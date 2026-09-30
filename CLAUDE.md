@@ -22,11 +22,8 @@ process or a network boundary, never linked:
 
 The rule that drew the line: a crate a consumer meets across a network boundary gets its
 own repository; the agent keeps everything interior. The suite-level documentation
-repository (`toddwbucy/WeaverTools`, empty on 2026-09-30) will hold the vision, the
-cross-repository contracts, the process documents and `experiments/`. Until it does,
-those live here, and the founding document of the split is
-`HANDOFF-2026-09-30-the-suite-split.md` in the parent workshop directory when this tree
-is checked out under `WeaverTools_Project/`.
+repository (`toddwbucy/WeaverTools`) holds `experiments/` and will hold the vision, the
+cross-repository contracts and the process documents. Until it does, those live here.
 
 Issue and pull request numbers in inherited code and documents (`#689`, `#551`, ...) are
 monorepo numbers. Its 31 open issues were transferred to `toddwbucy/WeaverAgents` on
@@ -103,10 +100,11 @@ Each crate's `tests/manifest.rs` reads its own manifest to pin its part of that 
 ### Where the documents are
 
 `docs/crates/<crate>/` holds each crate's PRD (charter) and Spec, mirroring
-`crates/<crate>/`. The harness's three members sit under `docs/crates/weaver-harness/`.
-Every seam has a contract under `docs/crates/contracts/`; three of them are
-cross-repository (`weaver-gate-world`, `weaver-admin-operator`, `weaver-analysis-web`)
-and are destined for the suite repository. `docs/crates/weaver-analysis/` and the two
+`crates/<crate>/`, except that `weaver-trace`, `weaver-diagnostic` and `weaver-state`
+sit under `docs/crates/weaver-harness/`. Every seam has a contract under
+`docs/crates/contracts/`; four of them are cross-repository (`weaver-gate-world`,
+`weaver-admin-operator`, `weaver-analysis-state`, `weaver-analysis-web`) and are
+destined for the suite repository. `docs/crates/weaver-analysis/` and the two
 `weaver-analysis-*` contracts are byte-identical copies of files in WeaverAnalysis;
 which copy is authoritative is unruled, so edit neither without saying so.
 
@@ -173,7 +171,7 @@ lock is unchecked rather than clean. Its header carries the measurements.
   `#[ignore]` and need scratch PostgreSQL (`unshare -Ur`, no sudo), so default
   `cargo test` passes without them and they fail when run.
 
-Until both are fixed, test per crate with `-p`. The deploy scripts already select
+Until both are fixed (#37), test per crate with `-p`. The deploy scripts already select
 crates: `deploy/bootstrap-stack.sh` and `deploy/update-stack.sh` test `weaver-trace`,
 `weaver-harness` and `weaver-state` with `weaver-harness/pyworker,weaver-state/sqlite,
 weaver-state/postgres`, then build the workspace in release with `weaver-spu/cuda`
@@ -204,7 +202,11 @@ pytest -q                                                 # CPU; the venv is hel
 ### Deploying and driving an agent
 
 `deploy/REDEPLOY.md` (a box from scratch) and `deploy/HowToDeployANewAgent.md` (one
-agent on a standing stack) are current as of 2026-09-30. The scripts are
+agent on a standing stack) describe the postgres path the scripts were written for.
+Under the operator's ruling of 2026-09-30 agent stores are sqlite (#38), and the scripts
+have known gaps, each an issue: `update-stack.sh` refuses at its test step (#33),
+`create-agent.sh` cannot make a sqlite agent (#34), `decommission.sh` discovers by one
+layout and matches every `weaver%` database (#35), small fixes (#39). The scripts are
 `bootstrap-stack.sh`, `update-stack.sh`, `create-agent.sh`, `verify-load.sh`,
 `decommission.sh`, and `deploy/turn.py <agent> "<text>"` sends one turn through a
 loaded agent's gate as the operator's uid with no sudo. The installed stack lives under
