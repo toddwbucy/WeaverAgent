@@ -1,0 +1,9 @@
+# python-spu's serving environment: the direct requirements, each at the version the
+# prototype's GPU smoke ran on thinkpad on 2026-09-28, per python-spu-Spec section 8.
+# requirements.lock is compiled from this with constraints.txt and carries a hash for
+# every file. Install with pip install --require-hashes --no-deps -r requirements.lock.
+blake3==1.0.9
+pydantic==2.13.5
+tokenizers==0.23.2
+torch==2.14.0
+transformers==5.17.0

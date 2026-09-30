@@ -1,0 +1,17 @@
+[package]
+name = "weaver-traits"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The floor's shared vocabulary: the message model and the permission modes"
+
+# The dependency set is one crate and it is argued in weaver-traits-Spec section 1:
+# serde with derive because the message model crosses the trace seam as payload
+# content. No format crate, no async runtime, no internal dependency - the manifest
+# test reads the resolved tree and this comment is not the instrument.
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

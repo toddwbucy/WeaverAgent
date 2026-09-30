@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "weaver-python-spu"
+version = "0.1.0"
+requires-python = "==3.14.7"
+dependencies = ["pydantic==2.13.5", "blake3==1.0.9"]
+
+[project.optional-dependencies]
+serve = ["torch==2.14.0", "transformers==5.17.0", "tokenizers==0.23.2"]
+test = ["pytest==9.1.1"]
+
+[project.scripts]
+python-spu = "python_spu.server:main"
+python-spu-classify = "python_spu.classifier:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

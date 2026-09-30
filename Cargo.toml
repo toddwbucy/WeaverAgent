@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+members = ["crates/weaver-traits", "crates/weaver-types", "crates/weaver-trace", "crates/weaver-harness", "crates/weaver-diagnostic", "crates/weaver-internal", "crates/weaver-admin", "crates/weaver-spu", "crates/weaver-gate", "crates/weaver-state"]
+
+[workspace.package]
+edition = "2024"
+license = "UNLICENSED"
+publish = false
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

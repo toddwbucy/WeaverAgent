@@ -1,0 +1,34 @@
+[package]
+name = "weaver-state"
+version = "0.1.0"
+edition = "2024"
+
+# The custodian, per weaver-state-Spec section 1: one binary, weaver-types
+# as the floor link weaver-state-PRD section 1 declares and the operator's ruling of
+# 2026-09-14 keeps, no unit here consuming it yet and what it will be drawn
+# for that charter's cell, weaver-traits as the second floor link, drawn for
+# the message model the typed landing decodes, and the externals the Spec
+# names, one engine's driver behind each engine's feature. No async runtime of the crate's own,
+# no logging crate, no HTTP, per the corpus's standing refusals.
+[features]
+default = ["sqlite"]
+sqlite = ["dep:rusqlite"]
+postgres = ["dep:postgres"]
+
+[dependencies]
+weaver-types = { path = "../weaver-types" }
+weaver-traits = { path = "../weaver-traits" }
+rusqlite = { version = "0.37", features = ["bundled"], optional = true }
+postgres = { version = "0.19", optional = true }
+# `float_roundtrip` makes serde_json's float parse correctly rounded, so a
+# reading the SPU rendered parses to the value it rendered and the typed
+# landing of weaver-state-Spec section 3 can hold it typed. Without it the
+# fast parse misrounds, the rendered value differs, and the landing's
+# exactness rule sends the reading to `field` verbatim.
+serde_json = { version = "1", features = ["raw_value", "float_roundtrip"] }
+nix = { version = "0.31", features = ["socket", "fs", "uio", "user", "poll"] }
+
+# Test scaffolding only, per the operator ruling of 2026-09-22: wire
+# round trips and live comparisons use the tee; production imports none.
+[dev-dependencies]
+weaver-trace = { path = "../weaver-trace" }

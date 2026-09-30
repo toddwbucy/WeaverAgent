@@ -1,0 +1,49 @@
+[package]
+name = "weaver-gate"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The outer membrane: the sole work ingress, its hook, and the boundary that judges every peer"
+
+# One binary, forked and exec'd by the harness during the enter fan-out, per
+# weaver-gate-Spec section 1. No other crate links this one.
+#
+# The lib target beside it is not an API for a consumer. Why it is declared is
+# weaver-gate-Spec section 1's to say and is not restated here, per gate G5:
+# tests/manifest.rs pins its presence and cites the same clause.
+[lib]
+name = "weaver_gate"
+path = "src/lib.rs"
+
+[[bin]]
+name = "weaver-gate"
+path = "src/main.rs"
+
+# One internal crate and two external ones, per Spec section 1 and the tool
+# boundary ruling of 2026-08-18. weaver-types is taken WITHOUT its `config`
+# feature: this crate reads no configuration file, the gate instruction
+# arriving over the seam instead, so no parser enters a process whose whole
+# argument is that it holds little. weaver-traits joined with the tool
+# workflow's opening act as the trait's executor and left with the ruling:
+# the shell is this crate's own verb, dispatched with no table, and the
+# contract's tool-trait draw retired with the table.
+# serde_json encodes the seam's envelopes and touches no client byte. nix is the
+# OS surface for what the standard library does not give, and which calls those
+# are is weaver-gate-Spec section 1's list, not a second copy here - per gate
+# G5, and because the copy that stood here was four calls behind it.
+# The feature set is this file's to hold, each one earning its place: `poll` so
+# the serve loop can wait on the channel and the hook's listener at once, the
+# boundary having to judge a dialing peer during the raised window and a loop
+# blocked on the channel alone never accepting one. The shell readers also poll
+# so an inherited pipe cannot hold cleanup open after group termination.
+# No `uio`: this crate sends and receives whole
+# datagrams and passes no control message, so the scatter-gather surface the
+# harness needs for descriptor passing is weight it does not carry. No async
+# runtime, no logging crate, no config-format parser - this
+# crate writes no account of anything, a logging crate being a second author's
+# first step.
+[dependencies]
+weaver-types = { path = "../weaver-types", default-features = false }
+serde_json.workspace = true
+nix = { version = "0.31", features = ["socket", "fs", "process", "user", "poll", "signal"] }

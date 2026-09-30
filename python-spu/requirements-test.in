@@ -1,0 +1,3 @@
+# The test environment: the serving environment and pytest, nothing else.
+-r requirements.in
+pytest==9.1.1

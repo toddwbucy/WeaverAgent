@@ -1,0 +1,171 @@
+# What a HADES ingest of this workspace does not read.
+#
+# **A workspace declares its own exclusions.** The ingest is configured on the
+# server and the corpus lives here, so a rule kept only on the server is a
+# rule the tree cannot be checked against. Per issue #565.
+#
+# Syntax follows .gitignore: one pattern per line, `#` comments, `/` anchors
+# to this file's directory, a trailing `/` matches directories only. **`**/`
+# is the escape from anchoring** and matches at any depth, which nine lines
+# below rely on, and **`!` names a path back in** after a broader line took it
+# out - last match wins, so order is part of the rule.
+#
+# **Only what this workspace adds.** The server already skips `__pycache__`,
+# `node_modules`, `target` and `venv` by default and hidden directories with
+# them, so listing those here is a copy that drifts when the server's defaults
+# move rather than a rule this tree is stating. Every stanza below is
+# load-bearing and each says what it excludes and why, so a later act can tell
+# a live rule from filler.
+
+# **Frozen copies of live code.** An ingest walking one puts the same symbols
+# in twice under two paths, so symbol resolution has two answers and no basis
+# for choosing, and retrieval returns the stale text as readily as the live.
+#
+# `WeaverTools-Working-Process` section 1 carries the rule: git is the archive
+# and no archive directory stands in this tree at all. The two that did were
+# deleted at PR #563 and `census.py`'s `archive_directories` reading holds it
+# at zero. **This is the second half of that rule and not a substitute for
+# it** - it covers the window between a directory appearing and someone acting
+# on the finding.
+#
+# **A family of spellings**, because a rule naming today's instance is the same
+# mistake as deleting today's instance. The reading matches the same set.
+# gitignore syntax has no case-insensitivity flag and the census reading uses
+# `re.I`, so the case classes are written out. Without them `ARCHIVE/` is
+# ingested while the census flags it - the two halves of one rule disagreeing,
+# which CodeRabbit found on PR #566.
+#
+# **Eight patterns, and the reading is bounded so eight is enough.** Two
+# prefixes by two plural forms by two suffix forms. The reading allowed any
+# number of leading underscores and gitignore cannot say that, which left the
+# halves 93 names apart on a second reading. `test_census.py` generates the
+# whole cross-product and fails on any disagreement, rather than checking a
+# list somebody wrote out - which is how the first eight passed.
+**/[Aa][Rr][Cc][Hh][Ii][Vv][Ee]/
+**/[Aa][Rr][Cc][Hh][Ii][Vv][Ee][SsDd]/
+**/[Aa][Rr][Cc][Hh][Ii][Vv][Ee][-_]*/
+**/[Aa][Rr][Cc][Hh][Ii][Vv][Ee][SsDd][-_]*/
+**/_[Aa][Rr][Cc][Hh][Ii][Vv][Ee]/
+**/_[Aa][Rr][Cc][Hh][Ii][Vv][Ee][SsDd]/
+**/_[Aa][Rr][Cc][Hh][Ii][Vv][Ee][-_]*/
+**/_[Aa][Rr][Cc][Hh][Ii][Vv][Ee][SsDd][-_]*/
+
+# **A probe's results are dated records and are not ingested**, per Working
+# Process section 5 as amended 2026-09-25: `experiments/` returned for the
+# deployment-tuple experiment, each probe's Spec and `code/` read like a crate's
+# and its `results/` answering to the other clock. The earlier form of this
+# stanza excluded `experiments/` whole, from the departure of 2026-09-13.
+experiments/**/results/
+
+# **The process documents govern the corpus and are not part of it.** They are
+# tracked here and excluded from the ingest, because a gate reading its own
+# rulebook as subject matter is a category error - it cost three review rounds
+# on PR #570 before it was named. An earlier form of this stanza said they had
+# left the repository. They had not, and the sentence framed a live rule as a
+# legacy safety net a later act could delete. **The rule is current, and it
+# does not depend on where the documents sit**: if they later leave the tree
+# the way experiments/ did between 2026-09-13 and 2026-09-25, this entry
+# stays, so a seat with copies on disk
+# does not ingest them. Delete the rule only when no seat has the documents.
+#
+# **The contents are excluded and not the directory, because `gates/` and
+# `ingest/` are named back in.** gitignore cannot re-include a file whose parent
+# directory is excluded, so `process/` followed by `!process/gates/` reads as a
+# rule and does nothing: the walk never descends far enough to see the negation.
+# Excluding `process/*` prunes the four documents sitting directly under it while
+# leaving the directory walkable, and `*` does not match `/`, so nothing deeper is
+# caught by that line.
+#
+# **The two named back are instruments and not documents**, which is the same
+# distinction PR #570 drew: `census.py` is H6, `test_census.py` holds it to its
+# baseline, and `chunk_plan.py --check` is a gate CLAUDE.md names. A gate that is
+# not in the graph cannot be found by a query about the gates, and these three
+# were out of it for as long as this entry read `process/`.
+process/*
+!process/gates/
+!process/ingest/
+
+# **Working registers, sketches and dated readings stay in the repository and
+# out of the graph.** They decide nothing and declare nothing: every one of the
+# corpus's 491 nodes and 665 edges is declared under `docs/crates/`, measured
+# 2026-09-14, and these files contribute none. Ingesting them puts scaffolding
+# beside the set it scaffolded, and puts an audit inside the graph it audits.
+docs/project/
+
+# **Test fixtures are data, not corpus.** Five numeric tables under
+# `crates/weaver-spu/tests/fixtures/gptoss/` - twenty three lines across the
+# five, nine chunks in the graph - were ingested as documents, while the
+# `.ndjson` fixtures under `weaver-analysis` were not, by extension alone. One
+# pattern for the class the tree has, `tests/fixtures/` at any depth. It is
+# not a spelling family the way the archive stanza is: no crate spells it
+# another way today, and the test that holds this line holds the pattern, not
+# a family. **It comes after the `process/` negations on purpose**: a fixture
+# set under `process/gates/` would be data too, and last-match-wins excludes
+# it. None exists, and `test_census.py` builds its fixtures in a temp dir.
+**/tests/fixtures/
+
+# The chunk plan is this tree's coordination state with the graph it would be
+# ingested into, so ingesting it is the graph reading a note about itself. It
+# is gitignored as of 2026-09-15 and named here so the exclusion does not rest
+# on `.json` having no handler, which is accident rather than intent.
+process/ingest/chunk-plan.json
+
+# **The agent instruction files are not authoritative and do not join the
+# graph.** `CLAUDE.md` says so on its own first page: the four process
+# documents govern everything and outrank it. So a semantic hit on its
+# restatement of the census, the clippy rule or the lock gate returns a copy
+# beside the Spec that owns the claim, with nothing marking which is
+# authoritative - the G5 duplication defect arriving through retrieval rather
+# than through a reader. The graph exists so code traces back to a Spec and a
+# PRD, and this file is neither.
+#
+# **Every spelling, and only the first exists today.** The others are named
+# because the tool reading the file decides its name, all of them are the same
+# kind of file, and an exclusion that waits for the file to arrive is one
+# nobody remembers to write. `**/` rather than an anchor: a per-crate copy is
+# the same file with a narrower audience.
+**/CLAUDE.md
+**/AGENT.md
+**/AGENTS.md
+
+# **The technical set is in development and is not authoritative**, per the
+# operator's ruling of 2026-09-16, and the directory belongs on a branch. Until
+# it moves it stays in the tree and out of the graph, for the reason the agent
+# instruction files are excluded above: a semantic hit on a page that describes
+# and decides nothing returns a reading beside the Spec that owns the claim, with
+# nothing marking which is authoritative.
+#
+# **This changes no census reading.** The eleven metrics count nothing under this
+# directory today, so the exclusion is about what a query answers with and not
+# about a number. The G1 width reading is a grep over the tree and is not
+# governed here either - all twelve of its current sightings are these pages, and
+# they leave when the directory does.
+#
+# `act-21` and `act-22` are withdrawn on this ruling, so no act is owed against
+# these pages while the block stands. Lift it when the set is integrated.
+docs/technical/
+
+# **SQL is not a supported unit and does not enter the graph**, per the
+# operator's ruling of 2026-09-17. Nine migrations stand under
+# `crates/weaver-web/migrations/` and nothing excluded them, so they would have
+# routed on the next ingest.
+#
+# **A migration is DDL and answers the domain's own questions with storage.**
+# `0005_three_members_leave_the_tuple.sql` names the tuple, the record and the
+# prefix, so a query about any of them returns a schema change beside the Spec
+# clause that governs it, with nothing marking which is authoritative. That is
+# the same G5-through-retrieval defect this file already excludes `CLAUDE.md`
+# and `docs/technical/` for, arriving through a third door. A dump is worse:
+# table and column names collide with Rust item names in symbol resolution, so
+# the graph holds two answers and no basis for choosing, which is the archive
+# stanza's reasoning about frozen copies reaching the same end by a different
+# route, and the rows themselves are unbounded content nobody wrote for a
+# reader.
+#
+# **This is the ingest half of a boundary the census states too.** A
+# conformance header exists so the graph can carry `code -> assertion -> doc`,
+# and a unit the ingest never reads has no edge for a header to carry, which is
+# why `census.py` asks a header of the supported set rather than of every
+# tracked file. Issue #592 asked for `.sql` and `.sh` ingest and is closed on
+# this ruling; shell is deferred rather than refused.
+**/*.sql

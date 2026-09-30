@@ -1,0 +1,18 @@
+[package]
+name = "weaver-diagnostic"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The diagnostic-trace writer: the replay record's envelope, kinds, and recorder"
+
+# conforms: diagnostic-no-trace-dependency
+# `weaver-trace` is deliberately absent, per `weaver-diagnostic-Spec` section 1:
+# the two records share a form and not a type, and the counterpart relation the
+# charter rests on would not survive one writer being the other's submodule in
+# all but name. The manifest test reads this absence from the resolved tree.
+
+[dependencies]
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+weaver-traits = { path = "../weaver-traits" }

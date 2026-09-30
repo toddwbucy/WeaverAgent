@@ -1,0 +1,11 @@
+.venv/
+.venv-gpu/
+reference/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+oracle/target/
+models/
+.hf-cache/
+results/
+python-spu.pyz

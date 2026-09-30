@@ -1,0 +1,132 @@
+[package]
+name = "weaver-spu"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The organ that holds the model: residency, the decode submodule, and the family libraries"
+
+# One binary, forked and exec'd by the harness during the enter fan-out, per
+# weaver-spu-Spec section 1. Nothing links this crate: the seam is a socket,
+# not a link, which is what `spu-one-binary` reads as a manifest fact and what
+# the manifest test checks - exactly one [[bin]] target.
+#
+# The lib target beside it is not an API for a consumer. It exists because four
+# of this Spec's named instruments are doctests (the shard-width set, the
+# absent signal shape, the eval-callback seam, the loader shapes) and cargo
+# runs doctests for lib targets only. A bin-only crate would carry those
+# doctests as text that never executes, which is the unrunnable instrument this
+# corpus treats as worse than an absent one. The binary is the entry and the
+# service loop; everything the doctests pin lives under the lib.
+[lib]
+name = "weaver_spu"
+path = "src/lib.rs"
+
+[[bin]]
+name = "weaver-spu"
+path = "src/main.rs"
+
+# The salvaged build script compiles kernels/transformer.cu, and only when the
+# `cuda` feature is on: it reads CARGO_FEATURE_CUDA and returns without doing
+# anything when that is absent, which is what keeps the no-feature build free of
+# a CUDA toolchain requirement.
+[build-dependencies]
+cc = "1"
+
+[[bin]]
+# The classify process, per weaver-spu-Spec section 11: the second bin
+# target, behind the device gate because its forward is candle's.
+name = "weaver-spu-classify"
+path = "src/bin/classify.rs"
+required-features = ["cuda"]
+
+[features]
+# **gguf carries the default and cuda does not**, per Spec section 1.1. The
+# pair's older reason, that a build with neither keeps the family surface
+# testable on a machine with no device, covers cuda and never covered this
+# one: llama.cpp builds and runs on the host, so gating it hid twenty-eight
+# tests from the workspace command and bought nothing the reason named. The
+# cost it does carry is that a workspace build compiles llama.cpp and needs
+# that toolchain.
+# conforms: spu-gguf-is-the-default-gate
+default = ["gguf"]
+# Each gate names what it buys, per Spec section 1.1. A build without cuda
+# compiles the channels, the residency bookkeeping, and the family libraries,
+# which is what keeps the family surface testable on a machine with no device.
+cuda = [
+    "dep:cudarc",
+    # **The engine's own device support rides this gate rather than its
+    # dependency line.** It was unconditional until 2026-08-23, which was
+    # harmless while gguf was off by default and became a defect the moment it
+    # was on: a host build would have compiled llama.cpp with CUDA and demanded
+    # that toolchain on a machine with no card, which is the opposite of what
+    # this gate is for. The `?` keeps it conditional on gguf rather than
+    # pulling the engine in.
+    "llama-cpp-2?/cuda",
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:candle-transformers",
+    # The fork's own device features ride this crate's gate: a cuda build of
+    # this crate that compiled candle CPU-only would load every safetensors
+    # artifact into host memory while claiming the device, which is the lie
+    # the admit's room judgment cannot see.
+    "candle-core/cuda",
+    "candle-nn/cuda",
+    "candle-transformers/cuda",
+]
+gguf = ["dep:llama-cpp-2", "dep:llama-cpp-sys-2"]
+
+[dependencies]
+# Two floor links, per Spec section 1.1. weaver-types is taken WITHOUT its
+# `config` feature: this crate reads no configuration file, and a parser in a
+# process whose argument is that it holds little is weight the floor Spec gates
+# against. weaver-traits is the second link and corrects charter section 6 in
+# this act - the framing ruling has the family library rendering the harness's
+# canonical messages, so the message model is drawn by name and the link
+# follows the draw.
+weaver-traits = { path = "../weaver-traits" }
+weaver-types = { path = "../weaver-types", default-features = false }
+
+# serde_json for the lifecycle channel's envelopes, whose JSON election is
+# weaver-types-Spec section 4.3's and carries no record here. nix is the OS
+# surface on the grounds weaver-harness-Spec section 2.4 argued and this crate
+# inherits: recvmsg, fcntl, the dumpable prctl, and descriptor adoption.
+serde_json.workspace = true
+nix = { version = "0.31", features = ["socket", "fs", "process", "uio", "user", "dir"] }
+
+# The host-side set. safetensors for the native backend's weights, half and
+# bytemuck for host-side tensor math, tokenizers for the family tokenizers,
+# blake3 and walkdir for the weights hash of section 3. None is gated: the
+# weights hash and the family surface are exactly what the no-feature build
+# keeps testable.
+safetensors = "0.7"
+half = { version = "2", features = ["num-traits"] }
+bytemuck = "1"
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
+blake3 = "1"
+walkdir = "2"
+
+# The two fork pins, the load-bearing dependencies of the whole crate. Both are
+# full revisions rather than abbreviations, per Spec section 1.1, which is the
+# durable record. llama-cpp-2 and llama-cpp-sys-2 come from the same git source
+# and revision, never one from the fork and one from the registry: two sys
+# crates resolve to two distinct types for one C library and the flash-attention
+# policy type stops typechecking across them, which the archived tree recorded
+# against itself.
+llama-cpp-2 = { git = "https://github.com/toddwbucy/llama-cpp-rs", rev = "ecce255bcb14dd6d88f184cc8776c23a85afafeb", optional = true, default-features = false, features = ["dynamic-link"] }
+llama-cpp-sys-2 = { git = "https://github.com/toddwbucy/llama-cpp-rs", rev = "ecce255bcb14dd6d88f184cc8776c23a85afafeb", optional = true, default-features = false }
+
+# The candle fork, taken for `forward_with_intermediates`, the readout's
+# working path. candle-flash-attn shares the pin and is NOT declared: no path
+# this crate names uses flash attention, and a declared dependency nothing
+# enables is the reserved slot the apex forbids. Its revision is recorded in
+# Spec section 1.1 as a pin value, which is where a value nothing takes belongs.
+candle-core = { git = "https://github.com/toddwbucy/candle", rev = "aee9af9c3e0b23ab9188a492d0b3ebdb5f3a3f4b", default-features = false, optional = true }
+candle-nn = { git = "https://github.com/toddwbucy/candle", rev = "aee9af9c3e0b23ab9188a492d0b3ebdb5f3a3f4b", default-features = false, optional = true }
+candle-transformers = { git = "https://github.com/toddwbucy/candle", rev = "aee9af9c3e0b23ab9188a492d0b3ebdb5f3a3f4b", default-features = false, optional = true }
+
+# cudarc is caret-pinned rather than exact, so Cargo unifies this crate's
+# device handles with candle's inside one minor line. Exactness comes from the
+# lock file rather than from a requirement that becomes unsatisfiable the day
+# candle raises its floor.
+cudarc = { version = "0.19.8", optional = true, features = ["std", "cublas", "driver", "cuda-version-from-build-system", "f16"] }

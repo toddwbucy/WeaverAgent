@@ -1,0 +1,41 @@
+[package]
+name = "weaver-harness"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The hub: loop 0, the channels and their custody, trace authorship, and loop 1's seat"
+
+# The internal set is the two floor links, the trace seam, and weaver-diagnostic, all
+# four tagged `link`, per weaver-harness-Spec section 1, which counts four and is the
+# authority this file reads against. weaver-types is taken WITHOUT its `config` feature:
+# this crate reads no field from the agent config's file, and the model binding and gate
+# instruction arrive over the coordination seam already validated. serde_json encodes
+# the loop 0 envelopes, whose JSON election is weaver-types-Spec section 4.3's. nix is
+# the OS surface elected in section 2.4: socketpair, recvmsg with control messages,
+# fcntl, fork, dup2, execve, and the dumpable prctl, over the standard library's owned
+# descriptor types. No async runtime, no logging crate, no HTTP client - the manifest
+# test reads the resolved tree and this comment is not the instrument.
+[dependencies]
+weaver-traits = { path = "../weaver-traits" }
+weaver-types = { path = "../weaver-types", default-features = false }
+weaver-trace = { path = "../weaver-trace" }
+# The diagnostic record's mechanism, per weaver-harness-Spec section 9's
+# settled election: one call site serves both writers and the binding's
+# kind selects the arm.
+weaver-diagnostic = { path = "../weaver-diagnostic" }
+serde_json.workspace = true
+nix = { version = "0.31", features = ["socket", "fs", "process", "uio", "user", "poll", "signal"] }
+# The embedded interpreter of the python-iterating worker, per
+# weaver-harness-Spec section 1: optional behind the pyworker feature, so no
+# default build compiles or links it and the manifest assertions above keep
+# their subject, the featureless resolved tree.
+pyo3 = { version = "0.27", features = ["auto-initialize"], optional = true }
+
+[features]
+pyworker = ["dep:pyo3"]
+
+[[bin]]
+name = "pyworker"
+path = "src/bin/pyworker/main.rs"
+required-features = ["pyworker"]
