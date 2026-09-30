@@ -2,532 +2,314 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## This workspace holds two separate repositories
+## What this repository is
 
-`WeaverTools_Project/` is **not** a git repository. It is a container for two independent
-clones, and the relationship between them is the single most important fact here:
+`WeaverAgents` is the agent of the WeaverTools suite: a ten-crate Rust workspace that
+builds the deployable proto-stateful agent, plus the documents that authorize its code,
+the deploy scripts that install it on a box, and a Python prototype of one organ. It was
+split out of the monorepo `toddwbucy/WeaverTools-old2` on 2026-09-30 (root commit
+`a9d9827`, no history on `main`; the local `seed-history` branch holds the monorepo's
+history and is never pushed).
 
-| Directory | Remote | Role |
-|---|---|---|
-| `WeaverTools/` | `toddwbucy/WeaverTools` | **The new tree.** The ratified document corpus plus the first phase-three code: `weaver-traits`, `weaver-types`, and `weaver-trace` land first - see "Where the work stands". |
-| `WeaverTools-archived/` | `toddwbucy/WeaverTools-archived` | **The quarry.** The full ~150k-line prior program, frozen. 438 PRs of history. Scheduled for deletion once G6 certifies extraction complete (checklist item 7). |
+Two sibling repositories left the monorepo in the same split and are met only across a
+process or a network boundary, never linked:
 
-The new tree is a **one-way extraction** from the quarry, not a fork. Nothing merges back
-in either direction, ever. The quarry is a **parts source you read and never edit** - no
-commits, no branches, no fixes there, however tempting. Its last commit is
-`d9366d5` (2026-07-28).
+- `toddwbucy/WeaverAnalysis`, the analytical tools over the trace, driver and reader of
+  the diagnostic record. Out of this tree's boundary; its Spec forbids any `weaver-*`
+  dependency.
+- `toddwbucy/WeaverWeb`, the suite's frontend and first consumer, reached through
+  connectors that do not exist yet.
 
-The old tree's `CLAUDE.md` and `docs/CLAUDE.md` load automatically when you work inside
-`WeaverTools-archived/`. They are accurate about *that* tree and stale about the program's
-direction - they describe a 12-crate workspace with a memory leg and a conformance graph,
-all of which the extraction leaves behind. Read them for how the parts work, not for what
-to build.
+The rule that drew the line: a crate a consumer meets across a network boundary gets its
+own repository; the agent keeps everything interior. The suite-level documentation
+repository (`toddwbucy/WeaverTools`, empty on 2026-09-30) will hold the vision, the
+cross-repository contracts, the process documents and `experiments/`. Until it does,
+those live here, and the founding document of the split is
+`HANDOFF-2026-09-30-the-suite-split.md` in the parent workshop directory when this tree
+is checked out under `WeaverTools_Project/`.
 
-### The founding document is not on disk
+Issue and pull request numbers in inherited code and documents (`#689`, `#551`, ...) are
+monorepo numbers. Its 31 open issues were transferred to `toddwbucy/WeaverAgents` on
+2026-09-30 and carry new numbers there. Every `toddwbucy/WeaverTools` reference inside
+this tree predates the rename and means the monorepo.
 
-The handoff that defines the extraction was committed and then immediately reverted
-(`9dd8caf` then `d9366d5`, both 2026-07-28). Retrieve it:
+All of these repositories were **public** on 2026-09-30. Check rather than assume:
+`gh repo view toddwbucy/WeaverAgents --json visibility`.
 
-```bash
-git -C WeaverTools-archived show \
-  9dd8caf:docs/project/HANDOFF-2026-07-28-radical-simplification-PROPOSED.md
+## The deliverable
+
+**A deployable proto-stateful agent that completes a turn end to end against a real
+local model and emits a clean, turn-bracketed, correctly-custodied trace.** The trace is
+the primary artifact, not a diagnostic. `docs/crates/weaver-agents-PRD.md` is the apex:
+the deliverable, the five invariants, the lifecycle and the enforcement posture every
+other document answers to.
+
+**Proto-stateful, not stateless** (PRD section 2, on the ruling of 2026-08-01). The
+agent holds real state within a session and none across sessions. Two things hold state
+across turns inside one session, deliberately and not two of a kind: the working
+structure (the run's trace events held in RAM in the canonical form the stream carries)
+and the hot KV cache (an optimization whose owner, flush trigger and forbidden touchers
+`weaver-spu-PRD` names). "Stateless" anywhere outside a record of the rename is stale.
+
+**Correctly custodied** means the agent cannot reach its own record: the stream lands
+behind a boundary the kernel enforces.
+
+## Architecture
+
+A deployed agent is four processes on one machine plus one program that stands outside
+every agent and does not run while one is serving. Every seam that crosses a process
+line is a Unix domain socket, and there is no listening network socket anywhere.
+
+```text
+                weaver-admin  (outside: loads, serves, unloads; systemd units)
+                      |
+   world --> weaver-gate --> [ worker: weaver-harness + weaver-trace + weaver-diagnostic ]
+                                   |                 |
+                              weaver-spu        weaver-state
+                            (the decoder)     (session store)
 ```
 
-**Read it before doing anything in this workspace.** It is marked PROPOSED and its own
-first instruction is that the session produces a written, operator-ratified inventory
-before any code is written. Whether that ratification has happened is not recorded
-anywhere in either tree - ask the operator rather than inferring it from the empty
-`WeaverTools/` repo existing.
+- **`weaver-harness`** is the content-neutral switchboard: it holds the sockets, routes
+  between organs, authors the trace, and holds no opinion about content. Its
+  `src/bin/worker` is the composition root that becomes a systemd unit;
+  `src/bin/pyworker` (feature `pyworker`, links pyo3) runs a loop written in Python.
+  Loops are workflow documents under `docs/crates/weaver-harness/Loops/`, not code in
+  the switchboard.
+- **`weaver-trace`** writes the record, one event per line in canonical form, and tees
+  it across the custody boundary. **`weaver-diagnostic`** is the harness's third member
+  and writes the diagnostic-trace (residual readouts) beside it.
+- **`weaver-spu`** holds the model. One binary the harness forks and execs; the seam is a
+  socket, and nothing links the crate. A second bin, `weaver-spu-classify`, sits behind
+  the `cuda` feature (Spec section 11). Backends: `gguf` (llama.cpp,
+  on by default, builds the C++ toolchain) and `cuda` (candle plus the crate's own
+  kernels under `kernels/`; `build.rs` compiles them only when the feature is on).
+  `kernels/PROVENANCE.md` records what hardware has run what.
+- **`weaver-gate`** is the world-facing organ: it admits a dialer by uid, relays one JSON
+  line in and one out, and holds the tool hooks.
+- **`weaver-state`** is the session store (`sqlite` default, `postgres` optional).
+- **`weaver-admin`** is the operator's program: inventory, units, verbs, the log sink,
+  and the choice of SPU implementation per agent.
+- **`weaver-internal`** holds internal tools that run inside the loop (the calculator).
+  A tool that binds a listening port is external and reaches the agent through the gate;
+  one that does not is internal.
+- **`weaver-traits`** and **`weaver-types`** are the floor: messages, providers, tools,
+  permissions, identities, the wire and the agent declaration parser (`config` feature).
+  They compile on stable and are demand-derived from what the organs need.
 
-## The mission and the carry rule
+Cargo edges run downward only: every crate links at most the floor, the harness links
+its two members, `weaver-state` links `weaver-trace`, and no organ links another organ.
+Each crate's `tests/manifest.rs` reads its own manifest to pin its part of that shape.
 
-Deliverable: **a deployable proto-stateful agent that emits a clean, turn-bracketed,
-correctly-custodied trace.** The trace is the primary artifact, not a diagnostic - that
-reframing is what promotes quarry issues #340/#343/#344/#363 from debt to blockers.
+### Where the documents are
 
-**Proto-stateful, not stateless.** The human's ruling of 2026-08-01 retired "stateless" as
-an overstatement, and `weaver-agents-PRD` section 2 is the authority. The agent holds
-real state *within* a session and none *across* sessions. **Two things hold state across turns
-inside one session, both deliberate and not two things of a kind.** The first is the working
-structure, the run's trace events held in RAM in the canonical form the stream carries,
-volatile by construction. The second is the hot KV cache, an optimization whose owner, flush
-trigger, and forbidden touchers are named in `weaver-spu-PRD`. Lose the first and turn two
-has nothing to be about. Lose the second and the agent is slow rather than absent. If you
-meet "stateless" anywhere in this workspace outside a record of the rename, it is stale.
+`docs/crates/<crate>/` holds each crate's PRD (charter) and Spec, mirroring
+`crates/<crate>/`. The harness's three members sit under `docs/crates/weaver-harness/`.
+Every seam has a contract under `docs/crates/contracts/`; three of them are
+cross-repository (`weaver-gate-world`, `weaver-admin-operator`, `weaver-analysis-web`)
+and are destined for the suite repository. `docs/crates/weaver-analysis/` and the two
+`weaver-analysis-*` contracts are byte-identical copies of files in WeaverAnalysis;
+which copy is authoritative is unruled, so edit neither without saying so.
 
-Anything crossing from quarry to new tree goes through exactly one of two doors, and you
-**state which door and why at the moment you carry it**:
+`docs/technical/` is a dated, non-normative reader's snapshot (one page per crate,
+`index.md` first). `docs/project/` holds handoffs, audits, sketches and the vision; the
+most recent handoffs are the fastest way to learn where the work stands.
 
-1. **Live code** - a proto-stateful agent provably needs it, meaning you can name the path a
-   single completed turn takes through it.
-2. **Stub** - a named joint the memory leg will bolt onto, *and* a written memory-leg
-   design already names it. No document, no crossing. Without that constraint door two
-   becomes the baggage door and every individual stub still looks principled.
+`docs/crates/weaver-spu/python-spu-Spec.md` governs `python-spu/`, a PyTorch prototype
+of the SPU's decode role carried as a lab instrument (a carry is not a hardening). It
+has its own README, lock files and an `oracle/` crate that links this workspace.
 
-Everything else stays in the quarry. **Nothing crosses because the old tree has it.**
+## What governs the work
 
-In scope: `weaver-spu`, `weaver-harness`, `weaver-gate`, `weaver-admin`, plus
-`weaver-trace`/`weaver-types`/`weaver-traits`. None come over verbatim.
-`weaver-traits` and `weaver-types` are **demand-derived** - built from what the SPU and
-harness turn out to need, never carried and pruned. `weaver-trace` is the exception:
-**designed** against what the memory leg will later read, because demand-derivation
-under-builds a deliverable.
+**The four process documents in `process/` outrank this file**:
+`WeaverTools-Working-Process` (phases, seats, gates, current position),
+`WeaverTools-Document-Format`, `WeaverTools-Working-Rules` (editorial),
+`WeaverTools-Handoff-Format`. They change often; read the file, not a remembered version.
 
-Out entirely: the memory leg in any form, `weaver-memory`, `weaver-train`,
-`weaver-frontend`, and `weaver-interface`. The composition root is
-deliberately **new code** - it is where the session boundary gets enforced, and where quarry
-issue #350 (the agent worker implements no task executor) gets solved rather than
-migrated.
+The program is in **phase three, coding**, under gates H1-H5 of Working Process
+section 6. **A merged Spec authorizes code** (H1), and where code and a Spec disagree
+the act changes whichever is wrong in the same act, contracts included and reaching
+every party. A new capability is a Spec gap and the operator's ruling.
 
-Order of work: SPU -> trace -> harness + new composition root -> admin and gate ->
-deployable proto-stateful agent -> autonomic calculator tool -> then memory.
+**The knowledge graph, HADES, ratification, the census and assertion records are all
+suspended until release**, on the operator's ruling of 2026-09-27. Existing
+`//! conforms:` headers stay unmaintained, new code owes none, and `.hadesignore` and
+`process/ingest/chunk_plan.py` are dormant. **The conformance check meanwhile is review
+against the Spec sections a pull request names.**
 
-## Where the work stands, and what governs it
+## Commands
 
-**Four process documents in `WeaverTools/process/` govern everything and outrank this
-file.** Read them before acting: `WeaverTools-Working-Process` (phases, seats, gates),
-`WeaverTools-Document-Format` (the document notation), `WeaverTools-Working-Rules`
-(editorial), `WeaverTools-Handoff-Format`. They carry versions and change often, so read
-the file rather than trusting a version remembered from a summary.
-
-**Three phases, and the program is in the third.**
-
-1. **Phase one, authoring.** PRDs, contracts, Specs. Closed 2026-08-04.
-2. **Phase two, graph mapping.** The graph was built on the HADES server as
-   `WeaverTools_v3` per `HANDOFF-2026-08-04-hades-graph-build`, and **the set was
-   RATIFIED 2026-08-04** per the operator's ruling recorded at Working Process
-   section 5. **Phase two and ratification are suspended until release**, on the
-   operator's ruling of 2026-09-27, and HADES is not part of this project until then.
-3. **Phase three, coding.** Open, gates H1-H5 in force per Working Process
-   section 6, H6 and the census having retired 2026-09-27. A merged Spec
-   authorizes code, and where code and a Spec disagree the act changes whichever
-   is wrong and moves on. No version is pinned here because the Format moves and
-   this file has carried a stale pin before.
-
-**Assertion records are suspended until release**, per Document Format section 0 as
-of 2026-09-27. The records that stand stay legal and unmaintained, and no new one is
-required. The conformance check meanwhile is review against the Spec sections a pull
-request names, per Working Process section 6.
-
-**Gates G1-G7 run on every act** (mechanical, level discipline, graph facts, vocabulary,
-duplication authority, extraction completeness, rulings landed). H1-H5 are phase
-three's, in force per Working Process section 6, H6 having retired 2026-09-27.
-
-**A ruling is a claim about the whole corpus.** A review finding names one sighting of its
-violation, so an act that lands a ruling ends with a corpus-wide sweep for every wording
-the ruling retires - and the sweep must be whitespace-normalized, because prose wraps at 88
-columns and any phrase can straddle a break. **This file is in the tree so that a
-corpus-wide sweep reaches it**, a rename having once swept the corpus clean and left it
-behind for sitting outside.
-
-## This machine is not the deployment box
-
-The quarry's own `CLAUDE.md` documents runtime paths (`/opt/weavertools` source,
-`/opt/weaver` installed runtime) that **do not exist here**. Consequences:
-
-- The quarry is cloned to a home directory. Per-agent OS users cannot traverse a 0700
-  home, so nothing agent-facing can actually run from this checkout - it is a reading and
-  planning workspace.
-- `.hades/` is gitignored and absent, so `gate-check.py` cannot run here. The quarry's
-  mandatory merge-gate sequence is not executable from this machine.
-- **`nvcc` is present and the device gate finishes here.** On 2026-09-25 the box
-  carried `/opt/cuda/bin/nvcc`, CUDA 13.4.92, and an RTX PRO 5000 Blackwell on
-  driver 615.71.09, and `weaver-spu`'s gate under `--features cuda,gguf` passed
-  cold twice - build, test and clippy - per #684. The second run had no
-  `CUDARC_CUDA_VERSION` override, cudarc `0.19.10` building its CUDA 13.4 API.
-- **A box that can compile the feature is not a box that should gate the device.**
-  The lane ruling of 2026-09-15 stands untouched by the correction above: the
-  device is the olympus lane, `weaver-spu`'s gate carries `--features cuda,gguf`
-  there, and `kernels/PROVENANCE.md` records what this hardware has run: the
-  crate's own device tests ran on the card at the candle repin of 2026-09-26,
-  and the salvaged kernels have not, nothing in the crate calling them yet.
-  The earlier bullet argued the lane from a missing compiler, which
-  made a standing ruling rest on a fact about one box that turned out to be wrong.
-- The pinned toolchain (`nightly-2026-02-13`, rustc `47611e160`) is installed and matches
-  `rust-toolchain.toml`.
-
-## Building the new tree
-
-From `WeaverTools/`. Nightly, edition 2024, eleven packages.
+Toolchain `nightly-2026-02-13` with rustfmt and clippy, pinned in `rust-toolchain.toml`,
+edition 2024. Run from the repository root. `--locked` goes on every cargo command that
+resolves; without it cargo repairs the lock in place and the gate answers about a tree
+the repository does not record. `fmt` resolves nothing and takes no flag.
 
 ```bash
+process/gates/lock.sh                                    # first: 0 in step, 1 drift, 2 unchecked
 cargo build --workspace --locked
-cargo test --workspace --locked
-cargo test -p weaver-harness --locked   # one crate
-cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test -p weaver-harness --locked                    # one crate
+cargo test -p weaver-harness --locked <name_fragment>    # one test by substring
+cargo clippy -p <crate> --all-targets --locked -- -D warnings
+cargo clippy -p weaver-spu --all-targets --features cuda,gguf --locked -- -D warnings
 cargo fmt --all -- --check
 ```
 
-**`--locked` on every command that resolves**, closing the first ask of
-issue #551. Without it cargo repairs a manifest change in place and the gate
-answers about a tree the repository does not record. With it the run refuses
-before a single test binary is spawned, so the drift is loud rather than
-silent. `fmt` resolves nothing and takes no flag.
-**This is the only place the refusal fires**: the deploy's own test line
-selects four crates, so the manifest instruments of `weaver-gate` and
-`weaver-internal` are reached by these commands and by nothing else.
+`lock.sh` compiles nothing and runs in under a second. Its 0 and 1 are definitive; 2
+means the gate could not run (cold cache, network needed, unreadable manifest), so the
+lock is unchecked rather than clean. Its header carries the measurements.
 
-**The flag refuses only where a seat types it, so the lock has a gate of its
-own**, on issue #551's third ask and as of 2026-09-15.
+**Workspace-wide `cargo test` does not compile yet.** Two path couplings reach
+`weaver-analysis`, the crate that left:
 
-    process/gates/lock.sh
+- `crates/weaver-types/tests/config.rs:646` does `include_str!` on
+  `../../weaver-analysis/tests/fixtures/derived-surrogate.toml`. The test file is
+  behind `#![cfg(feature = "config")]`, so `cargo test -p weaver-types --locked` passes
+  alone and fails under `--all-features` or `--workspace`, where feature unification
+  turns `config` on and stops the whole run before a test is spawned. The fixture is
+  the analysis crate's pinned output; a copy needs a note naming the WeaverAnalysis
+  commit it was taken from.
+- `crates/weaver-state/src/comparison.rs:548-581` expects a built `weaver-analysis`
+  binary two directories above the test executable and checks it against
+  `../weaver-analysis/src`. The preload and comparison suites that call it are
+  `#[ignore]` and need scratch PostgreSQL (`unshare -Ur`, no sudo), so default
+  `cargo test` passes without them and they fail when run.
 
-It runs from any directory and answers in an exit status: 0 the resolution is
-in step with the lock, 1 drift, 2 the gate could not run and the lock is
-unchecked rather than clean. **0 and 1 are definitive and 2 is not**: drift
-whose resolution completes offline reads 1, and drift needing the network - a
-package or a fork rev the local cache does not hold - reads 2 alongside a cold
-cache and an unreadable manifest, because cargo fails before it reaches the
-refusal that names the lock. So 2 means unchecked rather than drifted, the
-message says which it might be, and a run after `cargo clean` or on a fresh
-clone answers it for a tree that may be fine. It compiles nothing, so it
-costs well under a second and it goes first, ahead of the commands above. An
-instrument that runs inside a test binary cannot do this job at all, `cargo
-test` having resolved and repaired the lock before the binary is spawned, which
-is the defect #551 was filed against.
+Until both are fixed, test per crate with `-p`. The deploy scripts already select
+crates: `deploy/bootstrap-stack.sh` and `deploy/update-stack.sh` test `weaver-trace`,
+`weaver-harness` and `weaver-state` with `weaver-harness/pyworker,weaver-state/sqlite,
+weaver-state/postgres`, then build the workspace in release with `weaver-spu/cuda`
+added, because every engine an agent may elect must be compiled in or the member
+refuses that agent at load.
 
-**It is not a seventh enforcement device, and no document in this corpus carries
-a rule about the lock.** It is build hygiene under the resolution every command
-above rests on. Whether the lock deserves a sentence in the corpus is #551's
-remaining question and the operator's to answer. The script's header carries the
-measurements and the reasoning and they are not copied here, per gate G5.
+**`weaver-spu`'s gate carries `--features cuda,gguf`.** A bare run leaves
+`decoder/native.rs`, `decoder/native_pair.rs` and every test reaching them uncompiled,
+and they are where the device is touched. The device is the olympus lane: a seat that
+cannot compile the feature does not gate the crate and does not land acts in it. The
+thinkpad has compiled it (nvcc present, CUDA 13.4, Blackwell card, 2026-09-25) and that
+fact does not move the lane.
 
-**Every command here was run before being written here, and none of them
-touches the lock.** Counts go stale, so a later reader re-runs rather than
-trusting a number.
+**The clippy gate is the crate touched, not the workspace.** A crate that fails under
+`-D warnings` does not compile, so its dependents are not linted at all and a
+`--workspace` run answers a smaller question than ten per-crate runs. Issue #471 in
+the monorepo was the register of per-crate counts; counts are per box and none is
+written here.
 
-**The quarry's command below is not this one.** It carries a
-`weaver-spu/inference` flag that is correct there and errors here.
-
-**`weaver-spu`'s gate carries `--features cuda,gguf`**, on the operator's
-ruling of 2026-09-15. `default = ["gguf"]` puts the inference path on without
-a flag, so a bare run lints the crate and leaves `decoder/native.rs`,
-`decoder/native_pair.rs` and every test that reaches them uncompiled. They are
-not small and they are where the device is touched.
-
-    cargo clippy -p weaver-spu --all-targets --features cuda,gguf --locked \
-      -- -D warnings
-
-**A seat that cannot compile the feature does not gate the crate, and
-therefore does not land acts in it.** The device is the olympus lane and the
-gate follows the lane, rather than narrowing for every seat to accommodate a
-box that should not be acting on the SPU at all.
-
-## Building the quarry (read-only verification)
-
-Nightly, edition 2024. From `WeaverTools-archived/`:
+### python-spu
 
 ```bash
-cargo build                      # workspace, no GPU
-cargo test --workspace           # 12 packages
-cargo test -p weaver-harness     # one crate
-cargo test <name_fragment>       # one test by substring
-cargo clippy --workspace --all-targets --features weaver-spu/inference -- -D warnings
-cargo fmt --all -- --check
+cd python-spu
+cargo build --manifest-path oracle/Cargo.toml --locked    # the Rust oracle the suite compares against
+pytest -q                                                 # CPU; the venv is held to requirements-test.lock
 ```
 
-Cold resolution needs network: `weaver-spu` sources `candle-*` and `llama-cpp-2`/
-`llama-cpp-sys-2` from `github.com/toddwbucy` forks at pinned revs. The `llama-cpp-rs`
-fork pin (exposing the ggml scheduler eval callback - the only route to
-per-layer activations from a GGUF model) was the stated precondition for cutting the
-extraction, and it **is** in the quarry's `main`, at `277e4100`; the new tree pins
-`ecce255bcb14dd6d88f184cc8776c23a85afafeb`, moved 2026-08-17, which still exposes it.
+### Deploying and driving an agent
 
-`crates/weaver-frontend` is excluded from the workspace and needs X11/Wayland/GL dev
-libs, so build it from inside its own directory if at all.
+`deploy/REDEPLOY.md` (a box from scratch) and `deploy/HowToDeployANewAgent.md` (one
+agent on a standing stack) are current as of 2026-09-30. The scripts are
+`bootstrap-stack.sh`, `update-stack.sh`, `create-agent.sh`, `verify-load.sh`,
+`decommission.sh`, and `deploy/turn.py <agent> "<text>"` sends one turn through a
+loaded agent's gate as the operator's uid with no sudo. The installed stack lives under
+`/etc/weaver/admin`, `<prefix>/bin` and `/var/log/weaver`; each agent is a systemd unit
+`weaver-worker@<agent>.service` under its own OS user. Run logs of redeploys are kept
+under `docs/project/redeploy-*.md`. The thinkpad runs a stack built from this tree at
+the split and completes turns through the gate (2026-09-30 15:33).
 
-## Orienting in the quarry
+### Reading command output
 
-Sizes matter here - the carry rule is a subtraction discipline and roughly 90k lines
-are in scope for consideration. `wc -l` over `crates/<name>/src` gives the current
-figures when you need them.
+Cargo writes diagnostics to stderr, so a pipe without `2>&1` prints a clean nothing
+for a failed run. A crate that fails to compile emits no `test result` line at all, so
+check the exit status where the answer matters. Verbose output goes to the scratchpad
+and is grepped there; a file already read is re-read with `sed -n`, never `cat`.
 
-Reading order for architecture: `docs/weavertools-HAH-v41.md` (the hypothesis this whole
-apparatus tests), `docs/weavertools-primary-PRD.md` (the apparatus apex),
-`docs/crate-topology-Spec.md` (the doc<->crate map). Per-crate PRDs and Specs are at
-`docs/architecture/crates/<crate>/`, mirroring `crates/<crate>/` positionally.
-`docs/project/handoffs/` and the dated `HANDOFF-*.md` files at `docs/project/` are the
-narrative of how each subsystem reached its frozen state.
+```text
+cargo test -p <crate> --locked 2>&1 | grep -E '^test result|FAILED'
+cargo build --locked 2>&1 | grep -E '^error' -A4
+cargo clippy -p <crate> --all-targets --message-format=short --locked -- -D warnings 2>&1 \
+    | grep -cE '^crates/.*: error:'     # a run that fails for a non-lint reason reads 0 here
+```
 
-Design patterns worth carrying forward conceptually (they are the quarry's real
-contribution, independent of its code): per-invocation tool safety classification
-(`Tool::invocation_properties(input)` inspects the *actual* command - `ls` reads,
-`rm -rf` destroys - which drives parallel-vs-serial batching), events-as-rendering-API
-(`QueryEvent` over mpsc, consumed identically by CLI/TUI/tests), provider-agnostic
-messages with all wire format isolated at the composition root, and `SO_PEERCRED`-verified
-Unix sockets for all internal IPC.
+**Never `git checkout -- <file>` to undo an experiment.** Copy the file aside and copy
+it back.
 
-## Enforcement, and the graph
+## Seats and the pull request path
 
-**The graph is deferred to release**, on the operator's ruling of 2026-09-27, which
-`WeaverTools-Working-Process` sections 5 and 6 carry. HADES is not part of this
-project until release, when it returns as a lookup and a diff of documents against
-code. No rebuild is owed on document movement, and ratification, phase two's
-checklist, the census and H6's header rule are suspended with it. Existing assertion
-records and `conforms:` headers stay in place and are not maintained, and no new ones
-are required. The graph was a second source of truth every change had to keep true,
-and it had not once helped write code.
+Two Claude Code sessions and the operator (Todd), who closes every loop. The
+**Planner** (thinkpad seat) plans, grades drafts and handles third-party review; the
+**Executor** (olympus seat, or a `-executor` session) writes code on a branch from
+`main`, from a worktree, and opens a **draft** pull request. Nobody pushes to `main`
+directly, except that edits to this file and `AGENTS.md` are the Planner's and go to
+`main` directly.
 
-**The conformance check is review against the Spec.** Every pull request body carries
-`Implements: <Spec> <sections>`, and the Planner's grade gives each named section one
-verdict: conforms, drifted (fix the code), better way (change the Spec in the same
-pull request, a design-level change going to the operator), or Spec gap (extend the
-Spec, a new capability being the operator's ruling). H1 is applied as documents are
-written: where code and a Spec disagree, change whichever is wrong in the same act,
-contracts included and reaching every party. Working Process section 6 owns the rule.
+1. Gates first: `lock.sh`, fmt, clippy for the touched crate.
+2. The Planner grades the draft against a clean extract of the head. The body carries
+   `Implements: <Spec> <sections>`, and each named section gets one verdict: conforms,
+   drifted (fix the code), better way (change the Spec in the same pull request, a
+   design change going to the operator), or Spec gap (extend the Spec, the operator's
+   ruling).
+3. The Planner undrafts. That fires Codex's review; a draft gets no pass. A clean pass
+   edits the summary comment in place and posts no thread; findings arrive as review
+   threads, sometimes a minute after the summary row flips, so read the body, not the
+   thread count.
+4. Every finding is graded and answered on the pull request, fixed or declined with the
+   reason. A finding names one site of its class: grep every consumer of the same
+   shape in every file of the act and table each site in the body before the next
+   pass. Each push to an undrafted pull request fires another pass.
+5. Past four rounds the Planner checks convergence: new classes keep the loop going;
+   the same class again, or findings sharing one design question, return the pull
+   request to design.
+6. Only the operator merges. The body names every issue it closes (`Closes #N`) and
+   every epic item it closes or moves, or says in one line that it answers nothing.
+   After the merge the Executor ticks each named item on its epic with the merge
+   commit; an epic closes only when its checklist is empty or annotated.
 
-**Enforcement rests on the devices `weaver-agents-PRD` section 11 enumerates**, which
-this list restates, the first suspended until release and the sixth retired:
+Commit subjects carry `code:`, `docs:` or `process:`.
 
-1. Conformance trace headers in source carrying `code -> assertion -> doc`.
-   **Suspended until release**: existing headers stand unmaintained and nothing
-   reads them.
-2. **Compile-time pins** for invariants that are type properties. A runtime test
-   structurally cannot pin the *absence* of a trait impl.
-3. **Perturbation-verified tests** for invariants that are behaviours. Always confirm the
-   test fails when the property is removed - a test that passes either way converts
-   "unenforced" into "documented as enforced", which is worse than no test.
-4. Human and Codex review. Read the review **body**, not the thread count: a clean Codex
-   pass edits its summary comment in place and posts no review object and no thread,
-   and findings arrive as review threads, sometimes a minute after the summary row
-   flips, so a thread count of zero is not a verdict until the summary row reads
-   completed and a read of the threads taken after it still finds none.
-5. **Clippy at `-D warnings`, per crate at the point of an act**, on the
-   operator's ruling of 2026-09-06. **The gate is the crate you touched, not the
-   workspace**: `cargo clippy -p <crate> --all-targets -- -D warnings` passes
-   before that crate's act merges. It is the cheapest of the six, and until the
-   census joined it the only one a person had to type, which is how it went
-   unrun.
+## Enforcement
 
-   **Stated per crate because the workspace did not pass when the gate
-   landed, and a gate nobody can pass is a gate everyone learns to ignore.**
-   The backlog clears as each crate is next touched rather than as one act
-   nobody owns.
+Per `weaver-agents-PRD` section 11, what actually catches defects:
 
-   **Issue #471 is the register and this file keeps no census.** A count
-   written here is stale by the next act and then argues with the command.
-   Measure rather than read:
+- **Compile-time pins** for invariants that are type properties. A runtime test cannot
+  pin the absence of a trait impl.
+- **Perturbation-verified tests** for invariants that are behaviours: confirm the test
+  fails when the property is removed. A test that passes either way converts
+  "unenforced" into "documented as enforced", which is worse than no test.
+- **Human and Codex review**, read as above.
+- **Clippy at `-D warnings`, per crate, at the point of an act.**
 
-   ```bash
-   for c in $(ls crates); do
-     if out=$(cargo clippy -p "$c" --all-targets --message-format=short \
-                -- -D warnings 2>&1); then
-       printf '%-18s %s\n' "$c" 0
-     else
-       n=$(printf '%s\n' "$out" | grep -cE '^crates/.*: error:') || true
-       [ "$n" -eq 0 ] && n=BROKEN
-       printf '%-18s %s\n' "$c" "$n"
-     fi
-   done
-   ```
-
-   **`BROKEN` means the run failed for a reason that is not a lint** and the
-   crate's gate is unknown rather than passed. It is separated because a
-   loop that counts lint lines out of a pipe reports the exit status of
-   `grep` and prints a clean zero for a run that never linted. A bad flag is
-   enough to cause it, erroring on cargo's first argument and reading as clean
-   through the pipe. **The zero a broken run prints is the most expensive line
-   in this section**, so it prints a word instead.
-
-   **It counts the source lines the lint names**, so a finding whose path
-   clippy prints relative to the crate rather than the tree is not in the
-   count. That is not the case in this tree today, and it is where to look
-   first if a crate you know is dirty reads zero.
-
-   **The count is per box and this file records none.** Two seats running
-   that loop on one commit have returned different answers, a cast whose lint
-   fires only where it is a no-op being a property of the target's headers
-   rather than of the tree. **A count is a reading taken on a box**, which is
-   the second reason it does not live here, and #471 carries each reading with
-   the seat that took it.
-
-   **The workspace sweep is not the gate and under-reports it.** A crate that
-   fails does not compile under deny-warnings, so its dependents are not
-   linted at all and `--workspace` answers a smaller question than eleven
-   per-crate runs do.
-
-6. **The census**, H6 from the operator's ruling of 2026-09-11, **retired
-   2026-09-27** with the graph. Its scripts left the tree in #713, git being the
-   archive. Section 1's archive rule is held by review meanwhile, an archive
-   directory in a diff being a finding. `process/ingest/chunk_plan.py` and
-   `.hadesignore` are dormant until release.
-
-Every real defect found in the quarry's final week came from items 2-4, while
-`gate-check.py` returned 0 findings on four consecutive PRs and the graph returned zero
-code defects while accumulating 53 dangling edges of its own. A clean automated gate is
-evidence the gate did not fire, not evidence of correctness.
-
-## The pull request path
-
-All pull requests open as drafts, from a worktree, and the arrangement runs as the
-#683 trial of 2026-09-25 settled it and the operator's word of 2026-09-27 fixed it:
-the Executor seat opens the draft and never takes it out of draft, the Planner seat
-grades the draft and undrafts it when it passes, Codex's GitHub review is the
-third-party reviewer, and the operator merges. CodeRabbit is retired since
-2026-09-22. **Edits to this file and to `AGENTS.md` go straight to `main` from the
-Planning seat**, on the operator's word of 2026-09-27, so the Executor stays on code.
-
-**A pull request in draft gets no pass.** Undrafting fires one, every push to an
-undrafted pull request fires one, and `@codex review` or `@codex security review` on the
-pull request requests one. A clean pass edits the summary comment in place and posts no
-review object and no thread. Findings arrive as review threads, sometimes a minute after
-the summary row flips. Because the rework is a push to an undrafted pull request, the
-rework is always reviewed, which is the rule the sub-agent seat once carried as its
-second pass: on 2026-09-11 answering fifteen findings introduced a real defect in three
-pull requests of four, each found by the pass after the fixes.
-
-**The Planner grades every pass on the pull request** against a clean extract of
-the head, and verifies each fix by its own perturbation, not by the Executor's
-account. The grade is what the Executor acts on: a valid finding is fixed, an
-invalid one is declined with the reason, and either way the finding is answered
-on the pull request, since the record carries it as it stood. **Passing means no
-finding that changes behaviour or corrects a claim is unanswered.**
-
-**Fix the class and walk every site before the next pass.** A finding names one site of
-its class, and a site fix answers the finding while the reviewer finds the next site:
-#683's tail was classes fixed narrowly and found again, pass after pass. So a fix greps
-every consumer of the same shape in every file of the act, tables each site in the body
-with its disposition, and only then takes the next pass.
-
-**More than four review rounds is a checkpoint, not a stop**, on the operator's word of
-2026-09-28. The bound was chiefly a cost control from the CodeRabbit era, and Codex's
-review is a fixed cost. Past four rounds the Planner evaluates whether the findings
-converge. Valid, distinct findings, each a new class, keep the loop going. The same
-class found again, or findings sharing one design question, return the pull request to
-design, which is how #683's twenty-eight passes ended: each finding was the next site of
-a few classes. Working Process section 6 owns the rule, with the two that come before it
-on the ruling of 2026-09-27: a verdict's pass is stated in its Spec before it is
-hardened, and a carry is not a hardening.
-
-**Gates before review**: a reviewer's attention on what a command can check is attention
-not on "does this fix hold". The order, then, is this. The gates come first - `lock.sh`,
-fmt, clippy for the touched crate, and the G1 greps where documents moved - then the
-Planner's grade of the draft against a clean extract, carrying a conformance verdict for
-every section the `Implements:` line names, then out of draft, which fires the Codex
-pass. Every finding of the pass is graded and answered, fixed or declined with the
-reason on the pull request. The fixes pass the gates and then are pushed, that push
-fires a pass and the Planner grades it, and the loop repeats until a pass leaves nothing
-to push, past four rounds of it the checkpoint above. Then the operator's merge.
-
-**A pull request names what it answers, and a merge is not done until the ledger
-is.** On the operator's ruling of 2026-09-26, after an audit of the eleven epics
-found thirty checklist items landed and never ticked, twenty-two belonging to a
-crate that had left, and every closed epic still carrying live items. Three
-clauses. First, the body carries every issue the act closes, as `Closes #N`, and
-every epic item it closes or moves, by epic and item number with what the act did
-to it, and a pull request that answers nothing says so in one line. The Planner's
-verification before undraft checks the list is there. Second, after the operator
-merges, the Executor ticks each named item on its epic with the merge commit, or
-annotates it as moved or declined with the reason, in the same session as the
-merge notice, and the Planner's verification of main after a merge reads those
-edits. Third, an epic closes only when its checklist is empty or every remaining
-item is annotated with where it went. GitHub joins an issue to a pull request
-only whole, and an epic is the one thing a pull request never closes whole, so
-the join is made by hand in the body and kept true at the merge, and the register
-of 2026-09-26 is what its absence cost.
-
-## Experiment evidence lives on the share
-
-**A run's evidence lives in its deposit on the shared bulk store, and the repository
-carries only the result note and the scripts that produced its figures**, on the
-operator's word of 2026-09-28. Deposits sit under `weaver-testing/` on the bulk store,
-which olympus exports over NFS to the LAN and the thinkpad mounts, so each seat reads
-the other's runs where they were written. The record, the log, the summary, the box
-facts, the raw trace and the captured journal evidence all stay there, in the deposit
-and its `evidence/` directory. A trace runs to hundreds of megabytes, and committing one
-would make every clone carry it. **Every experiment's results go there by default**, and
-the result report goes in two places, a copy in the deposit and the same report under
-`experiments/` in the repository. The repository's copy names its deposits and copies no
-data from them, and beside it sit the commands that ran the run and every script that
-computed a number the report states, the harness itself cited by its commit.
+A clean automated gate is evidence the gate did not fire, not evidence of correctness.
 
 ## Police call
 
-**An act picks up the litter it walks past.** A count gone stale, a doc comment
-attached to the wrong item, a usage line printed twice, a claim the file next to
-it already disproved. These are corrected where they are found and named in the
-pull request body. They do not become issues and they do not wait for an act of
-their own, because filing one costs more than fixing it and the filing is the
-part that goes stale.
+**An act picks up the litter it walks past**: a stale count, a doc comment on the wrong
+item, a usage line printed twice, a claim the next file disproves. Fix it where found and
+name it in the pull request body. The line is whether the fix needs a decision: a
+ruling, a Spec election, a new instrument, a test that does not exist yet is a
+construction site and becomes an issue carrying what was measured. A subagent working
+under a do-not-touch list reports what it found; the coordinating seat fixes it in the
+same pass.
 
-**The line is whether the fix needs a decision.** A ruling, a Spec election, a
-new instrument, a test that does not exist yet - that is a construction site and
-it is not this act's to clear. It gets an issue carrying what was measured.
-Everything short of that is litter, and an act that walks past litter to file a
-ticket about it has made two pieces of work out of none.
+## Experiments
 
-**A subagent often cannot pick it up.** Parallel acts hold files, and an agent
-editing outside its own extent is how two acts collide. So an agent reports what
-it found and where, and the coordinating seat fixes it in the same pass. A report
-is not a deferral, and the do-not-touch list an agent works under is about
-collision and never about whether the thing gets fixed.
+`experiments/` left this tree for the suite repository on 2026-09-30, and the process
+documents, `.hadesignore` and several project documents still say it is here. A run's
+evidence lives in its deposit under `weaver-testing/` on the shared bulk store (olympus
+exports it over NFS, the thinkpad mounts it), and a repository carries only the result
+note and the scripts that produced its figures, on the operator's word of 2026-09-28.
 
-Per the operator's instruction of 2026-09-16, after a day in which six stale
-counts and misattached comments were filed as owed to acts that did not exist.
+## Conventions
 
-## Command output is context, and the session pays for it
-
-**On the operator's ruling of 2026-09-11.** A session can spend a fifth of a
-one-million-token window on the output of its own commands: not on the work
-and not on the conversation, but on `cat`, on full test runs, on `psql` dumps,
-and on re-reading files already in the window. The corpus is large and a
-session that reads it carelessly runs out of room to think.
-
-**Verbose network and database output goes to a file, then the file is
-queried.** A result held once on disk can be grepped ten times for nothing,
-where a result printed to the session is paid for once and then paid for again
-in every later turn that carries it. Write to the scratchpad, report the count,
-read back only the rows that matter.
-
-**Cargo writes its diagnostics to stderr, so a pipe without `2>&1` discards
-what it claims to filter** and prints a clean nothing whether the command
-succeeded or failed. The enforcement section above calls the zero it prints
-the most expensive line in that section.
-
-```text
-cargo test -p <crate> 2>&1 | grep -E '^test result|FAILED'
-cargo build 2>&1          | grep -E '^error' -A4
-cargo clippy -p <crate> --all-targets --message-format=short -- -D warnings 2>&1 \
-                          | grep -cE '^crates/.*: error:'
-git diff                  --stat first; the full diff only for the hunk in hand
-a listing                 aggregated - uniq -c, awk totals - never row by row
-a file already read       sed -n 'X,Yp', never cat
-```
-
-**A count from a pipe is still not the command's verdict**: a crate that fails
-to compile emits no `test result` line at all, so the grep prints nothing and
-nothing reads like success. Check the exit status where the answer matters.
-
-**Never `git checkout --` a file to undo an experiment.** It restores the
-index, and an uncommitted rewrite in that file is gone. Copy the file aside
-and copy it back.
-
-**Grep the narrowest thing that answers the question.** `grep -c` where a
-count settles it. A path rather than a tree. One section of a Spec rather than
-the Spec, which at two and a half thousand lines is most of a percent of the
-window each time it is opened.
-
-**This is a discipline and not a tooling gap.** A retrieval index over the
-corpus would cut the document half of it, and is wanted for other reasons -
-but the command output above is the session's own doing and no index touches
-it.
-
-## Conventions carried from the quarry
-
-- **Editorial: ASCII only, no em-dashes** (use ` - `) in docs and handoffs.
-- **Dates are absolute** (`2026-07-28`). A document carries no dated banner and no
-  header history, per Working Rules section 1. Where a kind elects `Landing PR`,
-  and a process document does not, the field names the pull request that last
-  changed what the document says.
-- **Forbidden vocabulary:** no Id/Ego/SuperEgo/Freudian framing in prose or code. Canonical
-  terms are `trace` / `reflection` / `substrate-state`.
-- **`latency is the enemy of agency`.** Prefer the shorter abstraction. Internal traffic
-  uses Unix sockets, never the network stack. Default to subprocess CLI over MCP - the
-  JSON-RPC and stdio buffering cost compounds across hundreds of tool calls per session.
-- **OPSEC / publish boundary.** The open-core plan extracts the SPU as a separate public
-  crate, so the guard is the *publish* boundary: no commercial, GTM, or strategy material
-  and no single-operator-vs-multi-tenant distinction in anything destined to be published.
-  **Check visibility, never assume it.** It has changed more than once and this file
-  has been wrong about it, so any statement of it here is a record rather than a
-  current fact. One command settles it:
-  `gh repo view toddwbucy/WeaverTools --json visibility`.
+- ASCII only, no em-dashes (use ` - `). Absolute dates (`2026-09-30`). No dated banners
+  or header histories; git is the archive, so superseded text is removed, not struck.
+- Canonical vocabulary is `trace` / `reflection` / `substrate-state`. No Id/Ego/SuperEgo
+  or Freudian framing in prose or code. Publish-destined prose says "memory" or
+  "state", not organ names.
+- A ruling is a claim about the whole corpus, so an act that lands one ends with a
+  whitespace-normalized sweep for every wording it retires, this file included.
+- `latency is the enemy of agency`: prefer the shorter abstraction, Unix sockets over
+  the network stack, subprocess CLI over MCP.
+- Internal traffic never touches the network stack, and a consumer never links an
+  interior crate. Internal IPC is `SO_PEERCRED`-verified.
+- Publish boundary: no commercial, GTM or strategy material and no single-operator
+  versus multi-tenant distinction in anything destined to be published. Check
+  visibility with `gh repo view`; never assume it.
+- No document edits under `docs/crates/weaver-analysis/` or the two analysis contracts
+  without saying which copy you changed.
