@@ -55,8 +55,7 @@ deploy/create-agent.sh <name> --artifact /opt/weaver/models/<artifact> --engine 
 
 `--engine` names the store and must be one the installed member carries. The script
 provisions `postgres` only and refuses `sqlite` and `none`, telling the operator to
-declare those by hand; a sqlite path, the default under the operator's ruling of
-2026-09-30, is #34. `--session` names the session the declaration opens,
+declare those by hand; a sqlite path beside the postgres one is #34. `--session` names the session the declaration opens,
 default `<name>-001`. Apply ends with two probes: the member reaches the database as its
 role, and the agent's own uid is refused. A refusal there is the boundary being wrong,
 not the agent.

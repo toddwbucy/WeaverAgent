@@ -202,9 +202,9 @@ pytest -q                                                 # CPU; the venv is hel
 ### Deploying and driving an agent
 
 `deploy/REDEPLOY.md` (a box from scratch) and `deploy/HowToDeployANewAgent.md` (one
-agent on a standing stack) describe the postgres path the scripts were written for.
-Under the operator's ruling of 2026-09-30 agent stores are sqlite (#38), and the scripts
-have known gaps, each an issue: `update-stack.sh` refuses at its test step (#33),
+agent on a standing stack) walk a postgres agent. An agent may elect sqlite or postgres
+(the build carries both, on the operator's ruling of 2026-09-30, #38). The scripts have
+known gaps, each an issue: `update-stack.sh` refuses at its test step (#33),
 `create-agent.sh` cannot make a sqlite agent (#34), `decommission.sh` discovers by one
 layout and matches every `weaver%` database (#35), small fixes (#39). The scripts are
 `bootstrap-stack.sh`, `update-stack.sh`, `create-agent.sh`, `verify-load.sh`,
