@@ -28,9 +28,9 @@ def copy(tmp_path, tiny_model):
 
 def test_the_first_look_is_the_rust_resolve(tmp_path, oracle):
     """Absent and a path through a file are unresolvable, a FIFO is unresolvable, and a
-    regular file, which the Rust SPU resolves and this build does not serve, crosses as
-    `BackendNotBuilt` does. Perturbation: judge the path with `is_dir()` alone, as the
-    prototype did, and the regular file reads unresolvable."""
+    regular file resolves and is judged by its header, as the Rust SPU judges it.
+    Perturbation: judge the path with `is_dir()` alone, as the prototype did, and the
+    regular file reads unresolvable."""
     assert refused(tmp_path / "absent") == "artifact_unresolvable"
     assert oracle(op="artifact", path=str(tmp_path / "absent")) == {
         "error": "ArtifactUnresolvable"}
@@ -38,10 +38,10 @@ def test_the_first_look_is_the_rust_resolve(tmp_path, oracle):
     assert refused(tmp_path / "file" / "below") == "artifact_unresolvable"
     os.mkfifo(tmp_path / "fifo")
     assert refused(tmp_path / "fifo") == "artifact_unresolvable"
-    assert refused(tmp_path / "file") == "device_cannot_admit"
-    # The Rust SPU resolves and pins the same file, which is what makes its refusal
-    # here a backend this build lacks and not an artifact that failed to resolve.
+    # The Rust SPU resolves and pins the same file, and reads its header next, so a
+    # file of no container's bytes is unreadable there, as here.
     assert "ok" in oracle(op="artifact", path=str(tmp_path / "file"))
+    assert refused(tmp_path / "file") == "artifact_unreadable"
 
 
 def test_a_denied_lookup_is_unreadable(tmp_path, oracle):
@@ -95,3 +95,81 @@ def test_a_quantized_artifact_is_one_the_engine_cannot_take(copy):
     config["quantization_config"] = {"quant_method": "bitsandbytes", "load_in_8bit": True}
     (copy / "config.json").write_text(json.dumps(config))
     assert refused(copy) == "device_cannot_admit"
+
+
+def gguf(architecture=None, template=None, truncate=False):
+    """A GGUF header with no tensors and the key-value pairs named."""
+    import struct
+
+    def text(value):
+        data = value.encode()
+        return struct.pack("<Q", len(data)) + data
+    pairs = []
+    if architecture is not None:
+        pairs.append(text("general.architecture") + struct.pack("<I", 8) + text(architecture))
+    if template is not None:
+        pairs.append(text("tokenizer.chat_template") + struct.pack("<I", 8) + text(template))
+    data = b"GGUF" + struct.pack("<IQQ", 3, 0, len(pairs)) + b"".join(pairs)
+    return data[:-3] if truncate else data
+
+
+def safetensors(header):
+    import struct
+    body = json.dumps(header).encode()
+    return struct.pack("<Q", len(body)) + body
+
+
+@pytest.mark.parametrize("name,data,kind", [
+    ("malformed", gguf("qwen2", truncate=True), "artifact_unreadable"),
+    ("no-architecture", gguf(), "artifact_unreadable"),
+    ("unknown-family", gguf("mystery"), "artifact_unreadable"),
+    ("contested-without-template", gguf("llama"), "artifact_unreadable"),
+    ("served-elsewhere", gguf("qwen3"), "device_cannot_admit"),
+    ("qwen2-gguf", gguf("qwen2"), "device_cannot_admit"),
+])
+def test_a_gguf_is_judged_by_its_header_first(tmp_path, oracle, name, data, kind):
+    """weaver-spu reads the header at step two, before `BackendNotBuilt` can answer at
+    step four: malformed bytes and a family the registry does not hold are unreadable,
+    a contested family with no template is `TemplateAbsent`, and a header the free
+    steps pass meets the missing backend. Found by Codex on #47. The Rust header read is
+    executed on the same bytes. Perturbation: refuse every GGUF `device_cannot_admit`
+    before the header, as the act's first commit did, and the unreadable cases fail."""
+    root = tmp_path / name
+    root.mkdir()
+    (root / "model.gguf").write_bytes(data)
+    rust = oracle(op="header", path=str(root))
+    if kind == "artifact_unreadable" and name in ("malformed", "no-architecture"):
+        assert rust == {"error": "ArtifactUnreadable"}, rust
+    else:
+        assert rust["ok"]["container"] == "Gguf", rust
+    assert refused(root) == kind
+
+
+def test_a_file_reference_is_judged_by_its_header_first(tmp_path, oracle):
+    """A file reference resolves in the Rust SPU and its header is read before any
+    backend answers: malformed bytes are unreadable, a safetensors file naming qwen2
+    beside its sidecar meets the backend this build lacks."""
+    bad = tmp_path / "bad.safetensors"
+    bad.write_bytes(b"\x05\x00")
+    assert oracle(op="header", path=str(bad)) == {"error": "ArtifactUnreadable"}
+    assert refused(bad) == "artifact_unreadable"
+    good = tmp_path / "good" / "model.safetensors"
+    good.parent.mkdir()
+    good.write_bytes(safetensors({"__metadata__": {"format": "pt"}}))
+    (good.parent / "config.json").write_text(json.dumps({"model_type": "qwen2"}))
+    assert oracle(op="header", path=str(good))["ok"]["family"] == "qwen2"
+    assert refused(good) == "device_cannot_admit"
+
+
+def test_a_directorys_header_and_sidecars_refuse_before_the_load(copy, oracle):
+    """The safetensors header and its sidecars, `config.json` and
+    `tokenizer_config.json`, are read at step two in the Rust SPU, a present one that
+    does not parse refusing unreadable, before any device or load. Perturbation: drop
+    the header read, and the corrupt tokenizer_config.json admits."""
+    (copy / "tokenizer_config.json").write_text("{ not json")
+    assert oracle(op="header", path=str(copy)) == {"error": "ArtifactUnreadable"}
+    assert refused(copy) == "artifact_unreadable"
+
+
+def test_the_registry_families_are_the_rust_registrys(oracle):
+    assert oracle(op="registry_families") == {"ok": engine.REGISTRY_FAMILIES}

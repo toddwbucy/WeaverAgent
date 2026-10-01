@@ -47,6 +47,19 @@ fn run(v: Value, raw_body: &str) -> Result<Value, String> {
             let mut pinned = weaver_spu::artifact::pin(&resolved).map_err(|e| format!("{e:?}"))?;
             Ok(json!(weaver_spu::artifact::weights_hash(std::path::Path::new(dir), &mut pinned).0))
         },
+        // weaver-spu artifact.rs's read_header over the resolved and pinned artifact:
+        // the container and the family the header names, or the refusal, step two.
+        "header" => {
+            let reference = weaver_types::ArtifactRef(v["path"].as_str().ok_or("path")?.into());
+            let resolved = weaver_spu::artifact::resolve(&reference).map_err(|e| format!("{e:?}"))?;
+            let mut pinned = weaver_spu::artifact::pin(&resolved).map_err(|e| format!("{e:?}"))?;
+            let header = weaver_spu::artifact::read_header(&mut pinned).map_err(|e| format!("{e:?}"))?;
+            Ok(json!({"container": format!("{:?}", header.container), "family": header.family.0,
+                "template": header.chat_template}))
+        },
+        // weaver-spu family/mod.rs's REGISTRY, its families in order.
+        "registry_families" => Ok(json!(weaver_spu::family::REGISTRY.iter()
+            .map(|declaration| declaration.family).collect::<Vec<_>>())),
         "render" => {
             let messages: Vec<weaver_traits::Message> = serde_json::from_value(body).map_err(|e| e.to_string())?;
             weaver_spu::family::qwen2::renderer().render_identity(&messages)

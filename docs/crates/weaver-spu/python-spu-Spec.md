@@ -242,9 +242,10 @@ width as `DeviceCannotAdmit`.
 | --- | --- | --- |
 | Nothing at the artifact path, or a path through a file; a path that is neither directory nor regular file | `resolve`, `Unresolvable` | `artifact_unresolvable` |
 | A lookup of the path the kernel refuses | `resolve`, `Unreadable` | `artifact_unreadable` |
-| A regular file, which the Rust SPU resolves and this build does not serve | `BackendNotBuilt` | `device_cannot_admit` |
 | A directory holding no container, or containers that are not one split | `resolve`'s `container_within`, `Unresolvable` | `artifact_unresolvable` |
-| A GGUF container, the backend this build does not carry | `BackendNotBuilt` | `device_cannot_admit` |
+| A header that does not read: GGUF's walk failing or naming no architecture, a safetensors header that is not its length-prefixed JSON or names no family, a `config.json` or `tokenizer_config.json` present and not JSON | `read_header`, step two, `Unreadable`, read before any device is judged | `artifact_unreadable` |
+| A GGUF container, or a regular-file reference, whose header reads: a family the registry does not hold, or a contested family with no template | `FamilyRefusal::UnknownFamily`, `TemplateAbsent` | `artifact_unreadable` |
+| The same, the family selected | the free steps pass and the load meets `BackendNotBuilt`, the backend this build does not carry | `device_cannot_admit` |
 | A device count other than one | `FamilyRefusal::WidthNotDeclared` | `device_cannot_admit` |
 | The CPU experiment on another ordinal, a CUDA device absent, the room judgment, an unreachable device | `Device`, `DeviceRefused` | `device_cannot_admit` |
 | A family other than qwen2, or the turn markers not promoted to single tokens | `FamilyRefusal::UnknownFamily`, `MarkersMatchNoEntry` | `artifact_unreadable` |
@@ -253,6 +254,15 @@ width as `DeviceCannotAdmit`.
 | A quantized artifact; any failure while the engine takes the weights or places them, out of memory included | step four, `LoadFailed` | `device_cannot_admit` |
 | The weights hash's walk failing, or a pinned name it no longer meets | the hash step's `Unreadable`, per `weaver-spu-Spec` section 3 on the operator's ruling of 2026-10-01; the oracle's pinned commit predates that ruling and admits with the empty sentinel | `artifact_unreadable` |
 
+**The header is ported**, `engine.read_header` over the pinned first container with
+the Rust caps, and the registry's families, `engine.REGISTRY_FAMILIES`, are held to the
+Rust `REGISTRY` by the oracle. A contested family's template is matched in the Rust SPU
+by llama.cpp's renderer, which this build does not carry, so a template no entry
+matches, `MarkersMatchNoEntry` or `MarkersAmbiguous` there, crosses here as a selected
+family would, `device_cannot_admit`, where the Rust SPU answers `artifact_unreadable`.
+That is the one divergence the mapping keeps, and it is reachable only by a GGUF or file
+reference this build refuses either way.
+
 The quantized row is traced through the Rust code rather than measured. The header
 step reads the family from `model_type` and never `quantization_config`, the native
 backend's `judge_family` judges the declared architecture alone, so a quantized qwen2
@@ -260,7 +270,8 @@ passes both and never reaches `BackendDoesNotServe`, and its weights then fail i
 `VarBuilder::from_mmaped_safetensors` at BF16 or `ModelForCausalLM::new`, both mapped
 to `LoadFailed`, all in `decoder/native.rs` `ResidentModel::load`. The tests in
 `tests/test_load_kinds.py` hold each step's kind, the first look's against the Rust
-`resolve` through the oracle's `artifact` operation.
+`resolve` through the oracle's `artifact` operation and the header's against the Rust
+`read_header` through its `header` operation.
 
 ## 4. What is its own
 

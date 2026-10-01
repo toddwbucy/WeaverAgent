@@ -147,20 +147,113 @@ def judge_room(ordinal,free,total,shard_bytes,headroom):
         raise AdmissionError('device_cannot_admit',
                              f'no room on device {ordinal}: free {free}, needed {needed}, total {total}')
 
+class _Header:
+    """A reader over a pinned descriptor, every short read unreadable, as
+    weaver-spu artifact.rs's `read_exact` maps its failures."""
+    def __init__(self,fd): self.fd=fd; self.at=0
+    def take(self,n):
+        data=os.pread(self.fd,n,self.at)
+        if len(data)!=n: raise AdmissionError('artifact_unreadable','the header is short')
+        self.at+=n; return data
+    def u32(self): return int.from_bytes(self.take(4),'little')
+    def u64(self): return int.from_bytes(self.take(8),'little')
+    def text(self):
+        length=self.u64()
+        if length>64*1024: raise AdmissionError('artifact_unreadable','a GGUF string past its cap')
+        try: return self.take(length).decode('utf-8')
+        except UnicodeDecodeError: raise AdmissionError('artifact_unreadable','a GGUF string not UTF-8') from None
+    def value(self,kind,depth=0):
+        widths={0:1,1:1,2:2,3:2,4:4,5:4,10:8,11:8}
+        if kind in widths: return int.from_bytes(self.take(widths[kind]),'little')
+        if kind in (6,7,12): self.take({6:4,7:1,12:8}[kind]); return None
+        if kind==8: return self.text()
+        if kind==9:
+            if depth>=8: raise AdmissionError('artifact_unreadable','a GGUF array nested past its cap')
+            element=self.u32(); count=self.u64()
+            if count>1024*1024: raise AdmissionError('artifact_unreadable','a GGUF array past its cap')
+            for _ in range(count): self.value(element,depth+1)
+            return None
+        raise AdmissionError('artifact_unreadable',f'a GGUF value of unknown type {kind}')
+
+def _sidecar(directory,name):
+    """artifact.rs `read_sidecar_json`: absent is None, present and not JSON refuses."""
+    import json
+    target=Path(directory)/name
+    if not target.is_file(): return None
+    try: return json.loads(target.read_text())
+    except (OSError,ValueError): raise AdmissionError('artifact_unreadable',f'{name} does not read') from None
+
+def read_header(fd,sidecars):
+    """weaver-spu artifact.rs `read_header`, step two, ported over the pinned first
+    container: GGUF's magic, version, counts and key-value walk with their caps, the
+    family from `general.architecture`; otherwise safetensors' length-prefixed JSON,
+    the family from `__metadata__` or the sidecar `config.json`, the chat template
+    from `tokenizer_config.json`, both sidecars refusing where present and unreadable.
+    Every failure is unreadable. Answers the container, the family and the template."""
+    import json
+    reader=_Header(fd)
+    if reader.take(4)==b'GGUF':
+        reader.u32(); reader.u64(); count=reader.u64()
+        if count>4096: raise AdmissionError('artifact_unreadable','GGUF metadata past its cap')
+        family=template=None
+        for _ in range(count):
+            key=reader.text(); value=reader.value(reader.u32())
+            if key=='general.architecture' and isinstance(value,str): family=value
+            if key=='tokenizer.chat_template' and isinstance(value,str): template=value
+        if family is None: raise AdmissionError('artifact_unreadable','GGUF names no architecture')
+        return {'container':'gguf','family':family,'template':template}
+    reader.at=0
+    length=reader.u64()
+    if length==0 or length>100*1024*1024: raise AdmissionError('artifact_unreadable','safetensors header length')
+    try: parsed=json.loads(reader.take(length))
+    except ValueError: raise AdmissionError('artifact_unreadable','safetensors header is not JSON') from None
+    metadata=parsed.get('__metadata__') if isinstance(parsed,dict) else None
+    config=_sidecar(sidecars,'config.json')
+    family=None
+    if isinstance(metadata,dict):
+        family=metadata.get('architecture',metadata.get('model_type'))
+    if not isinstance(family,str):
+        family=config.get('model_type') if isinstance(config,dict) else None
+    if not isinstance(family,str): raise AdmissionError('artifact_unreadable','no family declared')
+    tokenizer_config=_sidecar(sidecars,'tokenizer_config.json')
+    template=tokenizer_config.get('chat_template') if isinstance(tokenizer_config,dict) else None
+    return {'container':'safetensors','family':family,
+            'template':template if isinstance(template,str) else None}
+
+# weaver-spu family/mod.rs `REGISTRY`'s families, in its order, a family named twice
+# being contested between entries told apart by the chat template. tests/test_load_kinds.py
+# holds this to the registry by the oracle.
+REGISTRY_FAMILIES=['llama','llama','llama','qwen2','qwen3','qwen3moe','qwen35','qwen35moe',
+                   'gemma4','nemotron_h_moe','mistral3','phi3','phi3','gpt-oss']
+
+def backend_not_built(header):
+    """What the Rust SPU answers for a header this build has no backend for, judged as
+    its admit judges it before step four: a family the registry does not hold is
+    `UnknownFamily`, and a contested family with no template `TemplateAbsent`, both
+    unreadable; any other passes the free steps and meets `BackendNotBuilt`,
+    `device_cannot_admit`. A contested family's template is matched by llama.cpp's
+    renderer in the Rust SPU, which this build does not carry, so a template it would
+    match no entry by is answered here as it would be had it matched."""
+    from .family import same_key
+    matches=[f for f in REGISTRY_FAMILIES if same_key(f,header['family'])]
+    if not matches: raise AdmissionError('artifact_unreadable',f"no family {header['family']}")
+    if len(matches)>1 and header['template'] is None:
+        raise AdmissionError('artifact_unreadable',f"{header['family']} is contested and names no template")
+    raise AdmissionError('device_cannot_admit',f"this build carries no backend for {header['container']} {header['family']}")
+
 def resolve_directory(path):
     """weaver-spu artifact.rs `resolve`, its first look, ported: nothing at the path, or
     a path through a non-directory, is unresolvable; a lookup the kernel refuses is a
     present artifact this identity cannot reach, unreadable; anything but a directory or
-    a regular file is unresolvable. **A regular file resolves in the Rust SPU and is a
-    shape this build does not serve**, python-spu loading a safetensors directory alone,
-    so it refuses as the Rust SPU's `BackendNotBuilt` crosses, `device_cannot_admit`."""
+    a regular file is unresolvable. Answers 'directory' or 'file': **a regular file
+    resolves in the Rust SPU and is a shape this build does not serve**, judged after its
+    header by `backend_not_built`."""
     try: mode=os.stat(path).st_mode
     except (FileNotFoundError,NotADirectoryError):
         raise AdmissionError('artifact_unresolvable',str(path)) from None
     except OSError as e: raise AdmissionError('artifact_unreadable',f'{path}: {e}') from None
-    if stat.S_ISDIR(mode): return
-    if stat.S_ISREG(mode):
-        raise AdmissionError('device_cannot_admit',f'{path}: this build serves a safetensors directory')
+    if stat.S_ISDIR(mode): return 'directory'
+    if stat.S_ISREG(mode): return 'file'
     raise AdmissionError('artifact_unresolvable',str(path))
 
 class HFEngine:
@@ -174,18 +267,23 @@ class HFEngine:
         self.placing=False
         self.logits=None; self.norms=[]; self.current_norms=[]; self.readout=readout
         path=Path(artifact)
-        resolve_directory(path)
+        reference=resolve_directory(path)
         # Step one, as the Rust SPU's: the directory resolves to its containers, free.
-        members=containers(path)
-        # A GGUF container is the Rust SPU's other backend, which this build does not
-        # carry, and crosses as its `BackendNotBuilt` does.
-        if members[0].suffix!='.safetensors':
-            raise AdmissionError('device_cannot_admit','safetensors required: this build carries no GGUF backend')
-        if len(devices)!=1: raise AdmissionError('device_cannot_admit','one device required')
-        if cpu and devices!=[0]: raise AdmissionError('device_cannot_admit','CPU experiment requires ordinal 0')
-        self.device='cpu' if cpu else f'cuda:{devices[0]}'
-        if not cpu and (not torch.cuda.is_available() or devices[0]>=torch.cuda.device_count()):
-            raise AdmissionError('device_cannot_admit','assigned CUDA device unavailable')
+        members=containers(path) if reference=='directory' else [path]
+        # Step two, before any device is judged: the header through the pin. A GGUF
+        # container, or a file reference, is a shape whose backend this build does not
+        # carry, answered as the Rust SPU answers its header before step four.
+        self.pinned=pin(members)
+        try:
+            header=read_header(self.pinned[0][1],path if reference=='directory' else path.parent)
+            if reference=='file' or header['container']=='gguf': backend_not_built(header)
+            if len(devices)!=1: raise AdmissionError('device_cannot_admit','one device required')
+            if cpu and devices!=[0]: raise AdmissionError('device_cannot_admit','CPU experiment requires ordinal 0')
+            self.device='cpu' if cpu else f'cuda:{devices[0]}'
+            if not cpu and (not torch.cuda.is_available() or devices[0]>=torch.cuda.device_count()):
+                raise AdmissionError('device_cannot_admit','assigned CUDA device unavailable')
+        except BaseException:
+            self._unpin(); raise
         # A refusal is recorded here and raised after the except block ends, so the frames
         # and the exception that hold a part-moved model are gone when the cache is freed.
         model=None; failure=None
@@ -196,9 +294,9 @@ class HFEngine:
         # `device_cannot_admit`.
         loading=False
         try:
-            # The pin, held for the admit. The sidecars, config and tokenizer, are opens
-            # by name, the limit weaver-spu's native `sidecar_dir` states for its own.
-            self.pinned=pin(members)
+            # The pin, taken above and held for the admit. The sidecars, config and
+            # tokenizer, are opens by name, the limit weaver-spu's native `sidecar_dir`
+            # states for its own.
             config=AutoConfig.from_pretrained(path,local_files_only=True,trust_remote_code=False)
             if config.model_type!='qwen2': raise AdmissionError('artifact_unreadable','only qwen2 is verified')
             # A quantized safetensors artifact is one the engine cannot take, which in the

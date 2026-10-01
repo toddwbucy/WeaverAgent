@@ -352,8 +352,9 @@ def test_a_gguf_resolves_and_python_spu_refuses_it(tmp_path):
     assert engine.containers(root) == [root / "model.gguf"]
     with pytest.raises(AdmissionError) as caught:
         engine.HFEngine(root, [0], cpu=True)
-    assert (caught.value.kind, str(caught.value)) == (
-        "device_cannot_admit", "safetensors required: this build carries no GGUF backend")
+    # The fixture's bytes are no GGUF header, which the Rust SPU refuses unreadable at
+    # step two before any backend answers; tests/test_load_kinds.py walks the header.
+    assert caught.value.kind == "artifact_unreadable"
 
 
 # The determinism environment, python-spu-Spec section 8.
