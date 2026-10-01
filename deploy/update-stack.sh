@@ -163,8 +163,9 @@ BUILT="$BUILT/release"
 # installing fifty-odd files, every `.d` and `.rlib` among them, and `hades`
 # and its libraries from a workspace that has nothing to do with this one.
 # Discovering the subject from a directory is how a deployment installs what
-# it was never asked to. The build also makes `weaver-analysis` and
-# `weaver-spu-classify`, which this script does not ship. The build below is
+# it was never asked to. The build also makes `weaver-spu-classify`, which
+# this script does not ship; `weaver-analysis` left the workspace for its own
+# repository on 2026-09-30. The build below is
 # the whole workspace, the frontend having left the repository on 2026-09-26.
 # A member joins the installed set by being written here.
 MEMBERS="pyworker worker weaver-admin weaver-gate weaver-spu weaver-state"
@@ -307,14 +308,14 @@ say "test"
 # the package is also what lets the step name a `weaver-state` feature, the
 # refusal that kept it out being about selection rather than about the flag.
 cargo test --release --locked \
-  -p weaver-trace -p weaver-harness -p weaver-analysis -p weaver-state \
+  -p weaver-trace -p weaver-harness -p weaver-state \
   --features "$MEMBER_FEATURES" 2>&1 | grep -E '^test result' | \
   awk '{p+=$4; f+=$6} END {printf "  %d passed, %d failed\n", p, f; exit (f>0)}'
 
 # ------------------------------------------------------------------- 4. build
 # The frontend left the repository on 2026-09-26 and ships no member here, so
 # the build is the whole workspace: the six installed members and the tools
-# beside them (including analysis for replay).
+# beside them.
 say "build"
 NVCC_CCBIN=${NVCC_CCBIN:-/usr/bin/g++-15} \
   cargo build --release --locked --workspace --features "$FEATURES"
