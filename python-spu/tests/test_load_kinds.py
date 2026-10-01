@@ -252,7 +252,7 @@ def test_the_header_reads_as_serde_json_reads_it(tmp_path, oracle, name):
     rust = oracle(op="header", path=str(path))
     pinned = engine.pin([path])
     try:
-        python = {"ok": engine.read_header(pinned[0][1], tmp_path)["family"]}
+        python = {"ok": engine.read_header(pinned[0][1])["family"]}
     except AdmissionError as refusal:
         assert refusal.kind == "artifact_unreadable"
         python = "refused"
@@ -260,3 +260,51 @@ def test_the_header_reads_as_serde_json_reads_it(tmp_path, oracle, name):
         for _, fd in pinned:
             os.close(fd)
     assert python == ({"ok": rust["ok"]["family"]} if "ok" in rust else "refused"), rust
+
+
+def test_the_sidecars_are_read_beside_the_pinned_container(tmp_path, oracle):
+    """weaver-spu artifact.rs `sidecar_dir_of`: the header reads `config.json` beside
+    the file the pin holds, recovered through `/proc/self/fd`, not beside the name the
+    reference gave. A container reached through a link reads its target's sidecar, as
+    the Rust `read_header` does through the oracle on the same link. Found by Codex on
+    #47. Perturbation: read the sidecars beside the name, and the link's own
+    `config.json` names another family."""
+    import struct
+    header = json.dumps({"__metadata__": {"format": "pt"}}).encode()
+    real, beside = tmp_path / "real", tmp_path / "beside"
+    real.mkdir()
+    beside.mkdir()
+    (real / "model.safetensors").write_bytes(struct.pack("<Q", len(header)) + header)
+    (real / "config.json").write_text(json.dumps({"model_type": "qwen2"}))
+    (beside / "config.json").write_text(json.dumps({"model_type": "llama"}))
+    (beside / "model.safetensors").symlink_to(real / "model.safetensors")
+    rust = oracle(op="header", path=str(beside / "model.safetensors"))
+    pinned = engine.pin([beside / "model.safetensors"])
+    try:
+        python = engine.read_header(pinned[0][1])["family"]
+    finally:
+        for _, fd in pinned:
+            os.close(fd)
+    assert rust["ok"]["family"] == "qwen2", rust
+    assert python == rust["ok"]["family"], (python, rust)
+
+
+def test_the_load_reads_its_sidecars_beside_the_pinned_container(tiny_model, tmp_path):
+    """weaver-spu decoder/native.rs `sidecar_dir`: the load's `config.json`,
+    `AutoConfig` and `tokenizer.json` are read beside the pinned container, as the
+    header's are. A directory whose container links into another model's directory
+    loads that model's sidecars, never the ones sitting beside the link. Perturbation:
+    read them from the reference's directory, and the link's own `config.json`, a
+    family this build does not serve, refuses the load."""
+    linked = tmp_path / "linked"
+    linked.mkdir()
+    (linked / "model.safetensors").symlink_to(tiny_model / "model.safetensors")
+    for name in ("config.json", "tokenizer_config.json"):
+        shutil.copy(tiny_model / name, linked / name)
+    declared = json.loads((tiny_model / "config.json").read_text())
+    (linked / "config.json").write_text(json.dumps(dict(declared, model_type="llama")))
+    loaded = engine.HFEngine(linked, [0], cpu=True)
+    try:
+        assert loaded.layers == 2 and loaded.terminator == 2
+    finally:
+        loaded.close()

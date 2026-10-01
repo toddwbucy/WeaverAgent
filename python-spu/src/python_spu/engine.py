@@ -252,21 +252,45 @@ class _Header:
             return None
         raise AdmissionError('artifact_unreadable',f'a GGUF value of unknown type {kind}')
 
+def sidecar_dir_of(fd):
+    """weaver-spu artifact.rs `sidecar_dir_of`, ported: the directory the kernel now
+    names the pinned container's inode in, read back through `/proc/self/fd`, or None
+    where the link does not read. **The sidecars are the pinned file's neighbours, not
+    the name's**: a container reached through a link reads the `config.json` beside
+    its target, as the Rust reads it, never one beside the link."""
+    try: return Path(os.readlink(f'/proc/self/fd/{fd}')).parent
+    except OSError: return None
+
+def load_dir(fd):
+    """weaver-spu decoder/native.rs `sidecar_dir`, ported: the pinned container's
+    directory as the kernel names it, or where the link does not read, the parent of
+    the descriptor's own `/proc/self/fd` path, which holds no `config.json`, so the
+    load fails there as the native load does."""
+    path=f'/proc/self/fd/{fd}'
+    try: real=os.readlink(path)
+    except OSError: real=path
+    return Path(real).parent
+
 def _sidecar(directory,name):
     """artifact.rs `read_sidecar_json`: absent is None, present and not JSON, as
-    serde_json reads it, refuses."""
+    serde_json reads it, refuses. No directory, the pin's link not reading, is no
+    sidecar, as the Rust's `None` is."""
+    if directory is None: return None
     target=Path(directory)/name
     if not target.is_file(): return None
     try: return strict_json(target.read_bytes())
     except (OSError,ValueError): raise AdmissionError('artifact_unreadable',f'{name} does not read') from None
 
-def read_header(fd,sidecars):
+def read_header(fd):
     """weaver-spu artifact.rs `read_header`, step two, ported over the pinned first
     container: GGUF's magic, version, counts and key-value walk with their caps, the
     family from `general.architecture`; otherwise safetensors' length-prefixed JSON,
     the family from `__metadata__` or the sidecar `config.json`, the chat template
     from `tokenizer_config.json`, both sidecars refusing where present and unreadable.
-    Every failure is unreadable. Answers the container, the family and the template."""
+    Every failure is unreadable. Answers the container, the family and the template.
+    The sidecars are read beside the pinned file, `sidecar_dir_of`, as the Rust reads
+    them."""
+    sidecars=sidecar_dir_of(fd)
     reader=_Header(fd)
     if reader.take(4)==b'GGUF':
         reader.u32(); reader.u64(); count=reader.u64()
@@ -391,7 +415,7 @@ class HFEngine:
             members=containers(path) if reference=='directory' else split_members(path)
             step='pin'; self.pinned=pin(members)
             step='header'
-            header=read_header(self.pinned[0][1],path if reference=='directory' else path.parent)
+            header=read_header(self.pinned[0][1])
             step='select'; candidates=select(header)
             step='width'
             if not any(len(devices) in widths for _,widths,_ in candidates):
@@ -422,17 +446,19 @@ class HFEngine:
             # `read_declaration` then `judge_family` on the declaration's own
             # `model_type`, BackendDoesNotServe crossing unreadable, the one step-four
             # refusal that does.
-            declared=strict_json((path/'config.json').read_bytes())
+            # The sidecars beside the pinned container, as the native load reads them.
+            beside=load_dir(self.pinned[0][1])
+            declared=strict_json((beside/'config.json').read_bytes())
             from .family import SERVED_ARCHITECTURE,same_key
             model_type=declared.get('model_type') if isinstance(declared,dict) else None
             if not isinstance(model_type,str) or not same_key(model_type,SERVED_ARCHITECTURE):
                 raise AdmissionError('artifact_unreadable',f'the native backend does not serve {model_type}')
             # `read_config`: a quantized artifact is one the engine cannot take.
-            config=AutoConfig.from_pretrained(path,local_files_only=True,trust_remote_code=False)
+            config=AutoConfig.from_pretrained(beside,local_files_only=True,trust_remote_code=False)
             if getattr(config,'quantization_config',None):
                 raise AdmissionError('device_cannot_admit','quantized artifacts unsupported')
             self.max_context=config.max_position_embeddings
-            self.tokenizer=Tokenizer.from_file(str(path/'tokenizer.json'))
+            self.tokenizer=Tokenizer.from_file(str(beside/'tokenizer.json'))
             self.terminator=self.tokenizer.token_to_id('<|im_end|>')
             # This build's own judgment, the renderer's markers each one token.
             for marker in ('<|im_start|>','<|im_end|>'):

@@ -149,7 +149,7 @@ def test_a_short_header_read_is_read_on(tmp_path, monkeypatch):
     path.write_bytes(data)
     pinned = engine.pin([path])
     try:
-        assert engine.read_header(pinned[0][1], tmp_path)["family"] == "qwen2"
+        assert engine.read_header(pinned[0][1])["family"] == "qwen2"
     finally:
         for _, fd in pinned:
             engine.os.close(fd)

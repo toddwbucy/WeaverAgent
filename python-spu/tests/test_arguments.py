@@ -558,12 +558,22 @@ def test_the_pins_are_closed_on_every_path(artifact, monkeypatch):
 def test_a_symlinked_container_admits_and_hashes_as_the_rust_does(artifact, oracle):
     """hash_canonical does not follow links, so a container reached through one is left
     out of the digest, the pin still serving its load, which is #25's symlinked-member
-    item. Perturbation: refuse every pinned container the walk does not meet, and this
-    refuses."""
+    item. The sidecars are the link target's, artifact.rs `sidecar_dir_of`, so the
+    target's directory holds them, and a target standing alone, no `config.json` beside
+    it, refuses on both sides at the header (Codex on #47). Perturbation: refuse every
+    pinned container the walk does not meet, and this refuses."""
     root, _ = artifact
-    blob = root.parent / "blob.safetensors"
-    os.replace(root / "model.safetensors", blob)
-    (root / "model.safetensors").symlink_to(blob)
+    store = root.parent / "store"
+    store.mkdir()
+    os.replace(root / "model.safetensors", store / "model.safetensors")
+    (root / "model.safetensors").symlink_to(store / "model.safetensors")
+    with pytest.raises(AdmissionError) as refused:
+        engine.HFEngine(root, [0], cpu=True)
+    assert refused.value.kind == "artifact_unreadable", refused.value
+    assert oracle(op="header", path=str(root)) == {"error": "ArtifactUnreadable"}
+    for name in os.listdir(root):
+        if name != "model.safetensors":
+            shutil.copy(root / name, store / name)
     served = engine.HFEngine(root, [0], cpu=True)
     try:
         assert oracle(op="weights_hash", path=str(root)) == {"ok": served.weights_hash}
