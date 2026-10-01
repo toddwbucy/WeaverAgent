@@ -5,7 +5,7 @@ of the SPU organ's decode role that `docs/crates/weaver-spu/python-spu-Spec.md`
 governs, landed as a lab instrument under Working Process section 6's rule that a carry
 is not a hardening. The Spec says what the implementation must become, and its section
 2.1 names where this prototype falls short of it. Nothing here is relied on for a
-verdict until the acts epic #726 lists have closed those gaps.
+verdict until the acts epic #25 lists have closed those gaps.
 
 It serves Qwen2 causal models from a local Hugging Face directory with PyTorch in eager
 mode, on the CPU for the tests and on one CUDA device for the smoke test. It carries an
@@ -120,6 +120,6 @@ diagnostic replay, beyond the one turn of stage B
 (`experiments/deployment-tuple/kernel-stack/python-spu/results/2026-09-29-thinkpad-stage-b/`).
 The full wire vocabulary. GPU admission against a live occupant, and
 injected device faults. The headroom's room judgment has been shown refusing and
-admitting on an unoccupied card (#754). Other families, precisions and sharding. The
-classifier's equivalence on a trained artifact. Speed. A small model's smoke test
-passing establishes none of these.
+admitting on an unoccupied card (toddwbucy/WeaverTools-old2#754). Other families,
+precisions and sharding. The classifier's equivalence on a trained artifact. Speed. A
+small model's smoke test passing establishes none of these.

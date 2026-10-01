@@ -10,9 +10,9 @@ edition = "2024"
 # The workspace crates at a pinned commit, per python-spu-Spec section 2. Moving the
 # pin is its own act, carrying the conformance suite's result at the new commit.
 [dependencies]
-weaver-spu = { git = "https://github.com/toddwbucy/WeaverTools", rev = "f22bf08f1cc3545c561dc4471215aa322c751128", default-features = false }
-weaver-types = { git = "https://github.com/toddwbucy/WeaverTools", rev = "f22bf08f1cc3545c561dc4471215aa322c751128" }
-weaver-traits = { git = "https://github.com/toddwbucy/WeaverTools", rev = "f22bf08f1cc3545c561dc4471215aa322c751128" }
+weaver-spu = { git = "https://github.com/toddwbucy/WeaverTools-old2", rev = "f22bf08f1cc3545c561dc4471215aa322c751128", default-features = false }
+weaver-types = { git = "https://github.com/toddwbucy/WeaverTools-old2", rev = "f22bf08f1cc3545c561dc4471215aa322c751128" }
+weaver-traits = { git = "https://github.com/toddwbucy/WeaverTools-old2", rev = "f22bf08f1cc3545c561dc4471215aa322c751128" }
 # The sampler's mirrors, per python-spu-Spec section 5: candle at the revision
 # weaver-spu pins, CPU only, and the rand its LogitsProcessor draws from.
 candle = { package = "candle-core", git = "https://github.com/toddwbucy/candle", rev = "aee9af9c3e0b23ab9188a492d0b3ebdb5f3a3f4b", default-features = false }

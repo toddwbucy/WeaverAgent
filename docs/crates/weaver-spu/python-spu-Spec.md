@@ -6,7 +6,7 @@
 **Document ID:** `python-spu-Spec`
 **Parent:** `weaver-spu-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #756
+**Landing PR:** toddwbucy/WeaverTools-old2#756
 
 ---
 
@@ -30,7 +30,7 @@ cites each by section.
 It is written before the code it governs lands, per Working Process section 6's rule
 that no code lands without a merged Spec, and it states what a pass of the conformance
 suite certifies before that suite is hardened, per the same section's rule that a pass
-is stated before it is hardened. Epic #726 carries the work in stages, and this document
+is stated before it is hardened. Epic #25 carries the work in stages, and this document
 governs all of them.
 
 ## 1. What python-spu is
@@ -164,7 +164,7 @@ every refusal of `weaver-harness-spu-contract` and `weaver-harness-spu-decode-co
 against the prototype, per H3's rule that a seam is exercised against its contract's
 failure cases. It starts from the cancel gap's sibling, which the walk judges against
 the contract's exchange rule: `server.py` answers an ask arriving mid-generation with a
-bare `{'kind': 'out_of_order'}` message. Epic #726 carries the walk as one item.
+bare `{'kind': 'out_of_order'}` message. Epic #25 carries the walk as one item.
 
 ## 3. What it carries identically
 
@@ -215,7 +215,7 @@ the walk in the act that moves the pin to it.
 | --- | --- |
 | `artifact`: `resolve`, `pin`, `PinnedArtifact` and its accessors, `names_a_split` | `artifact`, over a fixture directory: the resolved file, the pinned length and each refusal, run as `engine.containers` then `engine.pin`. The pin holds each container's descriptor for the admit, and the size, the load and the hash's container bytes read through it |
 | `artifact`: `read_header`, `ArtifactHeader`, `Container` | `artifact`: the header of a safetensors directory. A GGUF container is refused at admit, a container this implementation does not serve |
-| `artifact`: `weights_hash`, and `residency`: `WeightsHash` and its sentinel | `weights_hash`: the canonical walk's blake3 over the fixture, equal to `python-spu`'s wherever nothing is swapped during admission, and the sentinel. `python-spu` reads the pinned containers' bytes through the pins inside that walk, so under a swap its digest names the bytes it served, where the Rust walk of a directory reads the new name. A container reached through a symbolic link is left out of the walk as the Rust leaves it, the pin still serving its size and its load. That parity is #726's symlinked-member item, and whether to hash link targets or refuse linked artifacts waits on the operator's ruling. A pinned name that no longer exists at all refuses `artifact_unreadable`. The sidecars are read by name, as the Rust states for its own |
+| `artifact`: `weights_hash`, and `residency`: `WeightsHash` and its sentinel | `weights_hash`: the canonical walk's blake3 over the fixture, equal to `python-spu`'s wherever nothing is swapped during admission, and the sentinel. `python-spu` reads the pinned containers' bytes through the pins inside that walk, so under a swap its digest names the bytes it served, where the Rust walk of a directory reads the new name. A container reached through a symbolic link is left out of the walk as the Rust leaves it, the pin still serving its size and its load. That parity is #25's symlinked-member item, and whether to hash link targets or refuse linked artifacts waits on the operator's ruling. A pinned name that no longer exists at all refuses `artifact_unreadable`. The sidecars are read by name, as the Rust states for its own |
 | `channel`: `adopt`, `Inherited`, `EntryFault` | excluded from the oracle: they read the process's inherited descriptors, which no call can hand over. A process test, per section 3 |
 | `channel`: `LifecycleChannel`, `DecodeSocket`, `lifecycle_from_owned`, `decode_from_owned`, `send`, `recv`, `send_octets`, `recv_octets`, `try_recv_octets`, `as_fd`, `ChannelFault` | `frame`, over a socket pair with the Rust code at one end: envelopes, segmented frames, truncation and closure faults |
 | `channel`: `ClassifySocket`, `adopt_classify` | excluded: the label seam is not this implementation's, per section 1 |
@@ -282,7 +282,7 @@ carries the partner's sampler and never an approximation of it.
 
 **The first version's partner is the Rust native engine**, candle on the same
 safetensors directory, which maps the weights at BF16 (`native.rs`, the single-device
-load's `DType::BF16`), on the Planner's election of 2026-09-28 recorded on #726. It is
+load's `DType::BF16`), on the Planner's election of 2026-09-28 recorded on #25. It is
 the one pairing that holds both the weights and the dtype fixed without changing
 `crates/`, since llama.cpp computes on quantized blocks that no dequantized forward
 reproduces. Its chain, from `crates/weaver-spu/src/decoder/native.rs` and candle's
@@ -380,7 +380,7 @@ mappings under `/proc`, is closed to an unprivileged reader by the dumpable flag
 SPUs clear at entry, per `weaver-spu-Spec` section 2, and reopening it would undo that
 section's claim. The toolchain reader reads `rustc` alone, and it reads per
 implementation: `rustc` for the Rust SPU, and the interpreter's version with the lock's
-hash for this one. Epic #726 carries the act as a stage C item, and no document here
+hash for this one. Epic #25 carries the act as a stage C item, and no document here
 changes the matrix.
 
 ## 6. What conforms means
@@ -414,7 +414,7 @@ proves by the oracle fails the suite once the pin reaches it.
 - Behaviour under a real device: admission against a live occupant, headroom and
   injected device faults. These are stage B's, on thinkpad, and not the suite's.
 - A turn completed end to end through the harness, the gate and admin, and a trace
-  verifying under the diagnostic replay. That is epic #726's deployment item.
+  verifying under the diagnostic replay. That is epic #25's deployment item.
 - Families, precisions and engines beyond the version served.
 - The label seam, which the classify process serves and this implementation does not.
 - Speed.
@@ -639,7 +639,7 @@ safetensors.**
 
 **Each later version is a separate binary, with its own locked environment, and a
 separate deployment under the tuple**, crossed one axis at a time against the one before
-it. Epic #726 lists them: `llama-cpp-python` pinned to the Rust SPU's llama.cpp commit
+it. Epic #25 lists them: `llama-cpp-python` pinned to the Rust SPU's llama.cpp commit
 and build flags, the control, first, then the attention kernels, the precision, which is
 `transformers` at FP32 crossed against the first version at BF16, a minimal variant with
 the forward written in plain torch, the device, and a classifier serving the label seam
