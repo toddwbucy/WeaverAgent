@@ -596,13 +596,14 @@ impl Residency {
         self.admit_attempted = true;
 
         // Step one. Resolve the binding to an artifact. Free.
-        let path = artifact::resolve(&binding.artifact).map_err(|refusal| {
-            AdmitRefusal::on_artifact(
-                refusal,
-                std::path::Path::new(&binding.artifact.0),
-                "resolve",
-            )
-        })?;
+        let (path, reference_kind) =
+            artifact::resolve_with_kind(&binding.artifact).map_err(|refusal| {
+                AdmitRefusal::on_artifact(
+                    refusal,
+                    std::path::Path::new(&binding.artifact.0),
+                    "resolve",
+                )
+            })?;
 
         // Open it once and hold it. Every read after this, the header, the
         // load, and the hash, goes through this descriptor, so a name replaced
@@ -661,7 +662,7 @@ impl Residency {
         // name a directory whose members beyond the container are part of the
         // artifact's identity.
         let reference = std::path::PathBuf::from(&binding.artifact.0);
-        let weights_hash = artifact::weights_hash(&reference, &mut pinned)
+        let weights_hash = artifact::weights_hash(&reference, reference_kind, &mut pinned)
             .map_err(|refusal| AdmitRefusal::on_artifact(refusal, &reference, "hash"))?;
 
         // Step four. Take the devices in shard order and load each shard. The

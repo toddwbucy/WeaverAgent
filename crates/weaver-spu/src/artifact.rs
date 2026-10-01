@@ -62,6 +62,29 @@ pub enum Container {
 /// named pipe cannot turn a bad binding into an admission that blocks forever
 /// on an open waiting for a writer.
 pub fn resolve(reference: &ArtifactRef) -> Result<PathBuf, LifecycleRefusal> {
+    resolve_with_kind(reference).map(|(path, _)| path)
+}
+
+/// What the operator's reference named when it resolved: one file, or a
+/// directory the container was resolved within.
+///
+/// **The kind is the resolution's, carried to the hash rather than asked
+/// again**, per Spec section 3: a directory renamed, removed or replaced by a
+/// file after the pin would otherwise read as a file reference at the hash,
+/// which would then hash the pinned container alone and admit an identity
+/// without the directory's names and sidecars. Carried, the walk of a
+/// directory that is gone fails and refuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reference {
+    File,
+    Directory,
+}
+
+/// [`resolve`], answering the kind of reference beside the path, from the one
+/// look the resolution already takes.
+pub fn resolve_with_kind(
+    reference: &ArtifactRef,
+) -> Result<(PathBuf, Reference), LifecycleRefusal> {
     let path = PathBuf::from(&reference.0);
     // **Absent and denied are told apart here**, per Spec section 3. A lookup
     // the kernel refuses is a present artifact this identity cannot reach,
@@ -88,7 +111,7 @@ pub fn resolve(reference: &ArtifactRef) -> Result<PathBuf, LifecycleRefusal> {
     // would then be handed a path it cannot open, refusing as a device
     // condition three steps after the fact that caused it.
     if metadata.is_dir() {
-        return container_within(&path);
+        return container_within(&path).map(|container| (container, Reference::Directory));
     }
     // Only a regular file resolves. A FIFO with a container's name would open
     // and then block until a writer connects, which turns a bad binding into
@@ -97,7 +120,7 @@ pub fn resolve(reference: &ArtifactRef) -> Result<PathBuf, LifecycleRefusal> {
     if !metadata.is_file() {
         return Err(LifecycleRefusal::ArtifactUnresolvable);
     }
-    Ok(path)
+    Ok((path, Reference::File))
 }
 
 /// An artifact opened once and held open for the whole admit.
@@ -666,9 +689,10 @@ fn read_gguf_typed<R: Read>(
 /// agree with.
 pub fn weights_hash(
     reference: &Path,
+    kind: Reference,
     pinned: &mut PinnedArtifact,
 ) -> Result<crate::residency::WeightsHash, LifecycleRefusal> {
-    let hashed = if reference.is_dir() {
+    let hashed = if kind == Reference::Directory {
         hash_canonical(reference, pinned)
     } else {
         pinned.rewind().map_err(|_| ()).and_then(|()| {
@@ -1104,9 +1128,9 @@ mod tests {
     /// The admit's own sequence for the hash: resolve, pin, then hash the
     /// reference through the pin.
     fn hash_of(dir: &Path) -> Result<crate::residency::WeightsHash, LifecycleRefusal> {
-        let resolved = resolve(&ArtifactRef(dir.to_string_lossy().into_owned()))?;
+        let (resolved, kind) = resolve_with_kind(&ArtifactRef(dir.to_string_lossy().into_owned()))?;
         let mut pinned = pin(&resolved)?;
-        weights_hash(dir, &mut pinned)
+        weights_hash(dir, kind, &mut pinned)
     }
 
     /// **A dot-entry is outside the artifact**, per Spec section 3 and the
@@ -1212,14 +1236,53 @@ mod tests {
         let swapped = dir.join("swapped");
         std::fs::write(&swapped, b"other weights").expect("written");
         std::fs::rename(&swapped, dir.join("model.safetensors")).expect("the swap");
-        assert_eq!(weights_hash(&dir, &mut pinned), Ok(before));
+        assert_eq!(
+            weights_hash(&dir, Reference::Directory, &mut pinned),
+            Ok(before)
+        );
 
         let mut pinned = pin(&resolved).expect("pins again");
         std::fs::remove_file(dir.join("model.safetensors")).expect("removed");
         assert_eq!(
-            weights_hash(&dir, &mut pinned),
+            weights_hash(&dir, Reference::Directory, &mut pinned),
             Err(LifecycleRefusal::ArtifactUnreadable)
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **A directory reference stays one through the hash**, per Spec section
+    /// 3: the kind is the resolution's, so a directory renamed away or
+    /// replaced by a file after the pin is a walk that fails, never a file
+    /// reference hashing the pinned container alone. Found by Codex on #44.
+    ///
+    /// Perturbation: decide the kind at the hash with `reference.is_dir()`
+    /// and both cases admit.
+    #[test]
+    fn a_directory_gone_after_the_pin_refuses() {
+        for replace_with_file in [false, true] {
+            let dir = walked_fixture(if replace_with_file {
+                "replaced"
+            } else {
+                "moved"
+            });
+            let (resolved, kind) =
+                resolve_with_kind(&ArtifactRef(dir.to_string_lossy().into_owned()))
+                    .expect("resolves");
+            assert_eq!(kind, Reference::Directory);
+            let mut pinned = pin(&resolved).expect("pins");
+            let aside = dir.with_extension("aside");
+            let _ = std::fs::remove_dir_all(&aside);
+            std::fs::rename(&dir, &aside).expect("moved away");
+            if replace_with_file {
+                std::fs::write(&dir, b"not a directory").expect("a file in its place");
+            }
+            assert_eq!(
+                weights_hash(&dir, kind, &mut pinned),
+                Err(LifecycleRefusal::ArtifactUnreadable),
+                "replaced with a file: {replace_with_file}"
+            );
+            let _ = std::fs::remove_file(&dir);
+            std::fs::remove_dir_all(&aside).ok();
+        }
     }
 }
