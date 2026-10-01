@@ -22,6 +22,9 @@ cargo build --manifest-path oracle/Cargo.toml --locked
 pytest -q
 ```
 
+The suite looks for the oracle at `oracle/target/debug/`, so build it with
+`CARGO_TARGET_DIR` unset where the environment sets one.
+
 The suite runs in the locked test environment, `requirements-test.lock` installed with
 `--require-hashes --no-deps --only-binary=:all:` into a fresh venv of the pinned
 interpreter, never over an older one, since pip removes nothing a newer lock drops. The
@@ -116,8 +119,9 @@ off.
 ## Not yet shown
 
 Integration with the Rust harness end to end, and a trace verifying under the
-diagnostic replay, beyond the one turn of stage B
-(`experiments/deployment-tuple/kernel-stack/python-spu/results/2026-09-29-thinkpad-stage-b/`).
+diagnostic replay, beyond the one turn of stage B, whose result lives in the suite
+repository, `toddwbucy/WeaverTools`, at
+`experiments/deployment-tuple/kernel-stack/python-spu/results/2026-09-29-thinkpad-stage-b/`.
 The full wire vocabulary. GPU admission against a live occupant, and
 injected device faults. The headroom's room judgment has been shown refusing and
 admitting on an unoccupied card (toddwbucy/WeaverTools-old2#754). Other families,

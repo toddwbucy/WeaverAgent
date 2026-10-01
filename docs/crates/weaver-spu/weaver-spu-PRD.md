@@ -777,7 +777,7 @@ is bounded, not drafted here, and incomplete for the same reason the charter is.
 - The family libraries of section 14: the per-family module surface and the per-entry
   capability declaration.
 - `python-spu-Spec`, the second implementation of this organ's decode role, filed
-  2026-09-28 on epic #726: which of this crate's behaviours it carries identically and
+  2026-09-28 on epic #25: which of this crate's behaviours it carries identically and
   how each is proven, which are its own, and what comparing the two certifies.
 
 Contracts this crate is party to are written with the PRDs of their other parties, one

@@ -555,7 +555,7 @@ def test_the_pins_are_closed_on_every_path(artifact, monkeypatch):
 
 def test_a_symlinked_container_admits_and_hashes_as_the_rust_does(artifact, oracle):
     """hash_canonical does not follow links, so a container reached through one is left
-    out of the digest, the pin still serving its load, which is #726's symlinked-member
+    out of the digest, the pin still serving its load, which is #25's symlinked-member
     item. Perturbation: refuse every pinned container the walk does not meet, and this
     refuses."""
     root, _ = artifact

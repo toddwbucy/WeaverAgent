@@ -109,7 +109,7 @@ def weights_digest(path,pinned):
     a swap during admission the digest names the bytes the load served, where the Rust
     walk reads the new name. A container reached through a symbolic link is left out of
     the walk, as the Rust leaves it, the pin still serving its size and its load: that
-    parity is #726's symlinked-member item, awaiting the operator's ruling. A pinned
+    parity is #25's symlinked-member item, awaiting the operator's ruling. A pinned
     name that no longer exists at all, unlinked after the pin, is refused rather than
     left out of the identity."""
     path=Path(path); pins=dict(pinned); met=set()
