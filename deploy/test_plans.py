@@ -585,6 +585,26 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertEqual(result.returncode, 1)
         self.assertIn("no agent root under", result.stderr)
 
+    def test_stack_refuses_a_root_closed_to_the_operator(self):
+        # Codex on #45, round 9: a root this user cannot read answered
+        # `-f agent.toml` false and was silently left out of the agents, so an
+        # install verified only the readable ones. It refuses naming the root,
+        # before the build. Perturbation: drop the readability check, and the
+        # run plans on without it.
+        closed = self.config / "closed"
+        closed.mkdir()
+        (closed / "agent.toml").write_text("")
+        closed.chmod(0o000)
+        try:
+            if os.access(closed, os.R_OK | os.X_OK):
+                self.skipTest("no mode closes a directory to this user")
+            result = self.run_script("update-stack.sh")
+        finally:
+            closed.chmod(0o755)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(str(closed) + " is closed to", result.stderr)
+        self.assertFalse([c for c in self.calls() if c[:2] == ["cargo", "build"]], self.calls())
+
     def test_stack_build_failure_cannot_claim_a_plan(self):
         self.env["BUILD_FAIL"] = "1"
         result = self.run_script("update-stack.sh")

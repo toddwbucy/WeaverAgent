@@ -105,12 +105,24 @@ done
 # admits them (ASCII letters, digits, `-` and `_`), so a staged root
 # `create-agent.sh` left under a dot-name is not one. A symlink is not a root,
 # and a root with no `agent.toml` is no agent, as admin refuses it for every verb.
+# **A root this user cannot read refuses, naming it, and is never left out.**
+# Every step below reads each root as this user, without privilege: the key
+# comparison, the store reconciliation, the plan. A root closed to this user
+# answered `-f agent.toml` false and dropped out of AGENTS, so `--install`
+# replaced the shared binaries, verified only the agents it could see and
+# called the box current (Codex on #45). `create-agent.sh` makes every root
+# 0755, so a closed one is a hand-made state, and the run stops on it.
+OPERATOR_NAME=$(id -un)
+[ -r "$ADMIN_BASE" ] && [ -x "$ADMIN_BASE" ] \
+  || die "$ADMIN_BASE cannot be listed by $OPERATOR_NAME, so its agent roots cannot be enumerated"
 AGENTS=""
 for root in "$ADMIN_BASE"/*/; do
   root=${root%/}
   [ -d "$root" ] && [ ! -L "$root" ] || continue
   agent=${root##*/}
   [[ "$agent" =~ ^[A-Za-z0-9_-]+$ ]] || continue
+  [ -r "$root" ] && [ -x "$root" ] \
+    || die "$root is closed to $OPERATOR_NAME, so whether it is an agent, and what it names, cannot be read. Open it to 0755 as create-agent.sh makes it, then rerun."
   [ -f "$root/agent.toml" ] || continue
   AGENTS="$AGENTS $agent"
 done
