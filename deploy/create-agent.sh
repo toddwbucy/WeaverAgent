@@ -179,6 +179,26 @@ LOG_DIR=$(stack_key log-directory required) || exit 1
 AGENT_DIR=$(stack_key agent-directory required) || exit 1
 LOG_PATH="$LOG_DIR/$NAME/admin.log"
 SPU_BINARY=${SPU_OVERRIDE:-$(stack_key spu-binary required)} || exit 1
+# **The stack's file names are judged as admin judges them, before anything is
+# provisioned.** Admin keys the load record's stack by file name, and
+# weaver-admin's `stack::judge_names` refuses every verb on a root where the
+# worker, the state member (`weaver-state`), the gate and the SPU do not have
+# four distinct names. An `--spu` named like any of them would otherwise be
+# provisioned whole and then unusable, and this creation-only script cannot
+# repair it.
+judge_names() {
+  local -a roles=("the worker" "the state member" "the gate" "the SPU")
+  local -a names=("$(basename -- "$(stack_key worker-binary required)")" "weaver-state"
+                  "$(basename -- "$(stack_key gate-binary required)")" "$(basename -- "$SPU_BINARY")")
+  local i j
+  for ((i = 0; i < 4; i++)); do
+    for ((j = i + 1; j < 4; j++)); do
+      [ "${names[i]}" = "${names[j]}" ] && die "${roles[i]} and ${roles[j]} share the file name ${names[i]}, which admin keys the stack by and refuses every verb on"
+    done
+  done
+  return 0
+}
+judge_names || exit 1
 # **The territory sits under the operator's home**, because the traversal the
 # member is given below is a chain of access entries from that home down, and
 # this script opens no passage anywhere else.

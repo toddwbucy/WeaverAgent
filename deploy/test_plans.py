@@ -510,6 +510,19 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assert_agent_root("sqlite", spu=spu)
         self.assertEqual((self.stack / "spu-binary").read_text(), self.stack_keys["spu-binary"] + "\n")
 
+    def test_an_spu_named_like_another_stack_binary_refuses_before_provisioning(self):
+        # Codex on #45: admin's stack::judge_names refuses every verb on a root
+        # whose worker, state member, gate and SPU share a file name, so an
+        # --spu named like one of them refuses here, before any call. Perturbation:
+        # drop the judge_names call, and each provisions.
+        self.env["ALLOW_APPLY_CHECKS"] = "1"
+        for name in ("pyworker", "weaver-state", "weaver-gate"):
+            result = self.create("--spu", "/opt/elsewhere/" + name, "--apply")
+            self.assertNotEqual(result.returncode, 0, name)
+            self.assertIn("share the file name " + name, result.stderr)
+            self.assertEqual(self.calls(), [], name)
+            self.assertFalse((self.config / ".m1.partial").exists(), name)
+
     def test_spu_override_must_be_absolute(self):
         result = self.create("--spu", "relative/spu", "--apply")
         self.assertNotEqual(result.returncode, 0)
