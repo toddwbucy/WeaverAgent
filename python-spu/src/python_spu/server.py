@@ -99,17 +99,18 @@ class Service:
         d=instruction.decoder
         values=d.tunable_values
         resolved=[]
-        for name,minimum,maximum in [('seed',0,2**64),('context-capacity',0,2**64),('max-tokens-per-turn',0,2**64)]:
+        # The exclusive ceilings are the ones weaver-spu sampling.rs passes `resolve_count`:
+        # context-capacity is a u32 there, refused at or past 2**32 as NotACount, which
+        # main.rs answers as config_invalid naming the field.
+        for name,minimum,maximum in [('seed',0,2**64),('context-capacity',0,2**32),('max-tokens-per-turn',0,2**64)]:
             value=values.get(name)
             if value is None or not math.isfinite(value) or value!=int(value) or not minimum<=value<maximum:
                 raise AdmissionError('config_invalid',f'invalid or missing {name}',field=f'tunable-values.{name}')
             resolved.append(int(value))
         if d.field_election is not None and d.field_election.depth<40:
             raise AdmissionError('config_invalid','field depth below sampling cutoff 40',field='spu-instruction.decoder.field-election.depth')
-        # Classifier uses a separate process in Rust. A complete paired deployment
-        # is not yet certified; refuse a declaration asking this prototype for it.
-        if instruction.classify is not None:
-            raise AdmissionError('artifact_unreadable','classifier residency not yet supported')
+        # The classify member is the classify process's, per python-spu-Spec section 1,
+        # and is left unread here as weaver-spu main.rs's admission leaves it.
         self.engine=self.factory(d.model_binding.artifact,d.model_binding.devices,cpu=self.cpu,
                                  readout=d.residual_readout_election,headroom=self.headroom)
         seed,capacity,limit=resolved
