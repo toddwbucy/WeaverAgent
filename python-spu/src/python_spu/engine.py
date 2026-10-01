@@ -225,13 +225,15 @@ class _Header:
     def take(self,n):
         # `read_exact`: a short read is read on from where it stopped until n bytes or
         # the end, an interrupted read retried (CPython retries EINTR itself, PEP 475).
-        data=b''
+        # The bytes gather in one growing buffer, so a filesystem that caps each read
+        # small costs a copy of each chunk once, not of the whole prefix per chunk.
+        data=bytearray()
         while len(data)<n:
             try: chunk=os.pread(self.fd,n-len(data),self.at+len(data))
             except OSError as e: raise AdmissionError('artifact_unreadable',f'the header does not read: {e}') from None
             if not chunk: raise AdmissionError('artifact_unreadable','the header is short')
             data+=chunk
-        self.at+=n; return data
+        self.at+=n; return bytes(data)
     def u32(self): return int.from_bytes(self.take(4),'little')
     def u64(self): return int.from_bytes(self.take(8),'little')
     def text(self):

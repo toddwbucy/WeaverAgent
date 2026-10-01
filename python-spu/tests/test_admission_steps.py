@@ -230,3 +230,25 @@ def test_a_shard_named_alone_pins_its_whole_split(tmp_path, oracle, named):
         (tmp_path / "model-00002-of-00002.safetensors").unlink()
     assert oracle(op="artifact", path=str(reference)) == {"error": "ArtifactUnresolvable"}
     assert refusal(reference).kind == "artifact_unresolvable"
+
+
+def test_a_header_read_in_small_chunks_copies_linearly(tmp_path, monkeypatch):
+    """A filesystem that caps each `pread` small makes the header read take many reads,
+    and each chunk is copied once into one buffer, so a large header completes in
+    time linear in its size. Found by Codex on #47. Perturbation: gather into
+    immutable `bytes`, which recopies the prefix every chunk, and the 48 MiB read in
+    8 KiB chunks runs past the bound (measured on olympus: 64 MiB took 22 s that way
+    and 0.011 s into a `bytearray`)."""
+    import time
+    path = tmp_path / "header.bin"
+    size = 48 * 1024 * 1024
+    path.write_bytes(b"x" * size)
+    real = engine.os.pread
+    monkeypatch.setattr(engine.os, "pread", lambda fd, n, at: real(fd, min(n, 8192), at))
+    fd = engine.os.open(path, engine.os.O_RDONLY)
+    try:
+        started = time.monotonic()
+        assert len(engine._Header(fd).take(size)) == size
+        assert time.monotonic() - started < 3.0
+    finally:
+        engine.os.close(fd)
