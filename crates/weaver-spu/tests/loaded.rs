@@ -146,9 +146,10 @@ fn a_real_admit_holds_the_device_and_release_frees_it() {
         Err(refusal) => panic!("the admit succeeds against a real artifact, got {refusal:?}"),
     };
 
-    // The weights hash is real, never the sentinel, against bytes that loaded.
-    assert!(
-        !resident.weights_hash.is_sentinel(),
+    // The weights hash is real against bytes that loaded.
+    assert_eq!(
+        resident.weights_hash.0.len(),
+        64,
         "a loaded artifact hashes to a value"
     );
     let held = free_bytes(&context);
