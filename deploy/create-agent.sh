@@ -2,10 +2,10 @@
 # Create one agent on this box: its accounts, its territory, the state store
 # behind its member's seam, and its root of admin configuration.
 #
-#   ./deploy/create-agent.sh fred --artifact /path/to.gguf            plan only
-#   ./deploy/create-agent.sh fred --artifact /path/to.gguf --apply    act
+#   ./deploy/create-agent.sh fred --engine sqlite --artifact /path/to.gguf            plan only
+#   ./deploy/create-agent.sh fred --engine sqlite --artifact /path/to.gguf --apply    act
 #
-# Options: --engine sqlite|postgres (default sqlite), --session <name>
+# Options: --engine sqlite|postgres (required), --session <name>
 # (default <name>-001), --spu <path> (this agent's SPU, in place of the
 # stack record's `spu-binary`).
 #
@@ -62,10 +62,10 @@ SESSION=""
 # 2026-09-11. They are still two statements, deliberately, because a build
 # serves engines no agent has elected yet; `update-stack.sh` reconciles them
 # before it spends a build, and refuses by name where they disagree.
-# The default is sqlite, on the operator's ruling of 2026-09-30 that agent
-# state stores are sqlite across the board; postgres stays the alternative for
-# as long as the build carries it.
-ENGINE=sqlite
+# **No engine is the default.** postgres and sqlite stand side by side, on
+# the operator's ruling on #38, so the operator names one and its absence is
+# refused below rather than read as either.
+ENGINE=
 SPU_OVERRIDE=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -92,7 +92,7 @@ done
 
 # The name is a unix user, a role, a database and a directory, so it is
 # bounded to what all four accept without quoting.
-[ -n "$NAME" ] || die "name the agent: create-agent.sh <name> --artifact <path>"
+[ -n "$NAME" ] || die "name the agent: create-agent.sh <name> --engine <sqlite|postgres> --artifact <path>"
 [[ "$NAME" =~ ^[a-z][a-z0-9]{1,15}$ ]] || die "the name is lowercase letters and digits, 2 to 16 characters: '$NAME'"
 [ -n "$ARTIFACT" ] || die "name the artifact the decoder binds: --artifact <path>"
 SESSION=${SESSION:-$NAME-001}
@@ -131,6 +131,7 @@ fi
 # election and not one this script serves: an agent electing no store has no
 # member and no room to verify. Declare that one by hand.
 case "$ENGINE" in
+  "") die "name the store engine: --engine sqlite or --engine postgres. Neither is the default." ;;
   sqlite|postgres) ;;
   none) die "none is a lawful election and not one this script makes: there is no member, no state room and no store to probe. Declare it by hand, per deploy/HowToDeployANewAgent.md section 3. What this option exists for is to name the engine rather than assume it, so that deploy/update-stack.sh can reconcile the declaration against the build." ;;
   *) die "no store engine named $ENGINE. weaver-types admits none, sqlite and postgres, and this script provisions sqlite and postgres." ;;

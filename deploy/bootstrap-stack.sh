@@ -211,6 +211,6 @@ sudo install -d -o root -g root -m 0750 "$LOG_DIR"
 sudo install -d -o "$OPERATOR" -g "$OPERATOR" -m 0755 "$AGENT_DIR"
 
 say "installed at $REV"
-plan "next: deploy/create-agent.sh <name> --artifact <path> [--apply], one agent at a time"
+plan "next: deploy/create-agent.sh <name> --engine <sqlite|postgres> --artifact <path> [--apply], one agent at a time"
 plan "then: sudo WEAVER_ADMIN_CONFIG=$ADMIN_BASE $PREFIX/bin/weaver-admin validate <name>"
 plan "then: deploy/verify-load.sh <name>"

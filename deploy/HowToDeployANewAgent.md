@@ -55,12 +55,13 @@ new login or `newgrp weaver-<name>`.
 first; the plan needs no sudo and prints exactly what apply will make.
 
 ```sh
-deploy/create-agent.sh <name> --artifact /opt/weaver/models/<artifact>
-deploy/create-agent.sh <name> --artifact /opt/weaver/models/<artifact> --apply
+deploy/create-agent.sh <name> --engine <sqlite|postgres> --artifact /opt/weaver/models/<artifact>
+deploy/create-agent.sh <name> --engine <sqlite|postgres> --artifact /opt/weaver/models/<artifact> --apply
 ```
 
-`--engine` names the store and must be one the installed member carries: `sqlite`, the
-default, or `postgres`. `none` is refused, and section 3 makes that agent by hand.
+`--engine` names the store and is required, since neither engine is the default: `sqlite`
+or `postgres`, either one the installed member carries. `none` is refused, and section 3
+makes that agent by hand.
 `--session` names the session the declaration opens, default `<name>-001`. `--spu
 <path>` gives this agent its own SPU, written as its root's `spu-binary` in place of
 the stack record's (the python SPU's zipapp, for instance); without it the agent

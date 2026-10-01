@@ -196,6 +196,12 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
 
     def create(self, *args):
+        # No engine is the default, so a case that names none runs as sqlite,
+        # named here rather than assumed by the script.
+        engine = [] if "--engine" in args else ["--engine", "sqlite"]
+        return self.create_naming(*engine, *args)
+
+    def create_naming(self, *args):
         return self.run_script("create-agent.sh", "m1", "--artifact", str(self.artifact), *args)
 
     def assert_unprivileged(self):
@@ -460,8 +466,17 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertTrue(all("-X" in c for c in sql))
         self.assertFalse(any("/etc/weaver/agents" in c for c in calls))
 
+    def test_an_unnamed_engine_refuses_naming_both(self):
+        # Neither engine is the default, per the operator's ruling on #38.
+        # Perturbation: default ENGINE to either and this case runs on.
+        result = self.create_naming("--apply")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--engine sqlite or --engine postgres", result.stderr + result.stdout)
+        self.assertIn("Neither is the default", result.stderr + result.stdout)
+        self.assert_unprivileged()
+
     def test_apply_fixture_reaches_the_end_with_sqlite(self):
-        # The default engine. Perturbation: let the sqlite path fall into the
+        # Perturbation: let the sqlite path fall into the
         # store half and psql or systemctl appear in the calls.
         self.env["ALLOW_APPLY_CHECKS"] = "1"
         result = self.create("--apply")

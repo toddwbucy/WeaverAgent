@@ -165,11 +165,12 @@ half-made, so a name that already has an account, a directory, an agent root, a 
 directory, a role or a database must be cleaned up first.
 
 ```sh
-deploy/create-agent.sh m1 --artifact /opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf
-deploy/create-agent.sh m1 --artifact /opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf --apply
+deploy/create-agent.sh m1 --engine <sqlite|postgres> --artifact /opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf
+deploy/create-agent.sh m1 --engine <sqlite|postgres> --artifact /opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf --apply
 ```
 
-The store is sqlite unless `--engine postgres` is given. The script makes both
+The store is the one `--engine` names, `sqlite` or `postgres`, and the option is
+required since neither is the default. The script makes both
 accounts, the territory with traversal ACLs along the operator's home, for postgres
 the role, database and two authentication lines, and the agent root staged under a
 dot-name: every key copied from the stack record, `log-path`, and the declaration as
