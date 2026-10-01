@@ -6,9 +6,12 @@ redeploy, where m1 and karl were made this way and proven to load; the log of th
 `REDEPLOY.md`, and this document starts where that one ends.
 
 Every command runs from the WeaverAgents tree. `<name>` is the agent's name: a unix
-user, a database role, a database and a directory, so lowercase letters, digits and
-hyphens. Paths below are the thinkpad's defaults; a box's real values are in
-`/etc/weaver/admin`, one file per key, and every script reads them from there.
+user, a database role, a database and a directory, so `create-agent.sh` takes
+lowercase letters and digits, 2 to 16 characters. Paths below are the defaults; a
+box's real values are in the stack record `/etc/weaver/stack/`, one file per key,
+which `bootstrap-stack.sh` wrote and the scripts read, and in each agent's own root
+`/etc/weaver/admin/<name>/`, which is all admin reads (`WEAVER_ADMIN_CONFIG` names
+another base).
 
 ## 0. What an agent is, on disk
 
@@ -19,12 +22,13 @@ load where any piece is missing, so the pieces are made first and admin is asked
 |---|---|---|
 | Agent account, the worker's uid | `weaver-<name>`, home `/home/weaver-<name>` | system user, nologin, home 2750 |
 | Member account, the state store's uid (agents with a store) | `weaver-<name>-state`, no home | system user, nologin |
-| Territory | `~operator/.weaveragents/<name>/` (the script names it `weaver-<name>/`) | root:operator 2750 |
-| State room (agents with a store) | `<territory>/state/` | member 0700, unreachable by the agent's uid |
+| Territory | `<agent-directory>/weaver-<name>/`, the stack record's `agent-directory` (default `~operator/.weaveragents`) | root:operator 2750 |
+| State room (agents with a store) | `<territory>/state/`, where a sqlite store keeps its file | member 0700, unreachable by the agent's uid |
 | Trace sink | `<territory>/trace.ndjson` | opened by admin under root at load |
-| Declaration | `~operator/.weaveragents/<name>.toml` | root or operator, 0644 |
-| Store (postgres election) | role and database `weaver_<name>`, one `peer map=weaver` line in `pg_hba.conf`, one `weaver` map line in `pg_ident.conf` | postgres |
-| Admission | `<name>` on one line of `/etc/weaver/admin/allow-list` | root |
+| Agent root, which is the admission | `/etc/weaver/admin/<name>/`: `worker-binary`, `spu-binary`, `gate-binary`, `run-tool`, `control-tool`, `coordination-root`, `unit-properties` (and `headroom-bytes`, `state-store-socket` where the stack record has them), copied from the stack record, plus `log-path` | root, directory 0755, files 0644; admin refuses a root that is not root-owned or is group- or world-writable |
+| Declaration | `/etc/weaver/admin/<name>/agent.toml` | root, 0644 |
+| Operations log | `/var/log/weaver/<name>/admin.log`, named by `log-path` | directory root 0750; admin writes the file |
+| Store (postgres election only) | role and database `weaver_<name>`, one `peer map=weaver` line in `pg_hba.conf`, one `weaver` map line in `pg_ident.conf` | postgres |
 
 The operator joins group `weaver-<name>` so the trace, written under root with the
 territory's group, is readable without sudo. A session that predates the join needs a
@@ -32,55 +36,75 @@ new login or `newgrp weaver-<name>`.
 
 ## 1. Before you start
 
-- The stack is installed: `ls /opt/weaver/bin` shows the six members and
-  `cat /etc/weaver/admin/allow-list` shows the agents already admitted.
+- The stack is installed: `ls /opt/weaver/bin` shows the six members,
+  `ls /etc/weaver/stack` shows the stack record, and `ls /etc/weaver/admin` shows the
+  agents already admitted, one root each.
 - The artifact is on the box, under `/opt/weaver/models`, and its hash is known. An
   agent's identity is its artifact as much as its prompt; record the sha256 in the run
   log with the declaration's.
-- The name collides with nothing: `id weaver-<name>` fails, `~/.weaveragents/<name>*`
-  is absent, and for a store election the role and database do not exist. The script
-  checks all of this and refuses rather than merging, because a half-made agent that
-  looks whole is worse than an absent one.
-- PostgreSQL is active, for a store election. The script starts it if not.
+- The name collides with nothing: `id weaver-<name>` fails, `~/.weaveragents/weaver-<name>`,
+  `/etc/weaver/admin/<name>` and `/var/log/weaver/<name>` are absent, and for a
+  postgres election the role and database do not exist. The script checks all of this
+  and refuses rather than merging, because a half-made agent that looks whole is worse
+  than an absent one.
+- PostgreSQL is active, for a postgres election. The script starts it if not.
 
 ## 2. An agent with a store
 
-`create-agent.sh` does the whole of section 0 and then proves both gates. Plan first;
-the plan needs no sudo and prints exactly what apply will make.
+`create-agent.sh` does the whole of section 0 and then proves the boundary. Plan
+first; the plan needs no sudo and prints exactly what apply will make.
 
 ```sh
-deploy/create-agent.sh <name> --artifact /opt/weaver/models/<artifact> --engine postgres
-deploy/create-agent.sh <name> --artifact /opt/weaver/models/<artifact> --engine postgres --apply
+deploy/create-agent.sh <name> --artifact /opt/weaver/models/<artifact>
+deploy/create-agent.sh <name> --artifact /opt/weaver/models/<artifact> --apply
 ```
 
-`--engine` names the store and must be one the installed member carries. The script
-provisions `postgres` only and refuses `sqlite` and `none`, telling the operator to
-declare those by hand; a sqlite path beside the postgres one is #34. `--session` names
-the session the declaration opens, default `<name>-001`. Apply ends with two probes: the
-member reaches the database as its role, and the agent's own uid is refused. A refusal
-there is the boundary being wrong, not the agent.
+`--engine` names the store and must be one the installed member carries: `sqlite`, the
+default, or `postgres`. `none` is refused, and section 3 makes that agent by hand.
+`--session` names the session the declaration opens, default `<name>-001`. `--spu
+<path>` gives this agent its own SPU, written as its root's `spu-binary` in place of
+the stack record's (the python SPU's zipapp, for instance); without it the agent
+serves from the stack's.
+
+Apply stages the agent root under the dot-name `/etc/weaver/admin/.<name>.partial`,
+which admin's name check never admits, then probes the boundary. For sqlite: the
+member can write its state room, and the agent's own uid cannot enter it. For
+postgres: the member reaches the database as its role, and the agent's own uid is
+refused. A refusal there is the boundary being wrong, not the agent, and leaves the
+staged root in place to read and remove. Only after both probes does the root move
+to `/etc/weaver/admin/<name>/`, which is the admission.
 
 The declaration the script writes is a working default: the artifact, `devices = [0]`,
-a plain system identity, `permission-mode = "ask"`, an empty tool set, surprisal on, the
-sink in the territory, and the store's engine, database and role. Edit it before
-validating if the agent wants another prompt, a wider context, or `deny`; the fields
-are in `docs/technical/weaver-agents/agent-declaration.md`, and nothing defaults, so an
+a plain system identity, `permission-mode = "deny"`, an empty tool set, surprisal on,
+the sink in the territory, and the store's engine (with its database and role for
+postgres). Edit `/etc/weaver/admin/<name>/agent.toml` under sudo before validating if
+the agent wants another prompt, a wider context, or `ask`; the fields are in
+`docs/technical/weaver-agents/agent-declaration.md`, and nothing defaults, so an
 absent or misspelled key refuses the parse by name.
 
 ## 3. An agent without a store
 
-`create-agent.sh` refuses `--engine none`, since its second half provisions a store and
-probes it and a storeless agent has none of that to verify. The pieces are made by
-hand, and they are the script's `accounts` and `territory` steps minus the member and
-the state room:
+`create-agent.sh` refuses `--engine none`, since a storeless agent has no member, no
+state room and no store to verify. The pieces are made by hand: the script's
+`accounts` and `territory` steps minus the member and the state room, then the agent
+root from the stack record, with the root made last because it is the admission:
 
 ```sh
 sudo useradd --system --shell /usr/sbin/nologin --create-home --user-group weaver-<name>
 sudo usermod -aG weaver-<name> "$USER"
 sudo chmod 2750 /home/weaver-<name>
 sudo install -d -o root -g "$USER" -m 2750 ~/.weaveragents/<name>
-sudo install -o root -g root -m 0644 <name>.toml ~/.weaveragents/<name>.toml
-echo <name> | sudo tee -a /etc/weaver/admin/allow-list
+sudo install -d -o root -g root -m 0750 /var/log/weaver/<name>
+R=/etc/weaver/admin/.<name>.partial
+sudo install -d -o root -g root -m 0755 "$R"
+for k in worker-binary spu-binary gate-binary run-tool control-tool \
+         coordination-root unit-properties headroom-bytes state-store-socket; do
+  [ ! -f /etc/weaver/stack/$k ] || sudo cp /etc/weaver/stack/$k "$R/$k"
+done
+echo /var/log/weaver/<name>/admin.log | sudo tee "$R/log-path" >/dev/null
+sudo install -o root -g root -m 0644 <name>.toml "$R/agent.toml"
+sudo chmod 0644 "$R"/*
+sudo mv -T "$R" /etc/weaver/admin/<name>
 ```
 
 The declaration is written by hand. karl's, which loaded on 2026-09-30, is the shape:
@@ -148,6 +172,10 @@ payload names the session, the run, the store, the declaration's hash, the compo
 `idle` and writes nothing is the failure this step exists to catch, and the state
 member's last words are in `<territory>/state/state.log`.
 
+A failed load needs no clearing by hand before the next one: admin clears the failed
+unit itself (`systemctl reset-failed`), so the next load is not refused as
+`prior_unit_unreaped`. It does not load again on its own.
+
 ## 5. Serving, stopping, unloading
 
 ```sh
@@ -158,7 +186,8 @@ sudo WEAVER_ADMIN_CONFIG=/etc/weaver/admin /opt/weaver/bin/weaver-admin unload <
 Or `deploy/verify-load.sh <name> --keep` to load with the read-back and leave it serving.
 The worker runs as the transient unit `weaver-worker@<name>.service` under the slice
 `system-weaver\x2dworker.slice`; `journalctl -u weaver-worker@<name>` is its log, and
-admin's own acts are in `/var/log/weaver/admin-operations.ndjson`, root's to read. Two
+admin's own acts on this agent are in `/var/log/weaver/<name>/admin.log`, root's to
+read. Two
 declarations naming one device serve one loaded agent at a time: the SPU refuses a
 conflicted device and never evicts.
 
@@ -172,7 +201,9 @@ first.
 ## 7. Taking an agent down
 
 `deploy/decommission.sh` takes down every agent on the box, archived first. For one
-agent, the pieces of section 0 are removed in reverse: unload; drop the database, then
-the role, and remove its two authentication lines; `userdel -r` both accounts; remove
-the territory and the declaration; remove the allow-list line. Archive the territory
-before removing it, since the trace is the one record of what the agent did.
+agent, the pieces of section 0 are removed in reverse: unload; remove its root
+`/etc/weaver/admin/<name>/`, which ends its admission; for postgres, drop the database,
+then the role, and remove its two authentication lines; `userdel -r` both accounts;
+remove the territory and the log directory `/var/log/weaver/<name>/`. Archive the
+territory, the root and the log before removing them, since the trace is the one
+record of what the agent did and the log the one record of what was done to it.

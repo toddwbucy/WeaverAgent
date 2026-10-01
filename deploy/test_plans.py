@@ -29,8 +29,6 @@ def mapped(value):
     return value
 
 def shell_read(arguments):
-    if os.environ.get('READ_FAIL') == 'allow-list' and any(a.endswith('/allow-list') for a in arguments):
-        sys.exit(2)
     if os.environ.get('PATH_FAIL') and os.environ['PATH_FAIL'] in arguments: sys.exit(1)
     rewritten = list(map(mapped, arguments))
     for argument in rewritten:
@@ -98,6 +96,16 @@ elif name == 'sudo':
         directory = pathlib.Path(mapped(rest[-1]))
         assert directory.is_relative_to(root), directory
         directory.mkdir(parents=True, exist_ok=True)
+    elif op == 'mv':
+        source, destination = (pathlib.Path(mapped(a)) for a in rest[-2:])
+        assert source.is_relative_to(root) and destination.is_relative_to(root)
+        assert not destination.exists(), destination
+        source.rename(destination)
+    elif op == 'test':
+        # The probes of a sqlite agent's state room: the member passes, the
+        # agent's own uid is refused, unless the fixture opens the wall.
+        if identity == 'weaver-m1': sys.exit(0 if os.environ.get('WALL_OPEN') else 1)
+        sys.exit(0)
     elif op in ('useradd', 'usermod', 'chmod', 'setfacl'): pass
     else: sys.exit(99)
 elif name == 'mktemp':
@@ -117,14 +125,29 @@ class PlanTests(unittest.TestCase):
         self.root = Path(self.scratch.name)
         self.repo = self.root / "repo"
         shutil.copytree(DEPLOY, self.repo / "deploy")
+        # The admin base, holding one agent's root, and the stack record.
         self.config = self.root / "config"
         self.config.mkdir()
-        self.agents = self.root / "agents"
-        self.agents.mkdir()
-        (self.config / "agent-config-directory").write_text(str(self.agents))
-        (self.config / "worker-binary").write_text(str(self.root / "installed" / "pyworker"))
-        (self.config / "allow-list").write_text("existing\n")
-        (self.agents / "existing.toml").write_text("[state-store]\nengine = \"none\"\n")
+        existing = self.config / "existing"
+        existing.mkdir()
+        (existing / "worker-binary").write_text(str(self.root / "installed" / "pyworker"))
+        (existing / "agent.toml").write_text("[state-store]\nengine = \"none\"\n")
+        self.stack = self.root / "stack"
+        self.stack.mkdir()
+        self.logs = self.root / "log"
+        self.logs.mkdir()
+        self.stack_keys = {
+            "worker-binary": str(self.root / "installed" / "pyworker"),
+            "spu-binary": str(self.root / "installed" / "weaver-spu"),
+            "gate-binary": str(self.root / "installed" / "weaver-gate"),
+            "run-tool": "/usr/bin/systemd-run", "control-tool": "/usr/bin/systemctl",
+            "coordination-root": "/run",
+            "unit-properties": "UMask=0000\nEnvironment=LD_LIBRARY_PATH=/fixture/lib\n",
+            "log-directory": str(self.logs),
+            "agent-directory": "/home/fixture-no-home/.weaveragents",
+        }
+        for key, value in self.stack_keys.items():
+            (self.stack / key).write_text(value + ("" if value.endswith("\n") else "\n"))
         self.home = self.root / "home"
         (self.home / "fixture-no-home" / ".weaveragents").mkdir(parents=True)
         self.hba = self.root / "pg_hba.conf"
@@ -142,10 +165,11 @@ class PlanTests(unittest.TestCase):
         self.log = self.root / "calls"
         self.env = {**os.environ, "PATH": str(self.bin) + os.pathsep + os.environ["PATH"],
                     "WEAVER_ADMIN_CONFIG": str(self.config), "CALLS": str(self.log),
+                    "WEAVER_STACK_RECORD": str(self.stack),
                     "CARGO_TARGET_DIR": str(self.root / 'target with "quotes"'),
                     "USER": "fixture-no-home", "PROBE": str(self.root / "probe"),
                     "FIXTURE_ROOT": str(self.root)}
-        for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "ROLE_COLLISION", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL"):
+        for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "ROLE_COLLISION", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN"):
             self.env.pop(name, None)
         # Redirect even shell builtin /home probes into the fixture. The
         # production scripts have no test-only path switches and never read
@@ -178,67 +202,80 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         forbidden = {"sudo", "systemctl", "psql", "mktemp", "setfacl"}
         self.assertFalse([c for c in self.calls() if c[0] in forbidden], self.calls())
 
+    def postgres(self, *args):
+        return self.create("--engine", "postgres", *args)
+
     def test_agent_plan_defers_privilege_and_preserves_fixture_files(self):
         before = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
         result = self.create()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(str(self.agents / "m1.toml"), result.stdout)
+        self.assertIn(str(self.config / "m1" / "agent.toml"), result.stdout)
+        self.assertIn(str(self.logs / "m1" / "admin.log"), result.stdout)
         self.assertIn("PENDING --apply", result.stdout)
         self.assertNotIn("nothing of this agent exists", result.stdout)
         self.assert_unprivileged()
         after = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file() and p != self.log}
         self.assertEqual(before, after)
 
-    def test_agent_plan_refuses_missing_or_empty_configuration(self):
-        field = self.config / "agent-config-directory"
-        for value in (None, ""):
-            with self.subTest(value=value):
-                if value is None: field.unlink()
-                else: field.write_text(value)
-                result = self.create()
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("agent-config-directory", result.stderr)
+    def test_agent_plan_refuses_missing_or_empty_stack_keys(self):
+        # Every required key of the stack record refuses by name, absent or
+        # empty, before anything privileged. Perturbation: drop the check and
+        # an agent root is written without the key admin requires.
+        for key in ("worker-binary", "unit-properties", "log-directory", "agent-directory"):
+            for value in (None, "  \n"):
+                with self.subTest(key=key, value=value):
+                    if value is None: (self.stack / key).unlink()
+                    else: (self.stack / key).write_text(value)
+                    result = self.create()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(key, result.stderr)
+                    (self.stack / key).write_text(self.stack_keys[key] + "\n")
         self.assert_unprivileged()
 
-    def test_missing_allow_list_is_empty_in_both_modes(self):
-        (self.config / "allow-list").unlink()
-        result = self.create()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_unprivileged()
-        self.env.update(ALLOW_APPLY_CHECKS="1", ACL_FAIL="1")
-        result = self.create("--apply")
-        self.assertIn("refuses access entries", result.stderr)
+    def test_missing_stack_record_refuses_in_both_modes(self):
+        shutil.rmtree(self.stack)
+        for apply in (False, True):
+            with self.subTest(apply=apply):
+                self.env["ALLOW_APPLY_CHECKS"] = "1"
+                result = self.create(*(["--apply"] if apply else []))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("no stack record", result.stderr)
+                self.assertFalse(any(c[0] == "sudo" for c in self.calls()))
 
     def test_agent_plan_refuses_visible_collisions(self):
-        for collision in ("account", "declaration", "allow-list"):
+        for collision in ("account", "agent root", "staged root", "log directory"):
             with self.subTest(collision=collision):
                 self.env.pop("COLLISION", None)
-                (self.agents / "m1.toml").unlink(missing_ok=True)
-                (self.config / "allow-list").write_text("existing\n")
+                for path in (self.config / "m1", self.config / ".m1.partial", self.logs / "m1"):
+                    if path.exists(): path.rmdir()
                 if collision == "account": self.env["COLLISION"] = "weaver-m1-state"
-                elif collision == "declaration": (self.agents / "m1.toml").touch()
-                else: (self.config / "allow-list").write_text("m1\n")
+                elif collision == "agent root": (self.config / "m1").mkdir()
+                elif collision == "staged root": (self.config / ".m1.partial").mkdir()
+                else: (self.logs / "m1").mkdir()
                 result = self.create()
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("already exists" if collision != "allow-list" else "already in", result.stderr)
+                self.assertIn("already exists", result.stderr)
         self.assert_unprivileged()
 
     def test_apply_still_refuses_catalogue_collision_before_creation(self):
         self.env.update(ALLOW_APPLY_CHECKS="1", ROLE_COLLISION="1")
-        result = self.create("--apply")
+        result = self.postgres("--apply")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("role weaver_m1 already exists", result.stderr)
         self.assertFalse(any("useradd" in c for c in self.calls()))
 
     def test_apply_still_probes_acl_before_creation(self):
-        self.env.update(ALLOW_APPLY_CHECKS="1", ACL_FAIL="1")
-        result = self.create("--apply")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("refuses access entries", result.stderr)
-        self.assertFalse(any("systemctl" in c for c in self.calls()))
-        self.assertTrue(any(c[0] == "setfacl" for c in self.calls()))
-        self.assertFalse(any("useradd" in c for c in self.calls()))
-        self.assertFalse(Path(self.env["PROBE"]).exists())
+        for engine in ("postgres", "sqlite"):
+            with self.subTest(engine=engine):
+                self.log.unlink(missing_ok=True)
+                self.env.update(ALLOW_APPLY_CHECKS="1", ACL_FAIL="1")
+                result = self.create("--engine", engine, "--apply")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("refuses access entries", result.stderr)
+                self.assertFalse(any("systemctl" in c for c in self.calls()))
+                self.assertTrue(any(c[0] == "setfacl" for c in self.calls()))
+                self.assertFalse(any("useradd" in c for c in self.calls()))
+                self.assertFalse(Path(self.env["PROBE"]).exists())
 
     def test_apply_requires_sudo_before_any_other_privileged_call(self):
         self.env.update(ALLOW_APPLY_CHECKS="1", SUDO_FAIL="1")
@@ -248,14 +285,14 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertEqual([c for c in self.calls() if c[0] == "sudo"], [["sudo", "-v"]])
 
     def test_apply_read_failures_refuse_before_creating_accounts(self):
-        for fault, cause in (("allow-list", "allow-list"), ("pg_roles", "role catalog"),
+        for fault, cause in (("pg_roles", "role catalog"),
                              ("pg_database", "database catalog"), ("hba_file", "hba_file"),
                              ("ident_file", "ident_file"), ("start", "start PostgreSQL"),
                              ("is-active", "confirm PostgreSQL")):
             with self.subTest(fault=fault):
                 self.log.unlink(missing_ok=True)
                 self.env.update(ALLOW_APPLY_CHECKS="1", READ_FAIL=fault)
-                result = self.create("--apply")
+                result = self.postgres("--apply")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(cause, result.stderr)
                 self.assertFalse(any("useradd" in c for c in self.calls()))
@@ -265,7 +302,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
             with self.subTest(path=path):
                 self.log.unlink(missing_ok=True)
                 self.env.update(ALLOW_APPLY_CHECKS="1", EMPTY_PATH=path)
-                result = self.create("--apply")
+                result = self.postgres("--apply")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("empty " + path, result.stderr)
                 self.assertFalse(any("useradd" in c for c in self.calls()))
@@ -284,19 +321,19 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
                 elif fault == "missing-hba": self.hba.unlink()
                 else: self.ident.unlink()
                 self.env["ALLOW_APPLY_CHECKS"] = "1"
-                result = self.create("--apply")
+                result = self.postgres("--apply")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("anchor" if fault == "no-peer" else "authentication file", result.stderr)
                 self.assert_no_provisioning()
 
-    def test_missing_declaration_directory_refuses_both_modes(self):
-        (self.config / "agent-config-directory").write_text(str(self.root / "missing"))
+    def test_missing_admin_base_refuses_both_modes(self):
+        self.env["WEAVER_ADMIN_CONFIG"] = str(self.root / "missing")
         for apply in (False, True):
             with self.subTest(apply=apply):
                 self.env["ALLOW_APPLY_CHECKS"] = "1"
                 result = self.create(*(["--apply"] if apply else []))
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("declaration directory", result.stderr)
+                self.assertIn("admin base", result.stderr)
                 self.assert_no_provisioning()
 
     def test_a_value_the_toml_string_cannot_carry_refuses_before_anything(self):
@@ -318,17 +355,21 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
     def test_the_rendered_declaration_is_toml_before_anything_is_made(self):
         # The plan renders and parse-checks the declaration it would write.
         # Perturbation: break the heredoc's quoting and the plan refuses here.
-        result = self.create("--session", "s-m1-1")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn("does not parse as TOML", result.stderr)
+        for engine in ("sqlite", "postgres"):
+            with self.subTest(engine=engine):
+                result = self.create("--session", "s-m1-1", "--engine", engine)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("does not parse as TOML", result.stderr)
 
     def test_invalid_engine_does_not_prompt_for_sudo(self):
-        result = self.create("--apply", "--engine", "invalid")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse(any(c[0] == "sudo" for c in self.calls()))
+        for engine in ("invalid", "none"):
+            with self.subTest(engine=engine):
+                result = self.create("--apply", "--engine", engine)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(any(c[0] == "sudo" for c in self.calls()))
 
     def test_apply_uses_privileged_collision_reads(self):
-        for path in (self.agents / "m1.toml", self.home / "weaver-m1",
+        for path in (self.config / "m1", self.home / "weaver-m1",
                      self.home / "fixture-no-home" / ".weaveragents" / "weaver-m1"):
             with self.subTest(path=path):
                 self.log.unlink(missing_ok=True)
@@ -342,28 +383,28 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
                 self.assert_no_provisioning()
                 path.unlink()
 
-    def test_configuration_and_allow_list_are_trimmed_in_both_modes(self):
-        (self.config / "agent-config-directory").write_text("  " + str(self.agents) + " \r\n")
-        (self.config / "allow-list").write_text("existing\n  m1 \r\n")
-        for apply in (False, True):
-            with self.subTest(apply=apply):
-                self.env["ALLOW_APPLY_CHECKS"] = "1"
-                result = self.create(*(["--apply"] if apply else []))
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("m1 is already in", result.stderr)
-                self.assertIn(str(self.agents / "m1.toml"), result.stdout)
-                self.assert_no_provisioning()
+    def test_stack_values_are_trimmed(self):
+        (self.stack / "agent-directory").write_text("  /home/fixture-no-home/.weaveragents \r\n")
+        result = self.create()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("directory       /home/fixture-no-home/.weaveragents/weaver-m1 ", result.stdout)
 
-    def test_present_unreadable_allow_list_refuses_in_both_modes(self):
-        # Inject an I/O refusal; chmod alone is ineffective under root test runners.
-        self.env["READ_FAIL"] = "allow-list"
-        for apply in (False, True):
-            with self.subTest(apply=apply):
-                self.env["ALLOW_APPLY_CHECKS"] = "1"
-                result = self.create(*(["--apply"] if apply else []))
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("cannot read", result.stderr)
-                self.assert_no_provisioning()
+    def test_agent_directory_outside_the_operators_home_refuses(self):
+        (self.stack / "agent-directory").write_text("/srv/agents\n")
+        result = self.create()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not under /home/fixture-no-home", result.stderr)
+        self.assert_unprivileged()
+
+    def test_unreadable_stack_key_refuses(self):
+        # A directory where a key file should be: cat fails, as an unreadable
+        # file does, and chmod alone is ineffective under root test runners.
+        (self.stack / "log-directory").unlink()
+        (self.stack / "log-directory").mkdir()
+        result = self.create()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot read", result.stderr)
+        self.assert_unprivileged()
 
     def test_failed_account_lookup_is_not_absence(self):
         self.env["ACCOUNT_FAIL"] = "1"
@@ -376,20 +417,40 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
                 self.assert_no_provisioning()
 
     def test_failed_privileged_path_inspection_is_not_absence(self):
-        self.env.update(ALLOW_APPLY_CHECKS="1", PATH_FAIL=str(self.agents / "m1.toml"))
+        self.env.update(ALLOW_APPLY_CHECKS="1", PATH_FAIL=str(self.config / "m1"))
         result = self.create("--apply")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("cannot inspect", result.stderr)
         self.assert_no_provisioning()
 
-    def test_apply_fixture_reaches_the_end_using_only_configured_directory(self):
-        (self.config / "allow-list").unlink()
+    def assert_agent_root(self, engine, spu=None):
+        root = self.config / "m1"
+        self.assertTrue(root.is_dir())
+        self.assertFalse((self.config / ".m1.partial").exists())
+        for key, value in self.stack_keys.items():
+            if key in ("log-directory", "agent-directory"):
+                self.assertFalse((root / key).exists(), key)
+            elif key == "spu-binary" and spu:
+                self.assertEqual((root / key).read_text(), spu + "\n")
+            else:
+                self.assertEqual((root / key).read_text(), (self.stack / key).read_text(), key)
+        self.assertEqual((root / "log-path").read_text(), str(self.logs / "m1" / "admin.log") + "\n")
+        self.assertTrue((self.logs / "m1").is_dir())
+        for retired in ("allow-list", "agent-config-directory", "spu-implementations", "agent-spu"):
+            self.assertFalse((root / retired).exists())
+            self.assertFalse((self.config / retired).exists())
+        import tomllib
+        store = tomllib.loads((root / "agent.toml").read_text())["state-store"]
+        self.assertEqual(store["engine"], engine)
+        return store
+
+    def test_apply_fixture_reaches_the_end_with_postgres(self):
         self.env["ALLOW_APPLY_CHECKS"] = "1"
-        result = self.create("--apply")
+        result = self.postgres("--apply")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("== made", result.stdout)
-        self.assertTrue((self.agents / "m1.toml").is_file())
-        self.assertIn("m1", (self.config / "allow-list").read_text().splitlines())
+        store = self.assert_agent_root("postgres")
+        self.assertEqual((store["database"], store["role"]), ("weaver_m1", "weaver_m1"))
         self.assertIn("local   weaver_m1", self.hba.read_text())
         self.assertIn("weaver-m1-state", self.ident.read_text())
         calls = self.calls()
@@ -398,6 +459,46 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertTrue(any("CREATE DATABASE" in c[-1] for c in sql))
         self.assertTrue(all("-X" in c for c in sql))
         self.assertFalse(any("/etc/weaver/agents" in c for c in calls))
+
+    def test_apply_fixture_reaches_the_end_with_sqlite(self):
+        # The default engine. Perturbation: let the sqlite path fall into the
+        # store half and psql or systemctl appear in the calls.
+        self.env["ALLOW_APPLY_CHECKS"] = "1"
+        result = self.create("--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("== made", result.stdout)
+        store = self.assert_agent_root("sqlite")
+        self.assertNotIn("database", store)
+        self.assertNotIn("role", store)
+        self.assertEqual(self.hba.read_text(), "local all all peer\n")
+        calls = self.calls()
+        self.assertFalse(any("psql" in c or "systemctl" in c for c in calls), calls)
+        self.assertTrue(any(c[:4] == ["sudo", "-u", "weaver-m1", "test"] for c in calls))
+
+    def test_sqlite_wall_open_refuses_before_admission(self):
+        self.env.update(ALLOW_APPLY_CHECKS="1", WALL_OPEN="1")
+        result = self.create("--apply")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("CAN ENTER THE STATE ROOM", result.stderr)
+        self.assertFalse((self.config / "m1").exists())
+        self.assertTrue((self.config / ".m1.partial").is_dir())
+
+    def test_spu_override_is_this_agents_spu_binary(self):
+        spu = "/opt/elsewhere/python-spu.pyz"
+        result = self.create("--spu", spu)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("spu-binary      " + spu, result.stdout)
+        self.env["ALLOW_APPLY_CHECKS"] = "1"
+        result = self.create("--spu", spu, "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_agent_root("sqlite", spu=spu)
+        self.assertEqual((self.stack / "spu-binary").read_text(), self.stack_keys["spu-binary"] + "\n")
+
+    def test_spu_override_must_be_absolute(self):
+        result = self.create("--spu", "relative/spu", "--apply")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("absolute path", result.stderr)
+        self.assertEqual(self.calls(), [])
 
     def test_stack_plan_builds_the_whole_workspace_and_compares_all_members(self):
         result = self.run_script("update-stack.sh")
@@ -413,22 +514,43 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         cargo_actions = [c[1] for c in self.calls() if c[0] == "cargo"]
         self.assertEqual(cargo_actions, ["metadata", "test", "build"])
 
-    def test_stack_refuses_an_agent_whose_declaration_is_still_yaml(self):
-        # The admin this installs reads `<agent>.toml`, so an agent with only
-        # `<agent>.yaml` refuses by name before cargo runs. Perturbation:
-        # remove the check and the run plans, reaching the build.
-        (self.agents / "existing.toml").unlink(missing_ok=True)
-        (self.agents / "existing.yaml").write_text("state-store:\n  engine: none\n")
-        result = self.run_script("update-stack.sh")
-        self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertIn("only a YAML declaration stands", result.stderr)
-        self.assertIn("existing", result.stderr)
-        self.assertIn("Install each agent's TOML declaration", result.stderr)
-        self.assertFalse(any(c[0] == "cargo" for c in self.calls()))
-        # Beside its TOML, the YAML is inert and the run plans.
-        (self.agents / "existing.toml").write_text("[state-store]\nengine = \"none\"\n")
+    def test_stack_test_step_selects_no_package_that_left(self):
+        # #33: weaver-analysis left the workspace and cargo refuses a package
+        # it does not hold. Perturbation: select it again and this fails.
         result = self.run_script("update-stack.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
+        test = next(c for c in self.calls() if c[:2] == ["cargo", "test"])
+        self.assertNotIn("weaver-analysis", test)
+        self.assertEqual([test[i + 1] for i, a in enumerate(test) if a == "-p"],
+                         ["weaver-trace", "weaver-harness", "weaver-state"])
+
+    def test_stack_refuses_a_box_on_the_box_wide_layout(self):
+        # Admin reads only `<base>/<agent>/`, so a base still holding the
+        # box-wide keys refuses by name before cargo runs. Perturbation:
+        # remove the check and the run plans, reaching the build.
+        for retired in ("allow-list", "agent-config-directory", "spu-implementations", "agent-spu"):
+            with self.subTest(retired=retired):
+                self.log.unlink(missing_ok=True)
+                (self.config / retired).write_text("existing\n")
+                result = self.run_script("update-stack.sh")
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("box-wide layout", result.stderr)
+                self.assertIn("REDEPLOY.md", result.stderr)
+                self.assertFalse(any(c[0] == "cargo" for c in self.calls()))
+                (self.config / retired).unlink()
+
+    def test_stack_agents_are_the_roots_under_the_base(self):
+        # A staged root under a dot-name and a plain file are not agents.
+        (self.config / ".m2.partial").mkdir()
+        (self.config / "stray-file").write_text("x")
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        agents_line = next(l for l in result.stdout.splitlines() if l.startswith("  agents"))
+        self.assertEqual(agents_line.split(), ["agents", "existing"])
+        shutil.rmtree(self.config / "existing")
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no agent root under", result.stderr)
 
     def test_stack_build_failure_cannot_claim_a_plan(self):
         self.env["BUILD_FAIL"] = "1"
@@ -544,7 +666,7 @@ class AdminAnswerTests(unittest.TestCase):
         program = ("set -euo pipefail\n" + admin_answer_definition(self.script)
                    + f'admin_answer {verb} m1\n')
         env = {**os.environ, "PATH": str(self.bin_dir) + os.pathsep + os.environ["PATH"],
-               "BIN_DIR": str(self.bin_dir), "ADMIN_CONFIG": "/nonexistent"}
+               "BIN_DIR": str(self.bin_dir), "ADMIN_BASE": "/nonexistent"}
         env.pop("BASH_ENV", None)
         return subprocess.run(["bash", "-c", program], env=env, text=True,
                               capture_output=True, timeout=20)

@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Bring this box's installed agent stack to the tree's current main.
 #
-# Box-agnostic: every path is read from /etc/weaver/admin rather than
-# written here, so the same script serves either seat.
+# Box-agnostic: every path is read from the stack record `bootstrap-stack.sh`
+# wrote (`/etc/weaver/stack/`, or WEAVER_STACK_RECORD) and from each agent's
+# root under the admin base (`/etc/weaver/admin/<agent>/`, or
+# WEAVER_ADMIN_CONFIG), rather than written here, so the same script serves
+# either seat. The agents are the roots under the base: admin admits an agent
+# by its root existing, and this script serves the same set.
 #
 #   ./deploy/update-stack.sh            plan only; refreshes refs, tests and builds, no install
 #   ./deploy/update-stack.sh --install  plan, then install what changed
@@ -18,13 +22,14 @@ INSTALL=0
 [ "${1:-}" = "--install" ] && INSTALL=1
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ADMIN_CONFIG=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
+ADMIN_BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
+STACK=${WEAVER_STACK_RECORD:-/etc/weaver/stack}
 cd "$REPO"
 
 say() { printf '\n== %s\n' "$*"; }
 die() { printf '\nREFUSED: %s\n' "$*" >&2; exit 1; }
 
-read_key() { cat "$ADMIN_CONFIG/$1" 2>/dev/null || true; }
+read_key() { cat "$STACK/$1" 2>/dev/null || true; }
 
 # **One reader for every value this script takes from a declaration**, through
 # python3's tomllib, so the script decodes what admin decodes within the TOML
@@ -81,31 +86,33 @@ sys.exit(1)
 # there, so a fact read and not checked is a divergence the run carries
 # silently, and the seats only find it by comparing results later.
 WORKER_BINARY=$(read_key worker-binary)
-AGENT_DIR=$(read_key agent-config-directory)
-ALLOW_LIST=$(read_key allow-list)
-[ -n "$WORKER_BINARY" ] || die "no worker-binary in $ADMIN_CONFIG"
-[ -n "$AGENT_DIR" ]     || die "no agent-config-directory in $ADMIN_CONFIG"
-[ -n "$ALLOW_LIST" ]    || die "no allow-list in $ADMIN_CONFIG"
+[ -n "$WORKER_BINARY" ] || die "no worker-binary in the stack record $STACK"
 BIN_DIR=$(dirname "$WORKER_BINARY")
 
-# **A box whose declarations are still YAML refuses before anything is
-# built.** The admin this script installs reads `<agent>.toml`, per
-# weaver-types-Spec section 2, so an allow-listed agent whose directory holds
-# only `<agent>.yaml` would read as having no declaration at all: skipped at
-# the engine check, skipped at reconciliation, and the run rolled back at
-# verification with nothing saying why. It is refused by name here instead,
-# while the installed stack still stands and still reads the YAML, and the
-# answer is to install the TOML declaration beside it first. An agent with
-# neither file is left to the steps below, which already name that case.
-UNMIGRATED=""
-for agent in $ALLOW_LIST; do
-  if [ ! -f "$AGENT_DIR/$agent.toml" ] && [ -f "$AGENT_DIR/$agent.yaml" ]; then
-    UNMIGRATED="$UNMIGRATED $agent"
-  fi
+# **A box still on the box-wide layout refuses before anything is built.**
+# Before 2026-10-01 admin read one configuration for every agent, its
+# allow-list naming them and its `agent-config-directory` holding their
+# declarations. The admin this script installs reads only `<base>/<agent>/`,
+# so on such a box it would find no agent at all, and every one would refuse
+# after the install. The migration is a one-time manual step, REDEPLOY.md
+# section 7, made while the old stack still stands.
+for retired in allow-list agent-config-directory spu-implementations agent-spu; do
+  [ ! -e "$ADMIN_BASE/$retired" ] || die "$ADMIN_BASE/$retired stands: this box is on the box-wide layout. \
+Migrate it to one root per agent first (deploy/REDEPLOY.md section 7), then rerun."
 done
-[ -z "$UNMIGRATED" ] || die "only a YAML declaration stands in $AGENT_DIR for:$UNMIGRATED. \
-The stack this installs reads <agent>.toml. Install each agent's TOML declaration \
-beside its YAML first, then rerun."
+
+# **The agents are the roots under the base**, named as admin's name check
+# admits them (ASCII letters, digits, `-` and `_`), so a staged root
+# `create-agent.sh` left under a dot-name is not one. A symlink is not a root.
+AGENTS=""
+for root in "$ADMIN_BASE"/*/; do
+  root=${root%/}
+  [ -d "$root" ] && [ ! -L "$root" ] || continue
+  agent=${root##*/}
+  [[ "$agent" =~ ^[A-Za-z0-9_-]+$ ]] || continue
+  AGENTS="$AGENTS $agent"
+done
+[ -n "$AGENTS" ] || die "no agent root under $ADMIN_BASE: make one with create-agent.sh first"
 
 # **Where cargo builds is asked rather than assumed.** This box sets
 # `CARGO_TARGET_DIR`, so `target/release` does not exist here, and every
@@ -163,9 +170,10 @@ BUILT="$BUILT/release"
 # installing fifty-odd files, every `.d` and `.rlib` among them, and `hades`
 # and its libraries from a workspace that has nothing to do with this one.
 # Discovering the subject from a directory is how a deployment installs what
-# it was never asked to. The build also makes `weaver-analysis` and
-# `weaver-spu-classify`, which this script does not ship. The build below is
-# the whole workspace, the frontend having left the repository on 2026-09-26.
+# it was never asked to. The build also makes `weaver-spu-classify`, which
+# this script does not ship. The build below is the whole workspace, the
+# frontend having left the repository on 2026-09-26 and the analysis crate on
+# 2026-09-30.
 # A member joins the installed set by being written here.
 MEMBERS="pyworker worker weaver-admin weaver-gate weaver-spu weaver-state"
 
@@ -176,9 +184,24 @@ FEATURES="$SPU_FEATURES,$MEMBER_FEATURES"
 # ---------------------------------------------------------------- 1. box facts
 say "box"
 printf '  host          %s\n' "$(hostname)"
-printf '  config root   %s\n' "$ADMIN_CONFIG"
+printf '  stack record  %s\n' "$STACK"
+printf '  admin base    %s\n' "$ADMIN_BASE"
+printf '  agents       %s\n' "$AGENTS"
 printf '  bin dir       %s\n' "$BIN_DIR"
 printf '  worker-binary %s\n' "$WORKER_BINARY"
+# **Each agent's binary paths are its own and this run does not move them.**
+# It installs over the files at the stack record's paths, so an agent whose
+# root names those paths is updated in place and nothing in its root changes;
+# one whose root names another file (an SPU chosen with `create-agent.sh
+# --spu`, or a path written by hand) keeps serving that file, and is printed
+# here so the reader knows this run does not reach it.
+for agent in $AGENTS; do
+  for key in worker-binary gate-binary spu-binary; do
+    own=$(cat "$ADMIN_BASE/$agent/$key" 2>/dev/null || true)
+    [ "$own" = "$(read_key "$key")" ] \
+      || printf '  %-12s %s = %s, not the stack record'"'"'s; this run does not update it\n' "$agent" "$key" "${own:-(absent)}"
+  done
+done
 # **The built-from path is a box fact and is printed as one.** It differs
 # between the seats, one of them setting `CARGO_TARGET_DIR`, and it was the
 # difference that let this script report a box current while comparing
@@ -231,8 +254,8 @@ fi
 # what the build carries, and neither reads the other. That is tolerable only
 # while something compares them, so this is that something: edit one and not
 # the other and the run refuses by name before it spends the build.
-for agent in $ALLOW_LIST; do
-  decl="$AGENT_DIR/$agent.toml"
+for agent in $AGENTS; do
+  decl="$ADMIN_BASE/$agent/agent.toml"
   [ -f "$decl" ] || continue
   # The engine at `state-store.engine`, read by `declared` as the string
   # admin decodes, and an absent election means the crate's own default
@@ -254,7 +277,7 @@ for agent in $ALLOW_LIST; do
     *) die "$agent elects the $elected store and the build carries $FEATURES, so the member would refuse it at load. Name weaver-state/$elected in FEATURES, or change the declaration." ;;
   esac
 done
-printf '  elected store every agent in the allow-list elects one this build carries\n'
+printf '  elected store every agent under the base elects one this build carries\n'
 
 # --------------------------------------------------------------- 2. update main
 say "tree"
@@ -306,15 +329,20 @@ say "test"
 # postgres engine carried no test at all against sqlite's thirteen. Selecting
 # the package is also what lets the step name a `weaver-state` feature, the
 # refusal that kept it out being about selection rather than about the flag.
+# **The selection is bootstrap-stack.sh's and the two move together.**
+# `weaver-analysis` left the workspace on 2026-09-30 and cargo refuses a
+# package it does not hold, so it is not selected; a replay that needs the
+# analysis binary takes it from WeaverAnalysis's own build.
 cargo test --release --locked \
-  -p weaver-trace -p weaver-harness -p weaver-analysis -p weaver-state \
+  -p weaver-trace -p weaver-harness -p weaver-state \
   --features "$MEMBER_FEATURES" 2>&1 | grep -E '^test result' | \
   awk '{p+=$4; f+=$6} END {printf "  %d passed, %d failed\n", p, f; exit (f>0)}'
 
 # ------------------------------------------------------------------- 4. build
 # The frontend left the repository on 2026-09-26 and ships no member here, so
 # the build is the whole workspace: the six installed members and the tools
-# beside them (including analysis for replay).
+# beside them. The analysis crate left on 2026-09-30 and is built in
+# WeaverAnalysis.
 say "build"
 NVCC_CCBIN=${NVCC_CCBIN:-/usr/bin/g++-15} \
   cargo build --release --locked --workspace --features "$FEATURES"
@@ -423,7 +451,7 @@ restore() {
   # to perform.
   if [ -n "$LOADED_AGENT" ]; then
     printf '  unloading %s before the restore\n' "$LOADED_AGENT" >&2
-    sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_CONFIG" "$BIN_DIR/weaver-admin" \
+    sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" \
       unload "$LOADED_AGENT" >/dev/null 2>&1 \
       || { printf '  %s WOULD NOT UNLOAD. It is still serving, and the files below go back under it. Stop the unit by hand before loading anything.\n' "$LOADED_AGENT" >&2; failed=1; }
     LOADED_AGENT=""
@@ -431,7 +459,7 @@ restore() {
   if [ ${#PATCHED[@]} -gt 0 ]; then
     for entry in "${PATCHED[@]}"; do
       printf '  restoring declaration %s\n' "${entry%%|*}" >&2
-      cp -a "${entry##*|}" "${entry%%|*}" \
+      sudo cp -a "${entry##*|}" "${entry%%|*}" \
         || { printf '  FAILED to restore %s\n' "${entry%%|*}" >&2; failed=1; }
     done
   fi
@@ -494,7 +522,8 @@ if [ ${#CHANGED[@]} -gt 0 ]; then
   # `mkdir -p` lets two runs in one second share a directory, and the
   # second run's copies would then be what the first run's rollback
   # restores. `mktemp -d` creates or fails.
-  BACKUP=$(sudo mktemp -d "/opt/weaver/backup-$(date +%Y%m%dT%H%M%S)-XXXXXX")
+  # Beside the bin directory, under the install prefix the stack record names.
+  BACKUP=$(sudo mktemp -d "$(dirname "$BIN_DIR")/backup-$(date +%Y%m%dT%H%M%S)-XXXXXX")
   # State may change from the next line on, so the trap's condition is
   # armed before it does rather than after the loop closes.
   INSTALL_DONE=1
@@ -532,7 +561,7 @@ fi
 # stopped without reconciling, verifying, or rolling back.
 admin_answer() {
   local said
-  said=$(sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_CONFIG" "$BIN_DIR/weaver-admin" "$1" "$2" 2>&1) || true
+  said=$(sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" "$1" "$2" 2>&1) || true
   [ -n "$said" ] || return 0
   printf '%s\n' "$said" | sed '$d' | sed 's/^/  admin: /' >&2
   printf '%s\n' "$said" | sed -n '$p'
@@ -544,8 +573,8 @@ validate() {
 
 # -------------------------------------------------------- 8. reconcile agents
 say "reconcile declarations"
-for agent in $ALLOW_LIST; do
-  decl="$AGENT_DIR/$agent.toml"
+for agent in $AGENTS; do
+  decl="$ADMIN_BASE/$agent/agent.toml"
   if [ ! -f "$decl" ]; then
     printf '  %-12s no declaration at %s\n' "$agent" "$decl"
     continue
@@ -561,9 +590,10 @@ for agent in $ALLOW_LIST; do
   declared "$decl" state-store table || rc=$?
   if [ ! -f "$STATE_BINARY" ] && [ "$rc" -eq 3 ]; then
     printf '  %-12s %s\n' "$agent" "$verdict"
-    cp -a "$decl" "$decl.pre-$AFTER-bak"
+    # The root is root's, so the backup and the patch are made under sudo.
+    sudo cp -a "$decl" "$decl.pre-$AFTER-bak"
     PATCHED+=("$decl|$decl.pre-$AFTER-bak")
-    printf '\n[state-store]\nengine = "none"\n' >> "$decl"
+    printf '\n[state-store]\nengine = "none"\n' | sudo tee -a "$decl" >/dev/null
     verdict=$(validate "$agent")
     if [ "$verdict" != '{"kind":"validated"}' ]; then
       rollback "$agent still refuses after the declaration: $verdict"
@@ -599,13 +629,13 @@ sink_lines() {
 # A load that is not read back is an install that was not verified. This reads
 # the event out of the agent's own sink, the only place the claim can be
 # checked from.
-# **Every agent the allow-list admits, not the first one.** Step 8 reconciles
+# **Every agent root under the base, not the first one.** Step 8 reconciles
 # each of them, so verifying one and reporting the box current would leave
 # the others' declarations changed and never loaded.
 say "verify"
 VERIFIED=0
-for AGENT in $ALLOW_LIST; do
-  decl="$AGENT_DIR/$AGENT.toml"
+for AGENT in $AGENTS; do
+  decl="$ADMIN_BASE/$AGENT/agent.toml"
   if [ ! -f "$decl" ]; then
     printf '  %-12s no declaration, not verified\n' "$AGENT"
     continue
@@ -615,7 +645,7 @@ for AGENT in $ALLOW_LIST; do
   [ "$rc" -eq 0 ] && [ -n "$SINK" ] || rollback "cannot find the trace sink for $AGENT"
   printf '  %s\n' "$AGENT"
   LINES=$(sink_lines "$SINK") || rollback "$AGENT: $SINK is not a regular file, and this step reads the load event back out of one"
-  sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_CONFIG" "$BIN_DIR/weaver-admin" unload "$AGENT" >/dev/null 2>&1 || true
+  sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" unload "$AGENT" >/dev/null 2>&1 || true
   # Claimed before the load rather than after it, so a load that comes up and
   # then dies on its read-back is still a load the restore knows to undo.
   LOADED_AGENT="$AGENT"
@@ -638,11 +668,11 @@ for AGENT in $ALLOW_LIST; do
   if ! tail -n "$NEW" "$SINK" | weaver_read_load; then
     rollback "$AGENT: the load event does not name its composer; the install did not take"
   fi
-  sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_CONFIG" "$BIN_DIR/weaver-admin" unload "$AGENT" >/dev/null 2>&1 || true
+  sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" unload "$AGENT" >/dev/null 2>&1 || true
   LOADED_AGENT=""
   VERIFIED=$((VERIFIED + 1))
 done
-[ "$VERIFIED" -gt 0 ] || rollback "no agent in the allow-list could be verified"
+[ "$VERIFIED" -gt 0 ] || rollback "no agent root under $ADMIN_BASE could be verified"
 
 COMPLETED=1
 say "the box is at $AFTER"

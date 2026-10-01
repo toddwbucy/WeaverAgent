@@ -1,24 +1,36 @@
 #!/usr/bin/env bash
 # Install the agent stack on a box that holds none: build at the lock, test,
-# install the members and their libraries, and write admin's configuration.
+# install the members and their libraries, and write the stack record.
 #
 #   deploy/bootstrap-stack.sh              plan: preflight, test, build; installs nothing, no sudo
 #   deploy/bootstrap-stack.sh --install    then install under sudo
 #
 # **This is the first install; `update-stack.sh` is every later one.** That
 # script diffs the built members against the installed ones and reads every
-# path out of `/etc/weaver/admin`, so on a box with neither it has nothing to
+# path out of the stack record, so on a box with neither it has nothing to
 # read and refuses. This one writes both from the facts below and then hands
 # over: after it, `create-agent.sh` makes each agent and `update-stack.sh`
-# carries the box forward. It refuses to run where a config root already
-# stands, because two writers of `/etc/weaver/admin` is how a box drifts.
+# carries the box forward. It refuses to run where a stack record already
+# stands, because two writers of one record is how a box drifts.
+#
+# **The stack record is the scripts' and admin never reads it.** Admin reads
+# one agent's root, `<admin base>/<agent>/`, and nothing shared. The record at
+# `/etc/weaver/stack/` holds the box-wide defaults, one file per key, which
+# `create-agent.sh` copies into each new agent's root: `worker-binary`,
+# `spu-binary`, `gate-binary`, `run-tool`, `control-tool`, `coordination-root`,
+# `unit-properties`, and for the scripts alone `prefix`, `log-directory` and
+# `agent-directory`. `headroom-bytes` and `state-store-socket` are optional;
+# this script writes neither, and an operator who writes one into the record
+# has it copied into every agent made after. The admin base is created empty
+# here, root-owned 0755, and gains one root per agent.
 #
 # Box facts are environment, defaulted, printed, and never discovered from a
 # directory listing (the install set is named, per update-stack.sh):
 #
 #   WEAVER_PREFIX        /opt/weaver            bin/ lib/ models/ python-spu/
-#   WEAVER_ADMIN_CONFIG  /etc/weaver/admin
-#   WEAVER_OPERATOR      $SUDO_USER or $USER    owns the agent config directory
+#   WEAVER_ADMIN_CONFIG  /etc/weaver/admin      the admin base: one root per agent
+#   WEAVER_STACK_RECORD  /etc/weaver/stack      the scripts' record of this install
+#   WEAVER_OPERATOR      $SUDO_USER or $USER    owns the agent directory
 #   WEAVER_AGENT_DIR     /home/$OPERATOR/.weaveragents
 #   WEAVER_LOG_DIR       /var/log/weaver
 #   CUDA_LIB_DIR         /opt/cuda/lib64        joins LD_LIBRARY_PATH in unit-properties
@@ -49,7 +61,8 @@ case "${1:-}" in
 esac
 
 PREFIX=${WEAVER_PREFIX:-/opt/weaver}
-ADMIN_CONFIG=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
+ADMIN_BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
+STACK=${WEAVER_STACK_RECORD:-/etc/weaver/stack}
 OPERATOR=${WEAVER_OPERATOR:-${SUDO_USER:-$USER}}
 AGENT_DIR=${WEAVER_AGENT_DIR:-/home/$OPERATOR/.weaveragents}
 LOG_DIR=${WEAVER_LOG_DIR:-/var/log/weaver}
@@ -73,7 +86,8 @@ say "box"
 plan "host          $(hostname)"
 plan "operator      $OPERATOR"
 plan "prefix        $PREFIX"
-plan "config root   $ADMIN_CONFIG"
+plan "admin base    $ADMIN_BASE"
+plan "stack record  $STACK"
 plan "agent dir     $AGENT_DIR"
 plan "log dir       $LOG_DIR"
 plan "toolchain     $(rustup show active-toolchain 2>/dev/null | cut -d' ' -f1)"
@@ -94,7 +108,13 @@ if [ -n "$CCCL" ] && ! cccl_in_window "$CCCL"; then
   die "cccl $CCCL is outside the 3.1.4-3.3.4 window #397 measured. Fix the pin first."
 fi
 command -v nvcc >/dev/null || die "no nvcc on PATH and the build carries $SPU_FEATURES"
-[ -d "$ADMIN_CONFIG" ] && die "$ADMIN_CONFIG already stands. This is the first install; use update-stack.sh, or decommission.sh first."
+[ -e "$STACK" ] && die "$STACK already stands. This is the first install; use update-stack.sh, or decommission.sh first."
+# An admin base that holds anything is a stack this script did not write: an
+# agent's root, or the box-wide configuration of the layout before 2026-10-01,
+# which REDEPLOY.md migrates by hand. An empty one is harmless and kept.
+if [ -d "$ADMIN_BASE" ] && [ -n "$(ls -A "$ADMIN_BASE" 2>/dev/null)" ]; then
+  die "$ADMIN_BASE already holds configuration. This is the first install; use update-stack.sh, or decommission.sh first."
+fi
 [ -d "$PREFIX/bin" ] && die "$PREFIX/bin already stands. Decommission first."
 
 say "tree"
@@ -143,9 +163,10 @@ plan "install -d $PREFIX/bin $PREFIX/lib  (root, 0755)"
 for b in $MEMBERS; do plan "install $b -> $PREFIX/bin/$b  $(sha256sum "$BUILT/$b" | cut -c1-12)"; done
 plan "cp -a ${#LIBS[@]} library files and links -> $PREFIX/lib"
 plan "write $LDSO_CONF = $PREFIX/lib and $CUDA_LIB_DIR, then ldconfig"
-plan "write $ADMIN_CONFIG/{allow-list,agent-config-directory,worker-binary,spu-binary,gate-binary,run-tool,control-tool,coordination-root,log-path,unit-properties}"
-plan "install -d $LOG_DIR (root:root 0750): admin's log, the agent excluded by owner, group and search bit"
-plan "install -d $AGENT_DIR ($OPERATOR:$OPERATOR 0755): declarations and territories"
+plan "write $STACK/{worker-binary,spu-binary,gate-binary,run-tool,control-tool,coordination-root,unit-properties,prefix,log-directory,agent-directory}  (root, 0755 / 0644)"
+plan "install -d $ADMIN_BASE (root:root 0755): empty; create-agent.sh adds one root per agent"
+plan "install -d $LOG_DIR (root:root 0750): each agent's operations log goes under it, the agent excluded by owner, group and search bit"
+plan "install -d $AGENT_DIR ($OPERATOR:$OPERATOR 0755): territories"
 [ -d "$PREFIX/models" ] && plan "$PREFIX/models stands: $(ls "$PREFIX/models" | wc -l) entries" || plan "$PREFIX/models is absent: copy the artifacts before declaring an agent"
 [ "$INSTALL" -eq 1 ] || { say "plan only. rerun with --install"; exit 0; }
 
@@ -169,25 +190,27 @@ if ldd "$PREFIX/bin/weaver-spu" 2>/dev/null | grep -q 'not found'; then
 fi
 plan "weaver-spu resolves: $(ldd "$PREFIX/bin/weaver-spu" | grep -cE 'ggml|llama') engine objects from $PREFIX/lib"
 
-say "admin configuration"
-sudo install -d -o root -g root -m 0755 "$ADMIN_CONFIG"
-w() { printf '%s\n' "$2" | sudo tee "$ADMIN_CONFIG/$1" >/dev/null; plan "$1 = $2"; }
-: | sudo tee "$ADMIN_CONFIG/allow-list" >/dev/null; plan "allow-list = (empty; create-agent.sh appends)"
-w agent-config-directory "$AGENT_DIR"
+say "stack record"
+sudo install -d -o root -g root -m 0755 "$STACK"
+w() { printf '%s\n' "$2" | sudo tee "$STACK/$1" >/dev/null; plan "$1 = $2"; }
 w worker-binary "$PREFIX/bin/worker"
 w spu-binary "$PREFIX/bin/weaver-spu"
 w gate-binary "$PREFIX/bin/weaver-gate"
 w run-tool /usr/bin/systemd-run
 w control-tool /usr/bin/systemctl
 w coordination-root /run
-w log-path "$LOG_DIR/admin-operations.ndjson"
+w prefix "$PREFIX"
+w log-directory "$LOG_DIR"
+w agent-directory "$AGENT_DIR"
 printf 'UMask=0000\nEnvironment=LD_LIBRARY_PATH=%s:%s\nLogRateLimitIntervalSec=30s\nLogRateLimitBurst=1000000\n' \
-  "$PREFIX/lib" "$CUDA_LIB_DIR" | sudo tee "$ADMIN_CONFIG/unit-properties" >/dev/null
+  "$PREFIX/lib" "$CUDA_LIB_DIR" | sudo tee "$STACK/unit-properties" >/dev/null
 plan "unit-properties = UMask, LD_LIBRARY_PATH, journal rate limit off"
+sudo install -d -o root -g root -m 0755 "$ADMIN_BASE"
+plan "admin base $ADMIN_BASE (empty)"
 sudo install -d -o root -g root -m 0750 "$LOG_DIR"
 sudo install -d -o "$OPERATOR" -g "$OPERATOR" -m 0755 "$AGENT_DIR"
 
 say "installed at $REV"
 plan "next: deploy/create-agent.sh <name> --artifact <path> [--apply], one agent at a time"
-plan "then: sudo WEAVER_ADMIN_CONFIG=$ADMIN_CONFIG $PREFIX/bin/weaver-admin validate <name>"
+plan "then: sudo WEAVER_ADMIN_CONFIG=$ADMIN_BASE $PREFIX/bin/weaver-admin validate <name>"
 plan "then: deploy/verify-load.sh <name>"

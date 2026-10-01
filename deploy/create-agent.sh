@@ -1,9 +1,21 @@
 #!/usr/bin/env bash
-# Create one agent's territory on this box: its accounts, its directory, and
-# the state store behind its member's seam.
+# Create one agent on this box: its accounts, its territory, the state store
+# behind its member's seam, and its root of admin configuration.
 #
 #   ./deploy/create-agent.sh fred --artifact /path/to.gguf            plan only
 #   ./deploy/create-agent.sh fred --artifact /path/to.gguf --apply    act
+#
+# Options: --engine sqlite|postgres (default sqlite), --session <name>
+# (default <name>-001), --spu <path> (this agent's SPU, in place of the
+# stack record's `spu-binary`).
+#
+# **The agent's root is `<admin base>/<name>/` and it is the admission.**
+# Admin reads that directory and nothing shared, so this script writes every
+# key admin requires into it, copied from the stack record `bootstrap-stack.sh`
+# wrote at `/etc/weaver/stack/` (which admin never reads), plus the agent's own
+# `log-path` and its declaration as `agent.toml`. The root is staged under a
+# dot-name admin's name check refuses, and moved into place last, so a run that
+# stops part way leaves no root admin would admit.
 #
 # **The program creates nothing and this is why the script exists.** Admin's
 # inventory refuses a missing home rather than building one, per
@@ -50,7 +62,11 @@ SESSION=""
 # 2026-09-11. They are still two statements, deliberately, because a build
 # serves engines no agent has elected yet; `update-stack.sh` reconciles them
 # before it spends a build, and refuses by name where they disagree.
-ENGINE=postgres
+# The default is sqlite, on the operator's ruling of 2026-09-30 that agent
+# state stores are sqlite across the board; postgres stays the alternative for
+# as long as the build carries it.
+ENGINE=sqlite
+SPU_OVERRIDE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply)    APPLY=1 ;;
@@ -67,6 +83,7 @@ while [ $# -gt 0 ]; do
    weaver-<name>-state, give that account traversal to its territory, and chown
    the territory to it." ;;
     --engine)   [ $# -ge 2 ] || die "--engine needs a name"; ENGINE=$2; shift ;;
+    --spu)      [ $# -ge 2 ] || die "--spu needs a path"; SPU_OVERRIDE=$2; shift ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -96,19 +113,27 @@ for pair in "session:$SESSION" "artifact:$ARTIFACT"; do
     die "the $field '$value' carries a double quote, a backslash or a control character, which the declaration's TOML string cannot hold as written"
   fi
 done
+# The SPU path is one line of a key file admin reads, so it is absolute and
+# carries no control character, on the ground the paragraph above gives.
+if [ -n "$SPU_OVERRIDE" ]; then
+  [[ "$SPU_OVERRIDE" == /* ]] || die "--spu takes an absolute path: '$SPU_OVERRIDE'"
+  [[ "$SPU_OVERRIDE" =~ [[:cntrl:]] ]] && die "--spu carries a control character, which a key file cannot hold as one line"
+fi
 
 
 # **An engine this script cannot provision is refused here rather than written
 # into a declaration.** `weaver-types` admits `none`, `sqlite` and `postgres`,
 # and anything else fails the inventory's parse after every account, database
-# and access entry has already been made. `none` is a lawful election and not
-# one this script can serve: the whole second half of it provisions a store
-# and probes the two gates over it, and an agent electing no store has none of
-# that to verify. Declare that one by hand.
+# and access entry has already been made. A sqlite agent is the postgres one
+# minus the store half: the same two accounts, territory and state room, the
+# member keeping its database file in the room, and no role, database or
+# admission line, which the inventory refuses for it. `none` is a lawful
+# election and not one this script serves: an agent electing no store has no
+# member and no room to verify. Declare that one by hand.
 case "$ENGINE" in
-  postgres) ;;
-  none|sqlite) die "$ENGINE is a lawful election and not one this script can make. The inventory refuses state-store.database and state-store.role for it, per weaver-admin/src/inventory.rs, and this script writes both because provisioning them is what it is for: a role, a database, an admission line and two probes over them. Declare a $ENGINE agent by hand, without those two fields$( [ "$ENGINE" = none ] && printf ' and without state-election' ). What this option exists for is to name the engine rather than assume it, so that deploy/update-stack.sh can reconcile the declaration against the build." ;;
-  *) die "no store engine named $ENGINE. weaver-types admits none, sqlite and postgres, and this script can provision only postgres." ;;
+  sqlite|postgres) ;;
+  none) die "none is a lawful election and not one this script makes: there is no member, no state room and no store to probe. Declare it by hand, per deploy/HowToDeployANewAgent.md section 3. What this option exists for is to name the engine rather than assume it, so that deploy/update-stack.sh can reconcile the declaration against the build." ;;
+  *) die "no store engine named $ENGINE. weaver-types admits none, sqlite and postgres, and this script provisions sqlite and postgres." ;;
 esac
 
 OPERATOR=${SUDO_USER:-$USER}
@@ -116,9 +141,52 @@ AGENT_USER="weaver-$NAME"          # the agent's own uid: the worker's identity
 MEMBER_USER="weaver-$NAME-state"   # the member's uid: holds the territory
 ROLE="weaver_$NAME"                # postgres spells with underscores
 DATABASE="weaver_$NAME"
-HOME_DIR="/home/$OPERATOR/.weaveragents/$AGENT_USER"
+ADMIN_BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
+STACK=${WEAVER_STACK_RECORD:-/etc/weaver/stack}
+AGENT_ROOT="$ADMIN_BASE/$NAME"
+STAGE="$ADMIN_BASE/.$NAME.partial"
+DECLARATION="$AGENT_ROOT/agent.toml"
+
+trim() {
+  local value=$1
+  value=${value#"${value%%[![:space:]]*}"}
+  value=${value%"${value##*[![:space:]]}"}
+  printf '%s' "$value"
+}
+# **The stack record is read without privilege in both modes.** It is
+# root-owned and world-readable by construction, holds no secret, and every
+# value the declaration renders from it must be known before sudo is asked
+# for. A key that is absent, empty or unreadable refuses by name; only the
+# optional keys may be absent.
+REQUIRED_KEYS="worker-binary spu-binary gate-binary run-tool control-tool coordination-root unit-properties"
+OPTIONAL_KEYS="headroom-bytes state-store-socket"
+stack_key() { # stack_key KEY required|optional
+  local file="$STACK/$1" value
+  [ -d "$STACK" ] || die "no stack record at $STACK: bootstrap-stack.sh writes it"
+  if [ ! -e "$file" ] && [ ! -L "$file" ]; then
+    [ "$2" = optional ] && return 0
+    die "no $1 in the stack record $STACK"
+  fi
+  value=$(cat -- "$file") || die "cannot read $file"
+  value=$(trim "$value")
+  [ -n "$value" ] || die "empty $1 in the stack record $STACK"
+  printf '%s' "$value"
+}
+for key in $REQUIRED_KEYS; do stack_key "$key" required >/dev/null || exit 1; done
+for key in $OPTIONAL_KEYS; do stack_key "$key" optional >/dev/null || exit 1; done
+LOG_DIR=$(stack_key log-directory required) || exit 1
+AGENT_DIR=$(stack_key agent-directory required) || exit 1
+LOG_PATH="$LOG_DIR/$NAME/admin.log"
+SPU_BINARY=${SPU_OVERRIDE:-$(stack_key spu-binary required)} || exit 1
+# **The territory sits under the operator's home**, because the traversal the
+# member is given below is a chain of access entries from that home down, and
+# this script opens no passage anywhere else.
+case "$AGENT_DIR/" in
+  "/home/$OPERATOR/"*) ;;
+  *) die "the stack record's agent-directory $AGENT_DIR is not under /home/$OPERATOR, and the member's passage to its territory is opened from there" ;;
+esac
+HOME_DIR="$AGENT_DIR/$AGENT_USER"
 STATE_DIR="$HOME_DIR/state"
-ADMIN_CONFIG=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
 
 # **The declaration is rendered once, here, and parse-checked before anything
 # is provisioned**, so a value that breaks it refuses before an account or a
@@ -184,9 +252,10 @@ keys = [
 # record.
 [state-store]
 engine = "$ENGINE"
-database = "$DATABASE"
-role = "$ROLE"
 TOML
+if [ "$ENGINE" = postgres ]; then
+  printf 'database = "%s"\nrole = "%s"\n' "$DATABASE" "$ROLE"
+fi
 }
 DECLARATION_TEXT=$(render_declaration)
 command -v python3 >/dev/null || die "python3 is not on PATH, and the declaration is parse-checked with its tomllib before anything is made"
@@ -199,23 +268,6 @@ if [ "$APPLY" -eq 1 ]; then
 fi
 read_as_owner() {
   if [ "$APPLY" -eq 1 ]; then sudo -n "$@"; else "$@"; fi
-}
-trim() {
-  local value=$1
-  value=${value#"${value%%[![:space:]]*}"}
-  value=${value%"${value##*[![:space:]]}"}
-  printf '%s' "$value"
-}
-read_config_file() {
-  # Only the allow-list is optional. An unreadable parent must not make a
-  # hidden file look absent. A failed sudo/read is always a failed preflight.
-  read_as_owner sh -c '
-    if [ "$2" = optional ] && [ ! -e "$1" ] && [ ! -L "$1" ]; then
-      [ -x "${1%/*}" ] || exit 1
-      exit 0
-    fi
-    cat -- "$1"
-  ' sh "$1" "${2:-required}" || die "cannot read $1"
 }
 # Preserve test false separately from a failed privileged invocation. A sudo
 # failure also returns 1, so using `sudo test ...` as a boolean loses its cause.
@@ -238,16 +290,8 @@ refuse_existing() {
   answer=$(path_answer -e "$1") || exit 1
   [ "$answer" = no ] || die "$2 already exists: $1"
 }
-AGENTS_DIR=$(read_config_file "$ADMIN_CONFIG/agent-config-directory") || exit 1
-AGENTS_DIR=$(trim "$AGENTS_DIR")
-[ -n "$AGENTS_DIR" ] || die "empty agent-config-directory in $ADMIN_CONFIG"
-require_path -d "$AGENTS_DIR" "declaration directory is missing or not a directory"
-require_path -x "$AGENTS_DIR" "declaration directory cannot be traversed"
-if [ "$APPLY" -eq 1 ]; then
-  require_path -w "$AGENTS_DIR" "declaration directory is not writable"
-fi
-ALLOW_LIST="$ADMIN_CONFIG/allow-list"
-DECLARATION="$AGENTS_DIR/$NAME.toml"
+require_path -d "$ADMIN_BASE" "the admin base is missing or not a directory (bootstrap-stack.sh makes it)"
+require_path -x "$ADMIN_BASE" "the admin base cannot be traversed"
 
 # **Whose identity the store admits is settled and derived.** The charter has
 # the member hold a uid of its own and dial the store under it, and as of
@@ -264,11 +308,17 @@ plan "operator        $OPERATOR joins group $AGENT_USER"
 plan "home            /home/$AGENT_USER        the agent's own, where its tools run"
 plan "directory       $HOME_DIR        root:$OPERATOR 2750"
 plan "state territory $STATE_DIR       $MEMBER_USER 0700, which the agent's uid cannot enter"
-plan "role            $ROLE            postgres, no password, peer only"
-plan "database        $DATABASE        owned by $ROLE"
-plan "admission       local $DATABASE $ROLE peer map=weaver"
-plan "identity map    weaver $MEMBER_USER -> $ROLE"
-plan "allow-list      $NAME appended to $ALLOW_LIST"
+if [ "$ENGINE" = postgres ]; then
+  plan "role            $ROLE            postgres, no password, peer only"
+  plan "database        $DATABASE        owned by $ROLE"
+  plan "admission       local $DATABASE $ROLE peer map=weaver"
+  plan "identity map    weaver $MEMBER_USER -> $ROLE"
+else
+  plan "store           sqlite, its file in the state territory; no role, database or admission line"
+fi
+plan "agent root      $AGENT_ROOT      root 0755, keys 0644, copied from $STACK"
+plan "spu-binary      $SPU_BINARY$( [ -n "$SPU_OVERRIDE" ] && printf '  (--spu, in place of the stack record'"'"'s)' )"
+plan "log-path        $LOG_PATH        its directory root 0750"
 plan "declaration     $DECLARATION     session $SESSION, artifact $ARTIFACT"
 plan "store engine    $ENGINE         which the deployed member must carry"
 
@@ -285,13 +335,11 @@ for u in "$AGENT_USER" "$MEMBER_USER"; do
 done
 refuse_existing "/home/$AGENT_USER" "agent home"
 refuse_existing "$HOME_DIR" "territory"
-refuse_existing "$DECLARATION" "declaration"
+refuse_existing "$AGENT_ROOT" "agent root"
+refuse_existing "$STAGE" "a partial agent root from an earlier run (remove it by hand)"
+refuse_existing "$LOG_DIR/$NAME" "operations log directory"
 [ -r "$ARTIFACT" ] || printf '   WARNING: the artifact is not readable from this shell: %s\n' "$ARTIFACT"
-listed=$(read_config_file "$ALLOW_LIST" optional) || exit 1
-while IFS= read -r entry; do
-  entry=$(trim "$entry")
-  [ "$entry" != "$NAME" ] || die "$NAME is already in $ALLOW_LIST"
-done <<< "$listed"
+[ -z "$SPU_OVERRIDE" ] || [ -x "$SPU_OVERRIDE" ] || printf '   WARNING: the --spu path is not executable from this shell: %s\n' "$SPU_OVERRIDE"
 if [ "$APPLY" -eq 0 ]; then
   printf '   no collision found in accounts and paths visible to this uid\n'
   printf '   PENDING --apply: privileged collision checks, service and store catalogs\n'
@@ -312,7 +360,7 @@ fi
 # operator and not the member**, the member's account not existing until the
 # apply below makes it, and what is asked here is whether the filesystem
 # carries entries at all rather than which account gets one.
-probe_parent="/home/$OPERATOR/.weaveragents"
+probe_parent="$AGENT_DIR"
 [ -d "$probe_parent" ] || probe_parent="/home/$OPERATOR"
 probe=$(mktemp -d "$probe_parent/.acl-probe-XXXXXX") || die "cannot write under $probe_parent"
 if setfacl -m "u:$OPERATOR:x" "$probe" 2>/dev/null; then
@@ -325,6 +373,7 @@ else
 fi
 rmdir "$probe"
 
+if [ "$ENGINE" = postgres ]; then
 # **A retired agent can leave its role or database behind.** Discovering
 # that at CREATE ROLE would leave both accounts and directories half-made.
 # Start the store and ask its catalogues before creating anything local.
@@ -366,6 +415,7 @@ for auth_file in "$HBA" "$IDENT"; do
 done
 sudo -n grep -qE '^local[[:space:]]+all[[:space:]]+all[[:space:]]+peer([[:space:]]|$)' "$HBA" \
   || die "cannot find 'local all all peer' anchor in $HBA"
+fi
 
 say "accounts"
 # **The agent gets a home and the member does not.** The agent's tools run
@@ -392,11 +442,17 @@ sudo install -d -o "$MEMBER_USER" -g "$MEMBER_USER" -m 0700 "$STATE_DIR"
 # cannot traverse to what it owns. Execute-only entries along the chain open
 # passage without opening any listing, which is the narrowest thing that
 # makes the ownership above true rather than stated.
-for step in "/home/$OPERATOR" "/home/$OPERATOR/.weaveragents" "$HOME_DIR"; do
+steps=("/home/$OPERATOR")
+IFS=/ read -ra parts <<< "${HOME_DIR#"/home/$OPERATOR/"}"
+for part in "${parts[@]}"; do
+  [ -n "$part" ] && steps+=("${steps[-1]}/$part")
+done
+for step in "${steps[@]}"; do
   sudo setfacl -m "u:$MEMBER_USER:x" "$step" \
     || die "no traversal for $MEMBER_USER at $step, and the member cannot reach its own territory"
 done
 
+if [ "$ENGINE" = postgres ]; then
 say "store"
 sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c "CREATE ROLE $ROLE LOGIN;"
 sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c "CREATE DATABASE $DATABASE OWNER $ROLE;"
@@ -410,35 +466,70 @@ sudo cp -a "$IDENT" "$IDENT.before-$NAME"
 sudo sed -i "0,/^local\s\+all\s\+all\s\+peer/s||local   $DATABASE   $ROLE   peer map=weaver\nlocal   all             all                                     peer|" "$HBA"
 printf 'weaver          %s                    %s\n' "$MEMBER_USER" "$ROLE" | sudo tee -a "$IDENT" >/dev/null
 sudo systemctl reload postgresql
+fi
 
-say "declaration"
+say "agent root, staged"
+# **Root-owned and not group- or world-writable, or admin refuses it**, so it
+# is made by root at 0755 with its files 0644. Every key the stack record
+# holds is copied as written; `spu-binary` is this agent's `--spu` where given,
+# and `log-path` is the agent's own.
+sudo install -d -o root -g root -m 0755 "$STAGE"
+for key in $REQUIRED_KEYS $OPTIONAL_KEYS; do
+  [ -e "$STACK/$key" ] || continue
+  if [ "$key" = spu-binary ] && [ -n "$SPU_OVERRIDE" ]; then
+    printf '%s\n' "$SPU_OVERRIDE" | sudo tee "$STAGE/$key" >/dev/null
+  else
+    sudo cp -- "$STACK/$key" "$STAGE/$key"
+  fi
+done
+printf '%s\n' "$LOG_PATH" | sudo tee "$STAGE/log-path" >/dev/null
 # **The sink is inside this agent's own territory and the script will not
 # write it anywhere else.** A declaration of 2026-08-23 pointed one agent's
 # sink at another's directory, so two agents were configured to write one
 # record, and it survived three weeks because nothing checked. The path is
 # derived here rather than accepted.
-printf '%s\n' "$DECLARATION_TEXT" | sudo tee "$DECLARATION" >/dev/null
-
-say "allow-list"
-# Without this every admin verb answers NoSuchAgent for the agent just made,
-# which is the one hand-step this script exists to remove.
-printf '%s\n' "$NAME" | sudo tee -a "$ALLOW_LIST" >/dev/null
-printf '   %s admitted in %s\n' "$NAME" "$ALLOW_LIST"
+printf '%s\n' "$DECLARATION_TEXT" | sudo tee "$STAGE/agent.toml" >/dev/null
+sudo chmod 0644 "$STAGE"/*
+sudo install -d -o root -g root -m 0750 "$LOG_DIR/$NAME"
+printf '   staged at %s; operations log directory %s\n' "$STAGE" "$LOG_DIR/$NAME"
 
 say "both gates, verified rather than assumed"
 # **Each probe names the role.** Without `-U` psql defaults the role to the
 # connecting account's own name, so the check would ask about a role nobody
 # created and fail for a reason that is not the gate.
-if sudo -u "$MEMBER_USER" psql -X -v ON_ERROR_STOP=1 -U "$ROLE" -d "$DATABASE" -c 'select 1' >/dev/null 2>&1; then
-  printf '   %s reaches the database as %s\n' "$MEMBER_USER" "$ROLE"
+# A refusal here leaves the root staged and not admitted.
+if [ "$ENGINE" = postgres ]; then
+  if sudo -u "$MEMBER_USER" psql -X -v ON_ERROR_STOP=1 -U "$ROLE" -d "$DATABASE" -c 'select 1' >/dev/null 2>&1; then
+    printf '   %s reaches the database as %s\n' "$MEMBER_USER" "$ROLE"
+  else
+    die "the member cannot reach its database: the first gate or the map is wrong"
+  fi
+  if sudo -u "$AGENT_USER" psql -X -v ON_ERROR_STOP=1 -U "$ROLE" -d "$DATABASE" -c 'select 1' >/dev/null 2>&1; then
+    die "THE AGENT'S UID REACHED THE DATABASE: the second gate is open"
+  else
+    printf "   the agent's own uid is refused, which is the gate the charter asks for\n"
+  fi
 else
-  die "the member cannot reach its database: the first gate or the map is wrong"
+  # **A sqlite store's gate is the room itself**: the member opens its file
+  # in the state territory, so the member must be able to write there and
+  # the agent's own uid must not be able to enter it.
+  if sudo -u "$MEMBER_USER" test -w "$STATE_DIR" && sudo -u "$MEMBER_USER" test -x "$STATE_DIR"; then
+    printf '   %s can write its state room %s\n' "$MEMBER_USER" "$STATE_DIR"
+  else
+    die "the member cannot write its state room $STATE_DIR: its passage or ownership is wrong"
+  fi
+  if sudo -u "$AGENT_USER" test -x "$STATE_DIR"; then
+    die "THE AGENT'S UID CAN ENTER THE STATE ROOM $STATE_DIR: the wall is open"
+  else
+    printf "   the agent's own uid cannot enter the state room, which is the wall the charter asks for\n"
+  fi
 fi
-if sudo -u "$AGENT_USER" psql -X -v ON_ERROR_STOP=1 -U "$ROLE" -d "$DATABASE" -c 'select 1' >/dev/null 2>&1; then
-  die "THE AGENT'S UID REACHED THE DATABASE: the second gate is open"
-else
-  printf "   the agent's own uid is refused, which is the gate the charter asks for\n"
-fi
+
+say "admission"
+# **Moving the root into place is the admission**: before it every admin verb
+# answers no_such_agent for this name, and after it the agent is admitted.
+sudo mv -T -- "$STAGE" "$AGENT_ROOT"
+printf '   %s admitted at %s\n' "$NAME" "$AGENT_ROOT"
 
 say "made"
 # **The group add applies to a login taken after it.** `usermod -aG` changes
@@ -448,4 +539,4 @@ say "made"
 printf '   %s joined group %s: a session that predates this run needs a new\n' "$OPERATOR" "$AGENT_USER"
 printf '   login, or `newgrp %s`, before the group applies\n' "$AGENT_USER"
 printf '   validate it before loading:\n'
-printf '     sudo WEAVER_ADMIN_CONFIG=%s weaver-admin validate %s\n' "$ADMIN_CONFIG" "$NAME"
+printf '     sudo WEAVER_ADMIN_CONFIG=%s %s validate %s\n' "$ADMIN_BASE" "$(dirname "$(stack_key worker-binary required)")/weaver-admin" "$NAME"
