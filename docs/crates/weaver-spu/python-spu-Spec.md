@@ -131,10 +131,6 @@ short of:
 
 - Section 2: the tree still carries an experimental ModernBERT classifier and its entry
   point, which section 1 scopes out of this implementation. The zipapp leaves it out.
-- Section 3 and `weaver-harness-spu-decode-contract`: a cancel arriving during a
-  generation is consumed and never answered, the generation's close being sent without
-  the cancel exchange's `at_rest` close (`server.py`), so a harness waiting on the
-  cancel can wait forever.
 - Section 3.1: its oracle answers twelve operations, and runs a transport test over the
   oracle's descriptor:
   - `session`, `seed`, `measure`, `render` and `round`.
@@ -151,14 +147,11 @@ short of:
 - Section 3.1, the `tokenize` row: the operation is unbuilt, so the tokenizer's
   equivalence with the Rust side's is unproven until it lands.
 
-**The list names the gaps known at the carry, and it is not a walk.** The cancel gap was
-found by the review of the carry itself (toddwbucy/WeaverTools-old2#729). The hardening
-act walks every exchange and every refusal of `weaver-harness-spu-contract` and
+**The list names the gaps known at the carry, and it is not a walk.** The hardening act
+walks every exchange and every refusal of `weaver-harness-spu-contract` and
 `weaver-harness-spu-decode-contract` against the prototype, per H3's rule that a seam is
-exercised against its contract's failure cases. It starts from the cancel gap's sibling,
-which the walk judges against the contract's exchange rule: `server.py` answers an ask
-arriving mid-generation with a bare `{'kind': 'out_of_order'}` message. Epic #25
-carries the walk as one item.
+exercised against its contract's failure cases, and epic #25 carries the walk as one
+item.
 
 ## 3. What it carries identically
 
