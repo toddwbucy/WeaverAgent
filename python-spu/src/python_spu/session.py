@@ -81,7 +81,7 @@ class Session:
                 p,logp,entropy=distribution(self.engine.logits)
                 drawn=sampler.sample(self.engine.logits,self.resident)
                 token=drawn if path is None else path[index]
-                if path is None and token==self.engine.terminator: break
+                if path is None and token in self.engine.stop_tokens: break
                 if not 0<=token<len(p): raise ValueError('re-feed token outside vocabulary')
                 pos=len(self.resident)
                 entropies.append(entropy); surprisals.append(-logp[token]/math.log(2))
@@ -124,7 +124,7 @@ class Session:
             request={'rendered':rendered,'template':family.TEMPLATE,'sampling':{
                 'temperature':.7,'top_k':40,'top_p':.95,'repetition_penalty':1.1,
                 'repetition_window':64,'seed':self.seed,'generation_seed':seed},
-                'stop':{'max_tokens':self.max_tokens,'stop_tokens':[self.engine.terminator],
+                'stop':{'max_tokens':self.max_tokens,'stop_tokens':list(self.engine.stop_tokens),
                         'terminator':self.engine.terminator}}
             return {'kind':'re_fed' if path is not None else 'generated','body':{
                 'emission':emission,'finish':finish,'content':content,'request':request,

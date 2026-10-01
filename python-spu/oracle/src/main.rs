@@ -1,5 +1,6 @@
 mod sampler;
 mod session;
+mod walk;
 use std::io::{self, BufRead};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -62,6 +63,10 @@ fn run(v: Value, raw_body: &str) -> Result<Value, String> {
         "registry_entries" => Ok(json!(weaver_spu::family::REGISTRY.iter()
             .map(|d| json!({"family": d.family, "widths": d.shard_widths, "taps_readout": d.taps_readout}))
             .collect::<Vec<_>>())),
+        "knobs" => walk::knobs(&v),
+        "stops" => walk::stops(&v),
+        "registry" => walk::registry(&v),
+        "partition" => walk::partition(&v),
         "render" => {
             let messages: Vec<weaver_traits::Message> = serde_json::from_value(body).map_err(|e| e.to_string())?;
             weaver_spu::family::qwen2::renderer().render_identity(&messages)

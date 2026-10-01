@@ -414,6 +414,28 @@ def room_and_reach(devices,shard_bytes,headroom,cuda):
         for target in devices:
             if source!=target and not cuda.can_device_access_peer(source,target):
                 raise AdmissionError('device_cannot_admit',f'device {source} cannot reach device {target}')
+class StopFault(Exception):
+    pass
+
+def promote_stop_conditions(declared,eos,tokenize):
+    """weaver-spu residency.rs `promote_stop_conditions`, ported: each declared
+    condition that tokenizes to exactly one token is a stop, the first being the turn's
+    terminator; one that does not is named unpromoted; the artifact's own end of
+    sequence is added where it is not already a stop. The terminator not promoting is a
+    fault, since no turn could then be recognised as ended. Answers the stop tokens, the
+    terminator and the unpromoted conditions."""
+    tokens=[]; unpromoted=[]; terminator=None
+    for position,condition in enumerate(declared):
+        ids=tokenize(condition)
+        if len(ids)==1:
+            if position==0: terminator=ids[0]
+            tokens.append(ids[0])
+        else: unpromoted.append(condition)
+    if terminator is None:
+        raise StopFault(f'the turn close does not promote against this vocabulary: declared {declared}')
+    if eos not in tokens: tokens.append(eos)
+    return {'tokens':tokens,'terminator':terminator,'unpromoted':unpromoted}
+
 
 class HFEngine:
     def __init__(self,artifact,devices,cpu=False,readout=False,headroom=HEADROOM_BYTES):
@@ -489,12 +511,17 @@ class HFEngine:
             # load orders them.
             self.declared_eos=read_eos(declared)
             self.tokenizer=Tokenizer.from_file(str(beside/'tokenizer.json'))
-            self.terminator=self.tokenizer.token_to_id('<|im_end|>')
             # This build's own judgment, the renderer's markers each one token.
             for marker in ('<|im_start|>','<|im_end|>'):
                 ids=self.tokenizer.encode(marker,add_special_tokens=False).ids
                 if len(ids)!=1 or self.tokenizer.id_to_token(ids[0])!=marker:
                     raise AdmissionError('artifact_unreadable',f'marker not promoted: {marker}')
+            # After the markers are judged, so an unpromoted turn close is their
+            # refusal. The family's stop conditions promoted against this vocabulary with the
+            # artifact's end of sequence beside them, as the Rust residency's `stop_set`.
+            stops=promote_stop_conditions(['<|im_end|>'],self.declared_eos,
+                lambda condition:self.tokenizer.encode(condition,add_special_tokens=False).ids)
+            self.terminator=stops['terminator']; self.stop_tokens=stops['tokens']
             # The weights come through the pins only. The concrete class for the config,
             # from transformers' own mapping, takes them as a state dict, so the model
             # code, its tying and its cast are the path load's, and the bytes are not.

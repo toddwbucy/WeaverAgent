@@ -1,11 +1,11 @@
 """SPU process entry. No bind, no daemon installation, no remote model fetch."""
 import json
-import math
 import re
 import sys
 from .transport import adopt,ChannelFault,Closed
 from .wire import Envelope,SpuInstruction,TOKEN_DIRECTIVE,dump
 from .session import Session,Refusal
+from .sampling import KNOBS,SESSION_PARAMETERS,KnobRefusal,resolve
 from .engine import HFEngine,AdmissionError,HEADROOM_BYTES,U64_MAX
 
 # u64's own parse in Rust: ASCII digits and an optional leading plus sign, nothing else.
@@ -101,17 +101,15 @@ class Service:
     def admit(self,instruction):
         d=instruction.decoder
         values=d.tunable_values
-        resolved=[]
-        # The exclusive ceilings are the ones weaver-spu sampling.rs passes `resolve_count`:
-        # context-capacity is a u32 there, refused at or past 2**32 as NotACount, which
-        # main.rs answers as config_invalid naming the field.
-        for name,minimum,maximum in [('seed',0,2**64),('context-capacity',0,2**32),('max-tokens-per-turn',0,2**64)]:
-            value=values.get(name)
-            if value is None or not math.isfinite(value) or value!=int(value) or not minimum<=value<maximum:
-                raise AdmissionError('config_invalid',f'invalid or missing {name}',field=f'tunable-values.{name}')
-            resolved.append(int(value))
-        if d.field_election is not None and d.field_election.depth<40:
-            raise AdmissionError('config_invalid','field depth below sampling cutoff 40',field='spu-instruction.decoder.field-election.depth')
+        # weaver-spu main.rs `resolve_effective`: the knobs, then the session parameters,
+        # each refusal answered `config_invalid` naming the field.
+        try: effective=resolve({**KNOBS,**SESSION_PARAMETERS},values)
+        except KnobRefusal as e:
+            raise AdmissionError('config_invalid',f'{e.kind} {e.knob}',field=f'tunable-values.{e.knob}') from None
+        resolved=[effective['seed'],effective['context-capacity'],effective['max-tokens-per-turn']]
+        # weaver-spu main.rs: the depth judged against the cutoff the resolve produced.
+        if d.field_election is not None and d.field_election.depth<effective['top-k']:
+            raise AdmissionError('config_invalid',f"field depth below sampling cutoff {effective['top-k']}",field='spu-instruction.decoder.field-election.depth')
         # The classify member is the classify process's, per python-spu-Spec section 1,
         # and is left unread here as weaver-spu main.rs's admission leaves it.
         self.engine=self.factory(d.model_binding.artifact,d.model_binding.devices,cpu=self.cpu,
