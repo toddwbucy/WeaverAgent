@@ -71,6 +71,16 @@ def containers(directory):
     return [first] if split is None else [
         directory/f'{split[0]}-{index:05}-of-{split[1]:05}{split[2]}' for index in range(1,split[1]+1)]
 
+def split_members(path):
+    """weaver-spu artifact.rs `pin` for a reference naming a file: a name in the split
+    pattern is one shard of a set, so every shard is pinned, first shard first, whichever
+    the operator named; any other name is itself. A shard that is absent is the pin's
+    `artifact_unresolvable`."""
+    path=Path(path); split=_split(path.name)
+    if split is None: return [path]
+    stem,count,suffix=split
+    return [path.parent/f'{stem}-{index:05}-of-{count:05}{suffix}' for index in range(1,count+1)]
+
 def pin(members):
     """weaver-spu artifact.rs `pin`, ported: each container opened once, O_NONBLOCK so a
     FIFO cannot block the open, its kind judged on the descriptor it opened rather than
@@ -343,6 +353,25 @@ def resolve_directory(path):
     if stat.S_ISREG(mode): return 'file'
     raise AdmissionError('artifact_unresolvable',str(path))
 
+def room_and_reach(devices,shard_bytes,headroom,cuda):
+    """weaver-spu gpu/mod.rs `room_and_reach`, ported whole: every assigned ordinal is a
+    device the driver answers for (`Unreachable`), every device has room for its shard
+    and the headroom (`NoRoom`), and every ordered pair reaches the other
+    (`NoPeerAccess`), both directions asked since the driver does not promise symmetry.
+    Each refuses `device_cannot_admit`, the figures in the detail. `cuda` is torch's
+    device layer, passed so a test can stand one up."""
+    for ordinal in devices:
+        if not cuda.is_available() or not 0<=ordinal<cuda.device_count():
+            raise AdmissionError('device_cannot_admit',f'device {ordinal} is unreachable')
+    for ordinal in devices:
+        try: free,total=cuda.mem_get_info(ordinal)
+        except RuntimeError as e: raise AdmissionError('device_cannot_admit',f'device {ordinal} is unreachable: {e}') from None
+        judge_room(ordinal,free,total,shard_bytes,headroom)
+    for source in devices:
+        for target in devices:
+            if source!=target and not cuda.can_device_access_peer(source,target):
+                raise AdmissionError('device_cannot_admit',f'device {source} cannot reach device {target}')
+
 class HFEngine:
     def __init__(self,artifact,devices,cpu=False,readout=False,headroom=HEADROOM_BYTES):
         import torch
@@ -359,7 +388,7 @@ class HFEngine:
         model=None; failure=None; step='resolve'
         try:
             reference=resolve_directory(path)
-            members=containers(path) if reference=='directory' else [path]
+            members=containers(path) if reference=='directory' else split_members(path)
             step='pin'; self.pinned=pin(members)
             step='header'
             header=read_header(self.pinned[0][1],path if reference=='directory' else path.parent)
@@ -378,11 +407,7 @@ class HFEngine:
             step='room'
             if cpu and devices!=[0]: raise AdmissionError('device_cannot_admit','CPU experiment requires ordinal 0')
             self.device='cpu' if cpu else f'cuda:{devices[0]}'
-            if not cpu:
-                if not torch.cuda.is_available() or devices[0]>=torch.cuda.device_count():
-                    raise AdmissionError('device_cannot_admit','assigned CUDA device unavailable')
-                free,total=torch.cuda.mem_get_info(devices[0])
-                judge_room(devices[0],free,total,shard_bytes,headroom)
+            if not cpu: room_and_reach(devices,shard_bytes,headroom,torch.cuda)
             # The hash before any device is taken, as weaver-spu-Spec section 3 places it.
             # The kind is the resolution's, as weaver-spu `resolve_with_kind` carries it.
             step='hash'

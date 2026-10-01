@@ -244,14 +244,14 @@ seam.
 | --- | --- | --- | --- |
 | resolve | artifact.rs `resolve`: nothing at the path or a path through a file, a directory with no container or containers that are not one split, anything but a directory or a regular file | `resolve_directory`, `containers` | `artifact_unresolvable` |
 | | the same: any other failed look, a lookup the kernel refuses among them | | `artifact_unreadable` |
-| pin | artifact.rs `pin`: a shard absent; any other failure to open, or a non-regular file | `pin` | `artifact_unresolvable`; `artifact_unreadable` |
+| pin | artifact.rs `pin`: a reference in the split pattern pins its whole set, first shard first; a shard absent; any other failure to open, or a non-regular file | `split_members`, `containers`, `pin` | `artifact_unresolvable`; `artifact_unreadable` |
 | header | artifact.rs `read_header`, step two: GGUF's walk with its caps, or safetensors' length-prefixed JSON, and the sidecars `config.json` and `tokenizer_config.json` where present, all read by `serde_json` | `read_header`, `strict_json` | `artifact_unreadable` |
 | select | family `select`: `UnknownFamily`, `TemplateAbsent` | `select` over `REGISTRY` | `artifact_unreadable` |
 | width | family `judge_width`: `WidthNotDeclared` | the selected entries' widths | `device_cannot_admit` |
 | readout | readout `judge`: `NotTappable` where readout is elected | the selected entries' tap flag | `device_cannot_admit` |
 | distinct | `judge_distinct`: `DuplicateDevice` | a device named twice | `device_cannot_admit` |
 | size | the pinned size, `on_artifact` "size" | `pinned_size` | `artifact_unreadable` |
-| room | `judge_room_and_reach`: `Device`, `DeviceRefused` | the CPU experiment's ordinal, the device's presence, `judge_room` | `device_cannot_admit` |
+| room | `judge_room_and_reach`, gpu/mod.rs `room_and_reach`: every assigned ordinal present (`Unreachable`), every device's room (`NoRoom`), every ordered pair's peer reach (`NoPeerAccess`) | the CPU experiment's ordinal, `room_and_reach` over torch's device layer | `device_cannot_admit` |
 | hash | artifact.rs `weights_hash`, before any device is taken (`weaver-spu-Spec` section 3) | `weights_digest` for a directory, `file_digest` for a file, by the resolution's kind | `artifact_unreadable` |
 | load | `load`: `BackendNotBuilt` for a GGUF container or a file reference this build does not serve | the same | `device_cannot_admit` |
 | | native `load`: more devices than it serves; `read_declaration` of `config.json` | one device; `strict_json` of `config.json` | `device_cannot_admit` |

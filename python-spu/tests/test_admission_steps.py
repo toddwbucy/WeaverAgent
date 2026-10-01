@@ -153,3 +153,80 @@ def test_a_short_header_read_is_read_on(tmp_path, monkeypatch):
     finally:
         for _, fd in pinned:
             engine.os.close(fd)
+
+
+class FakeCuda:
+    """torch's device layer stood up for a test: which ordinals exist, the free memory
+    of each, and which ordered pairs reach. The box under test holds one card or none,
+    so a two-device admission can only be judged against a layer like this."""
+
+    def __init__(self, free, reach=()):
+        self.free = free
+        self.reach = set(reach)
+
+    def is_available(self):
+        return True
+
+    def device_count(self):
+        return len(self.free)
+
+    def mem_get_info(self, ordinal):
+        return self.free[ordinal], 1 << 40
+
+    def can_device_access_peer(self, source, target):
+        return (source, target) in self.reach
+
+
+ROOM = 1 << 40
+
+
+@pytest.mark.parametrize("name,cuda,devices,detail", [
+    ("second absent", FakeCuda([ROOM]), [0, 1], "device 1 is unreachable"),
+    ("second without room", FakeCuda([ROOM, 0], {(0, 1), (1, 0)}), [0, 1], "no room on device 1"),
+    ("no peer access", FakeCuda([ROOM, ROOM]), [0, 1], "device 0 cannot reach device 1"),
+    ("one way only", FakeCuda([ROOM, ROOM], {(0, 1)}), [0, 1], "device 1 cannot reach device 0"),
+])
+def test_the_room_and_reach_judge_every_device(copy, monkeypatch, name, cuda, devices, detail):
+    """gpu/mod.rs `room_and_reach` judges every assigned ordinal's presence and room,
+    and peer reach across each ordered pair, before the hash and the load. Found by Codex
+    on #47 (only the first device was judged). Run against a faked device layer, since
+    the box holds no two cards. The hash is made to fail too, so the order is held:
+    the room answers first. Perturbations: judge the first device alone, or drop the
+    reach, and a case here passes the room and answers the hash's unreadable."""
+    import torch
+    for attribute in ("is_available", "device_count", "mem_get_info", "can_device_access_peer"):
+        monkeypatch.setattr(torch.cuda, attribute, getattr(cuda, attribute))
+    monkeypatch.setattr(engine, "weights_digest", unforeseen)
+    with pytest.raises(AdmissionError) as caught:
+        engine.HFEngine(copy, devices, cpu=False)
+    assert caught.value.kind == "device_cannot_admit", (name, str(caught.value))
+    assert detail in str(caught.value), (name, str(caught.value))
+
+
+def test_a_reaching_pair_passes_the_room(copy, monkeypatch):
+    """Two present devices with room that reach each other both ways pass the room, and
+    the admission goes on to the hash."""
+    import torch
+    cuda = FakeCuda([ROOM, ROOM], {(0, 1), (1, 0)})
+    for attribute in ("is_available", "device_count", "mem_get_info", "can_device_access_peer"):
+        monkeypatch.setattr(torch.cuda, attribute, getattr(cuda, attribute))
+    monkeypatch.setattr(engine, "weights_digest", unforeseen)
+    with pytest.raises(AdmissionError) as caught:
+        engine.HFEngine(copy, [0, 1], cpu=False)
+    assert (caught.value.kind, str(caught.value)) == ("artifact_unreadable", "hash: unforeseen")
+
+
+@pytest.mark.parametrize("named", ["model-00001-of-00002.safetensors",
+                                   "model-00002-of-00002.safetensors"])
+def test_a_shard_named_alone_pins_its_whole_split(tmp_path, oracle, named):
+    """artifact.rs `pin`: a reference naming one shard pins the set, first shard first,
+    and a shard that is absent is unresolvable, as the oracle's `artifact` answers.
+    Found by Codex on #47. Perturbation: pin the named file alone, and the set missing
+    its first shard is not refused unresolvable."""
+    (tmp_path / "model-00002-of-00002.safetensors").write_bytes(b"\x00" * 16)
+    reference = tmp_path / named
+    if named.startswith("model-00001"):
+        reference.write_bytes(b"\x00" * 16)
+        (tmp_path / "model-00002-of-00002.safetensors").unlink()
+    assert oracle(op="artifact", path=str(reference)) == {"error": "ArtifactUnresolvable"}
+    assert refusal(reference).kind == "artifact_unresolvable"
