@@ -22,7 +22,7 @@ fn running_as_root() -> bool {
 
 /// **The invocation runs as root or performs nothing.** Authorization is the
 /// kernel's, and the refusal is enacted before any verb touches anything: no
-/// configuration is read, no allow-list is consulted, and no agent is named.
+/// configuration is read, no agent's root is looked at, and no agent is named.
 ///
 /// Perturbation: remove the `running_as_root` guard from `run` in `main.rs`
 /// and this test fails, because the invocation proceeds to argument parsing
@@ -74,17 +74,18 @@ fn a_refusal_writes_one_object_and_exits_non_zero() {
     );
 }
 
-/// `show` and `list` refuse, and emit no state or agents object.
+/// `show` refuses, and emits no state object, and the retired `list` is
+/// malformed.
 ///
 /// **This test does not watch the residency substitution, and saying so is the
 /// point.** The invention Spec section 3 forbids, answering `show` with a
 /// state read from the unit, is carried by
-/// `show_and_list_construct_no_agent_state` in `main.rs`, which tests
+/// `show_answers_the_absence_as_unloaded` in `main.rs`, which tests
 /// `dispatch` directly. This one cannot: the root guard answers before
 /// `dispatch` is reached in an unprivileged suite, so the `show` arm is
 /// unreachable from the binary and this test passed unchanged under that
 /// substitution when it was run. What it does hold is narrower and still worth
-/// holding: these verbs refuse, and no `state` or `agents` object leaves the
+/// holding: these verbs refuse, and no `state` object leaves the
 /// binary on any path a non-root operator can reach.
 #[test]
 fn show_and_list_refuse_as_not_observable() {

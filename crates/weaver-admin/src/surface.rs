@@ -17,7 +17,9 @@ use weaver_types::{AgentName, LifecycleAnswer, LifecycleRefusal};
 /// without parsing the object.
 pub const EXIT_REFUSED: i32 = 1;
 
-/// One verb and the agent it names, where it names one.
+/// One verb and the agent it names. Every verb names one: admin is one agent's
+/// organ, on the operator's ruling of 2026-10-01, and a verb that answered for
+/// several agents would be fleet management, which is not this crate's.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
     Load(AgentName),
@@ -25,7 +27,19 @@ pub enum Request {
     Validate(AgentName),
     Stop(AgentName),
     Show(AgentName),
-    List,
+}
+
+impl Request {
+    /// The agent the verb names, whose root the invocation reads.
+    pub fn agent(&self) -> &AgentName {
+        match self {
+            Request::Load(agent)
+            | Request::Unload(agent)
+            | Request::Validate(agent)
+            | Request::Stop(agent)
+            | Request::Show(agent) => agent,
+        }
+    }
 }
 
 /// **The verb and its agent arrive as arguments**, rather than as a parsed
@@ -55,7 +69,6 @@ where
         "validate" => Ok(Request::Validate(named(rest)?)),
         "stop" => Ok(Request::Stop(named(rest)?)),
         "show" => Ok(Request::Show(named(rest)?)),
-        "list" if rest.is_empty() => Ok(Request::List),
         _ => Err(LifecycleRefusal::Malformed),
     }
 }
@@ -127,12 +140,12 @@ mod tests {
     fn the_verb_and_its_agent_arrive_as_arguments() {
         let parsed = parse_arguments(["load".to_string(), "alpha".to_string()]);
         assert_eq!(parsed, Ok(Request::Load(AgentName("alpha".into()))));
-        assert_eq!(parse_arguments(["list".to_string()]), Ok(Request::List));
 
         for bad in [
             vec![],
             vec!["load".to_string()],
             vec!["load".to_string(), "a".to_string(), "b".to_string()],
+            vec!["list".to_string()],
             vec!["list".to_string(), "alpha".to_string()],
             vec!["enter".to_string(), "alpha".to_string()],
             vec!["".to_string()],

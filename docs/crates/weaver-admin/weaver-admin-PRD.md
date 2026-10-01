@@ -668,7 +668,9 @@ held for it, dissolved the same day for want of a validator to enforce them.
 acts plus one directive.** A refused fan-out is the harness's to unwind along the
 same seams it fanned out on, and what returns to admin is the refusal naming where it
 stopped. Admin's remaining obligations are its own: direct leave where a run was
-entered, and stop the unit. Nothing durable of the program's exists to remove. Each
+entered, stop the unit, and clear the unit where the manager reports it failed, so the
+operator's next load is not refused for a name the failed one still holds (the
+operator's ruling of 2026-10-01; no reload follows). Nothing durable of the program's exists to remove. Each
 of those can itself fail, and a rollback that cannot complete reports what it could
 not undo and does not publish any state, which is the same rule as a partial load
 and not a second one.
@@ -684,7 +686,7 @@ root and to the operator are now written down.
 | Seam | Peer | What crosses |
 |---|---|---|
 | Coordination | `weaver-harness` | Admin dials the socket the worker bound and directs the run to be entered and left, hands the trace descriptor inside the enter directive, and conveys the operator's intent to stop. The harness confirms, refuses, or answers a stop with the turn's fate. A fault the worker survives crosses nowhere here, travelling as the `fault` event on the stream. |
-| The unit | the init system, as root | Admin asks for a transient unit under the agent's `User=` with the sandbox properties the operator's template fixes, asks for it to be stopped, and asks what state it is in. The init system starts, holds, and reaps the unit, and it is what keeps an agent alive past the operator's login session. No descriptor crosses. Governed by `weaver-admin-systemd-contract`. |
+| The unit | the init system, as root | Admin asks for a transient unit under the agent's `User=` with the sandbox properties the operator's template fixes, asks for it to be stopped, asks what state it is in, and asks for a failed one to be cleared. The init system starts, holds, and reaps the unit, and it is what keeps an agent alive past the operator's login session. No descriptor crosses. Governed by `weaver-admin-systemd-contract`. |
 | The record's exit | the operator | The stream leaves to the sink the operator declared, one event per line, with durability the operator's. Governed by `weaver-admin-operator-contract`. |
 
 **The two outward boundaries carry no seam edge, and the absence is the graph's rule

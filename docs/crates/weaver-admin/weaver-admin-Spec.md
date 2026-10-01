@@ -401,7 +401,7 @@ bind failure on 2026-08-16.** `BindFailed` answered for two conditions that a
 state ask already tells apart. Where the manager reports the unit `active` and
 the socket was unreachable, a bind is what failed and the name is right. Where
 it reports `failed`, a prior process exited non-zero and the name it leaves
-registered refuses every later start under it until the manager is asked to reap
+registered refuses every later start under it until the manager is asked to clear
 it. That answers `PriorUnitUnreaped`, and the answer claims that and no more:
 `failed` does not say whether the worker bound, or how long it served, because a
 unit that bound and exited non-zero later reads the same.
@@ -475,6 +475,17 @@ run was entered, stop the unit where a unit started, close the sink where one
 opened. Each act's failure is logged per section 8, the rollback reports what
 it could not undo, and no state is published on any partial outcome, which is
 the same rule as the partial load and not a second one.
+
+**The rollback clears a failed unit, on the operator's ruling of 2026-10-01.**
+Where the load started a unit, or its start was refused `PriorUnitUnreaped`, the
+rollback asks the unit's state after the stop, and on `failed` asks the manager to
+clear it, per `weaver-admin-systemd-contract` section 2, logging the clear as one
+more act of the account. The refusal is answered as it stood and nothing reloads:
+the operator's next load is the retry, and it is not refused unreaped. A unit that
+failed while serving is cleared the same way by the first load that meets it,
+which answers `PriorUnitUnreaped` and leaves the name free for the one after. Only
+`failed` is cleared, the state ask deciding, and a load that started nothing asks
+the manager nothing.
 
 ```graph
 node: admin-rollback-logs-its-account
@@ -841,7 +852,8 @@ own run tool, with the unit's properties declared on the invocation: the
 agent's `User=`, the fixed template's hardening, and the runtime-directory
 declaration the coordination socket is bound inside, per
 `weaver-admin-systemd-contract` section 2. Stopping it is one invocation of the
-stop verb, and the same interface answers the state query of section 3. The
+stop verb, clearing a failed one is one invocation of the clear verb, and the same
+interface answers the state query of section 3. The
 alternative is a bus library, and it loses on the tree, for a handful of
 invocations per lifecycle that are neither hot nor latency-bound.
 

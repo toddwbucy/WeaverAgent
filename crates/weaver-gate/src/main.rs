@@ -579,7 +579,6 @@ fn dispatch(state: &mut HookState, envelope: &OrganEnvelope) -> Payload {
             | LifecycleDirective::Load { .. }
             | LifecycleDirective::Unload { .. }
             | LifecycleDirective::Validate { .. }
-            | LifecycleDirective::List
             | LifecycleDirective::Show { .. },
         ) => Payload::Refusal(LifecycleRefusal::OutOfOrder),
     }
@@ -786,7 +785,7 @@ mod tests {
                 socket: terminal.to_path_buf(),
             },
             LifecycleDirective::Lower,
-            LifecycleDirective::List,
+            LifecycleDirective::Stop,
         ] {
             assert_eq!(
                 dispatch(&mut state, &opened(case)),
@@ -884,7 +883,6 @@ mod tests {
             LifecycleDirective::Leave,
             LifecycleDirective::Stop,
             LifecycleDirective::Release,
-            LifecycleDirective::List,
             LifecycleDirective::Show {
                 agent: AgentName("alpha".into()),
             },

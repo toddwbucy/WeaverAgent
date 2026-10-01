@@ -134,6 +134,10 @@ when the unit stops.
 
 **A state ask.** One unit named, its activity reported.
 
+**A clear ask.** One unit named, its failed state cleared so its name is free for
+the next start. Asked only after a state ask has answered `failed` for a load that
+was refused.
+
 **No handle crosses in either direction**, per section 0. The unit is started
 bare, it binds its own coordination socket, and the trace's handle reaches it
 over that socket rather than through the manager.
@@ -170,9 +174,12 @@ a later start ask for that name fails rather than replacing it. The failure is
 not distinguishable in the start ask's status, per the paragraph above, and the
 state ask reports it as `failed`, which is the one value this boundary states
 without ambiguity. Admin therefore reads the condition from the state ask and
-answers `PriorUnitUnreaped`, and reaping is the operator's act rather than
-admin's: a program that reset the unit before starting would discard the
-evidence of why the previous one failed, which is the operator's to read.
+answers `PriorUnitUnreaped`. **Admin clears the failed unit itself, on the
+operator's ruling of 2026-10-01,** as part of the refused load's rollback: the
+refusal is answered as it stood, the clear ask frees the name, and the operator's
+next load starts. The clear is a logged act of the rollback and the worker's own
+output stays in the journal, so what the clear discards is the manager's record
+that the unit failed and not the evidence of why. There is no automatic reload.
 
 **Two things carry what the outcome cannot, and both are the program's own.** The
 identity, the home, and the boundary are verified by admin before any ask is made,
@@ -195,6 +202,8 @@ condition so a later pass weighs a stated trade rather than rediscovering it.
   is bound by the worker the unit starts, per `weaver-admin-harness-contract`
   section 2.
 - A state ask is valid at any time and transitions nothing.
+- A clear ask follows a state ask that answered `failed`, inside a refused load's
+  rollback, and is followed by a state ask that says whether the name is free.
 - A stop ask is answered when the unit has stopped rather than when the stop was
   accepted, so an unload that returns has a stopped unit behind it.
 - Nothing here is ordered against the trace's handle, which crosses on a seam
@@ -243,6 +252,8 @@ about the record, which is `weaver-admin-operator-contract`'s.
   could not undo, per `weaver-admin-PRD` section 5.
 - A state ask fails, which is reported as unknown rather than guessed at, because a
   state this boundary could not answer is not a state the program may invent.
+- A clear ask fails and the unit stays `failed`, which the rollback reports as an
+  act it could not undo, the next load then refusing `PriorUnitUnreaped` as before.
 
 **A unit that dies on its own is not a failure of this boundary.** The death is
 observed where it is observed, at the coordination socket the next verb finds absent,

@@ -9,8 +9,8 @@
 //! newtype variants that cannot serialize.
 
 use weaver_types::{
-    AgentName, AgentState, AgentSummary, ExchangeId, LifecycleAnswer, LifecycleDirective,
-    LifecycleRefusal, Opener, OrganEnvelope, Payload, Position, RefusingOrgan,
+    AgentName, AgentState, ExchangeId, LifecycleAnswer, LifecycleDirective, LifecycleRefusal,
+    Opener, OrganEnvelope, Payload, Position, RefusingOrgan,
 };
 
 /// The envelope's layout, exactly as the Spec states it.
@@ -35,36 +35,6 @@ fn envelope_layout_is_the_stated_shape() {
             "\"payload\":{\"kind\":\"directive\",\"body\":{\"kind\":\"load\",\"agent\":\"alpha\"}}}"
         )
     );
-    let back: OrganEnvelope = serde_json::from_str(&json).expect("deserializes");
-    assert_eq!(envelope, back);
-}
-
-/// The sequence-carrying case round-trips, which is what the adjacent tagging
-/// of `Payload` exists to make possible.
-#[test]
-fn sequence_carrying_answer_round_trips() {
-    let envelope = OrganEnvelope {
-        exchange: ExchangeId {
-            opener: Opener::Admin,
-            ordinal: 9,
-        },
-        position: Position::Close,
-        payload: Payload::Answer(LifecycleAnswer::Agents {
-            agents: vec![
-                AgentSummary {
-                    name: AgentName("alpha".into()),
-                    state: AgentState::Idle,
-                    load: None,
-                },
-                AgentSummary {
-                    name: AgentName("beta".into()),
-                    state: AgentState::Unloaded,
-                    load: None,
-                },
-            ],
-        }),
-    };
-    let json = serde_json::to_string(&envelope).expect("serializes");
     let back: OrganEnvelope = serde_json::from_str(&json).expect("deserializes");
     assert_eq!(envelope, back);
 }

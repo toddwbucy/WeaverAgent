@@ -4,7 +4,8 @@
 //! The unit, per `weaver-admin-Spec` section 6: the init system is asked over
 //! its command-line interface, one invocation per load with the unit's
 //! properties declared on the invocation, one invocation of the stop verb to
-//! stop it, and the same interface answers the residency query of section 3.
+//! stop it, one of the clear verb to free a failed one's name, and the same
+//! interface answers the residency query of section 3.
 //!
 //! The alternative is a bus library, and it loses on the tree: `zbus` carries
 //! async machinery into the resolved tree whatever its surface API, which this
@@ -34,10 +35,8 @@ pub struct UnitTemplate {
     /// The SPU binary the worker forks at enter, and the gate binary beside
     /// it. **Operator-installed values rather than anything this invocation
     /// composed**, per `weaver-admin-Spec` section 9, which is why they sit
-    /// here and not in the agent's declaration. The gate's is one
-    /// installation's fact. The SPU's here is `spu-binary`, the installation's
-    /// default, and a load replaces it with the agent's own where section 9's
-    /// map names the agent. They reach the worker in the argument vector
+    /// here and not in the agent's declaration: `spu-binary` and `gate-binary`
+    /// in the agent's own root. They reach the worker in the argument vector
     /// because a process that does not yet exist has no other way to learn
     /// them.
     pub spu: std::path::PathBuf,
@@ -145,13 +144,12 @@ pub fn start(
 }
 
 /// **The unit one agent's load starts, and the only thing `start` takes**, per
-/// `weaver-admin-Spec` sections 6 and 9. It pairs the installation's template,
-/// its SPU replaced by the one section 9's map chose for the agent, with that
-/// agent's name, and its one constructor is `for_agent`, which applies the map.
-/// So the installation's own template, whose SPU is only the default, has no
-/// route to a start, and a template chosen for one agent cannot be started under
-/// another's name. A type property, and the compiler holds it: `start` taking a
-/// `UnitTemplate` does not type-check, and the field is private to this module.
+/// `weaver-admin-Spec` sections 6 and 9. It pairs the template read from the
+/// agent's own root with that agent's name, and its one constructor is
+/// `for_agent`. So a template has no route to a start except under the name of
+/// the agent whose root it was read from, a type property the compiler holds:
+/// `start` taking a `UnitTemplate` does not type-check, and the field is
+/// private to this module.
 #[derive(Debug, Clone)]
 pub struct AgentUnit {
     template: UnitTemplate,
@@ -159,16 +157,10 @@ pub struct AgentUnit {
 }
 
 impl AgentUnit {
-    /// The agent's unit: the installation's template with the agent's SPU.
-    pub fn for_agent(
-        template: &UnitTemplate,
-        choice: &crate::spu_choice::SpuChoice,
-        agent: &str,
-    ) -> Self {
-        let mut template = template.clone();
-        template.spu = choice.for_agent(agent, &template.spu).path;
+    /// The agent's unit: the template its root names, under its name.
+    pub fn for_agent(template: &UnitTemplate, agent: &str) -> Self {
         AgentUnit {
-            template,
+            template: template.clone(),
             agent: agent.to_string(),
         }
     }
@@ -202,7 +194,7 @@ impl AgentUnit {
 /// two binaries are the operator's installed values, and the loop file is
 /// the vector's one declaration-sourced value, the operator's file validated
 /// at inventory, resolved by the worker under the agent's own identity. So
-/// the vector reads the allow-listed name and the operator's files and reads
+/// the vector reads the checked name and the agent's root and reads
 /// nothing else. A builder who let any of these be composed from the
 /// invocation's own input would widen the delegated authority by the route
 /// the name check closes.
@@ -345,6 +337,25 @@ fn start_arguments(
 pub fn stop(template: &UnitTemplate, agent: &str) -> std::io::Result<std::process::ExitStatus> {
     Command::new(&template.control_tool)
         .arg("stop")
+        .arg(unit_name(agent))
+        .status()
+}
+
+/// Asks the init system to clear a failed unit, so its name is free for the
+/// next start.
+///
+/// **Admin clears what a failed load left**, on the operator's ruling of
+/// 2026-10-01, per `weaver-admin-Spec` section 3: a unit whose process exited
+/// non-zero holds its name, and a later load would be refused
+/// `PriorUnitUnreaped` until something asks for this. The caller asks the
+/// state first and calls this only on `failed`, and the state ask after it is
+/// what says whether the name is free.
+pub fn reset_failed(
+    template: &UnitTemplate,
+    agent: &str,
+) -> std::io::Result<std::process::ExitStatus> {
+    Command::new(&template.control_tool)
+        .arg("reset-failed")
         .arg(unit_name(agent))
         .status()
 }

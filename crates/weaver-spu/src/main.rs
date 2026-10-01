@@ -1635,7 +1635,6 @@ fn dispatch(
             | LifecycleDirective::Load { .. }
             | LifecycleDirective::Unload { .. }
             | LifecycleDirective::Validate { .. }
-            | LifecycleDirective::List
             | LifecycleDirective::Show { .. },
         ) => Payload::Refusal(LifecycleRefusal::OutOfOrder),
     }
@@ -1793,7 +1792,7 @@ mod tests {
                 instruction: instruction(),
             },
             LifecycleDirective::Release,
-            LifecycleDirective::List,
+            LifecycleDirective::Stop,
         ] {
             assert_eq!(
                 dispatch(
@@ -1860,7 +1859,6 @@ mod tests {
             LifecycleDirective::Leave,
             LifecycleDirective::Stop,
             LifecycleDirective::Lower,
-            LifecycleDirective::List,
             LifecycleDirective::Load {
                 agent: AgentName("alpha".into()),
             },
