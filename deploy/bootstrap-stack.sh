@@ -113,6 +113,26 @@ command -v nvcc >/dev/null || die "no nvcc on PATH and the build carries $SPU_FE
 # and a base the operator cannot list reads empty, and either would let an
 # install go over a stack it never saw. `standing` answers stands or absent, or
 # refuses where the look itself fails for any other reason.
+# **held_closed PATH: admin's rule for what a root process may trust**, per
+# weaver-admin-Spec section 9 (`judge_ancestors`). PATH, resolved to its
+# canonical path, and every directory above it up to `/`, must be owned by uid
+# 0 and writable by no group or other, unless it is a sticky directory, which
+# keeps another principal from renaming an entry it does not own. Fails
+# printing the first component that is not so, or the path where it does not
+# resolve. Every deploy script carrying it carries this same text.
+held_closed() {
+  local at owner mode
+  at=$(realpath -e -- "$1" 2>/dev/null) || { printf '%s' "$1"; return 1; }
+  while :; do
+    read -r owner mode < <(stat -c '%u %a' -- "$at" 2>/dev/null) || { printf '%s' "$at"; return 1; }
+    if [ "$owner" != 0 ] || { (( 8#$mode & 8#022 )) && ! { [ -d "$at" ] && (( 8#$mode & 8#1000 )); }; }; then
+      printf '%s' "$at"; return 1
+    fi
+    [ "$at" = / ] && return 0
+    at=$(dirname -- "$at")
+  done
+}
+
 standing() { # standing PATH: 0 stands, 1 absent, refuses where it cannot tell
   local err
   if err=$(LC_ALL=C stat -- "$1" 2>&1 >/dev/null); then return 0; fi
@@ -131,6 +151,16 @@ if standing "$ADMIN_BASE"; then
   [ -z "$listing" ] || die "$ADMIN_BASE already holds configuration. This is the first install; use update-stack.sh, or decommission.sh first."
 fi
 if standing "$PREFIX/bin"; then die "$PREFIX/bin already stands. Decommission first."; fi
+# **The base and the record are placed only where admin's rule holds**, judged
+# at the nearest directory that stands, since this script makes the rest root
+# 0755: admin refuses every verb on a root whose base or any directory above it
+# another principal could write, and verify-load.sh refuses a record that is
+# not closed (Codex on #45).
+for placed in "$ADMIN_BASE" "$STACK"; do
+  at=$placed
+  while ! standing "$at"; do at=$(dirname -- "$at"); done
+  bad=$(held_closed "$at") || die "$placed would stand under $bad, which is not held closed by root, so admin would refuse it"
+done
 
 say "tree"
 if git -C "$REPO" rev-parse --short HEAD >/dev/null 2>&1; then

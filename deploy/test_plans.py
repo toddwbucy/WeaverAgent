@@ -22,6 +22,18 @@ import json, os, pathlib, shutil, subprocess, sys
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 root = pathlib.Path(os.environ['FIXTURE_ROOT'])
+if name == 'stat':
+    # **The fixture's files are root's.** Every file the tests make is the
+    # tester's, so the ownership `held_closed` judges is answered as uid 0
+    # for anything under the fixture and read from the file itself elsewhere;
+    # the mode is always the file's own. Not logged: it is a look, not a call.
+    if args[:1] == ['-c'] and args[1] == '%u %a':
+        path = pathlib.Path(args[-1])
+        st = os.lstat(path)
+        owner = 0 if path.is_relative_to(root) else st.st_uid
+        print(owner, format(st.st_mode & 0o7777, 'o'))
+        sys.exit(0)
+    os.execv('/usr/bin/stat', ['stat', *args])
 with open(os.environ['CALLS'], 'a') as log:
     log.write(json.dumps([name, *args]) + '\n')
 def mapped(value):
@@ -41,7 +53,7 @@ if name == 'sh': shell_read(args)
 elif name == 'getent':
     if os.environ.get('ACCOUNT_FAIL'): sys.exit(1)
     sys.exit(0 if os.environ.get('COLLISION') == args[-1] else 2)
-elif name == 'id': print('12345')
+elif name == 'id': print(os.environ.get('FIXTURE_UID', '12345'))
 elif name == 'git':
     if args[0] == 'rev-parse': print('abcdef0')
     elif args[0] == 'branch': print('fixture-branch')
@@ -146,6 +158,7 @@ class PlanTests(unittest.TestCase):
             "unit-properties": "UMask=0000\nEnvironment=LD_LIBRARY_PATH=/fixture/lib\n",
             "log-directory": str(self.logs),
             "agent-directory": "/home/fixture-no-home/.weaveragents",
+            "prefix": str(self.root / "installed"),
         }
         for key, value in self.stack_keys.items():
             (self.stack / key).write_text(value + ("" if value.endswith("\n") else "\n"))
@@ -159,7 +172,7 @@ class PlanTests(unittest.TestCase):
         self.artifact.touch()
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        for name in ("sudo", "systemctl", "psql", "mktemp", "setfacl", "getent", "git", "cargo", "hostname", "nvidia-smi", "pacman", "sh", "id"):
+        for name in ("sudo", "systemctl", "psql", "mktemp", "setfacl", "getent", "git", "cargo", "hostname", "nvidia-smi", "pacman", "sh", "id", "stat"):
             command = self.bin / name
             command.write_text(DOUBLE)
             command.chmod(0o755)
@@ -435,7 +448,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertTrue(root.is_dir())
         self.assertFalse((self.config / ".m1.partial").exists())
         for key, value in self.stack_keys.items():
-            if key in ("log-directory", "agent-directory"):
+            if key in ("log-directory", "agent-directory", "prefix"):
                 self.assertFalse((root / key).exists(), key)
             elif key == "spu-binary" and spu:
                 self.assertEqual((root / key).read_text(), spu + "\n")
@@ -522,6 +535,96 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
             self.assertIn("share the file name " + name, result.stderr)
             self.assertEqual(self.calls(), [], name)
             self.assertFalse((self.config / ".m1.partial").exists(), name)
+
+    def held_closed(self, path):
+        """Each deploy script's `held_closed`, run on `path` under the fixture's
+        `stat`. Answers each script's exit status and what it printed."""
+        answers = {}
+        for script in ("verify-load.sh", "create-agent.sh", "bootstrap-stack.sh"):
+            text = (self.repo / "deploy" / script).read_text()
+            start = text.index("held_closed() {")
+            body = text[start:text.index("\n}\n", start) + 3]
+            ran = subprocess.run(["bash", "-c", body + 'held_closed "$1"', "bash", str(path)],
+                                 env=self.env, text=True, capture_output=True, timeout=20)
+            answers[script] = (ran.returncode, ran.stdout)
+        return answers
+
+    def test_every_deploy_script_holds_admins_ancestor_rule(self):
+        # weaver-admin-Spec section 9: a path and every directory above it held
+        # by root and writable by no group or other, a sticky directory
+        # excepted. Every script's copy is the same text and answers alike.
+        # Perturbation: drop the mode test from one copy, and its answer differs.
+        texts = set()
+        for script in ("verify-load.sh", "create-agent.sh", "bootstrap-stack.sh"):
+            text = (self.repo / "deploy" / script).read_text()
+            start = text.index("held_closed() {")
+            texts.add(text[start:text.index("\n}\n", start)])
+        self.assertEqual(len(texts), 1, "every copy of held_closed is one text")
+        parent = self.root / "parent"
+        leaf = parent / "leaf"
+        leaf.mkdir(parents=True)
+        for mode, held in ((0o755, True), (0o1777, True), (0o775, False), (0o757, False), (0o777, False)):
+            parent.chmod(mode)
+            for script, (code, said) in self.held_closed(leaf).items():
+                self.assertEqual(code == 0, held, (script, oct(mode), said))
+                if not held:
+                    self.assertEqual(said, str(parent), script)
+        parent.chmod(0o755)
+        for script, (code, said) in self.held_closed(self.root / "absent").items():
+            self.assertNotEqual(code, 0, script)
+
+    def test_create_agent_refuses_a_base_admin_would_refuse(self):
+        # Codex on #45, round 10: a base under a directory another principal
+        # may write passed create-agent and was provisioned whole, then admin's
+        # judge_ancestors refused every verb. It refuses before any call.
+        # Perturbation: drop the held_closed judgment of the base, and it provisions.
+        self.env["ALLOW_APPLY_CHECKS"] = "1"
+        self.config.chmod(0o777)
+        try:
+            result = self.create("--apply")
+        finally:
+            self.config.chmod(0o755)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("is not held closed by root at " + str(self.config), result.stderr)
+        # Only the credential check and the read-only path looks ran.
+        made = [c for c in self.calls()
+                if c[0] in ("psql", "systemctl", "mktemp", "setfacl")
+                or (c[0] == "sudo" and c[1:2] != ["-v"] and c[1:3] != ["-n", "sh"])]
+        self.assertEqual(made, [], self.calls())
+        self.assertFalse((self.config / ".m1.partial").exists())
+
+    def test_verify_load_runs_only_the_records_admin_held_closed(self):
+        # Codex on #45, round 10: verify-load ran `$(dirname worker-binary)/
+        # weaver-admin`, a key of a root admin had not judged, as root. It
+        # takes admin from the record's prefix, judged closed, and never from
+        # the root. Perturbations: restore the root-derived path, and the
+        # planted admin runs; drop the binary's judgment, and the open
+        # install's admin is accepted.
+        self.env["FIXTURE_UID"] = "0"
+        root = self.config / "m1"
+        root.mkdir()
+        (root / "agent.toml").write_text('[trace-sink]\npath = "/x"\n')
+        planted = self.root / "planted"
+        planted.mkdir()
+        marker = self.root / "planted-ran"
+        (planted / "weaver-admin").write_text(f"#!/bin/sh\ntouch {marker}\n")
+        (planted / "weaver-admin").chmod(0o755)
+        (root / "worker-binary").write_text(str(planted / "worker") + "\n")
+        installed = self.root / "installed" / "bin"
+        installed.mkdir(parents=True)
+        result = self.run_script("verify-load.sh", "m1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no weaver-admin at " + str(installed / "weaver-admin"), result.stderr)
+        self.assertFalse(marker.exists(), "the root's worker directory chose the admin run")
+        (installed / "weaver-admin").write_text("#!/bin/sh\nexit 7\n")
+        (installed / "weaver-admin").chmod(0o755)
+        installed.chmod(0o777)
+        try:
+            result = self.run_script("verify-load.sh", "m1")
+        finally:
+            installed.chmod(0o755)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("is not held closed by root: " + str(installed), result.stderr)
 
     def test_spu_override_must_be_absolute(self):
         result = self.create("--spu", "relative/spu", "--apply")

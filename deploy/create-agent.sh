@@ -148,6 +148,26 @@ AGENT_ROOT="$ADMIN_BASE/$NAME"
 STAGE="$ADMIN_BASE/.$NAME.partial"
 DECLARATION="$AGENT_ROOT/agent.toml"
 
+# **held_closed PATH: admin's rule for what a root process may trust**, per
+# weaver-admin-Spec section 9 (`judge_ancestors`). PATH, resolved to its
+# canonical path, and every directory above it up to `/`, must be owned by uid
+# 0 and writable by no group or other, unless it is a sticky directory, which
+# keeps another principal from renaming an entry it does not own. Fails
+# printing the first component that is not so, or the path where it does not
+# resolve. Every deploy script carrying it carries this same text.
+held_closed() {
+  local at owner mode
+  at=$(realpath -e -- "$1" 2>/dev/null) || { printf '%s' "$1"; return 1; }
+  while :; do
+    read -r owner mode < <(stat -c '%u %a' -- "$at" 2>/dev/null) || { printf '%s' "$at"; return 1; }
+    if [ "$owner" != 0 ] || { (( 8#$mode & 8#022 )) && ! { [ -d "$at" ] && (( 8#$mode & 8#1000 )); }; }; then
+      printf '%s' "$at"; return 1
+    fi
+    [ "$at" = / ] && return 0
+    at=$(dirname -- "$at")
+  done
+}
+
 trim() {
   local value=$1
   value=${value#"${value%%[![:space:]]*}"}
@@ -313,6 +333,11 @@ refuse_existing() {
 }
 require_path -d "$ADMIN_BASE" "the admin base is missing or not a directory (bootstrap-stack.sh makes it)"
 require_path -x "$ADMIN_BASE" "the admin base cannot be traversed"
+# **The base is judged as admin judges every directory above a root**, before
+# anything is provisioned: admin refuses every verb on a root whose base or any
+# directory above it another principal could write, so a base under a home
+# directory would be provisioned whole and then unusable (Codex on #45).
+bad=$(held_closed "$ADMIN_BASE") || die "the admin base $ADMIN_BASE is not held closed by root at $bad, so admin would refuse every verb on the agent"
 
 # **Whose identity the store admits is settled and derived.** The charter has
 # the member hold a uid of its own and dial the store under it, and as of
@@ -560,4 +585,4 @@ say "made"
 printf '   %s joined group %s: a session that predates this run needs a new\n' "$OPERATOR" "$AGENT_USER"
 printf '   login, or `newgrp %s`, before the group applies\n' "$AGENT_USER"
 printf '   validate it before loading:\n'
-printf '     sudo WEAVER_ADMIN_CONFIG=%s %s validate %s\n' "$ADMIN_BASE" "$(dirname "$(stack_key worker-binary required)")/weaver-admin" "$NAME"
+printf '     sudo WEAVER_ADMIN_CONFIG=%s %s validate %s\n' "$ADMIN_BASE" "$(stack_key prefix required)/bin/weaver-admin" "$NAME"

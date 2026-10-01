@@ -1729,7 +1729,12 @@ set, which keeps another principal from renaming an entry it does not own. Other
 invocation refuses `BoundaryUnverified`, naming the directory on stderr. A directory
 another principal could write would let it rename the judged root away and stand its own
 in its place between the judgment and the reads. Every read then goes through that
-canonical root, never a pathname re-resolved after the judgment. Every
+canonical root, never a pathname re-resolved after the judgment. **The deploy scripts
+are bound by the same judgments before they commit**: `create-agent.sh`,
+`bootstrap-stack.sh` and `verify-load.sh` apply this rule (`held_closed`), and any
+judgment admin gains here is one they must apply before they provision, publish or run
+a root, so that no script leaves a root admin then refuses or runs a program admin
+would not. Every
 value below is read from the root before any verb, and a value that fails to read fails
 the invocation as `ConfigInvalid` with no field.
 
