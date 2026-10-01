@@ -462,13 +462,21 @@ class HFEngine:
             if reference=='file' or header['container']=='gguf':
                 raise AdmissionError('device_cannot_admit',f"this build carries no backend for {header['container']} {header['family']}")
             if len(devices)!=1: raise AdmissionError('device_cannot_admit','this build serves one device')
+            # **The family the header selected is one this build renders**, per
+            # python-spu-Spec section 3.1's registry row: a family the Rust selects and
+            # this build does not serve refuses at admit. The renderer is qwen2's alone,
+            # so weights admitted under another selected family would be served in a
+            # template the header did not declare. Unreadable, as the declaration's own
+            # unserved `model_type` below.
+            from .family import SERVED_ARCHITECTURE,same_key
+            if not same_key(header['family'],SERVED_ARCHITECTURE):
+                raise AdmissionError('artifact_unreadable',f"the header selects {header['family']}, which this build does not serve")
             # `read_declaration` then `judge_family` on the declaration's own
             # `model_type`, BackendDoesNotServe crossing unreadable, the one step-four
             # refusal that does.
             # The sidecars beside the pinned container, as the native load reads them.
             beside=load_dir(self.pinned[0][1])
             declared=strict_json((beside/'config.json').read_bytes())
-            from .family import SERVED_ARCHITECTURE,same_key
             model_type=declared.get('model_type') if isinstance(declared,dict) else None
             if not isinstance(model_type,str) or not same_key(model_type,SERVED_ARCHITECTURE):
                 raise AdmissionError('artifact_unreadable',f'the native backend does not serve {model_type}')

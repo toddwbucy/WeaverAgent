@@ -258,10 +258,13 @@ seam.
 | | native `judge_family` on the declaration's `model_type`: `BackendDoesNotServe` | `same_key` against `qwen2` | `artifact_unreadable` |
 | | native `read_config`, `read_eos`, the tokenizer, the weights (`VarBuilder`, `ModelForCausalLM::new`, a tensor missing among them) | `AutoConfig` and a quantized config (the config's parse is python-spu's own, transformers' `AutoConfig`, per the operator's ruling of 2026-10-01), `read_eos`, `Tokenizer.from_file`, the model with its missing keys refused, placement, out of memory | `device_cannot_admit` |
 
-Two judgments are this build's own and sit at the load: its renderer's markers each
-promote to one token, refused `artifact_unreadable` (the Rust SPU meets an unpromoted
-turn close at the open, as a fault), and it serves one device where the native backend
-serves two, refused `device_cannot_admit` as the native's own width refusal is.
+Three judgments are this build's own and sit at the load:
+- the family the header selected is the one it renders, qwen2, refused
+  `artifact_unreadable` otherwise, per the registry row of section 3.1;
+- its renderer's markers each promote to one token, refused `artifact_unreadable`
+  (the Rust SPU meets an unpromoted turn close at the open, as a fault);
+- it serves one device where the native backend serves two, refused
+  `device_cannot_admit` as the native's own width refusal is.
 
 **The registry is ported as a table**, `engine.REGISTRY`, each entry's family, its
 declared widths and its tap flag in the Rust order, and the oracle's `registry_entries`

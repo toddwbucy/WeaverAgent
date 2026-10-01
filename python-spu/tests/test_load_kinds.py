@@ -350,3 +350,20 @@ def test_a_load_whose_config_declares_no_eos_refuses(tiny_model, tmp_path):
     with pytest.raises(AdmissionError) as refused:
         engine.HFEngine(root, [0], cpu=True)
     assert refused.value.kind == "device_cannot_admit" and "eos_token_id" in str(refused.value)
+
+
+def test_a_header_selecting_a_family_this_build_does_not_serve_refuses(tiny_model, tmp_path):
+    """python-spu-Spec section 3.1, the registry row: a family the header selects that
+    this build does not serve refuses at admit, even where `config.json` names qwen2,
+    since the build renders qwen2 alone and would serve the weights in a template the
+    header did not declare. Found by Codex on #47. Perturbation: drop the served-family
+    check, and the gemma4-selecting artifact loads."""
+    import struct
+    from safetensors.torch import load_file, save_file
+    root = tmp_path / "artifact"
+    shutil.copytree(tiny_model, root)
+    tensors = load_file(root / "model.safetensors")
+    save_file(tensors, root / "model.safetensors", metadata={"format": "pt", "architecture": "gemma4"})
+    with pytest.raises(AdmissionError) as refused:
+        engine.HFEngine(root, [0], cpu=True)
+    assert refused.value.kind == "artifact_unreadable" and "gemma4" in str(refused.value), refused.value
