@@ -22,16 +22,14 @@ process or a network boundary, never linked:
 
 The rule that drew the line: a crate a consumer meets across a network boundary gets its
 own repository; the agent keeps everything interior. The suite-level documentation
-repository (`toddwbucy/WeaverTools`, empty on 2026-09-30) will hold the vision, the
-cross-repository contracts, the process documents and `experiments/`. Until it does,
-those live here, and the founding document of the split is
-`HANDOFF-2026-09-30-the-suite-split.md` in the parent workshop directory when this tree
-is checked out under `WeaverTools_Project/`.
+repository (`toddwbucy/WeaverTools`) holds `experiments/` and will hold the vision, the
+cross-repository contracts and the process documents. Until it does, those live here.
 
 Issue and pull request numbers in inherited code and documents (`#689`, `#551`, ...) are
 monorepo numbers. Its 31 open issues were transferred to `toddwbucy/WeaverAgents` on
-2026-09-30 and carry new numbers there. Every `toddwbucy/WeaverTools` reference inside
-this tree predates the rename and means the monorepo.
+2026-09-30 and carry new numbers there. A `toddwbucy/WeaverTools` reference in a
+document or code written before 2026-09-30 means the monorepo; this file uses the name
+for the suite repository.
 
 All of these repositories were **public** on 2026-09-30. Check rather than assume:
 `gh repo view toddwbucy/WeaverAgents --json visibility`.
@@ -103,10 +101,11 @@ Each crate's `tests/manifest.rs` reads its own manifest to pin its part of that 
 ### Where the documents are
 
 `docs/crates/<crate>/` holds each crate's PRD (charter) and Spec, mirroring
-`crates/<crate>/`. The harness's three members sit under `docs/crates/weaver-harness/`.
-Every seam has a contract under `docs/crates/contracts/`; three of them are
-cross-repository (`weaver-gate-world`, `weaver-admin-operator`, `weaver-analysis-web`)
-and are destined for the suite repository. `docs/crates/weaver-analysis/` and the two
+`crates/<crate>/`, except that `weaver-trace`, `weaver-diagnostic` and `weaver-state`
+sit under `docs/crates/weaver-harness/`. Every seam has a contract under
+`docs/crates/contracts/`; four of them are cross-repository (`weaver-gate-world`,
+`weaver-admin-operator`, `weaver-analysis-state`, `weaver-analysis-web`) and are
+destined for the suite repository. `docs/crates/weaver-analysis/` and the two
 `weaver-analysis-*` contracts are byte-identical copies of files in WeaverAnalysis;
 which copy is authoritative is unruled, so edit neither without saying so.
 
@@ -173,7 +172,7 @@ lock is unchecked rather than clean. Its header carries the measurements.
   `#[ignore]` and need scratch PostgreSQL (`unshare -Ur`, no sudo), so default
   `cargo test` passes without them and they fail when run.
 
-Until both are fixed, test per crate with `-p`. The deploy scripts already select
+Until both are fixed (#37), test per crate with `-p`. The deploy scripts already select
 crates: `deploy/bootstrap-stack.sh` and `deploy/update-stack.sh` test `weaver-trace`,
 `weaver-harness` and `weaver-state` with `weaver-harness/pyworker,weaver-state/sqlite,
 weaver-state/postgres`, then build the workspace in release with `weaver-spu/cuda`
@@ -204,7 +203,11 @@ pytest -q                                                 # CPU; the venv is hel
 ### Deploying and driving an agent
 
 `deploy/REDEPLOY.md` (a box from scratch) and `deploy/HowToDeployANewAgent.md` (one
-agent on a standing stack) are current as of 2026-09-30. The scripts are
+agent on a standing stack) walk a postgres agent. An agent may elect sqlite or postgres
+(the build carries both, on the operator's ruling of 2026-09-30, #38). The scripts have
+known gaps, each an issue: `update-stack.sh` refuses at its test step (#33),
+`create-agent.sh` cannot make a sqlite agent (#34), `decommission.sh` discovers by one
+layout and matches every `weaver%` database (#35), small fixes (#39). The scripts are
 `bootstrap-stack.sh`, `update-stack.sh`, `create-agent.sh`, `verify-load.sh`,
 `decommission.sh`, and `deploy/turn.py <agent> "<text>"` sends one turn through a
 loaded agent's gate as the operator's uid with no sudo. The installed stack lives under
@@ -236,8 +239,8 @@ Two Claude Code sessions and the operator (Todd), who closes every loop. The
 **Planner** (thinkpad seat) plans, grades drafts and handles third-party review; the
 **Executor** (olympus seat, or a `-executor` session) writes code on a branch from
 `main`, from a worktree, and opens a **draft** pull request. Nobody pushes to `main`
-directly, except that edits to this file and `AGENTS.md` are the Planner's and go to
-`main` directly.
+directly: it is branch-protected (a direct push was refused on 2026-09-30), so edits to
+this file and `AGENTS.md`, which are the Planner's, also go through a pull request.
 
 1. Gates first: `lock.sh`, fmt, clippy for the touched crate.
 2. The Planner grades the draft against a clean extract of the head. The body carries
