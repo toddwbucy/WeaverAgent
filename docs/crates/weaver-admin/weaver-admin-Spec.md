@@ -183,20 +183,20 @@ service account, and what replaces it is the process boundary the operating
 system already draws around an executed program.
 
 **The verb and its agent arrive as arguments.** One verb per invocation,
-`load`, `unload`, `validate`, `stop`, `show`, or `list`, with the agent name as
-the one further argument where the verb takes one. Arguments rather than a
+`load`, `unload`, `validate`, `stop`, or `show`, with the agent name as the one further
+argument, which every verb takes. Arguments rather than a
 parsed request line, because the kernel already delivered them as a vector and
 re-encoding them into a wire format would be inventing a wire where no seam
-crosses. The service configuration's root is the one environment variable read,
+crosses. The base the agent's root stands under is the one environment variable read,
 per section 9.
 
 **Authorization is the kernel's, and what this crate checks is the name.** The
 invocation runs as root or performs nothing, so no predicate, no allow set, and
 no deny set exist here: the earlier form's `authorized` call, its group allow
 set, and its agent-uid deny set retired with the socket, the operator being the
-party the kernel already admitted. What survives is the allow-list check of
-section 4, which is about which agent may be named rather than about who may
-name it. The refusal is enacted before any verb touches anything, and the
+party the kernel already admitted. What survives is the name check of section 4
+and the agent's root of section 9, which are about which agent may be named rather
+than about who may name it. The refusal is enacted before any verb touches anything, and the
 instrument is a test running the binary as a non-root uid and finding it
 refuses, watched to fail when the check is removed.
 
@@ -241,8 +241,8 @@ to: axiom-contract-is-a-complete-interface
 **Concurrency left this crate with the surface that held it.** One invocation
 runs one verb and exits, so no threads, no accept loop, and no cross-connection
 synchronization remain. What kept two transitions for one agent from
-overlapping was the fleet map's in-flight flag, and section 3 states where that
-obligation lands now.
+overlapping was the in-flight flag of the map this crate once held across agents, and
+section 3 states where that obligation lands now.
 
 ## 3. The verbs, the agent's state, and rollback
 
@@ -261,19 +261,19 @@ signal and nothing more. Reading it as loaded-and-idle would also contradict the
 charter's own rule that the state publishes only on a ready aggregate, since a
 unit is running well before any aggregate returns.
 
-**So `show` and `list` answer through the observation exchange, as of 2026-09-04, and
-residency is read only where no worker answers.** `show` dials the agent's coordination
+**So `show` answers through the observation exchange, as of 2026-09-04, and residency
+is read only where no worker answers.** `show` dials the agent's coordination
 socket and opens `Observe`, per `weaver-admin-harness-contract` section 3, and what
 returns is the harness's own word: `Unloaded` before any enter or after a leave, `Idle`
 or `Active` with the load's facts beside it where a run stands, the same facts the
 `load` event carries, read from the run and never from the record. Where the socket does
 not exist or nothing answers the dial, there is no exchange to open, and this crate
 reports `Unloaded` from that absence, which is the one place residency is read and it is
-read as the absence of a worker and not as a state. A name the allow-list does not admit
-refuses `NoSuchAgent` as every verb does, and whether a declaration validates stays
-`validate`'s own answer, since no verb chains another. `list` opens the same exchange
-for every admitted agent and answers `Agents`, one summary per name with its state and
-its load.
+read as the absence of a worker and not as a state. A name with no root refuses
+`NoSuchAgent` as every verb does, and whether a declaration validates stays
+`validate`'s own answer, since no verb chains another. No verb answers for more than the
+one agent named, admin being one agent's organ on the operator's ruling of 2026-10-01,
+and managing several WeaverWeb's or a separate application's.
 
 **The manager's three values stay the manager's and reach no answer.** `active`,
 `failed`, and `inactive` are residency and not lifecycle state, per the paragraph above,
@@ -748,10 +748,10 @@ from: admin-checks-no-device
 to: axiom-harness-integrates-by-the-loop
 ```
 
-**The allow-list is consulted before anything else is touched.** The agent
-name is validated against the operator's allow-list and the constructed
-identity is `weaver-<name>` from the validated name, never from a
-caller-supplied string, which is the name-validation discipline of charter
+**The name is checked before anything else is touched.** The agent name is
+validated as a name, non-empty ASCII letters, digits, `-` and `_`, its root of
+section 9 is admitted, and the constructed identity is `weaver-<name>` from the
+validated name, never from a caller-supplied string, which is the name-validation discipline of charter
 section 7 landing at the one site that constructs. It is the one site because
 the same validated name is what section 6 interpolates into the unit template,
 so a name reaching a path or a unit has one origin and review reads that origin
@@ -1096,7 +1096,7 @@ to: axiom-floor-is-vocabulary-behavior-is-socket
 **The unit template is fixed and the name is the one variable.** The template lives in
 admin's own service configuration, per section 9, and the only value interpolated is the
 validated agent name of section 4, so the delegated authority stays bounded by the
-allow-list exactly as charter section 7 requires. **The argument vector the ask carries
+agent's root exactly as charter section 7 requires. **The argument vector the ask carries
 takes no value the invocation's own input composes.** Its values are the coordination
 socket path of section 7, which this crate already derives from that same validated
 name, the two organ binary paths section 9 holds among the operator's installed values,
@@ -1114,8 +1114,8 @@ bare clause below. An absent member puts no flag on the vector, the worker's own
 standing, per `weaver-harness-PRD` section 2. A builder who let any of these values be
 composed from the invocation's own input would be widening the delegated authority by
 the route the name check closes, so the shape to hold is that the vector reads the
-allow-listed name and the operator's files, the installed values and the validated
-declaration, and reads nothing else. An earlier form of this clause counted three values
+checked name and the agent's root, the installed values and the validated declaration,
+and reads nothing else. An earlier form of this clause counted three values
 and named the name the one variable, written before any declaration member rode the
 vector.
 
@@ -1636,7 +1636,7 @@ to: admin-enter-carries-descriptor-in-one-message
 **One exchange in flight per worker, and the serialization is now the
 harness's.** The channel's layer permits concurrency, per the drawn material,
 and the contract forbids a second transition for the same agent. What held
-that was admin's fleet map until 2026-08-05, and a per-invocation crate holds
+that was admin's map across agents until 2026-08-05, and a per-invocation crate holds
 nothing, so the property lands where the standing party is: the harness serves
 one connection at a time and answers a directive arriving out of order with a
 refusal, per the contract's section 4 and `weaver-harness-Spec` section 2.3.
@@ -1648,7 +1648,7 @@ structural rather than disciplined.
 
 **The format is NDJSON, one act per line, and it shares no schema with the
 trace.** The charter fixes the custody, 0640 in a 0750 directory, both owned
-by root, fleet-scoped and never inside an agent home. What this Spec adds is
+by root, one per agent at the path its root names, and never inside an agent home. What this Spec adds is
 the rendering: one JSON object per line, the same reading tools the stream's
 consumers already hold, and a
 field set that is this crate's own and deliberately not the event envelope,
@@ -1706,68 +1706,70 @@ accumulates, which is the charter's own grounds read forward.
 
 ## 9. The service's own configuration
 
-**Admin has operator-installed configuration of its own, and this Spec names it rather
-than leaving it implied.** The coordination socket's per-agent name, the log directory,
-the unit template, the agent config directory, the allow-list, the two organ binary
-paths, and the optional map choosing each agent's SPU below are deployment facts the
-operator installs. The store's socket directory joined the list 2026-09-04 under the key
-`state-store-socket`, optional, the service engine's conventional directory standing
-where the file is silent, and read under a service election alone. The operator socket's
-path left this list with the socket on 2026-08-05, and the coordination name stayed but
-changed hands: the operator places it, the harness binds it, and admin dials it, so one
-value reaches two crates and the operator's file is where they agree. They are not the
-agent config and no seam carries them, which is why the file takes no contract of its
-own. **The agent config directory holds one declaration per agent, `<agent>.toml`**,
-which this crate resolves by the agent's name and the format's extension, per
-`weaver-types-Spec` section 2, and a name that resolves to no file answers
-`NoSuchAgent`. **The file and its values part company at the start ask, and the
-distinction is worth holding.** This crate is the only one that reads the file. Three of
-the values do not stay in it: the coordination socket's name and the two organ binary
+**Admin has operator-installed configuration of its own, one root per agent, and this
+Spec names it rather than leaving it implied.** Admin is one agent's organ, on the
+operator's ruling of 2026-10-01, so an invocation reads the configuration of the agent
+it names and nothing shared with any other agent. `WEAVER_ADMIN_CONFIG` names the base,
+`/etc/weaver/admin` where it is unset, and the agent's root is `<base>/<agent>/`. The
+name is judged before the path is built, per section 4, so `.`, `..` and any name
+carrying `/` never reach the base. **The root existing is the admission**: no root, or a
+root that is not a directory, answers `NoSuchAgent`, and the look does not follow a link
+at the root itself. **The root must be root's and closed to every other writer**, owned
+by uid 0 and neither group- nor world-writable, or the invocation refuses
+`BoundaryUnverified` before a value is read, since what the root names runs under the
+agent's identity and a root another principal could write would hand that principal the
+agent. Every value below is read from the root before any verb, and a value that fails
+to read fails the invocation as `ConfigInvalid` with no field.
+
+**The root holds one file per key.** Required: `worker-binary`, `spu-binary`,
+`gate-binary`, `run-tool`, `control-tool`, `coordination-root` and `log-path`.
+Optional: `unit-properties`, `headroom-bytes` and `state-store-socket`, the last read
+under a service election alone, the service engine's conventional directory standing
+where the file is silent. **The agent's declaration stands beside them as
+`agent.toml`**, which this crate parses per `weaver-types-Spec` section 2, and a root
+with no declaration answers `NoSuchAgent`. The coordination name changed hands with the
+operator socket on 2026-08-05: the operator places it, the harness binds it, and admin
+dials it, so one value reaches two crates and the root is where they agree. These values
+are not the agent config and no seam carries them, which is why the root takes no
+contract of its own. **The file and its values part company at the start ask, and the
+distinction is worth holding.** This crate is the only one that reads the root. Three
+of the values do not stay in it: the coordination socket's name and the two organ binary
 paths reach the worker in section 6's argument vector, over the external boundary
-`weaver-admin-systemd-contract` holds rather than over any seam. The shape is a
-satellite of section 11: what is fixed here is that these values exist, that they are
-the operator's to place, and that none of them is discovered at runtime by searching.
+`weaver-admin-systemd-contract` holds rather than over any seam. What is fixed here is
+that these values exist, that they are the operator's to place, and that none of them
+is discovered at runtime by searching.
 
-**The organ binaries are on this list and not in the agent's declaration, and the
+**Nothing in one agent's root is read for another.** The box-wide values, the binaries,
+the tools, the coordination root and the headroom, are copied into each root by the
+deployment scripts from a stack record of their own that this crate never reads, so an
+agent's configuration is that agent's even where two roots carry the same values. The
+installed program files may stand once on disk and be named by every root; the
+configuration and the processes are each agent's own. **The operations log is one per
+agent**, at the path the agent's `log-path` names. Managing several agents, listing
+them or holding a map across them, is not this crate's and belongs to WeaverWeb or a
+separate application, which drives each agent through its own admin.
+
+**The organ binaries are in the root and not in the agent's declaration, and the
 placement is the ruling rather than a convenience.** Which program runs under an agent's
-identity is part of the authority this crate is delegated, the same authority the
-allow-list bounds, so it is placed where the allow-list is, in the operator's own
-configuration, and never in a file the declaration's author edits. The charter's own
-test settles the gate's from the other side: `weaver-harness-Spec` section 2 has the
-organ binaries supplied to the composition root as a deployment fact, not a discovery,
-and the declaration is the agent's elections rather than the deployment's.
-
-**The gate's binary is one installation's fact and the SPU's is one agent's**, on the
-operator's ruling of 2026-09-28 that `python-spu` is an option and not a takeover: an
-installation may serve one agent from the Rust SPU and another from `python-spu`, at
-once. The gate's path stays one value, identical for every agent, so a second copy of it
-per agent would be the divergence gate G5 refuses. The SPU's path is chosen per agent by
-two further values beside the allow-list, both optional:
-
-- `spu-implementations`, one line per implementation, a key and an absolute path,
-  the key lowercase letters, digits and hyphens.
-- `agent-spu`, one line per agent, an allow-listed name and a key the first file holds.
-
-**`spu-binary` stays, and it is the SPU of every agent `agent-spu` does not name.** An
-installation with one SPU therefore changes nothing, and one with two names each agent
-that departs from the default and no other. The three values are read where every value
-of this section is read, before any verb, and they are judged there: a line that is not
-two fields, a key outside lowercase letters, digits and hyphens, a relative path, a key
-or an agent named twice, an agent that is not on the allow-list, a key
-`spu-implementations` does not hold, or a file name two of the binaries the stack
-records share fails the invocation as an unreadable configuration fails it today, before
-any unit is asked, because each is the operator's file contradicting itself and no load
-could stand on it. The names are the worker's, the state member's, the gate's and each
-SPU's, pairwise among the first three and each SPU against those, SPUs not differing
-among themselves since one record carries one agent's SPU. They are held distinct rather
-than keyed around because the stack below is keyed by file name and `weaver-analysis`
-carries it into a run's code identity by those names, so records written before this act
-stay comparable with those written after. No new refusal names any of them, the
-configuration's failure having no lifecycle case to be.
+identity is part of the authority this crate is delegated, so it is placed where the
+admission is, in the root the operator holds, and never in a file the declaration's
+author edits. The charter's own test settles it from the other side:
+`weaver-harness-Spec` section 2 has the organ binaries supplied to the composition root
+as a deployment fact, not a discovery, and the declaration is the agent's elections
+rather than the deployment's. **`spu-binary` is this agent's SPU**, on the operator's
+ruling of 2026-09-28 that `python-spu` is an option and not a takeover: one agent may
+serve from the Rust SPU while another serves from `python-spu`, each root naming its
+own. **The names the root's binaries carry differ pairwise**: the worker's, the state
+member's, the gate's and the SPU's, and a root naming two of them under one file name
+fails the invocation as an unreadable configuration fails it, before any unit is asked.
+They are held distinct rather than keyed around because the stack below is keyed by
+file name and `weaver-analysis` carries it into a run's code identity by those names.
+No new refusal names any of them, the configuration's failure having no lifecycle case
+to be.
 
 **An optional value is absent only where nothing stands at its path.** Every optional
-value of this section, the two above, `unit-properties`, `headroom-bytes` and
-`state-store-socket`, reads as absent only where the path itself names nothing, which is
+value of this section, `unit-properties`, `headroom-bytes` and `state-store-socket`,
+reads as absent only where the path itself names nothing, which is
 asked of the link and never of its target. A dangling link, a directory, bytes that are
 not UTF-8, or a read the kernel refuses is the operator's file failing to read, and
 fails the invocation before any verb rather than standing a default the operator did not
@@ -1775,8 +1777,8 @@ choose. A required value fails either way, and its message says whether it was a
 did not read. Every reader of these files outside this crate holds the same line, the
 determinism matrix's among them.
 
-**What the SPU binary is, this crate does not judge.** It passes the agent's path on
-section 6's vector as it passed the installation's, and the worker forks it at enter as
+**What the SPU binary is, this crate does not judge.** It passes the path the agent's
+root names on section 6's vector, and the worker forks it at enter as
 it forks any SPU, under the agent's identity, per section 6. That the file is an SPU
 honoring `weaver-harness-spu-contract` and `weaver-harness-spu-decode-contract` is the
 operator's placement to make true, and an implementation that does not is found at the
@@ -1793,8 +1795,8 @@ two as well, digested from the same paths the vector carries, so each agent's re
 names the SPU that served it by the file's name and sha256, and two agents served by two
 implementations carry two different entries. The map is keyed by name already, so no
 type changes, and a record written before this act lacks the two entries, which reads as
-those facts being unrecorded. The load's `ready` line in section 8's log names the
-agent's key and path beside it.
+those facts being unrecorded. The load's `ready` line in section 8's log names the SPU's
+path beside it.
 
 **Two agents on one card is the SPU's question and is already answered.** Admission
 judges each assigned device by one inequality, the shard's need plus the headroom
@@ -2186,7 +2188,7 @@ Each names what settles it, and none is this Spec's to settle alone.
 - **How an agent's lifecycle state is observed. Settled 2026-09-04** by the observation
   exchange of `weaver-admin-harness-contract` section 3, per issue #435: the harness
   answers its state from the run with the load's facts beside it, section 3 above says
-  how `show` and `list` use it, and `StateNotObservable` left the floor with it. The
+  how `show` uses it, and `StateNotObservable` left the floor with it. The
   entry stood as: **How an agent's lifecycle state is observed, and what the `State`
   answer carries meanwhile.** Section 3 reports residency in the manager's own three
   values because that is what the init system can answer, and apex section 6's four

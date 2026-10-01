@@ -61,11 +61,11 @@ route alone: a record the harness writes from a `python-spu` report verifies und
 trace contract exactly as a record written from a Rust report does.
 
 **Nothing else in the agent changes, and nothing else learns which SPU served.** Admin
-launches whatever file its configuration names for the agent, `spu-binary` or the
-agent's own key in `spu-implementations`, per `weaver-admin-Spec` section 9, so one
-agent may be served by the Rust SPU and another by `python-spu` on one box at once.
-Admin digests that file into the load record's `stack` under the file's name, and the
-determinism matrix reads it into `weaver_binaries` at both ends of a run.
+launches whatever file the agent's own configuration root names as its `spu-binary`, per
+`weaver-admin-Spec` section 9, so one agent may be served by the Rust SPU and another by
+`python-spu` on one box at once. Admin digests that file into the load record's `stack`
+under the file's name, and the determinism matrix reads it into `weaver_binaries` at
+both ends of a run.
 
 **What served is named by two digests, and neither waits on the SPU reporting its own
 identity**, which section 10 defers. The first is the SPU binary's digest in the
@@ -587,8 +587,9 @@ its pin, rather than faulting.
 **The determinism environment is the process's own.** The engine enables torch's
 deterministic algorithms, which require `CUBLAS_WORKSPACE_CONFIG`, so the package sets
 it to `:4096:8` at its first import, before torch can initialise CUDA, rather than
-relying on a deployment line. One admin configuration may serve both SPUs, per
-`weaver-admin-Spec` section 9, and the Rust SPU needs no such line. A value the
+relying on a deployment line. Agents on one box may be served by both SPUs, each
+named in its agent's own admin configuration, per `weaver-admin-Spec` section 9, and
+the Rust SPU needs no such line. A value the
 environment already carries that differs is refused at the entry by name: one
 `bad_environment` line, then exit 1, before the channels are adopted. It is never
 overwritten, since a deployment that set one meant it. The rule holds for every variable
@@ -649,8 +650,8 @@ seat, on the operator's ruling of 2026-09-28, and section 1 states what names th
 implementation until then.
 
 **Which agents a deployment serves from which SPU.** That is the operator's choice in
-admin's configuration, per `weaver-admin-Spec` section 9, and this document binds only
-what `python-spu` must be to serve one.
+each agent's own admin configuration, per `weaver-admin-Spec` section 9, and this
+document binds only what `python-spu` must be to serve one.
 
 **The comparison cells.** Their declarations, predictions and falsifiers are the
 deployment-tuple charter's, per Document Format section 2, and this document supplies

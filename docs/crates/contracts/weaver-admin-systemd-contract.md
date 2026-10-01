@@ -104,20 +104,19 @@ and the classify binary joining it at issue #497. Neither addition crossed anyth
 at this boundary, which is why the omission went unnoticed and why it is corrected as a
 statement rather than as a change.
 
-**The vector widens nothing this boundary did not already
-carry.** The socket's path derives from the agent name the unit's name and its
-runtime directory already carry, the two organ binary paths are the operator's
-installed values, the SPU's chosen per agent among them per `weaver-admin-Spec`
-section 9, **the classify binary is a sibling of the worker binary** rather
-than a value of its own, and the loop file is a path in the operator's validated
-declaration. **The worker binary is the derivation's anchor and is not itself on the
-vector**, being the value the unit starts rather than a value the vector carries, so
-naming it here names a path the operator wrote and this boundary already knew. So a
+**The vector widens nothing this boundary did not already carry.** The socket's path
+derives from the agent name the unit's name and its runtime directory already carry, the
+two organ binary paths are the operator's installed values, the SPU's being the one the
+agent's own configuration root names, **the classify binary is a sibling of the worker
+binary** rather than a value of its own, and the loop file is a path in the operator's
+validated declaration. **The worker binary is the derivation's anchor and is not itself
+on the vector**, being the value the unit starts rather than a value the vector carries,
+so naming it here names a path the operator wrote and this boundary already knew. So a
 manager reading the vector learns the same agent name twice, paths the operator wrote,
 one path derived from a path the operator wrote, and one path the operator's own
-declaration named. Section 7's prohibition holds unchanged: no part of the
-agent's declaration is here, and a manager that logged the whole vector would still
-learn nothing about a turn.
+declaration named. Section 7's prohibition holds unchanged: no part of the agent's
+declaration is here, and a manager that logged the whole vector would still learn
+nothing about a turn.
 
 **The runtime directory is asked for here because its removal is the answer to a
 stale socket.** A Unix socket's pathname outlives the process that bound it, so a
@@ -214,12 +213,13 @@ condition so a later pass weighs a stated trade rather than rediscovering it.
 **Admin supplies** the validated agent name, the unit's properties as the operator's
 template fixes them, and the worker's argument vector of section 2.
 
-**Admin guarantees** that the name it interpolates is allow-listed and shaped as a
-name rather than a path, per `weaver-admin-PRD` section 7, so the delegated authority
-cannot be widened by an argument. It guarantees that every value in the argument
-vector is one the operator installed or one derived from that same validated name, so
-the vector is a second reading of the allow-list rather than a second authority
-beside it. It guarantees that it asks for one unit per agent
+**Admin guarantees** that the name it interpolates is shaped as a name rather than a
+path and names an agent whose own configuration root the operator wrote, root-owned
+and writable by no one else, per `weaver-admin-PRD` section 7, so the authority cannot
+be widened by an argument. It guarantees that every value in the argument vector is
+one the operator wrote into that agent's root or one derived from that same validated
+name, so the vector is a second reading of the agent's own root rather than a second
+authority beside it. It guarantees that it asks for one unit per agent
 and holds no second route to start one. It guarantees that the agent's identity and
 boundary were verified before the ask, so the manager is never asked to resolve what
 this program should have refused.

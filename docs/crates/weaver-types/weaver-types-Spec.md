@@ -176,11 +176,11 @@ are identifiers rather than numbers, which is what lets a run reference carry a
 stamp that distinguishes without anything being remembered between invocations,
 per the identity ruling of 2026-08-14.
 
-**One file per agent, named for the agent, in a directory the operator owns.** Admin
-resolves an agent's declaration as `<agent>.toml` in the agent-config directory its own
-configuration names, per `weaver-admin-Spec` section 9: the name is the agent's and the
-extension is the format's, and the operator provisions the file at that name. The
-directory's place stays operator provisioning, outside what this program governs, per
+**One file per agent, in the agent's own root, which the operator owns.** Admin
+resolves an agent's declaration as `agent.toml` in that agent's configuration root,
+`<base>/<agent>/`, per `weaver-admin-Spec` section 9: the root is the agent's and the
+extension is the format's, and the operator provisions the file there. The root's
+place stays operator provisioning, outside what this program governs, per
 `weaver-admin-PRD` section 1. Admin resolves an agent name to exactly one config file
 and refuses a load where it resolves to none.
 
@@ -1048,7 +1048,6 @@ pub enum LifecycleDirective {
     Load { agent: AgentName },
     Unload { agent: AgentName },
     Validate { agent: AgentName },
-    List,
     Show { agent: AgentName },
 }
 
@@ -1063,7 +1062,6 @@ pub enum LifecycleAnswer {
     GateStopped,
     Validated,
     State { state: AgentState, load: Option<Box<LoadFacts>> },
-    Agents { agents: Vec<AgentSummary> },
 }
 ```
 
@@ -1316,8 +1314,8 @@ interrupted. `Enter` answers `Ready`, `Leave` answers `Left`, `Stop` answers
 `TurnAborted` or `AtRest`, `Admit` answers `Admitted`, `Release` answers `Released`,
 `Raise` answers `GateReady`, `Lower` answers `GateStopped`, `Validate` answers
 `Validated`, `Load`, `Unload`, `Show`, and `Observe` answer `State`, the last carrying
-the load's facts beside the state where a run stands, and `List` answers `Agents`.
-Twelve of the thirteen have a single answering case. `Stop` has two, `TurnAborted` or
+the load's facts beside the state where a run stands. Eleven of the twelve have a
+single answering case. `Stop` has two, `TurnAborted` or
 `AtRest`, selected by whether a turn was in flight, and both are clean closes rather
 than a refusal, per `weaver-admin-harness-contract` section 3. Any directive may answer
 a `LifecycleRefusal` instead, which is the second half of what one answer per request
@@ -1354,8 +1352,7 @@ state is the harness and no exchange asked it, and it was minted as a marker wit
 scheduled death, leaving exactly one thing to delete when the observation exchange
 landed. The exchange landed with issue #435: `weaver-admin-harness-contract` section 3
 charters `Observe`, the harness answers `State` from whichever position it holds with
-`LoadFacts` beside it where a run stands, and `show` and `list` answer rather than
-refuse. The case is deleted rather than kept, per the apex's rule that a case nothing
+`LoadFacts` beside it where a run stands, and `show` answers rather than refuses. The case is deleted rather than kept, per the apex's rule that a case nothing
 produces is a reserved slot.
 
 **`LoadFacts` is what the observation carries beside the state, and it is the floor's
@@ -1364,9 +1361,7 @@ digest as admin read the file at the enter, the artifact, the readout, field, an
 surprisal elections, the tee's election, the store the member stands on and whether its
 end arrived, and the composing loop by binary and, where it is a file, path and digest.
 `Composer` is this crate's spelling of the loop's identity because the record's own is
-`weaver-trace`'s and the floor links downward only. `AgentSummary` carries the same
-`load` beside its name and state, so `list` answers for every admitted agent in one ask,
-per issue #435.
+`weaver-trace`'s and the floor links downward only.
 
 ### 4.3 The encoding
 
@@ -2225,8 +2220,8 @@ the claim divides are both open and section 6 carries them together.
 - **`SessionId`, `RunId`, `TurnKey`, `AgentName`, and `FieldName`.** Named in the
   signatures above and shaped in this crate, their representations being
   identifier choices with no cross-crate consequence.
-- **`AgentState` and `AgentSummary`, whose case sets are not free.** Their Rust
-  representations are this crate's, but they ride a `lifecycle-answer` out of
+- **`AgentState`, whose case set is not free.** Its Rust
+  representation is this crate's, but it rides a `lifecycle-answer` out of
   admin's invocation, so what an operator can be told about an agent is exactly
   what these enumerate. The lifecycle's four states, per apex section 6, are the
   floor of that set, and whether it carries more is settled with the operator

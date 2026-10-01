@@ -18,18 +18,20 @@ quarter of 2027.
 
 ## What it is
 
-**The fleet's lifecycle driver, run by the operator with root.** One crate,
-many agents, and it is a constituent organ of none of them. Two facts put
+**One agent's lifecycle driver and management plane, run by the operator with
+root.** One crate, one agent, and a constituent organ of that agent - its
+management plane, beside the gate as its data plane. Managing several agents
+belongs to WeaverWeb or a separate application, not here. Two facts put
 lifecycle here: an engine cannot drive the early steps of its own creation,
 because the worker spawn runs before the engine exists at all - and the acts a
 verb performs, starting a unit under another identity, opening a sink the
 agent could not, are root's acts, belonging to the one seat that holds root.
 
-It is not a control plane, and a reader expecting a daemon should spend that
-assumption here. The crate is an invocation rather than a resident: it runs
+It is not a daemon, and a reader expecting one should spend that assumption
+here. The crate is an invocation rather than a resident: it runs
 when the operator runs a verb, exits when the verb answers, and holds nothing
 between verbs. What persists across invocations is what the init system and
-the filesystem already hold - the standing party in every agent's lifetime is
+the filesystem already hold - the standing party in the agent's lifetime is
 the init system, which this program inherits rather than shadows.
 
 **It verifies the agent's boundary and authors none of it.** The regulation
@@ -46,9 +48,9 @@ property it only confirms.
 ## What it owns
 
 **Authorization of lifecycle intent.** Whether this operator may run this verb
-against this agent - settled before anything is touched, the agent named on an
-allow-list as a name rather than a path, and a refusal leaving the system
-exactly as it found it.
+against this agent - settled before anything is touched, the agent named as a
+name rather than a path and admitted by its own root-owned configuration root
+existing, and a refusal leaving the system exactly as it found it.
 
 **Verification of the boundary.** The identity resolves, the home directory
 exists with the ownership and modes a load requires, and the record's
@@ -73,9 +75,10 @@ whose invocation was interrupted has no reader otherwise, so admin keeps its
 own file, as its sole author. **It records acts of the supervisor and never
 conduct of the supervised** - the moment it carried a fact about what an agent
 did, it would be a second record of the agent with a second author, which is
-the arrangement the record's single writer exists to prevent. It is
-fleet-scoped, owned by root, and the agent's identity is excluded twice over -
-neither owner nor group, and the directory withholds the search bit.
+the arrangement the record's single writer exists to prevent. It is the
+agent's own, one log per agent, owned by root, and the agent's identity is
+excluded twice over - neither owner nor group, and the directory withholds the
+search bit.
 
 ## Seams
 
@@ -92,7 +95,8 @@ outlives every invocation. All three are on
 **A load, in order - and the order is the substance.**
 
 1. **Authorize the intent.** The invocation runs as root or performs nothing,
-   so what remains to authorize is the name against the allow-list.
+   so what remains to authorize is the name, and the agent's own
+   configuration root existing is its admission.
 2. **Validate the declaration.** Before any process exists.
 3. **Verify the boundary the operator wrote.** Refuse or proceed - never
    repair.
@@ -131,9 +135,9 @@ compiled in.
 
 **The turn, in any part.** No prompt, turn, task, or run enters through this
 crate. The line is stated in its live form because the operator surface is
-where it will be tested: reporting state, listing agents, and driving a verb
-are in bounds - carrying a prompt to a loaded agent is out, however convenient
-a menu makes it.
+where it will be tested: reporting state and driving a verb are in bounds -
+carrying a prompt to a loaded agent is out, however convenient a menu makes
+it.
 
 **Provisioning, in every part.** It creates no principal, changes no
 ownership, and edits no account.
@@ -162,7 +166,7 @@ good, over any artifact it touches.
 
 ## What is not built
 
-- **The status ask.** `show` and `list` refuse today: the init system reports
+- **The status ask.** `show` refuses today: the init system reports
   three unit values and the lifecycle has four agent states, and a translation
   between them is where invention would enter. The observation exchange
   retires the refusal when it lands.

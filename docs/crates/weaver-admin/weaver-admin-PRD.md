@@ -31,17 +31,20 @@ neither.
 
 ## 1. What this crate is
 
-**The fleet's lifecycle driver, run by the operator with root.** One crate, many
-agents, and it is not a constituent organ of any of them. Two facts put lifecycle
-here. A harness cannot drive the early steps of its own creation, because the worker
-spawn runs before the harness is running as the harness at all. And the acts a
+**One agent's lifecycle driver and management plane, run by the operator with root.**
+One crate, one agent: admin is a constituent organ of the agent it drives, its
+management plane beside `weaver-gate` as its data plane, per the operator's ruling of
+2026-10-01. Managing several agents is not this crate's and belongs to WeaverWeb or a
+separate application, which drives each agent through its own admin. Two facts put
+lifecycle here. A harness cannot drive the early steps of its own creation, because the
+worker spawn runs before the harness is running as the harness at all. And the acts a
 lifecycle verb performs, starting a unit under another identity, opening a sink the
-agent could not, are root's acts, so they belong to the one seat that holds root,
-which is the operator in the admin role, per section 7. The crate is an invocation
-rather than a resident: it runs when the operator runs a verb, exits when the verb
-answers, holds nothing between verbs, and what persists across invocations is what
-the init system and the filesystem already hold. The standing party in every agent's
-lifetime is the init system, which this program inherits rather than shadows.
+agent could not, are root's acts, so they belong to the one seat that holds root, which
+is the operator in the admin role, per section 7. The crate is an invocation rather than
+a resident: it runs when the operator runs a verb, exits when the verb answers, holds
+nothing between verbs, and what persists across invocations is what the init system and
+the filesystem already hold. The standing party in the agent's lifetime is the init
+system, which this program inherits rather than shadows.
 
 ```graph
 node: weaver-admin
@@ -249,14 +252,14 @@ because deferring a format is not a reason to leave the sole record of the privi
 half of the lifecycle invisible to it.
 
 **Custody, stated because every other artifact in this corpus has its access argued.**
-The log is owned by root, mode 0640, in a root-owned directory at mode 0750. It is
-fleet-scoped rather than per-agent and it never lands inside an agent home, which is
-the load-bearing half. The named adversary is the agent uid, and it is excluded
-twice over: it is neither owner nor group, and the directory's missing search bit
-means it cannot reach the file to try. An agent that could read this file would read
-the record of its own supervision, which is the same class of hole the trace
-directory's search bit exists to close. The operator reads it as root, the same seat
-that wrote it, per section 7.
+The log is owned by root, mode 0640, in a root-owned directory at mode 0750. It is the
+agent's own, one log per agent at the path its configuration root names, and it never
+lands inside an agent home, which is the load-bearing half. The named adversary is the
+agent uid, and it is excluded twice over: it is neither owner nor group, and the
+directory's missing search bit means it cannot reach the file to try. An agent that
+could read this file would read the record of its own supervision, which is the same
+class of hole the trace directory's search bit exists to close. The operator reads it as
+root, the same seat that wrote it, per section 7.
 
 **The stream's sink and this log are secured against the agent and against nothing
 stronger, and the party that concerns is the operator.** Custody is exclusion of
@@ -288,7 +291,7 @@ any artifact it touches.
 **The turn, in any part.** No prompt, turn, task, or run enters through this crate,
 per apex section 6. The line is worth stating in its live form rather than its
 abstract one, because the operator-facing surface of section 8 is where it will be
-tested: reporting an agent's state, listing agents, and driving a verb are in bounds,
+tested: reporting the agent's state and driving a verb are in bounds,
 and carrying a prompt to a loaded agent is out however convenient a menu makes it.
 
 **Activity control's mechanics.** The abort of a turn belongs to the harness and
@@ -405,8 +408,10 @@ order is the substance.
 
 1. **Authorize the intent.** The invocation runs as root or performs nothing, the
    kernel having already settled who may act, so what remains to authorize is the
-   name: the agent is on the operator's allow-list and shaped as a name rather than
-   a path, or the verb refuses without touching anything else.
+   name: it is shaped as a name rather than a path, and the agent's own
+   configuration root the operator wrote exists under the base directory, root-owned
+   and writable by no one else, or the verb refuses without touching anything else.
+   The root existing is the admission, and no list of agents exists to consult.
 2. **Read and validate the agent's configuration file.** A file that is absent, that
    is missing a required field, or that leaves the model binding's artifact unnamed
    fails the load before any process exists. Whether the artifact it names resolves
@@ -789,8 +794,8 @@ never an AI or an automation.** That is a statement about what this program is
 designed for and **not a guarantee about conduct** - assuming the role does not
 make its holder careful, and nothing here prevents a human from doing something
 unwise inside the bound they hold. What it fixes is who occupies the seat, so
-scripted fleet management or an agent driving the fleet is a **new role with its
-own ruling** rather than a quiet reuse of this one.
+scripted management of agents, or an agent driving another agent's admin, is a
+**new role with its own ruling** rather than a quiet reuse of this one.
 
 **The crate is the lifecycle tool the role runs.** One binary, run with root, one
 invocation per verb, exiting when the verb answers. It holds a two-initiator channel
@@ -883,9 +888,9 @@ it runs, one invocation per verb. Admin still chowns nothing, creates no account
 and provisions nothing, because those stayed operator acts under every reading.
 
 **The name-validation discipline survives the grant it was written for.** The
-agent name is validated against the operator's allow-list and shaped as a bare
-name before it reaches a filesystem path or a unit invocation, and the paths are
-constructed by the crate rather than accepted from anywhere. A name that
+agent name is validated as a bare name before it reaches a filesystem path or a
+unit invocation, admission is the agent's own root-owned configuration root, and the
+paths are constructed by the crate rather than accepted from anywhere. A name that
 traverses is a defect whatever principal runs the verb, so the discipline stands
 on its own ground now that no policy file exists to be gotten wrong.
 
@@ -939,17 +944,18 @@ a constraint rather than rediscovered.
 
 **The operator interface is the invocation itself.** The role of section 7 runs the
 crate with root: a verb and an agent name in, a typed answer or a typed
-`lifecycle-refusal` out, the exit status agreeing with the answer. It reports state,
-lists agents, drives the three verbs, and conveys the operator's intent to stop
-across the contract's stop exchange. It carries no work, per section 3. The socket,
-the group, and the peer-credential check the earlier form of this section carried
-retired with the recut of 2026-08-05: a surface that authenticated the operator to a
-service has no subject when the operator is root running the tool, the kernel having
-settled who may execute it. What state an agent is in between invocations is the
-init system's answer, which `list` and `show` consult rather than shadow. The
-trace's exit remains the contracted external boundary, governed by
-`weaver-admin-operator-contract`, which the recut narrows to that boundary: the
-stream that crosses out, its sink shapes, and the custody either side may rely on.
+`lifecycle-refusal` out, the exit status agreeing with the answer. It reports the
+agent's state, drives the three verbs, and conveys the operator's intent to stop across
+the contract's stop exchange. It answers for the one agent it is invoked for and lists
+no others, since there are no others in its domain. It carries no work, per section 3.
+The socket, the group, and the peer-credential check the earlier form of this section
+carried retired with the recut of 2026-08-05: a surface that authenticated the operator
+to a service has no subject when the operator is root running the tool, the kernel
+having settled who may execute it. What state an agent is in between invocations is the
+init system's answer, which `show` consults rather than shadows. The trace's exit
+remains the contracted external boundary, governed by `weaver-admin-operator-contract`,
+which the recut narrows to that boundary: the stream that crosses out, its sink shapes,
+and the custody either side may rely on.
 
 **Reading and analysis of finished records is not this crate's, and not this
 repository's.** An earlier reading named `weaver-admin-tools` a member of this domain,
@@ -964,8 +970,10 @@ thing this charter bounds, which describes none of it.
 would be built on, and any indexed query over history. Each is a consumer of the
 operator-held record on the terms `weaver-trace` publishes, which is what
 contract-coupled means here, and none is staged work in section 9, because staged
-work is work this crate will later do. Multi-agent management through the operator
-interface stays, since it drives verbs rather than reading records.
+work is work this crate will later do. **Multi-agent management leaves too**, per
+the operator's ruling of 2026-10-01: admin is one agent's organ, so a view across
+several agents, and driving their verbs together, belong to WeaverWeb or a separate
+application that invokes each agent's admin, and this crate keeps no list of agents.
 
 **Admin reads nothing of the record at all, as of 2026-08-01.** The manifest this
 paragraph once held open dissolved with the program-owned record, per the ruling
