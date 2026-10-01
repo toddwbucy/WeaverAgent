@@ -1196,8 +1196,34 @@ fn load_service_config_at(
         Ok(declaration) if declaration.is_file() => {}
         _ => return Err(LifecycleRefusal::NoSuchAgent),
     }
+    judge_entries(&root, owner)?;
     load_service_config_from(&root, agent)
         .map_err(|_| LifecycleRefusal::ConfigInvalid { field: None })
+}
+
+/// **Every entry of the root is closed as the root is**, per Spec section 9: a
+/// regular file, never a link, held by `owner`, and writable by no group or other.
+/// The values name programs this invocation runs as root, `run-tool` and
+/// `control-tool` among them, so a key another principal could rewrite, or a link
+/// to a file it holds, would hand that principal root; the directory's own mode
+/// does not stop a file inside it being writable, nor a link leading out.
+/// Anything else stands refuses the whole root `BoundaryUnverified`, the look
+/// failing included.
+fn judge_entries(root: &std::path::Path, owner: u32) -> Result<(), LifecycleRefusal> {
+    use std::os::unix::fs::MetadataExt;
+    let entries = std::fs::read_dir(root).map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
+    for entry in entries {
+        let entry = entry.map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
+        let metadata = std::fs::symlink_metadata(entry.path())
+            .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
+        if !metadata.file_type().is_file()
+            || metadata.uid() != owner
+            || metadata.mode() & 0o022 != 0
+        {
+            return Err(LifecycleRefusal::BoundaryUnverified);
+        }
+    }
+    Ok(())
 }
 
 /// **The agent's root is admitted only as a directory `owner` holds that no
@@ -1672,6 +1698,62 @@ mod tests {
         std::fs::write(root.join("agent.toml"), "").unwrap();
         let config = load_service_config_at(&base, "alpha", me).expect("a declared root reads");
         assert_eq!(config.agent, "alpha");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **Every key is closed as the root is.** A key a group or the world may
+    /// write, a key that is a link, and a directory inside the root each refuse
+    /// `BoundaryUnverified`; a root of closed files reads. Codex on #45, round 7:
+    /// the directory's own mode let a writable `run-tool` name the program admin
+    /// runs as root. Perturbation: drop `judge_entries`, and each case reads.
+    #[test]
+    fn every_key_of_the_root_is_closed() {
+        use std::os::unix::fs::PermissionsExt;
+        let me = nix::unistd::getuid().as_raw();
+        let base = std::env::temp_dir().join(format!("weaver-admin-keys-{}", std::process::id()));
+        let fresh = || {
+            let _ = std::fs::remove_dir_all(&base);
+            let root = base.join("alpha");
+            write_root(&root);
+            std::fs::write(root.join("agent.toml"), "").unwrap();
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+            for entry in std::fs::read_dir(&root).unwrap() {
+                let path = entry.unwrap().path();
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            }
+            root
+        };
+        let root = fresh();
+        assert!(
+            load_service_config_at(&base, "alpha", me).is_ok(),
+            "a closed root reads"
+        );
+        std::fs::set_permissions(
+            root.join("run-tool"),
+            std::fs::Permissions::from_mode(0o666),
+        )
+        .unwrap();
+        assert_eq!(
+            load_service_config_at(&base, "alpha", me).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a world-writable key"
+        );
+        let root = fresh();
+        std::fs::remove_file(root.join("control-tool")).unwrap();
+        std::fs::write(base.join("elsewhere"), "/usr/bin/systemctl").unwrap();
+        std::os::unix::fs::symlink(base.join("elsewhere"), root.join("control-tool")).unwrap();
+        assert_eq!(
+            load_service_config_at(&base, "alpha", me).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a key that is a link"
+        );
+        let root = fresh();
+        std::fs::create_dir(root.join("stray")).unwrap();
+        assert_eq!(
+            load_service_config_at(&base, "alpha", me).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a directory inside the root"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 

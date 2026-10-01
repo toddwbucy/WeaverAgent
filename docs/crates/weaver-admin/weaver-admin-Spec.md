@@ -1718,8 +1718,12 @@ at the root itself. **The root must be root's and closed to every other writer**
 by uid 0 and neither group- nor world-writable, or the invocation refuses
 `BoundaryUnverified` before a value is read, since what the root names runs under the
 agent's identity and a root another principal could write would hand that principal the
-agent. Every value below is read from the root before any verb, and a value that fails
-to read fails the invocation as `ConfigInvalid` with no field.
+agent. **Every entry of the root is held closed the same way**: a regular file, never a
+link, owned by uid 0 and writable by no group or other, or the invocation refuses
+`BoundaryUnverified`, since the values name programs this invocation runs as root and a
+directory's own mode stops neither a writable file inside it nor a link leading out. Every
+value below is read from the root before any verb, and a value that fails to read fails
+the invocation as `ConfigInvalid` with no field.
 
 **The root holds one file per key.** Required: `worker-binary`, `spu-binary`,
 `gate-binary`, `run-tool`, `control-tool`, `coordination-root` and `log-path`.
