@@ -11,7 +11,12 @@
 # - a **key root** is any directory under `/etc/weaver` holding a
 #   `worker-binary`: an agent's root `<base>/<agent>/`, the stack record
 #   `/etc/weaver/stack/`, or the box-wide configuration of the layout before
-#   2026-10-01. A directory holding an `allow-list` is one too.
+#   2026-10-01. A directory holding an `allow-list` is one too. **The two
+#   overrides the other scripts read are read here too**: an admin base named
+#   by `WEAVER_ADMIN_CONFIG` and a stack record named by `WEAVER_STACK_RECORD`
+#   outside `/etc/weaver` are discovered, archived and purged with it, so a
+#   purge leaves no record behind for the next bootstrap to refuse over. Run
+#   with the same values the install ran with: `sudo WEAVER_STACK_RECORD=...`.
 # - the **agents** are the names of the agent roots (a key root two levels
 #   down, under a base), every old allow-list's names, and every declaration
 #   in an old `agent-config-directory`. An account is never the source of an
@@ -81,6 +86,10 @@ plan "mode      $MODE"
 plan "archive   ${DEST:-(named at --archive)}"
 
 ETC=/etc/weaver
+ADMIN_BASE=${WEAVER_ADMIN_CONFIG:-$ETC/admin}
+STACK=${WEAVER_STACK_RECORD:-$ETC/stack}
+# Whether a path stands outside /etc/weaver, which is archived whole.
+outside_etc() { case "$1" in "$ETC"|"$ETC"/*) return 1 ;; *) return 0 ;; esac; }
 read_key() { cat "$1/$2" 2>/dev/null || true; }
 AGENT_NAME='^[A-Za-z0-9_-]+$'
 
@@ -88,12 +97,17 @@ AGENT_NAME='^[A-Za-z0-9_-]+$'
 # holding a `worker-binary` or an `allow-list`.
 CONFIG_ROOTS=()
 AGENT_ROOTS=()
-for d in "$ETC"/*/ "$ETC"/*/*/; do
+OUTSIDE=()
+outside_etc "$ADMIN_BASE" && OUTSIDE+=("$ADMIN_BASE"/*/)
+outside_etc "$STACK" && OUTSIDE+=("$STACK/")
+for d in "$ETC"/*/ "$ETC"/*/*/ "${OUTSIDE[@]}"; do
   d=${d%/}
   if [ -d "$d" ] && [ ! -L "$d" ] && { [ -f "$d/worker-binary" ] || [ -f "$d/allow-list" ]; }; then
     CONFIG_ROOTS+=("$d")
-    # Two levels down is an agent's root under a base.
-    if [ "${d%/*/*}" = "$ETC" ] && [[ "${d##*/}" =~ $AGENT_NAME ]]; then
+    # Two levels down is an agent's root under a base, and so is a root
+    # directly under an admin base named outside /etc/weaver.
+    if { [ "${d%/*/*}" = "$ETC" ] || [ "${d%/*}" = "$ADMIN_BASE" ]; } && [ "$d" != "$STACK" ] \
+        && [[ "${d##*/}" =~ $AGENT_NAME ]]; then
       AGENT_ROOTS+=("$d")
     fi
   fi
@@ -404,6 +418,8 @@ if [ "$MODE" = archive ]; then
   }
 
   [ -d /etc/weaver ] && archive_path etc-weaver /etc/weaver
+  if outside_etc "$ADMIN_BASE" && [ -d "$ADMIN_BASE" ]; then archive_path admin-base "$ADMIN_BASE"; fi
+  if outside_etc "$STACK" && [ -d "$STACK" ]; then archive_path stack-record "$STACK"; fi
   [ ${#LDSO_CONFS[@]} -gt 0 ] && archive_path ld-so-conf "${LDSO_CONFS[@]}"
   for p in "${!PREFIXES[@]}"; do
     n=$(basename "$p")
