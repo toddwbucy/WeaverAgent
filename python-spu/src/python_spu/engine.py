@@ -261,6 +261,23 @@ def sidecar_dir_of(fd):
     try: return Path(os.readlink(f'/proc/self/fd/{fd}')).parent
     except OSError: return None
 
+U32_MAX=2**32-1
+
+def read_eos(declared):
+    """weaver-spu decoder/native.rs `read_eos`, ported over the declaration already
+    read: `eos_token_id` as a scalar, or the first of a list, each as serde_json's
+    `as_u64` takes it, so a bool, a float, a negative and an integer past u64 are no
+    id. None declared refuses, as does one past the wire's u32 token width, never
+    truncated into another token. Both are the native load's `LoadFailed`,
+    `device_cannot_admit`."""
+    eos=declared.get('eos_token_id') if isinstance(declared,dict) else None
+    def as_u64(value): return value if type(value) is int and 0<=value<=U64_MAX else None
+    found=as_u64(eos)
+    if found is None and isinstance(eos,list) and eos: found=as_u64(eos[0])
+    if found is None: raise AdmissionError('device_cannot_admit','config.json: no eos_token_id declared')
+    if found>U32_MAX: raise AdmissionError('device_cannot_admit',f'config.json: eos_token_id {found} exceeds the token width')
+    return found
+
 def load_dir(fd):
     """weaver-spu decoder/native.rs `sidecar_dir`, ported: the pinned container's
     directory as the kernel names it, or where the link does not read, the parent of
@@ -458,6 +475,9 @@ class HFEngine:
             if getattr(config,'quantization_config',None):
                 raise AdmissionError('device_cannot_admit','quantized artifacts unsupported')
             self.max_context=config.max_position_embeddings
+            # `read_eos`, after `read_config` and before the tokenizer, as the native
+            # load orders them.
+            self.declared_eos=read_eos(declared)
             self.tokenizer=Tokenizer.from_file(str(beside/'tokenizer.json'))
             self.terminator=self.tokenizer.token_to_id('<|im_end|>')
             # This build's own judgment, the renderer's markers each one token.

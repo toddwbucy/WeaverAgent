@@ -308,3 +308,45 @@ def test_the_load_reads_its_sidecars_beside_the_pinned_container(tiny_model, tmp
         assert loaded.layers == 2 and loaded.terminator == 2
     finally:
         loaded.close()
+
+
+@pytest.mark.parametrize("declared,want", [
+    ({"eos_token_id": 2}, 2),
+    ({"eos_token_id": [7, 2]}, 7),
+    ({"eos_token_id": 2**32 - 1}, 2**32 - 1),
+    ({}, "no eos_token_id"),
+    ({"eos_token_id": None}, "no eos_token_id"),
+    ({"eos_token_id": True}, "no eos_token_id"),
+    ({"eos_token_id": 2.0}, "no eos_token_id"),
+    ({"eos_token_id": -1}, "no eos_token_id"),
+    ({"eos_token_id": []}, "no eos_token_id"),
+    ({"eos_token_id": ["2"]}, "no eos_token_id"),
+    ({"eos_token_id": 2**64}, "no eos_token_id"),
+    ({"eos_token_id": 2**32}, "exceeds the token width"),
+])
+def test_the_declared_eos_is_read_as_the_native_load_reads_it(declared, want):
+    """weaver-spu decoder/native.rs `read_eos`: a scalar or a list's first, each by
+    serde_json's `as_u64`, refused where none is declared or one is past u32, both
+    `device_cannot_admit`. Found by Codex on #47. Perturbations: take any int (a bool
+    and a negative read as ids), or cast past the width, and a case here differs."""
+    if isinstance(want, int):
+        assert engine.read_eos(declared) == want
+    else:
+        with pytest.raises(AdmissionError) as refused:
+            engine.read_eos(declared)
+        assert refused.value.kind == "device_cannot_admit" and want in str(refused.value)
+
+
+def test_a_load_whose_config_declares_no_eos_refuses(tiny_model, tmp_path):
+    """The load step reads the declared eos, so an artifact declaring none is refused
+    `device_cannot_admit`, as the native load's `LoadFailed`, where transformers would
+    admit it on the tokenizer alone. Perturbation: drop the `read_eos` call, and it
+    loads."""
+    root = tmp_path / "artifact"
+    shutil.copytree(tiny_model, root)
+    declared = json.loads((root / "config.json").read_text())
+    declared.pop("eos_token_id")
+    (root / "config.json").write_text(json.dumps(declared))
+    with pytest.raises(AdmissionError) as refused:
+        engine.HFEngine(root, [0], cpu=True)
+    assert refused.value.kind == "device_cannot_admit" and "eos_token_id" in str(refused.value)

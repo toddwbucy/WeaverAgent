@@ -256,7 +256,7 @@ seam.
 | load | `load`: `BackendNotBuilt` for a GGUF container or a file reference this build does not serve | the same | `device_cannot_admit` |
 | | native `load`: more devices than it serves; `read_declaration` of `config.json` in `sidecar_dir`, the pinned container's directory, every sidecar of the load read there | one device; `strict_json` of `config.json` in `load_dir`, as are `AutoConfig` and `tokenizer.json` | `device_cannot_admit` |
 | | native `judge_family` on the declaration's `model_type`: `BackendDoesNotServe` | `same_key` against `qwen2` | `artifact_unreadable` |
-| | native `read_config`, `read_eos`, the tokenizer, the weights (`VarBuilder`, `ModelForCausalLM::new`, a tensor missing among them) | `AutoConfig`, a quantized config, `Tokenizer.from_file`, the model with its missing keys refused, placement, out of memory | `device_cannot_admit` |
+| | native `read_config`, `read_eos`, the tokenizer, the weights (`VarBuilder`, `ModelForCausalLM::new`, a tensor missing among them) | `AutoConfig` and a quantized config (candle's strict parse of `read_config`'s required fields is not yet mirrored: `AutoConfig` defaults a missing field, #25), `read_eos`, `Tokenizer.from_file`, the model with its missing keys refused, placement, out of memory | `device_cannot_admit` |
 
 Two judgments are this build's own and sit at the load: its renderer's markers each
 promote to one token, refused `artifact_unreadable` (the Rust SPU meets an unpromoted
