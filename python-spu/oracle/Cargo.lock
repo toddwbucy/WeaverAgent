@@ -1518,7 +1518,7 @@ dependencies = [
 [[package]]
 name = "weaver-spu"
 version = "0.1.0"
-source = "git+https://github.com/toddwbucy/WeaverTools?rev=f22bf08f1cc3545c561dc4471215aa322c751128#f22bf08f1cc3545c561dc4471215aa322c751128"
+source = "git+https://github.com/toddwbucy/WeaverTools-old2?rev=f22bf08f1cc3545c561dc4471215aa322c751128#f22bf08f1cc3545c561dc4471215aa322c751128"
 dependencies = [
  "blake3",
  "bytemuck",
@@ -1536,7 +1536,7 @@ dependencies = [
 [[package]]
 name = "weaver-traits"
 version = "0.1.0"
-source = "git+https://github.com/toddwbucy/WeaverTools?rev=f22bf08f1cc3545c561dc4471215aa322c751128#f22bf08f1cc3545c561dc4471215aa322c751128"
+source = "git+https://github.com/toddwbucy/WeaverTools-old2?rev=f22bf08f1cc3545c561dc4471215aa322c751128#f22bf08f1cc3545c561dc4471215aa322c751128"
 dependencies = [
  "serde",
 ]
@@ -1544,7 +1544,7 @@ dependencies = [
 [[package]]
 name = "weaver-types"
 version = "0.1.0"
-source = "git+https://github.com/toddwbucy/WeaverTools?rev=f22bf08f1cc3545c561dc4471215aa322c751128#f22bf08f1cc3545c561dc4471215aa322c751128"
+source = "git+https://github.com/toddwbucy/WeaverTools-old2?rev=f22bf08f1cc3545c561dc4471215aa322c751128#f22bf08f1cc3545c561dc4471215aa322c751128"
 dependencies = [
  "serde",
  "serde_json",
