@@ -203,7 +203,7 @@ def test_the_engine_judges_room_before_the_load_with_the_headroom_it_was_given(t
     a_device["free"] = shard + 4096
     with pytest.raises(AdmissionError) as caught:
         engine.HFEngine(tiny_model, [0], headroom=4096)
-    assert (caught.value.kind, str(caught.value)) == ("artifact_unreadable", "reached the load")
+    assert (caught.value.kind, str(caught.value)) == ("device_cannot_admit", "load: reached the load")
 
 
 def test_a_refusal_before_the_load_touches_no_device(tiny_model, a_device, monkeypatch):
@@ -352,7 +352,9 @@ def test_a_gguf_resolves_and_python_spu_refuses_it(tmp_path):
     assert engine.containers(root) == [root / "model.gguf"]
     with pytest.raises(AdmissionError) as caught:
         engine.HFEngine(root, [0], cpu=True)
-    assert (caught.value.kind, str(caught.value)) == ("artifact_unreadable", "safetensors required")
+    # The fixture's bytes are no GGUF header, which the Rust SPU refuses unreadable at
+    # step two before any backend answers; tests/test_load_kinds.py walks the header.
+    assert caught.value.kind == "artifact_unreadable"
 
 
 # The determinism environment, python-spu-Spec section 8.
@@ -528,7 +530,7 @@ def test_the_size_is_the_pinned_files_not_the_names(artifact, a_device, monkeypa
     a_device["free"] = pinned_bytes + 1024
     with pytest.raises(AdmissionError) as caught:
         engine.HFEngine(root, [0], headroom=1024)
-    assert (caught.value.kind, str(caught.value)) == ("artifact_unreadable", "reached the load")
+    assert (caught.value.kind, str(caught.value)) == ("device_cannot_admit", "load: reached the load")
 
 
 def test_a_pinned_container_the_walk_does_not_meet_is_refused(artifact, monkeypatch):
@@ -556,12 +558,22 @@ def test_the_pins_are_closed_on_every_path(artifact, monkeypatch):
 def test_a_symlinked_container_admits_and_hashes_as_the_rust_does(artifact, oracle):
     """hash_canonical does not follow links, so a container reached through one is left
     out of the digest, the pin still serving its load, which is #25's symlinked-member
-    item. Perturbation: refuse every pinned container the walk does not meet, and this
-    refuses."""
+    item. The sidecars are the link target's, artifact.rs `sidecar_dir_of`, so the
+    target's directory holds them, and a target standing alone, no `config.json` beside
+    it, refuses on both sides at the header (Codex on #47). Perturbation: refuse every
+    pinned container the walk does not meet, and this refuses."""
     root, _ = artifact
-    blob = root.parent / "blob.safetensors"
-    os.replace(root / "model.safetensors", blob)
-    (root / "model.safetensors").symlink_to(blob)
+    store = root.parent / "store"
+    store.mkdir()
+    os.replace(root / "model.safetensors", store / "model.safetensors")
+    (root / "model.safetensors").symlink_to(store / "model.safetensors")
+    with pytest.raises(AdmissionError) as refused:
+        engine.HFEngine(root, [0], cpu=True)
+    assert refused.value.kind == "artifact_unreadable", refused.value
+    assert oracle(op="header", path=str(root)) == {"error": "ArtifactUnreadable"}
+    for name in os.listdir(root):
+        if name != "model.safetensors":
+            shutil.copy(root / name, store / name)
     served = engine.HFEngine(root, [0], cpu=True)
     try:
         assert oracle(op="weights_hash", path=str(root)) == {"ok": served.weights_hash}
@@ -598,6 +610,7 @@ def test_a_move_that_fails_part_way_is_unreachable_before_the_cache_is_freed(tin
     monkeypatch.setattr(torch.cuda, "device", lambda device: contextlib.nullcontext())
     with pytest.raises(AdmissionError) as caught:
         engine.HFEngine(tiny_model, [0])
-    assert caught.value.kind == "artifact_unreadable"
+    # The move is placement, step four, which crosses as the Rust `LoadFailed` does.
+    assert caught.value.kind == "device_cannot_admit"
     assert caught.value.__cause__ is None and caught.value.__context__ is None
     assert seen == [True]
