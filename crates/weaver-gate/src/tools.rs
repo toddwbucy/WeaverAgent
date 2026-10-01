@@ -89,9 +89,9 @@ fn execute_inner(
         });
     };
     // The home comes from the account database rather than from the
-    // environment: the organ fan-out execs with an empty environment on
-    // purpose, and the account database is where the uid's home is a fact
-    // rather than an inheritance.
+    // environment: the gate inherits the agent's environment, which may or
+    // may not carry `HOME`, and the account database is where the uid's home
+    // is a fact rather than an inheritance.
     let Some(home) = nix::unistd::User::from_uid(nix::unistd::getuid())
         .ok()
         .flatten()
@@ -158,8 +158,12 @@ fn run_in_home(
         .arg("-c")
         .arg(command)
         .current_dir(home)
-        // The gate's own environment is deliberately empty; the command
-        // still deserves to know where it lives.
+        // **The command starts with `HOME` and nothing else**, as it did when
+        // the gate itself ran with an empty environment. The gate now carries
+        // the agent's environment, per `weaver-harness-Spec` section 2.2, and
+        // the operator's ruling of 2026-10-01 reaches organs, not the commands
+        // a tool runs, so the clear keeps that surface where it stood.
+        .env_clear()
         .env("HOME", home)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -437,6 +441,32 @@ mod tests {
                 sender.send(()).unwrap();
             }
         });
+    }
+
+    /// **A tool's command does not see the gate's environment.** The gate
+    /// inherits the agent's, and the command is handed `HOME` alone. The
+    /// probe is a variable cargo sets on the test process.
+    ///
+    /// Perturbation: drop the `env_clear` and the command prints the value.
+    #[test]
+    fn a_command_sees_home_and_not_the_gates_environment() {
+        assert!(
+            std::env::var_os("CARGO_PKG_NAME").is_some(),
+            "cargo sets it"
+        );
+        let outcome = execute(&ToolExecution {
+            name: ToolName(SHELL_NAME.into()),
+            arguments:
+                r#"{"command":"printf '%s|%s' \"${CARGO_PKG_NAME-unset}\" \"${HOME:+home}\""}"#
+                    .into(),
+            clock_ms: 2_000,
+        });
+        assert_eq!(
+            outcome,
+            ToolOutcome::Result {
+                content: "unset|home".into()
+            }
+        );
     }
 
     /// conforms: gate-execution-cancel-brings-the-clock-forward

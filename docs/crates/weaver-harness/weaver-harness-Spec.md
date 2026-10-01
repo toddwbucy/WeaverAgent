@@ -559,16 +559,20 @@ to: harness-fork-to-exec-three-calls
 ```
 
 **The organ's argv carries the construction parameters its composition root is
-owed, and the environment stays empty.** The exec passes an empty `envp`, so an
-organ inherits no variable from the worker and is told what it needs by the
-descriptors it is handed and by this vector, and by nothing else.
+owed, and its environment is the worker's.** The exec passes the worker's
+environment as `envp`, on the operator's ruling of 2026-10-01: an organ starts as
+the agent is constituted, never empty. The agent is the service and each organ one
+of its components, the worker's environment is the agent's unit as admin
+configured it, `unit-properties` `Environment=` included, and an organ exec'd with
+less is a component the agent was never configured to be. The environment is read
+and its array built in the parent before the fork, as the vector below is.
 
-**Passing the worker's environment instead is refused rather than overlooked.**
-An environment crosses wholesale or not at all, so a value would reach an organ
-because the worker happened to be holding it rather than because an act wrote it
-down, and what an organ was told would then depend on how the worker was
-started. Argv names each parameter at the call site, where the act that added it
-is the act that can be read.
+**The environment is the agent's, and argv stays the route for what an organ's
+composition root is owed.** A parameter this crate hands an organ is named on the
+vector at the call site, where the act that added it is the act that can be read.
+A variable reaches an organ because the operator wrote it into the agent's unit, so
+what the environment carries is the operator's declaration and not a value this
+crate chose to pass.
 
 **What travels here is a host's fact and not an agent's.** A number two agents
 sharing this host cannot sensibly disagree about belongs on this vector, the
@@ -580,9 +584,9 @@ The distinction is worth stating because both routes end at the same composition
 root and a parameter on the wrong one is not visibly wrong from inside it.
 
 **The bound above is untouched by this and the reason is where the work
-happens.** Every argument is a `CString` built in the parent before the fork,
-the way the program name already is, so the vector the child hands `execve` is
-finished before the child exists. The child performs the same three calls. A
+happens.** Every argument and every pair of the environment is a `CString` built
+in the parent before the fork, the way the program name already is, so the
+vectors the child hands `execve` are finished before the child exists. The child performs the same three calls. A
 parameter that could only be assembled after the fork would not be expressible
 here, which is a constraint on what may travel this way rather than a cost.
 
