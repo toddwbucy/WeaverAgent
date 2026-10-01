@@ -626,6 +626,9 @@ class DecommissionLayoutTests(unittest.TestCase):
         script = (DEPLOY / "decommission.sh").read_text()
         script = script.replace("ETC=/etc/weaver\n", f"ETC={self.etc}\n", 1)
         script = script.replace('[ "$(id -u)" -eq 0 ] ||', ": ||", 1)
+        # The box's own store is never reached from a test.
+        script = script.replace("if systemctl is-active --quiet postgresql 2>/dev/null; then",
+                                "if false; then")
         self.script = self.tmp / "decommission.sh"
         self.script.write_text(script)
 
@@ -637,9 +640,9 @@ class DecommissionLayoutTests(unittest.TestCase):
         for key in keys:
             (path / key).write_text("/opt/x/bin/weaver-worker\n" if key == "worker-binary" else "\n")
 
-    def run_archive(self):
+    def run_archive(self, admin=None):
         self.dest.mkdir(exist_ok=True)
-        env = {**os.environ, "WEAVER_ADMIN_CONFIG": str(self.etc / "admin"),
+        env = {**os.environ, "WEAVER_ADMIN_CONFIG": str(admin or self.etc / "admin"),
                "WEAVER_STACK_RECORD": str(self.etc / "stack")}
         return subprocess.run(["bash", str(self.script), "--archive", str(self.dest)],
                               capture_output=True, text=True, env=env, timeout=60)
@@ -664,6 +667,21 @@ class DecommissionLayoutTests(unittest.TestCase):
         self.root(self.etc / "admin" / "alpha", "worker-binary", "agent.toml")
         self.root(self.etc / "admin" / ".beta.partial", "worker-binary")
         self.assert_recognised()
+
+    def test_an_override_nested_under_etc_weaver_is_recognised(self):
+        """Codex on #45, round 6: an admin base at /etc/weaver/custom/admin made
+        /etc/weaver/custom unrecognised. A directory leading to a configured root is
+        descended into, and its other entries are judged as every entry is.
+        Perturbation: drop the ancestor rule, and the nested base refuses."""
+        base = self.etc / "custom" / "admin"
+        self.root(self.etc / "stack", "worker-binary")
+        self.root(base / "alpha", "worker-binary", "agent.toml")
+        result = self.run_archive(admin=base)
+        self.assertNotIn("does not recognise", result.stderr, result.stdout)
+        self.root(self.etc / "custom" / "other")
+        result = self.run_archive(admin=base)
+        self.assertIn("does not recognise", result.stderr)
+        self.assertIn(str(self.etc / "custom" / "other"), result.stdout)
 
     def test_an_unrecognised_entry_refuses_touching_nothing(self):
         self.root(self.etc / "stack", "worker-binary")
@@ -720,6 +738,77 @@ class BootstrapStandingTests(unittest.TestCase):
                 if p.exists():
                     p.chmod(0o755)
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class DecommissionArchiveTests(unittest.TestCase):
+    """The archive's names and the purge's coverage, decommission.sh's self-walk of
+    #45 round 6."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.text = (DEPLOY / "decommission.sh").read_text()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def name_of(self, path):
+        start = self.text.index("  name_of() {")
+        end = self.text.index("  ARCHIVE_NAMES=()", start)
+        body = self.text[start:end] + f"name_of {shlex.quote(path)}\n"
+        return subprocess.run(["bash", "-c", body], capture_output=True, text=True, check=True).stdout
+
+    def test_archive_names_keep_every_path_apart(self):
+        """Codex's P1: two prefixes of one basename wrote one tarball. A name is the
+        path itself made file-name safe, so paths the old slug folded together stay
+        apart. Perturbation: name by basename, or fold `/` and `-` together, and a
+        pair here collides."""
+        for left, right in [("/opt/site/weaver", "/srv/weaver"), ("/a/b-c", "/a/b/c"),
+                            ("/a/b.c", "/a/b/c"), ("/a/b c", "/a/b-c"), ("/a/b%2F", "/a/b/")]:
+            self.assertNotEqual(self.name_of(left), self.name_of(right), (left, right))
+        self.assertRegex(self.name_of("/srv/my weaver/bin"), r"^[A-Za-z0-9_.%-]+$")
+
+    def purge(self, sums, listing, target):
+        """A finished archive holding one tarball of `listing`, summed or not, and a
+        PURGE-LIST naming `target` as covered by it; --purge run on a copy whose root
+        check and store are lifted."""
+        dest = self.tmp / "archive"
+        dest.mkdir()
+        (dest / "t.tar.zst").write_bytes(b"")
+        subprocess.run(["tar", "-I", "zstd", "-cf", str(dest / "t.tar.zst"), "-C", "/",
+                        *[str(p).lstrip("/") for p in listing]], check=True)
+        (dest / "PURGE-LIST").write_text(f"path t.tar.zst {target}\n")
+        names = ["PURGE-LIST"] + (["t.tar.zst"] if sums else [])
+        subprocess.run(["sh", "-c", f"cd {shlex.quote(str(dest))} && sha256sum {' '.join(names)} > SHA256SUMS"],
+                       check=True)
+        etc = self.tmp / "etc-weaver"
+        etc.mkdir(exist_ok=True)
+        script = self.text.replace("ETC=/etc/weaver\n", f"ETC={etc}\n", 1)
+        script = script.replace('[ "$(id -u)" -eq 0 ] ||', ": ||", 1)
+        script = script.replace("if systemctl is-active --quiet postgresql 2>/dev/null; then",
+                                "if false; then")
+        copy = self.tmp / "decommission.sh"
+        copy.write_text(script)
+        env = {**os.environ, "WEAVER_ADMIN_CONFIG": str(etc / "admin"),
+               "WEAVER_STACK_RECORD": str(etc / "stack")}
+        return subprocess.run(["bash", str(copy), "--purge", str(dest)],
+                              capture_output=True, text=True, env=env, timeout=60)
+
+    def test_nothing_is_purged_its_archive_does_not_hold(self):
+        """The purge's rule, checked before anything is touched: a path is removed only
+        where the tarball PURGE-LIST names for it is summed and lists it. Perturbation:
+        drop the coverage check, and the uncovered target is removed."""
+        target = self.tmp / "territory"
+        target.mkdir()
+        (target / "record").write_text("x")
+        other = self.tmp / "elsewhere"
+        other.mkdir()
+        result = self.purge(sums=False, listing=[target], target=target)
+        self.assertIn("is not in SHA256SUMS", result.stdout + result.stderr)
+        self.assertTrue((target / "record").exists(), "nothing was purged")
+        shutil.rmtree(self.tmp / "archive")
+        result = self.purge(sums=True, listing=[other], target=target)
+        self.assertIn("not in t.tar.zst", result.stdout + result.stderr)
+        self.assertTrue((target / "record").exists(), "nothing was purged")
 
 
 STUB_ADMIN = """#!/bin/sh

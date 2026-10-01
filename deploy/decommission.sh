@@ -123,15 +123,24 @@ unrecognised_entries() { # prints each entry not of a known kind, one per line
       printf '%s\n' "$e"
     done
   }
-  for e in "$ETC"/* "$ETC"/.[!.]* "$ETC"/..?*; do
-    [ -e "$e" ] || [ -L "$e" ] || continue
-    if [ -d "$e" ] && [ ! -L "$e" ]; then
-      if is_legacy_root "$e" || [ "$e" = "$STACK" ]; then continue; fi
-      if [ "$e" = "$ADMIN_BASE" ]; then check_base "$e"; continue; fi
-      for n in "${named[@]}"; do [ "$e" != "$n" ] || continue 2; done
-    fi
-    printf '%s\n' "$e"
-  done
+  # A directory leading to a configured root, an override nested under
+  # /etc/weaver such as /etc/weaver/custom/admin, is descended into and its
+  # entries judged the same way; it is not a kind of its own.
+  check_dir() { # check_dir DIR: the entries of a directory under /etc/weaver
+    local e n
+    for e in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+      [ -e "$e" ] || [ -L "$e" ] || continue
+      if [ -d "$e" ] && [ ! -L "$e" ]; then
+        if is_legacy_root "$e" || [ "$e" = "$STACK" ]; then continue; fi
+        if [ "$e" = "$ADMIN_BASE" ]; then check_base "$e"; continue; fi
+        case "$ADMIN_BASE/" in "$e"/*) check_dir "$e"; continue ;; esac
+        case "$STACK/" in "$e"/*) check_dir "$e"; continue ;; esac
+        for n in "${named[@]}"; do [ "$e" != "$n" ] || continue 2; done
+      fi
+      printf '%s\n' "$e"
+    done
+  }
+  check_dir "$ETC"
   if outside_etc "$ADMIN_BASE" && [ -d "$ADMIN_BASE" ] && ! is_legacy_root "$ADMIN_BASE"; then
     check_base "$ADMIN_BASE"
   fi
@@ -147,14 +156,15 @@ fi
 # holding a `worker-binary` or an `allow-list`.
 CONFIG_ROOTS=()
 AGENT_ROOTS=()
-OUTSIDE=()
-# An admin base named outside /etc/weaver is a root itself where it holds the
-# layout before 2026-10-01, box-wide keys at its top, and a base of agents'
+# The configured roots are scanned where they stand, outside /etc/weaver or
+# nested at any depth under it. An admin base is a root itself where it holds
+# the layout before 2026-10-01, box-wide keys at its top, and a base of agents'
 # roots otherwise.
-outside_etc "$ADMIN_BASE" && OUTSIDE+=("$ADMIN_BASE/" "$ADMIN_BASE"/*/)
-outside_etc "$STACK" && OUTSIDE+=("$STACK/")
-for d in "$ETC"/*/ "$ETC"/*/*/ "${OUTSIDE[@]}"; do
+declare -A SCANNED=()
+for d in "$ETC"/*/ "$ETC"/*/*/ "$ADMIN_BASE/" "$ADMIN_BASE"/*/ "$STACK/"; do
   d=${d%/}
+  [ -z "${SCANNED[$d]:-}" ] || continue
+  SCANNED[$d]=1
   if [ -d "$d" ] && [ ! -L "$d" ] && { [ -f "$d/worker-binary" ] || [ -f "$d/allow-list" ]; }; then
     CONFIG_ROOTS+=("$d")
     # Two levels down is an agent's root under a base, and so is a root
@@ -295,7 +305,12 @@ plan "groups:   ${WEAVER_GROUPS[*]:-none}"
 [ ${#UNCLAIMED[@]} -eq 0 ] || plan "left alone, no agent found claims them: ${UNCLAIMED[*]}"
 
 say "units"
-mapfile -t UNITS < <(systemctl list-units 'weaver-worker@*' --all --no-legend --plain 2>/dev/null | awk '{print $1}')
+# **A query that fails is never read as an empty answer.** A unit list that
+# could not be had would read as no units, and the archive would run with an
+# agent serving.
+UNIT_LIST=$(systemctl list-units 'weaver-worker@*' --all --no-legend --plain 2>&1) \
+  || die "cannot list the weaver-worker@ units: $UNIT_LIST"
+mapfile -t UNITS < <(printf '%s\n' "$UNIT_LIST" | awk 'NF {print $1}')
 ACTIVE_UNITS=()
 for u in "${UNITS[@]}"; do
   st=$(systemctl is-active "$u" 2>/dev/null || true)
@@ -381,17 +396,21 @@ auth_lines() { # auth_lines hba|ident FILE DBS ROLES : print the agents' lines
   ' "$2" 2>/dev/null || true
 }
 if systemctl is-active --quiet postgresql 2>/dev/null; then
+  # The store is running, so a query that fails is a store this script cannot
+  # see, and it refuses rather than read no databases.
+  ask_pg() { sudo -u postgres psql -X -tAc "$1" 2>&1 || die "postgresql is active and does not answer: $1"; }
+  ROLE_ROWS=$(ask_pg "select rolname from pg_roles")
+  DB_ROWS=$(ask_pg "select datname from pg_database")
+  HBA=$(ask_pg 'show hba_file'); IDENT=$(ask_pg 'show ident_file')
   while read -r r; do
     [ -n "$r" ] || continue
     if [ -n "${ROLE_WANT[$r]:-}" ]; then PG_ROLES+=("$r"); fi
-  done < <(sudo -u postgres psql -X -tAc "select rolname from pg_roles" 2>/dev/null || true)
+  done <<< "$ROLE_ROWS"
   while read -r db; do
     [ -n "$db" ] || continue
     if [ -n "${DB_WANT[$db]:-}" ]; then PG_DBS+=("$db")
     else case "$db" in weaver*) OTHER_DBS+=("$db") ;; esac; fi
-  done < <(sudo -u postgres psql -X -tAc "select datname from pg_database" 2>/dev/null || true)
-  HBA=$(sudo -u postgres psql -X -tAc 'show hba_file' 2>/dev/null || true)
-  IDENT=$(sudo -u postgres psql -X -tAc 'show ident_file' 2>/dev/null || true)
+  done <<< "$DB_ROWS"
   plan "roles      ${PG_ROLES[*]:-none}"
   plan "databases  ${PG_DBS[*]:-none}"
   [ ${#OTHER_DBS[@]} -eq 0 ] || plan "left alone, no agent found names them: ${OTHER_DBS[*]}"
@@ -422,12 +441,13 @@ sha_all() { find "$1" -maxdepth 1 -type f -exec sha256sum {} \; 2>/dev/null || t
 
 if [ "$MODE" = archive ]; then
   [ ${#ACTIVE_UNITS[@]} -eq 0 ] || die "units still active: ${ACTIVE_UNITS[*]}. Unload them (weaver-admin unload <agent>) or stop them, then rerun"
-  [ -e "$DEST/SHA256SUMS" ] && die "$DEST already holds an archive; name another directory"
+  # **The archive directory is new or empty, and nothing in it is removed.** A
+  # directory holding anything, an earlier run's part-written archive or the
+  # operator's own files, refuses; this script deletes nothing it did not write
+  # in this run.
   as_op mkdir -p "$DEST" || die "the operator cannot create $DEST"
   as_op test -w "$DEST" || die "$DEST is not writable by $OPERATOR"
-  # A run that died part way leaves files here the operator may not own;
-  # they are this script's and go before it writes again.
-  find "$DEST" -maxdepth 1 -type f -exec rm -f {} \; 2>/dev/null || true
+  [ -z "$(as_op ls -A "$DEST")" ] || die "$DEST is not empty; name a new or empty directory"
   say "archive to $DEST"
 
   NVCC=$(command -v nvcc || ls /opt/cuda/bin/nvcc 2>/dev/null || true)
@@ -473,38 +493,54 @@ if [ "$MODE" = archive ]; then
   } | to_file "$DEST/box-facts.txt"
   plan "box-facts.txt"
 
-  PURGE=()
-  archive_path() { # archive_path NAME PATH...
+  # **Every archive is named before any is written, and two of one name
+  # refuse.** A name is the archived path made safe, each byte outside letters,
+  # digits, `_` and `-` written as `%XX`, so `/a/b-c` and `/a/b/c` stay apart and
+  # no name carries a space; and a collision the encoding still allowed refuses
+  # here rather than one tarball overwriting another.
+  name_of() { # name_of PATH : the path, `/` first dropped, as a file-name-safe string
+    local s=${1#/} out='' c i
+    for (( i=0; i<${#s}; i++ )); do
+      c=${s:i:1}
+      case "$c" in [A-Za-z0-9_-]) out+=$c ;; /) out+=. ;; *) printf -v c '%%%02X' "'$c"; out+=$c ;; esac
+    done
+    printf '%s' "$out"
+  }
+  ARCHIVE_NAMES=(); ARCHIVE_PATHS=()
+  queue() { # queue NAME PATH... : what stands of the paths, under NAME.tar.zst
     local name=$1; shift
-    local present=()
+    local present=() pth
     for pth in "$@"; do [ -e "$pth" ] && present+=("$pth"); done
     [ ${#present[@]} -gt 0 ] || return 0
-    tarz "$DEST/$name.tar.zst" "${present[@]}"
-    # Apparent size, not blocks: on NFS the blocks are not yet accounted
-    # when this line prints, and du answered 512 for a 3 G tarball.
-    plan "$name.tar.zst  $(stat -c %s "$DEST/$name.tar.zst" | numfmt --to=iec)  <- ${present[*]}"
-    PURGE+=("${present[@]}")
+    ARCHIVE_NAMES+=("$name.tar.zst"); ARCHIVE_PATHS+=("$(printf '%s\n' "${present[@]}")")
   }
-
-  [ -d /etc/weaver ] && archive_path etc-weaver /etc/weaver
-  if outside_etc "$ADMIN_BASE" && [ -d "$ADMIN_BASE" ]; then archive_path admin-base "$ADMIN_BASE"; fi
-  if outside_etc "$STACK" && [ -d "$STACK" ]; then archive_path stack-record "$STACK"; fi
-  [ ${#LDSO_CONFS[@]} -gt 0 ] && archive_path ld-so-conf "${LDSO_CONFS[@]}"
+  [ -d /etc/weaver ] && queue etc-weaver /etc/weaver
+  if outside_etc "$ADMIN_BASE" && [ -d "$ADMIN_BASE" ]; then queue admin-base "$ADMIN_BASE"; fi
+  if outside_etc "$STACK" && [ -d "$STACK" ]; then queue stack-record "$STACK"; fi
+  [ ${#LDSO_CONFS[@]} -gt 0 ] && queue ld-so-conf "${LDSO_CONFS[@]}"
   for p in "${!PREFIXES[@]}"; do
-    n=$(basename "$p")
     parts=()
     for sub in bin lib python-spu; do [ -d "$p/$sub" ] && parts+=("$p/$sub"); done
     for sub in "$p"/backup-* "$p"/lib.backup-*; do [ -d "$sub" ] && parts+=("$sub"); done
-    [ ${#parts[@]} -gt 0 ] && archive_path "opt-$n" "${parts[@]}"
+    [ ${#parts[@]} -gt 0 ] && queue "prefix-$(name_of "$p")" "${parts[@]}"
   done
-  # Named by the whole path, so two directories of one basename do not
-  # write one tarball.
-  slug() { printf '%s' "${1#/}" | tr '/.' '--'; }
-  for d in "${!INSTALL_DIRS[@]}"; do archive_path "install-$(slug "$d")" "$d"; done
-  for d in "${LOG_DIRS[@]}"; do archive_path "log-$(slug "$d")" "$d"; done
-  for d in "${TERRITORY_PATHS[@]}"; do archive_path "territory-$(slug "$d")" "$d"; done
-  [ ${#HOMES[@]} -gt 0 ] && archive_path home-weaver-users "${HOMES[@]}"
-  [ ${#TMP_PATHS[@]} -gt 0 ] && archive_path tmp-weaver "${TMP_PATHS[@]}"
+  for d in "${!INSTALL_DIRS[@]}"; do queue "install-$(name_of "$d")" "$d"; done
+  for d in "${LOG_DIRS[@]}"; do queue "log-$(name_of "$d")" "$d"; done
+  for d in "${TERRITORY_PATHS[@]}"; do queue "territory-$(name_of "$d")" "$d"; done
+  [ ${#HOMES[@]} -gt 0 ] && queue home-weaver-users "${HOMES[@]}"
+  [ ${#TMP_PATHS[@]} -gt 0 ] && queue tmp-weaver "${TMP_PATHS[@]}"
+  dup=$(printf '%s\n' "${ARCHIVE_NAMES[@]}" | sort | uniq -d)
+  [ -z "$dup" ] || die "two archives would share a name, so one would overwrite the other: $dup"
+
+  PURGE_PATHS=()   # "<archive> <path>", what --purge may remove and what covers it
+  for k in "${!ARCHIVE_NAMES[@]}"; do
+    mapfile -t present <<< "${ARCHIVE_PATHS[$k]}"
+    tarz "$DEST/${ARCHIVE_NAMES[$k]}" "${present[@]}"
+    # Apparent size, not blocks: on NFS the blocks are not yet accounted
+    # when this line prints, and du answered 512 for a 3 G tarball.
+    plan "${ARCHIVE_NAMES[$k]}  $(stat -c %s "$DEST/${ARCHIVE_NAMES[$k]}" | numfmt --to=iec)  <- ${present[*]}"
+    for pth in "${present[@]}"; do PURGE_PATHS+=("${ARCHIVE_NAMES[$k]} $pth"); done
+  done
 
   if [ ${#PG_DBS[@]} -gt 0 ]; then
     as_op mkdir -p "$DEST/postgres"
@@ -512,7 +548,12 @@ if [ "$MODE" = archive ]; then
       sudo -u postgres pg_dump -Fc "$db" | to_file "$DEST/postgres/$db.dump"
       plan "postgres/$db.dump"
     done
-    { [ ${#PG_ROLES[@]} -eq 0 ] || sudo -u postgres pg_dumpall --roles-only 2>/dev/null | grep -wF -f <(printf '%s\n' "${PG_ROLES[@]}") || true; } | to_file "$DEST/postgres/roles.sql"
+    # The roles' definitions, whose dump must succeed before any role can be
+    # listed for the purge; a failure here stops the archive.
+    ROLE_DUMP=$(sudo -u postgres pg_dumpall --roles-only) || die "pg_dumpall --roles-only failed"
+    if [ ${#PG_ROLES[@]} -gt 0 ]; then
+      printf '%s\n' "$ROLE_DUMP" | grep -wF -f <(printf '%s\n' "${PG_ROLES[@]}") || true
+    fi | to_file "$DEST/postgres/roles.sql"
     [ -n "$HBA" ]   && cat "$HBA"   | to_file "$DEST/postgres/pg_hba.conf"
     [ -n "$IDENT" ] && cat "$IDENT" | to_file "$DEST/postgres/pg_ident.conf"
   fi
@@ -520,7 +561,7 @@ if [ "$MODE" = archive ]; then
   # What --purge may touch, and nothing else. Accounts, roles and databases
   # are listed by kind so the purge removes them by the right verb.
   {
-    for pth in "${PURGE[@]}"; do echo "path $pth"; done
+    for entry in "${PURGE_PATHS[@]}"; do echo "path $entry"; done
     for u in "${WEAVER_USERS[@]}";  do echo "user $u"; done
     for g in "${WEAVER_GROUPS[@]}"; do echo "group $g"; done
     for db in "${PG_DBS[@]}";       do echo "database $db"; done
@@ -544,22 +585,65 @@ fi
 say "re-verify $DEST"
 ( cd "$DEST" && sha256sum -c --quiet SHA256SUMS ) || die "the archive no longer verifies; purge refused"
 [ ${#ACTIVE_UNITS[@]} -eq 0 ] || die "units still active: ${ACTIVE_UNITS[*]}"
-plan "verified"
 
-say "units"
-for u in "${UNITS[@]}"; do systemctl stop "$u" 2>/dev/null || true; systemctl reset-failed "$u" 2>/dev/null || true; plan "stopped $u"; done
-systemctl stop "$SLICE" 2>/dev/null && plan "stopped $SLICE" || true
-
-say "store"
-while read -r kind name; do
+# **Nothing is purged that its archive does not hold**, checked here, before
+# anything is touched, and not left to how the archive was built. Every path
+# names the tarball that covers it, which must be summed and must list it; a
+# database needs its dump summed, a role its definitions, and an
+# authentication file its copy. One entry short refuses the whole purge.
+summed() { awk '{print $2}' "$DEST/SHA256SUMS" | grep -qxF -- "$1"; }
+COVERAGE_GAPS=()
+declare -A LISTINGS=()
+while read -r kind first rest; do
   case $kind in
-    database) sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS $(sql_ident "$name");" >/dev/null && plan "dropped database $name" ;;
+    path)
+      summed "$first" || { COVERAGE_GAPS+=("path $rest: $first is not in SHA256SUMS"); continue; }
+      if [ -z "${LISTINGS[$first]:-}" ]; then LISTINGS[$first]=$(tar -tf "$DEST/$first"); fi
+      rel=${rest#/}
+      printf '%s\n' "${LISTINGS[$first]}" | grep -qxF -e "$rel" -e "$rel/" \
+        || COVERAGE_GAPS+=("path $rest: not in $first") ;;
+    database) summed "postgres/$first.dump" || COVERAGE_GAPS+=("database $first: no summed dump") ;;
+    role) summed postgres/roles.sql && grep -qwF -- "$first" "$DEST/postgres/roles.sql" \
+            || COVERAGE_GAPS+=("role $first: not in the summed roles.sql") ;;
+    hba) summed postgres/pg_hba.conf || COVERAGE_GAPS+=("hba $first${rest:+ $rest}: no summed copy") ;;
+    ident) summed postgres/pg_ident.conf || COVERAGE_GAPS+=("ident $first${rest:+ $rest}: no summed copy") ;;
+    user|group) ;;
+    *) COVERAGE_GAPS+=("an entry of no known kind: $kind") ;;
   esac
 done < "$DEST/PURGE-LIST"
-while read -r kind name; do
-  case $kind in
-    role) sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c "DROP ROLE IF EXISTS $(sql_ident "$name");" >/dev/null && plan "dropped role $name" ;;
-  esac
+if [ ${#COVERAGE_GAPS[@]} -gt 0 ]; then
+  say "not covered by the archive"
+  for g in "${COVERAGE_GAPS[@]}"; do plan "$g"; done
+  die "the archive does not cover what PURGE-LIST names; nothing was purged"
+fi
+plan "verified, and every entry is covered by a summed archive"
+
+# **Each state is the command's own answer.** A step that fails is reported as
+# held with its status, the purge goes on through the rest, and the run ends
+# non-zero naming how many were held, never "purged" over a step that was not.
+HELD=0
+held() { plan "HELD: $*"; HELD=$((HELD + 1)); }
+attempt() { # attempt WHAT CMD... : report done or held by CMD's own status
+  local what=$1; shift
+  local out
+  if out=$("$@" 2>&1); then plan "$what"; else held "$what failed: ${out:-exit $?}"; fi
+}
+
+say "units"
+for u in "${UNITS[@]}"; do
+  attempt "stopped $u" systemctl stop "$u"
+  if [ "$(systemctl is-active "$u" 2>/dev/null || true)" = failed ]; then attempt "cleared failed $u" systemctl reset-failed "$u"; fi
+done
+if systemctl is-active --quiet "$SLICE" 2>/dev/null; then attempt "stopped $SLICE" systemctl stop "$SLICE"; fi
+
+say "store"
+while read -r kind name _; do
+  [ "$kind" = database ] || continue
+  attempt "dropped database $name" sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS $(sql_ident "$name");"
+done < "$DEST/PURGE-LIST"
+while read -r kind name _; do
+  [ "$kind" = role ] || continue
+  attempt "dropped role $name" sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c "DROP ROLE IF EXISTS $(sql_ident "$name");"
 done < "$DEST/PURGE-LIST"
 # The databases and roles the archive listed, and only their lines go.
 LISTED_DBS=$(awk '$1 == "database" {printf "%s ", $2}' "$DEST/PURGE-LIST")
@@ -567,49 +651,58 @@ LISTED_ROLES=$(awk '$1 == "role" {printf "%s ", $2}' "$DEST/PURGE-LIST")
 while read -r kind name; do
   case $kind in
     hba|ident)
-      backup="$name.before-decommission-$STAMP"
-      cp -a "$name" "$backup"
+      # A backup beside the file, named to the second and never written over.
+      backup="$name.before-decommission-$(date +%Y%m%d%H%M%S)"
+      if [ -e "$backup" ]; then held "$name: the backup $backup already stands"; continue; fi
+      if ! cp -a -- "$name" "$backup"; then held "$name: no backup could be made"; continue; fi
       # create-agent.sh wrote `local <db> <role> peer map=weaver` and
       # `weaver <member> <role>`. Each line is dropped where its fields name
       # a listed database and role (hba) or a listed role (ident), so a line
       # of a database no agent named stays. Written through the open file so
       # its owner and mode stand.
-      auth_lines "$kind" "$backup" "$LISTED_DBS" "$LISTED_ROLES" > "$name.drop-$STAMP"
-      grep -vxF -f "$name.drop-$STAMP" "$backup" > "$name" || true
-      plan "removed $(wc -l < "$name.drop-$STAMP") agents' lines from $name (backup beside it)"
-      rm -f "$name.drop-$STAMP" ;;
+      drop=$(mktemp)
+      auth_lines "$kind" "$backup" "$LISTED_DBS" "$LISTED_ROLES" > "$drop"
+      # grep answers 1 where no line is left, which is a rewrite that worked;
+      # only 2 is a failure.
+      rc=0; grep -vxF -f "$drop" "$backup" > "$name" || rc=$?
+      if [ "$rc" -le 1 ]; then
+        plan "removed $(wc -l < "$drop") agents' lines from $name (backup $backup)"
+      else
+        held "$name: rewriting it failed; the backup is $backup"
+      fi
+      rm -f "$drop" ;;
   esac
 done < "$DEST/PURGE-LIST"
-systemctl is-active --quiet postgresql 2>/dev/null && systemctl reload postgresql
+if systemctl is-active --quiet postgresql 2>/dev/null; then attempt "reloaded postgresql" systemctl reload postgresql; fi
 
 say "accounts"
-while read -r kind name; do
-  case $kind in
-    user)  userdel -r "$name" 2>/dev/null && plan "removed user $name (and home)" || { userdel "$name" 2>/dev/null && plan "removed user $name" || plan "user $name: not removed"; } ;;
-  esac
+# **An account is removed without its home.** A home under /home was archived
+# and is purged as a path; one anywhere else was not, and `userdel -r` would
+# remove it unarchived.
+while read -r kind name _; do
+  [ "$kind" = user ] || continue
+  if getent passwd "$name" >/dev/null; then attempt "removed user $name" userdel "$name"; else plan "user $name: already gone"; fi
 done < "$DEST/PURGE-LIST"
-while read -r kind name; do
-  case $kind in
-    group) getent group "$name" >/dev/null && { groupdel "$name" 2>/dev/null && plan "removed group $name" || plan "group $name: not removed"; } ;;
-  esac
+while read -r kind name _; do
+  [ "$kind" = group ] || continue
+  if getent group "$name" >/dev/null; then attempt "removed group $name" groupdel "$name"; else plan "group $name: already gone"; fi
 done < "$DEST/PURGE-LIST"
 
 say "paths"
-while read -r kind name; do
-  case $kind in
-    path)
-      case "$name" in */models|*/models/*) plan "kept $name"; continue;; esac
-      rm -rf -- "$name" && plan "removed $name" ;;
-  esac
+while read -r kind archive name; do
+  [ "$kind" = path ] || continue
+  case "$name" in */models|*/models/*) plan "kept $name"; continue;; esac
+  attempt "removed $name (archived in $archive)" rm -rf -- "$name"
 done < "$DEST/PURGE-LIST"
 # A prefix left holding only models stays; one left empty goes.
 for p in "${!PREFIXES[@]}"; do
-  if [ -d "$p" ] && [ -z "$(ls -A "$p")" ]; then rmdir "$p" && plan "removed empty $p"; fi
+  if [ -d "$p" ] && [ -z "$(ls -A "$p")" ]; then attempt "removed empty $p" rmdir -- "$p"; fi
 done
-ldconfig && plan "ldconfig rerun: $(ldconfig -p | grep -cE 'ggml|llama') engine objects still in the cache"
+attempt "reran ldconfig" ldconfig
 
 say "what remains"
 for p in "${!PREFIXES[@]}"; do [ -d "$p" ] && find "$p" -maxdepth 1 -mindepth 1 -printf '   %p\n'; done
 getent passwd | awk -F: '$1 ~ /^weaver-/ {print "   account still present: "$1}' || true
 systemctl list-units 'weaver-worker@*' --all --no-legend 2>/dev/null | sed 's/^/   unit still present: /' || true
+[ "$HELD" -eq 0 ] || die "$HELD step(s) held, named above; the purge is incomplete. The archive is $DEST"
 say "purged. the archive is $DEST"

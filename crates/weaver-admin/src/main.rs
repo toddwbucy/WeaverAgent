@@ -741,10 +741,15 @@ fn settle_refused_load(
     if (standing.unit_started || *refusal == LifecycleRefusal::PriorUnitUnreaped)
         && unit::residency(&config.unit, &agent.0) == unit::Residency::Failed
     {
-        let _ = unit::reset_failed(&config.unit, &agent.0);
+        // **Undone only on two answers**: the clear's own status, and the state
+        // after it reading `inactive`. A clear that did not run, or a state no
+        // one could read, is held: the name may still be taken, and the log
+        // must not say otherwise.
+        let cleared = unit::reset_failed(&config.unit, &agent.0).is_ok_and(|s| s.success());
         account.push(verbs::Undone {
             act: "unit-reset-failed",
-            succeeded: unit::residency(&config.unit, &agent.0) != unit::Residency::Failed,
+            succeeded: cleared
+                && unit::residency(&config.unit, &agent.0) == unit::Residency::Inactive,
         });
     }
     for undone in &account {
@@ -1733,6 +1738,16 @@ mod tests {
     /// appended to a calls file. Answers the configuration pointed at it and
     /// the two files.
     fn manager_double(root: &std::path::Path, state: &str) -> (ServiceConfig, PathBuf, PathBuf) {
+        manager_double_with(root, state, "echo inactive > \"$STATE\"")
+    }
+
+    /// The double with the reset's own behaviour supplied as shell, `$STATE` naming
+    /// the state file.
+    fn manager_double_with(
+        root: &std::path::Path,
+        state: &str,
+        reset: &str,
+    ) -> (ServiceConfig, PathBuf, PathBuf) {
         use std::os::unix::fs::PermissionsExt;
         std::fs::create_dir_all(root).unwrap();
         let state_file = root.join("state");
@@ -1742,7 +1757,7 @@ mod tests {
         std::fs::write(
             &tool,
             format!(
-                "#!/bin/sh\necho \"$1\" >> '{calls}'\ncase \"$1\" in\n  is-active) cat '{state}';;\n  reset-failed) echo inactive > '{state}';;\nesac\n",
+                "#!/bin/sh\nSTATE='{state}'\necho \"$1\" >> '{calls}'\ncase \"$1\" in\n  is-active) cat \"$STATE\";;\n  reset-failed) {reset};;\nesac\n",
                 calls = calls.display(),
                 state = state_file.display(),
             ),
@@ -1796,6 +1811,46 @@ mod tests {
                 .contains("reset-failed")
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// **A clear is logged undone only where it ran and the unit then reads at
+    /// rest.** A reset that fails, or a state after it no one can read, is held.
+    /// Codex on #45, round 6: `Unknown != Failed` had logged an unread state as
+    /// cleared. Perturbation: compare against `Failed` alone again, and the
+    /// unreadable case logs `undone`.
+    #[test]
+    fn a_clear_that_cannot_be_confirmed_is_held() {
+        for (name, reset) in [
+            ("refused", "exit 1"),
+            ("unread", "echo garbled > \"$STATE\""),
+        ] {
+            let root = std::env::temp_dir()
+                .join(format!("weaver-admin-held-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            let (config, _, log_path) = manager_double_with(&root, "failed", reset);
+            let standing = verbs::Standing {
+                unit_started: true,
+                ..Default::default()
+            };
+            let mut operations = log::OperationsLog::open(&log_path).unwrap();
+            settle_refused_load(
+                &config,
+                &AgentName("alpha".into()),
+                &standing,
+                &LifecycleRefusal::NoResidency,
+                &mut operations,
+            );
+            let logged = std::fs::read_to_string(&log_path).unwrap();
+            assert!(
+                logged.contains("unit-reset-failed:held"),
+                "{name}: {logged}"
+            );
+            assert!(
+                !logged.contains("unit-reset-failed:undone"),
+                "{name}: {logged}"
+            );
+            let _ = std::fs::remove_dir_all(&root);
+        }
     }
 
     /// **Only `failed` is cleared, and the state ask decides.** A unit the
