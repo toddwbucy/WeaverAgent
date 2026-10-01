@@ -108,14 +108,29 @@ if [ -n "$CCCL" ] && ! cccl_in_window "$CCCL"; then
   die "cccl $CCCL is outside the 3.1.4-3.3.4 window #397 measured. Fix the pin first."
 fi
 command -v nvcc >/dev/null || die "no nvcc on PATH and the build carries $SPU_FEATURES"
-[ -e "$STACK" ] && die "$STACK already stands. This is the first install; use update-stack.sh, or decommission.sh first."
+# **What stands is asked, and a question this script cannot answer refuses.**
+# A path behind a directory the operator cannot traverse reads absent to `-e`,
+# and a base the operator cannot list reads empty, and either would let an
+# install go over a stack it never saw. `standing` answers stands or absent, or
+# refuses where the look itself fails for any other reason.
+standing() { # standing PATH: 0 stands, 1 absent, refuses where it cannot tell
+  local err
+  if err=$(LC_ALL=C stat -- "$1" 2>&1 >/dev/null); then return 0; fi
+  case "$err" in *"No such file or directory"*) return 1 ;; esac
+  die "cannot tell whether $1 stands: $err"
+}
+if standing "$STACK"; then
+  die "$STACK already stands. This is the first install; use update-stack.sh, or decommission.sh first."
+fi
 # An admin base that holds anything is a stack this script did not write: an
 # agent's root, or the box-wide configuration of the layout before 2026-10-01,
-# which REDEPLOY.md migrates by hand. An empty one is harmless and kept.
-if [ -d "$ADMIN_BASE" ] && [ -n "$(ls -A "$ADMIN_BASE" 2>/dev/null)" ]; then
-  die "$ADMIN_BASE already holds configuration. This is the first install; use update-stack.sh, or decommission.sh first."
+# which REDEPLOY.md migrates by hand. An empty one is harmless and kept, and one
+# that cannot be listed is never read as empty.
+if standing "$ADMIN_BASE"; then
+  listing=$(LC_ALL=C ls -A -- "$ADMIN_BASE" 2>&1) || die "cannot list $ADMIN_BASE to see whether it holds configuration: $listing"
+  [ -z "$listing" ] || die "$ADMIN_BASE already holds configuration. This is the first install; use update-stack.sh, or decommission.sh first."
 fi
-[ -d "$PREFIX/bin" ] && die "$PREFIX/bin already stands. Decommission first."
+if standing "$PREFIX/bin"; then die "$PREFIX/bin already stands. Decommission first."; fi
 
 say "tree"
 if git -C "$REPO" rev-parse --short HEAD >/dev/null 2>&1; then

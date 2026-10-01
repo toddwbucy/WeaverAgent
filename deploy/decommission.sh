@@ -97,12 +97,61 @@ read_key() { cat "$1/$2" 2>/dev/null || true; }
 sql_ident() { local q='"'; printf '%s' "$q${1//$q/$q$q}$q"; }
 AGENT_NAME='^[A-Za-z0-9_-]+$'
 
+# **Discovery fails closed.** A destructive script meeting a layout it does not
+# recognise refuses rather than guesses, so every entry under /etc/weaver, and
+# under an admin base named outside it, must be one this script knows before
+# anything is read further: a legacy root (box-wide keys, an `allow-list`), the
+# stack record, the admin base, an agent's root (a well-formed name holding
+# `agent.toml`), a root `create-agent.sh` staged under `.<name>.partial`, or the
+# directory a legacy root names as its `agent-config-directory`. Anything else
+# is named and the run stops in every mode, touching nothing.
+is_legacy_root() { [ -d "$1" ] && [ ! -L "$1" ] && [ -f "$1/allow-list" ]; }
+unrecognised_entries() { # prints each entry not of a known kind, one per line
+  local named=() e n root
+  for root in "$ETC"/*/ "$ADMIN_BASE"/; do
+    root=${root%/}
+    if is_legacy_root "$root"; then
+      n=$(read_key "$root" agent-config-directory); [ -z "$n" ] || named+=("$n")
+    fi
+  done
+  check_base() { # check_base DIR: an admin base's entries
+    for e in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+      [ -e "$e" ] || [ -L "$e" ] || continue
+      n=${e##*/}
+      if [ -d "$e" ] && [ ! -L "$e" ] && [[ "$n" =~ $AGENT_NAME ]] && [ -f "$e/agent.toml" ]; then continue; fi
+      if [ -d "$e" ] && [ ! -L "$e" ] && [[ "$n" =~ ^\.[A-Za-z0-9_-]+\.partial$ ]]; then continue; fi
+      printf '%s\n' "$e"
+    done
+  }
+  for e in "$ETC"/* "$ETC"/.[!.]* "$ETC"/..?*; do
+    [ -e "$e" ] || [ -L "$e" ] || continue
+    if [ -d "$e" ] && [ ! -L "$e" ]; then
+      if is_legacy_root "$e" || [ "$e" = "$STACK" ]; then continue; fi
+      if [ "$e" = "$ADMIN_BASE" ]; then check_base "$e"; continue; fi
+      for n in "${named[@]}"; do [ "$e" != "$n" ] || continue 2; done
+    fi
+    printf '%s\n' "$e"
+  done
+  if outside_etc "$ADMIN_BASE" && [ -d "$ADMIN_BASE" ] && ! is_legacy_root "$ADMIN_BASE"; then
+    check_base "$ADMIN_BASE"
+  fi
+}
+mapfile -t UNRECOGNISED < <(unrecognised_entries)
+if [ ${#UNRECOGNISED[@]} -gt 0 ]; then
+  say "unrecognised"
+  for e in "${UNRECOGNISED[@]}"; do plan "$e"; done
+  die "this layout holds entries this script does not recognise, so it touches nothing; move them aside or extend the script"
+fi
+
 # The key roots, by rule: a directory one or two levels under /etc/weaver
 # holding a `worker-binary` or an `allow-list`.
 CONFIG_ROOTS=()
 AGENT_ROOTS=()
 OUTSIDE=()
-outside_etc "$ADMIN_BASE" && OUTSIDE+=("$ADMIN_BASE"/*/)
+# An admin base named outside /etc/weaver is a root itself where it holds the
+# layout before 2026-10-01, box-wide keys at its top, and a base of agents'
+# roots otherwise.
+outside_etc "$ADMIN_BASE" && OUTSIDE+=("$ADMIN_BASE/" "$ADMIN_BASE"/*/)
 outside_etc "$STACK" && OUTSIDE+=("$STACK/")
 for d in "$ETC"/*/ "$ETC"/*/*/ "${OUTSIDE[@]}"; do
   d=${d%/}

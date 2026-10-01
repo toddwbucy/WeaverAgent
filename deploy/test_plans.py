@@ -612,6 +612,116 @@ class DecommissionNameTests(unittest.TestCase):
         self.assertEqual(len([l for l in lines if l.startswith(("db ", "role "))]), 2, lines)
 
 
+class DecommissionLayoutTests(unittest.TestCase):
+    """decommission.sh's discovery fails closed: every entry under its /etc/weaver must
+    be a kind it recognises, or the run refuses in every mode before anything is
+    archived or purged. Run on a copy whose /etc/weaver is a fixture and whose root
+    check is lifted. Perturbation: drop the refusal, and the unrecognised layouts run
+    on into the archive."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.etc = self.tmp / "etc-weaver"
+        self.dest = self.tmp / "archive"
+        script = (DEPLOY / "decommission.sh").read_text()
+        script = script.replace("ETC=/etc/weaver\n", f"ETC={self.etc}\n", 1)
+        script = script.replace('[ "$(id -u)" -eq 0 ] ||', ": ||", 1)
+        self.script = self.tmp / "decommission.sh"
+        self.script.write_text(script)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def root(self, path, *keys):
+        path.mkdir(parents=True, exist_ok=True)
+        for key in keys:
+            (path / key).write_text("/opt/x/bin/weaver-worker\n" if key == "worker-binary" else "\n")
+
+    def run_archive(self):
+        self.dest.mkdir(exist_ok=True)
+        env = {**os.environ, "WEAVER_ADMIN_CONFIG": str(self.etc / "admin"),
+               "WEAVER_STACK_RECORD": str(self.etc / "stack")}
+        return subprocess.run(["bash", str(self.script), "--archive", str(self.dest)],
+                              capture_output=True, text=True, env=env, timeout=60)
+
+    def assert_refused_naming(self, entry):
+        result = self.run_archive()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("does not recognise", result.stderr)
+        self.assertIn(str(entry), result.stdout)
+        self.assertEqual(list(self.dest.iterdir()), [], "nothing was archived")
+
+    def assert_recognised(self):
+        result = self.run_archive()
+        self.assertNotIn("does not recognise", result.stderr, result.stdout)
+
+    def test_the_layouts_it_knows_pass_discovery(self):
+        self.root(self.etc / "admin", "allow-list", "worker-binary")
+        self.root(self.etc / "admin.before-migration", "allow-list", "worker-binary")
+        self.assert_recognised()
+        shutil.rmtree(self.etc)
+        self.root(self.etc / "stack", "worker-binary")
+        self.root(self.etc / "admin" / "alpha", "worker-binary", "agent.toml")
+        self.root(self.etc / "admin" / ".beta.partial", "worker-binary")
+        self.assert_recognised()
+
+    def test_an_unrecognised_entry_refuses_touching_nothing(self):
+        self.root(self.etc / "stack", "worker-binary")
+        self.root(self.etc / "admin" / "alpha", "worker-binary", "agent.toml")
+        for make, entry in [
+            (lambda: self.root(self.etc / "mystery"), self.etc / "mystery"),
+            (lambda: (self.etc / "note.txt").write_text("x"), self.etc / "note.txt"),
+            (lambda: self.root(self.etc / "admin" / "gamma", "worker-binary"),
+             self.etc / "admin" / "gamma"),
+            (lambda: (self.etc / "admin" / "delta").symlink_to(self.etc / "admin" / "alpha"),
+             self.etc / "admin" / "delta"),
+        ]:
+            make()
+            self.assert_refused_naming(entry)
+            if entry.is_symlink() or entry.is_file():
+                entry.unlink()
+            else:
+                shutil.rmtree(entry)
+
+
+class BootstrapStandingTests(unittest.TestCase):
+    """bootstrap-stack.sh never reads what it cannot see as absent or empty: its checks
+    for a standing stack record, admin base and install, run as the script runs them,
+    refuse where the look fails. Perturbation: read the base's listing with its error
+    discarded, as before, and the unreadable base reads empty."""
+
+    def check(self, base, stack):
+        script = (DEPLOY / "bootstrap-stack.sh").read_text()
+        start = script.index("standing() {")
+        end = script.index('if standing "$PREFIX/bin"', start)
+        body = 'die() { printf "REFUSED: %s\\n" "$*" >&2; exit 1; }\n'
+        body += f"STACK={shlex.quote(str(stack))}; ADMIN_BASE={shlex.quote(str(base))}\n"
+        body += script[start:end] + 'echo "passed"\n'
+        return subprocess.run(["bash", "-c", body], capture_output=True, text=True)
+
+    def test_an_unreadable_base_or_path_refuses(self):
+        if os.geteuid() == 0:
+            self.skipTest("no mode denies root; rerun as an unprivileged uid")
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            self.assertIn("passed", self.check(tmp / "admin", tmp / "stack").stdout)
+            (tmp / "admin").mkdir()
+            self.assertIn("passed", self.check(tmp / "admin", tmp / "stack").stdout)
+            (tmp / "admin").chmod(0)
+            result = self.check(tmp / "admin", tmp / "stack")
+            self.assertIn("cannot list", result.stderr, result.stdout)
+            (tmp / "admin").chmod(0o755)
+            (tmp / "shut").mkdir()
+            (tmp / "shut").chmod(0)
+            result = self.check(tmp / "admin", tmp / "shut" / "stack")
+            self.assertIn("cannot tell whether", result.stderr, result.stdout)
+        finally:
+            for p in (tmp / "admin", tmp / "shut"):
+                if p.exists():
+                    p.chmod(0o755)
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 STUB_ADMIN = """#!/bin/sh
 printf '%s\\n' "boundary unverified: no store socket at /run/weaver/fixture" >&2
 printf '%s\\n' '{"kind":"refused","reason":"boundary_unverified"}'
