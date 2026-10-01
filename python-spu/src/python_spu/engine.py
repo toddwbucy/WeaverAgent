@@ -1,5 +1,6 @@
 """Local Qwen2, explicit placement, cached forwards and full rollback rebuild."""
 import gc
+import math
 import os
 import stat
 from blake3 import blake3
@@ -147,14 +148,43 @@ def judge_room(ordinal,free,total,shard_bytes,headroom):
         raise AdmissionError('device_cannot_admit',
                              f'no room on device {ordinal}: free {free}, needed {needed}, total {total}')
 
+# serde_json's recursion limit: its counter starts here and refuses on reaching zero,
+# so the deepest nesting it reads is one less.
+SERDE_DEPTH=128
+
 def strict_json(data):
-    """JSON as serde_json reads it: UTF-8 only, no `NaN`, `Infinity` or `-Infinity`,
-    and no unpaired surrogate escape, each of which CPython's `json` accepts and the
-    Rust header read refuses. Raises ValueError for any of them."""
+    """JSON as serde_json reads it, its whole refusal set: UTF-8 only; no `NaN`,
+    `Infinity` or `-Infinity`; no number outside f64's range, an overflowing literal
+    such as `1e400` included, which CPython reads as infinity; no unpaired surrogate
+    escape; and no nesting past serde_json's recursion limit of 128 arrays and objects,
+    which CPython reads until its own stack gives out. Raises ValueError for any of
+    them."""
     import json
     text=data.decode('utf-8') if isinstance(data,bytes) else data
     def constant(name): raise ValueError(f'non-standard JSON constant {name}')
-    value=json.loads(text,parse_constant=constant)
+    def finite(literal):
+        value=float(literal)
+        if not math.isfinite(value): raise ValueError(f'number out of range: {literal}')
+        return value
+    def integer(literal):
+        # serde_json reads an integer past i64 and u64 as an f64, out of range past it.
+        value=int(literal)
+        try: float(value)
+        except OverflowError: raise ValueError(f'number out of range: {literal}') from None
+        return value
+    depth=0; quoted=False; escaped=False
+    for c in text:
+        if quoted:
+            if escaped: escaped=False
+            elif c=='\\': escaped=True
+            elif c=='"': quoted=False
+        elif c=='"': quoted=True
+        elif c in '[{':
+            depth+=1
+            if depth>=SERDE_DEPTH: raise ValueError('nested past serde_json\'s recursion limit')
+        elif c in ']}': depth-=1
+    try: value=json.loads(text,parse_constant=constant,parse_float=finite,parse_int=integer)
+    except RecursionError: raise ValueError('nested past the parser\'s depth') from None
     def check(item):
         if isinstance(item,str):
             if any(0xD800<=ord(c)<=0xDFFF for c in item): raise ValueError('unpaired surrogate')

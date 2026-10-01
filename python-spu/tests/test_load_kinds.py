@@ -205,3 +205,57 @@ def test_a_header_read_that_fails_is_unreadable(tmp_path, monkeypatch):
         raise OSError(errno.EIO, "I/O error")
     monkeypatch.setattr(engine.os, "pread", failing)
     assert refused(path) == "artifact_unreadable"
+
+
+M = b'{"__metadata__":{"model_type":"qwen2"},"x":'
+CORPUS = {
+    "depth 126": M + b"[" * 125 + b"]" * 125 + b"}",
+    "depth 127": M + b"[" * 126 + b"]" * 126 + b"}",
+    "depth 128": M + b"[" * 127 + b"]" * 127 + b"}",
+    "depth 129": M + b"[" * 128 + b"]" * 128 + b"}",
+    "bracket in string": M + b'"' + b"[" * 200 + b'"}',
+    "1e400": M + b"1e400}", "-1e400": M + b"-1e400}", "1e308": M + b"1e308}",
+    "f64 max": M + b"1.7976931348623157e308}", "1e-400": M + b"1e-400}",
+    "big int": M + b"1" + b"0" * 400 + b"}", "u64 max": M + b"18446744073709551615}",
+    "u64 + 1": M + b"18446744073709551616}", "i64 min - 1": M + b"-9223372036854775809}",
+    "-0": M + b"-0}", "1E5": M + b"1E5}", "01": M + b"01}", "1.": M + b"1.}",
+    ".5": M + b".5}", "+1": M + b"+1}", "NaN": M + b"NaN}", "Infinity": M + b"Infinity}",
+    "true": M + b"true}", "control char": M + b'"a\x01b"}', "tab": M + b'"a\tb"}',
+    "nul escape": M + b'"\\u0000"}', "bad escape": M + b'"\\x"}',
+    "paired surrogate": M + b'"\\ud83d\\ude00"}', "lone high": M + b'"\\ud800"}',
+    "lone low": M + b'"\\ude00"}', "invalid utf8": M + b'"\xff"}',
+    "bom": b"\xef\xbb\xbf" + M + b"1}", "utf16": (M + b"1}").decode().encode("utf-16"),
+    "empty": b"", "whitespace": b"   ", "trailing data": M + b"1} x",
+    "trailing whitespace": M + b"1} \n", "trailing comma": M + b"1,}", "comment": M + b"1}//c",
+    "single quote": M + b"'a'}", "duplicate keys":
+        b'{"__metadata__":{"model_type":"llama"},"__metadata__":{"model_type":"qwen2"}}',
+    "duplicate inner": b'{"__metadata__":{"model_type":"llama","model_type":"qwen2"}}',
+    "array": b"[1]", "scalar": b"1", "metadata not an object": b'{"__metadata__":1}',
+    "architecture not a string": b'{"__metadata__":{"architecture":1,"model_type":"qwen2"}}',
+    "architecture first": b'{"__metadata__":{"architecture":"llama","model_type":"qwen2"}}',
+}
+
+
+@pytest.mark.parametrize("name", list(CORPUS))
+def test_the_header_reads_as_serde_json_reads_it(tmp_path, oracle, name):
+    """The whole class of Codex's #47 findings, closed by difference rather than by
+    reading: every edge of JSON this corpus names is read by the Rust `read_header`
+    through the oracle and by `engine.read_header`, and the two agree on the family or
+    on the refusal. Perturbation: drop any one guard of `strict_json` (the depth scan,
+    the number range, the constants, the surrogates, the UTF-8 decode), and a case
+    here differs."""
+    import struct
+    data = CORPUS[name]
+    path = tmp_path / "model.safetensors"
+    path.write_bytes(struct.pack("<Q", len(data)) + data)
+    rust = oracle(op="header", path=str(path))
+    pinned = engine.pin([path])
+    try:
+        python = {"ok": engine.read_header(pinned[0][1], tmp_path)["family"]}
+    except AdmissionError as refusal:
+        assert refusal.kind == "artifact_unreadable"
+        python = "refused"
+    finally:
+        for _, fd in pinned:
+            os.close(fd)
+    assert python == ({"ok": rust["ok"]["family"]} if "ok" in rust else "refused"), rust
