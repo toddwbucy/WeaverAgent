@@ -1,5 +1,5 @@
 //! conforms: spu-weights-hash-at-admit
-//! conforms: spu-hash-failure-sentinel
+//! conforms: spu-hash-failure-refuses
 //! conforms: spu-artifact-refusal-names-path-and-identity
 //!
 //! The artifact: resolution, the header read, and the weights hash.
@@ -119,6 +119,12 @@ pub struct PinnedArtifact {
     /// bytes is the swap the descriptor discipline exists to prevent, and a
     /// split artifact's bytes are every shard's.
     siblings: Vec<File>,
+    /// The names the pin opened, the first shard's first, in the order of the
+    /// descriptors above. The directory walk of the weights hash reads a
+    /// member it meets under one of these names through its descriptor, so
+    /// the hash is of the bytes the load reads and not of whatever the name
+    /// holds by the time the walk reaches it.
+    names: Vec<PathBuf>,
 }
 
 impl PinnedArtifact {
@@ -184,14 +190,24 @@ pub fn pin(path: &Path) -> Result<PinnedArtifact, LifecycleRefusal> {
         return Ok(PinnedArtifact {
             file: pin_one(path)?,
             siblings: Vec::new(),
+            names: vec![path.to_path_buf()],
         });
     };
-    let file = pin_one(&shard_name(&first, 1, count, suffix))?;
+    let mut names = Vec::with_capacity(count as usize);
+    let first_name = shard_name(&first, 1, count, suffix);
+    let file = pin_one(&first_name)?;
+    names.push(first_name);
     let mut siblings = Vec::with_capacity(count as usize - 1);
     for index in 2..=count {
-        siblings.push(pin_one(&shard_name(&first, index, count, suffix))?);
+        let name = shard_name(&first, index, count, suffix);
+        siblings.push(pin_one(&name)?);
+        names.push(name);
     }
-    Ok(PinnedArtifact { file, siblings })
+    Ok(PinnedArtifact {
+        file,
+        siblings,
+        names,
+    })
 }
 
 fn pin_one(path: &Path) -> Result<File, LifecycleRefusal> {
@@ -316,6 +332,12 @@ fn container_within(dir: &Path) -> Result<PathBuf, LifecycleRefusal> {
     let entries = std::fs::read_dir(dir).map_err(|_| LifecycleRefusal::ArtifactUnreadable)?;
     for entry in entries.flatten() {
         let path = entry.path();
+        // A dot-entry is not part of the artifact, per the canonical walk of
+        // section 3, so a container is never resolved from one: the load
+        // would then serve bytes the identity leaves out.
+        if is_dot_entry(&entry.file_name()) {
+            continue;
+        }
         // Regular files only, on the same ground: a FIFO inside a directory
         // artifact would be selected by name and block the open.
         let is_container = path.is_file()
@@ -627,32 +649,27 @@ fn read_gguf_typed<R: Read>(
 /// The weights hash: BLAKE3 over a canonical manifest, a single file or a
 /// walked directory.
 ///
-/// **The empty-string sentinel on every failure path is the property worth
-/// carrying verbatim.** A hash that cannot be computed reports that it could
-/// not rather than reporting a wrong value, and apex section 8 rests replay on
-/// the identity being right. This function therefore returns
-/// [`WeightsHash::sentinel`] rather than an error: a caller cannot accidentally
-/// treat a failure as a value, because the failure is a value it can test.
+/// **A hash that cannot be computed refuses the admission**, on the operator's
+/// ruling of 2026-10-01, per Spec section 3: an unreadable member, a walk that
+/// cannot complete, or a pinned member the walk no longer meets answers
+/// `ArtifactUnreadable`, so no agent serves under an identity that does not
+/// name its weights.
 ///
 /// The hash is computed at admit by reading the artifact, never from a manifest
 /// handed to this process, and it is computed fresh on each call with no cache
 /// across an artifact change, which is what makes the third walk's alteration
-/// visible. **For a single-file artifact it reads the descriptor the load
-/// used**, so a name replaced during the load cannot change what is hashed:
-/// the descriptor holds the inode. What remains open is a directory-shaped
-/// artifact, whose members beyond the loaded container are named rather than
-/// pinned, and that closes with the native path that reads them.
+/// visible. **The members the load reads are hashed through the descriptors
+/// the pin holds**: a single file, every shard of a split, and the container
+/// met inside a walked directory. A name replaced during the admit therefore
+/// cannot change what is hashed, the descriptor holding the inode. A
+/// directory's other members are read by name, there being no load of them to
+/// agree with.
 pub fn weights_hash(
     reference: &Path,
     pinned: &mut PinnedArtifact,
-) -> crate::residency::WeightsHash {
-    // A reference naming one file hashes the descriptor the load used, which
-    // is what closes the swap window on the single-file case. A reference
-    // naming a directory hashes the walked directory, per the Spec's canonical
-    // manifest: its members beyond the container are not pinned, so that case
-    // keeps the window and the native path is where it closes.
+) -> Result<crate::residency::WeightsHash, LifecycleRefusal> {
     let hashed = if reference.is_dir() {
-        hash_canonical(reference)
+        hash_canonical(reference, pinned)
     } else {
         pinned.rewind().map_err(|_| ()).and_then(|()| {
             // Every shard feeds the hash in split order: the identity is the
@@ -667,39 +684,66 @@ pub fn weights_hash(
             Ok(hasher.finalize().to_hex().to_string())
         })
     };
-    match hashed {
-        Ok(value) => crate::residency::WeightsHash(value),
-        Err(()) => crate::residency::WeightsHash::sentinel(),
-    }
+    hashed
+        .map(crate::residency::WeightsHash)
+        .map_err(|()| LifecycleRefusal::ArtifactUnreadable)
 }
 
-fn hash_canonical(path: &Path) -> Result<String, ()> {
+/// Whether a directory entry's name marks it as outside the artifact. A
+/// downloader's bookkeeping, `.cache/` the standing case, sits beside the
+/// model under such a name and is no property of the weights.
+fn is_dot_entry(name: &std::ffi::OsStr) -> bool {
+    name.as_encoded_bytes().first() == Some(&b'.')
+}
+
+/// The canonical walk of a directory artifact, per Spec section 3: every
+/// regular file beneath it in sorted name order, dot-entries and everything
+/// under them excluded, symbolic links followed and their targets hashed under
+/// the link's name, each file contributing its path relative to the directory
+/// and then its bytes. **Every failure refuses**: an entry the walk cannot
+/// read, a link that leads nowhere or loops, and a pinned name the walk does
+/// not meet.
+fn hash_canonical(path: &Path, pinned: &mut PinnedArtifact) -> Result<String, ()> {
     let mut hasher = blake3::Hasher::new();
-    if path.is_dir() {
-        // A walked directory, in sorted order, so the manifest is canonical
-        // rather than dependent on readdir order. Each file contributes its
-        // relative path and then its bytes, so a rename is a different hash.
-        let mut files = Vec::new();
-        for entry in walkdir::WalkDir::new(path).sort_by_file_name() {
-            let entry = entry.map_err(|_| ())?;
-            if entry.file_type().is_file() {
-                files.push(entry.path().to_path_buf());
+    let mut met = vec![false; pinned.names.len()];
+    let walk = walkdir::WalkDir::new(path)
+        .follow_links(true)
+        .min_depth(1)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_entry(|entry| !is_dot_entry(entry.file_name()));
+    for entry in walk {
+        let entry = entry.map_err(|_| ())?;
+        // Regular files only, after the link is followed: a FIFO would block
+        // the read the way it would block the resolution's open.
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let relative = entry.path().strip_prefix(path).map_err(|_| ())?;
+        hasher.update(relative.to_string_lossy().as_bytes());
+        match pinned.names.iter().position(|name| name == entry.path()) {
+            Some(index) => {
+                met[index] = true;
+                let file = if index == 0 {
+                    &mut pinned.file
+                } else {
+                    &mut pinned.siblings[index - 1]
+                };
+                file.seek(SeekFrom::Start(0)).map_err(|_| ())?;
+                hash_reader_into(file, &mut hasher)?;
+            }
+            None => {
+                let mut handle = File::open(entry.path()).map_err(|_| ())?;
+                hash_reader_into(&mut handle, &mut hasher)?;
             }
         }
-        for file in files {
-            let relative = file.strip_prefix(path).map_err(|_| ())?;
-            hasher.update(relative.to_string_lossy().as_bytes());
-            hash_file_into(&file, &mut hasher)?;
-        }
-    } else {
-        hash_file_into(path, &mut hasher)?;
+    }
+    // A pinned name the walk did not meet was removed or renamed after the
+    // pin: the load reads its bytes and the identity would leave them out.
+    if met.contains(&false) {
+        return Err(());
     }
     Ok(hasher.finalize().to_hex().to_string())
-}
-
-fn hash_file_into(path: &Path, hasher: &mut blake3::Hasher) -> Result<(), ()> {
-    let mut handle = File::open(path).map_err(|_| ())?;
-    hash_reader_into(&mut handle, hasher)
 }
 
 fn hash_reader_into<R: Read>(reader: &mut R, hasher: &mut blake3::Hasher) -> Result<(), ()> {
@@ -1041,6 +1085,141 @@ mod tests {
             "the admission carries the file, never the directory"
         );
         assert_eq!(resolved.extension().and_then(|e| e.to_str()), Some("gguf"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A scratch directory artifact: a container and a sidecar, the shape a
+    /// downloaded safetensors directory has. Named per test so runs in
+    /// parallel never share one.
+    fn walked_fixture(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("weaver-spu-walk-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch dir");
+        std::fs::write(dir.join("model.safetensors"), b"the weights").expect("written");
+        std::fs::write(dir.join("config.json"), b"{}").expect("written");
+        dir
+    }
+
+    /// The admit's own sequence for the hash: resolve, pin, then hash the
+    /// reference through the pin.
+    fn hash_of(dir: &Path) -> Result<crate::residency::WeightsHash, LifecycleRefusal> {
+        let resolved = resolve(&ArtifactRef(dir.to_string_lossy().into_owned()))?;
+        let mut pinned = pin(&resolved)?;
+        weights_hash(dir, &mut pinned)
+    }
+
+    /// **A dot-entry is outside the artifact**, per Spec section 3 and the
+    /// operator's ruling of 2026-10-01 on #32: a downloader's `.cache/` beside
+    /// the model, readable or not, moves neither the identity nor the
+    /// resolution, and a container named under a dot is never the one
+    /// resolved.
+    ///
+    /// Perturbation: drop the walk's `filter_entry` and the hash moves.
+    #[test]
+    fn a_dot_entry_is_outside_the_identity() {
+        let dir = walked_fixture("dot");
+        let before = hash_of(&dir).expect("the fixture hashes");
+        let cache = dir.join(".cache").join("huggingface").join("trees");
+        std::fs::create_dir_all(&cache).expect("a cache dir");
+        std::fs::write(cache.join("rev.json"), b"downloader bookkeeping").expect("written");
+        std::fs::set_permissions(
+            cache.join("rev.json"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o000),
+        )
+        .expect("chmod");
+        std::fs::write(dir.join(".stray.safetensors"), b"not the model").expect("written");
+        assert_eq!(hash_of(&dir), Ok(before), "the dot-entries moved nothing");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **A symbolic link is followed and hashed under its own name**, per the
+    /// same ruling: a directory whose sidecar is a link to identical bytes
+    /// elsewhere is the same identity as one holding the file, and a container
+    /// reached through a link is hashed through the pin like any other.
+    ///
+    /// Perturbation: `follow_links(false)` and the linked sidecar drops out of
+    /// the walk, so the two identities differ.
+    #[test]
+    fn a_linked_member_is_hashed_under_the_links_name() {
+        let plain = walked_fixture("plain");
+        let linked = walked_fixture("linked");
+        let elsewhere = walked_fixture("elsewhere");
+        std::fs::remove_file(linked.join("config.json")).expect("removed");
+        std::os::unix::fs::symlink(elsewhere.join("config.json"), linked.join("config.json"))
+            .expect("a link");
+        std::fs::remove_file(linked.join("model.safetensors")).expect("removed");
+        std::os::unix::fs::symlink(
+            elsewhere.join("model.safetensors"),
+            linked.join("model.safetensors"),
+        )
+        .expect("a link");
+        assert_eq!(
+            hash_of(&linked).expect("a linked directory hashes"),
+            hash_of(&plain).expect("the plain directory hashes"),
+            "the link's target bytes under the link's name"
+        );
+        for dir in [plain, linked, elsewhere] {
+            std::fs::remove_dir_all(&dir).ok();
+        }
+    }
+
+    /// **A member the walk cannot read refuses the admission**, per the same
+    /// ruling, where it once admitted under the empty sentinel: an identity
+    /// that leaves out a member it could not read names other weights.
+    ///
+    /// Perturbation: skip a member whose open fails, and the hash is a value.
+    #[test]
+    fn an_unreadable_member_refuses() {
+        // The suite skips loudly rather than attesting to nothing: no mode
+        // denies root.
+        if nix::unistd::geteuid().is_root() {
+            eprintln!("skipped: no file mode denies root, rerun as an unprivileged uid");
+            return;
+        }
+        let dir = walked_fixture("unreadable");
+        std::fs::set_permissions(
+            dir.join("config.json"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o000),
+        )
+        .expect("chmod");
+        assert_eq!(hash_of(&dir), Err(LifecycleRefusal::ArtifactUnreadable));
+        // A link that leads nowhere is a member that cannot be read too.
+        let dangling = walked_fixture("dangling");
+        std::os::unix::fs::symlink(dangling.join("gone"), dangling.join("tokenizer.json"))
+            .expect("a link");
+        assert_eq!(
+            hash_of(&dangling),
+            Err(LifecycleRefusal::ArtifactUnreadable)
+        );
+        for dir in [dir, dangling] {
+            std::fs::remove_dir_all(&dir).ok();
+        }
+    }
+
+    /// **The container is hashed through the pin, inside the walk**: a name
+    /// replaced after the pin leaves the identity of the bytes the load reads,
+    /// and a name removed after it refuses rather than leave them out.
+    ///
+    /// Perturbation: open every walked file by name and the replaced case
+    /// hashes the new bytes.
+    #[test]
+    fn the_walk_reads_the_container_through_the_pin() {
+        let dir = walked_fixture("pinned");
+        let before = hash_of(&dir).expect("the fixture hashes");
+        let resolved = resolve(&ArtifactRef(dir.to_string_lossy().into_owned())).expect("resolves");
+        let mut pinned = pin(&resolved).expect("pins");
+        let swapped = dir.join("swapped");
+        std::fs::write(&swapped, b"other weights").expect("written");
+        std::fs::rename(&swapped, dir.join("model.safetensors")).expect("the swap");
+        assert_eq!(weights_hash(&dir, &mut pinned), Ok(before));
+
+        let mut pinned = pin(&resolved).expect("pins again");
+        std::fs::remove_file(dir.join("model.safetensors")).expect("removed");
+        assert_eq!(
+            weights_hash(&dir, &mut pinned),
+            Err(LifecycleRefusal::ArtifactUnreadable)
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }
