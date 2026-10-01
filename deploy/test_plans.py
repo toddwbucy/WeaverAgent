@@ -798,6 +798,47 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertFalse((self.config / "m1").exists())
         self.assertFalse((self.config / ".m1.partial").exists())
 
+    def test_a_new_name_is_made_only_where_no_other_principal_can_claim_it(self):
+        # Codex on #45, round 14: a sticky directory keeps another principal from
+        # renaming an entry, not from claiming a missing name, which a later
+        # root `install -d` or `tee` would follow. `creatable_in` refuses a
+        # sticky open directory that held_closed admits, in both scripts, and
+        # create-agent refuses a sticky base. Perturbation: drop the mode test.
+        sticky = self.root / "sticky"
+        sticky.mkdir()
+        sticky.chmod(0o1777)
+        closed = self.root / "closed"
+        closed.mkdir()
+        for script in ("create-agent.sh", "bootstrap-stack.sh"):
+            text = (self.repo / "deploy" / script).read_text()
+            body = "".join(text[text.index(f"{name}() {{"):text.index("\n}\n", text.index(f"{name}() {{")) + 3]
+                           for name in ("held_closed", "creatable_in"))
+            run = lambda d: subprocess.run(["bash", "-c", body + 'creatable_in "$1"', "bash", str(d)],
+                                           env=self.env, text=True, capture_output=True, timeout=20)
+            self.assertNotEqual(run(sticky).returncode, 0, script)
+            self.assertEqual(run(closed).returncode, 0, script)
+        self.env["ALLOW_APPLY_CHECKS"] = "1"
+        self.config.chmod(0o1777)
+        try:
+            result = self.create("--apply")
+        finally:
+            self.config.chmod(0o755)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("lets another principal make names in it", result.stderr)
+        self.assertFalse((self.config / ".m1.partial").exists())
+
+    def test_bootstrap_makes_every_record_entry_readable_whatever_the_umask(self):
+        # Codex on #45, round 14: under a 0077 umask `sudo tee` made the record's
+        # keys 0600, and the scripts that read the record without privilege
+        # then refused. Every file bootstrap writes with tee is made 0644.
+        # Perturbation: drop the chmod from `w`.
+        lines = (self.repo / "deploy" / "bootstrap-stack.sh").read_text().splitlines()
+        writes = [i for i, l in enumerate(lines) if "sudo tee " in l and not l.lstrip().startswith("#")]
+        self.assertTrue(writes)
+        for i in writes:
+            target = lines[i].split("sudo tee ")[1].split()[0]
+            self.assertIn(f"sudo chmod 0644 {target}", "\n".join(lines[i:i + 2]), lines[i])
+
     def test_spu_override_must_be_absolute(self):
         result = self.create("--spu", "relative/spu", "--apply")
         self.assertNotEqual(result.returncode, 0)

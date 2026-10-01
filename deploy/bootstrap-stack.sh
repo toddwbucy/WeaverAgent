@@ -133,6 +133,19 @@ held_closed() {
   done
 }
 
+# **creatable_in DIR: where a root step may make a new name.** DIR must be
+# held closed, and also writable by no group or other even when sticky: the
+# sticky bit keeps another principal from renaming an entry it does not own,
+# but not from claiming a name that does not exist yet, which a later root
+# `install -d` or `tee` would then follow (Codex on #45). Fails printing DIR.
+creatable_in() {
+  local bad mode
+  bad=$(held_closed "$1") || { printf '%s' "$bad"; return 1; }
+  read -r _ mode < <(stat -c '%u %a' -- "$(realpath -e -- "$1")" 2>/dev/null) || { printf '%s' "$1"; return 1; }
+  (( 8#$mode & 8#022 )) && { printf '%s' "$1"; return 1; }
+  return 0
+}
+
 standing() { # standing PATH: 0 stands, 1 absent, refuses where it cannot tell
   local err
   if err=$(LC_ALL=C stat -- "$1" 2>&1 >/dev/null); then return 0; fi
@@ -159,7 +172,13 @@ if standing "$PREFIX/bin"; then die "$PREFIX/bin already stands. Decommission fi
 for placed in "$ADMIN_BASE" "$STACK"; do
   at=$placed
   while ! standing "$at"; do at=$(dirname -- "$at"); done
-  bad=$(held_closed "$at") || die "$placed would stand under $bad, which is not held closed by root, so admin would refuse it"
+  # Where a component is still missing, the nearest standing directory must be
+  # one no other principal can make a name in, sticky or not.
+  if [ "$at" = "$placed" ]; then
+    bad=$(held_closed "$at") || die "$placed is not held closed by root at $bad, so admin would refuse it"
+  else
+    bad=$(creatable_in "$at") || die "$placed would be made under $bad, where another principal could claim the missing name first"
+  fi
 done
 
 say "tree"
@@ -227,6 +246,7 @@ sudo cp -a "${LIBS[@]}" "$PREFIX/lib/"
 sudo chown -h root:root "$PREFIX"/lib/*
 plan "installed ${#LIBS[@]} library files and links"
 printf '%s\n%s\n' "$PREFIX/lib" "$CUDA_LIB_DIR" | sudo tee "$LDSO_CONF" >/dev/null
+sudo chmod 0644 "$LDSO_CONF"
 sudo ldconfig
 plan "wrote $LDSO_CONF ($PREFIX/lib, $CUDA_LIB_DIR) and ran ldconfig"
 if ldd "$PREFIX/bin/weaver-spu" 2>/dev/null | grep -q 'not found'; then
@@ -237,7 +257,9 @@ plan "weaver-spu resolves: $(ldd "$PREFIX/bin/weaver-spu" | grep -cE 'ggml|llama
 
 say "stack record"
 sudo install -d -o root -g root -m 0755 "$STACK"
-w() { printf '%s\n' "$2" | sudo tee "$STACK/$1" >/dev/null; plan "$1 = $2"; }
+# Each key is made 0644 whatever the umask: create-agent.sh and update-stack.sh
+# read the record without privilege (Codex on #45).
+w() { printf '%s\n' "$2" | sudo tee "$STACK/$1" >/dev/null; sudo chmod 0644 "$STACK/$1"; plan "$1 = $2"; }
 w worker-binary "$PREFIX/bin/worker"
 w spu-binary "$PREFIX/bin/weaver-spu"
 w gate-binary "$PREFIX/bin/weaver-gate"
@@ -249,6 +271,7 @@ w log-directory "$LOG_DIR"
 w agent-directory "$AGENT_DIR"
 printf 'UMask=0000\nEnvironment=LD_LIBRARY_PATH=%s:%s\nLogRateLimitIntervalSec=30s\nLogRateLimitBurst=1000000\n' \
   "$PREFIX/lib" "$CUDA_LIB_DIR" | sudo tee "$STACK/unit-properties" >/dev/null
+sudo chmod 0644 "$STACK/unit-properties"
 plan "unit-properties = UMask, LD_LIBRARY_PATH, journal rate limit off"
 sudo install -d -o root -g root -m 0755 "$ADMIN_BASE"
 plan "admin base $ADMIN_BASE (empty)"

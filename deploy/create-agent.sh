@@ -168,6 +168,19 @@ held_closed() {
   done
 }
 
+# **creatable_in DIR: where a root step may make a new name.** DIR must be
+# held closed, and also writable by no group or other even when sticky: the
+# sticky bit keeps another principal from renaming an entry it does not own,
+# but not from claiming a name that does not exist yet, which a later root
+# `install -d` or `tee` would then follow (Codex on #45). Fails printing DIR.
+creatable_in() {
+  local bad mode
+  bad=$(held_closed "$1") || { printf '%s' "$bad"; return 1; }
+  read -r _ mode < <(stat -c '%u %a' -- "$(realpath -e -- "$1")" 2>/dev/null) || { printf '%s' "$1"; return 1; }
+  (( 8#$mode & 8#022 )) && { printf '%s' "$1"; return 1; }
+  return 0
+}
+
 trim() {
   local value=$1
   value=${value#"${value%%[![:space:]]*}"}
@@ -368,6 +381,11 @@ require_path -x "$ADMIN_BASE" "the admin base cannot be traversed"
 # directory above it another principal could write, so a base under a home
 # directory would be provisioned whole and then unusable (Codex on #45).
 bad=$(held_closed "$ADMIN_BASE") || die "the admin base $ADMIN_BASE is not held closed by root at $bad, so admin would refuse every verb on the agent"
+# The stage and the root are new names in the base, and the log directory is a
+# new name in the record's log-directory, so neither may let another principal
+# claim the name first.
+bad=$(creatable_in "$ADMIN_BASE") || die "the admin base $ADMIN_BASE lets another principal make names in it ($bad), so the stage could be claimed first"
+bad=$(creatable_in "$LOG_DIR") || die "the log directory $LOG_DIR lets another principal make names in it, or is not held closed ($bad)"
 
 # **Whose identity the store admits is settled and derived.** The charter has
 # the member hold a uid of its own and dial the store under it, and as of
