@@ -9,6 +9,7 @@ forward sudo, systemctl, package-manager or Cargo calls to the host.
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -579,6 +580,36 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertNotIn("== plan", result.stdout)
         self.assertNotIn("box is current", result.stdout)
         self.assert_unprivileged()
+
+
+class DecommissionNameTests(unittest.TestCase):
+    """decommission.sh's one entry for database and role names, sourced and run: a name
+    enters only as ASCII letters, digits and `_`, so no later use, SQL, archive path
+    or authentication line, sees another. Codex on #45 rounds 3 and 4, one class.
+    Perturbation: drop the shape check from `want`, and each hostile name enters."""
+
+    def run_want(self, *calls):
+        script = (DEPLOY / "decommission.sh").read_text()
+        start = script.index("declare -A DB_WANT=() ROLE_WANT=()")
+        end = script.index("for a in \"${!AGENTS[@]}\"; do", start)
+        body = script[start:end]
+        body += "".join(f"want {kind} {shlex.quote(name)}\n" for kind, name in calls)
+        body += 'printf "db %s\\n" "${!DB_WANT[@]}"; printf "role %s\\n" "${!ROLE_WANT[@]}"\n'
+        body += 'printf "unhandled %s\\n" "${UNHANDLED[@]}"\n'
+        out = subprocess.run(["bash", "-c", body], capture_output=True, text=True, check=True)
+        return [line for line in out.stdout.splitlines() if line.split(" ", 1)[1:] != [""]]
+
+    def test_only_the_suites_shape_enters(self):
+        lines = self.run_want(("database", "weaver_alpha"), ("role", "weaver_alpha"),
+                              ("database", "../../existing"), ("database", "a/b"),
+                              ("role", 'q"uote'), ("database", "research-db"))
+        self.assertIn("db weaver_alpha", lines)
+        self.assertIn("role weaver_alpha", lines)
+        for hostile in ("database ../../existing", "database a/b", 'role q"uote',
+                        "database research-db"):
+            self.assertIn(f"unhandled {hostile}", lines)
+            self.assertNotIn(hostile.replace("database ", "db ", 1), lines)
+        self.assertEqual(len([l for l in lines if l.startswith(("db ", "role "))]), 2, lines)
 
 
 STUB_ADMIN = """#!/bin/sh

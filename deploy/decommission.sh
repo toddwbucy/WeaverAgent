@@ -297,12 +297,27 @@ say "store"
 # candidates are `weaver_<agent>` for each agent found and whatever its
 # declaration names, and each is taken only where the catalogue holds it by
 # exactly that name.
+#
+# **A name enters only in the shape this suite creates**, ASCII letters, digits
+# and `_`, which is checked here, where every name enters, and nowhere later.
+# The names travel on as SQL identifiers, as archive file names and as
+# pg_hba/pg_ident fields, and a declaration may name any identifier PostgreSQL
+# accepts quoted, `/`, `..` and quotes among them; a name outside the shape is
+# printed as left alone and is never dumped, dropped or matched.
 declare -A DB_WANT=() ROLE_WANT=()
+UNHANDLED=()
+want() { # want database|role NAME
+  if [[ "$2" =~ ^[A-Za-z0-9_]+$ ]]; then
+    if [ "$1" = database ]; then DB_WANT["$2"]=1; else ROLE_WANT["$2"]=1; fi
+  else
+    UNHANDLED+=("$1 $2")
+  fi
+}
 for a in "${!AGENTS[@]}"; do
-  DB_WANT["weaver_$a"]=1; ROLE_WANT["weaver_$a"]=1
+  want database "weaver_$a"; want role "weaver_$a"
   if [ -n "${DECLS[$a]:-}" ]; then
-    v=$(declared "${DECLS[$a]}" state-store.database); [ -z "$v" ] || DB_WANT["$v"]=1
-    v=$(declared "${DECLS[$a]}" state-store.role); [ -z "$v" ] || ROLE_WANT["$v"]=1
+    v=$(declared "${DECLS[$a]}" state-store.database); [ -z "$v" ] || want database "$v"
+    v=$(declared "${DECLS[$a]}" state-store.role); [ -z "$v" ] || want role "$v"
   fi
 done
 PG_ROLES=(); PG_DBS=(); OTHER_DBS=(); HBA=""; IDENT=""
@@ -331,6 +346,7 @@ if systemctl is-active --quiet postgresql 2>/dev/null; then
   plan "roles      ${PG_ROLES[*]:-none}"
   plan "databases  ${PG_DBS[*]:-none}"
   [ ${#OTHER_DBS[@]} -eq 0 ] || plan "left alone, no agent found names them: ${OTHER_DBS[*]}"
+  for u in "${UNHANDLED[@]}"; do plan "left alone: not a name this script handles: $u"; done
   [ -z "$HBA" ]   || plan "hba lines   $(auth_lines hba "$HBA" "${PG_DBS[*]:-}" "${PG_ROLES[*]:-}" | wc -l) in $HBA"
   [ -z "$IDENT" ] || plan "ident lines $(auth_lines ident "$IDENT" "${PG_DBS[*]:-}" "${PG_ROLES[*]:-}" | wc -l) in $IDENT"
 else
