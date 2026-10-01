@@ -248,12 +248,17 @@ width as `DeviceCannotAdmit`.
 | A device count other than one | `FamilyRefusal::WidthNotDeclared` | `device_cannot_admit` |
 | The CPU experiment on another ordinal, a CUDA device absent, the room judgment, an unreachable device | `Device`, `DeviceRefused` | `device_cannot_admit` |
 | A family other than qwen2, or the turn markers not promoted to single tokens | `FamilyRefusal::UnknownFamily`, `MarkersMatchNoEntry` | `artifact_unreadable` |
-| A config or tokenizer that does not read, or any other failure before the weights are taken | the header step's `Unreadable` | `artifact_unreadable` |
+| A config that does not read, or any other failure before the weights are taken | the header step's `Unreadable`, `config.json` and `tokenizer_config.json` being its sidecars | `artifact_unreadable` |
+| A `tokenizer.json` that does not read | step four, `LoadFailed`: the native load reads the vocabulary | `device_cannot_admit` |
 | A quantized artifact; any failure while the engine takes the weights or places them, out of memory included | step four, `LoadFailed` | `device_cannot_admit` |
 | The weights hash's walk failing, or a pinned name it no longer meets | the hash step's `Unreadable`, per `weaver-spu-Spec` section 3 on the operator's ruling of 2026-10-01; the oracle's pinned commit predates that ruling and admits with the empty sentinel | `artifact_unreadable` |
 
-The quantized row is read from the Rust code rather than measured: the native backend
-names no quantization check, so such an artifact fails inside its load. The tests in
+The quantized row is traced through the Rust code rather than measured. The header
+step reads the family from `model_type` and never `quantization_config`, the native
+backend's `judge_family` judges the declared architecture alone, so a quantized qwen2
+passes both and never reaches `BackendDoesNotServe`, and its weights then fail in
+`VarBuilder::from_mmaped_safetensors` at BF16 or `ModelForCausalLM::new`, both mapped
+to `LoadFailed`, all in `decoder/native.rs` `ResidentModel::load`. The tests in
 `tests/test_load_kinds.py` hold each step's kind, the first look's against the Rust
 `resolve` through the oracle's `artifact` operation.
 

@@ -69,6 +69,15 @@ def test_a_sidecar_that_does_not_read_is_unreadable(copy):
     assert refused(copy) == "artifact_unreadable"
 
 
+def test_a_tokenizer_that_does_not_read_is_load_failed(copy):
+    """The Rust SPU reads `tokenizer.json` inside the native load, decoder/native.rs
+    `ResidentModel::load`, mapping its failure to `LoadFailed`; only `config.json` and
+    `tokenizer_config.json` are read at the header step. Perturbation: let the
+    tokenizer read fall to the pre-load catch-all, and this crosses as unreadable."""
+    (copy / "tokenizer.json").write_text("{ not json")
+    assert refused(copy) == "device_cannot_admit"
+
+
 def test_a_failure_taking_the_weights_is_load_failed(copy, monkeypatch):
     """The engine taking the weights is step four, whose failure the Rust SPU maps
     `LoadFailed` -> `DeviceCannotAdmit`. Perturbation: map every exception to

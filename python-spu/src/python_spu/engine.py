@@ -206,7 +206,10 @@ class HFEngine:
             if getattr(config,'quantization_config',None):
                 raise AdmissionError('device_cannot_admit','quantized artifacts unsupported')
             self.max_context=config.max_position_embeddings
-            self.tokenizer=Tokenizer.from_file(str(path/'tokenizer.json'))
+            # The Rust SPU reads the vocabulary inside the native load, step four, where
+            # a tokenizer.json that does not read is `LoadFailed` (decoder/native.rs).
+            try: self.tokenizer=Tokenizer.from_file(str(path/'tokenizer.json'))
+            except Exception as e: raise AdmissionError('device_cannot_admit',f'tokenizer.json: {e}') from None
             self.terminator=self.tokenizer.token_to_id('<|im_end|>')
             for marker in ('<|im_start|>','<|im_end|>'):
                 ids=self.tokenizer.encode(marker,add_special_tokens=False).ids
