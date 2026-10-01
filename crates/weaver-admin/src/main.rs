@@ -1176,9 +1176,10 @@ fn load_service_config(agent: &AgentName) -> Result<ServiceConfig, LifecycleRefu
 
 /// The admission and the read under a given base and owner, so a test can judge a
 /// root it made; every invocation passes the environment's base and root's uid.
-/// **A root with no declaration is no agent, for every verb**: the presence of
-/// `agent.toml` is judged here with the root, so `show` and `stop`, which take no
-/// inventory, refuse it as `load` and `validate` do.
+/// **A root with no declaration is no agent, for every verb**: `agent.toml` must be
+/// a regular file, a link followed to one, judged here with the root, so `show` and
+/// `stop`, which take no inventory, refuse a root without one as `load` and
+/// `validate` do. A directory or a dangling link at the name is no declaration.
 fn load_service_config_at(
     base: &std::path::Path,
     agent: &str,
@@ -1186,11 +1187,9 @@ fn load_service_config_at(
 ) -> Result<ServiceConfig, LifecycleRefusal> {
     let root = base.join(agent);
     judge_root(&root, owner)?;
-    match std::fs::symlink_metadata(root.join("agent.toml")) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(LifecycleRefusal::NoSuchAgent);
-        }
-        _ => {}
+    match std::fs::metadata(root.join("agent.toml")) {
+        Ok(declaration) if declaration.is_file() => {}
+        _ => return Err(LifecycleRefusal::NoSuchAgent),
     }
     load_service_config_from(&root, agent)
         .map_err(|_| LifecycleRefusal::ConfigInvalid { field: None })
@@ -1633,8 +1632,9 @@ mod tests {
     /// **A root with no declaration is no agent, for every verb**, per Spec
     /// section 9: the root's other keys standing do not make one. Found by
     /// Codex on #45, where `show` and `stop`, taking no inventory, read such a
-    /// root as an agent. Perturbation: drop the declaration check from
-    /// `load_service_config_at`, and the read without it succeeds.
+    /// root as an agent, and then a directory or dangling link at the name.
+    /// Perturbations: drop the declaration check, or judge presence alone with
+    /// `symlink_metadata`, and a case here reads.
     #[test]
     fn a_root_without_a_declaration_is_no_agent() {
         use std::os::unix::fs::PermissionsExt;
@@ -1649,6 +1649,21 @@ mod tests {
             load_service_config_at(&base, "alpha", me).err(),
             Some(LifecycleRefusal::NoSuchAgent)
         );
+        // A directory, and a link that leads nowhere, at the name are no declaration.
+        std::fs::create_dir(root.join("agent.toml")).unwrap();
+        assert_eq!(
+            load_service_config_at(&base, "alpha", me).err(),
+            Some(LifecycleRefusal::NoSuchAgent),
+            "a directory named agent.toml"
+        );
+        std::fs::remove_dir(root.join("agent.toml")).unwrap();
+        std::os::unix::fs::symlink(root.join("gone"), root.join("agent.toml")).unwrap();
+        assert_eq!(
+            load_service_config_at(&base, "alpha", me).err(),
+            Some(LifecycleRefusal::NoSuchAgent),
+            "a dangling link named agent.toml"
+        );
+        std::fs::remove_file(root.join("agent.toml")).unwrap();
         std::fs::write(root.join("agent.toml"), "").unwrap();
         let config = load_service_config_at(&base, "alpha", me).expect("a declared root reads");
         assert_eq!(config.agent, "alpha");

@@ -91,6 +91,10 @@ STACK=${WEAVER_STACK_RECORD:-$ETC/stack}
 # Whether a path stands outside /etc/weaver, which is archived whole.
 outside_etc() { case "$1" in "$ETC"|"$ETC"/*) return 1 ;; *) return 0 ;; esac; }
 read_key() { cat "$1/$2" 2>/dev/null || true; }
+# A name as a PostgreSQL quoted identifier: in double quotes, each double quote
+# doubled. A declaration may name any identifier PostgreSQL accepts quoted, such
+# as `research-db`, and an unquoted one is parsed as SQL rather than as the name.
+sql_ident() { local q='"'; printf '%s' "$q${1//$q/$q$q}$q"; }
 AGENT_NAME='^[A-Za-z0-9_-]+$'
 
 # The key roots, by rule: a directory one or two levels under /etc/weaver
@@ -484,12 +488,12 @@ systemctl stop "$SLICE" 2>/dev/null && plan "stopped $SLICE" || true
 say "store"
 while read -r kind name; do
   case $kind in
-    database) sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS $name;" >/dev/null && plan "dropped database $name" ;;
+    database) sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS $(sql_ident "$name");" >/dev/null && plan "dropped database $name" ;;
   esac
 done < "$DEST/PURGE-LIST"
 while read -r kind name; do
   case $kind in
-    role) sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c "DROP ROLE IF EXISTS $name;" >/dev/null && plan "dropped role $name" ;;
+    role) sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c "DROP ROLE IF EXISTS $(sql_ident "$name");" >/dev/null && plan "dropped role $name" ;;
   esac
 done < "$DEST/PURGE-LIST"
 # The databases and roles the archive listed, and only their lines go.
