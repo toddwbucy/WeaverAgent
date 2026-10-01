@@ -131,11 +131,12 @@ short of:
 
 - Section 2: the tree still carries an experimental ModernBERT classifier and its entry
   point, which section 1 scopes out of this implementation. The zipapp leaves it out.
-- Section 3.1: its oracle answers twelve operations, and runs a transport test over the
+- Section 3.1: its oracle answers eighteen operations, and runs a transport test over the
   oracle's descriptor:
   - `session`, `seed`, `measure`, `render` and `round`.
   - The sampler's `rng`, `select`, `generation`, `probs` and `weighted`.
-  - `artifact` and `weights_hash`.
+  - `artifact`, `weights_hash`, `header` and `registry_entries`.
+  - The model-free walk's `knobs`, `stops`, `registry` and `partition`.
 
   Every other operation the walk names is unbuilt.
 - Section 5: the sampler is the native engine's, ported and proven as section 5 says,
@@ -229,7 +230,7 @@ the walk in the act that moves the pin to it.
 | `sampling`: `derived_seed` | `seed`, and section 8.5's test vectors |
 | the native engine's `sample` | `generation`, `probs`, `select`, `weighted` and `rng`, mirrors, per section 5: it needs a loaded model, so the operations run the code it runs at the pinned revisions. `generation` is candle's `LogitsProcessor` with the engine's penalty over a whole generation, `probs` the probability vector's bits, `select` the whole index order `select_nth_unstable_by` leaves, `weighted` rand's `WeightedIndex` over scripted words, and `rng` the generator's words |
 | `decoder::native`, `native_pair`, `gguf`, `gguf_tap`, `gpu` | excluded as a whole: the engines, their taps and the device query, which section 4 makes this implementation's own. Two parts are excepted. The native sampler is excepted per the row above. `gpu::room_and_reach`'s room inequality is carried identically per section 3's room row: a mirror, since it needs a device, ported as `engine.judge_room`, with the sum saturating and `NoRoom`'s figures in the refusal's detail, since the wire's `device_cannot_admit` carries none |
-| the binary's `main.rs`: `headroom_from`, `HEADROOM_BYTES`, and `main`'s `bad_parameter` refusal | the process's command line, a mirror: a binary's items are not the library's, so no call reaches them. `server.parameters` ports the rule. The whole vector is read, a missing or malformed value is refused, a parameter stated twice is refused, and an unknown one is refused by name. An absent headroom is the compiled default. The entry refuses in `main`'s form: one JSON line, exit 1, before the channels are adopted. The tests hold it to `the_whole_vector_is_judged`'s cases and to the worker's `OrganParameters::spu_arguments`. python-spu's own `--cpu-experiment` and `--declare-imports`, which the worker never sends, follow the same rules |
+| the binary's `main.rs`: `headroom_from`, `HEADROOM_BYTES`, `main`'s `bad_parameter` refusal, and `KNOBS` and `SESSION_PARAMETERS`, the dispositions the binary elects | the process's command line, a mirror: a binary's items are not the library's, so no call reaches them. `server.parameters` ports the rule. The whole vector is read, a missing or malformed value is refused, a parameter stated twice is refused, and an unknown one is refused by name. An absent headroom is the compiled default. The entry refuses in `main`'s form: one JSON line, exit 1, before the channels are adopted. The tests hold it to `the_whole_vector_is_judged`'s cases and to the worker's `OrganParameters::spu_arguments`. python-spu's own `--cpu-experiment` and `--declare-imports`, which the worker never sends, follow the same rules. The dispositions are mirrored as `sampling.KNOBS` and `sampling.SESSION_PARAMETERS`, held to the binary's literal by `tests/test_walk.py`, and resolved through the library by the `knobs` operation |
 
 **Admission runs the Rust SPU's steps, in its order, and each failure crosses as its
 step's kind.** This table is the authority `engine.HFEngine` follows: its steps are
