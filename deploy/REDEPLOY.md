@@ -57,29 +57,33 @@ the runbook is what gets amended.
 
 ## 1. Decommission and archive
 
+> **`decommission.sh` does not yet understand the per-agent layout.** It was written for
+> the box-wide layout before 2026-10-01 (one `/etc/weaver/admin` with an `allow-list`).
+> **Do not run it on a box migrated to `/etc/weaver/admin/<agent>/` roots** until
+> toddwbucy/WeaverAgents#35 lands; until then take agents down by hand, per
+> `HowToDeployANewAgent.md` section 7. On a box still on the box-wide layout it runs as
+> described below.
+
 ```sh
-sudo deploy/decommission.sh --archive <dir>
+sudo deploy/decommission.sh --archive              # -> /mnt/bulk-store/dev-archive-<date>-<host>
 ```
 
-The archive directory is named every time; the script has no default, since where an
-archive may land is a fact of the box and its mounts. A bulk store may squash root to
-nobody, as the thinkpad's mount of olympus's export does, so the script reads as root
-and writes every byte under the archive directory as the operator, through `sudo -u`.
-Pass a directory the operator can create or already owns.
+The bulk store may squash root to nobody, as the thinkpad's mount of olympus's export does,
+so the script reads as root and writes every byte under the archive directory as the
+operator, through `sudo -u`. Pass a directory the operator can create or already owns.
 
 Refuses while any `weaver-worker@` unit is active: unload each with
 `sudo WEAVER_ADMIN_CONFIG=<root> <prefix>/bin/weaver-admin unload <name>` first, or
 stop the unit if admin will not. The archive holds:
 
 - `box-facts.txt`: accounts, groups, units, sha256 of every installed binary,
-  library and model, the store's roles and the agents' lines of the two
-  authentication files, and the mode of everything archived.
-- One `.tar.zst` per piece, owners, ACLs and xattrs preserved: `etc-weaver` (the stack
-  record, the admin base and every agent root), `ld-so-conf`, `opt-<prefix>` (bin, lib,
-  python-spu, the backup-* directories; never models), `install-<path>` for a binary
-  directory not named `bin`, `log-<path>` (the log directory and each agent's under
-  it, and `/var/lib/weaver`), `territory-<path>` (the agent directory and every
-  declaration's trace-sink directory), `home-weaver-users`, `tmp-weaver`.
+  library and model, the store's roles and the two authentication files' weaver
+  lines, and the mode of everything archived.
+- One `.tar.zst` per piece, owners, ACLs and xattrs preserved: `etc-weaver`,
+  `ld-so-conf`, `opt-<prefix>` (bin, lib, python-spu, the backup-* directories;
+  never models),
+  `var-lib-weaver`, `log-weaver`, `agent-config-<dir>` (declarations and traces),
+  `home-weaver-users`, `tmp-weaver`.
 - `postgres/<db>.dump` (custom format), `roles.sql`, and copies of `pg_hba.conf` and
   `pg_ident.conf`.
 - `PURGE-LIST`: the exact paths, users, groups, databases and roles the purge may
@@ -95,17 +99,15 @@ the installed one by 256 bytes, so the installed one is the only copy of itself.
 ## 2. Purge
 
 ```sh
-sudo deploy/decommission.sh --purge <dir>
+sudo deploy/decommission.sh --purge /mnt/bulk-store/dev-archive-<date>-<host>
 ```
 
-Stops units and the slice, drops the listed databases then the listed roles, removes
-from `pg_hba.conf` and `pg_ident.conf` only the lines naming them (backups beside the
-files) and reloads PostgreSQL, removes each agent's `weaver-<name>` and
-`weaver-<name>-state` users with their homes and their groups, removes every path on
-the list (every agent root goes with `/etc/weaver`, and every agent's log directory
-with the log directory), removes a prefix left empty, and prints what remains. After
-it, `getent passwd | grep weaver-` should show only accounts the plan printed as left
-alone, and `ls /opt/weaver` nothing but `models`.
+Stops units and the slice, drops the databases then the roles, removes the weaver
+lines from `pg_hba.conf` and `pg_ident.conf` (backups beside them) and reloads
+PostgreSQL, removes the `weaver-*` users with their homes and their groups, removes
+every path on the list, removes a prefix left empty, and prints what remains. After
+it, `getent passwd | grep weaver-` and `ls /opt/weaver` should show nothing but
+`models`.
 
 Not touched, because they are the operator's and not the stack's: the operator's
 membership of `video` and `render` (the agents' memberships go with their accounts),
@@ -300,4 +302,4 @@ installed. `<prefix>` is the install prefix, `/opt/weaver` by default.
    `/var/log/weaver/admin-operations.ndjson` stays where it is as the record of what
    came before; each agent's acts from here on are in its own `admin.log`. When the
    box has been verified, `/etc/weaver/admin.before-migration` can be archived and
-   removed; `decommission.sh` also finds it, as a key root, until it is.
+   removed.

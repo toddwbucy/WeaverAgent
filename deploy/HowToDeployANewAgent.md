@@ -201,8 +201,8 @@ first.
 
 ## 7. Taking an agent down
 
-`deploy/decommission.sh` takes down every agent on the box, archived first. For one
-agent, the pieces of section 0 are removed in reverse: unload; remove its root
+`deploy/decommission.sh` does not yet understand the per-agent layout and must not be
+run on a box on it until toddwbucy/WeaverAgents#35 lands. Take an agent down by hand: the pieces of section 0 are removed in reverse: unload; remove its root
 `/etc/weaver/admin/<name>/`, which ends its admission; for postgres, drop the database,
 then the role, and remove its two authentication lines; `userdel -r` both accounts;
 remove the territory and the log directory `/var/log/weaver/<name>/`. Archive the
