@@ -784,6 +784,20 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn(str(key) + " stands and cannot be read", result.stderr)
 
+    def test_create_agent_refuses_a_record_without_a_prefix_before_provisioning(self):
+        # Codex on #45, round 13: the prefix was read only in the closing
+        # message, inside a substitution whose refusal ended the subshell
+        # alone, so an absent prefix provisioned everything and exited 0. It is
+        # required at preflight. Perturbation: read it late again, and the
+        # apply provisions and succeeds.
+        (self.stack / "prefix").unlink()
+        self.env["ALLOW_APPLY_CHECKS"] = "1"
+        result = self.create("--apply")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no prefix in the stack record", result.stderr)
+        self.assertFalse((self.config / "m1").exists())
+        self.assertFalse((self.config / ".m1.partial").exists())
+
     def test_spu_override_must_be_absolute(self):
         result = self.create("--spu", "relative/spu", "--apply")
         self.assertNotEqual(result.returncode, 0)

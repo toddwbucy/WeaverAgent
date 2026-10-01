@@ -205,6 +205,12 @@ for key in $REQUIRED_KEYS; do stack_key "$key" required >/dev/null || exit 1; do
 for key in $OPTIONAL_KEYS; do stack_key "$key" optional >/dev/null || exit 1; done
 LOG_DIR=$(stack_key log-directory required) || exit 1
 AGENT_DIR=$(stack_key agent-directory required) || exit 1
+# **The install prefix is a script-required key, read here and never copied
+# into the root.** It was read only in the closing message, inside a command
+# substitution whose refusal ended the subshell alone, so an absent prefix
+# refused on stderr after everything was provisioned and the run still
+# succeeded (Codex on #45).
+PREFIX=$(stack_key prefix required) || exit 1
 LOG_PATH="$LOG_DIR/$NAME/admin.log"
 SPU_BINARY=${SPU_OVERRIDE:-$(stack_key spu-binary required)} || exit 1
 # **The stack's file names are judged as admin judges them, before anything is
@@ -609,4 +615,4 @@ say "made"
 printf '   %s joined group %s: a session that predates this run needs a new\n' "$OPERATOR" "$AGENT_USER"
 printf '   login, or `newgrp %s`, before the group applies\n' "$AGENT_USER"
 printf '   validate it before loading:\n'
-printf '     sudo WEAVER_ADMIN_CONFIG=%s %s validate %s\n' "$ADMIN_BASE" "$(stack_key prefix required)/bin/weaver-admin" "$NAME"
+printf '     sudo WEAVER_ADMIN_CONFIG=%s %s validate %s\n' "$ADMIN_BASE" "$PREFIX/bin/weaver-admin" "$NAME"
