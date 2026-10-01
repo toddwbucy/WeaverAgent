@@ -151,13 +151,14 @@ short of:
 - Section 3.1, the `tokenize` row: the operation is unbuilt, so the tokenizer's
   equivalence with the Rust side's is unproven until it lands.
 
-**The list names the gaps known at the carry, and it is not a walk.** Three of them were
-found by the review of the carry itself. The hardening act walks every exchange and
-every refusal of `weaver-harness-spu-contract` and `weaver-harness-spu-decode-contract`
-against the prototype, per H3's rule that a seam is exercised against its contract's
-failure cases. It starts from the cancel gap's sibling, which the walk judges against
-the contract's exchange rule: `server.py` answers an ask arriving mid-generation with a
-bare `{'kind': 'out_of_order'}` message. Epic #25 carries the walk as one item.
+**The list names the gaps known at the carry, and it is not a walk.** The cancel gap was
+found by the review of the carry itself (toddwbucy/WeaverTools-old2#729). The hardening
+act walks every exchange and every refusal of `weaver-harness-spu-contract` and
+`weaver-harness-spu-decode-contract` against the prototype, per H3's rule that a seam is
+exercised against its contract's failure cases. It starts from the cancel gap's sibling,
+which the walk judges against the contract's exchange rule: `server.py` answers an ask
+arriving mid-generation with a bare `{'kind': 'out_of_order'}` message. Epic #25
+carries the walk as one item.
 
 ## 3. What it carries identically
 
