@@ -1734,7 +1734,14 @@ are bound by the same judgments before they commit**: `create-agent.sh`,
 `bootstrap-stack.sh` and `verify-load.sh` apply this rule (`held_closed`), and any
 judgment admin gains here is one they must apply before they provision, publish or run
 a root, so that no script leaves a root admin then refuses or runs a program admin
-would not. Every
+would not. **The line those judgments hold is another principal's choice.** The
+operator runs every script and holds root, so a value the operator supplies (the
+environment, the arguments, the build, a directory under the operator's own home) is
+the operator's own choice and not an escalation. A defect is a root step acting on a
+value another principal can choose: an agent's account, its state member's account,
+any other local user, or a root-owned path re-pointed through a directory such a
+principal can write. Every such value is judged before the step, by this section's
+rule, by admin's own answer, or by reading it as the principal that owns it. Every
 value below is read from the root before any verb, and a value that fails to read fails
 the invocation as `ConfigInvalid` with no field.
 
