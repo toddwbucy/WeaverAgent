@@ -555,9 +555,13 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
                 (self.config / retired).unlink()
 
     def test_stack_agents_are_the_roots_under_the_base(self):
-        # A staged root under a dot-name and a plain file are not agents.
+        # A staged root under a dot-name, a plain file, and a root with no
+        # declaration are not agents, as admin refuses the last for every verb.
+        # Perturbation: drop the declaration check and `undeclared` is listed.
         (self.config / ".m2.partial").mkdir()
         (self.config / "stray-file").write_text("x")
+        (self.config / "undeclared").mkdir()
+        (self.config / "undeclared" / "worker-binary").write_text("/x")
         result = self.run_script("update-stack.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
         agents_line = next(l for l in result.stdout.splitlines() if l.startswith("  agents"))

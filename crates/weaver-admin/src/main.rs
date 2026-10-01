@@ -1171,9 +1171,28 @@ fn load_service_config(agent: &AgentName) -> Result<ServiceConfig, LifecycleRefu
     let base = std::env::var_os("WEAVER_ADMIN_CONFIG")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_BASE));
-    let root = base.join(&agent.0);
-    judge_root(&root, 0)?;
-    load_service_config_from(&root, &agent.0)
+    load_service_config_at(&base, &agent.0, 0)
+}
+
+/// The admission and the read under a given base and owner, so a test can judge a
+/// root it made; every invocation passes the environment's base and root's uid.
+/// **A root with no declaration is no agent, for every verb**: the presence of
+/// `agent.toml` is judged here with the root, so `show` and `stop`, which take no
+/// inventory, refuse it as `load` and `validate` do.
+fn load_service_config_at(
+    base: &std::path::Path,
+    agent: &str,
+    owner: u32,
+) -> Result<ServiceConfig, LifecycleRefusal> {
+    let root = base.join(agent);
+    judge_root(&root, owner)?;
+    match std::fs::symlink_metadata(root.join("agent.toml")) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(LifecycleRefusal::NoSuchAgent);
+        }
+        _ => {}
+    }
+    load_service_config_from(&root, agent)
         .map_err(|_| LifecycleRefusal::ConfigInvalid { field: None })
 }
 
@@ -1608,6 +1627,31 @@ mod tests {
             Err(LifecycleRefusal::NoSuchAgent),
             "a link at the root is not followed"
         );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **A root with no declaration is no agent, for every verb**, per Spec
+    /// section 9: the root's other keys standing do not make one. Found by
+    /// Codex on #45, where `show` and `stop`, taking no inventory, read such a
+    /// root as an agent. Perturbation: drop the declaration check from
+    /// `load_service_config_at`, and the read without it succeeds.
+    #[test]
+    fn a_root_without_a_declaration_is_no_agent() {
+        use std::os::unix::fs::PermissionsExt;
+        let me = nix::unistd::getuid().as_raw();
+        let base =
+            std::env::temp_dir().join(format!("weaver-admin-no-decl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("alpha");
+        write_root(&root);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            load_service_config_at(&base, "alpha", me).err(),
+            Some(LifecycleRefusal::NoSuchAgent)
+        );
+        std::fs::write(root.join("agent.toml"), "").unwrap();
+        let config = load_service_config_at(&base, "alpha", me).expect("a declared root reads");
+        assert_eq!(config.agent, "alpha");
         let _ = std::fs::remove_dir_all(&base);
     }
 

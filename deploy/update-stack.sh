@@ -103,13 +103,15 @@ done
 
 # **The agents are the roots under the base**, named as admin's name check
 # admits them (ASCII letters, digits, `-` and `_`), so a staged root
-# `create-agent.sh` left under a dot-name is not one. A symlink is not a root.
+# `create-agent.sh` left under a dot-name is not one. A symlink is not a root,
+# and a root with no `agent.toml` is no agent, as admin refuses it for every verb.
 AGENTS=""
 for root in "$ADMIN_BASE"/*/; do
   root=${root%/}
   [ -d "$root" ] && [ ! -L "$root" ] || continue
   agent=${root##*/}
   [[ "$agent" =~ ^[A-Za-z0-9_-]+$ ]] || continue
+  [ -f "$root/agent.toml" ] || continue
   AGENTS="$AGENTS $agent"
 done
 [ -n "$AGENTS" ] || die "no agent root under $ADMIN_BASE: make one with create-agent.sh first"
