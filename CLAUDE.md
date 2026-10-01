@@ -27,8 +27,9 @@ cross-repository contracts and the process documents. Until it does, those live 
 
 Issue and pull request numbers in inherited code and documents (`#689`, `#551`, ...) are
 monorepo numbers. Its 31 open issues were transferred to `toddwbucy/WeaverAgents` on
-2026-09-30 and carry new numbers there. Every `toddwbucy/WeaverTools` reference inside
-this tree predates the rename and means the monorepo.
+2026-09-30 and carry new numbers there. A `toddwbucy/WeaverTools` reference in a
+document or code written before 2026-09-30 means the monorepo; this file uses the name
+for the suite repository.
 
 All of these repositories were **public** on 2026-09-30. Check rather than assume:
 `gh repo view toddwbucy/WeaverAgents --json visibility`.
@@ -238,8 +239,8 @@ Two Claude Code sessions and the operator (Todd), who closes every loop. The
 **Planner** (thinkpad seat) plans, grades drafts and handles third-party review; the
 **Executor** (olympus seat, or a `-executor` session) writes code on a branch from
 `main`, from a worktree, and opens a **draft** pull request. Nobody pushes to `main`
-directly, except that edits to this file and `AGENTS.md` are the Planner's and go to
-`main` directly.
+directly: it is branch-protected (a direct push was refused on 2026-09-30), so edits to
+this file and `AGENTS.md`, which are the Planner's, also go through a pull request.
 
 1. Gates first: `lock.sh`, fmt, clippy for the touched crate.
 2. The Planner grades the draft against a clean extract of the head. The body carries
