@@ -1721,7 +1721,15 @@ agent's identity and a root another principal could write would hand that princi
 agent. **Every entry of the root is held closed the same way**: a regular file, never a
 link, owned by uid 0 and writable by no group or other, or the invocation refuses
 `BoundaryUnverified`, since the values name programs this invocation runs as root and a
-directory's own mode stops neither a writable file inside it nor a link leading out. Every
+directory's own mode stops neither a writable file inside it nor a link leading out.
+**Every directory above the root is held closed too**, as sshd's StrictModes judges a
+path. The root is resolved once to its canonical path. Each directory from its parent up
+to `/` must be owned by uid 0 and writable by no group or other, unless its sticky bit is
+set, which keeps another principal from renaming an entry it does not own. Otherwise the
+invocation refuses `BoundaryUnverified`, naming the directory on stderr. A directory
+another principal could write would let it rename the judged root away and stand its own
+in its place between the judgment and the reads. Every read then goes through that
+canonical root, never a pathname re-resolved after the judgment. Every
 value below is read from the root before any verb, and a value that fails to read fails
 the invocation as `ConfigInvalid` with no field.
 

@@ -1192,6 +1192,9 @@ fn load_service_config_at(
 ) -> Result<ServiceConfig, LifecycleRefusal> {
     let root = base.join(agent);
     judge_root(&root, owner)?;
+    // Every read below goes through the canonical root whose every ancestor was
+    // judged, never a pathname another principal could re-point after the judgment.
+    let root = judge_ancestors(&root, owner)?;
     match std::fs::metadata(root.join("agent.toml")) {
         Ok(declaration) if declaration.is_file() => {}
         _ => return Err(LifecycleRefusal::NoSuchAgent),
@@ -1224,6 +1227,42 @@ fn judge_entries(root: &std::path::Path, owner: u32) -> Result<(), LifecycleRefu
         }
     }
     Ok(())
+}
+
+/// **Every directory above the root is closed too**, per Spec section 9, as
+/// sshd's StrictModes judges a path: the root is resolved once to its canonical
+/// path, and each directory from its parent up to `/` must be held by `owner` or
+/// by root, and writable by no group or other unless its sticky bit is set, which
+/// keeps another principal from renaming an entry it does not own. A directory
+/// another principal could write would let it rename the judged root away and
+/// stand its own in its place, with a `run-tool` this invocation then runs as
+/// root, between the judgment and the reads. The refusal is `BoundaryUnverified`,
+/// and the directory is named on stderr. Answers the canonical root, which every
+/// later read uses.
+fn judge_ancestors(
+    root: &std::path::Path,
+    owner: u32,
+) -> Result<std::path::PathBuf, LifecycleRefusal> {
+    use std::os::unix::fs::MetadataExt;
+    let canonical =
+        std::fs::canonicalize(root).map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
+    let mut above = canonical.parent();
+    while let Some(directory) = above {
+        let metadata = std::fs::symlink_metadata(directory)
+            .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
+        let held = metadata.uid() == owner || metadata.uid() == 0;
+        let closed = metadata.mode() & 0o022 == 0 || metadata.mode() & 0o1000 != 0;
+        if !held || !closed {
+            eprintln!(
+                "weaver-admin: {} above the agent's root is held or writable by another \
+                 principal, so the root cannot be vouched for",
+                directory.display()
+            );
+            return Err(LifecycleRefusal::BoundaryUnverified);
+        }
+        above = directory.parent();
+    }
+    Ok(canonical)
 }
 
 /// **The agent's root is admitted only as a directory `owner` holds that no
@@ -1657,6 +1696,57 @@ mod tests {
             Err(LifecycleRefusal::NoSuchAgent),
             "a link at the root is not followed"
         );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **Every directory above the root is closed as the root is**, per Spec
+    /// section 9: a directory a group or the world may write refuses
+    /// `BoundaryUnverified` unless it is sticky, and a closed or sticky one
+    /// admits. Codex on #45, round 9: a writable ancestor let another principal
+    /// swap the judged root before the reads. Perturbation: drop the
+    /// `judge_ancestors` call, and the open base reads.
+    #[test]
+    fn every_directory_above_the_root_is_closed() {
+        use std::os::unix::fs::PermissionsExt;
+        let me = nix::unistd::getuid().as_raw();
+        let base =
+            std::env::temp_dir().join(format!("weaver-admin-ancestors-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("alpha");
+        write_root(&root);
+        std::fs::write(root.join("agent.toml"), "").unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let base_mode =
+            |bits| std::fs::set_permissions(&base, std::fs::Permissions::from_mode(bits)).unwrap();
+        for open in [0o775, 0o757, 0o777] {
+            base_mode(open);
+            assert_eq!(
+                load_service_config_at(&base, "alpha", me).err(),
+                Some(LifecycleRefusal::BoundaryUnverified),
+                "a base of mode {open:o} lets another principal swap the root"
+            );
+        }
+        for closed in [0o755, 0o1777] {
+            base_mode(closed);
+            assert!(
+                load_service_config_at(&base, "alpha", me).is_ok(),
+                "a base of mode {closed:o} admits"
+            );
+        }
+        // A writable directory two levels up refuses as the parent does.
+        let deeper = base.join("deeper");
+        write_root(&deeper.join("beta"));
+        std::fs::write(deeper.join("beta").join("agent.toml"), "").unwrap();
+        std::fs::set_permissions(deeper.join("beta"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        std::fs::set_permissions(&deeper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        base_mode(0o777);
+        assert_eq!(
+            load_service_config_at(&deeper, "beta", me).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a writable grandparent"
+        );
+        base_mode(0o755);
         let _ = std::fs::remove_dir_all(&base);
     }
 
