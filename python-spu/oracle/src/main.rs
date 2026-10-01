@@ -57,9 +57,11 @@ fn run(v: Value, raw_body: &str) -> Result<Value, String> {
             Ok(json!({"container": format!("{:?}", header.container), "family": header.family.0,
                 "template": header.chat_template}))
         },
-        // weaver-spu family/mod.rs's REGISTRY, its families in order.
-        "registry_families" => Ok(json!(weaver_spu::family::REGISTRY.iter()
-            .map(|declaration| declaration.family).collect::<Vec<_>>())),
+        // weaver-spu family/mod.rs's REGISTRY in order: each entry's family, the device
+        // widths it declares, and whether it taps the readout.
+        "registry_entries" => Ok(json!(weaver_spu::family::REGISTRY.iter()
+            .map(|d| json!({"family": d.family, "widths": d.shard_widths, "taps_readout": d.taps_readout}))
+            .collect::<Vec<_>>())),
         "render" => {
             let messages: Vec<weaver_traits::Message> = serde_json::from_value(body).map_err(|e| e.to_string())?;
             weaver_spu::family::qwen2::renderer().render_identity(&messages)

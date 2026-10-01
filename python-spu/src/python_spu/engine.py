@@ -103,6 +103,19 @@ def pinned_tensors(pinned):
             for key in f.keys(): tensors[key]=f.get_tensor(key)
     return tensors
 
+def file_digest(pinned):
+    """weaver-spu artifact.rs `weights_hash` for a reference naming a file: the pinned
+    descriptors' bytes in shard order, names excluded, in blake3. A read that fails is
+    unreadable."""
+    digest=blake3()
+    for _,fd in pinned:
+        at=0
+        while True:
+            chunk=os.pread(fd,1<<20,at)
+            if not chunk: break
+            digest.update(chunk); at+=len(chunk)
+    return digest.hexdigest()
+
 def weights_digest(path,pinned):
     """weaver-spu artifact.rs `hash_canonical`'s value: every regular file under the
     directory, sorted, symbolic links not followed, its relative path and then its
@@ -200,9 +213,14 @@ class _Header:
     weaver-spu artifact.rs's `read_exact` maps its failures."""
     def __init__(self,fd): self.fd=fd; self.at=0
     def take(self,n):
-        try: data=os.pread(self.fd,n,self.at)
-        except OSError as e: raise AdmissionError('artifact_unreadable',f'the header does not read: {e}') from None
-        if len(data)!=n: raise AdmissionError('artifact_unreadable','the header is short')
+        # `read_exact`: a short read is read on from where it stopped until n bytes or
+        # the end, an interrupted read retried (CPython retries EINTR itself, PEP 475).
+        data=b''
+        while len(data)<n:
+            try: chunk=os.pread(self.fd,n-len(data),self.at+len(data))
+            except OSError as e: raise AdmissionError('artifact_unreadable',f'the header does not read: {e}') from None
+            if not chunk: raise AdmissionError('artifact_unreadable','the header is short')
+            data+=chunk
         self.at+=n; return data
     def u32(self): return int.from_bytes(self.take(4),'little')
     def u64(self): return int.from_bytes(self.take(8),'little')
@@ -268,34 +286,55 @@ def read_header(fd,sidecars):
     return {'container':'safetensors','family':family,
             'template':template if isinstance(template,str) else None}
 
-# weaver-spu family/mod.rs `REGISTRY`'s families, in its order, a family named twice
-# being contested between entries told apart by the chat template. tests/test_load_kinds.py
-# holds this to the registry by the oracle.
-REGISTRY_FAMILIES=['llama','llama','llama','qwen2','qwen3','qwen3moe','qwen35','qwen35moe',
-                   'gemma4','nemotron_h_moe','mistral3','phi3','phi3','gpt-oss']
+# weaver-spu family/mod.rs `REGISTRY`, in its order: each entry's family, the device
+# widths it declares and whether it taps the readout. A family named twice is contested
+# between entries told apart by the chat template. tests/test_load_kinds.py holds this
+# to the registry by the oracle.
+REGISTRY=[
+    ('llama',(1,2),False),('llama',(1,2),False),('llama',(1,2),False),
+    ('qwen2',(1,2),True),('qwen3',(1,2),True),('qwen3moe',(1,2),False),
+    ('qwen35',(1,2),False),('qwen35moe',(1,2),True),('gemma4',(1,2),False),
+    ('nemotron_h_moe',(1,2),False),('mistral3',(1,2),False),('phi3',(1,2),False),
+    ('phi3',(1,2),False),('gpt-oss',(1,2),False)]
 
-def backend_not_built(header):
-    """What the Rust SPU answers for a header this build has no backend for, judged as
-    its admit judges it before step four: a family the registry does not hold is
-    `UnknownFamily`, and a contested family with no template `TemplateAbsent`, both
-    unreadable; any other passes the free steps and meets `BackendNotBuilt`,
-    `device_cannot_admit`. A contested family's template is matched by llama.cpp's
-    renderer in the Rust SPU, which this build does not carry, so a template it would
-    match no entry by is answered here as it would be had it matched."""
+# **The admission's steps, in the Rust SPU's order, and the kind each refuses as**,
+# weaver-spu residency.rs `admit` and decoder/native.rs `ResidentModel::load`, per
+# python-spu-Spec section 3.1's step table, which this list follows. A failure inside a
+# step, anticipated or not, crosses as that step's kind.
+ADMISSION_STEPS={
+    'resolve':'artifact_unreadable',   # artifact.rs `resolve`: absent is unresolvable, raised
+                                       # as such, and any other failed look unreadable
+    'pin':'artifact_unreadable',       # artifact.rs `pin`: an absent shard unresolvable, raised
+    'header':'artifact_unreadable',    # artifact.rs `read_header`, step two
+    'select':'artifact_unreadable',    # family `select`: UnknownFamily, TemplateAbsent
+    'width':'device_cannot_admit',     # family `judge_width`: WidthNotDeclared
+    'readout':'device_cannot_admit',   # readout `judge`: NotTappable
+    'distinct':'device_cannot_admit',  # residency `judge_distinct`: DuplicateDevice
+    'size':'artifact_unreadable',      # the pinned size, `on_artifact` "size"
+    'room':'device_cannot_admit',      # `judge_room_and_reach`: Device, DeviceRefused
+    'hash':'artifact_unreadable',      # artifact.rs `weights_hash`
+    'load':'device_cannot_admit',      # `load`: BackendNotBuilt, LoadFailed
+}
+
+def select(header):
+    """family/mod.rs `select` over the registry above: no entry by the key is
+    `UnknownFamily`, a contested family with no template `TemplateAbsent`. A contested
+    family's template is matched in the Rust SPU by llama.cpp's renderer, which this
+    build does not carry, so its candidates stand together. Answers the candidates."""
     from .family import same_key
-    matches=[f for f in REGISTRY_FAMILIES if same_key(f,header['family'])]
-    if not matches: raise AdmissionError('artifact_unreadable',f"no family {header['family']}")
-    if len(matches)>1 and header['template'] is None:
+    candidates=[entry for entry in REGISTRY if same_key(entry[0],header['family'])]
+    if not candidates: raise AdmissionError('artifact_unreadable',f"no family {header['family']}")
+    if len(candidates)>1 and header['template'] is None:
         raise AdmissionError('artifact_unreadable',f"{header['family']} is contested and names no template")
-    raise AdmissionError('device_cannot_admit',f"this build carries no backend for {header['container']} {header['family']}")
+    return candidates
 
 def resolve_directory(path):
     """weaver-spu artifact.rs `resolve`, its first look, ported: nothing at the path, or
     a path through a non-directory, is unresolvable; a lookup the kernel refuses is a
     present artifact this identity cannot reach, unreadable; anything but a directory or
     a regular file is unresolvable. Answers 'directory' or 'file': **a regular file
-    resolves in the Rust SPU and is a shape this build does not serve**, judged after its
-    header by `backend_not_built`."""
+    resolves in the Rust SPU and is a shape this build does not serve**, refused at the
+    load as the Rust SPU's `BackendNotBuilt` is, after the steps before it."""
     try: mode=os.stat(path).st_mode
     except (FileNotFoundError,NotADirectoryError):
         raise AdmissionError('artifact_unresolvable',str(path)) from None
@@ -315,67 +354,77 @@ class HFEngine:
         self.placing=False
         self.logits=None; self.norms=[]; self.current_norms=[]; self.readout=readout
         path=Path(artifact)
-        reference=resolve_directory(path)
-        # Step one, as the Rust SPU's: the directory resolves to its containers, free.
-        members=containers(path) if reference=='directory' else [path]
-        # Step two, before any device is judged: the header through the pin. A GGUF
-        # container, or a file reference, is a shape whose backend this build does not
-        # carry, answered as the Rust SPU answers its header before step four.
-        self.pinned=pin(members)
+        # The steps of weaver-spu residency.rs `admit` in its order, each named, so a
+        # failure inside one crosses as that step's kind, per `ADMISSION_STEPS`.
+        model=None; failure=None; step='resolve'
         try:
+            reference=resolve_directory(path)
+            members=containers(path) if reference=='directory' else [path]
+            step='pin'; self.pinned=pin(members)
+            step='header'
             header=read_header(self.pinned[0][1],path if reference=='directory' else path.parent)
-            if reference=='file' or header['container']=='gguf': backend_not_built(header)
-            if len(devices)!=1: raise AdmissionError('device_cannot_admit','one device required')
+            step='select'; candidates=select(header)
+            step='width'
+            if not any(len(devices) in widths for _,widths,_ in candidates):
+                raise AdmissionError('device_cannot_admit',f'{len(devices)} devices is a width {header["family"]} does not declare')
+            step='readout'
+            if readout and not any(taps for _,_,taps in candidates):
+                raise AdmissionError('device_cannot_admit',f'{header["family"]} does not tap the readout')
+            step='distinct'
+            if len(set(devices))!=len(devices): raise AdmissionError('device_cannot_admit','a device is named twice')
+            step='size'; shard_bytes=pinned_size(self.pinned)//len(devices)
+            # **The room is the device's**, judged before the weights load, as the Rust
+            # SPU judges it. A CPU experiment has no device and so no room to judge.
+            step='room'
             if cpu and devices!=[0]: raise AdmissionError('device_cannot_admit','CPU experiment requires ordinal 0')
             self.device='cpu' if cpu else f'cuda:{devices[0]}'
-            if not cpu and (not torch.cuda.is_available() or devices[0]>=torch.cuda.device_count()):
-                raise AdmissionError('device_cannot_admit','assigned CUDA device unavailable')
-        except BaseException:
-            self._unpin(); raise
-        # A refusal is recorded here and raised after the except block ends, so the frames
-        # and the exception that hold a part-moved model are gone when the cache is freed.
-        model=None; failure=None
-        # **Which step a failure lands in decides its wire kind**, per python-spu-Spec
-        # section 3.1, as weaver-spu residency.rs maps its own: a read of the artifact
-        # or its sidecars is `Unreadable` and crosses `artifact_unreadable`; the engine
-        # taking the weights is step four, `LoadFailed`, which crosses
-        # `device_cannot_admit`.
-        loading=False
-        try:
-            # The pin, taken above and held for the admit. The sidecars, config and
-            # tokenizer, are opens by name, the limit weaver-spu's native `sidecar_dir`
-            # states for its own.
+            if not cpu:
+                if not torch.cuda.is_available() or devices[0]>=torch.cuda.device_count():
+                    raise AdmissionError('device_cannot_admit','assigned CUDA device unavailable')
+                free,total=torch.cuda.mem_get_info(devices[0])
+                judge_room(devices[0],free,total,shard_bytes,headroom)
+            # The hash before any device is taken, as weaver-spu-Spec section 3 places it.
+            # The kind is the resolution's, as weaver-spu `resolve_with_kind` carries it.
+            step='hash'
+            self.weights_hash=(weights_digest(path,self.pinned) if reference=='directory'
+                               else file_digest(self.pinned))
+            # Step four, decoder/native.rs `ResidentModel::load` in its order. A GGUF
+            # container or a file reference is a backend this build does not carry.
+            step='load'
+            if reference=='file' or header['container']=='gguf':
+                raise AdmissionError('device_cannot_admit',f"this build carries no backend for {header['container']} {header['family']}")
+            if len(devices)!=1: raise AdmissionError('device_cannot_admit','this build serves one device')
+            # `read_declaration` then `judge_family` on the declaration's own
+            # `model_type`, BackendDoesNotServe crossing unreadable, the one step-four
+            # refusal that does.
+            declared=strict_json((path/'config.json').read_bytes())
+            from .family import SERVED_ARCHITECTURE,same_key
+            model_type=declared.get('model_type') if isinstance(declared,dict) else None
+            if not isinstance(model_type,str) or not same_key(model_type,SERVED_ARCHITECTURE):
+                raise AdmissionError('artifact_unreadable',f'the native backend does not serve {model_type}')
+            # `read_config`: a quantized artifact is one the engine cannot take.
             config=AutoConfig.from_pretrained(path,local_files_only=True,trust_remote_code=False)
-            if config.model_type!='qwen2': raise AdmissionError('artifact_unreadable','only qwen2 is verified')
-            # A quantized safetensors artifact is one the engine cannot take, which in the
-            # Rust SPU fails inside the native load, step four.
             if getattr(config,'quantization_config',None):
                 raise AdmissionError('device_cannot_admit','quantized artifacts unsupported')
             self.max_context=config.max_position_embeddings
-            # The Rust SPU reads the vocabulary inside the native load, step four, where
-            # a tokenizer.json that does not read is `LoadFailed` (decoder/native.rs).
-            try: self.tokenizer=Tokenizer.from_file(str(path/'tokenizer.json'))
-            except Exception as e: raise AdmissionError('device_cannot_admit',f'tokenizer.json: {e}') from None
+            self.tokenizer=Tokenizer.from_file(str(path/'tokenizer.json'))
             self.terminator=self.tokenizer.token_to_id('<|im_end|>')
+            # This build's own judgment, the renderer's markers each one token.
             for marker in ('<|im_start|>','<|im_end|>'):
                 ids=self.tokenizer.encode(marker,add_special_tokens=False).ids
                 if len(ids)!=1 or self.tokenizer.id_to_token(ids[0])!=marker:
                     raise AdmissionError('artifact_unreadable',f'marker not promoted: {marker}')
-            # **Room is judged before the weights load**, per python-spu-Spec section 3,
-            # as the Rust SPU judges it: the shard is the pinned containers' size over
-            # the device count. A CPU experiment has no device and so no room to judge.
-            if not cpu:
-                shard_bytes=pinned_size(self.pinned)//len(devices)
-                try: free,total=torch.cuda.mem_get_info(devices[0])
-                except RuntimeError as e: raise AdmissionError('device_cannot_admit',f'device {devices[0]} unreachable: {e}') from None
-                judge_room(devices[0],free,total,shard_bytes,headroom)
-            loading=True
             # The weights come through the pins only. The concrete class for the config,
             # from transformers' own mapping, takes them as a state dict, so the model
             # code, its tying and its cast are the path load's, and the bytes are not.
-            model=MODEL_FOR_CAUSAL_LM_MAPPING[type(config)].from_pretrained(None,config=config,
+            model,loaded=MODEL_FOR_CAUSAL_LM_MAPPING[type(config)].from_pretrained(None,config=config,
                 state_dict=pinned_tensors(self.pinned),dtype=getattr(torch,DTYPE),
-                attn_implementation='eager')
+                attn_implementation='eager',output_loading_info=True)
+            # **A weight the model needs and the artifact lacks refuses**, as candle's
+            # VarBuilder refuses a missing tensor, `LoadFailed`, where transformers would
+            # initialise it at random and serve a model the artifact never held.
+            if loaded['missing_keys']:
+                raise AdmissionError('device_cannot_admit',f"missing tensors: {', '.join(sorted(loaded['missing_keys'])[:5])}")
             # Set where placement begins, so a move that fails part-way is still freed.
             self.placing=not cpu
             self.model=model.to(self.device).eval()
@@ -383,8 +432,6 @@ class HFEngine:
             if readout:
                 for layer in self.model.model.layers:
                     self.hooks.append(layer.register_forward_hook(self._tap))
-            loading=False
-            self.weights_hash=weights_digest(path,self.pinned)
             self._unpin()
             self.artifact=str(path.resolve())
             torch.set_num_threads(1)
@@ -394,7 +441,7 @@ class HFEngine:
         except torch.OutOfMemoryError as e:
             failure=AdmissionError('device_cannot_admit',str(e))
         except Exception as e:
-            failure=AdmissionError('device_cannot_admit' if loading else 'artifact_unreadable',str(e))
+            failure=AdmissionError(ADMISSION_STEPS[step],f'{step}: {e}')
         # **A move that fails part-way is released.** Inside the except block the local
         # model and the exception's traceback, whose frames hold the module being moved,
         # keep its device tensors alive, and freeing the cache there frees nothing. Out

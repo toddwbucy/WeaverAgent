@@ -222,7 +222,7 @@ the walk in the act that moves the pin to it.
 | `readout`: `ReadoutElection`, `judge`, `judge_column_ask`, `ReadoutRefusal`, `TapOutcome` | `registry`: each judgment against a declaration |
 | `readout`: `Tap` | excluded as a trait: the tap reads the engine's hidden states and is the engine's own |
 | `residency`: `promote_stop_conditions`, `StopSet` | `stops`, over supplied stop inputs |
-| `residency`: `Headroom`, `AdmitRefusal` | the wire rows of section 3 for the refusals, and the load-failure mapping below for which kind each of `python-spu`'s load failures crosses as. The headroom judgment's inequality is a mirror and its driver query needs a device, per the `gpu` row |
+| `residency`: `Headroom`, `AdmitRefusal` | the wire rows of section 3 for the refusals, and the admission's step table below for which kind each of `python-spu`'s refusals crosses as. The headroom judgment's inequality is a mirror and its driver query needs a device, per the `gpu` row |
 | `residency`: `Residency` and its methods, `Admission` and its accessors, `Resident`'s `model`, `open_session`, `declared_eos` and `stop_set`, `LoadedModel` | excluded from the oracle: each needs a loaded model or a device. The process tests and the contract rows of section 3 |
 | `residency`: `Resident::tokenize`, `Resident::detokenize` | `tokenize`, a mirror. Both reach the native engine's `tokenize` and `detokenize`, which are `pub(crate)` and need a loaded model, so the operation calls `tokenizers` 0.21.4, the version `weaver-spu` links, with the two calls `native.rs` makes, `encode(text, false)` and `decode(ids, false)`, against the served artifact's `tokenizer.json`, and compares both directions on the rendered prefix and every delta. This implementation runs the Python `tokenizers` 0.23.2 the lock pins, which `transformers` 5.17.0 requires, so the two sides run two releases and the operation is the proof of their equivalence on the artifacts served, a divergence being a finding against the engine's version. Section 7's check that each generation's input token identifiers are equal on both sides is the backstop on the prompts a comparison runs |
 | `sampling`: `Disposition`, `is_frozen`, `Knobs`, `EffectiveKnobs`, `SessionParameters`, `EffectiveSessionParameters`, `tunable_names`, `resolve`, `KnobRefusal` | `knobs`: resolution against supplied tunable values, and each refusal |
@@ -231,47 +231,62 @@ the walk in the act that moves the pin to it.
 | `decoder::native`, `native_pair`, `gguf`, `gguf_tap`, `gpu` | excluded as a whole: the engines, their taps and the device query, which section 4 makes this implementation's own. Two parts are excepted. The native sampler is excepted per the row above. `gpu::room_and_reach`'s room inequality is carried identically per section 3's room row: a mirror, since it needs a device, ported as `engine.judge_room`, with the sum saturating and `NoRoom`'s figures in the refusal's detail, since the wire's `device_cannot_admit` carries none |
 | the binary's `main.rs`: `headroom_from`, `HEADROOM_BYTES`, and `main`'s `bad_parameter` refusal | the process's command line, a mirror: a binary's items are not the library's, so no call reaches them. `server.parameters` ports the rule. The whole vector is read, a missing or malformed value is refused, a parameter stated twice is refused, and an unknown one is refused by name. An absent headroom is the compiled default. The entry refuses in `main`'s form: one JSON line, exit 1, before the channels are adopted. The tests hold it to `the_whole_vector_is_judged`'s cases and to the worker's `OrganParameters::spu_arguments`. python-spu's own `--cpu-experiment` and `--declare-imports`, which the worker never sends, follow the same rules |
 
-**Each load failure crosses as the Rust SPU's refusal for the same step**, the floor's
-closed set carrying the kind and the detail staying on this side of the seam. The Rust
-mapping is `weaver-spu` residency.rs `From<AdmitRefusal> for LifecycleRefusal`, and the
-first look is artifact.rs `resolve`. A family judgment crosses through
-`From<FamilyRefusal>`, an unresolved selection as `ArtifactUnreadable` and an undeclared
-width as `DeviceCannotAdmit`.
+**Admission runs the Rust SPU's steps, in its order, and each failure crosses as its
+step's kind.** This table is the authority `engine.HFEngine` follows: its steps are
+named in this order, and a failure inside one, anticipated or not, crosses as that
+step's kind (`engine.ADMISSION_STEPS`). The Rust order is `weaver-spu` residency.rs
+`admit`, then decoder/native.rs `ResidentModel::load`. Its kinds come from
+`From<AdmitRefusal> for LifecycleRefusal` and `From<FamilyRefusal>`. The floor's closed
+set carries the kind, and the detail, which names the step, stays on this side of the
+seam.
 
-| `python-spu` failure | The Rust step and case | Wire kind |
-| --- | --- | --- |
-| Nothing at the artifact path, or a path through a file; a path that is neither directory nor regular file | `resolve`, `Unresolvable` | `artifact_unresolvable` |
-| A lookup of the path the kernel refuses | `resolve`, `Unreadable` | `artifact_unreadable` |
-| A directory holding no container, or containers that are not one split | `resolve`'s `container_within`, `Unresolvable` | `artifact_unresolvable` |
-| A header that does not read: GGUF's walk failing or naming no architecture, a safetensors header that is not its length-prefixed JSON or names no family, a `config.json` or `tokenizer_config.json` present and not JSON | `read_header`, step two, `Unreadable`, read before any device is judged | `artifact_unreadable` |
-| A GGUF container, or a regular-file reference, whose header reads: a family the registry does not hold, or a contested family with no template | `FamilyRefusal::UnknownFamily`, `TemplateAbsent` | `artifact_unreadable` |
-| The same, the family selected | the free steps pass and the load meets `BackendNotBuilt`, the backend this build does not carry | `device_cannot_admit` |
-| A device count other than one | `FamilyRefusal::WidthNotDeclared` | `device_cannot_admit` |
-| The CPU experiment on another ordinal, a CUDA device absent, the room judgment, an unreachable device | `Device`, `DeviceRefused` | `device_cannot_admit` |
-| A family other than qwen2, or the turn markers not promoted to single tokens | `FamilyRefusal::UnknownFamily`, `MarkersMatchNoEntry` | `artifact_unreadable` |
-| A config that does not read, or any other failure before the weights are taken | the header step's `Unreadable`, `config.json` and `tokenizer_config.json` being its sidecars | `artifact_unreadable` |
-| A `tokenizer.json` that does not read | step four, `LoadFailed`: the native load reads the vocabulary | `device_cannot_admit` |
-| A quantized artifact; any failure while the engine takes the weights or places them, out of memory included | step four, `LoadFailed` | `device_cannot_admit` |
-| The weights hash's walk failing, or a pinned name it no longer meets | the hash step's `Unreadable`, per `weaver-spu-Spec` section 3 on the operator's ruling of 2026-10-01; the oracle's pinned commit predates that ruling and admits with the empty sentinel | `artifact_unreadable` |
+| Step | The Rust | `python-spu` | Kind |
+| --- | --- | --- | --- |
+| resolve | artifact.rs `resolve`: nothing at the path or a path through a file, a directory with no container or containers that are not one split, anything but a directory or a regular file | `resolve_directory`, `containers` | `artifact_unresolvable` |
+| | the same: any other failed look, a lookup the kernel refuses among them | | `artifact_unreadable` |
+| pin | artifact.rs `pin`: a shard absent; any other failure to open, or a non-regular file | `pin` | `artifact_unresolvable`; `artifact_unreadable` |
+| header | artifact.rs `read_header`, step two: GGUF's walk with its caps, or safetensors' length-prefixed JSON, and the sidecars `config.json` and `tokenizer_config.json` where present, all read by `serde_json` | `read_header`, `strict_json` | `artifact_unreadable` |
+| select | family `select`: `UnknownFamily`, `TemplateAbsent` | `select` over `REGISTRY` | `artifact_unreadable` |
+| width | family `judge_width`: `WidthNotDeclared` | the selected entries' widths | `device_cannot_admit` |
+| readout | readout `judge`: `NotTappable` where readout is elected | the selected entries' tap flag | `device_cannot_admit` |
+| distinct | `judge_distinct`: `DuplicateDevice` | a device named twice | `device_cannot_admit` |
+| size | the pinned size, `on_artifact` "size" | `pinned_size` | `artifact_unreadable` |
+| room | `judge_room_and_reach`: `Device`, `DeviceRefused` | the CPU experiment's ordinal, the device's presence, `judge_room` | `device_cannot_admit` |
+| hash | artifact.rs `weights_hash`, before any device is taken (`weaver-spu-Spec` section 3) | `weights_digest` for a directory, `file_digest` for a file, by the resolution's kind | `artifact_unreadable` |
+| load | `load`: `BackendNotBuilt` for a GGUF container or a file reference this build does not serve | the same | `device_cannot_admit` |
+| | native `load`: more devices than it serves; `read_declaration` of `config.json` | one device; `strict_json` of `config.json` | `device_cannot_admit` |
+| | native `judge_family` on the declaration's `model_type`: `BackendDoesNotServe` | `same_key` against `qwen2` | `artifact_unreadable` |
+| | native `read_config`, `read_eos`, the tokenizer, the weights (`VarBuilder`, `ModelForCausalLM::new`, a tensor missing among them) | `AutoConfig`, a quantized config, `Tokenizer.from_file`, the model with its missing keys refused, placement, out of memory | `device_cannot_admit` |
 
-**The header is ported**, `engine.read_header` over the pinned first container with
-the Rust caps, and the registry's families, `engine.REGISTRY_FAMILIES`, are held to the
-Rust `REGISTRY` by the oracle. A contested family's template is matched in the Rust SPU
-by llama.cpp's renderer, which this build does not carry, so a template no entry
-matches, `MarkersMatchNoEntry` or `MarkersAmbiguous` there, crosses here as a selected
-family would, `device_cannot_admit`, where the Rust SPU answers `artifact_unreadable`.
-That is the one divergence the mapping keeps, and it is reachable only by a GGUF or file
-reference this build refuses either way.
+Two judgments are this build's own and sit at the load: its renderer's markers each
+promote to one token, refused `artifact_unreadable` (the Rust SPU meets an unpromoted
+turn close at the open, as a fault), and it serves one device where the native backend
+serves two, refused `device_cannot_admit` as the native's own width refusal is.
 
-The quantized row is traced through the Rust code rather than measured. The header
-step reads the family from `model_type` and never `quantization_config`, the native
-backend's `judge_family` judges the declared architecture alone, so a quantized qwen2
-passes both and never reaches `BackendDoesNotServe`, and its weights then fail in
-`VarBuilder::from_mmaped_safetensors` at BF16 or `ModelForCausalLM::new`, both mapped
-to `LoadFailed`, all in `decoder/native.rs` `ResidentModel::load`. The tests in
-`tests/test_load_kinds.py` hold each step's kind, the first look's against the Rust
-`resolve` through the oracle's `artifact` operation and the header's against the Rust
-`read_header` through its `header` operation.
+**The registry is ported as a table**, `engine.REGISTRY`, each entry's family, its
+declared widths and its tap flag in the Rust order, and the oracle's `registry_entries`
+operation holds it to the Rust `REGISTRY`. A contested family's template is matched in
+the Rust SPU by llama.cpp's renderer, which this build does not carry. So a contested
+family's candidates stand together through the width and readout steps, and a template
+no entry matches, `MarkersMatchNoEntry` or `MarkersAmbiguous` there, is selected here,
+where the Rust SPU answers `artifact_unreadable`. That is the one divergence the steps
+keep, and it is reachable only by a GGUF or file reference this build refuses either
+way.
+
+**The reads are the Rust's reads.** A header read is `read_exact`'s: it reads on after
+a short read until the bytes are in or the file ends, and any failure is unreadable.
+The JSON of the header and sidecars is `serde_json`'s: UTF-8 only, no non-standard
+constant, no number outside f64's range, no unpaired surrogate, and no nesting past 127.
+`tests/test_load_kinds.py` holds that by difference against the Rust `read_header`
+through the oracle's `header` operation.
+
+The quantized step is traced through the Rust code rather than measured. The header
+step reads the family from `model_type` and never `quantization_config`, and the native
+`judge_family` judges the declared architecture alone, so a quantized qwen2 passes both
+and its weights fail in `VarBuilder::from_mmaped_safetensors` at BF16 or
+`ModelForCausalLM::new`, both `LoadFailed`. `tests/test_admission_steps.py` injects a
+failure at each step and holds its kind, and holds the order where two steps would both
+fail.
 
 ## 4. What is its own
 

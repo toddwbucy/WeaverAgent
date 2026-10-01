@@ -203,7 +203,7 @@ def test_the_engine_judges_room_before_the_load_with_the_headroom_it_was_given(t
     a_device["free"] = shard + 4096
     with pytest.raises(AdmissionError) as caught:
         engine.HFEngine(tiny_model, [0], headroom=4096)
-    assert (caught.value.kind, str(caught.value)) == ("device_cannot_admit", "reached the load")
+    assert (caught.value.kind, str(caught.value)) == ("device_cannot_admit", "load: reached the load")
 
 
 def test_a_refusal_before_the_load_touches_no_device(tiny_model, a_device, monkeypatch):
@@ -530,7 +530,7 @@ def test_the_size_is_the_pinned_files_not_the_names(artifact, a_device, monkeypa
     a_device["free"] = pinned_bytes + 1024
     with pytest.raises(AdmissionError) as caught:
         engine.HFEngine(root, [0], headroom=1024)
-    assert (caught.value.kind, str(caught.value)) == ("device_cannot_admit", "reached the load")
+    assert (caught.value.kind, str(caught.value)) == ("device_cannot_admit", "load: reached the load")
 
 
 def test_a_pinned_container_the_walk_does_not_meet_is_refused(artifact, monkeypatch):

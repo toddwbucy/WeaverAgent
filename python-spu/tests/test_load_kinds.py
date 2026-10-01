@@ -171,8 +171,9 @@ def test_a_directorys_header_and_sidecars_refuse_before_the_load(copy, oracle):
     assert refused(copy) == "artifact_unreadable"
 
 
-def test_the_registry_families_are_the_rust_registrys(oracle):
-    assert oracle(op="registry_families") == {"ok": engine.REGISTRY_FAMILIES}
+def test_the_registry_is_the_rust_registrys(oracle):
+    assert oracle(op="registry_entries") == {"ok": [
+        {"family": f, "widths": list(w), "taps_readout": t} for f, w, t in engine.REGISTRY]}
 
 
 @pytest.mark.parametrize("name,header", [
