@@ -203,7 +203,7 @@ def test_the_engine_judges_room_before_the_load_with_the_headroom_it_was_given(t
     a_device["free"] = shard + 4096
     with pytest.raises(AdmissionError) as caught:
         engine.HFEngine(tiny_model, [0], headroom=4096)
-    assert (caught.value.kind, str(caught.value)) == ("artifact_unreadable", "reached the load")
+    assert (caught.value.kind, str(caught.value)) == ("device_cannot_admit", "reached the load")
 
 
 def test_a_refusal_before_the_load_touches_no_device(tiny_model, a_device, monkeypatch):
@@ -352,7 +352,8 @@ def test_a_gguf_resolves_and_python_spu_refuses_it(tmp_path):
     assert engine.containers(root) == [root / "model.gguf"]
     with pytest.raises(AdmissionError) as caught:
         engine.HFEngine(root, [0], cpu=True)
-    assert (caught.value.kind, str(caught.value)) == ("artifact_unreadable", "safetensors required")
+    assert (caught.value.kind, str(caught.value)) == (
+        "device_cannot_admit", "safetensors required: this build carries no GGUF backend")
 
 
 # The determinism environment, python-spu-Spec section 8.
@@ -528,7 +529,7 @@ def test_the_size_is_the_pinned_files_not_the_names(artifact, a_device, monkeypa
     a_device["free"] = pinned_bytes + 1024
     with pytest.raises(AdmissionError) as caught:
         engine.HFEngine(root, [0], headroom=1024)
-    assert (caught.value.kind, str(caught.value)) == ("artifact_unreadable", "reached the load")
+    assert (caught.value.kind, str(caught.value)) == ("device_cannot_admit", "reached the load")
 
 
 def test_a_pinned_container_the_walk_does_not_meet_is_refused(artifact, monkeypatch):
@@ -598,6 +599,7 @@ def test_a_move_that_fails_part_way_is_unreachable_before_the_cache_is_freed(tin
     monkeypatch.setattr(torch.cuda, "device", lambda device: contextlib.nullcontext())
     with pytest.raises(AdmissionError) as caught:
         engine.HFEngine(tiny_model, [0])
-    assert caught.value.kind == "artifact_unreadable"
+    # The move is placement, step four, which crosses as the Rust `LoadFailed` does.
+    assert caught.value.kind == "device_cannot_admit"
     assert caught.value.__cause__ is None and caught.value.__context__ is None
     assert seen == [True]

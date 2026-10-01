@@ -147,6 +147,22 @@ def judge_room(ordinal,free,total,shard_bytes,headroom):
         raise AdmissionError('device_cannot_admit',
                              f'no room on device {ordinal}: free {free}, needed {needed}, total {total}')
 
+def resolve_directory(path):
+    """weaver-spu artifact.rs `resolve`, its first look, ported: nothing at the path, or
+    a path through a non-directory, is unresolvable; a lookup the kernel refuses is a
+    present artifact this identity cannot reach, unreadable; anything but a directory or
+    a regular file is unresolvable. **A regular file resolves in the Rust SPU and is a
+    shape this build does not serve**, python-spu loading a safetensors directory alone,
+    so it refuses as the Rust SPU's `BackendNotBuilt` crosses, `device_cannot_admit`."""
+    try: mode=os.stat(path).st_mode
+    except (FileNotFoundError,NotADirectoryError):
+        raise AdmissionError('artifact_unresolvable',str(path)) from None
+    except OSError as e: raise AdmissionError('artifact_unreadable',f'{path}: {e}') from None
+    if stat.S_ISDIR(mode): return
+    if stat.S_ISREG(mode):
+        raise AdmissionError('device_cannot_admit',f'{path}: this build serves a safetensors directory')
+    raise AdmissionError('artifact_unresolvable',str(path))
+
 class HFEngine:
     def __init__(self,artifact,devices,cpu=False,readout=False,headroom=HEADROOM_BYTES):
         import torch
@@ -158,10 +174,13 @@ class HFEngine:
         self.placing=False
         self.logits=None; self.norms=[]; self.current_norms=[]; self.readout=readout
         path=Path(artifact)
-        if not path.is_dir(): raise AdmissionError('artifact_unresolvable',str(path))
+        resolve_directory(path)
         # Step one, as the Rust SPU's: the directory resolves to its containers, free.
         members=containers(path)
-        if members[0].suffix!='.safetensors': raise AdmissionError('artifact_unreadable','safetensors required')
+        # A GGUF container is the Rust SPU's other backend, which this build does not
+        # carry, and crosses as its `BackendNotBuilt` does.
+        if members[0].suffix!='.safetensors':
+            raise AdmissionError('device_cannot_admit','safetensors required: this build carries no GGUF backend')
         if len(devices)!=1: raise AdmissionError('device_cannot_admit','one device required')
         if cpu and devices!=[0]: raise AdmissionError('device_cannot_admit','CPU experiment requires ordinal 0')
         self.device='cpu' if cpu else f'cuda:{devices[0]}'
@@ -170,13 +189,22 @@ class HFEngine:
         # A refusal is recorded here and raised after the except block ends, so the frames
         # and the exception that hold a part-moved model are gone when the cache is freed.
         model=None; failure=None
+        # **Which step a failure lands in decides its wire kind**, per python-spu-Spec
+        # section 3.1, as weaver-spu residency.rs maps its own: a read of the artifact
+        # or its sidecars is `Unreadable` and crosses `artifact_unreadable`; the engine
+        # taking the weights is step four, `LoadFailed`, which crosses
+        # `device_cannot_admit`.
+        loading=False
         try:
             # The pin, held for the admit. The sidecars, config and tokenizer, are opens
             # by name, the limit weaver-spu's native `sidecar_dir` states for its own.
             self.pinned=pin(members)
             config=AutoConfig.from_pretrained(path,local_files_only=True,trust_remote_code=False)
             if config.model_type!='qwen2': raise AdmissionError('artifact_unreadable','only qwen2 is verified')
-            if getattr(config,'quantization_config',None): raise AdmissionError('artifact_unreadable','quantized artifacts unsupported')
+            # A quantized safetensors artifact is one the engine cannot take, which in the
+            # Rust SPU fails inside the native load, step four.
+            if getattr(config,'quantization_config',None):
+                raise AdmissionError('device_cannot_admit','quantized artifacts unsupported')
             self.max_context=config.max_position_embeddings
             self.tokenizer=Tokenizer.from_file(str(path/'tokenizer.json'))
             self.terminator=self.tokenizer.token_to_id('<|im_end|>')
@@ -192,6 +220,7 @@ class HFEngine:
                 try: free,total=torch.cuda.mem_get_info(devices[0])
                 except RuntimeError as e: raise AdmissionError('device_cannot_admit',f'device {devices[0]} unreachable: {e}') from None
                 judge_room(devices[0],free,total,shard_bytes,headroom)
+            loading=True
             # The weights come through the pins only. The concrete class for the config,
             # from transformers' own mapping, takes them as a state dict, so the model
             # code, its tying and its cast are the path load's, and the bytes are not.
@@ -205,6 +234,7 @@ class HFEngine:
             if readout:
                 for layer in self.model.model.layers:
                     self.hooks.append(layer.register_forward_hook(self._tap))
+            loading=False
             self.weights_hash=weights_digest(path,self.pinned)
             self._unpin()
             self.artifact=str(path.resolve())
@@ -215,7 +245,7 @@ class HFEngine:
         except torch.OutOfMemoryError as e:
             failure=AdmissionError('device_cannot_admit',str(e))
         except Exception as e:
-            failure=AdmissionError('artifact_unreadable',str(e))
+            failure=AdmissionError('device_cannot_admit' if loading else 'artifact_unreadable',str(e))
         # **A move that fails part-way is released.** Inside the except block the local
         # model and the exception's traceback, whose frames hold the module being moved,
         # keep its device tensors alive, and freeing the cache there frees nothing. Out
