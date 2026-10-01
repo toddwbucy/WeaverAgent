@@ -12,6 +12,7 @@ from pathlib import Path
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -727,6 +728,61 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("admin does not validate m1, so its root is not read: " + str(real / "weaver-admin"),
                       result.stderr)
+
+    def test_turn_names_a_coordination_root_it_cannot_read(self):
+        # Codex on #45, round 12: an unreadable `coordination-root` fell back to
+        # /run, so the turn dialled a gate that is not this agent's and reported
+        # none standing. Absent and unreadable each refuse, naming the key.
+        # Perturbation: restore the fallback, and the turn dials /run.
+        root = self.config / "m1"
+        root.mkdir()
+        turn = [sys.executable, str(self.repo / "deploy" / "turn.py"), "m1", "hello"]
+        result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("cannot read " + str(root / "coordination-root"), result.stderr)
+        key = root / "coordination-root"
+        key.write_text(str(self.root / "elsewhere") + "\n")
+        key.chmod(0o000)
+        try:
+            if os.access(key, os.R_OK):
+                self.skipTest("no mode closes a file to this user")
+            result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
+        finally:
+            key.chmod(0o644)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("cannot read " + str(key), result.stderr)
+        self.assertNotIn("/run/", result.stderr)
+
+    def test_verify_load_keeps_an_interior_space_in_the_prefix(self):
+        # Codex on #45, round 12: the prefix was stripped of every space, so
+        # `/opt/Weaver Stack` read as `/opt/WeaverStack`. Only its ends are
+        # trimmed. Perturbation: delete every space, and admin is not found.
+        self.env["FIXTURE_UID"] = "0"
+        (self.config / "m1").mkdir()
+        spaced = self.root / "Weaver Stack"
+        (spaced / "bin").mkdir(parents=True)
+        (spaced / "bin" / "weaver-admin").write_text('#!/bin/sh\necho refused\n')
+        (spaced / "bin" / "weaver-admin").chmod(0o755)
+        (self.stack / "prefix").write_text("  " + str(spaced) + " \n")
+        result = self.run_script("verify-load.sh", "m1")
+        self.assertNotIn("no weaver-admin", result.stderr)
+        self.assertIn("admin does not validate m1", result.stderr)
+
+    def test_stack_refuses_an_agent_key_it_cannot_read(self):
+        # The sweep of Codex's round-12 class (unreadable read as absent): a
+        # root key the operator cannot read was reported as absent, "this run
+        # does not update it". It refuses, naming the key. Perturbation: drop
+        # the check, and the plan reads it as absent.
+        key = self.config / "existing" / "worker-binary"
+        key.chmod(0o000)
+        try:
+            if os.access(key, os.R_OK):
+                self.skipTest("no mode closes a file to this user")
+            result = self.run_script("update-stack.sh")
+        finally:
+            key.chmod(0o644)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(str(key) + " stands and cannot be read", result.stderr)
 
     def test_spu_override_must_be_absolute(self):
         result = self.create("--spu", "relative/spu", "--apply")

@@ -59,7 +59,11 @@ ROOT="$ADMIN_BASE/$AGENT"
 # rule, `held_closed`, before the binary runs.
 STACK=${WEAVER_STACK_RECORD:-/etc/weaver/stack}
 bad=$(held_closed "$STACK/prefix") || die "the stack record's prefix is not held closed by root: $bad"
-PREFIX=$(tr -d '[:space:]' < "$STACK/prefix"); [ -n "$PREFIX" ] || die "the stack record's prefix is empty"
+# Trimmed at its ends only: a prefix may hold an interior space, and the record
+# keeps it as written (Codex on #45).
+PREFIX=$(< "$STACK/prefix")
+PREFIX=${PREFIX#"${PREFIX%%[![:space:]]*}"}; PREFIX=${PREFIX%"${PREFIX##*[![:space:]]}"}
+[ -n "$PREFIX" ] || die "the stack record's prefix is empty"
 # Run by the canonical path that is judged, so no link on the written path can be
 # re-pointed between the judgment and the exec.
 ADMIN=$(realpath -e -- "$PREFIX/bin/weaver-admin" 2>/dev/null) || die "no weaver-admin at $PREFIX/bin/weaver-admin"

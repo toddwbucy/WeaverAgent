@@ -239,6 +239,10 @@ printf '  worker-binary %s\n' "$WORKER_BINARY"
 # here so the reader knows this run does not reach it.
 for agent in $AGENTS; do
   for key in worker-binary gate-binary spu-binary; do
+    # A key that stands and does not read is not an absent one (Codex on #45).
+    if [ -e "$ADMIN_BASE/$agent/$key" ] && [ ! -r "$ADMIN_BASE/$agent/$key" ]; then
+      die "$ADMIN_BASE/$agent/$key stands and cannot be read by $(id -un), so whether this run updates $agent is unknown"
+    fi
     own=$(cat "$ADMIN_BASE/$agent/$key" 2>/dev/null || true)
     [ "$own" = "$(read_key "$key")" ] \
       || printf '  %-12s %s = %s, not the stack record'"'"'s; this run does not update it\n' "$agent" "$key" "${own:-(absent)}"
