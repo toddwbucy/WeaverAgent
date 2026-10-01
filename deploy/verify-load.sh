@@ -51,8 +51,6 @@ KEEP=0; [ "${2:-}" = --keep ] && KEEP=1
 ADMIN_BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
 ROOT="$ADMIN_BASE/$AGENT"
 [ -d "$ROOT" ] || die "no agent root at $ROOT"
-read_key() { cat "$ROOT/$1" 2>/dev/null || true; }
-WORKER=$(read_key worker-binary); [ -n "$WORKER" ] || die "no worker-binary in $ROOT"
 # **The program run as root comes from the record and is judged first.** It was
 # `$(dirname worker-binary)/weaver-admin`, a key of an agent root admin had not
 # yet judged, so a root, key or directory another principal could write chose
@@ -62,21 +60,31 @@ WORKER=$(read_key worker-binary); [ -n "$WORKER" ] || die "no worker-binary in $
 STACK=${WEAVER_STACK_RECORD:-/etc/weaver/stack}
 bad=$(held_closed "$STACK/prefix") || die "the stack record's prefix is not held closed by root: $bad"
 PREFIX=$(tr -d '[:space:]' < "$STACK/prefix"); [ -n "$PREFIX" ] || die "the stack record's prefix is empty"
-ADMIN="$PREFIX/bin/weaver-admin"
+# Run by the canonical path that is judged, so no link on the written path can be
+# re-pointed between the judgment and the exec.
+ADMIN=$(realpath -e -- "$PREFIX/bin/weaver-admin" 2>/dev/null) || die "no weaver-admin at $PREFIX/bin/weaver-admin"
 [ -f "$ADMIN" ] && [ -x "$ADMIN" ] || die "no weaver-admin at $ADMIN"
 bad=$(held_closed "$ADMIN") || die "weaver-admin at $ADMIN is not held closed by root: $bad"
+admin() { WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$ADMIN" "$@" 2>&1 || true; }
+
+# **Admin judges the root before this script reads anything in it.** It read
+# `agent.toml` and then counted the sink it names, as root, before admin had
+# judged the root, so a writable root or declaration could name a FIFO or a
+# device as the sink (Codex on #45). `validate` applies admin's root, ancestor
+# and entry judgments (Spec section 9), so the root is read only once admin
+# answers `validated`, and through admin's judgment rather than a copy of it.
+VERDICT=$(admin validate "$AGENT" | tail -1)
+[ "$VERDICT" = '{"kind":"validated"}' ] || die "admin does not validate $AGENT, so its root is not read: $VERDICT"
 DECL="$ROOT/agent.toml"; [ -f "$DECL" ] || die "no declaration at $DECL"
 
 SINK=$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["trace-sink"]["path"])' "$DECL") \
   || die "the declaration names no trace-sink.path"
 lines() { [ -e "$1" ] && wc -l < "$1" || echo 0; }
 
-admin() { WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$ADMIN" "$@" 2>&1 || true; }
-
 say "$AGENT"
 plan "declaration $DECL"
 plan "sink        $SINK"
-plan "validate    $(admin validate "$AGENT" | tail -1)"
+plan "validate    $VERDICT"
 BEFORE=$(lines "$SINK")
 admin unload "$AGENT" >/dev/null
 plan "load        $(admin load "$AGENT" | tail -1)"
@@ -84,7 +92,10 @@ AFTER=$(lines "$SINK")
 NEW=$((AFTER - BEFORE))
 if [ "$NEW" -le 0 ]; then
   st="$(dirname "$SINK")/state/state.log"
-  [ -f "$st" ] && { plan "the state member last said:"; tail -n 3 "$st" | sed 's/^/     /'; }
+  # Read as the member, whose territory it is, never as root: the member can put
+  # a link at that name, and root's read would follow it anywhere.
+  said=$(sudo -n -u "weaver-$AGENT-state" tail -n 3 "$st" 2>/dev/null || true)
+  [ -n "$said" ] && { plan "the state member last said:"; printf '%s\n' "$said" | sed 's/^/     /'; }
   admin unload "$AGENT" >/dev/null
   die "the load wrote no events to $SINK"
 fi

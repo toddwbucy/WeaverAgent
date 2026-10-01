@@ -193,6 +193,14 @@ stack_key() { # stack_key KEY required|optional
   [ -n "$value" ] || die "empty $1 in the stack record $STACK"
   printf '%s' "$value"
 }
+[ -d "$STACK" ] || die "no stack record at $STACK: bootstrap-stack.sh writes it"
+# **The stack record is judged before any value of it is trusted**: the record
+# and every entry in it held closed by admin's rule, since a root step below
+# acts on the paths it names (the walk of 2026-10-01, #45 round 11).
+bad=$(held_closed "$STACK") || die "the stack record $STACK is not held closed by root at $bad"
+for entry in "$STACK"/*; do
+  bad=$(held_closed "$entry") || die "the stack record's $entry is not held closed by root at $bad"
+done
 for key in $REQUIRED_KEYS; do stack_key "$key" required >/dev/null || exit 1; done
 for key in $OPTIONAL_KEYS; do stack_key "$key" optional >/dev/null || exit 1; done
 LOG_DIR=$(stack_key log-directory required) || exit 1
@@ -226,6 +234,22 @@ case "$AGENT_DIR/" in
   "/home/$OPERATOR/"*) ;;
   *) die "the stack record's agent-directory $AGENT_DIR is not under /home/$OPERATOR, and the member's passage to its territory is opened from there" ;;
 esac
+# **Under the home by what it resolves to, not by how it is spelled.** The
+# prefix above is text, so `..` or a link the operator placed under the home
+# passed it and the privileged `install -d` and `setfacl` below followed it out
+# of the home, opening a passage for the member through whatever it reached
+# (Codex on #45). No component may be `.`, `..` or empty, and every component
+# below the home that stands must be a directory and not a link; the rest
+# `install -d` makes as plain directories.
+below=${AGENT_DIR#"/home/$OPERATOR/"}
+at="/home/$OPERATOR"
+IFS=/ read -r -a parts <<< "$below"
+for part in "${parts[@]}"; do
+  case "$part" in ""|.|..) die "the stack record's agent-directory $AGENT_DIR carries an empty, . or .. component, so where it resolves is not what it says" ;; esac
+  at="$at/$part"
+  if [ -L "$at" ]; then die "$at, on the stack record's agent-directory, is a link, which would carry the territory out of /home/$OPERATOR"; fi
+  if [ -e "$at" ] && [ ! -d "$at" ]; then die "$at, on the stack record's agent-directory, is not a directory"; fi
+done
 HOME_DIR="$AGENT_DIR/$AGENT_USER"
 STATE_DIR="$HOME_DIR/state"
 

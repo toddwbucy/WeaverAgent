@@ -31,6 +31,34 @@ die() { printf '\nREFUSED: %s\n' "$*" >&2; exit 1; }
 
 read_key() { cat "$STACK/$1" 2>/dev/null || true; }
 
+# **held_closed PATH: admin's rule for what a root process may trust**, per
+# weaver-admin-Spec section 9 (`judge_ancestors`). PATH, resolved to its
+# canonical path, and every directory above it up to `/`, must be owned by uid
+# 0 and writable by no group or other, unless it is a sticky directory, which
+# keeps another principal from renaming an entry it does not own. Fails
+# printing the first component that is not so, or the path where it does not
+# resolve. Every deploy script carrying it carries this same text.
+held_closed() {
+  local at owner mode
+  at=$(realpath -e -- "$1" 2>/dev/null) || { printf '%s' "$1"; return 1; }
+  while :; do
+    read -r owner mode < <(stat -c '%u %a' -- "$at" 2>/dev/null) || { printf '%s' "$at"; return 1; }
+    if [ "$owner" != 0 ] || { (( 8#$mode & 8#022 )) && ! { [ -d "$at" ] && (( 8#$mode & 8#1000 )); }; }; then
+      printf '%s' "$at"; return 1
+    fi
+    [ "$at" = / ] && return 0
+    at=$(dirname -- "$at")
+  done
+}
+[ -d "$STACK" ] || die "no stack record at $STACK: bootstrap-stack.sh writes it"
+# **The stack record is judged before any value of it is trusted**: the record
+# and every entry in it held closed by admin's rule, since a root step below
+# acts on the paths it names (the walk of 2026-10-01, #45 round 11).
+bad=$(held_closed "$STACK") || die "the stack record $STACK is not held closed by root at $bad"
+for entry in "$STACK"/*; do
+  bad=$(held_closed "$entry") || die "the stack record's $entry is not held closed by root at $bad"
+done
+
 # **One reader for every value this script takes from a declaration**, through
 # python3's tomllib, so the script decodes what admin decodes within the TOML
 # 1.0 grammar declarations are written in, per weaver-types-Spec section 2: a
@@ -604,7 +632,10 @@ for agent in $AGENTS; do
   declared "$decl" state-store table || rc=$?
   if [ ! -f "$STATE_BINARY" ] && [ "$rc" -eq 3 ]; then
     printf '  %-12s %s\n' "$agent" "$verdict"
-    # The root is root's, so the backup and the patch are made under sudo.
+    # The root is root's, so the backup and the patch are made under sudo, and
+    # only once the root and its declaration are held closed: admin has just
+    # refused this root, so its judgment does not stand behind the write.
+    bad=$(held_closed "$decl") || die "$agent: the declaration $decl is not held closed by root at $bad, so it is not patched as root"
     sudo cp -a "$decl" "$decl.pre-$AFTER-bak"
     PATCHED+=("$decl|$decl.pre-$AFTER-bak")
     printf '\n[state-store]\nengine = "none"\n' | sudo tee -a "$decl" >/dev/null
@@ -675,7 +706,9 @@ for AGENT in $AGENTS; do
   # subsystem. Naming the fault properly is the admin-harness contract's act,
   # not this script's; pointing at where it is already written is this one's.
   if [ "$NEW" -le 0 ]; then
-    said=$(sudo -n tail -n 3 "$(dirname "$SINK")/state/state.log" 2>/dev/null || true)
+    # Read as the member, whose territory it is, never as root: the member can
+    # put a link at that name, and root's read would follow it anywhere.
+    said=$(sudo -n -u "weaver-$AGENT-state" tail -n 3 "$(dirname "$SINK")/state/state.log" 2>/dev/null || true)
     [ -n "$said" ] && printf '  the state member last said:\n%s\n' "$said" >&2
     rollback "$AGENT: the load wrote no events to $SINK"
   fi

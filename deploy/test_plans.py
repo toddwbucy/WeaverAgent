@@ -540,7 +540,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         """Each deploy script's `held_closed`, run on `path` under the fixture's
         `stat`. Answers each script's exit status and what it printed."""
         answers = {}
-        for script in ("verify-load.sh", "create-agent.sh", "bootstrap-stack.sh"):
+        for script in ("verify-load.sh", "create-agent.sh", "bootstrap-stack.sh", "update-stack.sh"):
             text = (self.repo / "deploy" / script).read_text()
             start = text.index("held_closed() {")
             body = text[start:text.index("\n}\n", start) + 3]
@@ -555,7 +555,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         # excepted. Every script's copy is the same text and answers alike.
         # Perturbation: drop the mode test from one copy, and its answer differs.
         texts = set()
-        for script in ("verify-load.sh", "create-agent.sh", "bootstrap-stack.sh"):
+        for script in ("verify-load.sh", "create-agent.sh", "bootstrap-stack.sh", "update-stack.sh"):
             text = (self.repo / "deploy" / script).read_text()
             start = text.index("held_closed() {")
             texts.add(text[start:text.index("\n}\n", start)])
@@ -625,6 +625,108 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
             installed.chmod(0o755)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("is not held closed by root: " + str(installed), result.stderr)
+
+    def test_the_territory_resolves_under_the_home(self):
+        # Codex on #45, round 11: the territory was judged by its spelling, so
+        # `..` or a link under the home carried the privileged install and
+        # access entries out of it. Each refuses before any call.
+        # Perturbation: drop the component walk, and both provision.
+        self.env["ALLOW_APPLY_CHECKS"] = "1"
+        outside = self.root / "outside"
+        outside.mkdir()
+        home = self.home / "fixture-no-home"
+        (home / "link").symlink_to(outside)
+        for directory, said in (("/home/fixture-no-home/../../root", ". or .. component"),
+                                ("/home/fixture-no-home/link/agents", "is a link")):
+            (self.stack / "agent-directory").write_text(directory + "\n")
+            if self.log.exists():
+                self.log.unlink()
+            result = self.create("--apply")
+            self.assertNotEqual(result.returncode, 0, directory)
+            self.assertIn(said, result.stderr)
+            self.assertFalse([c for c in self.calls() if c[0] in ("psql", "setfacl", "mktemp")
+                              or (c[0] == "sudo" and c[1:2] != ["-v"] and c[1:3] != ["-n", "sh"])],
+                             self.calls())
+
+    def test_verify_load_reads_no_root_admin_does_not_validate(self):
+        # Codex on #45, round 11: verify-load parsed the declaration, and counted
+        # the sink it names, as root before admin had judged the root. It asks
+        # admin's `validate` first and reads nothing from the root until it
+        # answers validated. Perturbation: drop the gate, and the declaration
+        # is read (the planted sink's marker is touched by the count).
+        self.env["FIXTURE_UID"] = "0"
+        root = self.config / "m1"
+        root.mkdir()
+        sink = self.root / "planted-sink"
+        (root / "agent.toml").write_text(f'[trace-sink]\npath = "{sink}"\n')
+        installed = self.root / "installed" / "bin"
+        installed.mkdir(parents=True)
+        (installed / "weaver-admin").write_text(
+            '#!/bin/sh\necho \'{"kind":"refused","refusal":"boundary_unverified"}\'\n')
+        (installed / "weaver-admin").chmod(0o755)
+        result = self.run_script("verify-load.sh", "m1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("admin does not validate m1", result.stderr)
+        self.assertNotIn(str(sink), result.stdout + result.stderr, "the declaration was read")
+
+    def test_a_stack_record_another_principal_may_write_refuses(self):
+        # The walk of #45 round 11: create-agent and update-stack act as root on
+        # paths the record names, so the record and each entry are held closed
+        # first. A group-writable entry refuses both, naming it, before any
+        # privileged step. Perturbation: drop the entry loop, and both go on.
+        entry = self.stack / "log-directory"
+        entry.chmod(0o664)
+        try:
+            for result in (self.create(), self.run_script("update-stack.sh")):
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("the stack record's " + str(entry) + " is not held closed", result.stderr)
+        finally:
+            entry.chmod(0o644)
+        self.assert_unprivileged()
+
+    def test_the_members_state_log_is_read_as_the_member(self):
+        # The walk of #45 round 11: the state log sits in the member's own
+        # territory, where the member can put a link, so root never reads it;
+        # both scripts read it as the member. Perturbation: restore a root read
+        # in either, and its text no longer holds.
+        for script in ("verify-load.sh", "update-stack.sh"):
+            text = (self.repo / "deploy" / script).read_text()
+            reads = [l for l in text.splitlines()
+                     if "tail" in l and ("state.log" in l or '"$st"' in l)]
+            self.assertTrue(reads, script)
+            for line in reads:
+                self.assertIn('sudo -n -u "weaver-$AGENT-state" tail', line, (script, line))
+
+    def test_update_stack_patches_only_a_declaration_held_closed(self):
+        # The walk of #45 round 11: the patch runs exactly when admin has refused
+        # the root, so its judgment does not stand behind the write; the
+        # declaration is held closed before the root copy and append.
+        # Perturbation: drop the judgment, and the patch is unguarded.
+        text = (self.repo / "deploy" / "update-stack.sh").read_text()
+        guard = text.index('bad=$(held_closed "$decl")')
+        self.assertLess(guard, text.index('sudo cp -a "$decl"'))
+        self.assertLess(guard, text.index('sudo tee -a "$decl"'))
+
+    def test_verify_load_execs_admin_by_its_judged_canonical_path(self):
+        # The walk of #45 round 11: admin was judged by its resolved path and
+        # run by its written one, so a link on the written path could be
+        # re-pointed between the two. It runs the canonical path it judged.
+        # Perturbation: run `$PREFIX/bin/weaver-admin` as written, and $0 is the link.
+        self.env["FIXTURE_UID"] = "0"
+        root = self.config / "m1"
+        root.mkdir()
+        (root / "agent.toml").write_text('[trace-sink]\npath = "/x"\n')
+        real = self.root / "real-admin"
+        real.mkdir()
+        (real / "weaver-admin").write_text('#!/bin/sh\necho "$0"\n')
+        (real / "weaver-admin").chmod(0o755)
+        installed = self.root / "installed" / "bin"
+        installed.mkdir(parents=True)
+        (installed / "weaver-admin").symlink_to(real / "weaver-admin")
+        result = self.run_script("verify-load.sh", "m1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("admin does not validate m1, so its root is not read: " + str(real / "weaver-admin"),
+                      result.stderr)
 
     def test_spu_override_must_be_absolute(self):
         result = self.create("--spu", "relative/spu", "--apply")
