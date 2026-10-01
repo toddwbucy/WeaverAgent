@@ -173,3 +173,35 @@ def test_a_directorys_header_and_sidecars_refuse_before_the_load(copy, oracle):
 
 def test_the_registry_families_are_the_rust_registrys(oracle):
     assert oracle(op="registry_families") == {"ok": engine.REGISTRY_FAMILIES}
+
+
+@pytest.mark.parametrize("name,header", [
+    ("nan", b'{"__metadata__": {"model_type": "qwen2", "x": NaN}}'),
+    ("infinity", b'{"__metadata__": {"model_type": "qwen2", "x": -Infinity}}'),
+    ("utf16", '{"__metadata__": {"model_type": "qwen2"}}'.encode("utf-16")),
+    ("surrogate", b'{"__metadata__": {"model_type": "qwen2", "x": "\\ud800"}}'),
+])
+def test_a_header_serde_refuses_is_unreadable(tmp_path, oracle, name, header):
+    """The Rust header is read by serde_json, which refuses JSON's non-standard
+    constants, any encoding but UTF-8 and an unpaired surrogate escape, each of which
+    CPython's `json` accepts. A file reference naming qwen2 would otherwise pass its
+    header and meet the backend. Found by Codex on #47. Perturbation: parse with
+    `json.loads` as before, and each case reaches `device_cannot_admit`."""
+    import struct
+    path = tmp_path / f"{name}.safetensors"
+    path.write_bytes(struct.pack("<Q", len(header)) + header)
+    assert oracle(op="header", path=str(path)) == {"error": "ArtifactUnreadable"}
+    assert refused(path) == "artifact_unreadable"
+
+
+def test_a_header_read_that_fails_is_unreadable(tmp_path, monkeypatch):
+    """artifact.rs maps every `read_exact` failure to `ArtifactUnreadable`, so a read
+    the kernel fails after the pin is a refusal and never a fault. Found by Codex on
+    #47. Perturbation: let `pread`'s OSError escape, and this raises it."""
+    import errno
+    path = tmp_path / "model.safetensors"
+    path.write_bytes(b"\x00" * 16)
+    def failing(fd, n, at):
+        raise OSError(errno.EIO, "I/O error")
+    monkeypatch.setattr(engine.os, "pread", failing)
+    assert refused(path) == "artifact_unreadable"

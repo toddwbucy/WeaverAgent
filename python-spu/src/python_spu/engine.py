@@ -147,12 +147,31 @@ def judge_room(ordinal,free,total,shard_bytes,headroom):
         raise AdmissionError('device_cannot_admit',
                              f'no room on device {ordinal}: free {free}, needed {needed}, total {total}')
 
+def strict_json(data):
+    """JSON as serde_json reads it: UTF-8 only, no `NaN`, `Infinity` or `-Infinity`,
+    and no unpaired surrogate escape, each of which CPython's `json` accepts and the
+    Rust header read refuses. Raises ValueError for any of them."""
+    import json
+    text=data.decode('utf-8') if isinstance(data,bytes) else data
+    def constant(name): raise ValueError(f'non-standard JSON constant {name}')
+    value=json.loads(text,parse_constant=constant)
+    def check(item):
+        if isinstance(item,str):
+            if any(0xD800<=ord(c)<=0xDFFF for c in item): raise ValueError('unpaired surrogate')
+        elif isinstance(item,dict):
+            for key,inner in item.items(): check(key); check(inner)
+        elif isinstance(item,list):
+            for inner in item: check(inner)
+    check(value)
+    return value
+
 class _Header:
     """A reader over a pinned descriptor, every short read unreadable, as
     weaver-spu artifact.rs's `read_exact` maps its failures."""
     def __init__(self,fd): self.fd=fd; self.at=0
     def take(self,n):
-        data=os.pread(self.fd,n,self.at)
+        try: data=os.pread(self.fd,n,self.at)
+        except OSError as e: raise AdmissionError('artifact_unreadable',f'the header does not read: {e}') from None
         if len(data)!=n: raise AdmissionError('artifact_unreadable','the header is short')
         self.at+=n; return data
     def u32(self): return int.from_bytes(self.take(4),'little')
@@ -176,11 +195,11 @@ class _Header:
         raise AdmissionError('artifact_unreadable',f'a GGUF value of unknown type {kind}')
 
 def _sidecar(directory,name):
-    """artifact.rs `read_sidecar_json`: absent is None, present and not JSON refuses."""
-    import json
+    """artifact.rs `read_sidecar_json`: absent is None, present and not JSON, as
+    serde_json reads it, refuses."""
     target=Path(directory)/name
     if not target.is_file(): return None
-    try: return json.loads(target.read_text())
+    try: return strict_json(target.read_bytes())
     except (OSError,ValueError): raise AdmissionError('artifact_unreadable',f'{name} does not read') from None
 
 def read_header(fd,sidecars):
@@ -190,7 +209,6 @@ def read_header(fd,sidecars):
     the family from `__metadata__` or the sidecar `config.json`, the chat template
     from `tokenizer_config.json`, both sidecars refusing where present and unreadable.
     Every failure is unreadable. Answers the container, the family and the template."""
-    import json
     reader=_Header(fd)
     if reader.take(4)==b'GGUF':
         reader.u32(); reader.u64(); count=reader.u64()
@@ -205,7 +223,7 @@ def read_header(fd,sidecars):
     reader.at=0
     length=reader.u64()
     if length==0 or length>100*1024*1024: raise AdmissionError('artifact_unreadable','safetensors header length')
-    try: parsed=json.loads(reader.take(length))
+    try: parsed=strict_json(reader.take(length))
     except ValueError: raise AdmissionError('artifact_unreadable','safetensors header is not JSON') from None
     metadata=parsed.get('__metadata__') if isinstance(parsed,dict) else None
     config=_sidecar(sidecars,'config.json')
