@@ -165,23 +165,20 @@ cargo fmt --all -- --check
 means the gate could not run (cold cache, network needed, unreadable manifest), so the
 lock is unchecked rather than clean. Its header carries the measurements.
 
-**Workspace-wide `cargo test` does not compile yet.** Two path couplings reach
-`weaver-analysis`, the crate that left:
+**Workspace-wide `cargo test --workspace --locked` compiles and passes** (since #37). Two
+tests meet `weaver-analysis`, the crate that left, from its own repository:
 
-- `crates/weaver-types/tests/config.rs:646` does `include_str!` on
-  `../../weaver-analysis/tests/fixtures/derived-surrogate.toml`. The test file is
-  behind `#![cfg(feature = "config")]`, so `cargo test -p weaver-types --locked` passes
-  alone and fails under `--all-features` or `--workspace`, where feature unification
-  turns `config` on and stops the whole run before a test is spawned. The fixture is
-  the analysis crate's pinned output; a copy needs a note naming the WeaverAnalysis
-  commit it was taken from.
-- `crates/weaver-state/src/comparison.rs:548-581` expects a built `weaver-analysis`
-  binary two directories above the test executable and checks it against
-  `../weaver-analysis/src`. The preload and comparison suites that call it are
-  `#[ignore]` and need scratch PostgreSQL (`unshare -Ur`, no sudo), so default
-  `cargo test` passes without them and they fail when run.
+- `crates/weaver-types/tests/config.rs` includes a pinned copy of WeaverAnalysis's
+  `derived-surrogate.toml` (`crates/weaver-types/tests/fixtures/`), with the
+  WeaverAnalysis commit it came from named in the const's doc. A drift test compares it
+  against the checkout below and skips, saying so, when there is none.
+- `crates/weaver-state/src/comparison.rs` finds the WeaverAnalysis checkout from
+  `WEAVER_ANALYSIS_DIR`, else the sibling `../WeaverAnalysis`, refusing by name when
+  neither holds one. It locates that checkout's debug `weaver-analysis` through its
+  own `cargo metadata` and refuses a stale build. The preload and comparison suites
+  stay `#[ignore]` and need scratch PostgreSQL (`unshare -Ur`, no sudo).
 
-Until both are fixed (#37), test per crate with `-p`. The deploy scripts already select
+The deploy scripts already select
 crates: `deploy/bootstrap-stack.sh` and `deploy/update-stack.sh` test `weaver-trace`,
 `weaver-harness` and `weaver-state` with `weaver-harness/pyworker,weaver-state/sqlite,
 weaver-state/postgres`, then build the workspace in release with `weaver-spu/cuda`

@@ -25,9 +25,8 @@ repository root:
 
 - `process/gates/lock.sh`: first; 0 means the lock is in step, 1 drift, 2 unchecked.
 - `cargo build --workspace --locked`: build all packages.
-- `cargo test -p <crate> --locked`: test one package. A workspace-wide `cargo test`
-  does not compile yet: `crates/weaver-types/tests/config.rs` reads a fixture from
-  the analysis crate that left the tree, and feature unification turns that test on.
+- `cargo test --workspace --locked`: test everything; `cargo test -p <crate> --locked`
+  tests one package.
 - `cargo test -p <crate> --locked <name_fragment>`: one test by substring.
 - `cargo clippy -p <crate> --all-targets --locked -- -D warnings`: lint each changed
   crate. `weaver-spu` adds `--features cuda,gguf` and is gated on the olympus lane.
