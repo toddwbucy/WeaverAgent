@@ -353,12 +353,18 @@ worth only as much as the reads that stay inside it. The name is the operator's,
 
 **The parse stays total and reads nothing.** This crate holds no I/O, per section 5's
 manifest clause, so the read is the caller's: `parse` takes, beside the declaration's
-text, a reader it calls once with the judged name and which answers the file's text or
-nothing. An answer of nothing refuses `BadValue` naming the field, and the parse yields
-the whole `AgentConfig` with the identity seated or a typed error, never a declaration
-with its identity pending. The reader is admin's, opening the name inside the directory
-it judged, per `weaver-admin-Spec` section 4, and a test's reader is a closure over a
-string. The shape the enter carries is the resolved one, the same pattern the state
+text, a reader it calls once with the judged name, and the reader answers one of three
+things. **The file's text**, which is seated. **Nothing**, for a file that is absent or
+does not read, which refuses `BadValue` naming the field. **A refusal of the reader's
+own**, which the parse returns unchanged beside its typed errors and does not type or
+interpret, so the caller's boundary keeps its own category: admin's reader refuses a
+prompt file that fails section 9's judgment, a link, a wrong owner or a group- or
+other-writable entry, and admin answers that `BoundaryUnverified`, per
+`weaver-admin-Spec` section 4, where an absence the parse turned into `BadValue` maps to
+`ConfigInvalid`. The parse yields the whole `AgentConfig` with the identity seated, a
+typed error, or the reader's refusal, never a declaration with its identity pending.
+The reader is admin's, opening the name inside the directory it judged, per
+`weaver-admin-Spec` section 4, and a test's reader is a closure over a string. The shape the enter carries is the resolved one, the same pattern the state
 election takes, admin filling at inventory what the worker never re-derives.
 
 **The embedded form is retired rather than kept beside the file, and the grammar's own
@@ -2239,6 +2245,9 @@ already discharged.
       empty, refuses `BadValue` naming `spu-instruction.decoder.identity-file`,
       confirmed by watching `../agent.toml` reach the reader when the name
       check is removed
+    - a reader's own refusal comes back from the parse unchanged and not as
+      `BadValue`, confirmed by watching it arrive as `BadValue` when the arm
+      maps the refusal to nothing
     - a reader answering nothing refuses `BadValue` naming the same field,
       confirmed by watching the parse yield an empty identity when the arm
       maps nothing to the empty list

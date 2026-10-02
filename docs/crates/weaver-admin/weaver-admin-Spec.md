@@ -516,8 +516,9 @@ reader is this crate's: it opens the name the declaration's `identity-file` carr
 inside the declaration directory section 9 judged, through the directory as opened at
 that judgment and never by a pathname re-resolved after it, judges the file as that
 section judges the entries it reads, and answers its bytes. A prompt file that fails
-that judgment refuses `BoundaryUnverified`, naming the file on stderr, as a failed entry
-of the root does. One that is absent, does not read, or is not UTF-8 refuses
+that judgment is the reader's own refusal, which the parse returns unchanged per
+`weaver-types-Spec` section 2, and it refuses `BoundaryUnverified`, naming the file on
+stderr, as a failed entry of the root does. One that is absent, does not read, or is not UTF-8 refuses
 `ConfigInvalid` naming `spu-instruction.decoder.identity-file`, the omission being the
 declaration's. **Both digests are this crate's**: sha256 of the declaration's bytes
 and of the prompt file's, each as read here, ride the enter as `declaration` and
