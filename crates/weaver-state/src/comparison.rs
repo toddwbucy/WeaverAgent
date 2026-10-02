@@ -545,18 +545,60 @@ fn child_entry() {
         "preload requires the operator credential; run these scratch tests with unshare -Ur (no sudo)"
     );
 }
+/// **The `weaver-analysis` binary this suite compares against, from its own
+/// repository.** The crate left this workspace for WeaverAnalysis on
+/// 2026-09-30, so its checkout is `WEAVER_ANALYSIS_DIR` where set, and the
+/// suite workshop's sibling `../WeaverAnalysis` otherwise. Where neither holds a
+/// Cargo.toml, the suite refuses, naming both. The binary is that checkout's
+/// debug build, located by its own `cargo metadata` (which follows
+/// `CARGO_TARGET_DIR`), and it refuses if missing or older than the checkout's
+/// sources.
 fn analysis_binary() -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    let path = exe
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("weaver-analysis");
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let sibling = workspace.join("../WeaverAnalysis");
+    let named = std::env::var_os("WEAVER_ANALYSIS_DIR").map(PathBuf::from);
+    let checkout = match named {
+        Some(directory) if directory.join("Cargo.toml").is_file() => directory,
+        Some(directory) => panic!(
+            "WEAVER_ANALYSIS_DIR names {}, which holds no Cargo.toml; unset it to use the sibling {}",
+            directory.display(),
+            sibling.display()
+        ),
+        None if sibling.join("Cargo.toml").is_file() => sibling,
+        None => panic!(
+            "no WeaverAnalysis checkout: WEAVER_ANALYSIS_DIR is unset and the sibling {} holds no Cargo.toml",
+            sibling.display()
+        ),
+    };
+    let metadata = Command::new(env!("CARGO"))
+        .args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--no-deps",
+            "--offline",
+        ])
+        .current_dir(&checkout)
+        .output()
+        .expect("cargo metadata runs in the WeaverAnalysis checkout");
+    assert!(
+        metadata.status.success(),
+        "cargo metadata in {} failed: {}",
+        checkout.display(),
+        String::from_utf8_lossy(&metadata.stderr)
+    );
+    let target: Value = serde_json::from_slice(&metadata.stdout).expect("cargo metadata is JSON");
+    let path = PathBuf::from(
+        target["target_directory"]
+            .as_str()
+            .expect("cargo metadata names a target directory"),
+    )
+    .join("debug/weaver-analysis");
     assert!(
         path.is_file(),
-        "missing {}: run cargo build -p weaver-analysis --locked before this suite",
-        path.display()
+        "missing {}: run cargo build --locked in {} before this suite",
+        path.display(),
+        checkout.display()
     );
     fn newest_source(directory: &std::path::Path) -> std::time::SystemTime {
         std::fs::read_dir(directory)
@@ -572,11 +614,12 @@ fn analysis_binary() -> PathBuf {
             .max()
             .expect("analysis sources")
     }
-    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../weaver-analysis/src");
     assert!(
-        std::fs::metadata(&path).unwrap().modified().unwrap() >= newest_source(&source),
-        "stale {}: run cargo build -p weaver-analysis --locked before this suite",
-        path.display()
+        std::fs::metadata(&path).unwrap().modified().unwrap()
+            >= newest_source(&checkout.join("src")),
+        "stale {}: run cargo build --locked in {} before this suite",
+        path.display(),
+        checkout.display()
     );
     path
 }

@@ -131,9 +131,9 @@ What it does, so the log can say which step a failure was at:
 2. Names the tree: the git revision, or `nogit-<lockfile sha>` on a tree without git.
 3. `cargo test --release --locked -p weaver-trace -p weaver-harness -p weaver-state
    --features weaver-harness/pyworker,weaver-state/sqlite,weaver-state/postgres`.
-   A workspace-wide test does not compile in this tree yet (weaver-types reads a
-   fixture from the crate that left, see the suite CLAUDE.md), which is why the
-   selection is named.
+   The selection is the crates the stack runs, with every store engine's feature on,
+   so each engine an agent may elect is tested before it is installed. A
+   workspace-wide `cargo test --locked` also compiles and passes (#37).
 4. `cargo build --release --locked --workspace --features
    weaver-spu/cuda,weaver-harness/pyworker,weaver-state/sqlite,weaver-state/postgres`.
    Every engine an agent may elect is named, the default one included, or the member
