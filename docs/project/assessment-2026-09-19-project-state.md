@@ -599,7 +599,7 @@ crates/weaver-state/src/engine/postgres.rs
 The eight differing document paths were:
 
 ```text
-docs/crates/weaver-agent-PRD.md
+docs/crates/weaver-agents-PRD.md
 docs/crates/weaver-harness/Loops/basic-inference-loop.md
 docs/crates/weaver-harness/Loops/diagnostic-replay-loop.md
 docs/crates/weaver-harness/weaver-harness-Spec.md
