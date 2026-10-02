@@ -570,8 +570,10 @@ worker, applied one level down, and it is what keeps the routing claim of
 **The encoder is named as domain and is not built.** Encoding and decoding are one
 domain and it is this crate's, per `weaver-harness-PRD` section 3. The deferral
 rests on order of construction, per the operator's framing recorded on
-issue #93: **memory is a lossy compression of state, and state is the trace's
-faithful account of what happened.** There is no memory until
+issue #93 and restated on the operator's ruling of 2026-10-02 (issue #1): **the
+trace is the faithful account of what happened, state management is what is
+supposed to happen reconciled with what did and is built from the trace, and
+memory is a lossy compression of state.** There is no memory until
 something can reliably extract from the trace what a compression takes as
 input, so the encoder - the thing that compresses - cannot precede a
 trustworthy trace, whatever anyone wants to build. The trace is this program's
@@ -585,9 +587,10 @@ vectors with no consumer. A consumer could be invented sooner than a
 trustworthy trace could be skipped, which is why the order-of-construction
 ground is the sturdier of the two.
 
-**State and memory are not the same thing, and this charter needs the
-distinction stated.** State is the faithful account. Memory is a lossy
-derivative of it. The memory leg's exclusion is a consequence of that ordering
+**Trace, state and memory are not the same thing, and this charter needs the
+distinction stated.** The trace is the faithful account. State management is
+built from it and reconciles it with what is supposed to happen. Memory is a
+lossy derivative of state. The memory leg's exclusion is a consequence of that ordering
 rather than a scope decision, and the eventual memory PRDs inherit a
 definition to build against instead of one to invent.
 
