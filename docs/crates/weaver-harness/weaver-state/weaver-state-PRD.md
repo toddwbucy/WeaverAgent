@@ -39,9 +39,10 @@ harness, organs never linking.
 
 **The store is an in-memory embedded SQLite in this member's own process.** One
 database, never more, with no server, no network and no pool, reached by exactly one
-peer, the harness, over one Unix socket. It snapshots to a file stamped with the trace
-position it covers and reloads from the latest snapshot plus a replay of the trace's
-tail, a full rebuild from the trace being the fallback only, per section 4.
+peer, the harness, over one Unix socket. It keeps save points, files each stamped with
+the trace position it covers and never overwritten, taken at every unload and on
+demand. A load restores one, the latest by default, and with none rebuilds from the
+trace, per section 4.
 
 **Two functions and no third: ingest and serve.** The tee's distillate flows
 in and is kept, and what is kept answers asks. The two were not symmetric
@@ -59,7 +60,7 @@ This is the statefulness leg returning by the door apex section 9 built for it: 
 schema extension plus a new socket and contract, never a retrofit. This document is
 that return's first paper, and nothing in the base set moved to make room for it,
 which is what the door was for. The memory leg stays out and returns by the same
-door, reading from this crate's snapshots when it comes.
+door, reading from this crate's save points when it comes.
 
 ```graph
 node: weaver-state
@@ -125,8 +126,8 @@ whole of the charter, and a member that judged its own contents would be a secon
 reasoning loop wearing a filing cabinet's name.
 
 **It does not initiate, and it holds only its schema's shape.** Nothing in this crate
-fires on a condition, watches a threshold, or acts unasked, a snapshot included: the
-loop asks for one, per section 4. A loop that consults state is the compiled loop in
+fires on a condition, watches a threshold, or acts unasked, a save point included: the
+harness asks for one, per section 4. A loop that consults state is the compiled loop in
 the harness's seat, per the tool boundary ruling's placement of control loops, and
 this crate is a place that loop reaches rather than a place one lives. What it holds is
 what the loop's schema admits and nothing else, so the shape of the holdings is the
@@ -159,10 +160,10 @@ is what keeps each part answerable to its own charter.
 assembly and its loop's decisions, and the model receives only what the loop
 serves it as composed context, the same wall `weaver-harness-PRD` section 5
 holds for the trace. There is no model-facing read path and no tool that opens
-one. **The agent never reaches its own raw trace or its state snapshots**, per the
-operator's ruling of 2026-10-02: a snapshot is a file in the operator's directory that
-this member writes through a handle admin opened, per section 4, and nothing the
-agent's uid holds names it or opens it.
+one. **The agent never reaches its own raw trace or its save points**, per the
+operator's ruling of 2026-10-02: a save point is a file in the operator's custody that
+this member writes without a path the agent's uid holds, per section 4, and nothing
+the agent's uid holds names it or opens it.
 
 ## 3. The seam
 
@@ -211,11 +212,11 @@ after a dead driver is a replacement rather than a double - the recovery invaria
 stated before the loss clause leans on it. With that in place the loss clause below
 covers the new door without amendment, the preload being rebuildable from the record
 more directly than any holding the tee fed. **The door is also where the trace reaches
-a reload**, the member never reading the record itself: the tail a snapshot does not
-cover, and the whole record where the fallback rebuild runs, are a finished record's
-distillates landed through this door, per section 4. The tail lands on top of the
-snapshot rather than after a retirement, which the door's contract does not yet say,
-and section 5 names that contract as owed.
+a rebuild**, the member never reading the record itself: with no save point, the whole
+record's distillates land through this door, per section 4, honouring every reset the
+record names. No tail replays on top of a save point by default; a tail landing on a
+stamped position is a door the contract does not yet say, and section 5 names that
+contract as owed.
 
 The nesting under `weaver-harness` carries domain membership and nothing else,
 per apex section 5.4: nesting is never process topology, and this member
@@ -229,25 +230,29 @@ should not carry, so it stands beside the harness rather than inside it.
 across sessions, per the operator's ruling of 2026-10-02 on issue #1, which revises
 both the session boundary this paragraph drew on the ruling of 2026-08-18 and apex
 section 2's "none across sessions" of 2026-08-01. The trace already persists across
-load and unload cycles, and the holdings persist beside it by snapshot: an unload
-retires a run and its member process, the latest snapshot stands in the operator's
-directory, and the next load, of the same session or of a later one, reloads from it.
-**Custody is what makes the crossing lawful**: the snapshot sits where the agent's uid
-cannot reach, it is written through a handle and never a path, and it is rebuildable
-from a record the agent cannot reach either. Which sessions an answer reaches is the
+load and unload cycles, and the holdings persist beside it by save point: an unload
+retires a run and its member process and takes a save point, which stands in the
+operator's custody beside every earlier one, and the next load, of the same session or
+of a later one, restores the latest or the one its declaration's `restore` names.
+**Custody is what makes the crossing lawful**: a save point sits where the agent's uid
+cannot reach, it is written without a path the agent holds, and it is rebuildable from
+a record the agent cannot reach either. Which sessions an answer reaches is the
 asking loop's to say, the store holding one database for the agent and no boundary of
 its own between its sessions, and the asks standing today keep the session bound their
 definitions carry, per `weaver-harness-state-contract` section 2. The memory leg, which
-will read from these snapshots, is still out, and nothing here lays in for it: no export
+will read from these save points, is still out, and nothing here lays in for it: no export
 surface a future act would wish existed, per the no-reserved-slots rule.
 
 **Losing the member loses the derivative and never the account.** State can
 die while the session lives, and the session goes on: the trace is the
 authoritative record, this crate holds a working derivative of it, and a
 harness whose state member is gone serves turns the way it did before the leg
-existed. **The holdings live in memory, so a death costs what landed since the
-latest snapshot**, and nothing more: everything the holdings distilled is still in
-the record, so the next load's reload replays it, and whether a member restarted
+existed. **The holdings live in memory, so an unclean stop costs what landed since the
+latest known-good save point**, and nothing more: the next load resets to that save
+point and records the reset on the trace, which save point and which position, and no
+tail replays by default, on the operator's ruling of 2026-10-02. Everything the
+holdings distilled is still in the record, and a full rebuild from it honours the
+recorded reset, so the reloaded store equals the replay. Whether a member restarted
 inside a run is refilled or stands empty is the loop's policy like every other
 judgment. What this charter forbids is the inversion: no design in this leg may make
 the session's continuation depend on the derivative surviving.
@@ -312,8 +317,8 @@ nothing derived from it is kept.
 
 One member instance serves one run of one agent: it stands with each run, ingests a
 stream whose events already carry their session, run, and turn identity, and its
-process retires with each unload while its holdings stand in the latest snapshot for
-the next run, so nothing this crate holds needs an identity it minted itself.
+process retires with each unload while its holdings stand in that unload's save point
+for the next run, so nothing this crate holds needs an identity it minted itself.
 
 What organizing means at this charter's level: the holdings are queryable by
 the facts the record already carries, the run, the turn, the kind, and the
@@ -334,16 +339,44 @@ judgment about what a turn needs rather than a mechanic of keeping, so each move
 the act that writes the loop's schema, and until it lands the store serves them as it
 does.
 
-**Snapshot and reload are custody's mechanics and the loop's timing.** The store
-snapshots when the harness asks, at the interval the loop's settings name and at the
-leave, to a file stamped with the trace position it covers, the run and the sequence
-of the last distillate in it. It reloads at the next load from the latest snapshot
-plus the trace's tail past that position, landed through the preload door of section
-3. **A full rebuild from the trace is the fallback only**, used where the snapshot is
-missing, is corrupt, or disagrees with the trace, and it lands every distillate the
-record holds through the same door. A reload and a full rebuild arrive at the same
-holdings by construction, the snapshot being a cache of what the replay produces, and
-`weaver-state-Spec` section 5 names the instrument that holds them equal.
+**Save points are custody's mechanics, and their timing is the harness's ask**, on the
+operator's rulings of 2026-10-02 on this act's second and third questions. A save point
+is a file of the whole store, stamped with the trace position it covers, the run and the
+sequence of the last distillate in it, and **never overwritten**: each is its own file,
+and the operator keeps, deletes or archives them. One is taken at every unload, and one
+on demand, when the harness asks; who triggers an on-demand save point, the loop on a
+setting, a later admin verb or WeaverWeb through admin-con under a role, is later work,
+and the primitive supports the ask. **A load restores a chosen save point, the latest by
+default**, chosen through the declaration's existing `restore` member pointed at a save
+point, data in `agent.toml`, so admin's verbs and answers stay as they are. **After an
+unclean stop, the load resets to the latest known-good save point**, and the reset is
+recorded on the trace, so a full rebuild honours it; there is no tail replay by default.
+**With no save point, the next load rebuilds from the trace**, landing every distillate
+the record holds through the preload door of section 3, so deleting save points never
+yields an empty store while the record stands, and a fresh state is a new agent, per the
+seventh question. **Taking, restoring and resetting each author a trace event**, which
+save point by digest and which position, per the fourth question, so the record says
+where state came from. A restore and a full rebuild to the same position arrive at the
+same holdings by construction, the save point being a cache of what the replay
+produces, and `weaver-state-Spec` section 5 names the instrument that holds them equal.
+
+**A live restore swaps state without unloading**, on the operator's ruling of 2026-10-02.
+State lives in this member's process, apart from the models, so a save point restores
+while the agent stays loaded: the member's in-memory store is replaced from it, the SPU
+stays resident with its decoder and classifier untouched, and the hot KV cache is
+flushed with `keep = 0` through `weaver-harness-spu-decode-contract`'s existing cut,
+which clears everything but the identity prefix, permanent from open to release; the
+next turn's context comes from the restored state. A larger cut that keeps a prefix the
+save point and the live context share is the loop's choice through the same two calls,
+later. A save point that needs a different system prompt cannot be served by a flush:
+it needs the SPU session closed and reopened with the new prefix, one prefix recompute
+with the weights resident, never a model reload. The trace records the restore, by
+digest, and the flush. Who triggers a live restore is later work.
+
+**An edited save point is an input, not derived state.** A save point the operator edits
+offline holds what the trace never recorded, so loading one records its digest, marked
+operator-supplied, and the file is kept as an input, as a prompt file is. Rebuildable
+from the trace then holds from the latest recorded save-point load onward.
 
 **The store is a port, and one engine stands behind it.** This crate's custody holds no
 opinion about a query language, and the seam to the harness names asks and never a
@@ -470,11 +503,12 @@ file today.
   engine on: one database per agent, reached by one peer, with nothing another
   agent can reach across.
 - **The preload door's contract, owed.** Section 3 makes the door the path by
-  which the trace reaches a reload, the tail landing on top of a snapshot and
-  the fallback landing whole. `weaver-analysis-state-contract` says the door's
-  opener retires the declared session's holdings and says nothing of a tail
-  that follows a stamped position, so that contract is owed the change, with
-  every party to it, before the reload's code act lands.
+  which the trace reaches a rebuild, landing whole and honouring every reset
+  the record names. `weaver-analysis-state-contract` says the door's opener
+  retires the declared session's holdings and says nothing of a reset event a
+  rebuild must honour, nor of a tail opener keyed to a stamped (run, sequence)
+  position, so that contract is owed both, with every party to it, before the
+  save-point code act lands.
 - **Who else may ask.** Today the harness is the one peer, and every ask
   arrives through it. Whether a later operator surface reads state directly or
   through an admin verb is a cell for the day such a reader exists, refused

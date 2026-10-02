@@ -157,9 +157,9 @@ the human's ruling of 2026-08-01 corrected as an overstatement: an agent holding
 working structure and a hot cache is not stateless. That ruling also held that the
 agent's state died with the session, and the operator's ruling of 2026-10-02 revises
 it: **state management accumulates across sessions**, its holdings carried between
-loads by a snapshot in the operator's directory, which the agent never reaches, and
+loads by save points in the operator's directory, which the agent never reaches, and
 rebuildable from a record the agent never reaches either. The custody is what makes
-the crossing lawful, and memory, which will read from those snapshots, is still to
+the crossing lawful, and memory, which will read from those save points, is still to
 come.
 
 Two things hold state across turns inside one session, both deliberate, and
@@ -181,10 +181,14 @@ they are not two things of a kind:
 
 **Across sessions one thing holds state, and it is neither of those.** The state
 member's store, per `weaver-state-PRD`, holds what the loop's schema admits of what the
-tee carried, in memory while the agent serves and in a snapshot between loads, stamped
-with the trace position it covers. It is a derivative of the record and never a second
-account: a reload is the latest snapshot plus the trace's tail, and a full rebuild from
-the trace is the fallback where a snapshot is missing, corrupt, or disagrees with it.
+tee carried, in memory while the agent serves and in save points between loads, each
+stamped with the trace position it covers and never overwritten. It is a derivative of
+the record and never a second account: a load restores a save point, the latest by
+default or the one the declaration's `restore` names, and with no save point it
+rebuilds from the trace. An unclean stop resets to the latest known-good save point,
+the reset recorded on the trace, so a rebuild from the record arrives where the reset
+did. A save point the operator edits is an input like a prompt file, recorded by
+digest, per `weaver-state-PRD` section 4.
 
 ## 3. One turn, end to end
 
@@ -943,22 +947,13 @@ training, and the desktop frontend.
 
 **The identity's source is parked here by name**, on the operator's ruling of
 2026-10-02. Today an agent's system prompt is a file the operator edits, named by the
-declaration and read by admin, and the harness carries it to the session's open, per
+declaration and read by admin, and the harness carries it to every load's open, per
 `weaver-harness-Spec` section 6.1, which names the one site where the identity's source
 is read. The operator's long-range direction is for state management to supply that
 identity instead, a semantic-graph store kept current by sleep-cycle consolidation.
 That is the memory leg above and is out, not built here, and it returns by the
 mechanism this section states: naming the site is not a slot, and no field, ask or
 seam is carried for it.
-
-**The operator bringing the loop is parked here by name**, on the operator's ruling of
-2026-10-02 on #1. The state-management loop is compiled into the worker, and
-`loop-file`, a declaration naming code the worker runs, retires for the compiled path
-with the pyworker lane. An operator supplying a loop of its own is a future feature,
-not built here, and it returns by the mechanism this section states. The compiled
-loop's tunable opinions become a `[state-management]` settings table in the
-declaration, recorded on the load event; the table itself is `weaver-state`'s Spec to
-state.
 
 **External tooling is out entirely as well, and stays out.** This program builds no
 tool crate, and the reason differs on each side of the boundary.
@@ -1024,14 +1019,25 @@ fixed: `weaver-state` is a schema extension behind a new socket and contract, wi
 own PRD, and nothing in the base set moved for it. Holding what the agent was asked to
 hold, and answering a query over what it holds, are state management's and in scope.
 What stays out is the layer below it, the lossy compression consolidation writes, which
-returns by the same door and reads from state's snapshots when it comes.
+returns by the same door and reads from state's save points when it comes.
 
 **The operator bringing the loop is parked here by name**, on the same rulings. The
-loop of section 5.5 is one loop, compiled into the worker, with its opinions exposed as
-settings in the declaration's `[state-management]` table. An operator supplying a loop
-of its own, by a declared file or any other path, is a possible future feature, not
-built here, and it returns by the mechanism below if it returns at all. Naming it is
-not a slot: no field, flag or seam is carried for it.
+loop of section 5.5 is one loop, compiled into the worker, and `loop-file`, a
+declaration naming code the worker runs, retires for the compiled path with the
+pyworker lane. Its opinions are settings in the declaration's `[state-management]`
+table, recorded on the load event: the table's grammar is `weaver-types-Spec`'s, with
+the declaration's other keys, and its meaning is `weaver-harness-Spec`'s, with the
+loop, per the operator's ruling of 2026-10-02 on #58's sixth question. An operator
+supplying a loop of its own, by a declared file or any other path, is a possible
+future feature, not built here, and it returns by the mechanism below if it returns at
+all. Naming it is not a slot: no field, flag or seam is carried for it.
+
+**Save points as task- or workflow-level presets are parked here by name**, on the
+operator's ruling of 2026-10-02 on #58: a known-good context returned to repeatedly for
+different tasks on one project, like a system prompt but at a task or workflow level.
+State management keeps save points and restores one on demand, per `weaver-state-PRD`
+section 4, and a preset built on them is a future feature, not built here: no field,
+flag or seam is carried for it.
 
 Memory returns as a **feature add**, not as a retrofit. The mechanism is
 fixed now, in three parts:

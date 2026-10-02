@@ -295,16 +295,22 @@ pub enum ConfigErrorKind {
 }
 ```
 
-**`identity` is the seed and not the session's identity, per the operator's ruling of
-2026-09-04 on issue #422.** The field keeps its shape and its refusals: canonical
-messages, every one `role: system`, required with an empty list legitimate. What changed
-is its authority. Where a state member stands, the session's identity is what the store
-holds under the turnless `message.system` events at the session's opening, and this
-field is what the first load of a session seats and lands there, the store governing
-every later load of the session, per `weaver-state-PRD` section 4. Where no member
-stands the field governs alone, which is what it did before the ruling. Divergence
-between the two is not a defect, because they answer different questions, the seed and
-the session, and G5 names the store authoritative within the session.
+**`identity` is what every load seats**, on the operator's ruling of 2026-10-02 on #58's
+fifth question, which revises the ruling of 2026-09-04 on issue #422 that the store
+governed a session's later loads. The field keeps its shape and its refusals: canonical
+messages, every one `role: system`, required with an empty list legitimate. **The
+prompt file is authoritative at every load**: an edit to it takes effect at the next
+load, its digest recorded, and where a state member stands the store keeps the history
+of what the loads seated, under the turnless `message.system` events at each run's
+opening, per `weaver-state-PRD` section 4, deciding none of them.
+
+**`[state-management]` is the declaration's table for the compiled loop's settings**,
+and its grammar is this crate's, on the operator's ruling of 2026-10-02 on #58's sixth
+question; its meaning is `weaver-harness-Spec`'s, with the loop. It is an optional
+top-level table: absent, every setting stands at its compiled default. Its members
+arrive with the act that compiles the loop, each a typed key this section then names,
+and until then the table carries no key, so any member refuses `UnknownField` under the
+unknown-key rule below, as every key no organ registered does.
 
 **The operator writes the seed as a file, and the field is what the parse seats from
 it**, on the operator's ruling of 2026-10-02. On disk the decoder's section carries

@@ -1999,8 +1999,10 @@ management composes against the same granted surface as every loop and mints not
 **Its opinions are settings in the declaration's `[state-management]` table**, each
 with a compiled default, wherever an operator could reasonably want a different answer,
 and the `load` event this crate authors records every value in effect, per
-`weaver-trace-PRD` section 3.1. The table's members are a later act's, and this clause
-states only the rule:
+`weaver-trace-PRD` section 3.1. **This Spec gives the table its meaning and
+`weaver-types-Spec` gives it its grammar**, with the declaration's other keys, on the
+operator's ruling of 2026-10-02 on #58's sixth question. The table's members are a
+later act's, and this clause states only the rule:
 custody, the rebuild from the trace, and every state write passing through the tee are
 never settings. **Every judgment the loop makes reaches the record before the loop acts
 on it**, the classify pair and the score above being the precedents: a ranking the loop
@@ -2023,15 +2025,23 @@ loop that composes them, which stays the builder's.
 ruling of 2026-08-11 answering the handoff's first question. Loop 0 opens the decode
 session as the last step of standing the interior up, after the SPU's admit confirms
 residency, so the surface loop 0 grants at loaded-and-idle is already a session at rest.
-The identity material the open carries has two sources and one rule, per the operator's
-ruling of 2026-09-04 on issue #422. Where the state member's end arrived on this enter,
-the harness asks the store for the session's identity, the `identity` ask of
-`weaver-harness-state-contract` section 2, once the seam stands and before the open: a
-prefix answered is the open's `messages`, and an empty answer, the store holding no
-turnless `message.system` for the session, means the first load of the session, so the
-decoder instruction's `identity` field seeds the open and the tee lands what it seated.
-Where no end arrived the field governs alone, as it did before the ruling.
-**This choice is the one site where the identity's source is read**, and the prefix the
+The identity material the open carries has two sources, one per binding. **Under a
+serving binding the prompt file is authoritative at every load**, on the operator's
+ruling of 2026-10-02 on #58's fifth question, which revises the ruling of 2026-09-04 on
+issue #422 that the store governed every load after a session's first: the open seats
+the decoder instruction's `identity`, an edit to the file takes effect at the next
+load, and where the state member's end arrived the tee lands what the open seated, the
+store keeping the history of the identities the loads seated and deciding none of
+them. **Under a diagnostic binding the identity is the preloaded store's**, on the
+operator's ruling of 2026-10-02 on #57's sixth question: the harness asks the store
+for it, the `identity` ask of `weaver-harness-state-contract` section 2, once the seam
+stands and before the open, and the record's own `message.system` events seat, in
+order and with their boundaries, byte for byte, the derived declaration's prompt file
+being empty. **A missed ask there refuses the enter**, the dead-peer conversion of
+every other ask notwithstanding: a replay whose bounding cannot be read is not a replay
+with no bounding, so the enter fails closed through the same after-load failure a
+refused open uses, per ruling 2 of issue #422.
+**This is the one site where the identity's source is read**, and the prefix the
 open seats comes from nowhere else. The seed it reads is the decoder instruction's
 `identity` as the enter carried it, which since the operator's ruling of 2026-10-02
 admin seated at the inventory from the prompt file the declaration names, per
@@ -2041,13 +2051,9 @@ direction moves the source here and not elsewhere**: state management supplying 
 identity, a semantic-graph store that sleep-cycle consolidation keeps current, in place
 of a file the operator edits. That is the memory leg, out of scope per
 `weaver-agent-PRD` section 9 and not built here, and nothing in this crate is shaped for
-it: the choice stays two-way, the store's answer or the seed, and a new source arrives
-as that leg's own act. **A missed
-ask refuses the enter**, the dead-peer conversion of every other ask notwithstanding: a
-run whose bounding cannot be read is not a run with no bounding, so the enter fails
-closed through the same after-load failure a refused open uses, per ruling 2 of the
-issue. The run's session identity is the open's `session` in every case. A refused open
-is a refused enter, returned through the fan-out's after-load failure so the authored
+it: the choice stays two-way by binding, the seed or the preloaded store's answer, and
+a new source arrives as that leg's own act. The run's session identity is the open's
+`session` in every case. A refused open is a refused enter, returned through the fan-out's after-load failure so the authored
 bracket stands for the leave to unwind, the aggregate naming the decode seam as where
 the fan-out stopped. **Under a restoring load the open carries the restored conversation
 beside the identity**, per the ruling of 2026-09-04 on issue #432: the harness asks the
