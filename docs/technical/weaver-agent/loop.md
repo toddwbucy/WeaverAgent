@@ -1,8 +1,8 @@
 ---
 title: The loop
 summary: the operator surface - the seat's calls, the one crossing, and everything the framework refuses to decide
-version: v0.1
-date: 2026-09-15
+version: v0.2
+date: 2026-10-02
 commit: unreleased
 parent: WeaverTools Technical Documentation
 ---
@@ -28,7 +28,28 @@ The nearest thing to it in ordinary experience is a springs-and-terminals
 electronics kit. The parts are fixed and someone else made them, the springs are
 where wires land, a handful of worked projects come in the book, and past those
 the board is yours. **This program supplies parts, springs, and a few worked
-examples. The loop is the wiring, and the wiring is the operator's.**
+examples. The loop is the wiring.** The wiring an agent deploys is one loop, state
+management, compiled into the worker, and where an operator could reasonably want a
+different answer from it, the loop brings the choice out as a switch the operator sets.
+
+## The deployed loop is state management
+
+Every agentic loop is state management: it decides what reaches the model and when,
+and reconciles what happened with what is supposed to happen, turn by turn. That is the
+operator's ruling of 2026-10-02 on issue #1, and it settles which loop ships. **There
+is one, written in Rust and compiled into the worker.** No declaration elects another,
+and an operator bringing a loop of its own is a parked future feature rather than a
+surface here. Its opinions are settings in a `[state-management]` table of the agent's
+declaration, each with a compiled default, and the `load` event records the values in
+effect. Which settings exist is a later act's. Custody, the rebuild from the trace, and
+every state write passing through the tee are never settings.
+
+The loop reaches the state member's store and the SPU's classifier through the seat
+below, like any loop. Both are primitives with no opinion of their own: the store holds
+what the loop's schema admits, and the classifier scores what it is handed. **Every
+judgment the loop makes is recorded on the trace**, a classification or a ranking as
+surely as a flush, so the state the store holds can be rebuilt from the record without
+asking a model again.
 
 ## The loop is one surface of several
 
@@ -59,9 +80,11 @@ its unit, comes up as the provisioned agent identity, binds the coordination soc
 inside its own sandbox, creates the unnamed pairs its organs are reached over, and
 sits there being one sealed agent.
 
-**Loop 1 is the builder's**, and loops above it are further builder loops. The one
-builder-facing surface reaches loop 1 and above and excludes loop 0, so loop 0 is the
-service that runs your loop and is never itself supplied through that surface.
+**Loop 1 is the loop the service runs**, and the one deployed is state management.
+The one builder-facing surface reaches loop 1 and above and excludes loop 0, so loop 0
+is the service that runs a loop and is never itself supplied through that surface. That
+surface is where the state-management loop is built and where the Python bench
+iterates on loops, and it is not a slot an agent's declaration fills.
 
 ## The seat drives a serving binding
 
@@ -138,7 +161,9 @@ recorded in each of their charters:
 The loop file states the same thing from the inside: **the trigger, the recall
 depth, the quote budget, the memory conventions, and what every injected line says
 are the loop's alone, and the framework holds no threshold and no convention
-anywhere.**
+anywhere.** In the compiled loop, the ones an operator could reasonably want otherwise
+become the settings of the `[state-management]` table, the framework still holding none
+of them.
 
 ## What the loop cannot do
 
@@ -149,8 +174,10 @@ The springs are where wires land. They are not everywhere.
 - **No loop authors the trace.** The harness is the sole writer. A loop's actions
   reach the record because the harness authored them, never because the loop wrote.
 - **No tool result is fabricated.** A result has exactly one construction site.
-- **No state crosses a residency.** What the loop accumulates dies with the session,
-  which is what proto-stateful means.
+- **No raw state reaches the agent.** State management carries across sessions under
+  custody, in a snapshot in the operator's directory that the agent never reaches, and
+  neither the snapshot nor the agent's own raw trace is ever handed to it. The agent
+  gets what the loop serves it as composed context and nothing else.
 - **No handle to the hot cache.** The loop elects the flush and never touches what
   the flush clears.
 - **No loop changes its binding's kind.** The kind was declared at the load this
@@ -176,16 +203,17 @@ breaking and without the session dying.
 This distinction is easy to trip over and the corpus states the halves in different
 places.
 
-**The compiled form is the deployment form.** The loop is compiled into the worker
-binary rather than read from a file at runtime, and what a builder inherits is an
+**The compiled form is the deployment form, and the deployed loop is state
+management.** The loop is compiled into the worker binary rather than read from a file
+at runtime, and what a builder inherits is an
 array they did not choose at runtime. That is what holds variance to a range, so
 what remains in a measurement is attributable to the thing under study rather than
 to the rig.
 
 **The Python form is the iteration surface.** A worker built with the `pyworker`
 feature reads its loop file at every crossing, so an edit takes effect on the next
-turn. It carries the same behaviour as the compiled loop and exists to iterate at
-conversation speed.
+turn. It exists to iterate at conversation speed and to run experiments, and it stays
+as it is, untouched by the ruling that made the compiled loop state management.
 
 Both are real and they are not in competition. **Iterate in Python, ship the
 compiled array.**

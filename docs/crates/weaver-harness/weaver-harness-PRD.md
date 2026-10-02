@@ -105,10 +105,16 @@ to from outside it.
 lifecycle interior of loop 0, the load and the unload, the same for every agent,
 together with the engine machinery a loop is built from: tool dispatch, batch
 partitioning, and the surfaces the rest of this section names. The loop itself,
-loop 1, is the builder's, per the composability ruling of 2026-08-02: written at
-the worker composition root against what this crate exposes, which is the
-extension seam the children list of section 6 names. Which loop an agent runs
-is the agent's own declared fact, per the operator's ruling of 2026-08-20: the
+loop 1, is written at the worker composition root, per the composability ruling of
+2026-08-02, against what this crate exposes, which is the
+extension seam the children list of section 6 names. **The deployed loop 1 is state
+management**, one loop written in Rust and compiled into the worker, per the operator's
+rulings of 2026-10-02 on issue #1 and `weaver-agent-PRD` section 5.5: no declaration
+elects a loop for the compiled path, its opinions are settings in the declaration's
+`[state-management]` table, and an operator bringing a loop of its own is parked at apex
+section 9. The ruling of 2026-08-20 that follows now describes the Python-iterating
+worker, the bench and experiments lane, which stays untouched until its own resolution.
+Which loop an agent runs there is the agent's own declared fact, per that ruling: the
 loop is a member of that agent's harness and unique to it. A worker whose loop
 is compiled carries it in the binary its unit starts, and a worker that reads
 its loop from a file runs the one the agent's declaration names. A compiled

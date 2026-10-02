@@ -1,6 +1,6 @@
 # Basic Inference Loop
 
-**Status:** MERGED v0.12, 2026-08-01. The workflow document for the basic inference
+**Status:** MERGED v0.13, 2026-10-02. The workflow document for the basic inference
 loop, filed under the harness's `Loops/` container per the Document Format's
 container entry. It argues no edges of its own: the seams it walks are declared in
 the crate charters per Document Format section 4, and a graph block here would
@@ -104,8 +104,8 @@ revision is the rule applied.
 
 **Scope.** The basic loop serves a local client over the gate's Unix socket hook.
 There is no listening network port anywhere in the loop, per the ruling above.
-Streaming responses, memory reads, and every other interior elaboration are
-out of scope here and arrive with later loops.
+Streaming responses, state reads, and every other interior elaboration are
+out of scope here and arrive with the state-management loop of section 6.
 
 ## 1. The grammar
 
@@ -289,13 +289,21 @@ Everything after the sink is the consumer's.
 
 ## 6. The harness
 
-The harness is the holder of loops, which is why this document files under it.
-This is the basic loop, and later loops, memory, embedding, whatever the corpus
-grows, are also held by the harness, each taking its own workflow document in
-this directory. The loop is never held by the model. The SPU decoder is a token
-function the harness calls, one interior step of a turn, and the loop runs until
-the model returns a final answer or the operator interrupts it, per
-`weaver-harness-PRD` section 2, the interrupt arriving as the stop exchange.
+The harness is the holder of loops, which is why this document files under it. This is
+the basic loop, the bare turn path every loop runs on. **The loop an agent deploys is
+state management**, per the operator's rulings of 2026-10-02 on issue #1 and
+`weaver-agent-PRD` section 5.5: one loop, written in Rust and compiled into the worker,
+which composes this path with the state member's store and the SPU's classifier through
+the harness, its opinions exposed as settings in the declaration's `[state-management]`
+table and every judgment it makes recorded on the trace. It takes its own workflow
+document in this directory with the act that writes it, and no declaration elects
+another loop for the compiled path. The Python-iterating worker stays, untouched, as the
+bench and experiments lane a loop is iterated on, per `weaver-harness-Spec` section 1.
+Memory, when it comes, is held by the harness the same way and takes its own document.
+The loop is never held by the model. The SPU decoder is a token function the harness
+calls, one interior step of a turn, and the loop runs until the model returns a final
+answer or the operator interrupts it, per `weaver-harness-PRD` section 2, the interrupt
+arriving as the stop exchange.
 
 What the harness does in this loop: it serves the contract's exchanges, it
 authors every event and places each at its position, it fans turn content to the

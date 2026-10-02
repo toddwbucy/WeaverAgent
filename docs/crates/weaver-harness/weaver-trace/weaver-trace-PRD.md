@@ -343,6 +343,19 @@ the same section argues the shape. **`score` is the twenty-fourth**, on the oper
 rulings of 2026-09-09 and 2026-09-26 on issue #523: a task's verdict on a run is a fact
 about that run, so the record carries it, and the same section argues the shape.
 
+**Every judgment the loop makes is a fact on the record**, on the operator's ruling of
+2026-10-02 on issue #1, and the kinds above are its precedents. The loop is state
+management, per `weaver-agent-PRD` section 5.5, and state is rebuilt from this record
+alone, so a judgment the record did not hold would make state unrebuildable without
+asking a model again, and a model asked again need not answer the same. The classifier's
+verdict already crosses as `classify.request` and `classify.output`, a task's as
+`score`, a flush's and an elision's as their own kinds, and a recall's answer as
+`recall`. **A judgment with no kind yet, a ranking the loop makes over held facts the
+first of them, is recorded as its own kind when the loop act that makes it lands**, and
+that act names and shapes it in full and adds it here and to every contract whose
+vocabulary names the set. No kind is named ahead of its emitter, per apex section 9's
+rule against a reserved slot.
+
 **The record declares the posture it was written in.** Section 3.1's `load`
 event carries every diagnostic election of the load by name, because
 without it a record holding no field is indistinguishable from a record
@@ -519,7 +532,13 @@ taken with the member standing and one taken without are not comparable
 either. **From this act the `load` event names both**, the loop by the binary
 that ran it and the file and digest where the loop is a file, and the member
 not by that election but by whether its end arrived on the enter, which is the
-harness's own knowledge whatever admin decided from.
+harness's own knowledge whatever admin decided from. **The loop's settings are one more
+such fact**, on the operator's ruling of 2026-10-02 on issue #1: the compiled loop's
+opinions are the operator's to set in the declaration's `[state-management]` table, per
+`weaver-agent-PRD` section 5.5, so two records run under different settings are
+records of different loops. The `load` event carries every setting's value in effect,
+the declared value or the compiled default it fell back to, and the act that lands the
+table shapes the member.
 
 **The store the member stands on is a third such fact, as of 2026-09-04.** Per
 `weaver-state-PRD` section 4 the engine is the deployment's

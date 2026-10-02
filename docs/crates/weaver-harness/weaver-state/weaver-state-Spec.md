@@ -12,7 +12,8 @@
 
 ## 0. What this document is
 
-How the custodian is represented: its process, its store, its territory, and
+How the store primitive is represented: its process, its store and the snapshot
+that carries it across loads, its territory, the slot for the loop's schema, and
 the shapes both halves of the seam take. Written from the merged corpus
 alone. The charter carries every why, and where reasoning appears here it
 restates a charter clause and cites it. The serve half stood deliberately
@@ -21,11 +22,14 @@ with the context-injection loop's act of 2026-08-19 at section 4.
 
 ## 1. The crate
 
-A binary crate, one process per session member, spawned at load and retired at
-unload while its holdings stand, per `weaver-state-PRD` section 3. The
-charter's one sentence is asserted at the crate: custody without policy,
-nothing judged, ranked, or initiated, which review checks by reading the
-crate's surface for any door a judgment could enter by.
+A binary crate, one process per run of one agent, spawned at load and retired at
+unload while its holdings stand in the latest snapshot, per `weaver-state-PRD`
+section 3. The charter's one sentence is asserted at the crate: custody without
+policy. **The store initiates nothing and holds only its schema's shape**, and the
+judging and the ranking are the loop's, made through the SPU and recorded on the
+trace before they reach this crate as distillates, per the charter's section 2.
+Review checks it by reading the crate's surface for any door a judgment could enter
+by.
 
 ```graph
 node: state-custody-without-policy
@@ -53,32 +57,33 @@ They build the opener and distillate through `weaver_trace::opener` and
 and the dependency cell is closed by the operator's ruling of 2026-09-22,
 recorded in charter section 5 under Working Process section 6.
 
-**Dependencies, external.** One per engine, each behind a feature named for
-its engine so a build compiles the integrations it deploys and no other, per
-the ruling of 2026-09-04 that the store is a port: `rusqlite` with its bundled
-engine for the embedded store, so that store's version is the build's fact
-rather than the host's, and `postgres`, the synchronous client, for the service
-store, so no async runtime enters with it. Both pinned by the lock file like
-every dependency. `serde_json` for the canonical event JSON the ingest reads.
-`nix` for the preload door's credential check and for the descriptor handling
-both doors require. Nothing else: no async runtime, no logging
+**Dependencies, external.** One engine, behind the feature named for it: `rusqlite`
+with its bundled engine, so the store's version is the build's fact rather than the
+host's, its serialization interface carrying the snapshot, pinned by the lock file
+like every dependency. **The `postgres` client and its feature retire** with the
+service engine, on the operator's ruling of 2026-10-02 reversing #38, in the code act
+that removes the engine. `serde_json` for the canonical event JSON the ingest reads.
+`nix` for the preload door's credential check and for the descriptor handling both
+doors and the snapshot handles require. Nothing else: no async runtime, no logging
 crate, no HTTP, per the corpus's standing refusals.
 
 ## 2. The process and its territory
 
 The member runs under its own account, owning one subdirectory in the
 operator-side territory where the session record lives, per the charter's
-custody ruling. Under the embedded engine the store opens by path in that
-subdirectory and keeps sibling files, so custody is by ownership, mode-locked
-against the agent's uid, and nothing else writes there. Under the service
-engine the subdirectory holds the preload door's name and nothing of the
-store, the store being reached by a connection the member alone holds: it
-dials the store's unix socket under its own account, the store's peer
-authentication maps that account to the role the binding declares, and the
-agent's uid maps to no role, which is the second gate of the charter's section
-4 standing where the first did not already refuse. The engine and, for the
-service engine, the socket, the database, and the role arrive on the member's
-vector from the binding, per `weaver-admin-Spec` section 6.
+custody ruling. **The store is not in that subdirectory**: it lives in the member's
+memory, and the subdirectory holds the preload door's name and nothing of the store.
+**The snapshot arrives as two handles and never as a path**, per the operator's
+ruling of 2026-10-02 and `weaver-admin-Spec` section 6: admin, as root, opens the
+latest snapshot in the operator's declaration directory for reading and the snapshot
+file for writing, and the member inherits both at its spawn the way it inherits the
+first door's end. Where no snapshot exists the reading handle is absent, which is an
+agent's first load or a snapshot lost, and the reload of section 3 falls back. The
+handles' numbers are a fixed convention between this crate and admin, the code act's
+to elect beside the first door's, and each is probed before it is adopted, by the
+rule below, a regular file and the access mode its use needs. The engine flag and the
+service engine's three flags leave the vector with that engine, in the code act that
+removes it, `weaver-admin-Spec` section 6 moving in the same act.
 
 The first door's end arrives with the process, per the operator's ruling of 2026-08-26:
 admin creates the pair at the spawn and this member inherits its end, so the peer is
@@ -100,20 +105,19 @@ territory, the credential judgment of section 4 unchanged on it.
 
 ## 3. The store
 
-**The store is a port and the engine is elected, per the operator's ruling of
-2026-09-04.** `src/store.rs` declares `Store`, the port: open under the
-binding's election, retire a session's prior holdings, land a distillate
-whole, build the elected indexes, and answer the three asks. Every engine
-implements it whole and the ingest and serve of section 4 speak to the port
-and never to an engine, so the seam's traffic is the same whatever engine
-answers. Two engines stand, one module each behind its feature: `Sqlite`, the
-embedded engine of the 2026-08-18 ruling, its file `state.sql` in the member's
-territory, opened or created at load, reopened by later loads of the same
-session, and retired with the session, and `Postgres`, the service engine, one
-database per agent named by the binding, reached over the store's unix socket
-under the member's account. The port is the one place a query language is
-spelled, each engine spelling its own dialect of the same two-table shape
-below, and a third engine is an implementation of the port in its own act.
+**The store is a port and one engine stands behind it, per the operator's ruling of
+2026-10-02 on issue #1.** `src/store.rs` declares `Store`, the port: open with the
+loop's schema, load a snapshot, land a distillate whole, build the elected indexes,
+answer the asks, and write a snapshot. The ingest and serve of section 4 speak to the
+port and never to an engine, so the seam's traffic is the same whatever answers it.
+**One engine stands**, `Sqlite`, an embedded database opened in memory in this process,
+one database and never more, with no file of its own, no server, no network and no
+pool. Its holdings reach the disk only as a snapshot, per the clause below. **The
+service engine, `Postgres`, retires** with its module, its feature and its suites, in
+the code act that removes it, the ruling of 2026-09-04 that elected it being reversed
+because a shared database server breaks individuation, per the charter's section 4.
+The port is the one place a query language is spelled, and a further engine is an
+implementation of the port in its own act.
 
 ```graph
 node: state-store-is-a-port
@@ -198,8 +202,7 @@ CREATE TABLE IF NOT EXISTS series (
 );
 ```
 
-The service engine spells the same four in its own dialect, `BIGINT` for the
-integers and `DOUBLE PRECISION` for the readings. **What lands typed is what
+**What lands typed is what
 the seam's vocabulary names**, per `weaver-harness-state-contract`'s Vocabulary
 clause. A message kind's `role` and `content` are read through the floor's
 message model, `weaver_traits::Role` and `weaver_traits::ContentBlock`: the role
@@ -222,14 +225,14 @@ through the renderer every answer uses and compares it with the pair, and a valu
 does not decode as its named type, or decodes and renders differently, lands as a
 `field` row instead. So a typed row cannot serve a spelling the record did not hold, and
 the contract's served-as-it-crossed clause holds by construction. A decoded string
-carrying U+0000 lands verbatim too, in any string the message model holds, because the
-service engine's `TEXT` refuses it where the escaped JSON in `field` holds it, and it
-does so under both engines so the two answer alike rather than one typing what the other
-rolls back. A block the floor adds after this build, or a named member the SPU spells
-some other way, lands whole and verbatim rather than typed in part or refused. The
-canonical form spells each value one way, so what the tee sends from a record types
-where the vocabulary names it unless a string in it carries U+0000, and the other
-fallbacks are reached only by frames the tee does not produce.
+carrying U+0000 lands verbatim too, in any string the message model holds, a rule the
+retired service engine's `TEXT` forced and that stands unchanged until the act that
+moves these tables into the loop's schema re-elects it. A block the floor adds after
+this build, or a named member the SPU spells some other way, lands whole and verbatim
+rather than typed in part or refused. The canonical form spells each value one way, so
+what the tee sends from a record types where the vocabulary names it unless a string in
+it carries U+0000, and the other fallbacks are reached only by frames the tee does not
+produce.
 
 **A pair lands one way and never both.** The `field` row and the typed rows
 never hold one pair twice, so the elected index over `field` for a path that
@@ -269,25 +272,60 @@ beneath an earlier load's, which is the whole reason the name is derived from
 the path rather than from the key's position in the election. Where an engine's
 identifier limit cannot hold a path's name the load refuses the election with a
 named fault, because building the subset that fits is the same silent loss read
-from the other end. The encoding is the code act's under this election, the way
-the pragmas below are. **The ceiling belongs to the engine and so does the
-encoding.** The service engine measures every name against the identifier width
-its store states at open, which that store truncates a longer name past rather
-than refusing, so an election carrying a path it cannot name is refused entire
-rather than built in the part that fits. The width is asked for rather than
-assumed, a store built to another one being the same collision read from a
-number this crate would have guessed. The embedded engine is unaffected, sqlite
-setting no such limit, and the two engines encode one path differently on that
-ground.
+from the other end. The encoding is the code act's under this election. **The
+ceiling belongs to the engine and so does the encoding**, and sqlite sets no
+identifier limit, so the refusal stands for an engine a later act integrates rather
+than for this one.
 
-**Durability yields to speed, and the charter is the license.** The
-derivative is rebuildable from the record and the session never depends on
-it, per the loss clause, so the embedded engine runs with synchronization
-relaxed and the journal in memory, the crash cost being a rebuild or an empty
-stand rather than a lost account. The exact pragmas are the code act's, under
-this election. The service engine's durability is the store's own and this
-crate asks nothing of it, its rows being the same derivative under the same
-license.
+**The typed tables are loop opinions held here until the loop's schema takes them**,
+per the operator's ruling of 2026-10-02 on issue #1. The `message`, `part`,
+`measurement` and `series` tables above, and the selection rules section 4's recall and
+identity carry, the message kinds the recall reads and the newest run the identity
+answers from, were each elected against a real ask, and each is a judgment about what a
+turn needs rather than a mechanic of keeping. They leave custody into the loop and its
+schema with the act that writes that schema, the asks that serve them moving with them
+under the contract's change protocol, and until it lands the store holds and serves them
+as this section and section 4 state. **The neutral substrate stays**: the `event` and
+`field` tables carry the envelope and the elected pairs with no opinion in either, and
+every schema the loop provides stands beside them rather than in their place.
+
+**The schema slot.** The loop provides its schema and the store stands it at open: the
+tables the loop's state takes, their keys and constraints, and for each distilled kind
+the rows a distillate of that kind lands as. It crosses the seam in the opener, per
+`weaver-harness-state-contract` section 2, so a restarted member stands the identical
+schema with its reopened channel exactly as it builds the identical indexes. **What the
+schema does not admit has nowhere to land**: a distillate whose landing the schema's
+constraints refuse rolls back whole, by the transaction rule of section 4, and stands
+in the trace and in the neutral substrate and nowhere else. The store applies the
+schema mechanically and holds no opinion about it, so a schema is never this crate's
+to write, repair or extend. **A snapshot carries the schema it was taken under**, and a
+reload whose opener carries a different schema is a snapshot that disagrees, so the
+fallback of the clause below runs and rebuilds the holdings under the new schema from
+the trace.
+
+**Durability is the snapshot's, and the charter is the license.** The derivative is
+rebuildable from the record and the session never depends on it, per the loss clause,
+so the live store pays no disk write per landing: it holds its rows in memory, and the
+crash cost is what landed since the latest snapshot, which the next reload replays
+from the trace. **A snapshot is the whole database serialized**, written through the
+writing handle when the harness asks for one with the contract's `snapshot` ask, at
+the interval the loop's settings name and at the leave, and never on the store's own
+initiative. **It is stamped with the trace position it covers**, the run and the
+sequence of the last distillate landed in it, and with a check over its own bytes, so a
+snapshot written in part or damaged since reads as corrupt rather than as holdings.
+
+**The reload is the latest snapshot plus the trace's tail.** At the spawn the member
+reads the snapshot through the reading handle into its in-memory database and holds its
+stamp. The tail, every distillate the record holds past that position, lands through the
+preload door of section 4 by the same path as every other landing, and the asks park on
+the door's seal as they do under a restoring load, so nothing is served from a snapshot
+the tail has not yet caught up. **A full rebuild from the trace is the fallback only**:
+where the reading handle is absent, where the snapshot's check fails, or where the
+snapshot disagrees with the trace, its stamp naming a position the record does not hold
+or the schema it carries differing from the opener's, the member discards what it read
+and stands empty, and the whole record lands through the same door. A reload and a full
+rebuild arrive at the same holdings by construction, and section 5 names the instrument
+that holds them equal.
 
 ## 4. The ingest and the serve
 
@@ -318,11 +356,11 @@ to: state-distillate-lands-whole
 **The serve half, shaped by its first asker per the charter's cell.** An
 `ask` frame arriving on the stream is handled in stream order by the same
 loop that lands distillates, which is what delivers the contract's
-answered-against clause without a lock or a snapshot: the holdings at the
+answered-against clause without a lock or an isolation level: the holdings at the
 ask's position are the holdings, because nothing lands between reading the
 ask and answering it.
 
-**Every serve query restricts to the opener's session, and the restriction
+**Every standing serve query restricts to the opener's session, and the restriction
 is the query's rather than the caller's.** The contract's `election` carries
 the session the load declared, per its 2026-08-20 amendment, and this crate
 holds it for the channel's life and puts it in the `WHERE` of every read
@@ -333,14 +371,16 @@ looked perfectly well formed - a shape ask reporting a lifetime's runs as
 this session's, and a recall reaching a fact the operator believed a session
 cut had retired. Nothing surfaced it until a fresh session reported
 twenty-eight earlier runs it never had. **A store holding more than one
-session is the normal case rather than the broken one**, sessions outliving
-runs and the store outliving sessions under either engine, so the restriction
-is what makes `weaver-state-PRD` section 4's within-a-session boundary a
-property of the answers instead of an assumption about the store. What
-becomes of an earlier session's rows on disk is section 6's open question and
-deliberately not
-settled here, per the operator's ruling of the same date: unreachable is
-what this act delivers, and removal is its own election.
+session is the normal case rather than the broken one**, and since the operator's
+ruling of 2026-10-02 it is the design: state carries across sessions under custody,
+per `weaver-state-PRD` section 3, and the store holds one database for the agent with
+no boundary of its own between its sessions. **So the restriction is each standing
+ask's definition and not a wall of the store's**: the asks that read held events,
+`shape`, `recall`, `replay` and `identity`, each answer within the declared session
+because that is what each was elected to answer,
+and an ask the loop's schema brings may reach across sessions where its definition
+says so. Which sessions an answer reaches is a loop opinion like the typed tables of
+section 3, and it moves with them.
 
 ```graph
 node: state-serve-restricts-to-the-session
@@ -365,18 +405,26 @@ recent turns by id, the rows outside them left unread, a turn label recurring ac
 runs naming two different turns. The answer serves each event as the distillate's own
 shape, envelope and pairs, each pair the value that crossed: read back from `field`, or
 rendered from section 3's typed rows through the renderer the landing checked it
-against. One reader per engine serves every answer, so the recall, the replay and the
-identity cannot spell one event two ways. The `grants` ask reads no event row: it reads
-the engine's own boundary, the catalog's lines for the connected role under the service
-engine and the file's owner, group, and mode under the embedded one, and answers them in
-the engine's order as `{"answer":{"grants":{"surface":[...]}}}`, each line a string, per
-the contract's fourth ask of 2026-09-04. The `identity` ask reads the event rows of kind
-`message.system` whose turn is absent and whose run is the run of the newest such row,
-ordered by the `id` column, with their pairs, and answers them as
-`{"answer":{"identity":{"messages":[...]}}}`, each the distillate's own shape, an empty
-list where the session holds none, per the contract's fifth ask of 2026-09-04. A
-malformed ask is dropped whole the way a malformed distillate is, and the resulting
-silence is the harness's bound to convert into a missing answer.
+against. One reader serves every answer, so the recall, the replay and the identity
+cannot spell one event two ways. The `grants` ask reads no event row: it reads the
+store's own boundary, which with the store in memory is the snapshot's, the owner, group
+and mode of the file the writing handle names, read through the handle and never by
+path, and answers them in a fixed order as `{"answer":{"grants":{"surface":[...]}}}`,
+each line a string, per the contract's fourth ask of 2026-09-04. The `identity` ask
+reads the event rows of kind `message.system` whose turn is absent and whose run is the
+run of the newest such row, ordered by the `id` column, with their pairs, and answers
+them as `{"answer":{"identity":{"messages":[...]}}}`, each the distillate's own shape,
+an empty list where the session holds none, per the contract's fifth ask of 2026-09-04.
+A malformed ask is dropped whole the way a malformed distillate is, and the resulting
+silence is the harness's bound to convert into a missing answer. **The `snapshot` ask
+writes the store and answers the stamp**, per the contract's sixth ask of 2026-10-02:
+the member serializes the whole database with its schema and its stamp, writes it
+through the writing handle, and answers
+`{"answer":{"snapshot":{"run":...,"sequence":...}}}` naming the position the snapshot
+covers, or drops the ask unanswered where the write failed, the silence converting at
+the harness into a missing answer like every other. It runs in stream order like every
+ask, so the snapshot covers exactly the distillates the stream carried before it, and a
+write that failed part way is what the reload's check exists to catch.
 
 **Three protocol bounds are this crate's elections, each named with what its
 breach means, per the audit of 2026-08-26.** The answer ceiling is one
@@ -406,11 +454,15 @@ the contract's section 2. The path is thereby idempotent at the preload grain -
 re-running it replaces the session's holdings rather than appending to them - and a dead
 driver's prefix needs no cleanup act, the next opener being the cleanup. The first
 door's path performs no retirement and gains no branch: the delete hangs on the preload
-opener alone. What is new is the door's standing and its judgment, and both are
-conditioned facts: the member binds the preload name only where the party that stands it
-names one, and that party names it under a diagnostic binding or a serving load that
-elects a restore, per issue #432, holding the resolved kind from the inventory per
-`weaver-admin-Spec` section 4. **That party is `weaver-admin` and the name rides the
+opener alone. **The reload's tail is the one preload that must not retire**, landing on
+top of the snapshot section 3 loaded, so the tail's opener names the position it follows
+and retires nothing, where the fallback rebuild's opener retires everything the member
+read. `weaver-analysis-state-contract` carries neither opener yet, and the charter's
+section 5 names it owed. What is new is the door's standing and its judgment, and both
+are conditioned facts: the member binds the preload name only where the party that
+stands it names one, and that party names it under a diagnostic binding or a serving
+load that elects a restore, per issue #432, holding the resolved kind from the inventory
+per `weaver-admin-Spec` section 4. **That party is `weaver-admin` and the name rides the
 vector**, per that Spec's section 6 as amended 2026-08-25, no exchange this member holds
 carrying a path. **Section 2's election is narrowed rather than closed**: the descriptor
 choreography it leaves to the code act is still that act's, and what is settled here is
@@ -555,21 +607,19 @@ is cited at a test.** Every `conforms:` line in the crate sits at a `//!` file
 header but one, the line inside `stand_preload_name`, which is a function the
 binary runs, so none of the nine is a sighting under that rule.
 
-**Requiring a perturbation-verified test.** Eleven claims, each watched where the
-behaviour sits.
+**Requiring a perturbation-verified test.** Eleven claims stand today, each watched
+where the behaviour sits, and three join them with the store primitive, owed by the
+code act that lands it.
 
-- The serve restricts to the opener's session, watched by dropping any of the
+- The standing asks restrict to the opener's session, watched by dropping any of the
   three `WHERE session` predicates the reads carry, which returns an earlier
-  session's runs to a shape answer and an earlier session's rows to a recall.
+  session's runs to a shape answer and an earlier session's rows to a recall. The
+  claim is now each ask's definition rather than the store's boundary, per section
+  4, and it moves with the asks when the loop's schema takes them.
 - The indexes are built at load, watched by naming them positionally: a later
   load's differing election then falls under the earlier name through
   `CREATE INDEX IF NOT EXISTS` and one index stands where the election asks
-  two. At the service engine the perturbation is the scheme that engine carried
-  before its names were derived as they are, the key's hex under a prefix and
-  the store's truncation in place of a refusal, which the two together collide
-  to one name for two elected paths of thirty bytes. Truncation alone collides
-  nothing under the naming that stands, those two paths naming indexes well
-  inside the width. **The timing is the half no test reaches.** The build sits
+  two. **The timing is the half no test reaches.** The build sits
   on the binary's startup path between the opener's parse and the serve loop,
   and every test that drives it calls the port directly, so what is watched is
   that the election's own indexes are built and not that they are built before
@@ -584,16 +634,15 @@ behaviour sits.
   serving load stands a door nothing should dial.
 - The preload door refuses every peer but the operator, watched by dropping
   the root arm from the accept, which admits the agent's own uid.
-- A distillate lands whole, watched at the service engine as of PR #644 by an
-  insert forced to fail inside the landing's transaction with the holdings
-  counted after: `a_failed_pair_insert_leaves_no_partial_distillate` lands a
-  good event, then one whose second pair carries a NUL that `TEXT` refuses, and
-  requires the refusal, an unchanged `held()`, an unchanged replay and one field
-  row. The perturbation commits the event before its pairs, and the count moves
-  by one. The embedded suite still watches the persistence half, a good landing
-  surviving a reopen.
-- A named member lands typed and serves what the record reads, watched at both
-  engines by `recorded_lines_land_typed`. It distills four recorded lines through
+- A distillate lands whole. Its watch stood at the service engine as of PR #644,
+  a pair carrying a NUL that engine's `TEXT` refuses forcing the failure inside the
+  transaction, and it leaves with that engine. **The embedded engine owes the
+  watch**: the code act that retires the service engine forces a failure inside
+  the embedded landing's transaction, the loop schema's own constraint refusing a
+  row being the natural lever, requires the refusal and unchanged holdings, and
+  perturbs by committing the event before its rows.
+- A named member lands typed and serves what the record reads, watched by
+  `recorded_lines_land_typed`. It distills four recorded lines through
   the tee, lands them, and requires the replay to serve every pair as it crossed,
   the served message read through the floor's type to equal the record's payload
   read the same way, and the typed tables to hold the rows. The perturbation makes
@@ -605,67 +654,58 @@ behaviour sits.
   drops the render comparison from `typed::split`, and a perplexity crossing as
   `1.50` lands typed and would serve as `1.5`.
 - An absent reading is absent and not zero, watched by
-  `an_absent_reading_is_absent_and_not_zero` and at both engines by the null
-  perplexity the recorded test lands. The perturbation defaults a measurement's
-  missing perplexity to zero, and all three fail.
-- A string no engine can hold lands verbatim, watched by
-  `a_nul_in_a_string_lands_verbatim` and at both engines by
-  `a_nul_in_a_message_lands_verbatim`, which lands a message whose text carries
-  U+0000 and requires it served byte for byte from a `field` row with no part
-  typed. The perturbation drops the holdable check from `typed::split`: the
-  service engine refuses the landing and rolls it back, and the embedded engine
-  holds the part typed, so each engine's test fails.
+  `an_absent_reading_is_absent_and_not_zero` and by the null perplexity the
+  recorded test lands. The perturbation defaults a measurement's missing
+  perplexity to zero, and both fail.
+- A string carrying U+0000 lands verbatim, watched by
+  `a_nul_in_a_string_lands_verbatim` and `a_nul_in_a_message_lands_verbatim`,
+  which lands a message whose text carries U+0000 and requires it served byte for
+  byte from a `field` row with no part typed. The perturbation drops the holdable
+  check from `typed::split`, and the embedded engine holds the part typed.
+- **A reloaded store equals a full replay, and this is the store primitive's
+  instrument**, per the operator's ruling of 2026-10-02 on issue #1. The test lands
+  a recorded session's distillates, snapshots part way, lands the rest, then
+  stands a second store from the snapshot plus the tail past its stamp and a third
+  from the whole record with no snapshot, and requires the second and third to
+  answer every ask alike and to hold the same rows, table by table, the loop's
+  schema included. The perturbations are the stamp written one position late,
+  which lands a distillate twice, and one position early, which loses one, and the
+  tail replayed from the record's start: each must fail the equality.
+- A snapshot that fails its check is not loaded, watched by a snapshot truncated
+  part way and by one with a byte flipped, each of which must stand the fallback
+  rebuild rather than serve. The perturbation drops the check, and a torn snapshot
+  is read as holdings.
+- What the schema does not admit lands nowhere, watched by a distillate whose
+  landing the loop schema's constraint refuses: the landing rolls back whole and
+  the neutral substrate holds the event. The perturbation drops the constraint from
+  the schema the store stands, and the row lands.
 
-**The session claim is watched at both engines, as of PR #644.** The service
-engine's in-file suite stands a scratch PostgreSQL per test, lands two sessions
-and asks about one, and `postgres.rs` cites the claim where that suite sits. The
-perturbation is recorded rather than performed by the suite: PR #644's body
-records the removal of each of the five `WHERE session` predicates the reads
-carry, one at a time, and the review seats independently reproduced selected
-removals. Four removals widen an answer to the other session's rows,
-a shape holding two runs or a count of two. The fifth, on the turn selection,
-fails the other way: the bound is spent on the other session's newest turn while
-the outer predicate still excludes that turn's rows, and the requested session's
-bounded recall comes back empty. The suite catches both shapes. **The index
-naming is watched at both.** The service engine
-holds a suite over the derivation section 3's election asks it for, a name made
-from the key path, carried into the statement the build would issue, and a
-refusal where the store's identifier limit cannot hold one, and it cites the
-claim where that suite sits. **That arm holds under one flag and not under the
-crate's default.** The service engine is behind a feature the crate does not
-default to, so a suite run without it compiles none of that engine and answers
-nothing about it. The flag alone reaches the statement suite. The live
-instruments of PR #644 are ignored by default, a loud skip that the ordinary run
-reports as fourteen ignored rather than passes, and they run under a scratch
-instance with `WEAVER_STATE_TEST_PG` naming its socket directory and
-`cargo test -p weaver-state --features postgres --locked -- --ignored`, which runs
-the live suite alongside the separately invoked statement suite. The ordinary
-featured run and the ignored run together supply this section's test evidence
-for that engine.
-As of PR #644 the suite reaches the store as well: the live tests construct a
-service engine on a scratch database and read `pg_indexes` for the indexes the
-store then holds, and the arms of the session, lands-whole, retirement and
-ask-vocabulary claims at that engine rest on runs. **What still rests on a
-reading at that engine** is the timing half of indexes-at-load, the build
-sitting on the binary's startup path where no port-level test reaches it.
+**The service engine's suites retire with it.** The scratch PostgreSQL suites of
+PR #644, the statement suite over the index naming, and the `--features postgres`
+runs leave in the code act that removes the engine, and nothing here rests on them
+after it.
 
 **Enforced by review, and each clause names what would buy it.** Review here
 means the instrument was not bought and never that none exists, per Document
 Format section 5.
 
 - **Custody without policy** is read off the crate's surface for any door a
-  judgment could enter by. The claim is an absence spread across a surface
-  rather than a shape, so no single compile-fail pin names it and a test can
-  only watch the doors that exist. What would buy it is a check over the
-  crate's exported items refusing any that ranks, judges or initiates, which
-  is a shape this corpus has no instance of, and naming it is what keeps the
-  claim from reading as unbuyable.
+  judgment could enter by, a snapshot taken unasked among them. The claim is an
+  absence spread across a surface rather than a shape, so no single compile-fail
+  pin names it and a test can only watch the doors that exist. What would buy it
+  is a check over the crate's exported items refusing any that ranks, judges or
+  initiates, which is a shape this corpus has no instance of, and naming it is
+  what keeps the claim from reading as unbuyable.
 - **The store is a port** and the nearest thing to an instrument is the
   signature: the ingest and the serve take the port behind a reference and can
   name no engine, so a call reaching past it would not compile as this code
   stands. Nothing holds that signature in place, so a later act widening one of
   them to a concrete engine compiles and this claim goes quiet. What would buy
   it is a compile-fail pin over an ingest path that names an engine.
+- **The member sees a handle and never a path** is read off the vector and the
+  spawn: no positional or flag names the snapshot, and the member opens no file
+  by name. What would buy it is a test over the vector admin composes refusing any
+  member naming the declaration directory, which is admin's side and its Spec's.
 
 **The walks the seam's conformance asks for are not in this tree.** The
 contract's section 8 names them and says both directions land with the acts
@@ -678,16 +718,16 @@ interleaved among distillates. The suites here reach most of those properties
 through the port or through the unit that holds them rather than across the
 seam, which is the cheaper instrument and not the one the contract names, and
 **the dead-peer clause is reached by nothing here in either direction**. The
-territory's mode is owed the same kind of walk, the agent's uid asked to read
-the file and refused, and the service engine's second gate the same at the
-store, the agent's uid asked to connect as any role and refused by the store's
-own authentication. The `grants` ask reports the file's owner and mode and
-asserts nothing about either, so it is a surface for that walk rather than the
-walk.
+snapshot's custody is owed the same kind of walk, the agent's uid asked to open
+the snapshot in the operator's directory and refused, and the member's own process
+asked to open it by path and refused. The `grants` ask reports the snapshot's
+owner and mode and asserts nothing about either, so it is a surface for that walk
+rather than the walk.
 
 **Where the records sit.** The assertion records are at the clauses that argue
 the claims, across sections 1 through 4 rather than gathered here, per Document
-Format section 6.
+Format section 6. The three claims the store primitive adds carry no record, the
+assertion record being required of nothing new until release.
 
 ## 6. Open elections
 
@@ -695,7 +735,8 @@ The serve surface's election closed 2026-08-19: its shape and vocabulary
 landed in the contract, its query-side representation at section 4, and the
 store shape's trigger fired and was answered at section 3, all elected
 against the context-injection loop's real ask per the charter's cell. The
-store shape was answered again 2026-09-29 with the typed landing.
+store shape was answered again 2026-09-29 with the typed landing, and the
+operator's ruling of 2026-10-02 moves that landing toward the loop's schema.
 
 - **The measurement's remaining members.** The SPU renders a generation's
   model, weights hash, token identifiers, prompt blocks, timings and residual
@@ -703,23 +744,33 @@ store shape was answered again 2026-09-29 with the typed landing.
   section 6 spells none of their member names, so they land verbatim. Each types
   by section 3's rule once that section spells it and the contract's vocabulary
   names it, an act of the SPU's Spec and this seam's together rather than a name
-  this crate takes from the SPU's code.
-
+  this crate takes from the SPU's code, and once the loop's schema holds the
+  typed tables, an act of that schema's too.
 - **The transformation vocabulary, beyond its first member.** The shape
   aggregate landed with the serve act, and which further derivations
   custody performs stays elected ask by ask, because a derivation is named
   by what reads it.
-- **The retirement mechanics.** The session's close retires the holdings,
-  and the act that gives sessions a close in practice elects how the
-  embedded engine's file is removed and how the service engine's rows are
-  dropped, sessions today outliving every run this workshop has
-  produced. **Sharpened 2026-08-20 rather than closed**: the serve
-  restriction of section 4 makes an earlier session's holdings unreachable,
-  so the charter's boundary now holds in the answers, and what remains open
-  is the disk - whether a session's close removes its rows, and what an
-  operator may recover after it. The operator ruled the two apart in that
-  act, so a reader meeting this cell is meeting a narrowed question rather
-  than the original one.
+- **The snapshot's format and its write.** Section 3 fixes what a snapshot holds,
+  the whole database with its schema, its stamp and a check, and leaves how it is
+  laid out and how it is written to the code act: whether the writing handle is
+  rewritten in place or names a fresh file admin rotates, what the check is, and
+  what the member does with a write the kernel refuses part way.
+- **The tail's driver and the agreement check.** Section 3 has the tail land
+  through the preload door and the snapshot judged against the trace. The door
+  stands today only under a diagnostic binding or a restoring load, and the
+  driver that dials it is the operator's, so which party stands it and drives the
+  tail at an ordinary load, and which party reads the record's position the stamp
+  is compared with, are elections owed with `weaver-analysis-state-contract` and
+  admin's vector, neither of which this act moves. A snapshot taken at the leave
+  covers the whole record, so the tail is empty after every clean unload and the
+  question bites after a crash.
+- **The retirement of an agent's holdings.** A session's close no longer retires
+  anything, state carrying across sessions per the charter's section 3, so what
+  remains is what an operator does to retire an agent's state: the snapshot is a
+  file in the operator's own directory, and deleting it makes the next load a full
+  rebuild rather than an empty store, the trace still holding everything. Whether
+  an operator may stand an agent on an empty store while its record stands is the
+  operator's ruling to make.
 - **The member's account name and the territory's exact key.** Deployment
   facts, elected where the spawn path lands, the way every path in the
   admin configuration is.

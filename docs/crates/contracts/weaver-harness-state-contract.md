@@ -13,12 +13,16 @@
 
 - **`weaver-harness`, the feeder and the asker.** Applies the tee of
   `weaver-trace-PRD` section 11 and sends what it elects across this seam. The
-  only party that will ever ask, its own loops asking through it. Decides
-  everything: what is elected, what any held fact is worth, and what to do
-  with an answer.
+  only party that will ever ask, its loop asking through it. Decides
+  everything: what is elected, the schema the holdings take, what any held fact
+  is worth, when a snapshot is taken, and what to do with an answer. The loop is
+  state management, per `weaver-agent-PRD` section 5.5, and its schema and its
+  judgments are the harness's to carry and never this seam's to hold an opinion
+  about.
 - **`weaver-state`, the custodian.** Receives the distillate, holds it
-  organized, and will answer asks when the ask exists. Transforms as part of
-  organizing, per its charter, and decides nothing.
+  organized in the shape the loop's schema admits, answers asks, and writes a
+  snapshot when asked. Transforms as part of organizing, per its charter, and
+  decides nothing.
 
 No third party reaches this seam. The model has no path to it, per
 `weaver-state-PRD` section 2, and no other crate holds an end.
@@ -83,33 +87,38 @@ section spells them, until when they cross as values this contract does not name
 State reads the three member by member and the floor carries no measurement shape,
 the harness consuming none of it.
 
-**This seam's own.** Four terms. The `election`: the seam's opener, the session the load
-declared and, beside it, three facts the load declared about what crosses. Whether every
-kind crosses carrying its envelope or only the kinds named do, which kinds are named,
-and the payload key paths elected for each. It is sent whole at every standing of the
-channel and never per event. **The same three facts are written into the record**, on
-the `load` event's payload per `weaver-trace-Spec` section 3, so a reader of a finished
-record knows the rule this seam carried without being told it. **The first of the three
-is a term of this seam and not a shorthand for the other two**: a deployment electing
-every kind and no paths is saying something a list of kinds cannot say, and the record
-that flattened it into a list would be recording a different rule. The record carries
-the rule and not the session, which rides the opener by the clause below and reaches a
-reader from the envelope of every event. That matters to nobody standing this seam and
-to everyone replaying it: a replay preloads under the rule the record names or it
-preloads a different session under a rule of its own. **The session rides the opener
-rather than the ask**, per the operator's ruling of 2026-08-20 on the custody defect: it
-is a load-declared fact standing for the channel's life, the same shape as the election
-it sits beside, and a restarted member relearns it with its reopened channel exactly as
-it relearns the election. An asker naming its own session on every question would put
-the fact on the wire per ask and would make the asking loop state something it has no
-reason to know. What the member does with it is its own, per section 2: the holdings
-answer within the declared session and not across it, which is `weaver-state-PRD`
-section 4's boundary made reachable rather than assumed. The `distillate`: one distilled
-event, carrying the envelope whole and the elected payload pairs beside it, each pair a
-payload key path and the value the canonical JSON held at it. The `ask`: one question
-the harness puts to the holdings on the standing channel, carrying a name from the
-closed vocabulary section 2 enumerates. The `answer`: the custodian's one reply to one
-well-formed ask, sent only when asked and at no other time.
+**This seam's own.** Five terms. The `election`: the seam's opener, the session the load
+declared, the loop's `schema`, and, beside them, three facts the load declared about
+what crosses. Whether every kind crosses carrying its envelope or only the kinds named
+do, which kinds are named, and the payload key paths elected for each. It is sent whole
+at every standing of the channel and never per event. **The same three facts are written
+into the record**, on the `load` event's payload per `weaver-trace-Spec` section 3, so a
+reader of a finished record knows the rule this seam carried without being told it.
+**The first of the three is a term of this seam and not a shorthand for the other two**:
+a deployment electing every kind and no paths is saying something a list of kinds cannot
+say, and the record that flattened it into a list would be recording a different rule.
+The record carries the rule and not the session, which rides the opener by the clause
+below and reaches a reader from the envelope of every event. That matters to nobody
+standing this seam and to everyone replaying it: a replay preloads under the rule the
+record names or it preloads a different session under a rule of its own. **The session
+rides the opener rather than the ask**, per the operator's ruling of 2026-08-20 on the
+custody defect: it is a load-declared fact standing for the channel's life, the same
+shape as the election it sits beside, and a restarted member relearns it with its
+reopened channel exactly as it relearns the election. An asker naming its own session on
+every question would put the fact on the wire per ask and would make the asking loop
+state something it has no reason to know. What the member does with it is its own, per
+section 2: each standing ask answers within the declared session by its own definition,
+the store holding no boundary between sessions of its own. The `distillate`: one
+distilled event, carrying the envelope whole and the elected payload pairs beside it,
+each pair a payload key path and the value the canonical JSON held at it. The `ask`: one
+question the harness puts to the holdings on the standing channel, carrying a name from
+the closed vocabulary section 2 enumerates. The `answer`: the custodian's one reply to
+one well-formed ask, sent only when asked and at no other time. The `schema`: the loop's
+declaration of the tables its state takes, their keys and constraints, and the rows a
+distillate of each kind lands as, carried in the opener, per the operator's ruling of
+2026-10-02 on issue #1. **Its content is the loop's and this contract names only its
+carriage**: what a schema says is the loop act's to write, and a schema the custodian
+cannot stand refuses the opener rather than standing in part.
 
 ```graph
 edge: draws
@@ -147,24 +156,30 @@ kind: term
 edge: defines
 from: weaver-harness-state-contract
 to: answer
+
+node: loop-schema
+kind: term
+
+edge: defines
+from: weaver-harness-state-contract
+to: loop-schema
 ```
 
 ## 1. What this contract governs
 
-The one seam between the harness and its state member: the channel's standing,
-the ingest traffic that flows today, the serve direction that is chartered and
-unshaped, what each party owes, how the seam fails, and what neither party may
-do. It is read alongside `weaver-state-PRD` and neither is complete without
-the other.
+The one seam between the harness and its state member: the channel's standing, the
+ingest traffic, the serve direction, the snapshot the harness asks for, what each party
+owes, how the seam fails, and what neither party may do. It is read alongside
+`weaver-state-PRD` and neither is complete without the other.
 
 ## 2. The traffic
 
 **Ingest, flowing, one direction, and the election opens it.** The first
 traffic on every standing of the channel is the election itself, whole: the
-elected kinds and their payload key paths, as the load declared them. The
-custodian needs the election before the first distillate, because its
-indexes are built from it at load, and a restarted member receives the
-identical election with its reopened channel, which is what keeps the
+elected kinds and their payload key paths, as the load declared them, and the loop's
+schema. The custodian needs the election before the first distillate, because its
+indexes are built from it and its schema stood from it at load, and a restarted member
+receives the identical election with its reopened channel, which is what keeps the
 selection deterministic across the processes of one load. After the opener,
 the harness sends a `distillate` per elected event, in sequence order, and
 is owed nothing back: the fact has one home, state's holdings, and a
@@ -189,23 +204,26 @@ ask's: it parks precisely because the holdings it is for arrive after it,
 so every distillate received through the seal is in its answer's view. The
 shape and recall asks keep the pre-ask view without exception.
 
-**Every answer is bounded to the session the opener declared**, per the
-operator's ruling of 2026-08-20. Holdings a member accumulated under an
-earlier session are outside every answer's view, whatever else is true of
-them, so an ask cannot reach across the boundary `weaver-state-PRD` section
-4 draws. This is a property of the answers rather than of the store: what
-becomes of an earlier session's rows on disk is deliberately not settled
-here, per the same ruling, and stands as its own question.
+**State carries across sessions, and each ask's definition says which sessions its
+answer reaches**, per the operator's ruling of 2026-10-02 on issue #1, which revises the
+session bound of 2026-08-20. The custodian holds one database for the agent across its
+runs and its sessions, carried between loads by snapshot, per `weaver-state-PRD` section
+3, and holds no boundary of its own between sessions. **The asks standing on that date
+that read held events, `shape`, `recall`, `replay` and `identity`, answer within the
+session the opener declared**, because each was elected to, so holdings of an earlier
+session stay outside their view: that bound is each ask's own definition and never the
+store's wall. An ask that reaches across sessions enters under section 7 like any
+further ask, with the loop act that writes the schema it reads.
 
-**The ask vocabulary is closed and enumerated here, and it holds five names: `shape`,
-`recall`, `replay`, `grants`, and `identity`.** The shape ask carries no members, one
-member instance holding one session, and asks for the session's shape - what happened,
-in what order, in which run, which is the phrase the charter uses for what the default
-election holds. Its answer carries the session's runs in the order custody first saw
-them, each with its run reference and its held event counts by kind, every name spelled
-as the envelope spelled it. The counts are organized envelope fact and carry no
-judgment: what a kind's count means to a turn is the asking loop's business, per the
-three-way division of `weaver-state-PRD` section 2.
+**The ask vocabulary is closed and enumerated here, and it holds six names: `shape`,
+`recall`, `replay`, `grants`, `identity`, and `snapshot`.** The shape ask carries no
+members, the session being the opener's, and asks for the session's shape -
+what happened, in what order, in which run, which is the phrase the charter uses for
+what the default election holds. Its answer carries the session's runs in the order
+custody first saw them, each with its run reference and its held event counts by kind,
+every name spelled as the envelope spelled it. The counts are organized envelope fact
+and carry no judgment: what a kind's count means to a turn is the asking loop's
+business, per the three-way division of `weaver-state-PRD` section 2.
 
 **The `recall` ask returns the conversation as custody holds it**, added
 2026-08-19 against the context-management loop's need: after a flush the
@@ -216,9 +234,11 @@ recent turns, absent meaning the session whole. The answer carries the
 events of the four message kinds and of `message.restored` in landing order,
 each with its envelope whole and its elected pairs beside it - the distillate's
 own shape served back - so what returns is exactly what the election kept, no
-more recallable than it was distillable. Selection bounds and ordering are
-custody's organizing licence, and every judgment about what to keep, summarize,
-or drop in the rebuilt context is the loop's.
+more recallable than it was distillable. Ordering is custody's organizing licence and
+every judgment about what to keep, summarize, or drop in the rebuilt context is the
+loop's. **The choice of the message kinds is a loop opinion custody holds for now**, per
+the operator's ruling of 2026-10-02: it leaves into the loop's schema with the act that
+writes it, under section 7, and so does the identity ask's newest-run rule below.
 
 **The `replay` ask returns the session's elected events whole, in landing
 order**, added 2026-08-24 against the diagnostic replay loop's need: the
@@ -273,13 +293,13 @@ against the leave clause of `weaver-trace-PRD` section 3.1: the record names wha
 state was built into, and the harness reads the store's grant surface at the enter and
 again at the leave so the `unload` event can say whether the boundary moved inside the
 session. The ask carries no members. The answer carries one member, `surface`, an
-ordered list of strings the engine renders from its own catalog, under the service
-engine the role's attributes, its memberships, the database's access list, and the table
-grants it holds, and under the embedded engine the file's owner, group, and mode, the
-filesystem being the boundary there. The lines are spelled so two readings compare as
-equal or not and for nothing else: the harness compares and the record carries the
-comparison, and custody states the surface and never judges it, per section 4. The ask
-answers immediately against the store, holding no event and parking never, like `shape`.
+ordered list of strings the custodian renders from its boundary, which with the store in
+memory is the snapshot's: the owner, group and mode of the file its snapshot handle
+names, read through the handle and never by path. The lines are spelled so two readings
+compare as equal or not and for nothing else: the harness compares and the record
+carries the comparison, and custody states the surface and never judges it, per section
+4. The ask answers immediately against the store, holding no event and parking never,
+like `shape`.
 
 **The `identity` ask returns the session's seated prefix as custody holds it**, added
 2026-09-04 against the ruling of `weaver-state-PRD` section 4 that the identity is the
@@ -297,6 +317,18 @@ ask the dead-peer clause of section 5 does not convert**: a missed answer refuse
 enter, because a run whose bounding cannot be read is not a run with no bounding. The
 ask answers immediately, holding no event and parking never, like `shape`.
 
+**The `snapshot` ask writes the holdings and answers the position they cover**, added
+2026-10-02 on the operator's ruling on issue #1: the store initiates nothing, so a
+snapshot is taken when the harness asks, at the interval the loop's settings name and
+at the leave. The ask carries no members. The custodian writes the whole of its holdings
+with the schema they stand under through the snapshot handle admin handed it, per
+`weaver-state-PRD` section 4, and the answer carries two members, `run` and `sequence`,
+the trace position of the last distillate the snapshot holds. It answers against the
+holdings the stream carried before it, like `shape`, and parks never. A write that
+fails is not answered, the asker's bound converting the silence into the missing answer
+of section 5, and the harness holds no stamp for that snapshot. The
+answer is a stamp and never the holdings: no byte of the snapshot crosses this seam.
+
 A further ask name is a change under section 7 and does not exist until it merges there.
 
 ## 3. What the harness owes
@@ -307,8 +339,12 @@ A further ask name is a change under section 7 and does not exist until it merge
 - **The envelope always.** Every distillate carries all five envelope fields
   as the canonical form spelled them. An unattributable distillate is a
   defect in the sender.
-- **Its own judgment kept to itself.** What a fact is worth is the harness's
-  loops' business and crosses this seam in neither direction.
+- **Its own judgment reaches the holdings only through the record.** What a fact is
+  worth is the loop's business, and where the loop judges, a classification or a
+  ranking among them, the harness records the judgment on the trace and it crosses
+  this seam as the distillate of that event and in no other form. No ask carries a
+  judgment and no answer is ranked by the custodian: **the custodian serves what its
+  schema holds, and the ranking is the loop's**, held where its schema put it.
 - **Asks from the enumerated vocabulary only, and a bounded wait.** The
   harness sends no ask this contract does not name, and it does not wait
   unboundedly for an answer: an answer that has not arrived inside the
@@ -319,7 +355,13 @@ A further ask name is a change under section 7 and does not exist until it merge
 
 - **Custody whole.** What arrived is held, organized, and attributable by its
   envelope, and nothing that arrived is judged, ranked, or discarded by any
-  policy of the custodian's own. Retention within the session is total.
+  policy of the custodian's own. Retention is total across runs and sessions in the
+  neutral substrate, and the loop's tables hold what its schema admits, a
+  distillate the schema refuses landing there alone.
+- **The snapshot and the reload faithful.** A snapshot holds exactly the holdings
+  the stream carried before its ask, stamped with the position they cover, and a
+  reload from it plus the trace's tail holds exactly what a full rebuild from the
+  trace holds.
 - **Transformation without judgment.** Derived shapes, aggregates, and
   indexes are custody's work and carry no opinion about what a turn should
   do, per the three-way division of `weaver-state-PRD` section 2.
@@ -339,8 +381,9 @@ A further ask name is a change under section 7 and does not exist until it merge
 **A dead peer costs the distillate and never the turn.** If state is gone,
 the harness observes closure, drops what it would have sent, and serves turns
 exactly as it did before the leg existed, per the loss clause of
-`weaver-state-PRD` section 3. The holdings meanwhile stand in state's file,
-and the next load's channel reopens against them. There is no buffering, no
+`weaver-state-PRD` section 3. The holdings meanwhile stand in the latest snapshot and
+the record, and the next load reloads them, the distillates landed since the snapshot
+returning with the trace's tail. There is no buffering, no
 retry, and no backpressure onto the turn path: the derivative is rebuildable
 from the record, so the cheapest honest answer to a broken seam is to stop
 distilling until the next load.
@@ -367,8 +410,12 @@ an answer, the turn it would cost being every turn of the run.
   distillate is a projection of the record and nothing here flows back.
 - Neither party exposes this seam to the model. There is no tool, no verb,
   and no path from the loop's interior to either end.
-- Neither party persists across the session through this seam. The file's
-  life is `weaver-state-PRD` section 3's and no traffic here extends it.
+- Neither party carries state across sessions through this seam. The holdings
+  cross by snapshot, written through a handle admin opened, per `weaver-state-PRD`
+  section 4, and no byte of a snapshot crosses here in either direction.
+- Neither party hands the agent a snapshot or its own raw trace. What the agent
+  receives is what the loop serves it as composed context, per the operator's
+  ruling of 2026-10-02.
 
 ## 7. Change protocol
 
@@ -378,7 +425,10 @@ touches this contract, and every party merges in the same act. The serve
 direction's first shape was a change under this protocol and landed
 2026-08-19 with the loop act the charter named, which is the
 sentence above kept as the rule it demonstrated: a second ask name enters
-by the same door.
+by the same door. **The schema's content is not a change under this protocol**: what
+the loop's schema says is the loop's, and a new schema is a new load's opener, like a
+new election. Its carriage in the opener is this contract's, and so is any ask that
+serves what a schema holds.
 
 ## 8. Conformance
 
@@ -410,3 +460,9 @@ holding every count the stream carried before its ask and nothing sent
 after it. The serve half of the dead-peer clause is testable by asking with
 the member gone and watching the turn complete without the fact inside the
 bound. All three land with the loop act that shapes the surface.
+
+The snapshot ask is testable against the living pair: a real load, real events
+landed, the ask answered with the position of the last distillate it carried before
+the ask, and a second load reloading from that snapshot and the record's tail holding
+exactly what a third load rebuilding from the whole record holds, ask for ask. It lands
+with the code act that stands the store primitive.

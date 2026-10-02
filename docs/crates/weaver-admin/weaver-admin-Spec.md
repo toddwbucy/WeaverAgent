@@ -1274,6 +1274,23 @@ from: weaver-admin
 to: admin-preload-name-follows-the-kind
 ```
 
+**The snapshot is handed to the member as a descriptor, never as a path**, on the
+operator's ruling of 2026-10-02 on issue #1, exactly as section 5 hands the trace sink
+down and for the same reasons. The member's state lives in its memory and crosses loads
+by a snapshot file in the operator's declaration directory, section 9's
+`declaration-directory`, `~/.weaveragent/<agent>/` by default, beside the declaration
+and the system prompt. That directory stays `0700` to the operator, so the member could
+not open it by path and is never asked to: this crate, as root, opens the latest
+snapshot for reading and the snapshot file for writing, each close-on-exec in the
+opening call, and places both at their fixed numbers in the member's process at the
+spawn alone, the way it places the first door's end, per `weaver-state-Spec` section 2.
+No path for either rides the vector, the member sees a handle and never a name, and the
+agent, whose worker never holds either descriptor, never reaches the snapshot. A
+snapshot absent from the directory is an absent reading descriptor and no refusal, the
+member falling back to a rebuild from the trace. **This is interior to this crate**: the
+verbs, their arguments and their answers are unchanged, and the operator contract
+carries nothing new.
+
 **The one name left stands under the member's territory, and it is derived
 rather than told.** Per the operator's ruling of 2026-08-26 the preload name
 is the territory with a fixed leaf, so no value the invocation's input

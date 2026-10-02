@@ -989,6 +989,14 @@ from: weaver-trace
 to: trace-score-records-the-verdict-and-its-terms
 ```
 
+**`score` and the classify pair are the precedents for every loop judgment**, per the
+charter's section 3.1 on the operator's ruling of 2026-10-02: a judgment the loop makes,
+a model-made one included, is authored by the harness before the loop acts on it,
+carries what was judged and the verdict, and lands turnless where it was made between
+turns. A ranking is the first judgment with no kind, and the loop act that makes one
+names its kind and shapes its payload in full on these precedents, the closed set and
+`Kind` moving in that act and in no earlier one.
+
 **The surprisal's election is a plain boolean and is present rather than
 skipped when false**, which is the opposite election from the field's
 `Option` beside it. The field's absence means no field was asked for and

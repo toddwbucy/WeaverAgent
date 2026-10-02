@@ -1848,8 +1848,8 @@ half-open span of resident positions forwarded to the directive unjudged,
 and answers the resident counts either side, `None` where the seam refused.
 
 **Which span to elide is the loop's election and this crate holds no
-policy about it.** The mechanic is here and what to keep is the operator's,
-written in the loop that operator owns: a port that judged a span would be
+policy about it.** The mechanic is here and what to keep is the loop's, with the
+operator's settings where the loop exposes one: a port that judged a span would be
 this crate deciding what a context is worth, which is the possession
 `weaver-spu-PRD` section 13.9 places with the loop and 13.13 keeps there.
 The seat forwards, the seam refuses a span describing no removable region,
@@ -1986,6 +1986,28 @@ frame is skipped against it rather than taken for the exchange's answer, so a sk
 frame does not renew the bound and a stream of them cannot postpone the retirement. A
 loop asking about many positions in a turn waits up to the bound on each, since the asks
 are serial and each one blocks.
+
+**The loop these ports serve is state management**, per the operator's rulings of
+2026-10-02 on issue #1 and `weaver-agent-PRD` section 5.5. **One loop is deployed, the
+Rust loop compiled into the worker under `dev_loop`**, which is the freeze section 1
+already names, and no declaration elects another: the Python-iterating worker stays as
+section 1 states it, untouched, the bench and experiments lane a loop is iterated on.
+The ports above are the loop's whole reach into the store and the classifier, so state
+management composes against the same granted surface as every loop and mints nothing.
+**Its opinions are settings in the declaration's `[state-management]` table**, each
+with a compiled default, wherever an operator could reasonably want a different answer,
+and the `load` event this crate authors records every value in effect, per
+`weaver-trace-PRD` section 3.1. The table's members are a later act's, and this clause
+states only the rule:
+custody, the rebuild from the trace, and every state write passing through the tee are
+never settings. **Every judgment the loop makes reaches the record before the loop acts
+on it**, the classify pair and the score above being the precedents: a ranking the loop
+makes over held facts is authored as its own kind by the act that makes it, per
+`weaver-trace-Spec` section 3, so the state the store rebuilds holds the judgment as the
+record holds it and never asks a model again. **The snapshot is the loop's to time**:
+the store initiates nothing, so this crate sends the `snapshot` ask of
+`weaver-harness-state-contract` section 2 at the interval the loop's settings name and
+once at the leave, under the dead-peer conversion every state ask takes.
 
 ### 6.1 The decode surface, chartered
 

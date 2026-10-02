@@ -99,8 +99,8 @@ this crate whole: a member does not carry a judgment of its own danger, because 
 enforceable constraint is the uid boundary and a heuristic beside it is hope
 wearing a uniform.
 
-**No initiation.** A member that can act unasked is a control loop, and control
-loops are the operator's code in the harness's seat, never members here. The
+**No initiation.** A member that can act unasked is a control loop, and the control
+loop is the compiled loop in the harness's seat, never a member here. The
 member's whole surface is call in, answer out.
 
 ## 5. The first member

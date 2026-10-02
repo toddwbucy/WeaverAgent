@@ -1,6 +1,6 @@
 # Diagnostic Replay Loop
 
-**Status:** MERGED v0.4, 2026-08-25. The workflow document for the diagnostic replay
+**Status:** MERGED v0.5, 2026-10-02. The workflow document for the diagnostic replay
 loop, filed under the harness's `Loops/` container per the Document Format's container
 entry. It argues no edges of its own: the seams it walks are declared in the crate
 charters, and a graph block here would duplicate a record that already has a home.
@@ -34,6 +34,14 @@ does not carry it: that loop gained a port on a seat a turn had already granted,
 turn begins at the gate and nowhere else. The loop composes what the seat grants and
 nothing else - the state port, the decode surface, the flush and, since 2026-09-26, the
 elision - and it mints no port, per `weaver-harness-Spec` section 6.
+
+**It is no exception to the one deployed loop**, per the operator's rulings of
+2026-10-02 on issue #1. The loop an agent serves under is state management, compiled
+into the worker, and nothing elects another. This loop is not elected either: it is
+what a diagnostic binding runs, the binding's kind selecting it at the load, and it
+manages no state, re-executing a finished record rather than composing a new one. The
+`loop_file` route above is among the Python-loop sites that ruling leaves to resolve
+another day.
 
 **What it refuses is the substrate's three refusals**, per the charter:
 nothing enters from outside, the working structure is preloaded and read
