@@ -151,7 +151,8 @@ What it does, so the log can say which step a failure was at:
    operator who wants `headroom-bytes` or `state-store-socket` on every agent writes
    it into the record before making agents. Creates the admin base `/etc/weaver/admin`
    empty (root 0755), `/var/log/weaver` (root 0750) and the agent directory
-   (operator 0755).
+   `/var/lib/weaver-agent` (root 0755), under which each territory is
+   root:weaver-<name>-state 0710, not setgid.
 
 The python SPU is a separate install and not part of this step. Its procedure is
 `python-spu/README.md`, "Installing it on a box", and an agent that serves from it is

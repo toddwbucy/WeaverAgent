@@ -30,7 +30,7 @@
 #   WEAVER_PREFIX        /opt/weaver            bin/ lib/ models/ python-spu/
 #   WEAVER_ADMIN_CONFIG  /etc/weaver/admin      the admin base: one root per agent
 #   WEAVER_STACK_RECORD  /etc/weaver/stack      the scripts' record of this install
-#   WEAVER_OPERATOR      $SUDO_USER or $USER    owns the agent directory
+#   WEAVER_OPERATOR      $SUDO_USER or $USER    named in the plan; owns nothing this makes
 #   WEAVER_AGENT_DIR     /var/lib/weaver-agent
 #   WEAVER_LOG_DIR       /var/log/weaver
 #   CUDA_LIB_DIR         /opt/cuda/lib64        joins LD_LIBRARY_PATH in unit-properties
@@ -230,7 +230,7 @@ plan "write $LDSO_CONF = $PREFIX/lib and $CUDA_LIB_DIR, then ldconfig"
 plan "write $STACK/{worker-binary,spu-binary,gate-binary,run-tool,control-tool,coordination-root,unit-properties,prefix,log-directory,agent-directory}  (root, 0755 / 0644)"
 plan "install -d $ADMIN_BASE (root:root 0755): empty; create-agent.sh adds one root per agent"
 plan "install -d $LOG_DIR (root:root 0750): each agent's operations log goes under it, the agent excluded by owner, group and search bit"
-plan "install -d $AGENT_DIR (root:root 0755): territories, each root:weaver-<name>-state 2750"
+plan "install -d $AGENT_DIR (root:root 0755): territories, each root:weaver-<name>-state 0710, not setgid, its trace root:weaver-<name>-trace 0640"
 [ -d "$PREFIX/models" ] && plan "$PREFIX/models stands: $(ls "$PREFIX/models" | wc -l) entries" || plan "$PREFIX/models is absent: copy the artifacts before declaring an agent"
 [ "$INSTALL" -eq 1 ] || { say "plan only. rerun with --install"; exit 0; }
 
