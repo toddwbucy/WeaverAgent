@@ -329,6 +329,9 @@ installed. `<prefix>` is the install prefix, `/opt/weaver` by default.
    sudo chmod g-s,u=rwx,g=x,o= "$T"                  # 0710, setgid cleared
    sudo find "$T" -maxdepth 1 -type f -exec chgrp "weaver-$N-trace" {} + \
      -exec chmod g-w,o= {} +                          # the trace and any copy beside it
+   sudo test -e "$T/trace.ndjson" || sudo install -o root -g "weaver-$N-trace" -m 0640 \
+     /dev/null "$T/trace.ndjson"     # a never-loaded agent: made; looked for as root, so a
+                                     # trace this shell cannot yet reach is never truncated
    sudo -u "weaver-$N-state" test -r "$T/trace.ndjson" && echo "LEAK: the member reads the trace"
    ```
 
