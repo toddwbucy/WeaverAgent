@@ -49,8 +49,8 @@ the runbook is what gets amended.
 | Engine libraries `libggml*`, `libllama*` | `<prefix>/lib/`, reached by `/etc/ld.so.conf.d/weaver.conf` and by `LD_LIBRARY_PATH` in `unit-properties` | bootstrap |
 | Model artifacts, hash-pinned | `<prefix>/models/` | operator, by hand |
 | The python SPU prefix and zipapp | `<prefix>/python-spu/` | `python-spu/README.md` |
-| Agent account `weaver-<name>` (home `/home/weaver-<name>`, 2750) and member account `weaver-<name>-state` (no home) | passwd | create-agent |
-| Territory `weaver-<name>/` (root:weaver-<name>-state 2750, reached by group) with `state/` (member 0700) and `trace.ndjson` | the stack record's `agent-directory`, default `/var/lib/weaver-agent` | create-agent |
+| Agent account `weaver-<name>` (home `/home/weaver-<name>`, 2750) member account `weaver-<name>-state` (no home), and group `weaver-<name>-trace` | passwd | create-agent |
+| Territory `weaver-<name>/` (root:weaver-<name>-state 0710, passage only) with `state/` (member 0700) and `trace.ndjson` (root:weaver-<name>-trace 0640) | the stack record's `agent-directory`, default `/var/lib/weaver-agent` | create-agent |
 | Postgres election only: role and database `weaver_<name>`, a `peer map=weaver` line in `pg_hba.conf`, a `weaver` map line in `pg_ident.conf` | PostgreSQL | create-agent |
 | The agent's operations log, one per agent | `/var/log/weaver/<name>/admin.log` (directory root 0750) | create-agent makes the directory, admin the file |
 | Transient unit per load, under one slice | systemd | admin, at load |
@@ -173,15 +173,17 @@ deploy/create-agent.sh m1 --engine <sqlite|postgres> --artifact /opt/weaver/mode
 
 The store is the one `--engine` names, `sqlite` or `postgres`, and the option is
 required since neither is the default. The script makes both
-accounts, the territory (root:weaver-<name>-state 2750 under the stack record's
-`agent-directory`, reached by group with no access entries), for postgres
+accounts and the trace group, the territory (root:weaver-<name>-state 0710 under the
+stack record's `agent-directory`, passage by group with no access entries) and its trace
+(root:weaver-<name>-trace 0640, which the member cannot read), for postgres
 the role, database and two authentication lines, and the agent root staged under a
 dot-name: every key copied from the stack record, `log-path`, and the declaration as
-`agent.toml`. It then proves the boundary (for sqlite, the member can write its state
+`agent.toml`. It then proves the boundary (for either engine, the member cannot read the
+trace; for sqlite, the member can write its state
 room and the agent's own uid cannot enter it; for postgres, the member reaches the
 database and the agent's own uid does not), and only then moves the root into place,
-which is the admission. The operator's two new group memberships need a fresh login
-before both apply (`newgrp` selects one group in one shell).
+which is the admission. The operator's three new group memberships need a fresh login
+before they apply (`newgrp` selects one group in one shell).
 
 An agent electing no store (`[state-store] engine = "none"`) is made by hand, since
 there is no member or store to provision or probe: `HowToDeployANewAgent.md`
@@ -303,13 +305,33 @@ installed. `<prefix>` is the install prefix, `/opt/weaver` by default.
    done
    echo <prefix>          | sudo tee "$S/prefix" >/dev/null
    echo /var/log/weaver   | sudo tee "$S/log-directory" >/dev/null
-   echo "$DECLS"          | sudo tee "$S/agent-directory" >/dev/null
+   sudo install -d -o root -g root -m 0755 /var/lib/weaver-agent
+   echo /var/lib/weaver-agent | sudo tee "$S/agent-directory" >/dev/null
+   sudo chmod 0644 "$S"/*
    ```
 
-   `agent-directory` is where the territories stand; the old declaration directory
-   held them beside the declarations. `create-agent.sh` requires it to stand
-   root-owned and writable by no group or other (`/var/lib/weaver-agent` on a new
-   box); existing territories stay where they are.
+   `agent-directory` is where `create-agent.sh` makes new territories, and it must stand
+   root-owned and writable by no group or other, so it is a new root-held base and never
+   the old operator-owned declaration directory. Existing territories stay where they
+   are, their sink paths unchanged in their declarations; lay each out per step 4a.
+
+4a. **An existing territory with a state member** (made before 2026-10-02) may be
+   grouped to its member and setgid, which lets the member read the trace, its ingress
+   being the tee's distillate and nothing more. Re-lay it as `create-agent.sh` now makes
+   one, with `<t>` the territory and `<name>` the agent, the agent unloaded:
+
+   ```sh
+   T=<t>; N=<name>
+   sudo groupadd --system "weaver-$N-trace"
+   sudo usermod -aG "weaver-$N-trace" "$USER"
+   sudo chgrp "weaver-$N-state" "$T"
+   sudo chmod g-s,u=rwx,g=x,o= "$T"                  # 0710, setgid cleared
+   sudo find "$T" -maxdepth 1 -type f -exec chgrp "weaver-$N-trace" {} + \
+     -exec chmod g-w,o= {} +                          # the trace and any copy beside it
+   sudo -u "weaver-$N-state" test -r "$T/trace.ndjson" && echo "LEAK: the member reads the trace"
+   ```
+
+   A storeless agent has no member and needs none of this.
 
 5. Install the new admin (`deploy/update-stack.sh --install`), which validates and
    loads every agent root before it reports the box current. The old box-wide log

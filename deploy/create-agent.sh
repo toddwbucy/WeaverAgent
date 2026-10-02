@@ -80,8 +80,9 @@ while [ $# -gt 0 ]; do
    member's account is weaver-<name>-state, derived by weaver-admin from the
    agent's name, and the store must admit that and nothing else. An agent made
    before this date mapped root: change its pg_ident.conf line to name
-   weaver-<name>-state, and regroup its territory to that account,
-   root:weaver-<name>-state 2750." ;;
+   weaver-<name>-state, and lay its territory out as create-agent.sh now makes
+   one: root:weaver-<name>-state 0710, its trace root:weaver-<name>-trace 0640
+   (deploy/REDEPLOY.md, existing territories)." ;;
     --engine)   [ $# -ge 2 ] || die "--engine needs a name"; ENGINE=$2; shift ;;
     --spu)      [ $# -ge 2 ] || die "--spu needs a path"; SPU_OVERRIDE=$2; shift ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
@@ -140,6 +141,7 @@ esac
 OPERATOR=${SUDO_USER:-$USER}
 AGENT_USER="weaver-$NAME"          # the agent's own uid: the worker's identity
 MEMBER_USER="weaver-$NAME-state"   # the member's uid: holds the territory
+TRACE_GROUP="weaver-$NAME-trace"   # the trace's readers: the operator, never the member
 ROLE="weaver_$NAME"                # postgres spells with underscores
 DATABASE="weaver_$NAME"
 ADMIN_BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
@@ -251,8 +253,9 @@ judge_names || exit 1
 # record's `agent-directory`, which bootstrap-stack.sh makes root 0755: it must
 # stand, be held closed by admin's rule, and let no other principal make a name
 # in it, since the territory is a new name there. Each territory is root-owned
-# and grouped to its state member, 2750, so the member reaches its room by group
-# and the agent's uid, in no group of it, cannot enter. No ACL is asked of the
+# and grouped to its state member, 0710, so the member passes to its room by
+# group and the agent's uid, in no group of it, cannot enter; the trace has a
+# group of its own (below). No ACL is asked of the
 # filesystem, so a box whose datasets carry none deploys as any other.
 [ -d "$AGENT_DIR" ] || die "the stack record's agent-directory $AGENT_DIR does not stand: bootstrap-stack.sh makes it, root 0755"
 bad=$(creatable_in "$AGENT_DIR") || die "the stack record's agent-directory $AGENT_DIR is not a root-held base no other principal can make a name in ($bad)"
@@ -385,9 +388,11 @@ HBA=""; IDENT=""   # asked of the store itself rather than guessed from a distro
 say "plan for agent '$NAME'"
 plan "agent account   $AGENT_USER      (system, nologin, the worker's uid)"
 plan "member account  $MEMBER_USER     (system, nologin, owns the state territory)"
-plan "operator        $OPERATOR joins groups $AGENT_USER and $MEMBER_USER"
+plan "trace group     $TRACE_GROUP     (system group: the trace's readers, never the member)"
+plan "operator        $OPERATOR joins groups $AGENT_USER, $MEMBER_USER and $TRACE_GROUP"
 plan "home            /home/$AGENT_USER        the agent's own, where its tools run"
-plan "directory       $HOME_DIR        root:$MEMBER_USER 2750"
+plan "directory       $HOME_DIR        root:$MEMBER_USER 0710, passage only, no listing"
+plan "trace           $HOME_DIR/trace.ndjson  root:$TRACE_GROUP 0640, made before the first load"
 plan "state territory $STATE_DIR       $MEMBER_USER 0700, which the agent's uid cannot enter"
 if [ "$ENGINE" = postgres ]; then
   plan "role            $ROLE            postgres, no password, peer only"
@@ -414,6 +419,12 @@ for u in "$AGENT_USER" "$MEMBER_USER"; do
     [ "$account_status" -eq 2 ] || die "cannot read account $u"
   fi
 done
+if getent group "$TRACE_GROUP" >/dev/null; then
+  die "the group $TRACE_GROUP already exists"
+else
+  group_status=$?
+  [ "$group_status" -eq 2 ] || die "cannot read group $TRACE_GROUP"
+fi
 refuse_existing "/home/$AGENT_USER" "agent home"
 refuse_existing "$HOME_DIR" "territory"
 refuse_existing "$AGENT_ROOT" "agent root"
@@ -479,21 +490,27 @@ say "accounts"
 # runs nothing and owns one room of the operator's tree instead.
 sudo useradd --system --shell /usr/sbin/nologin --create-home --user-group "$AGENT_USER"
 sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$MEMBER_USER"
-sudo usermod -aG "$AGENT_USER,$MEMBER_USER" "$OPERATOR"
+sudo groupadd --system "$TRACE_GROUP"
+sudo usermod -aG "$AGENT_USER,$MEMBER_USER,$TRACE_GROUP" "$OPERATOR"
 sudo chmod 2750 "/home/$AGENT_USER"
 printf '   %s uid %s, %s uid %s\n' \
   "$AGENT_USER" "$(id -u "$AGENT_USER")" "$MEMBER_USER" "$(id -u "$MEMBER_USER")"
 
 say "territory"
-# **Root's directory, the member's group, the member's room.** The territory is
-# root-owned and grouped to the state member, setgid so what is written there
-# keeps that group, 2750: the member reaches its room by group, the operator
-# reads the trace as a member of that group, and the agent's uid, in no group
-# of it, cannot enter. The state subdirectory is the member's own and closed
-# to everyone else, which is what makes the charter's "one subdirectory the
-# agent's uid cannot enter" true rather than stated. No access entry is set
-# anywhere (operator's ruling of 2026-10-02, #28).
-sudo install -d -o root -g "$MEMBER_USER" -m 2750 "$HOME_DIR"
+# **The member passes through; the trace is not its to read** (operator's ruling
+# of 2026-10-02, #28, as refined on #56). Admin makes the member's room at
+# `<sink directory>/state`, so the member must traverse the directory holding
+# the trace, and the protection sits on the trace file rather than on the
+# directory. The territory is root's, grouped to the member, 0710 and not
+# setgid: the member may pass to its room but not list, and nothing written
+# here takes the member's group. The trace is made here, before the first load,
+# root:$TRACE_GROUP 0640: admin opens an existing sink append-only and leaves
+# its owner and mode alone, so the member, outside that group, cannot read it,
+# and the operator reads it through the group. Were the file ever removed,
+# admin recreates it root:root 0640, which fails closed. The agent's uid, in no
+# group of either, cannot enter. The state subdirectory is the member's own.
+sudo install -d -o root -g "$MEMBER_USER" -m 0710 "$HOME_DIR"
+sudo install -o root -g "$TRACE_GROUP" -m 0640 /dev/null "$HOME_DIR/trace.ndjson"
 sudo install -d -o "$MEMBER_USER" -g "$MEMBER_USER" -m 0700 "$STATE_DIR"
 
 if [ "$ENGINE" = postgres ]; then
@@ -569,6 +586,14 @@ else
   fi
 fi
 
+# **The member cannot read the trace**, for either engine: its ingress is the
+# tee's distillate and nothing more (weaver-state-PRD).
+if sudo -u "$MEMBER_USER" test -r "$HOME_DIR/trace.ndjson"; then
+  die "THE MEMBER $MEMBER_USER CAN READ THE TRACE $HOME_DIR/trace.ndjson: the trace's group or mode is open"
+else
+  printf "   the member cannot read the trace, which is the boundary the state charter asks for\n"
+fi
+
 say "admission"
 # **Moving the root into place is the admission**: before it every admin verb
 # answers no_such_agent for this name, and after it the agent is admitted.
@@ -580,7 +605,7 @@ say "made"
 # the account and not a session already running, so a shell that predates this
 # run cannot reach the gate's socket until it takes the group (#673, measured
 # on the W4a run of 2026-09-25).
-printf '   %s joined groups %s and %s: a session that predates this run needs a new\n' "$OPERATOR" "$AGENT_USER" "$MEMBER_USER"
-printf '   login before both groups apply (`newgrp` selects one group in one shell)\n'
+printf '   %s joined groups %s, %s and %s: a session that predates this run needs a new\n' "$OPERATOR" "$AGENT_USER" "$MEMBER_USER" "$TRACE_GROUP"
+printf '   login before the groups apply (`newgrp` selects one group in one shell)\n'
 printf '   validate it before loading:\n'
 printf '     sudo WEAVER_ADMIN_CONFIG=%s %s validate %s\n' "$ADMIN_BASE" "$PREFIX/bin/weaver-admin" "$NAME"

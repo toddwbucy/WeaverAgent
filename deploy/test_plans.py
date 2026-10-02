@@ -107,9 +107,10 @@ elif name == 'sudo':
         assert source.is_relative_to(root) and destination.is_relative_to(root)
         shutil.copyfile(source, destination)
     elif op == 'install':
-        directory = pathlib.Path(mapped(rest[-1]))
-        assert directory.is_relative_to(root), directory
-        directory.mkdir(parents=True, exist_ok=True)
+        target = pathlib.Path(mapped(rest[-1]))
+        assert target.is_relative_to(root), target
+        if '-d' in rest: target.mkdir(parents=True, exist_ok=True)
+        else: target.touch()
     elif op == 'mv':
         source, destination = (pathlib.Path(mapped(a)) for a in rest[-2:])
         assert source.is_relative_to(root) and destination.is_relative_to(root)
@@ -119,8 +120,10 @@ elif name == 'sudo':
         # The probes of a sqlite agent's state room: the member passes, the
         # agent's own uid is refused, unless the fixture opens the wall.
         if identity == 'weaver-m1': sys.exit(0 if os.environ.get('WALL_OPEN') else 1)
+        # The member's read of the trace: refused, unless the fixture opens it.
+        if identity == 'weaver-m1-state' and '-r' in rest: sys.exit(0 if os.environ.get('TRACE_OPEN') else 1)
         sys.exit(0)
-    elif op in ('useradd', 'usermod', 'chmod', 'setfacl'): pass
+    elif op in ('useradd', 'usermod', 'groupadd', 'chmod', 'setfacl'): pass
     else: sys.exit(99)
 elif name == 'mktemp':
     if not os.environ.get('ALLOW_APPLY_CHECKS'): sys.exit(99)
@@ -185,7 +188,7 @@ class PlanTests(unittest.TestCase):
                     "CARGO_TARGET_DIR": str(self.root / 'target with "quotes"'),
                     "USER": "fixture-no-home", "PROBE": str(self.root / "probe"),
                     "FIXTURE_ROOT": str(self.root)}
-        for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "ROLE_COLLISION", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN"):
+        for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "ROLE_COLLISION", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN"):
             self.env.pop(name, None)
         # Redirect even shell builtin /home probes into the fixture. The
         # production scripts have no test-only path switches and never read
@@ -625,23 +628,45 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("is not held closed by root: " + str(installed), result.stderr)
 
-    def test_the_territory_is_reached_by_group_and_never_by_access_entries(self):
-        # The operator's ruling of 2026-10-02 (#28): the territory is root's,
-        # grouped to the state member, 2750, under the record's base; the
-        # member's room is its own, 0700; the operator joins both of the agent's
-        # groups; and no access entry is set or probed anywhere, so a box whose
-        # datasets carry none deploys. Perturbations: group the territory to the
-        # operator, or restore the setfacl chain, and this fails.
+    def test_the_territory_is_passage_for_the_member_and_the_trace_is_not_its_to_read(self):
+        # The operator's ruling of 2026-10-02 (#28) as refined on #56: the member
+        # passes through a root:member 0710 territory (no setgid, no listing) to
+        # its 0700 room, and the trace is made before the first load as
+        # root:weaver-<name>-trace 0640, so the member, outside that group, cannot
+        # read it. The operator joins all three groups, and no access entry is set
+        # or probed. Perturbations: restore setgid (2710 or 2750), group the
+        # trace to the member, or drop the trace group from the operator, and
+        # this fails.
         self.env["ALLOW_APPLY_CHECKS"] = "1"
         result = self.create("--apply")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.calls()
         territory = str(self.root / "agents" / "weaver-m1")
-        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-state", "-m", "2750", territory], calls)
+        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-state", "-m", "0710", territory], calls)
+        self.assertIn(["sudo", "install", "-o", "root", "-g", "weaver-m1-trace", "-m", "0640", "/dev/null",
+                       territory + "/trace.ndjson"], calls)
         self.assertIn(["sudo", "install", "-d", "-o", "weaver-m1-state", "-g", "weaver-m1-state", "-m", "0700",
                        territory + "/state"], calls)
-        self.assertIn(["sudo", "usermod", "-aG", "weaver-m1,weaver-m1-state", "fixture-no-home"], calls)
+        self.assertIn(["sudo", "groupadd", "--system", "weaver-m1-trace"], calls)
+        self.assertIn(["sudo", "usermod", "-aG", "weaver-m1,weaver-m1-state,weaver-m1-trace", "fixture-no-home"], calls)
+        self.assertIn(["sudo", "-u", "weaver-m1-state", "test", "-r", territory + "/trace.ndjson"], calls)
         self.assertFalse([c for c in calls if "setfacl" in c or c[0] == "mktemp"], calls)
+
+    def test_a_trace_the_member_can_read_refuses_before_admission(self):
+        # The probe is what holds the boundary on the box: a member that can read
+        # the trace refuses before the root is moved into place, for either
+        # engine. Perturbation: drop the probe, and the agent is admitted.
+        for engine in ("sqlite", "postgres"):
+            with self.subTest(engine=engine):
+                self.log.unlink(missing_ok=True)
+                shutil.rmtree(self.config / ".m1.partial", ignore_errors=True)
+                shutil.rmtree(self.root / "agents" / "weaver-m1", ignore_errors=True)
+                shutil.rmtree(self.logs / "m1", ignore_errors=True)
+                self.env.update(ALLOW_APPLY_CHECKS="1", TRACE_OPEN="1")
+                result = self.create("--engine", engine, "--apply")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("CAN READ THE TRACE", result.stderr)
+                self.assertFalse((self.config / "m1").exists())
 
     def test_verify_load_reads_no_root_admin_does_not_validate(self):
         # Codex on #45, round 11: verify-load parsed the declaration, and counted

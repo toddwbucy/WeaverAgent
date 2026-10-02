@@ -22,18 +22,21 @@ load where any piece is missing, so the pieces are made first and admin is asked
 |---|---|---|
 | Agent account, the worker's uid | `weaver-<name>`, home `/home/weaver-<name>` | system user, nologin, home 2750 |
 | Member account, the state store's uid (agents with a store) | `weaver-<name>-state`, no home | system user, nologin |
-| Territory | `<agent-directory>/weaver-<name>/`, the stack record's `agent-directory` (default `/var/lib/weaver-agent`, root 0755) | root:weaver-<name>-state 2750, reached by group, with no access entries; the operator joins the group to read the trace |
+| Territory | `<agent-directory>/weaver-<name>/`, the stack record's `agent-directory` (default `/var/lib/weaver-agent`, root 0755) | root:weaver-<name>-state 0710, not setgid: the member passes to its room, lists nothing, and no access entry is set |
 | State room (agents with a store) | `<territory>/state/`, where a sqlite store keeps its file | member 0700, unreachable by the agent's uid |
-| Trace sink | `<territory>/trace.ndjson` | opened by admin under root at load |
+| Trace group (agents with a store) | `weaver-<name>-trace`, the trace's readers: the operator, never the member | system group |
+| Trace sink | `<territory>/trace.ndjson` | made by create-agent before the first load, root:weaver-<name>-trace 0640, so the member cannot read it; admin opens it append-only at load and leaves its owner and mode alone |
 | Agent root, which is the admission | `/etc/weaver/admin/<name>/`: `worker-binary`, `spu-binary`, `gate-binary`, `run-tool`, `control-tool`, `coordination-root`, `unit-properties` (and `headroom-bytes`, `state-store-socket` where the stack record has them), copied from the stack record, plus `log-path` | root, directory 0755, files 0644; admin refuses a root that is not root-owned or is group- or world-writable |
 | Declaration | `/etc/weaver/admin/<name>/agent.toml` | root, 0644 |
 | Operations log | `/var/log/weaver/<name>/admin.log`, named by `log-path` | directory root 0750; admin writes the file |
 | Store (postgres election only) | role and database `weaver_<name>`, one `peer map=weaver` line in `pg_hba.conf`, one `weaver` map line in `pg_ident.conf` | postgres |
 
-The operator joins groups `weaver-<name>`, for the gate's socket, and
-`weaver-<name>-state`, the territory's group, so the trace is readable without sudo. A
-session that predates the join needs a fresh login before both groups apply: `newgrp`
-selects one group in one shell.
+The operator joins three groups: `weaver-<name>` for the gate's socket,
+`weaver-<name>-state` for passage through the territory, and `weaver-<name>-trace` to
+read the trace without sudo. The member is in none but its own, so it reaches its room
+and never the trace, whose content it receives only as the tee's distillate. A session
+that predates the join needs a fresh login before the groups apply: `newgrp` selects one
+group in one shell.
 
 ## 1. Before you start
 
