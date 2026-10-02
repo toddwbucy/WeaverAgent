@@ -77,22 +77,11 @@ pub struct Headroom(pub u64);
 
 /// The weights hash that travels with every measurement.
 ///
-/// The sentinel is the empty string, on every failure path.
+/// Never empty from this crate: a hash that cannot be computed refuses the
+/// admission, per Spec section 3 and the operator's ruling of 2026-10-01, and
+/// apex section 8 rests replay on the identity being right.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WeightsHash(pub String);
-
-impl WeightsHash {
-    /// The sentinel: a hash that could not be computed. A hash that cannot be
-    /// computed reports that it could not rather than reporting a wrong value,
-    /// and apex section 8 rests replay on the identity being right.
-    pub fn sentinel() -> Self {
-        WeightsHash(String::new())
-    }
-
-    pub fn is_sentinel(&self) -> bool {
-        self.0.is_empty()
-    }
-}
 
 /// Why an admit refused, with the step that refused it legible.
 ///
@@ -607,13 +596,14 @@ impl Residency {
         self.admit_attempted = true;
 
         // Step one. Resolve the binding to an artifact. Free.
-        let path = artifact::resolve(&binding.artifact).map_err(|refusal| {
-            AdmitRefusal::on_artifact(
-                refusal,
-                std::path::Path::new(&binding.artifact.0),
-                "resolve",
-            )
-        })?;
+        let (path, reference_kind) =
+            artifact::resolve_with_kind(&binding.artifact).map_err(|refusal| {
+                AdmitRefusal::on_artifact(
+                    refusal,
+                    std::path::Path::new(&binding.artifact.0),
+                    "resolve",
+                )
+            })?;
 
         // Open it once and hold it. Every read after this, the header, the
         // load, and the hash, goes through this descriptor, so a name replaced
@@ -662,6 +652,19 @@ impl Residency {
             / binding.devices.len() as u64;
         judge_room_and_reach(&binding.devices, shard_bytes, headroom)?;
 
+        // **The weights hash is judged here, the last free step**, per Spec
+        // section 3: computed by reading the artifact, never taken from a
+        // manifest handed in, fresh with no cache across an artifact change,
+        // and an artifact whose identity cannot be computed refuses before any
+        // device is taken, on the operator's ruling of 2026-10-01. The members
+        // the load reads are hashed through the descriptors it will read them
+        // through. The hash's subject is the operator's reference, which may
+        // name a directory whose members beyond the container are part of the
+        // artifact's identity.
+        let reference = std::path::PathBuf::from(&binding.artifact.0);
+        let weights_hash = artifact::weights_hash(&reference, reference_kind, &mut pinned)
+            .map_err(|refusal| AdmitRefusal::on_artifact(refusal, &reference, "hash"))?;
+
         // Step four. Take the devices in shard order and load each shard. The
         // binding's order is the shard order, and the loader's one door is the
         // admission this function just proved.
@@ -685,19 +688,6 @@ impl Residency {
             _admitted: (),
         };
         let model = load(&admission)?;
-
-        // The weights hash is computed at admit by reading the artifact,
-        // never taken from a manifest handed in, and computed fresh with no
-        // cache across an artifact change. It is a read beside the load, not
-        // of it: a swap landing between the two records an identity the
-        // device does not hold, and binding the hash to the engine's own
-        // mapped bytes is named in the artifact module as the remaining
-        // distance.
-        // The hash's subject is the operator's reference, which may name a
-        // directory whose members beyond the container are part of the
-        // artifact's identity.
-        let reference = std::path::PathBuf::from(&binding.artifact.0);
-        let weights_hash = artifact::weights_hash(&reference, &mut pinned);
 
         // Step five. Confirm.
         self.resident = Some(Resident {

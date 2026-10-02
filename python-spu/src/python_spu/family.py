@@ -4,6 +4,24 @@ TEMPLATE='<|im_start|>{role}\n{message}<|im_end|>\n'
 OPENER='<|im_start|>assistant\n'
 class MalformedDelta(ValueError): pass
 
+# The registry's key, weaver-spu family/mod.rs `normalised_key` and `same_key`, ported:
+# `_`, `-` and `.` are ignored and ASCII letters fold to lower case, every other byte
+# standing as written. The served family is the native backend's `SERVED_ARCHITECTURE`.
+SERVED_ARCHITECTURE='qwen2'
+def normalised_key(spelled):
+    return bytes(b+32 if 65<=b<=90 else b for b in spelled.encode() if b not in b'_-.').decode()
+def same_key(left,right): return normalised_key(left)==normalised_key(right)
+
+def judge(model_type,width):
+    """Whether this build serves a declared family at a device count, answered as the
+    wire kind it refuses with, or None. The Rust SPU's native backend serves qwen2 alone
+    (`judge_family`, `BackendDoesNotServe`, unreadable) at the widths the registry
+    declares for it; this build serves one device, so a wider set is its own
+    `device_cannot_admit`."""
+    if not same_key(model_type,SERVED_ARCHITECTURE): return 'artifact_unreadable'
+    if width!=1: return 'device_cannot_admit'
+    return None
+
 def compact(value): return json.dumps(value,ensure_ascii=False,separators=(',',':'),sort_keys=True,allow_nan=False)
 def render(messages):
     parts=[]

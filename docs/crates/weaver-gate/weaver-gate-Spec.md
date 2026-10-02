@@ -181,8 +181,8 @@ its close-on-exec, the two `prctl` sets of section 2, `poll` for the serve
 loop of section 4, `umask` around the bind for the mode election of section
 3, `getsockopt` for the peer credential with `getuid` for the predicate it
 feeds, `User::from_uid` for the home the shell starts in, which comes from
-the account database because the fan-out execs with an empty environment,
-and `killpg` with `waitid` for the group kill and the reap of section 8.
+the account database because there the uid's home is a fact rather than a
+variable the agent's environment may or may not carry, and `killpg` with `waitid` for the group kill and the reap of section 8.
 **The bind, the listen and the accept are not among them.**
 `UnixListener::bind` is the standard library's and creates and binds and
 listens in one call, per section 3, which is the shape the one bind site
@@ -1269,6 +1269,13 @@ leaves descendants holding the pipes' write ends, and a kill that reaped
 only the leader would hold the answer open on a straggler's schedule. The
 exit is observed unreaped before the group is signaled, so the group id
 cannot be reissued between the observation and the kill.
+
+**The shell starts in the uid's home with `HOME` and no other variable.** This
+crate runs with the agent's environment, per `weaver-harness-Spec` section 2.2
+and the operator's ruling of 2026-10-01, and that ruling reaches the organs and
+not the commands a tool runs, so the invocation clears the environment and sets
+`HOME` alone, the surface the shell had when this crate itself started empty.
+Whether a command should see the agent's environment is a ruling of its own.
 
 **Both pipes drain concurrently with the run, bounded, and the drain
 continues past the bound.** A pipe left unread to the exit fills at the

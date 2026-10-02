@@ -131,15 +131,12 @@ short of:
 
 - Section 2: the tree still carries an experimental ModernBERT classifier and its entry
   point, which section 1 scopes out of this implementation. The zipapp leaves it out.
-- Section 3 and `weaver-harness-spu-decode-contract`: a cancel arriving during a
-  generation is consumed and never answered, the generation's close being sent without
-  the cancel exchange's `at_rest` close (`server.py`), so a harness waiting on the
-  cancel can wait forever.
-- Section 3.1: its oracle answers twelve operations, and runs a transport test over the
+- Section 3.1: its oracle answers eighteen operations, and runs a transport test over the
   oracle's descriptor:
   - `session`, `seed`, `measure`, `render` and `round`.
   - The sampler's `rng`, `select`, `generation`, `probs` and `weighted`.
-  - `artifact` and `weights_hash`.
+  - `artifact`, `weights_hash`, `header` and `registry_entries`.
+  - The model-free walk's `knobs`, `stops`, `registry` and `partition`.
 
   Every other operation the walk names is unbuilt.
 - Section 5: the sampler is the native engine's, ported and proven as section 5 says,
@@ -151,14 +148,11 @@ short of:
 - Section 3.1, the `tokenize` row: the operation is unbuilt, so the tokenizer's
   equivalence with the Rust side's is unproven until it lands.
 
-**The list names the gaps known at the carry, and it is not a walk.** The cancel gap was
-found by the review of the carry itself (toddwbucy/WeaverTools-old2#729). The hardening
-act walks every exchange and every refusal of `weaver-harness-spu-contract` and
+**The list names the gaps known at the carry, and it is not a walk.** The hardening act
+walks every exchange and every refusal of `weaver-harness-spu-contract` and
 `weaver-harness-spu-decode-contract` against the prototype, per H3's rule that a seam is
-exercised against its contract's failure cases. It starts from the cancel gap's sibling,
-which the walk judges against the contract's exchange rule: `server.py` answers an ask
-arriving mid-generation with a bare `{'kind': 'out_of_order'}` message. Epic #25
-carries the walk as one item.
+exercised against its contract's failure cases, and epic #25 carries the walk as one
+item.
 
 ## 3. What it carries identically
 
@@ -209,7 +203,7 @@ the walk in the act that moves the pin to it.
 | --- | --- |
 | `artifact`: `resolve`, `pin`, `PinnedArtifact` and its accessors, `names_a_split` | `artifact`, over a fixture directory: the resolved file, the pinned length and each refusal, run as `engine.containers` then `engine.pin`. The pin holds each container's descriptor for the admit, and the size, the load and the hash's container bytes read through it |
 | `artifact`: `read_header`, `ArtifactHeader`, `Container` | `artifact`: the header of a safetensors directory. A GGUF container is refused at admit, a container this implementation does not serve |
-| `artifact`: `weights_hash`, and `residency`: `WeightsHash` and its sentinel | `weights_hash`: the canonical walk's blake3 over the fixture, equal to `python-spu`'s wherever nothing is swapped during admission, and the sentinel. `python-spu` reads the pinned containers' bytes through the pins inside that walk, so under a swap its digest names the bytes it served, where the Rust walk of a directory reads the new name. A container reached through a symbolic link is left out of the walk as the Rust leaves it, the pin still serving its size and its load. That parity is #25's symlinked-member item, and whether to hash link targets or refuse linked artifacts waits on the operator's ruling. A pinned name that no longer exists at all refuses `artifact_unreadable`. The sidecars are read by name, as the Rust states for its own |
+| `artifact`: `weights_hash`, and `residency`: `WeightsHash` and its sentinel | `weights_hash`: the canonical walk's blake3 over the fixture, equal to `python-spu`'s wherever nothing is swapped during admission, and the sentinel. `python-spu` reads the pinned containers' bytes through the pins inside that walk, so under a swap its digest names the bytes it served, where the Rust walk of a directory reads the new name. A container reached through a symbolic link is left out of the walk as the Rust leaves it, the pin still serving its size and its load. That parity is #25's symlinked-member item, and whether to hash link targets or refuse linked artifacts waits on the operator's ruling. A pinned name that no longer exists at all refuses `artifact_unreadable`. The sidecars are read by name, as the Rust states for its own, in the directory the kernel names the pinned first container in, through `/proc/self/fd`, as artifact.rs `sidecar_dir_of` and native.rs `sidecar_dir` find it, so a container reached through a link reads its target's sidecars |
 | `channel`: `adopt`, `Inherited`, `EntryFault` | excluded from the oracle: they read the process's inherited descriptors, which no call can hand over. A process test, per section 3 |
 | `channel`: `LifecycleChannel`, `DecodeSocket`, `lifecycle_from_owned`, `decode_from_owned`, `send`, `recv`, `send_octets`, `recv_octets`, `try_recv_octets`, `as_fd`, `ChannelFault` | `frame`, over a socket pair with the Rust code at one end: envelopes, segmented frames, truncation and closure faults |
 | `channel`: `ClassifySocket`, `adopt_classify` | excluded: the label seam is not this implementation's, per section 1 |
@@ -229,14 +223,74 @@ the walk in the act that moves the pin to it.
 | `readout`: `ReadoutElection`, `judge`, `judge_column_ask`, `ReadoutRefusal`, `TapOutcome` | `registry`: each judgment against a declaration |
 | `readout`: `Tap` | excluded as a trait: the tap reads the engine's hidden states and is the engine's own |
 | `residency`: `promote_stop_conditions`, `StopSet` | `stops`, over supplied stop inputs |
-| `residency`: `Headroom`, `AdmitRefusal` | the wire rows of section 3 for the refusals. The headroom judgment's inequality is a mirror and its driver query needs a device, per the `gpu` row |
+| `residency`: `Headroom`, `AdmitRefusal` | the wire rows of section 3 for the refusals, and the admission's step table below for which kind each of `python-spu`'s refusals crosses as. The headroom judgment's inequality is a mirror and its driver query needs a device, per the `gpu` row |
 | `residency`: `Residency` and its methods, `Admission` and its accessors, `Resident`'s `model`, `open_session`, `declared_eos` and `stop_set`, `LoadedModel` | excluded from the oracle: each needs a loaded model or a device. The process tests and the contract rows of section 3 |
 | `residency`: `Resident::tokenize`, `Resident::detokenize` | `tokenize`, a mirror. Both reach the native engine's `tokenize` and `detokenize`, which are `pub(crate)` and need a loaded model, so the operation calls `tokenizers` 0.21.4, the version `weaver-spu` links, with the two calls `native.rs` makes, `encode(text, false)` and `decode(ids, false)`, against the served artifact's `tokenizer.json`, and compares both directions on the rendered prefix and every delta. This implementation runs the Python `tokenizers` 0.23.2 the lock pins, which `transformers` 5.17.0 requires, so the two sides run two releases and the operation is the proof of their equivalence on the artifacts served, a divergence being a finding against the engine's version. Section 7's check that each generation's input token identifiers are equal on both sides is the backstop on the prompts a comparison runs |
 | `sampling`: `Disposition`, `is_frozen`, `Knobs`, `EffectiveKnobs`, `SessionParameters`, `EffectiveSessionParameters`, `tunable_names`, `resolve`, `KnobRefusal` | `knobs`: resolution against supplied tunable values, and each refusal |
 | `sampling`: `derived_seed` | `seed`, and section 8.5's test vectors |
 | the native engine's `sample` | `generation`, `probs`, `select`, `weighted` and `rng`, mirrors, per section 5: it needs a loaded model, so the operations run the code it runs at the pinned revisions. `generation` is candle's `LogitsProcessor` with the engine's penalty over a whole generation, `probs` the probability vector's bits, `select` the whole index order `select_nth_unstable_by` leaves, `weighted` rand's `WeightedIndex` over scripted words, and `rng` the generator's words |
 | `decoder::native`, `native_pair`, `gguf`, `gguf_tap`, `gpu` | excluded as a whole: the engines, their taps and the device query, which section 4 makes this implementation's own. Two parts are excepted. The native sampler is excepted per the row above. `gpu::room_and_reach`'s room inequality is carried identically per section 3's room row: a mirror, since it needs a device, ported as `engine.judge_room`, with the sum saturating and `NoRoom`'s figures in the refusal's detail, since the wire's `device_cannot_admit` carries none |
-| the binary's `main.rs`: `headroom_from`, `HEADROOM_BYTES`, and `main`'s `bad_parameter` refusal | the process's command line, a mirror: a binary's items are not the library's, so no call reaches them. `server.parameters` ports the rule. The whole vector is read, a missing or malformed value is refused, a parameter stated twice is refused, and an unknown one is refused by name. An absent headroom is the compiled default. The entry refuses in `main`'s form: one JSON line, exit 1, before the channels are adopted. The tests hold it to `the_whole_vector_is_judged`'s cases and to the worker's `OrganParameters::spu_arguments`. python-spu's own `--cpu-experiment` and `--declare-imports`, which the worker never sends, follow the same rules |
+| the binary's `main.rs`: `headroom_from`, `HEADROOM_BYTES`, `main`'s `bad_parameter` refusal, and `KNOBS` and `SESSION_PARAMETERS`, the dispositions the binary elects | the process's command line, a mirror: a binary's items are not the library's, so no call reaches them. `server.parameters` ports the rule. The whole vector is read, a missing or malformed value is refused, a parameter stated twice is refused, and an unknown one is refused by name. An absent headroom is the compiled default. The entry refuses in `main`'s form: one JSON line, exit 1, before the channels are adopted. The tests hold it to `the_whole_vector_is_judged`'s cases and to the worker's `OrganParameters::spu_arguments`. python-spu's own `--cpu-experiment` and `--declare-imports`, which the worker never sends, follow the same rules. The dispositions are mirrored as `sampling.KNOBS` and `sampling.SESSION_PARAMETERS`, held to the binary's literal by `tests/test_walk.py`, and resolved through the library by the `knobs` operation |
+
+**Admission runs the Rust SPU's steps, in its order, and each failure crosses as its
+step's kind.** This table is the authority `engine.HFEngine` follows: its steps are
+named in this order, and a failure inside one, anticipated or not, crosses as that
+step's kind (`engine.ADMISSION_STEPS`). The Rust order is `weaver-spu` residency.rs
+`admit`, then decoder/native.rs `ResidentModel::load`. Its kinds come from
+`From<AdmitRefusal> for LifecycleRefusal` and `From<FamilyRefusal>`. The floor's closed
+set carries the kind, and the detail, which names the step, stays on this side of the
+seam.
+
+| Step | The Rust | `python-spu` | Kind |
+| --- | --- | --- | --- |
+| resolve | artifact.rs `resolve`: nothing at the path or a path through a file, a directory with no container or containers that are not one split, anything but a directory or a regular file | `resolve_directory`, `containers` | `artifact_unresolvable` |
+| | the same: any other failed look, a lookup the kernel refuses among them | | `artifact_unreadable` |
+| pin | artifact.rs `pin`: a reference in the split pattern pins its whole set, first shard first; a shard absent; any other failure to open, or a non-regular file | `split_members`, `containers`, `pin` | `artifact_unresolvable`; `artifact_unreadable` |
+| header | artifact.rs `read_header`, step two: GGUF's walk with its caps, or safetensors' length-prefixed JSON, and the sidecars `config.json` and `tokenizer_config.json` where present beside the pinned container (`sidecar_dir_of`), all read by `serde_json` | `read_header`, `sidecar_dir_of`, `strict_json` | `artifact_unreadable` |
+| select | family `select`: `UnknownFamily`, `TemplateAbsent` | `select` over `REGISTRY` | `artifact_unreadable` |
+| width | family `judge_width`: `WidthNotDeclared` | the selected entries' widths | `device_cannot_admit` |
+| readout | readout `judge`: `NotTappable` where readout is elected | the selected entries' tap flag | `device_cannot_admit` |
+| distinct | `judge_distinct`: `DuplicateDevice` | a device named twice | `device_cannot_admit` |
+| size | the pinned size, `on_artifact` "size" | `pinned_size` | `artifact_unreadable` |
+| room | `judge_room_and_reach`, gpu/mod.rs `room_and_reach`: every assigned ordinal present (`Unreachable`), every device's room (`NoRoom`), every ordered pair's peer reach (`NoPeerAccess`) | the CPU experiment's ordinal, `room_and_reach` over torch's device layer | `device_cannot_admit` |
+| hash | artifact.rs `weights_hash`, before any device is taken (`weaver-spu-Spec` section 3) | `weights_digest` for a directory, `file_digest` for a file, by the resolution's kind | `artifact_unreadable` |
+| load | `load`: `BackendNotBuilt` for a GGUF container or a file reference this build does not serve | the same | `device_cannot_admit` |
+| | native `load`: more devices than it serves; `read_declaration` of `config.json` in `sidecar_dir`, the pinned container's directory, every sidecar of the load read there | one device; `strict_json` of `config.json` in `load_dir`, as are `AutoConfig` and `tokenizer.json` | `device_cannot_admit` |
+| | native `judge_family` on the declaration's `model_type`: `BackendDoesNotServe` | `same_key` against `qwen2` | `artifact_unreadable` |
+| | native `read_config`, `read_eos`, the tokenizer, the weights (`VarBuilder`, `ModelForCausalLM::new`, a tensor missing among them) | `AutoConfig` and a quantized config (the config's parse is python-spu's own, transformers' `AutoConfig`, per the operator's ruling of 2026-10-01), `read_eos`, `Tokenizer.from_file`, the model with its missing keys refused, placement, out of memory | `device_cannot_admit` |
+
+Three judgments are this build's own and sit at the load:
+- the family the header selected is the one it renders, qwen2, refused
+  `artifact_unreadable` otherwise, per the registry row of section 3.1;
+- its renderer's markers each promote to one token, refused `artifact_unreadable`
+  (the Rust SPU meets an unpromoted turn close at the open, as a fault);
+- it serves one device where the native backend serves two, refused
+  `device_cannot_admit` as the native's own width refusal is.
+
+**The registry is ported as a table**, `engine.REGISTRY`, each entry's family, its
+declared widths and its tap flag in the Rust order, and the oracle's `registry_entries`
+operation holds it to the Rust `REGISTRY`. A contested family's template is matched in
+the Rust SPU by llama.cpp's renderer, which this build does not carry. So a contested
+family's candidates stand together through the width and readout steps, and a template
+no entry matches, `MarkersMatchNoEntry` or `MarkersAmbiguous` there, is selected here,
+where the Rust SPU answers `artifact_unreadable`. That is the one divergence the steps
+keep, and it is reachable only by a GGUF or file reference this build refuses either
+way.
+
+**The reads are the Rust's reads.** A header read is `read_exact`'s: it reads on after
+a short read until the bytes are in or the file ends, and any failure is unreadable.
+The JSON of the header and sidecars is `serde_json`'s: UTF-8 only, no non-standard
+constant, no number outside f64's range, no unpaired surrogate, and no nesting past 127.
+`tests/test_load_kinds.py` holds that by difference against the Rust `read_header`
+through the oracle's `header` operation.
+
+The quantized step is traced through the Rust code rather than measured. The header
+step reads the family from `model_type` and never `quantization_config`, and the native
+`judge_family` judges the declared architecture alone, so a quantized qwen2 passes both
+and its weights fail in `VarBuilder::from_mmaped_safetensors` at BF16 or
+`ModelForCausalLM::new`, both `LoadFailed`. `tests/test_admission_steps.py` injects a
+failure at each step and holds its kind, and holds the order where two steps would both
+fail.
 
 ## 4. What is its own
 

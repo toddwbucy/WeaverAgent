@@ -47,6 +47,23 @@ pub unsafe fn fork_organ(
     argv.push(program.as_ptr());
     argv.extend(arguments.iter().map(|argument| argument.as_ptr()));
     argv.push(std::ptr::null());
+    // **The organ starts as the agent is constituted**, per `weaver-harness-Spec`
+    // section 2.2 and the operator's ruling of 2026-10-01: the worker's
+    // environment, which is the agent's unit as configured, `Environment=`
+    // included. Read and built here in the parent for the reason the vector
+    // above is, so the child reads a finished array rather than the process's
+    // `environ`, which another thread of the worker could be changing.
+    let environment: Vec<CString> = std::env::vars_os()
+        .filter_map(|(name, value)| {
+            let mut pair = name.into_encoded_bytes();
+            pair.push(b'=');
+            pair.extend(value.into_encoded_bytes());
+            CString::new(pair).ok()
+        })
+        .collect();
+    let mut envp: Vec<*const nix::libc::c_char> = Vec::with_capacity(environment.len() + 1);
+    envp.extend(environment.iter().map(|pair| pair.as_ptr()));
+    envp.push(std::ptr::null());
     // SAFETY: the caller's contract above, and the child body below runs only
     // async-signal-safe calls.
     match unsafe { nix::unistd::fork()? } {
@@ -80,7 +97,6 @@ pub unsafe fn fork_organ(
                 unsafe { nix::libc::_exit(PLACEMENT_FAILED) };
             }
             // Call three.
-            let envp = [std::ptr::null()];
             // SAFETY: execve is async-signal-safe; on success it does not
             // return, and on failure the child exits without unwinding.
             unsafe {
@@ -325,6 +341,47 @@ mod last_word_tests {
         assert!(
             quiet_word.take().is_none(),
             "with no descriptor placed the word never arrives"
+        );
+    }
+
+    /// **The organ starts with the worker's environment**, per
+    /// `weaver-harness-Spec` section 2.2 and the operator's ruling of
+    /// 2026-10-01, so a variable the agent's unit sets reaches every organ.
+    /// The probe is a variable cargo sets on the test process and no shell
+    /// sets for itself, read back as the organ's last typed line.
+    ///
+    /// Perturbation: hand `execve` an empty `envp` and the organ reports the
+    /// variable empty.
+    #[test]
+    fn an_organ_inherits_the_workers_environment() {
+        let expected = std::env::var("CARGO_PKG_NAME").expect("cargo sets it on a test run");
+        let (word, write_end) = LastWord::stand().expect("a pipe");
+        let pid = unsafe {
+            fork_organ(
+                std::path::Path::new("/bin/sh"),
+                &[],
+                &[
+                    "-c".to_string(),
+                    r#"printf '{"probe":"%s"}\n' "$CARGO_PKG_NAME" >&2"#.to_string(),
+                ],
+                Some(std::os::fd::AsRawFd::as_raw_fd(&write_end)),
+            )
+        }
+        .expect("the fork");
+        drop(write_end);
+        let _ = nix::sys::wait::waitpid(pid, None);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let line = loop {
+            if let Some(line) = word.take() {
+                break line;
+            }
+            assert!(std::time::Instant::now() < deadline, "no word arrived");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert_eq!(
+            line,
+            format!(r#"{{"probe":"{expected}"}}"#),
+            "the organ saw the worker's variable"
         );
     }
 

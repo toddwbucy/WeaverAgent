@@ -213,9 +213,9 @@ BUILT="$BUILT/release"
 # and its libraries from a workspace that has nothing to do with this one.
 # Discovering the subject from a directory is how a deployment installs what
 # it was never asked to. The build also makes `weaver-spu-classify`, which
-# this script does not ship. The build below is the whole workspace, the
-# frontend having left the repository on 2026-09-26 and the analysis crate on
-# 2026-09-30.
+# this script does not ship; `weaver-analysis` left the workspace for its own
+# repository on 2026-09-30. The build below is
+# the whole workspace, the frontend having left the repository on 2026-09-26.
 # A member joins the installed set by being written here.
 MEMBERS="pyworker worker weaver-admin weaver-gate weaver-spu weaver-state"
 
@@ -387,8 +387,7 @@ cargo test --release --locked \
 # ------------------------------------------------------------------- 4. build
 # The frontend left the repository on 2026-09-26 and ships no member here, so
 # the build is the whole workspace: the six installed members and the tools
-# beside them. The analysis crate left on 2026-09-30 and is built in
-# WeaverAnalysis.
+# beside them.
 say "build"
 NVCC_CCBIN=${NVCC_CCBIN:-/usr/bin/g++-15} \
   cargo build --release --locked --workspace --features "$FEATURES"

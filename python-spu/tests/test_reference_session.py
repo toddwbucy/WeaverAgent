@@ -2,7 +2,7 @@ from python_spu.session import Session,Refusal
 class Engine:
     def __init__(self):
         self.logits=[-1000.,0.,-1000.]; self.norms=[]
-        self.terminator=2; self.artifact='fake'; self.weights_hash='fake'
+        self.terminator=2; self.stop_tokens=[2]; self.artifact='fake'; self.weights_hash='fake'
         self.next_tokens=[]
     def tokenize(self,_): return self.next_tokens.copy()
     def append(self,_): pass

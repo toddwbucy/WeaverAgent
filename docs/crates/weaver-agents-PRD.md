@@ -644,6 +644,17 @@ The chain, in order:
 | **weaver-spu** | Model admission, decoder and encoder residency, GPU release |
 | **weaver-gate** | Sole work ingress, and the loop's membrane, raised last and lowered first |
 
+**Every organ is one agent's own**, on the operator's ruling of 2026-10-01: started
+under that agent's identity, constituted by that agent's configuration, and serving
+no other agent. An organ is a component of one agent and not a service of the host.
+A second agent gets its own admin, SPU, gate, state member, loop and harness, so two
+agents never share a process, everything an agent does is tied to its own
+processes, and the operating system enforces the identity between them.
+The constitution reaches the organ whole: each starts with the environment of its
+agent's worker, which is the agent's unit as admin configured it, and never with an
+environment of its own, since an organ constituted from anywhere but its agent would
+be a host service able to serve several, per `weaver-harness-Spec` section 2.2.
+
 **Admin is the coordinating center of the load, and the harness is the
 coordinating center of the turn.** Admin authorizes the intent, verifies the
 boundary the operator wrote, opens the sink, starts the worker unit, and directs

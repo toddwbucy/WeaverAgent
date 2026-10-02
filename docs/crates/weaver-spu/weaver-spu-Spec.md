@@ -678,9 +678,8 @@ them is a larger act than the three this one takes. The release's free-before-an
 ordering stood in that group until the load act of 2026-08-07 put the driver itself in
 reach, and its record carries the instrument that act bought. The remainder needs no
 device at all and is simply unbought: the devices coming from the binding, the
-headroom's placement, the hash's failure sentinel, and the once-only admit. Stating that
-here once is what keeps six review tags from reading as six findings that no instrument
-exists.
+headroom's placement, and the once-only admit. Stating that here once is what keeps
+five review tags from reading as five findings that no instrument exists.
 
 **Admit runs the charter's five steps, and the first three are free.** Resolve the
 binding to an artifact, read what the artifact declares about itself without loading it,
@@ -870,24 +869,34 @@ to: spu-headroom-is-a-construction-parameter
 
 **The weights hash is computed at admit and travels with every measurement.**
 The salvaged mechanic is BLAKE3 over a canonical manifest, a single file or a
-walked directory, with a sidecar cache and an **empty-string sentinel on every
-failure path**, which is the property worth carrying verbatim: a hash that
-cannot be computed reports that it could not rather than reporting a wrong
-value, and apex section 8 rests replay on the identity being right. **The third
-walk's test reaches the hash and not the sentinel,** an alteration between two
-admits showing a changed hash and showing nothing about a failure path. The
-sentinel is a claim of its own rather than the periphery of that one, and it is
-review's by non-purchase, an unreadable artifact being as reachable a fixture as
-an altered one. **The manifest is stated so a second party computes the same
-value**, as of 2026-09-06 per issue #465, because a catalog that keys on another
-digest joins a record to nothing unless it can derive this one from the files it
-registers. A reference naming a file hashes that file's bytes, and where the file
-is one shard of a split every shard's bytes follow in split order, names excluded,
-read through the descriptors the load pinned. A reference naming a directory hashes
-every regular file beneath it, walked in sorted name order, each contributing its
-path relative to the directory and then its bytes, so a rename is a different
-identity and a sidecar the index never names is inside it. The value renders as
-sixty-four lower-case hex characters and the sentinel as the empty string. **This
+walked directory. **A hash that cannot be computed refuses the admission**
+`ArtifactUnreadable`, on the operator's ruling of 2026-10-01: an unreadable
+member, a walk that cannot complete, and a pinned member the walk no longer meets
+each refuse, because apex section 8 rests replay on the identity being right and an
+agent serving under no identity, or under one that left out a member it could not
+read, is the lie the rule forbids. The hash is the last free step, judged after the
+device judgment and before any device is taken, so the refusal costs no device
+work. A record written before 2026-10-01 may carry the empty string where a hash
+could not be computed, and no admission since carries one.
+**The third walk's test reaches the hash,** an alteration between two admits
+showing a changed hash. **The manifest is stated so a second party computes the
+same value**, as of 2026-09-06 per issue #465, because a catalog that keys on
+another digest joins a record to nothing unless it can derive this one from the
+files it registers. A reference naming a file hashes that file's bytes, and where
+the file is one shard of a split every shard's bytes follow in split order, names
+excluded, read through the descriptors the load pinned. **A reference naming a
+directory hashes its canonical walk**, on the operator's ruling of 2026-10-01 on
+#32: every regular file beneath it, walked in sorted name order, each contributing
+its path relative to the directory and then its bytes, so a rename is a different
+identity and a sidecar the index never names is inside it. A dot-entry and
+everything under it is outside the walk, a downloader's `.cache/` the standing case,
+since a digest that depended on which tool fetched the model and as whom would not
+be a property of the weights, and the resolution never selects a container from
+one. A symbolic link is followed and its target hashed under the link's name. The
+container the load reads is hashed inside the walk through the descriptor the pin
+holds, so a name replaced during the admit cannot move the identity off the bytes
+the device holds, and a pinned name the walk no longer meets refuses. The value
+renders as sixty-four lower-case hex characters. **This
 is the record's identity of the artifact and it is at the grain of everything the
 binding named**, which is coarser than one file and finer than the weights alone: two
 directories holding the same shards beside a different sidecar are two record
@@ -910,13 +919,13 @@ edge: asserts
 from: weaver-spu
 to: spu-weights-hash-at-admit
 
-node: spu-hash-failure-sentinel
+node: spu-hash-failure-refuses
 kind: assertion
-tag: review
+tag: perturbation
 
 edge: asserts
 from: weaver-spu
-to: spu-hash-failure-sentinel
+to: spu-hash-failure-refuses
 ```
 
 **Release frees the device before it answers, and the ordering is the
