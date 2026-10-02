@@ -240,24 +240,24 @@ produced it without this crate minting any identity of its own.
 on issue #422.** The system prompt is the first bounding of the possibility space the
 decoder samples from, which is to say it is context, and context is this crate's
 material and not the declaration's. Three rulings land it. **The declaration seeds and
-the store governs**: a session's first load seats the declaration's `identity` field and
-the tee lands it here as the turnless `message.system` events at the run's opening, and
-from then on what this crate holds under that kind is the session's identity, answered
-to the harness's `identity` ask at every later load's opening, the declaration's field
-authoritative for the seed alone. **A missed read fails closed**: the harness refuses
-the enter where the ask misses, per `weaver-harness-Spec` section 2, because a run with
-no bounding is not a run this charter's custody can stand behind, and this is the one
-ask the dead-peer clause does not convert. **The identity's kind cannot be elected
-out**: the seated prefix crosses the tee whole under every election, per
-`weaver-trace-PRD` section 11, the one exception to the key-based
-rule, so no election produces a session whose identity this crate never held. Within
-this act the store's identity is what the session's first load seated, and a mechanism
-that lands a revised prefix mid-session is a further act, taking effect at the next load
-because the decode seam holds the prefix permanent for a residency. Across sessions
-nothing moves, per apex section 9: an identity that individuates across sessions is the
-memory leg's, a schema extension with its own socket and contract, and this ruling is
-compatible with that path and does not take it. Where no member stands, the declaration
-governs alone, which is what it did before the ruling.
+the store governs**: a session's first load seats the declaration's identity, the text
+of the prompt file it names since 2026-10-02, and the tee lands it here as the turnless
+`message.system` events at the run's opening, and from then on what this crate holds
+under that kind is the session's identity, answered to the harness's `identity` ask at
+every later load's opening, the declaration's prompt file authoritative for the seed
+alone. **A missed read fails closed**: the harness refuses the enter where the ask
+misses, per `weaver-harness-Spec` section 2, because a run with no bounding is not a run
+this charter's custody can stand behind, and this is the one ask the dead-peer clause
+does not convert. **The identity's kind cannot be elected out**: the seated prefix
+crosses the tee whole under every election, per `weaver-trace-PRD` section 11, the one
+exception to the key-based rule, so no election produces a session whose identity this
+crate never held. Within this act the store's identity is what the session's first load
+seated, and a mechanism that lands a revised prefix mid-session is a further act, taking
+effect at the next load because the decode seam holds the prefix permanent for a
+residency. Across sessions nothing moves, per apex section 9: an identity that
+individuates across sessions is the memory leg's, a schema extension with its own socket
+and contract, and this ruling is compatible with that path and does not take it. Where
+no member stands, the declaration governs alone, which is what it did before the ruling.
 
 **A session may stand on another record's holdings, per the operator's ruling of
 2026-09-04 on issue #432.** Under a load that elects a restore the door of section 3

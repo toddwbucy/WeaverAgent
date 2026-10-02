@@ -66,6 +66,18 @@ because creating an agent is an operator act and the file is its declaration, pe
 `weaver-admin-PRD` section 1. Admin validates it before a process exists and the harness
 consumes the elections it carries.
 
+**The system prompt is a file the declaration names and not text inside it, on the
+operator's ruling of 2026-10-02.** The operator edits the prompt as a markdown file,
+and the declaration and the prompt file both live in the operator's own directory for
+the agent, owned by the operator. Neither is ever readable by the agent: the operator's
+home is closed to the agent's uids, and the model receives the prompt's text at load as
+its identity prefix, which is what a system prompt is and gives the agent process no
+read of the file and no way to change it. Admin reads the file as data and the type it
+seats is the one the wire already carries, so the ruling moves the declaration's
+surface and where admin reads it from, and of the seams only adds the prompt file's
+digest to the enter and the `load` event. `weaver-types-Spec` section 2 carries the key
+and its refusals.
+
 **Validation divides by binding time, per the operator's ruling of 2026-08-02.** The
 compiler verifies the frozen half at build, an immutable binary needing no load-time
 check of what it baked, and admin verifies the tunable remainder at load, at whatever

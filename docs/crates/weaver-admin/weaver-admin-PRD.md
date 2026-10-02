@@ -415,7 +415,12 @@ order is the substance.
 2. **Read and validate the agent's configuration file.** A file that is absent, that
    is missing a required field, or that leaves the model binding's artifact unnamed
    fails the load before any process exists. Whether the artifact it names resolves
-   is the SPU's to answer at admission, per section 4.3.
+   is the SPU's to answer at admission, per section 4.3. **The file and the system
+   prompt it names are the operator's**, on the operator's ruling of 2026-10-02: both
+   are read as data from the operator's own directory for the agent, which the root
+   names and which must be closed to every principal but the operator, the uid the
+   root's `operator` key names, the agent's uids above all, and the prompt reaches the agent only as the identity prefix its
+   text is seated as. What names a program admin starts stays in the root.
 3. **Verify the boundary the operator wrote.** The OS identity resolves, the home
    directory exists with the expected ownership and modes, and the trace directory is
    root-owned and not searchable by the agent uid. Any failure refuses. Nothing here
