@@ -320,12 +320,17 @@ rulings of 2026-10-02 on this act's second and third questions: the operator is 
 competent, and the file and the trace show what the model was given. **The file seats
 one message**: `role: system`, one `Text` block, its text the file's bytes exactly,
 seated verbatim with no trailing-newline stripping and no normalization, so the trailing
-newline an editor writes is part of the prompt and of the tokens it renders to, and the
-recorded `identity_file` digest and the text the model receives are the same bytes.
-Carried agents see their file's newline from this change on. **A file that is empty, or
-holds whitespace alone, is accepted** and seats the empty list, the agent with no
-identity prefix that was always legitimate, rather than a message of an empty or blank
-block: admin judges the file's presence, never its quality. A file that is not UTF-8
+newline an editor writes is part of the prompt and of the tokens it renders to, and for
+such a file the recorded `identity_file` digest and the text the model receives are the
+same bytes. Carried agents see their file's newline from this change on. **A file that
+is empty, or holds whitespace alone, is accepted** and seats the empty list, the agent
+with no identity prefix that was always legitimate, rather than a message of an empty or
+blank block: admin judges the file's presence, never its quality. **`identity_file` is
+always the digest of the file's bytes as read**, the operator's file and not the seated
+prefix: for a whitespace-only file it digests bytes the model never receives, and the
+seated prefix is the empty list, which the `message.system` events the load authors
+record as none. A provenance reader takes the digest as the file's and the events as
+what was seated. A file that is not UTF-8
 refuses `BadValue` naming `spu-instruction.decoder.identity-file`.
 
 **A derived declaration names an empty prompt file**, on the operator's ruling of
