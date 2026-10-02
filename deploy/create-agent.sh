@@ -581,6 +581,6 @@ say "made"
 # run cannot reach the gate's socket until it takes the group (#673, measured
 # on the W4a run of 2026-09-25).
 printf '   %s joined groups %s and %s: a session that predates this run needs a new\n' "$OPERATOR" "$AGENT_USER" "$MEMBER_USER"
-printf '   login, or `newgrp`, before the groups apply\n'
+printf '   login before both groups apply (`newgrp` selects one group in one shell)\n'
 printf '   validate it before loading:\n'
 printf '     sudo WEAVER_ADMIN_CONFIG=%s %s validate %s\n' "$ADMIN_BASE" "$PREFIX/bin/weaver-admin" "$NAME"

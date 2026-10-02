@@ -180,8 +180,8 @@ dot-name: every key copied from the stack record, `log-path`, and the declaratio
 `agent.toml`. It then proves the boundary (for sqlite, the member can write its state
 room and the agent's own uid cannot enter it; for postgres, the member reaches the
 database and the agent's own uid does not), and only then moves the root into place,
-which is the admission. The operator's new group membership needs a fresh login or
-`newgrp`.
+which is the admission. The operator's two new group memberships need a fresh login
+before both apply (`newgrp` selects one group in one shell).
 
 An agent electing no store (`[state-store] engine = "none"`) is made by hand, since
 there is no member or store to provision or probe: `HowToDeployANewAgent.md`

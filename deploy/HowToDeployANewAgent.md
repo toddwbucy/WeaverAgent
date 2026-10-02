@@ -30,9 +30,10 @@ load where any piece is missing, so the pieces are made first and admin is asked
 | Operations log | `/var/log/weaver/<name>/admin.log`, named by `log-path` | directory root 0750; admin writes the file |
 | Store (postgres election only) | role and database `weaver_<name>`, one `peer map=weaver` line in `pg_hba.conf`, one `weaver` map line in `pg_ident.conf` | postgres |
 
-The operator joins group `weaver-<name>` so the trace, written under root with the
-territory's group, is readable without sudo. A session that predates the join needs a
-new login or `newgrp weaver-<name>`.
+The operator joins groups `weaver-<name>`, for the gate's socket, and
+`weaver-<name>-state`, the territory's group, so the trace is readable without sudo. A
+session that predates the join needs a fresh login before both groups apply: `newgrp`
+selects one group in one shell.
 
 ## 1. Before you start
 
