@@ -172,8 +172,9 @@ state channel's end where the member stands, the SPU instruction, the gate instr
 where the kind declares a Gate, the state election the tee applies, the store election
 the member stands on, resolved to the embedded engine where the declaration is silent,
 per `weaver-state-PRD` section 4, the lineage of the restore where
-the declaration elects one, and the digests of the organ binaries admin started and of
-the two it hands the worker to fork, the agent's SPU and the gate. The
+the declaration elects one, the digests of the organ binaries admin started and of
+the two it hands the worker to fork, the agent's SPU and the gate, and the digests of
+the declaration and, as of 2026-10-02, of the prompt file it names. The
 state channel's end is the harness half of the socketpair admin created at the member's
 spawn, per the operator's ruling of 2026-08-26 carried at
 `weaver-harness-state-contract`: admin couriers it and speaks on it never. Its absence
@@ -234,7 +235,10 @@ any enter, `Unloaded` and no load. Entered, `Idle` where no turn is in flight an
 declaration's digest as admin read it at the enter, the artifact, the elections the load
 stands under, the store the member stands on and whether its end arrived, and the
 composing loop by binary and, where it is a file, path and digest, the same facts the
-`load` event carries and read from the run rather than the record. After a leave,
+`load` event carries and read from the run rather than the record, the prompt file's
+digest excepted: the record carries it and the observation does not, the answer's
+shape being what `show` relays under `weaver-admin-operator-contract`, which the act of
+2026-10-02 did not move. After a leave,
 `Unloaded` and no load, the position being terminal. The answer is the harness's own
 word and never a read of the deployment, it touches no bracket and authors no event, and
 an observation arriving during a turn is answered from inside it, between tokens, as
@@ -325,7 +329,9 @@ record's path, so the harness names its parent without opening anything, the dig
 the organ binaries admin started and of the agent's SPU and the gate it hands the
 worker, keyed by name, the declaration's digest as this crate
 read the file at the inventory, so the run and the record can both name what they were
-built from, and the intent to stop.
+built from, the prompt file's digest as this crate read the file the declaration names,
+as of 2026-10-02, so the record can say which prompt the agent was given now that the
+declaration's digest no longer covers it, and the intent to stop.
 
 **Admin guarantees** that the trace sink handle it passes refers to the sink the
 session's configuration declares, that the run reference distinguishes this run

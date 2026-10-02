@@ -545,6 +545,18 @@ record is the cache's canonical form and nothing derived from it is kept: a sess
 stands from a record recomputes its prefix from the record under whatever conditions the
 load declares, and the load event is where those conditions and that lineage are read.
 
+**The prompt file the load was given is one more such fact, as of 2026-10-02.** On the
+operator's ruling of that date the system prompt is a file the declaration names rather
+than text inside it, so the declaration's digest the `load` event carries stopped
+covering the prompt, and a record holding only that digest could not say which prompt
+the agent's operator had written. **From this act the `load` event names the prompt
+file's digest beside the declaration's**, as admin read both at the inventory, and never
+a path. The seated prefix the record carries is what the session ran under, and under a
+standing state member that is the store's and not the file's after the session's first
+load, so the two answer different questions and both are kept. Absence means a record
+older than the act and is read as the digest being unrecoverable, never as a default.
+`weaver-trace-Spec` section 3 carries the member.
+
 **A replay under the wrong projection does not fail.** It lands, the loop asks,
 an answer comes back, and what the run produces is a plausible replay of a
 session that never happened. That is the shape this charter's own section 3.1
