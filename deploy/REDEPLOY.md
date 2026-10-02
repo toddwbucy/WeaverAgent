@@ -323,7 +323,7 @@ installed. `<prefix>` is the install prefix, `/opt/weaver` by default.
    ```sh
    T=<t>; N=<name>
    sudo groupadd --system "weaver-$N-trace"
-   sudo usermod -aG "weaver-$N-trace" "$USER"
+   sudo usermod -aG "weaver-$N-state,weaver-$N-trace" "$USER"   # passage, and the trace
    sudo chgrp "weaver-$N-state" "$T"
    sudo chmod g-s,u=rwx,g=x,o= "$T"                  # 0710, setgid cleared
    sudo find "$T" -maxdepth 1 -type f -exec chgrp "weaver-$N-trace" {} + \
