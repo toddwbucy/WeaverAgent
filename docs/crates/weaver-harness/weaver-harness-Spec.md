@@ -1581,7 +1581,9 @@ exists, so a claim whose own named instrument is in the tree takes the
 instrument's tag, and this one is section 8's perturbation bullet beside
 determinism. The two stay two records because the byte-for-byte comparison
 holds whatever order landed and cannot see the order move, which is the reason
-the order was given a claim of its own.
+the order was given a claim of its own. **Assembly reads the identity prefix and
+never its source**: where the prefix comes from is decided at one site, section
+6.1's open, and named there.
 
 ```graph
 node: harness-prompt-part-order
@@ -2028,7 +2030,19 @@ the harness asks the store for the session's identity, the `identity` ask of
 prefix answered is the open's `messages`, and an empty answer, the store holding no
 turnless `message.system` for the session, means the first load of the session, so the
 decoder instruction's `identity` field seeds the open and the tee lands what it seated.
-Where no end arrived the field governs alone, as it did before the ruling. **A missed
+Where no end arrived the field governs alone, as it did before the ruling.
+**This choice is the one site where the identity's source is read**, and the prefix the
+open seats comes from nowhere else. The seed it reads is the decoder instruction's
+`identity` as the enter carried it, which since the operator's ruling of 2026-10-02
+admin seated at the inventory from the prompt file the declaration names, per
+`weaver-types-Spec` section 2, so this crate holds the file's text and never the file,
+its path or a handle into the operator's directory. **The operator's long-range
+direction moves the source here and not elsewhere**: state management supplying the
+identity, a semantic-graph store that sleep-cycle consolidation keeps current, in place
+of a file the operator edits. That is the memory leg, out of scope per
+`weaver-agent-PRD` section 9 and not built here, and nothing in this crate is shaped for
+it: the choice stays two-way, the store's answer or the seed, and a new source arrives
+as that leg's own act. **A missed
 ask refuses the enter**, the dead-peer conversion of every other ask notwithstanding: a
 run whose bounding cannot be read is not a run with no bounding, so the enter fails
 closed through the same after-load failure a refused open uses, per ruling 2 of the
@@ -2168,7 +2182,10 @@ and no one else does. Neither is read from the deployment, so the record cannot 
 with what ran. A third member that is not an election joins on 2026-09-04: the
 declaration's digest, which admin computed at the inventory and the enter carries, so
 the record names what the run was built from without this crate reading a file, per
-issue #435.
+issue #435. A fourth joins on 2026-10-02 by the same route: the digest of the prompt
+file the declaration names, `identity_file` on the enter and on the load event, per
+`weaver-trace-Spec` section 3, which this crate copies and does not compute, the file
+being admin's to read and never this crate's.
 
 **The seated identity prefix is authored beside the load, one `message.system` per
 message**, per `weaver-trace-PRD` section 5. The harness is again the party that holds

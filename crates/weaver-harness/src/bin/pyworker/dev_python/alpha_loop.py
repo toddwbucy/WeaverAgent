@@ -7,7 +7,7 @@
 # depth (four turns) and a nominal 600 quote budget, and differ where a run
 # can see it. The compiled loop seats its own system prompt at the first
 # turn and at recovery, and this one relies on the declaration's identity.
-# This one detects RECALL:/REMEMBER: lines and can run up to three memory
+# This one detects RECALL:/REMEMBER: lines and can run up to three state
 # follow-up turns, and the compiled loop runs one turn per request. The
 # budget counts Unicode characters here and UTF-8 bytes there, the empty
 # block and the ellipsis render differently, and the trigger is float
@@ -54,12 +54,12 @@
 # that runs none falls back to a plain unshaped turn.
 #
 # Every judgment below is the loop's alone: the trigger, the recall depth,
-# the quote budget, the memory conventions, and what every injected line
+# the quote budget, the state conventions, and what every injected line
 # says. The framework holds no threshold and no convention anywhere.
 #
-# THE MEMORY CONVENTIONS, series one. The model queries and saves its own
-# state through its outputs: a line "RECALL: <subject>" asks memory, a line
-# "REMEMBER: <fact>" saves one. Both are loop-detected in the emission and
+# THE STATE CONVENTIONS, series one. The model queries and saves its own
+# state through its outputs: a line "RECALL: <subject>" asks state, a line
+# "REMEMBER: <fact>" holds one in state. Both are loop-detected in the emission and
 # dispatched inward against the state seam - internal tools, never the
 # gate's. A REMEMBER needs no write call at all: the line is already in the
 # recorded emission, distilled into custody through the record's one
@@ -75,7 +75,7 @@
 import json
 
 # THE PROMPTS ARE NOT HERE EITHER, for the same reason the teaching is not:
-# the system prompt and the memory conventions are seated from the session's
+# the system prompt and the state conventions are seated from the session's
 # identity in state, which the declaration's identity block seeds on the
 # first load, and this file held a second copy of both that nothing read. Two copies of one text is one fact in two places with
 # no authority named, and the copy that is not the one in force is the one
@@ -92,16 +92,16 @@ PRESSURE = 4 / 5
 RECALL_TURNS = 4
 QUOTE_BOUND = 600
 
-# The memory conventions' own judgments. Rounds cap the detect-and-refeed
+# The state conventions' own judgments. Rounds cap the detect-and-refeed
 # cycle the way the tool rounds are capped. Asks per round and hits per
 # ask keep an answer a working set. The quote bound is per hit, centered
 # on the match. MISS_REDIRECT is the experiment's second arm: None tells
 # the truth and stops, a string is appended to the miss to point the model
 # somewhere else.
-MEMORY_ROUNDS = 3
-MEMORY_ASKS = 3
-MEMORY_HITS = 4
-MEMORY_QUOTE = 300
+STATE_ROUNDS = 3
+STATE_ASKS = 3
+STATE_HITS = 4
+STATE_QUOTE = 300
 MISS_REDIRECT = None
 
 # THE ABLATION LINE IS NOT HERE. It moved into the declaration's identity
@@ -202,7 +202,7 @@ def reentry(events):
     return text
 
 
-def memory_lines(emission):
+def state_lines(emission):
     """The sigil lines of one emission: (remembered facts, recall subjects).
 
     Column-zero-anchored on purpose: a sentence mentioning the convention
@@ -223,7 +223,7 @@ def memory_lines(emission):
     return remembers, recalls
 
 
-def memory_search(events, subject):
+def state_search(events, subject):
     """The premade query: a case-insensitive match of the subject against
     custody's texts, newest hits last, each quoted in a window around the
     match. RECALL lines are excluded - they are asks, not facts - the
@@ -247,31 +247,31 @@ def memory_search(events, subject):
             at = stripped.lower().find(needle)
             if at < 0:
                 continue
-            start = max(0, at - MEMORY_QUOTE // 3)
-            window = stripped[start : start + MEMORY_QUOTE]
+            start = max(0, at - STATE_QUOTE // 3)
+            window = stripped[start : start + STATE_QUOTE]
             if start > 0:
                 window = "..." + window
-            if start + MEMORY_QUOTE < len(stripped):
+            if start + STATE_QUOTE < len(stripped):
                 window = window + "..."
             if window not in hits:
                 hits.append(window)
-                # The retention is streaming: at most MEMORY_HITS windows
+                # The retention is streaming: at most STATE_HITS windows
                 # are ever held, oldest discarded as newer ones arrive, so
                 # the scan's memory is bounded by the answer's own cap. The
                 # dedup is against the retained set, so a fact recurring
                 # after falling out re-enters as recent, which is the
                 # newest-hits-last reading the return already promises.
-                if len(hits) > MEMORY_HITS:
+                if len(hits) > STATE_HITS:
                     hits.pop(0)
     return hits
 
 
-def memory_followup(seat, emission):
+def state_followup(seat, emission):
     """The inward dispatch: None where the emission holds no sigil, else
     the one contribution answering every sigil it held - saves confirmed,
     recalls answered labeled or missed honestly.
     """
-    remembers, recalls = memory_lines(emission)
+    remembers, recalls = state_lines(emission)
     if not remembers and not recalls:
         return None
     parts = []
@@ -279,17 +279,17 @@ def memory_followup(seat, emission):
         parts.append("Saved.")
     if recalls:
         events = seat.recall(None)
-        for subject in recalls[:MEMORY_ASKS]:
+        for subject in recalls[:STATE_ASKS]:
             if events is None:
-                parts.append("(Your memory could not be reached.)")
+                parts.append("(What you hold could not be reached.)")
                 break
-            found = memory_search(events, subject)
+            found = state_search(events, subject)
             if found:
                 parts.append(
-                    "From your memory:\n" + "\n".join("- " + hit for hit in found)
+                    "From what you hold:\n" + "\n".join("- " + hit for hit in found)
                 )
             else:
-                miss = f"Your memory holds nothing about {subject}."
+                miss = f"You hold nothing about {subject}."
                 if MISS_REDIRECT:
                     miss += " " + MISS_REDIRECT
                 parts.append(miss)
@@ -315,12 +315,12 @@ def drive(seat, text):
             delta.append({"role": "system", "text": line})
     delta.append({"role": "user", "text": text})
     outcome = seat.turn(delta)
-    # The memory rounds: detect the sigils, dispatch inward, refeed, and
+    # The state rounds: detect the sigils, dispatch inward, refeed, and
     # stop when an emission holds none or the cap lands. A follow-up turn
     # that refuses fails the request whole, which is the crossing's
     # standing economics.
-    for _ in range(MEMORY_ROUNDS):
-        follow = memory_followup(seat, (outcome or {}).get("emission", ""))
+    for _ in range(STATE_ROUNDS):
+        follow = state_followup(seat, (outcome or {}).get("emission", ""))
         if follow is None:
             break
         outcome = seat.turn([{"role": "system", "text": follow}])

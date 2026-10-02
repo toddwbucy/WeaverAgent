@@ -264,6 +264,7 @@ pub struct Elections {
     pub state_store: StoreIdentity,
     pub composer: LoopIdentity,
     pub declaration: String,
+    pub identity_file: String,
     pub lineage: Option<Lineage>,
     pub stack: BTreeMap<String, String>,
 }
@@ -791,6 +792,26 @@ beside it. Both ride the `Elections` payload on the drift reason above, and a re
 older than this act lacks the members, which reads as those facts being unrecoverable
 and never as a default. Neither is read from the deployment: the harness authors what
 the enter carried, as it authors the store's identity.
+
+**The `load` event names its declaration and its prompt file by digest**, the first as
+of 2026-09-04 per issue #435 and the second as of 2026-10-02, per the charter's section
+3.1 on the operator's ruling of that date. `declaration` is sha256 hex of the
+declaration's bytes and `identity_file` of the prompt file's, each as admin read it at
+the inventory, copied from the enter and never a path, which admin alone holds. Both
+ride the `Elections` payload on the drift reason above. **The second exists because the
+first stopped covering the prompt**: while the prompt was a string inside the
+declaration one digest named both, and once it is its own file an edit to the prompt
+leaves the declaration's digest unchanged. The seated prefix the record already carries
+does not stand in for it, because under a standing state member every later load of a
+session seats the store's identity and not the file's, so the digest is the record's
+one account of what the operator's file held at that load, and a seat that diverged from
+the file is visible as the two disagreeing. **The member is additive**: a record older
+than this act lacks it, which reads as the prompt file's digest being unrecorded and
+never as a default, and every consumer of the `load` event sees one new member and no
+other change, WeaverWeb's ingest, `weaver-analysis`, and the deployment tuple's harness
+among them. The deployment tuple's `sampler and seed` member, whose provenance names
+the declaration, holds the prompt file's digest beside the declaration's from this act,
+a provenance naming the declaration alone no longer naming what the model was told.
 
 **`elision` carries its coordinates and `flush` does not need to.** An
 earlier draft of this section gave the elision `FlushCounts` on the reading

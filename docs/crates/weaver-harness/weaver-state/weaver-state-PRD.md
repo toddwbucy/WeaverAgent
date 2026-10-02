@@ -270,29 +270,23 @@ identifies itself in that stream since the ruling of 2026-08-14, admin's run ref
 having replaced the ordinal, so what state receives is attributable to the run that
 produced it without this crate minting any identity of its own.
 
-**The identity is the session's first holding, per the operator's ruling of 2026-09-04
-on issue #422.** The system prompt is the first bounding of the possibility space the
-decoder samples from, which is to say it is context, and context is this crate's
-material and not the declaration's. Three rulings land it. **The declaration seeds and
-the store governs**: a session's first load seats the declaration's `identity` field and
-the tee lands it here as the turnless `message.system` events at the run's opening, and
-from then on what this crate holds under that kind is the session's identity, answered
-to the harness's `identity` ask at every later load's opening, the declaration's field
-authoritative for the seed alone. **A missed read fails closed**: the harness refuses
-the enter where the ask misses, per `weaver-harness-Spec` section 2, because a run with
-no bounding is not a run this charter's custody can stand behind, and this is the one
-ask the dead-peer clause does not convert. **The identity's kind cannot be elected
+**The identity is held here and seated from the prompt file at every load**, on the
+operator's ruling of 2026-10-02 on this act's fifth question, which revises the ruling
+of 2026-09-04 on issue #422. The system prompt is the first bounding of the possibility
+space the decoder samples from, which is to say it is context, and context is this
+crate's material: each load seats the declaration's identity, the text of the prompt
+file it names, and the tee lands it here as the turnless `message.system` events at the
+run's opening. **The prompt file is authoritative at every load**: editing
+`system-prompt.md` takes effect at the next load, its digest recorded on the load event,
+and what this crate holds under that kind is the history of the identities the loads
+seated, never an authority over the next one. **The identity's kind cannot be elected
 out**: the seated prefix crosses the tee whole under every election, per
-`weaver-trace-PRD` section 11, the one exception to the key-based
-rule, so no election produces a session whose identity this crate never held. Within
-this act the store's identity is what the session's first load seated, and a mechanism
-that lands a revised prefix mid-session is a further act, taking effect at the next load
-because the decode seam holds the prefix permanent for a residency. Across sessions the
-`identity` ask answers within the session by its own definition, so a new session seeds
-from the declaration. Whether a held identity carries into a later session is the
-loop's selection, one of the opinions this section moves out of custody, and an identity
-rewritten by consolidation is the memory leg's and stays out, per apex section 9. Where
-no member stands, the declaration governs alone, which is what it did before the ruling.
+`weaver-trace-PRD` section 11, the one exception to the key-based rule, so no election
+produces a load whose identity this crate never held. Within a residency the prefix is
+permanent, the decode seam holding it from open to release, so a revised prompt takes
+effect at the next load, or at an SPU session reopened with the new prefix as a live
+restore that needs one does, per section 4. An identity rewritten by consolidation is
+the memory leg's and stays out, per apex section 9.
 
 **A session may stand on another record's holdings, per the operator's ruling of
 2026-09-04 on issue #432.** Under a load that elects a restore the door of section 3

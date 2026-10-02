@@ -941,6 +941,25 @@ construction rather than by nobody dialing a live ingress.
 and nap passes, and any memory substrate. Also out: offline analysis,
 training, and the desktop frontend.
 
+**The identity's source is parked here by name**, on the operator's ruling of
+2026-10-02. Today an agent's system prompt is a file the operator edits, named by the
+declaration and read by admin, and the harness carries it to the session's open, per
+`weaver-harness-Spec` section 6.1, which names the one site where the identity's source
+is read. The operator's long-range direction is for state management to supply that
+identity instead, a semantic-graph store kept current by sleep-cycle consolidation.
+That is the memory leg above and is out, not built here, and it returns by the
+mechanism this section states: naming the site is not a slot, and no field, ask or
+seam is carried for it.
+
+**The operator bringing the loop is parked here by name**, on the operator's ruling of
+2026-10-02 on #1. The state-management loop is compiled into the worker, and
+`loop-file`, a declaration naming code the worker runs, retires for the compiled path
+with the pyworker lane. An operator supplying a loop of its own is a future feature,
+not built here, and it returns by the mechanism this section states. The compiled
+loop's tunable opinions become a `[state-management]` settings table in the
+declaration, recorded on the load event; the table itself is `weaver-state`'s Spec to
+state.
+
 **External tooling is out entirely as well, and stays out.** This program builds no
 tool crate, and the reason differs on each side of the boundary.
 
