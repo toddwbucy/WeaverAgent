@@ -42,7 +42,7 @@ Use rustfmt, four-space Rust indentation, `snake_case` functions/modules, and
 `PascalCase` types. Existing `conforms:` headers stay in place unmaintained, and new
 code owes none until release. Reuse contract-defined types across seams. Write
 documentation in ASCII with absolute dates and canonical terminology (`trace`,
-`reflection`, `substrate-state`).
+`state management`, `memory`; see CLAUDE.md).
 
 ## Testing Guidelines
 

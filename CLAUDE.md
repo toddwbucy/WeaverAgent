@@ -312,9 +312,19 @@ note and the scripts that produced its figures, on the operator's word of 2026-0
 
 - ASCII only, no em-dashes (use ` - `). Absolute dates (`2026-09-30`). No dated banners
   or header histories; git is the archive, so superseded text is removed, not struck.
-- Canonical vocabulary is `trace` / `reflection` / `substrate-state`. No Id/Ego/SuperEgo
-  or Freudian framing in prose or code. Publish-destined prose says "memory" or
-  "state", not organ names.
+- Canonical vocabulary is `trace` / `state management` / `memory`: three layers with
+  authority running downward, on the operator's ruling of 2026-10-02.
+  - The **trace** is what happened: lossless, append-only, the floor under everything.
+  - **State management** is what is supposed to happen, reconciled with what did, turn by
+    turn. It is built from the trace's tee and rebuildable from it, and its schema,
+    classifiers and re-rankers are the enforcement.
+  - **Memory** is a lossy compression of state, written only by sleep-cycle
+    consolidation, where patterns, strategies and the constitution are held.
+
+  Memory proposes and state enforces. A live write or query, such as `/remember` or
+  `/do-you-remember`, is state management, never memory. No Id/Ego/SuperEgo or Freudian
+  framing in prose or code. Publish-destined prose uses these three words, not organ
+  names.
 - A ruling is a claim about the whole corpus, so an act that lands one ends with a
   whitespace-normalized sweep for every wording it retires, this file included.
 - `latency is the enemy of agency`: prefer the shorter abstraction, Unix sockets over
