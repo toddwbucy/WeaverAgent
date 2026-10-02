@@ -418,8 +418,8 @@ order is the substance.
    is the SPU's to answer at admission, per section 4.3. **The file and the system
    prompt it names are the operator's**, on the operator's ruling of 2026-10-02: both
    are read as data from the operator's own directory for the agent, which the root
-   names and which must be closed to every principal but the operator, the agent's
-   uids above all, and the prompt reaches the agent only as the identity prefix its
+   names and which must be closed to every principal but the operator, the uid the
+   root's `operator` key names, the agent's uids above all, and the prompt reaches the agent only as the identity prefix its
    text is seated as. What names a program admin starts stays in the root.
 3. **Verify the boundary the operator wrote.** The OS identity resolves, the home
    directory exists with the expected ownership and modes, and the trace directory is

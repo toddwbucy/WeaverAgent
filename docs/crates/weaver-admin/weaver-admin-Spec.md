@@ -1761,15 +1761,18 @@ value below is read from the root before any verb, and a value that fails to rea
 the invocation as `ConfigInvalid` with no field.
 
 **The root holds one file per key.** Required: `worker-binary`, `spu-binary`,
-`gate-binary`, `run-tool`, `control-tool`, `coordination-root`, `log-path` and
-`declaration-directory`. Optional: `unit-properties`, `headroom-bytes` and
+`gate-binary`, `run-tool`, `control-tool`, `coordination-root`, `log-path`,
+`declaration-directory` and `operator`. Optional: `unit-properties`, `headroom-bytes` and
 `state-store-socket`, the last read under a service election alone, the service engine's
 conventional directory standing where the file is silent. **The agent's declaration
 stands in the operator's directory and not in the root**, on the operator's ruling of
 2026-10-02: `declaration-directory` names it, absolute, `~/.weaveragent/<agent>/` by
 convention, and it holds `agent.toml`, which this crate parses per `weaver-types-Spec`
 section 2, beside the prompt file the declaration's `identity-file` names. A declaration
-directory holding no `agent.toml` answers `NoSuchAgent`, as a root holding none did. The
+directory holding no `agent.toml` answers `NoSuchAgent`, as a root holding none did.
+**`operator` names the operator's uid**, on the operator's ruling of 2026-10-02 on this
+act's first question: a root-owned key `create-agent.sh` writes once, the box's own fact,
+set by root, about whose data defines the agent, and independent of who invokes a verb. The
 coordination name changed hands with the operator socket on 2026-08-05: the operator
 places it, the harness binds it, and admin dials it, so one value reaches two crates and
 the root is where they agree. These values are not the agent config and no seam carries
@@ -1823,13 +1826,17 @@ declaration directory is judged before any value in it is read, and the judgment
 root's with the operator in root's place. The value of `declaration-directory` is
 resolved once to its canonical path, the look not following a link at the directory
 itself, and every read goes through the directory as opened at the judgment. **The
-directory is closed to everyone but its owner**: its owner is the uid this judgment
-reads as the operator's, which must be neither the agent's account nor its member's, and
-it grants no permission to group or other and carries no access-control entry beyond its
+directory is closed to everyone but its owner**: its owner must be exactly the uid the
+root's `operator` key names, and a directory any other uid owns, the agent's or the
+member's account among them, refuses. Once WeaverWeb's admin-con is the caller under
+#50's roles, WeaverWeb decides which person may act as the agent's operator, and the box
+never takes the server's word for which local account owns the agent's data ("the box
+decides", toddwbucy/WeaverTools#6). The directory
+grants no permission to group or other and carries no access-control entry beyond its
 mode, so neither of the agent's uids, whatever passage the territory's provisioning
 opened through the directories above, can list it, enter it or read a file in it. **The
 entries this crate reads are held closed**: `agent.toml` and the prompt file are each a
-regular file and never a link, owned by the operator or by uid 0, and writable by no
+regular file and never a link, owned by that uid or by uid 0, and writable by no
 group or other. Their read bits are not judged, the closed directory already denying
 every other principal the path, so a file an editor writes under an ordinary umask
 passes. Other entries are the operator's and are not read. **Every directory above it is
@@ -2219,7 +2226,8 @@ directive is asserted where the run happens.
   agent, confirmed by watching a verb proceed when the check is removed.
 - The declaration directory is closed, per section 9 as of 2026-10-02: a directory
   granting group or other any permission, one carrying an access-control entry, one
-  owned by the agent's or the member's account, an entry read that is a link or
+  owned by any uid but the one the root's `operator` key names (the agent's and the
+  member's among them), an `operator` key absent or naming no uid, an entry read that is a link or
   writable by group or other, and an ancestor another principal can write each refuse
   `BoundaryUnverified` before a value is read, confirmed by watching each pass and its
   declaration parse when its arm of the judgment is removed. The prompt file absent

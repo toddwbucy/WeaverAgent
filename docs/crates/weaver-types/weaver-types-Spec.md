@@ -142,8 +142,10 @@ crate reads TOML 1.1, the deploy script and the experiment harness read with Pyt
 others refuse. Admin's parser is the authority on what a declaration says, and syntax
 only 1.1 has, a multiline inline table or a `\e` escape among it, is outside what the
 program guarantees. **A path in a declaration carries no control character**, on the
-operator's ruling of 2026-09-28: the restore's `record`, the `loop-file`, the trace
-sink's `path` and the decoder's `identity-file` are refused by name where one does,
+operator's ruling of 2026-09-28: the restore's `record`, the `loop-file` (retiring with
+the pyworker lane, the compiled path's state-management loop being compiled into the
+worker on the operator's ruling of 2026-10-02 on #1), the trace sink's `path` and the
+decoder's `identity-file` are refused by name where one does,
 because every reader in the suite, admin's parser, the deploy script's shell and the
 harness, must agree on what a path is, and a control character is where they part.
 JSON stays rejected on the criterion's comments clause: it has none, and a
@@ -313,12 +315,28 @@ table of tables was the ceremony an operator paid on every edit of the one field
 edited. `identity` stays the type's member and the wire's, so `SpuInstruction` crosses
 the enter exactly as it did and no seam downstream of the parse moves: the harness, the
 identity door, the SPU's open and the decode contract all meet canonical messages as
-before. **The file seats one message**: `role: system`, one `Text` block, its text the
-file's bytes as read, taken verbatim with nothing trimmed, so the trailing newline an
-editor writes is part of the prompt and of the tokens it renders to. A file of zero
-bytes seats the empty list, the agent with no identity prefix that was always
-legitimate, rather than a message with an empty block, which the door refuses. A file
-that is not UTF-8 refuses `BadValue` naming `spu-instruction.decoder.identity-file`.
+before. **The mechanism holds no opinion about the prompt's content**, on the operator's
+rulings of 2026-10-02 on this act's second and third questions: the operator is assumed
+competent, and the file and the trace show what the model was given. **The file seats
+one message**: `role: system`, one `Text` block, its text the file's bytes exactly,
+seated verbatim with no trailing-newline stripping and no normalization, so the trailing
+newline an editor writes is part of the prompt and of the tokens it renders to, and the
+recorded `identity_file` digest and the text the model receives are the same bytes.
+Carried agents see their file's newline from this change on. **A file that is empty, or
+holds whitespace alone, is accepted** and seats the empty list, the agent with no
+identity prefix that was always legitimate, rather than a message of an empty or blank
+block: admin judges the file's presence, never its quality. A file that is not UTF-8
+refuses `BadValue` naming `spu-instruction.decoder.identity-file`.
+
+**A derived declaration names an empty prompt file**, on the operator's ruling of
+2026-10-02 on this act's sixth question. `weaver-analysis derive`, writing a diagnostic
+declaration, writes an empty prompt file, which the rule above admits, and the derived
+declaration states that its identity comes from the preloaded record. The replay's
+identity is not that file: the declaration's identity is the seed, per the ruling of
+2026-09-04 above, and a diagnostic replay always stands a member preloaded from the
+record, so the open seats the record's own `message.system` events, in order and with
+their boundaries, byte for byte, and certification is unaffected. The analysis side's
+edit is toddwbucy/WeaverAnalysis#7.
 
 **The name is a bare file name, resolved in the declaration's own directory and
 nowhere else.** It carries no `/`, is not `.` or `..`, is not empty and carries no
@@ -1258,7 +1276,12 @@ harness copies onto the load event and reads nowhere else. **`LoadFacts` does no
 it**: `LoadFacts` is the shape `show` answers the operator with under
 `weaver-admin-operator-contract`, which this act does not move, so the record carries
 the prompt's digest and the observation does not, and the observation's answer is
-widened only in an act that moves that contract.
+widened only in an act that moves that contract. **The digest joins `show` in the later
+act that reworks `show` as a whole**, on the operator's ruling of 2026-10-02 on this
+act's fifth question, once the admin freeze lifts: bundled with #52's observation time
+and the load confirmation, each organ listed and confirmed up with what it runs, as one
+change to `weaver-admin-operator-contract` and one WeaverWeb adjustment. Until then the
+digest rides on the load event, which WeaverWeb already receives.
 
 **`EnterBinding` is the kind resolved, and a directive disagreeing with its
 kind is unrepresentable rather than refused.** The config holds the kind as
@@ -2215,9 +2238,10 @@ already discharged.
       confirmed by watching the parse yield an empty identity when the arm
       maps nothing to the empty list
     - the seated message is the file's bytes verbatim, confirmed by watching a
-      trailing newline vanish when the text is trimmed, and a file of zero
-      bytes seats the empty list, confirmed by watching it refuse at the
-      empty-text check when the zero-length arm is removed
+      trailing newline vanish when the text is trimmed, and a file that is empty
+      or holds whitespace alone seats the empty list, confirmed by watching each
+      refuse at the empty-text check, or seat a blank message, when its arm is
+      removed
 - In this crate: the config's field names are kebab-case on disk and snake_case
   in Rust, per section 2, confirmed by watching `rename_all` dropped from
   `AgentConfig` and `deny_unknown_fields` refuse the operator's own spellings.
