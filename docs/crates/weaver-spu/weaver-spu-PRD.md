@@ -141,7 +141,8 @@ so cannot protect or corrupt any region of it. What this pass does not state is 
 flush is expressed on the wire, which belongs to the decode seam and is deferred with
 it.
 
-**A live restore of state is a flush trigger**, on the operator's ruling of 2026-10-02 on
+**A live restore of state is a flush trigger**, on the operator's ruling of
+2026-10-02 on
 #58: when the harness swaps the state member's store for a save point while the agent
 stays loaded, the cache describes the old context, so the harness flushes it with
 `keep = 0` through the decode contract's existing cut, which clears everything but the

@@ -2053,7 +2053,8 @@ of a file the operator edits. That is the memory leg, out of scope per
 `weaver-agent-PRD` section 9 and not built here, and nothing in this crate is shaped for
 it: the choice stays two-way by binding, the seed or the preloaded store's answer, and
 a new source arrives as that leg's own act. The run's session identity is the open's
-`session` in every case. A refused open is a refused enter, returned through the fan-out's after-load failure so the authored
+`session` in every case. A refused open is a refused enter, returned through the
+fan-out's after-load failure so the authored
 bracket stands for the leave to unwind, the aggregate naming the decode seam as where
 the fan-out stopped. **Under a restoring load the open carries the restored conversation
 beside the identity**, per the ruling of 2026-09-04 on issue #432: the harness asks the

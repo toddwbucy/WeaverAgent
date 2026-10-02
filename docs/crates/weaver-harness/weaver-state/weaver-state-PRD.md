@@ -240,7 +240,8 @@ a record the agent cannot reach either. Which sessions an answer reaches is the
 asking loop's to say, the store holding one database for the agent and no boundary of
 its own between its sessions, and the asks standing today keep the session bound their
 definitions carry, per `weaver-harness-state-contract` section 2. The memory leg, which
-will read from these save points, is still out, and nothing here lays in for it: no export
+will read from these save points, is still out, and nothing here lays in for it: no
+export
 surface a future act would wish existed, per the no-reserved-slots rule.
 
 **Losing the member loses the derivative and never the account.** State can
@@ -360,7 +361,8 @@ where state came from. A restore and a full rebuild to the same position arrive 
 same holdings by construction, the save point being a cache of what the replay
 produces, and `weaver-state-Spec` section 5 names the instrument that holds them equal.
 
-**A live restore swaps state without unloading**, on the operator's ruling of 2026-10-02.
+**A live restore swaps state without unloading**, on the operator's ruling of
+2026-10-02.
 State lives in this member's process, apart from the models, so a save point restores
 while the agent stays loaded: the member's in-memory store is replaced from it, the SPU
 stays resident with its decoder and classifier untouched, and the hot KV cache is
