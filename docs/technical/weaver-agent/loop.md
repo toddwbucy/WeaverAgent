@@ -136,7 +136,7 @@ recorded in each of their charters:
   of a message and never on anything inside it.
 
 The loop file states the same thing from the inside: **the trigger, the recall
-depth, the quote budget, the memory conventions, and what every injected line says
+depth, the quote budget, the state conventions, and what every injected line says
 are the loop's alone, and the framework holds no threshold and no convention
 anywhere.**
 

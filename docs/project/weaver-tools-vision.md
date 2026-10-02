@@ -251,7 +251,7 @@ The two axes cross rather than nest, and the corners are all occupied except one
   of 2026-08-07, which files a tool by whether it binds a listening port rather than
   by where its bytes go. None of those three binds one, so all three are internal and
   dispatched inward, and what remains here is the service that listens.
-- **Autonomic and dispatched inward.** A memory surfacing because the loop's
+- **Autonomic and dispatched inward.** Held state surfacing because the loop's
   condition was met, entering the decoder's path without the model having asked.
 - **Autonomic and dispatched outward** is the empty corner. The loop reaching the
   world unprompted is out of scope with the rest of autonomic action.
@@ -264,8 +264,8 @@ flips at once, while every initiation claim stays true.
 
 **One consequence is a latency requirement rather than a taxonomy note.** An elected
 inward action must not leave the body, because an agent that reasons its way to
-asking what it remembers should get an answer at close to the speed of the same
-memory surfacing autonomically. Both ride the organ's own channels. Neither is gate
+asking what it holds should get an answer at close to the speed of the same
+state surfacing autonomically. Both ride the organ's own channels. Neither is gate
 traffic, and a design that sent elected recall out through the gate and back would be
 bounded by the world for an answer that never left the machine.
 
