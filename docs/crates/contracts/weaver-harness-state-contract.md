@@ -302,19 +302,23 @@ carries the comparison, and custody states the surface and never judges it, per 
 like `shape`.
 
 **The `identity` ask returns the session's seated prefix as custody holds it**, added
-2026-09-04 against the ruling of `weaver-state-PRD` section 4 that the identity is the
-session's first holding: the harness asks once at every enter, after this seam stands
-and before the decode session opens, and what answers is what the open seats. The ask
+2026-09-04 and narrowed on the operator's ruling of 2026-10-02 on #58's fifth question:
+the prompt file is authoritative at every serving load, so the harness seats it and
+asks nothing for it, and **the ask governs a diagnostic load alone**, where the
+preloaded record's identity is what the open seats, per `weaver-harness-Spec` section
+6.1 and the ruling of 2026-10-02 on #57's sixth question. There the harness asks once at
+the enter, after this seam stands and before the decode session opens. The ask
 carries no members. The answer carries one member, `messages`, the turnless
 `message.system` events of the declared session's most recent run that holds any, in
 landing order, because every load seats the prefix and the prefix door records it again,
 so the session holds one prefix per run and the one in force is the newest run's, each
 served as the distillate's own shape, envelope and pairs, the pairs being the prefix's
 payload whole because that kind crosses the tee whole under every election. An empty
-list is an answer and not a miss: it says the store holds no prefix for the session,
-which is the first load, and the harness seeds from the declaration. **This is the one
-ask the dead-peer clause of section 5 does not convert**: a missed answer refuses the
-enter, because a run whose bounding cannot be read is not a run with no bounding. The
+list is an answer and not a miss: it says the preloaded record holds no prefix for the
+session, and the open seats the empty identity. **Under a diagnostic load this is the
+one ask the dead-peer clause of section 5 does not convert**: a missed answer refuses
+the enter, because a replay whose bounding cannot be read is not a replay with no
+bounding. The
 ask answers immediately, holding no event and parking never, like `shape`.
 
 **The `snapshot` ask writes the holdings and answers the position they cover**, added
@@ -400,9 +404,10 @@ turn without the fact, and no retry follows on this standing of the channel. A m
 ask is dropped by the custodian without an answer, which the harness's bound converts
 into the same missing-answer outcome, and a malformed answer is dropped by the harness
 to the same effect. In every one of these the record remains whole and the next load's
-channel asks again against holdings that never moved. The `identity` ask of section 2 is
-the stated exception, ruled 2026-09-04: its miss refuses the enter rather than costing
-an answer, the turn it would cost being every turn of the run.
+channel asks again against holdings that never moved. The `identity` ask of section 2 at
+a diagnostic load is the stated exception, ruled 2026-09-04 and narrowed 2026-10-02: its
+miss refuses the enter rather than costing an answer, the turn it would cost being every
+turn of the replay.
 
 ## 6. What neither party may do
 

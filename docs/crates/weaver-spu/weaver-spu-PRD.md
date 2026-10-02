@@ -141,6 +141,17 @@ so cannot protect or corrupt any region of it. What this pass does not state is 
 flush is expressed on the wire, which belongs to the decode seam and is deferred with
 it.
 
+**A live restore of state is a flush trigger**, on the operator's ruling of 2026-10-02 on
+#58: when the harness swaps the state member's store for a save point while the agent
+stays loaded, the cache describes the old context, so the harness flushes it with
+`keep = 0` through the decode contract's existing cut, which clears everything but the
+identity prefix, permanent from open to release, and the next turn starts on the
+restored context. This crate does nothing new for it: the decoder, the classifier and
+their residency stay as they were, and a larger cut the loop chooses is the same two
+calls. A save point that needs a different identity prefix is served by the session
+closed and reopened with the new prefix, one prefix recompute with the weights
+resident, never by a release and a fresh admission.
+
 **The cache ends with the residency and never outlives it.** A release frees the
 device, and the cache is on the device, so nothing survives a release to be reattached
 to a later admission. This is the same fact as residency ending at unload, stated once

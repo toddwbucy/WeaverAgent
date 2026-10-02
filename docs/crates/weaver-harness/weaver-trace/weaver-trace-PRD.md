@@ -356,6 +356,16 @@ that act names and shapes it in full and adds it here and to every contract whos
 vocabulary names the set. No kind is named ahead of its emitter, per apex section 9's
 rule against a reserved slot.
 
+**Where state came from is a fact on the record too**, on the operator's ruling of
+2026-10-02 on #58's fourth question. Taking a save point, restoring one, at a load or
+live, and resetting to one after an unclean stop each author an event naming which save
+point, by digest, and which trace position it covers, so a rebuild from this record
+arrives where the store did and honours every reset. A save point the operator edited
+is marked operator-supplied on the event that restores it, its digest recorded and the
+file kept as an input. A live restore's KV flush is recorded as the `flush` it is. Each
+of these kinds is named and shaped by the act that lands its emitter, the save-point
+act, on the rule above, and added here then.
+
 **The record declares the posture it was written in.** Section 3.1's `load`
 event carries every diagnostic election of the load by name, because
 without it a record holding no field is indistinguishable from a record
