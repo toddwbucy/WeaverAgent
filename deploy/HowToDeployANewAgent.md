@@ -211,9 +211,17 @@ first.
 `deploy/decommission.sh` does not yet understand the per-agent layout and must not be
 run on a box on it until toddwbucy/WeaverAgent#35 lands. Take an agent down by hand: the pieces of section 0 are removed in reverse: unload; remove its root
 `/etc/weaver/admin/<name>/`, which ends its admission; for postgres, drop the database,
-then the role, and remove its two authentication lines; `userdel -r` both accounts, and
-`groupdel weaver-<name>-trace` (a group of its own that `userdel` leaves, the operator
-still in it);
+then the role, and remove its two authentication lines; `userdel -r` both accounts, then
+delete the three groups the operator was added to, which `userdel` leaves while a member
+remains and which a later `useradd --user-group` of the same name would refuse on;
 remove the territory and the log directory `/var/log/weaver/<name>/`. Archive the
 territory, the root and the log before removing them, since the trace is the one
 record of what the agent did and the log the one record of what was done to it.
+
+The groups, once both accounts are gone:
+
+```sh
+for g in weaver-<name> weaver-<name>-state weaver-<name>-trace; do
+  getent group "$g" >/dev/null && sudo groupdel "$g"
+done
+```
