@@ -646,7 +646,9 @@ The chain, in order:
 
 **Every organ is one agent's own**, on the operator's ruling of 2026-10-01: started
 under that agent's identity, constituted by that agent's configuration, and serving
-no other agent. An organ is a component of one agent and not a service of the host.
+no other agent. Admin is the one organ that does not run under the agent's identity:
+it is the operator's root invocation against that one agent, reading only the agent's
+own root, so it is that agent's by what it acts on rather than by its uid. An organ is a component of one agent and not a service of the host.
 A second agent gets its own admin, SPU, gate, state member, loop and harness, so two
 agents never share a process, everything an agent does is tied to its own
 processes, and the operating system enforces the identity between them.
