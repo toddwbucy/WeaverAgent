@@ -46,7 +46,8 @@ group in one shell.
 - The artifact is on the box, under `/opt/weaver/models`, and its hash is known. An
   agent's identity is its artifact as much as its prompt; record the sha256 in the run
   log with the declaration's.
-- The name collides with nothing: `id weaver-<name>` fails, `~/.weaveragent/weaver-<name>`,
+- The name collides with nothing: `id weaver-<name>` and `getent group weaver-<name>-trace`
+  fail, `<agent-directory>/weaver-<name>` (`/var/lib/weaver-agent/weaver-<name>` by default),
   `/etc/weaver/admin/<name>` and `/var/log/weaver/<name>` are absent, and for a
   postgres election the role and database do not exist. The script checks all of this
   and refuses rather than merging, because a half-made agent that looks whole is worse
@@ -98,7 +99,9 @@ root from the stack record, with the root made last because it is the admission:
 sudo useradd --system --shell /usr/sbin/nologin --create-home --user-group weaver-<name>
 sudo usermod -aG weaver-<name> "$USER"
 sudo chmod 2750 /home/weaver-<name>
-sudo install -d -o root -g "$USER" -m 2750 /var/lib/weaver-agent/weaver-<name>
+T=/var/lib/weaver-agent/weaver-<name>      # the stack record's agent-directory, then the account
+[ ! -e "$T" ] || { echo "REFUSED: $T already exists"; exit 1; }   # install -d would merge
+sudo install -d -o root -g "$USER" -m 2750 "$T"
 sudo install -d -o root -g root -m 0750 /var/log/weaver/<name>
 R=/etc/weaver/admin/.<name>.partial
 sudo install -d -o root -g root -m 0755 "$R"
@@ -145,7 +148,7 @@ denied-uids = []
 
 [trace-sink]
 kind = "file"
-path = "/home/todd/.weaveragent/karl/trace.ndjson"
+path = "/var/lib/weaver-agent/weaver-karl/trace.ndjson"
 create = true
 
 [state-store]
@@ -208,7 +211,9 @@ first.
 `deploy/decommission.sh` does not yet understand the per-agent layout and must not be
 run on a box on it until toddwbucy/WeaverAgent#35 lands. Take an agent down by hand: the pieces of section 0 are removed in reverse: unload; remove its root
 `/etc/weaver/admin/<name>/`, which ends its admission; for postgres, drop the database,
-then the role, and remove its two authentication lines; `userdel -r` both accounts;
+then the role, and remove its two authentication lines; `userdel -r` both accounts, and
+`groupdel weaver-<name>-trace` (a group of its own that `userdel` leaves, the operator
+still in it);
 remove the territory and the log directory `/var/log/weaver/<name>/`. Archive the
 territory, the root and the log before removing them, since the trace is the one
 record of what the agent did and the log the one record of what was done to it.
