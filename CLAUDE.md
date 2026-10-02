@@ -38,7 +38,7 @@ All of these repositories were **public** on 2026-09-30. Check rather than assum
 
 **A deployable proto-stateful agent that completes a turn end to end against a real
 local model and emits a clean, turn-bracketed, correctly-custodied trace.** The trace is
-the primary artifact, not a diagnostic. `docs/crates/weaver-agents-PRD.md` is the apex:
+the primary artifact, not a diagnostic. `docs/crates/weaver-agent-PRD.md` is the apex:
 the deliverable, the five invariants, the lifecycle and the enforcement posture every
 other document answers to.
 
@@ -274,7 +274,7 @@ Commit subjects carry `code:`, `docs:` or `process:`.
 
 ## Enforcement
 
-Per `weaver-agents-PRD` section 11, what actually catches defects:
+Per `weaver-agent-PRD` section 11, what actually catches defects:
 
 - **Compile-time pins** for invariants that are type properties. A runtime test cannot
   pin the absence of a trait impl.

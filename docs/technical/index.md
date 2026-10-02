@@ -16,7 +16,7 @@ quarter of 2027. These pages are published as a dated snapshot of a system under
 construction, and each says on its face what it does not yet have.
 
 **The directories carry the boundary, and one level down they carry
-membership.** `weaver-agents/` holds the agent domain: nine crate papers, the two
+membership.** `weaver-agent/` holds the agent domain: nine crate papers, the two
 surfaces an operator writes against, and `weaver-internal/` beneath it for the
 callables that crate mounts. The frontend domain, `weaver-web`, left this repository on
 2026-09-26 for `WeaverTools_Project/weaver-web/` beside it, reaching an agent only
@@ -35,39 +35,39 @@ governs it, and where to start depending on what you came for.
 
 Two crates every domain draws from and no domain contains.
 
-- [weaver-types](weaver-agents/weaver-types.md) - the declaration, peer identity, and
+- [weaver-types](weaver-agent/weaver-types.md) - the declaration, peer identity, and
   the wire vocabulary loop 0 speaks
-- [weaver-traits](weaver-agents/weaver-traits.md) - messages, roles, permission modes,
+- [weaver-traits](weaver-agent/weaver-traits.md) - messages, roles, permission modes,
   and the tool surface
 
 ## The organs
 
 A crate that governs a domain and holds a two-initiator channel with the harness.
 
-- [weaver-harness](weaver-agents/weaver-harness.md) - the switchboard, the loops, and
+- [weaver-harness](weaver-agent/weaver-harness.md) - the switchboard, the loops, and
   sole authorship of the trace
-- [weaver-spu](weaver-agents/weaver-spu.md) - model residency, two decode engines, and
+- [weaver-spu](weaver-agent/weaver-spu.md) - model residency, two decode engines, and
   the measurement that rides a generation
-- [weaver-gate](weaver-agents/weaver-gate.md) - the agent's boundary, and the shell as
+- [weaver-gate](weaver-agent/weaver-gate.md) - the agent's boundary, and the shell as
   its own outbound verb
-- [weaver-admin](weaver-agents/weaver-admin.md) - lifecycle authorization, boundary
+- [weaver-admin](weaver-agent/weaver-admin.md) - lifecycle authorization, boundary
   verification, and custody of the sink
-- [Reproducibility, confirmed in the lab](weaver-agents/reproducibility.md) - a
+- [Reproducibility, confirmed in the lab](weaver-agent/reproducibility.md) - a
   recorded turn reissued from the trace alone reproduced bit-exact across full
   reloads, with the method and the scope stated
 
 ## Under the harness's domain
 
-- [weaver-trace](weaver-agents/weaver-trace.md) - the recorder, and the working
+- [weaver-trace](weaver-agent/weaver-trace.md) - the recorder, and the working
   structure the loop reasons over
-- [weaver-state](weaver-agents/weaver-state.md) - the session custodian, sqlite behind
+- [weaver-state](weaver-agent/weaver-state.md) - the session custodian, sqlite behind
   the member's own channel
 
 ## Neither
 
-- [weaver-internal](weaver-agents/weaver-internal.md) - callables the loop dispatches
+- [weaver-internal](weaver-agent/weaver-internal.md) - callables the loop dispatches
   inward, and never through the gate
-  - [The calculator](weaver-agents/weaver-internal/calculator.md) - its first and
+  - [The calculator](weaver-agent/weaver-internal/calculator.md) - its first and
     so far only member, and the reason the perturbation mechanic a diagnostic
     instrument would need already exists
 
@@ -78,9 +78,9 @@ written per turn and takes effect on the next crossing. Extending the floor is a
 build-time change** and is grouped here because both are places a person decides
 something rather than places the framework does.
 
-- [The loop](weaver-agents/loop.md) - loop 0 and loop 1, the seat's nine calls, the one
+- [The loop](weaver-agent/loop.md) - loop 0 and loop 1, the seat's nine calls, the one
   crossing, and everything the framework refuses to decide
-- [Extending the program](weaver-agents/extending.md) - the floor, the seams, a new
+- [Extending the program](weaver-agent/extending.md) - the floor, the seams, a new
   organ, and where the framework's requirements stop
 
 ## The frontend

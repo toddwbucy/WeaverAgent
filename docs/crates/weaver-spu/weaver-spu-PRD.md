@@ -9,7 +9,7 @@ later releasing it.
 
 **Date filed:** 2026-07-31
 **Document ID:** `weaver-spu-PRD`
-**Parent:** `weaver-agents-PRD`
+**Parent:** `weaver-agent-PRD`
 **Companion contract:** `weaver-harness-spu-contract`, drafted with this document
 **Editorial:** Per the Working Rules.
 **Landing PR:** #734

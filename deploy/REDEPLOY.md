@@ -60,7 +60,7 @@ the runbook is what gets amended.
 > **`decommission.sh` does not yet understand the per-agent layout.** It was written for
 > the box-wide layout before 2026-10-01 (one `/etc/weaver/admin` with an `allow-list`).
 > **Do not run it on a box migrated to `/etc/weaver/admin/<agent>/` roots** until
-> toddwbucy/WeaverAgents#35 lands; until then take agents down by hand, per
+> toddwbucy/WeaverAgent#35 lands; until then take agents down by hand, per
 > `HowToDeployANewAgent.md` section 7. On a box still on the box-wide layout it runs as
 > described below.
 
@@ -115,7 +115,7 @@ membership of `video` and `render` (the agents' memberships go with their accoun
 
 ## 3. Build and install
 
-From the WeaverAgents tree, on the pinned toolchain. Give the build its own target
+From the WeaverAgent tree, on the pinned toolchain. Give the build its own target
 directory if the box shares one with a gate.
 
 ```sh

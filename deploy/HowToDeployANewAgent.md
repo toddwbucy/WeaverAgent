@@ -5,7 +5,7 @@ redeploy, where m1 and karl were made this way and proven to load; the log of th
 `docs/project/redeploy-2026-09-30-thinkpad.md`. Standing the stack itself up is
 `REDEPLOY.md`, and this document starts where that one ends.
 
-Every command runs from the WeaverAgents tree. `<name>` is the agent's name: a unix
+Every command runs from the WeaverAgent tree. `<name>` is the agent's name: a unix
 user, a database role, a database and a directory, so `create-agent.sh` takes
 lowercase letters and digits, 2 to 16 characters. Paths below are the defaults; a
 box's real values are in the stack record `/etc/weaver/stack/`, one file per key,
@@ -80,7 +80,7 @@ a plain system identity, `permission-mode = "deny"`, an empty tool set, surprisa
 the sink in the territory, and the store's engine (with its database and role for
 postgres). Edit `/etc/weaver/admin/<name>/agent.toml` under sudo before validating if
 the agent wants another prompt, a wider context, or `ask`; the fields are in
-`docs/technical/weaver-agents/agent-declaration.md`, and nothing defaults, so an
+`docs/technical/weaver-agent/agent-declaration.md`, and nothing defaults, so an
 absent or misspelled key refuses the parse by name.
 
 ## 3. An agent without a store
@@ -202,7 +202,7 @@ first.
 ## 7. Taking an agent down
 
 `deploy/decommission.sh` does not yet understand the per-agent layout and must not be
-run on a box on it until toddwbucy/WeaverAgents#35 lands. Take an agent down by hand: the pieces of section 0 are removed in reverse: unload; remove its root
+run on a box on it until toddwbucy/WeaverAgent#35 lands. Take an agent down by hand: the pieces of section 0 are removed in reverse: unload; remove its root
 `/etc/weaver/admin/<name>/`, which ends its admission; for postgres, drop the database,
 then the role, and remove its two authentication lines; `userdel -r` both accounts;
 remove the territory and the log directory `/var/log/weaver/<name>/`. Archive the

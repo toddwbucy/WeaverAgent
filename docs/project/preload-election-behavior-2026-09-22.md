@@ -203,7 +203,7 @@ operator ownership of merge remain unchanged.
 
 ## Related claims retained and enforcement owed
 
-The state-claim sentences in `weaver-agents-PRD` section 8 and
+The state-claim sentences in `weaver-agent-PRD` section 8 and
 `weaver-diagnostic-PRD` section 4 remain unchanged: both constrain a claim to
 reproduce the source state, while an explicitly renamed diagnostic projection
 makes no such claim. The loop document now distinguishes that diagnostic

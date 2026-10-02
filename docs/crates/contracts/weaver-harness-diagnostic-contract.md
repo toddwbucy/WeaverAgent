@@ -122,7 +122,7 @@ and no agreement of this seam's.
 **It governs one record and never the other.** A serving binding authors
 through `weaver-trace` under its own contract and reaches this seam at no
 point, and a diagnostic binding authors here and reaches that one at no
-point, per `weaver-agents-PRD` section 6 as ruled 2026-08-24: the kind
+point, per `weaver-agent-PRD` section 6 as ruled 2026-08-24: the kind
 selects the mechanism, and the selection happens once, at the fan-out, from
 the kind the enter declared.
 

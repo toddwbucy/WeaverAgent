@@ -7,7 +7,7 @@ terms under the per-charter rule of 2026-08-23, conforming to the pattern the
 **Date filed:** 2026-08-24
 **Document ID:** `weaver-analysis-PRD`
 **Parent:** the WeaverTools suite, whose governing document is deliberately
-not yet written, per `weaver-agents-PRD` section 0. The graph parent edge
+not yet written, per `weaver-agent-PRD` section 0. The graph parent edge
 names the `WeaverTools` system node, and the header and the edge name the
 same thing.
 **Editorial:** Per the Working Rules.
@@ -69,7 +69,7 @@ of the reader and naming the reader as never asking the emitter for anything,
 so the Document Format's one-asking-party branch has no answer here. **That
 page settles it where the silence is**, in its Parties clause, on the
 initiating side, which is where the corpus already puts this crate's other
-seam, per `weaver-agents-PRD` section 6 and `weaver-diagnostic-PRD` section 6.
+seam, per `weaver-agent-PRD` section 6 and `weaver-diagnostic-PRD` section 6.
 **What crosses is not argued in this charter**, the contract holding the shape
 and `weaver-analysis-Spec` section 5 representing it, and section 4 names the
 clause this charter owes.
@@ -90,7 +90,7 @@ governs nothing inside the agent, and the harness has no channel to it, no
 knowledge of it, and no behavior conditioned on its presence.
 
 **Not a member of the agent domain.** It parents to the suite rather than to
-`weaver-harness`, per `weaver-agents-PRD` section 0's rule that crates outside
+`weaver-harness`, per `weaver-agent-PRD` section 0's rule that crates outside
 the agent boundary do not enter that roster. `weaver-diagnostic` went the
 other way in the same act and for the opposite reason.
 

@@ -587,7 +587,7 @@ Spec's section 9 item settles with it.
 
 **Mirroring is what lets one call site serve both mechanisms**, which is the
 election's whole argument: the harness holds the two recorders under one shape and
-the binding's kind selects the arm, per `weaver-agents-PRD` section 6, so the
+the binding's kind selects the arm, per `weaver-agent-PRD` section 6, so the
 authorship path does not fork per site. A surface of its own would have made every
 authoring site in the harness ask which record it was writing.
 

@@ -503,7 +503,7 @@ is a state act before it is a variant. `binding_kind` may be absent because
 `weaver-types-PRD` section 2.1 rules what absence means, a serving binding, so a
 declaration written before the member existed still parses and still means what it
 meant, on the same footing as `loop_file` above. The enum is closed at two cases because
-`weaver-agents-PRD` section 6 names exactly two kinds, and a third kind is an apex act
+`weaver-agent-PRD` section 6 names exactly two kinds, and a third kind is an apex act
 before it is a variant. `gate_instruction` is an `Option` for a reason the three above
 do not share: presence follows the resolved kind rather than standing alone, a serving
 binding requiring it and a diagnostic binding excluding it, per the contract's shape
@@ -513,7 +513,7 @@ per `weaver-admin-Spec` section 4. **`trace_sink` is required under either kind*
 briefly was not: an act of 2026-08-24 made it conditional on the reading that a
 diagnostic binding authors nothing, and the operator's ruling of the same date replaced
 that reading with a composition, every binding authoring a record and the kind selecting
-the mechanism rather than the presence, per `weaver-agents-PRD` section 6. What the
+the mechanism rather than the presence, per `weaver-agent-PRD` section 6. What the
 declaration names is a sink, and what the run writes into it follows the kind without
 the field moving. Every other field is required. The residual-readout election is what a
 builder will reach to default, to off, and it is exactly the one that must not: an

@@ -10,7 +10,7 @@ conforms to.
 
 **Date filed:** 2026-07-28
 **Document ID:** `weaver-harness-PRD`
-**Parent:** `weaver-agents-PRD`
+**Parent:** `weaver-agent-PRD`
 **Editorial:** Per the Working Rules.
 **Landing PR:** #623
 
@@ -423,7 +423,7 @@ contracts. **It links no other internal crate**, the second record mechanism hav
 joined that list 2026-08-27 with the act that wrote its contract. The four are one
 dependency surface and two classifications, which is what the blocks below project:
 two `floor-link` records and two `seam` records tagged `link`. Calling all four
-floor vocabulary would use the word `weaver-agents-PRD` section 5.1 reserves for
+floor vocabulary would use the word `weaver-agent-PRD` section 5.1 reserves for
 what every domain draws from and no domain contains. That is the whole
 dependency surface, and it is checkable against this list.
 
@@ -444,7 +444,7 @@ tag: socket
 
 **A third member joins the trace and is linked the same way, its contract landed
 2026-08-27.** `weaver-diagnostic` is the mechanism this crate authors a
-diagnostic-trace through, per `weaver-agents-PRD` section 6 as ruled
+diagnostic-trace through, per `weaver-agent-PRD` section 6 as ruled
 2026-08-24, standing to a diagnostic binding as `weaver-trace` stands to a
 serving one. It is linked rather than dialed on the trace's own ground: apex
 section 5.1 forbids a behavior reached by path dependency **across a process

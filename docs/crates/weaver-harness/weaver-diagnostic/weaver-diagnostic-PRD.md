@@ -18,7 +18,7 @@ terms under the per-charter rule of 2026-08-23, conforming to the pattern the
 mechanism**, standing to a replay exactly as `weaver-trace` stands to a turn.
 It is chartered by the operator's ruling of 2026-08-23, carried by the epic
 that tracked it, and it is the second half of the taxonomy promotion the
-operator split on 2026-08-24: the binding kinds landed in `weaver-agents-PRD`
+operator split on 2026-08-24: the binding kinds landed in `weaver-agent-PRD`
 section 6 and the acts of that date, and the loop class lands here.
 
 **It does not produce the diagnostic-trace.** The harness authors. This crate
@@ -106,7 +106,7 @@ it departed.
 
 **Not a memory leg.** It renders a record and reads none, `weaver-analysis`
 holding the reading. What it renders enters no agent's state, no prompt, and
-no working structure, and statefulness returns through `weaver-agents-PRD`
+no working structure, and statefulness returns through `weaver-agent-PRD`
 section 9's door or not at all. The sentence this replaces had this crate
 reading records and writing analysis artifacts, which was true of the
 consumer it was chartered as for one day and is true of nothing it does now.
@@ -121,7 +121,7 @@ The diagnostic substrate is defined by three refusals, against the production
 substrate's grants:
 
 - **Gate never starts.** A diagnostic binding declares no Gate, per
-  `weaver-agents-PRD` section 6, so nothing enters from outside and the
+  `weaver-agent-PRD` section 6, so nothing enters from outside and the
   wrong arrangement is unrepresentable rather than guarded against.
 - **The working structure is preloaded from a finished trace** and read
   positionally as the source of prompts, rather than accumulating. Same
@@ -170,7 +170,7 @@ assumed**: two certified column replays of one source differenced to
 passive-read comparison holds the token path and the vectors exact alike
 where the device model matches, the report naming that model per the
 licence rule. Across device models the comparison keeps the GPU float
-tolerance of `weaver-agents-PRD` section 8, unmeasured and bounded by
+tolerance of `weaver-agent-PRD` section 8, unmeasured and bounded by
 issue #346's finding that replay is bit-exact within a card model and not
 across one. A readout from an
 uncertified replay is a picture of an unknown run.
@@ -179,13 +179,13 @@ uncertified replay is a picture of an unknown run.
 nothing unless the input was the same one, so the certification checks the
 input first, established from the record: input token identifiers, output
 token identifiers, model identity with its weights hash, sampling
-parameters, and the prompt-block partition, per `weaver-agents-PRD` section
+parameters, and the prompt-block partition, per `weaver-agent-PRD` section
 8, with the template's identity traveling with them so a replay re-feeds
 rather than re-renders. The same conversation rendered under a later
 template is a different prompt, and a replay that re-rendered would compare
 two different runs and find them different. **A claim about the state rests
 on one fact beyond that list, claim-relative the same way: the tee's
-election**, per `weaver-agents-PRD` section 8. It is the rule that decided
+election**, per `weaver-agent-PRD` section 8. It is the rule that decided
 what the original agent's state held, so a replay preloaded under a
 different one rebuilds a session that never ran, and a record written before
 the member existed fails a state claim while its token path still stands.
@@ -248,7 +248,7 @@ record the replay runs from.
 
 **The record runs one way only, and the other product is authored through this
 crate.** A
-diagnostic binding writes no trace, per `weaver-agents-PRD` section 6 as
+diagnostic binding writes no trace, per `weaver-agent-PRD` section 6 as
 amended 2026-08-24, so `weaver-trace` has nothing to do in a replay at either
 end: it is not read, because a reader of a finished record is downstream of a
 file rather than a party to that crate, and it is not written, because a

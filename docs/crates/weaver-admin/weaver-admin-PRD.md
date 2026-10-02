@@ -7,7 +7,7 @@ reshaped this charter are recorded in it rather than pending against it, and sec
 
 **Date filed:** 2026-07-29
 
-**Parent:** `weaver-agents-PRD`
+**Parent:** `weaver-agent-PRD`
 **Companion contract:** `weaver-admin-harness-contract`, written with this document
 **External boundaries:** `weaver-admin-operator-contract` for the record's exit and
 `weaver-admin-systemd-contract` for the unit, both parties outside the program
@@ -184,7 +184,7 @@ would serve no residency at all.
 **Which doors the member stands is this crate's to say, because the kind is.**
 A diagnostic binding stands the preload door of
 `weaver-analysis-state-contract` and a serving binding stands none, per
-`weaver-agents-PRD` section 6 as ruled 2026-08-24. The member holds no opinion
+`weaver-agent-PRD` section 6 as ruled 2026-08-24. The member holds no opinion
 about the binding and learns which doors to stand from the party that starts
 it, per `weaver-state-Spec` section 4, which is the same division the rest of
 this charter runs on: this crate resolves what the declaration meant, once, and
@@ -1182,7 +1182,7 @@ close-on-exec mechanism, and the drop-first privilege window left this way.
 
 **Four more left on 2026-07-31.** The apex 5.1 restatement and the 5.4 definition
 landed together, taken early as a named exception to Working Process section 7 and
-recorded as such in `weaver-agents-PRD` section 5. The five wire definitions landed in
+recorded as such in `weaver-agent-PRD` section 5. The five wire definitions landed in
 `weaver-types-PRD` section 2.3 rather than section 4, which is where this register
 said they would go, because 2.3 is where that charter keeps definitions and 4 is where
 it keeps the departure argument. Both were edited. The harness clause on opening

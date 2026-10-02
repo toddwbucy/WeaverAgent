@@ -1051,7 +1051,7 @@ question the graph answered first**, which is where a document and the code
 disagree about a count, a file list, or a name. That question does not wait on
 the architecture settling, and the audits of 2026-09-13 and 2026-09-14 are what
 it produced. Both are dated readings rather than members of the set.
-`weaver-agents-PRD` section 11 carries the same retirement, landed in the same
+`weaver-agent-PRD` section 11 carries the same retirement, landed in the same
 act.
 
 **The seat shifted 2026-08-19, on the operator's direction: from building

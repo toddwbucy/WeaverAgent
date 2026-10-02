@@ -1135,7 +1135,7 @@ either is the count, the descriptor, and that a run opens with an authored event
 
 **Which recorder it is follows the kind, and nothing else in the walk does.**
 Both kinds receive a descriptor and author a record into it, per
-`weaver-agents-PRD` section 6 as ruled 2026-08-24, and the kind selects the
+`weaver-agent-PRD` section 6 as ruled 2026-08-24, and the kind selects the
 mechanism: `weaver-trace`'s recorder under a serving binding and
 `weaver-diagnostic`'s under a diagnostic one. This crate is the sole writer
 either way and the selection is made once, here, from the payload's binding.

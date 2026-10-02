@@ -1,4 +1,4 @@
-# weaver-agents - Domain PRD
+# weaver-agent - Domain PRD
 
 **Status:** MERGED 2026-07-28. RATIFIED 2026-08-04 in the set-wide act, per the
 operator's ruling of that date: the whole set mapped into the graph on the HADES
@@ -13,7 +13,8 @@ charters currently say. The set-wide form was a requirement of its moment, when
 nothing yet existed to be consistent with, rather than a standing obligation.
 
 **Date filed:** 2026-07-28
-**Document ID:** `weaver-agents-PRD`
+**Document ID:** `weaver-agent-PRD`, renamed from WeaverAgents / weaver-agents-PRD on
+2026-10-02 (operator's ruling, WeaverTools#6)
 **Editorial:** Per the Working Rules.
 **Landing PR:** #713
 
@@ -21,7 +22,7 @@ nothing yet existed to be consistent with, rather than a standing obligation.
 
 ## 0. What this document is
 
-**This is the apex of the weaver-agents domain, not of the suite.** Every crate PRD
+**This is the apex of the weaver-agent domain, not of the suite.** Every crate PRD
 inside that domain refines it, every Spec refines a crate PRD, and every contract is
 derived from the PRDs of its parties. Coherence across the domain is checked by
 reading each document against this one rather than by reading pairs against each
@@ -78,14 +79,14 @@ tag: ratified
 **The graph does not yet carry the domain level this document now names, and that is
 stated rather than quietly deferred.** `WeaverTools` remains the one `system` node, the
 seven domain roots parent to it, and `weaver-trace`, `weaver-state`, and
-`weaver-diagnostic` parent to `weaver-harness` as members. There is no `weaver-agents`
+`weaver-diagnostic` parent to `weaver-harness` as members. There is no `weaver-agent`
 node.
 
 Inserting one needs a decision this document cannot take alone. Document Format
 section 3 declares exactly one `system` node, gives `crate` to "every crate,
 whether a domain root or a member of one," and carries no kind for a level between
 them. It also holds that the parent edges "reproduce the directory tree exactly,"
-and `crates/` has no `weaver-agents/` directory to reproduce. **So the level lands
+and `crates/` has no `weaver-agent/` directory to reproduce. **So the level lands
 either as a Format act adding a kind, or with the crate tree gaining the
 directory,** and until one of those happens the graph answers the older shape while
 this document answers the newer one. A reader meeting both should trust the graph

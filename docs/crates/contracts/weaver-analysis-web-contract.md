@@ -58,7 +58,7 @@ where there is none, exactly as it has none on an organ channel, and a question
 its branches do not reach is settled here rather than reasoned around in a
 charter, per that document's section 7. **The initiating side declares**, which
 is where the corpus already puts the other seam this emitter holds, per
-`weaver-agents-PRD` section 6 and `weaver-diagnostic-PRD` section 6. So the
+`weaver-agent-PRD` section 6 and `weaver-diagnostic-PRD` section 6. So the
 record is `weaver-analysis-PRD` section 1's as of 2026-09-16, and the reader's
 charter carries none. Nothing about the boundary moves with it: the parties,
 the direction and the socket are what the sections below state.

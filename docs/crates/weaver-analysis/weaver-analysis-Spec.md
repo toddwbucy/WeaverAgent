@@ -280,7 +280,7 @@ the holdings are what that rule produced, so recovering it from them would be
 reading a projection to learn what did the projecting. Since this crate's election
 decides what reaches the holdings at all, an election omitting `load` would land a
 session whose certification cannot check the rule that built it, which is the failure
-`weaver-agents-PRD` section 8 added the criterion to prevent. **The source's resident
+`weaver-agent-PRD` section 8 added the criterion to prevent. **The source's resident
 edits, a fault's case and the recall are elected too**, as of 2026-09-26: `flush` with
 `resident_before` and `resident_after`, and `elision` with `from`, `to` and both counts,
 because `diagnostic-replay-loop` section 2's walk reproduces each where it fell and

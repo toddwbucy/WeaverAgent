@@ -599,7 +599,7 @@ crates/weaver-state/src/engine/postgres.rs
 The eight differing document paths were:
 
 ```text
-docs/crates/weaver-agents-PRD.md
+docs/crates/weaver-agent-PRD.md
 docs/crates/weaver-harness/Loops/basic-inference-loop.md
 docs/crates/weaver-harness/Loops/diagnostic-replay-loop.md
 docs/crates/weaver-harness/weaver-harness-Spec.md
@@ -620,7 +620,7 @@ update with `git show f03142a:<path>`.
 
 [tool-grant]: ../../crates/weaver-harness/src/tools.rs
 [diagnostic-gate]: ../../crates/weaver-analysis/src/reading.rs
-[reproducibility]: ../technical/weaver-agents/reproducibility.md
+[reproducibility]: ../technical/weaver-agent/reproducibility.md
 [readout]: ../../crates/weaver-spu/src/readout.rs
 [web-main]: ../../crates/weaver-web/src/bin/weaver-web.rs
 [conversation]: ../../crates/weaver-web/src/store/conversation.rs
@@ -635,5 +635,5 @@ update with `git show f03142a:<path>`.
 [trace-writer]: ../../crates/weaver-trace/src/writer.rs
 [web-charter]: ../crates/weaver-web/weaver-web-PRD.md
 [analysis-parser]: ../../crates/weaver-analysis/src/record.rs
-[apex]: ../crates/weaver-agents-PRD.md
-[calculator]: ../technical/weaver-agents/weaver-internal/calculator.md
+[apex]: ../crates/weaver-agent-PRD.md
+[calculator]: ../technical/weaver-agent/weaver-internal/calculator.md

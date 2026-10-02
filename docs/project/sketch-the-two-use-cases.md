@@ -60,11 +60,11 @@ the agent gets more state.
 ## 3. Use case one: the proto-stateful agent
 
 A proto-stateful agent holds real state within a session and none across sessions,
-per `weaver-agents-PRD` section 2. Two things persist across turns inside a session,
+per `weaver-agent-PRD` section 2. Two things persist across turns inside a session,
 the working structure the agent reasons over and the hot KV cache, and what the agent
 begins each session without is accumulated experience: no memory substrate of any
 kind, which is the whole of what this program defers. That is what WeaverTools
-currently holds, which is the weaver-agents domain.
+currently holds, which is the weaver-agent domain.
 
 **The agents deployed on the internet right now are the narrower thing.** They carry
 no state outside the prompt, and what looks like memory is rebuilt from scratch every
@@ -191,7 +191,7 @@ reverse move of collapsing a distributed agent onto one host.
 This was designed in and has never been stated as a property, because stating it
 during the local build would have pulled attention toward the network problem
 before the local one was solved. The demotion of the old WeaverTools PRD to the
-weaver-agents domain is the same widening reaching the document set. **The sketch as
+weaver-agent domain is the same widening reaching the document set. **The sketch as
 drafted paired that demotion with authoring a new apex above it, and the operator's
 ruling of the following day went the other way**: the suite has no apex on purpose
 while the scope is still moving, which is why this sketch is a sketch.

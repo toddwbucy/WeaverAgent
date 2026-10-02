@@ -7,7 +7,7 @@ statement of the organ channel's mechanics and every organ contract draws it.
 
 **Date filed:** 2026-07-31
 **Document ID:** `weaver-organ-channel`
-**Parent:** `weaver-agents-PRD`, invariant 5.4
+**Parent:** `weaver-agent-PRD`, invariant 5.4
 **Editorial:** Per the Working Rules.
 
 **On the word floor.** Apex section 5.1 rules that the floor is exactly `weaver-traits`

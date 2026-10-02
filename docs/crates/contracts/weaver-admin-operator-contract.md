@@ -9,7 +9,7 @@ same ruling.
 
 **Date filed:** 2026-08-01
 **Document ID:** `weaver-admin-operator-contract`
-**Parent:** `weaver-agents-PRD`, invariant 5.3
+**Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
 **Landing PR:** #300
 

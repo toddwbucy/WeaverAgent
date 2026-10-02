@@ -6,7 +6,7 @@
 //! function from an expression string to a rendered value or a refusal in
 //! its own words, per `weaver-internal-Spec` section 3. Arithmetic is IEEE
 //! 754 binary64 throughout. The apex places this member at
-//! `weaver-agents-PRD` section 4: a model-elected call whose result the
+//! `weaver-agent-PRD` section 4: a model-elected call whose result the
 //! harness supplies deterministically, and an operator control loop may
 //! fire it autonomically once the ladder clears - either way the loop is
 //! the caller, and no model ever addresses it by name.

@@ -102,7 +102,7 @@ residual rather than the class the claim would need.
 ## What these documents are
 
 **One paper per crate, plus six that belong to no crate**, and the directories
-carry the boundary: `weaver-agents/` for the agent domain, with
+carry the boundary: `weaver-agent/` for the agent domain, with
 `weaver-internal/` beneath it for the callables that crate mounts,
 `weaver-web/` for the frontend domain that reaches an agent only across a contract,
 moved with its crate to `WeaverTools_Project/weaver-web/docs/technical/` on 2026-09-26,
@@ -159,14 +159,14 @@ fits neither definition and is described rather than resolved.
 program's entire public surface, written for an outside consumer and for nothing
 else. Nothing else on this site is a surface you build against.
 
-**To write a loop**, read [The loop](weaver-agents/loop.md) first. It is where an
+**To write a loop**, read [The loop](weaver-agent/loop.md) first. It is where an
 operator's judgment enters a turn, and it is the surface with the shortest turnaround:
 an edit runs on the next crossing. Then read the contracts for the seams the seat's
 calls cross.
 
 **To add something the program does not have yet** - a shape on a seam, a tool the trait
 set does not describe, a whole organ - read [Extending the
-program](weaver-agents/extending.md). The floor is deliberately thin, a shape
+program](weaver-agent/extending.md). The floor is deliberately thin, a shape
 crosses a seam only if both sides name it at compile time, and the page is explicit
 about where the framework's requirements stop and your own practice begins.
 

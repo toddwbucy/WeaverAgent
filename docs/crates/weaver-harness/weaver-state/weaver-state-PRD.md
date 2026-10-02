@@ -50,7 +50,7 @@ to: weaver-harness
 ```
 
 **It links `weaver-types` as floor, and the link stands ahead of its consumer.**
-That crate is floor per `weaver-agents-PRD` section 5.1, this crate asks it
+That crate is floor per `weaver-agent-PRD` section 5.1, this crate asks it
 nothing, so the record is a `floor-link` and never a `seam`. **No source file here
 consumes it today, and it stands anyway on the operator's ruling of 2026-09-14:**
 the dependency stays because this crate is not finished, and a link held for work
@@ -72,7 +72,7 @@ to: weaver-types
 typed landing of `weaver-state-Spec` section 3 reads a message kind's `role` and
 `content` through the message model that crate defines, the model the harness
 renders them from, so custody holds a message as the floor spells it rather than
-under a second definition of its own. `weaver-agents-PRD` section 5.1 rules the
+under a second definition of its own. `weaver-agent-PRD` section 5.1 rules the
 crate floor and Document Format section 4 admits a floor link to a floor crate, and
 this crate asks it nothing, so the record is a `floor-link`. The seam's contract
 draws the same name in its vocabulary clause, per the operator's ruling of
@@ -169,7 +169,7 @@ door authenticates by possession: it admits the operator principal and refuses e
 other peer, the agent's among them. Its name stands in this member's own territory,
 per the operator's ruling of 2026-08-26, where the agent's identity holds nothing. The
 door itself does not exist under a serving load that elects no restore, so the serving
-membrane of `weaver-agents-PRD` section 0 is untouched for every agent that stands
+membrane of `weaver-agent-PRD` section 0 is untouched for every agent that stands
 from nothing, and a restoring load opens it to the one operator principal the
 diagnostic binding already admits and to nobody else. No ask crosses it, ever: the
 driver is a sender and never an asker, so section 5's who-else-may-ask cell keeps its
@@ -384,7 +384,7 @@ that day rather than a shared file or a shared connection today.
   alternatives below retained as history.
   The manifest carries the crate and the graph carries no edge for it, which is the
   H2 breach the audit of 2026-09-13 found. **The `floor-link` branch is closed**:
-  `weaver-agents-PRD` section 5.1 rules the floor exactly `weaver-traits` and
+  `weaver-agent-PRD` section 5.1 rules the floor exactly `weaver-traits` and
   `weaver-types` and rules that crate out of it by name, and Document Format section
   4 admits a floor link only to a floor crate. What is left is a `seam` tagged `link`
   under a contract that does not exist, or the edge coming off.
@@ -411,7 +411,7 @@ that day rather than a shared file or a shared connection today.
   dev-dependency at all - `WeaverTools-Working-Process` section 6 does not say, and
   `weaver-admin` declares one floor crate in both sections under a single record.
   The dear reading is that a finished ingest calls into it, which makes the seam real
-  and owes it a contract, and owes `weaver-agents-PRD` section 5.1 the retirement of
+  and owes it a contract, and owes `weaver-agent-PRD` section 5.1 the retirement of
   "the harness is its only caller".
 - **Which member of `weaver-types` this crate consumes. Opened 2026-09-14.** The
   floor link is declared at section 1 and the operator has ruled it stays. What the
