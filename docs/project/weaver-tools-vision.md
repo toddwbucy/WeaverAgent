@@ -460,8 +460,8 @@ when the second had gone.
 **The agent keeps two doors and gains no others.** weaver-gate carries the data plane
 and weaver-admin the management plane, at `weaver-gate-world-contract` and
 `weaver-admin-operator-contract`. Each door gets a network connector outside it, a
-client of that door's socket rather than anything the agent listens to: `web-con`
-outside the gate and `admin-con` outside admin. They are separate clients, separately
+client of that door's socket rather than anything the agent listens to: `gate-con`
+outside the gate and `admin-con` outside admin, the names the 2026-10-02 ruling gives. They are separate clients, separately
 credentialed. Consumers talk to the connectors and never to the agent, so the agent's
 surface stays at two however many consumers and tools stand up. The connectors are
 WeaverWeb's, in its repository or their own and never in this one, and start under
@@ -477,7 +477,8 @@ with the care a contract takes.
 
 **Credentials are issued on the server and dropped into a client's configuration**, and
 without one a client cannot talk to a connector. There is one credential per client per
-connector, so weaver-analysis, once it leaves, holds two. The server keeps a record of
+connector, so weaver-analysis, its own repository since 2026-09-30, holds two as a
+client of both. The server keeps a record of
 what it issued and revokes one credential without touching another, and a credential
 file never enters a repository. **A connector authenticates and never authorizes.** It
 passes a verified principal across the door, and weaver-gate and weaver-admin decide
