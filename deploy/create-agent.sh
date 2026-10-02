@@ -80,8 +80,8 @@ while [ $# -gt 0 ]; do
    member's account is weaver-<name>-state, derived by weaver-admin from the
    agent's name, and the store must admit that and nothing else. An agent made
    before this date mapped root: change its pg_ident.conf line to name
-   weaver-<name>-state, give that account traversal to its territory, and chown
-   the territory to it." ;;
+   weaver-<name>-state, and regroup its territory to that account,
+   root:weaver-<name>-state 2750." ;;
     --engine)   [ $# -ge 2 ] || die "--engine needs a name"; ENGINE=$2; shift ;;
     --spu)      [ $# -ge 2 ] || die "--spu needs a path"; SPU_OVERRIDE=$2; shift ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
@@ -246,29 +246,16 @@ judge_names() {
   return 0
 }
 judge_names || exit 1
-# **The territory sits under the operator's home**, because the traversal the
-# member is given below is a chain of access entries from that home down, and
-# this script opens no passage anywhere else.
-case "$AGENT_DIR/" in
-  "/home/$OPERATOR/"*) ;;
-  *) die "the stack record's agent-directory $AGENT_DIR is not under /home/$OPERATOR, and the member's passage to its territory is opened from there" ;;
-esac
-# **Under the home by what it resolves to, not by how it is spelled.** The
-# prefix above is text, so `..` or a link the operator placed under the home
-# passed it and the privileged `install -d` and `setfacl` below followed it out
-# of the home, opening a passage for the member through whatever it reached
-# (Codex on #45). No component may be `.`, `..` or empty, and every component
-# below the home that stands must be a directory and not a link; the rest
-# `install -d` makes as plain directories.
-below=${AGENT_DIR#"/home/$OPERATOR/"}
-at="/home/$OPERATOR"
-IFS=/ read -r -a parts <<< "$below"
-for part in "${parts[@]}"; do
-  case "$part" in ""|.|..) die "the stack record's agent-directory $AGENT_DIR carries an empty, . or .. component, so where it resolves is not what it says" ;; esac
-  at="$at/$part"
-  if [ -L "$at" ]; then die "$at, on the stack record's agent-directory, is a link, which would carry the territory out of /home/$OPERATOR"; fi
-  if [ -e "$at" ] && [ ! -d "$at" ]; then die "$at, on the stack record's agent-directory, is not a directory"; fi
-done
+# **The territory stands under a root-owned base, reached by group and never by
+# access entries** (operator's ruling of 2026-10-02, #28). The base is the stack
+# record's `agent-directory`, which bootstrap-stack.sh makes root 0755: it must
+# stand, be held closed by admin's rule, and let no other principal make a name
+# in it, since the territory is a new name there. Each territory is root-owned
+# and grouped to its state member, 2750, so the member reaches its room by group
+# and the agent's uid, in no group of it, cannot enter. No ACL is asked of the
+# filesystem, so a box whose datasets carry none deploys as any other.
+[ -d "$AGENT_DIR" ] || die "the stack record's agent-directory $AGENT_DIR does not stand: bootstrap-stack.sh makes it, root 0755"
+bad=$(creatable_in "$AGENT_DIR") || die "the stack record's agent-directory $AGENT_DIR is not a root-held base no other principal can make a name in ($bad)"
 HOME_DIR="$AGENT_DIR/$AGENT_USER"
 STATE_DIR="$HOME_DIR/state"
 
@@ -398,9 +385,9 @@ HBA=""; IDENT=""   # asked of the store itself rather than guessed from a distro
 say "plan for agent '$NAME'"
 plan "agent account   $AGENT_USER      (system, nologin, the worker's uid)"
 plan "member account  $MEMBER_USER     (system, nologin, owns the state territory)"
-plan "operator        $OPERATOR joins group $AGENT_USER"
+plan "operator        $OPERATOR joins groups $AGENT_USER and $MEMBER_USER"
 plan "home            /home/$AGENT_USER        the agent's own, where its tools run"
-plan "directory       $HOME_DIR        root:$OPERATOR 2750"
+plan "directory       $HOME_DIR        root:$MEMBER_USER 2750"
 plan "state territory $STATE_DIR       $MEMBER_USER 0700, which the agent's uid cannot enter"
 if [ "$ENGINE" = postgres ]; then
   plan "role            $ROLE            postgres, no password, peer only"
@@ -437,41 +424,15 @@ refuse_existing "$LOG_DIR/$NAME" "operations log directory"
 if [ "$APPLY" -eq 0 ]; then
   printf '   no collision found in accounts and paths visible to this uid\n'
   printf '   PENDING --apply: privileged collision checks, service and store catalogs\n'
-  printf '   PENDING --apply: authentication paths and filesystem access-entry probe\n'
+  printf '   PENDING --apply: authentication paths\n'
   say "plan only"
   printf '   no provisioning performed; rerun with --apply to check and make it\n'
   exit 0
 fi
-# **Traversal is asked about here rather than discovered halfway through.** The
-# member needs passage along a chain that runs through the operator's own home,
-# which is 0700, and this pool answers `setfacl` with Operation not supported,
-# so the need and the means are checked together before anything is made.
-# **The probe sits on the filesystem that will hold the territory**, which is
-# not always the operator's home: `.weaveragent` can be a mount or a dataset
-# of its own, and access entries are a property of the filesystem rather than
-# of the tree. Where that parent does not exist yet the home is the right
-# stand-in, being where the script is about to create it. **The entry names the
-# operator and not the member**, the member's account not existing until the
-# apply below makes it, and what is asked here is whether the filesystem
-# carries entries at all rather than which account gets one.
-probe_parent="$AGENT_DIR"
-[ -d "$probe_parent" ] || probe_parent="/home/$OPERATOR"
-probe=$(mktemp -d "$probe_parent/.acl-probe-XXXXXX") || die "cannot write under $probe_parent"
-if setfacl -m "u:$OPERATOR:x" "$probe" 2>/dev/null; then
-  printf '   this filesystem carries access entries, so %s can be given passage\n' "$MEMBER_USER"
-else
-  rmdir "$probe"
-  die "$probe_parent refuses access entries, so $MEMBER_USER cannot traverse to
-   its territory there. Place the territory on a filesystem that carries them,
-   or somewhere the member can reach by ownership alone."
-fi
-rmdir "$probe"
-
 if [ "$ENGINE" = postgres ]; then
 # **A retired agent can leave its role or database behind.** Discovering
 # that at CREATE ROLE would leave both accounts and directories half-made.
 # Start the store and ask its catalogues before creating anything local.
-# The reversible ACL probe runs first, so its refusal starts no service.
 sudo -n systemctl start postgresql || die "cannot start PostgreSQL for preflight checks"
 sudo -n systemctl is-active --quiet postgresql \
   || die "cannot confirm PostgreSQL is active for preflight checks"
@@ -518,33 +479,22 @@ say "accounts"
 # runs nothing and owns one room of the operator's tree instead.
 sudo useradd --system --shell /usr/sbin/nologin --create-home --user-group "$AGENT_USER"
 sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$MEMBER_USER"
-sudo usermod -aG "$AGENT_USER" "$OPERATOR"
+sudo usermod -aG "$AGENT_USER,$MEMBER_USER" "$OPERATOR"
 sudo chmod 2750 "/home/$AGENT_USER"
 printf '   %s uid %s, %s uid %s\n' \
   "$AGENT_USER" "$(id -u "$AGENT_USER")" "$MEMBER_USER" "$(id -u "$MEMBER_USER")"
 
 say "territory"
-# The directory is the operator's to read and the member's to own one room
-# of. Setgid so the operator's group survives whatever writes here, and the
-# state subdirectory closed to everyone else, which is what makes the
-# charter's "one subdirectory the agent's uid cannot enter" true rather than
-# stated.
-sudo install -d -o root -g "$OPERATOR" -m 2750 "$HOME_DIR"
+# **Root's directory, the member's group, the member's room.** The territory is
+# root-owned and grouped to the state member, setgid so what is written there
+# keeps that group, 2750: the member reaches its room by group, the operator
+# reads the trace as a member of that group, and the agent's uid, in no group
+# of it, cannot enter. The state subdirectory is the member's own and closed
+# to everyone else, which is what makes the charter's "one subdirectory the
+# agent's uid cannot enter" true rather than stated. No access entry is set
+# anywhere (operator's ruling of 2026-10-02, #28).
+sudo install -d -o root -g "$MEMBER_USER" -m 2750 "$HOME_DIR"
 sudo install -d -o "$MEMBER_USER" -g "$MEMBER_USER" -m 0700 "$STATE_DIR"
-# **Owning the room is not reaching it.** The operator's home is 0700 and
-# every directory above the territory belongs to the operator, so the member
-# cannot traverse to what it owns. Execute-only entries along the chain open
-# passage without opening any listing, which is the narrowest thing that
-# makes the ownership above true rather than stated.
-steps=("/home/$OPERATOR")
-IFS=/ read -ra parts <<< "${HOME_DIR#"/home/$OPERATOR/"}"
-for part in "${parts[@]}"; do
-  [ -n "$part" ] && steps+=("${steps[-1]}/$part")
-done
-for step in "${steps[@]}"; do
-  sudo setfacl -m "u:$MEMBER_USER:x" "$step" \
-    || die "no traversal for $MEMBER_USER at $step, and the member cannot reach its own territory"
-done
 
 if [ "$ENGINE" = postgres ]; then
 say "store"
@@ -630,7 +580,7 @@ say "made"
 # the account and not a session already running, so a shell that predates this
 # run cannot reach the gate's socket until it takes the group (#673, measured
 # on the W4a run of 2026-09-25).
-printf '   %s joined group %s: a session that predates this run needs a new\n' "$OPERATOR" "$AGENT_USER"
-printf '   login, or `newgrp %s`, before the group applies\n' "$AGENT_USER"
+printf '   %s joined groups %s and %s: a session that predates this run needs a new\n' "$OPERATOR" "$AGENT_USER" "$MEMBER_USER"
+printf '   login, or `newgrp`, before the groups apply\n'
 printf '   validate it before loading:\n'
 printf '     sudo WEAVER_ADMIN_CONFIG=%s %s validate %s\n' "$ADMIN_BASE" "$PREFIX/bin/weaver-admin" "$NAME"

@@ -31,7 +31,7 @@
 #   WEAVER_ADMIN_CONFIG  /etc/weaver/admin      the admin base: one root per agent
 #   WEAVER_STACK_RECORD  /etc/weaver/stack      the scripts' record of this install
 #   WEAVER_OPERATOR      $SUDO_USER or $USER    owns the agent directory
-#   WEAVER_AGENT_DIR     /home/$OPERATOR/.weaveragent
+#   WEAVER_AGENT_DIR     /var/lib/weaver-agent
 #   WEAVER_LOG_DIR       /var/log/weaver
 #   CUDA_LIB_DIR         /opt/cuda/lib64        joins LD_LIBRARY_PATH in unit-properties
 #   CARGO_TARGET_DIR     honoured; give the install its own, never a gate's
@@ -64,7 +64,7 @@ PREFIX=${WEAVER_PREFIX:-/opt/weaver}
 ADMIN_BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
 STACK=${WEAVER_STACK_RECORD:-/etc/weaver/stack}
 OPERATOR=${WEAVER_OPERATOR:-${SUDO_USER:-$USER}}
-AGENT_DIR=${WEAVER_AGENT_DIR:-/home/$OPERATOR/.weaveragent}
+AGENT_DIR=${WEAVER_AGENT_DIR:-/var/lib/weaver-agent}
 LOG_DIR=${WEAVER_LOG_DIR:-/var/log/weaver}
 CUDA_LIB_DIR=${CUDA_LIB_DIR:-/opt/cuda/lib64}
 
@@ -169,7 +169,7 @@ if standing "$PREFIX/bin"; then die "$PREFIX/bin already stands. Decommission fi
 # 0755: admin refuses every verb on a root whose base or any directory above it
 # another principal could write, and verify-load.sh refuses a record that is
 # not closed (Codex on #45).
-for placed in "$ADMIN_BASE" "$STACK"; do
+for placed in "$ADMIN_BASE" "$STACK" "$AGENT_DIR"; do
   at=$placed
   while ! standing "$at"; do at=$(dirname -- "$at"); done
   # Where a component is still missing, the nearest standing directory must be
@@ -230,7 +230,7 @@ plan "write $LDSO_CONF = $PREFIX/lib and $CUDA_LIB_DIR, then ldconfig"
 plan "write $STACK/{worker-binary,spu-binary,gate-binary,run-tool,control-tool,coordination-root,unit-properties,prefix,log-directory,agent-directory}  (root, 0755 / 0644)"
 plan "install -d $ADMIN_BASE (root:root 0755): empty; create-agent.sh adds one root per agent"
 plan "install -d $LOG_DIR (root:root 0750): each agent's operations log goes under it, the agent excluded by owner, group and search bit"
-plan "install -d $AGENT_DIR ($OPERATOR:$OPERATOR 0755): territories"
+plan "install -d $AGENT_DIR (root:root 0755): territories, each root:weaver-<name>-state 2750"
 [ -d "$PREFIX/models" ] && plan "$PREFIX/models stands: $(ls "$PREFIX/models" | wc -l) entries" || plan "$PREFIX/models is absent: copy the artifacts before declaring an agent"
 [ "$INSTALL" -eq 1 ] || { say "plan only. rerun with --install"; exit 0; }
 
@@ -276,7 +276,9 @@ plan "unit-properties = UMask, LD_LIBRARY_PATH, journal rate limit off"
 sudo install -d -o root -g root -m 0755 "$ADMIN_BASE"
 plan "admin base $ADMIN_BASE (empty)"
 sudo install -d -o root -g root -m 0750 "$LOG_DIR"
-sudo install -d -o "$OPERATOR" -g "$OPERATOR" -m 0755 "$AGENT_DIR"
+# The territories' base is root's, so no other principal can make a name in it
+# and each territory is reached by group, never by an access entry (#28).
+sudo install -d -o root -g root -m 0755 "$AGENT_DIR"
 
 say "installed at $REV"
 plan "next: deploy/create-agent.sh <name> --engine <sqlite|postgres> --artifact <path> [--apply], one agent at a time"

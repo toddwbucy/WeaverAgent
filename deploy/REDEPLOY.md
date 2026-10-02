@@ -50,7 +50,7 @@ the runbook is what gets amended.
 | Model artifacts, hash-pinned | `<prefix>/models/` | operator, by hand |
 | The python SPU prefix and zipapp | `<prefix>/python-spu/` | `python-spu/README.md` |
 | Agent account `weaver-<name>` (home `/home/weaver-<name>`, 2750) and member account `weaver-<name>-state` (no home) | passwd | create-agent |
-| Territory `weaver-<name>/` (root:operator 2750) with `state/` (member 0700) and `trace.ndjson` | the stack record's `agent-directory`, default `~operator/.weaveragent` | create-agent |
+| Territory `weaver-<name>/` (root:weaver-<name>-state 2750, reached by group) with `state/` (member 0700) and `trace.ndjson` | the stack record's `agent-directory`, default `/var/lib/weaver-agent` | create-agent |
 | Postgres election only: role and database `weaver_<name>`, a `peer map=weaver` line in `pg_hba.conf`, a `weaver` map line in `pg_ident.conf` | PostgreSQL | create-agent |
 | The agent's operations log, one per agent | `/var/log/weaver/<name>/admin.log` (directory root 0750) | create-agent makes the directory, admin the file |
 | Transient unit per load, under one slice | systemd | admin, at load |
@@ -173,7 +173,8 @@ deploy/create-agent.sh m1 --engine <sqlite|postgres> --artifact /opt/weaver/mode
 
 The store is the one `--engine` names, `sqlite` or `postgres`, and the option is
 required since neither is the default. The script makes both
-accounts, the territory with traversal ACLs along the operator's home, for postgres
+accounts, the territory (root:weaver-<name>-state 2750 under the stack record's
+`agent-directory`, reached by group with no access entries), for postgres
 the role, database and two authentication lines, and the agent root staged under a
 dot-name: every key copied from the stack record, `log-path`, and the declaration as
 `agent.toml`. It then proves the boundary (for sqlite, the member can write its state
@@ -306,8 +307,9 @@ installed. `<prefix>` is the install prefix, `/opt/weaver` by default.
    ```
 
    `agent-directory` is where the territories stand; the old declaration directory
-   held them beside the declarations. `create-agent.sh` requires it under the
-   operator's home.
+   held them beside the declarations. `create-agent.sh` requires it to stand
+   root-owned and writable by no group or other (`/var/lib/weaver-agent` on a new
+   box); existing territories stay where they are.
 
 5. Install the new admin (`deploy/update-stack.sh --install`), which validates and
    loads every agent root before it reports the box current. The old box-wide log

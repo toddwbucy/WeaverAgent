@@ -22,7 +22,7 @@ load where any piece is missing, so the pieces are made first and admin is asked
 |---|---|---|
 | Agent account, the worker's uid | `weaver-<name>`, home `/home/weaver-<name>` | system user, nologin, home 2750 |
 | Member account, the state store's uid (agents with a store) | `weaver-<name>-state`, no home | system user, nologin |
-| Territory | `<agent-directory>/weaver-<name>/`, the stack record's `agent-directory` (default `~operator/.weaveragent`) | root:operator 2750 |
+| Territory | `<agent-directory>/weaver-<name>/`, the stack record's `agent-directory` (default `/var/lib/weaver-agent`, root 0755) | root:weaver-<name>-state 2750, reached by group, with no access entries; the operator joins the group to read the trace |
 | State room (agents with a store) | `<territory>/state/`, where a sqlite store keeps its file | member 0700, unreachable by the agent's uid |
 | Trace sink | `<territory>/trace.ndjson` | opened by admin under root at load |
 | Agent root, which is the admission | `/etc/weaver/admin/<name>/`: `worker-binary`, `spu-binary`, `gate-binary`, `run-tool`, `control-tool`, `coordination-root`, `unit-properties` (and `headroom-bytes`, `state-store-socket` where the stack record has them), copied from the stack record, plus `log-path` | root, directory 0755, files 0644; admin refuses a root that is not root-owned or is group- or world-writable |
@@ -94,7 +94,7 @@ root from the stack record, with the root made last because it is the admission:
 sudo useradd --system --shell /usr/sbin/nologin --create-home --user-group weaver-<name>
 sudo usermod -aG weaver-<name> "$USER"
 sudo chmod 2750 /home/weaver-<name>
-sudo install -d -o root -g "$USER" -m 2750 ~/.weaveragent/<name>
+sudo install -d -o root -g "$USER" -m 2750 /var/lib/weaver-agent/weaver-<name>
 sudo install -d -o root -g root -m 0750 /var/log/weaver/<name>
 R=/etc/weaver/admin/.<name>.partial
 sudo install -d -o root -g root -m 0755 "$R"

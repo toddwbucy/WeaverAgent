@@ -158,13 +158,14 @@ class PlanTests(unittest.TestCase):
             "coordination-root": "/run",
             "unit-properties": "UMask=0000\nEnvironment=LD_LIBRARY_PATH=/fixture/lib\n",
             "log-directory": str(self.logs),
-            "agent-directory": "/home/fixture-no-home/.weaveragent",
+            "agent-directory": str(self.root / "agents"),
             "prefix": str(self.root / "installed"),
         }
         for key, value in self.stack_keys.items():
             (self.stack / key).write_text(value + ("" if value.endswith("\n") else "\n"))
         self.home = self.root / "home"
-        (self.home / "fixture-no-home" / ".weaveragent").mkdir(parents=True)
+        (self.home / "fixture-no-home").mkdir(parents=True)
+        (self.root / "agents").mkdir()
         self.hba = self.root / "pg_hba.conf"
         self.hba.write_text("local all all peer\n")
         self.ident = self.root / "pg_ident.conf"
@@ -285,19 +286,6 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertIn("role weaver_m1 already exists", result.stderr)
         self.assertFalse(any("useradd" in c for c in self.calls()))
 
-    def test_apply_still_probes_acl_before_creation(self):
-        for engine in ("postgres", "sqlite"):
-            with self.subTest(engine=engine):
-                self.log.unlink(missing_ok=True)
-                self.env.update(ALLOW_APPLY_CHECKS="1", ACL_FAIL="1")
-                result = self.create("--engine", engine, "--apply")
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("refuses access entries", result.stderr)
-                self.assertFalse(any("systemctl" in c for c in self.calls()))
-                self.assertTrue(any(c[0] == "setfacl" for c in self.calls()))
-                self.assertFalse(any("useradd" in c for c in self.calls()))
-                self.assertFalse(Path(self.env["PROBE"]).exists())
-
     def test_apply_requires_sudo_before_any_other_privileged_call(self):
         self.env.update(ALLOW_APPLY_CHECKS="1", SUDO_FAIL="1")
         result = self.create("--apply")
@@ -391,7 +379,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
 
     def test_apply_uses_privileged_collision_reads(self):
         for path in (self.config / "m1", self.home / "weaver-m1",
-                     self.home / "fixture-no-home" / ".weaveragent" / "weaver-m1"):
+                     self.root / "agents" / "weaver-m1"):
             with self.subTest(path=path):
                 self.log.unlink(missing_ok=True)
                 path.touch()
@@ -405,17 +393,27 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
                 path.unlink()
 
     def test_stack_values_are_trimmed(self):
-        (self.stack / "agent-directory").write_text("  /home/fixture-no-home/.weaveragent \r\n")
+        (self.stack / "agent-directory").write_text(f"  {self.root / 'agents'} \r\n")
         result = self.create()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("directory       /home/fixture-no-home/.weaveragent/weaver-m1 ", result.stdout)
+        self.assertIn(f"directory       {self.root / 'agents' / 'weaver-m1'} ", result.stdout)
 
-    def test_agent_directory_outside_the_operators_home_refuses(self):
-        (self.stack / "agent-directory").write_text("/srv/agents\n")
-        result = self.create()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not under /home/fixture-no-home", result.stderr)
-        self.assert_unprivileged()
+    def test_a_territory_base_another_principal_could_write_refuses(self):
+        # The operator's ruling of 2026-10-02 (#28): the territories stand under
+        # a root-held base no other principal can make a name in. A base that
+        # does not stand, or one a group may write, refuses before anything is
+        # asked or made. Perturbation: drop the creatable_in judgment of the
+        # base, and the open base plans on.
+        open_base = self.root / "open-agents"
+        open_base.mkdir()
+        open_base.chmod(0o775)
+        for base, said in ((self.root / "absent-agents", "does not stand"),
+                           (open_base, "no other principal can make a name in")):
+            (self.stack / "agent-directory").write_text(f"{base}\n")
+            result = self.create()
+            self.assertNotEqual(result.returncode, 0, base)
+            self.assertIn(said, result.stderr)
+            self.assert_unprivileged()
 
     def test_unreadable_stack_key_refuses(self):
         # A directory where a key file should be: cat fails, as an unreadable
@@ -627,27 +625,23 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("is not held closed by root: " + str(installed), result.stderr)
 
-    def test_the_territory_resolves_under_the_home(self):
-        # Codex on #45, round 11: the territory was judged by its spelling, so
-        # `..` or a link under the home carried the privileged install and
-        # access entries out of it. Each refuses before any call.
-        # Perturbation: drop the component walk, and both provision.
+    def test_the_territory_is_reached_by_group_and_never_by_access_entries(self):
+        # The operator's ruling of 2026-10-02 (#28): the territory is root's,
+        # grouped to the state member, 2750, under the record's base; the
+        # member's room is its own, 0700; the operator joins both of the agent's
+        # groups; and no access entry is set or probed anywhere, so a box whose
+        # datasets carry none deploys. Perturbations: group the territory to the
+        # operator, or restore the setfacl chain, and this fails.
         self.env["ALLOW_APPLY_CHECKS"] = "1"
-        outside = self.root / "outside"
-        outside.mkdir()
-        home = self.home / "fixture-no-home"
-        (home / "link").symlink_to(outside)
-        for directory, said in (("/home/fixture-no-home/../../root", ". or .. component"),
-                                ("/home/fixture-no-home/link/agents", "is a link")):
-            (self.stack / "agent-directory").write_text(directory + "\n")
-            if self.log.exists():
-                self.log.unlink()
-            result = self.create("--apply")
-            self.assertNotEqual(result.returncode, 0, directory)
-            self.assertIn(said, result.stderr)
-            self.assertFalse([c for c in self.calls() if c[0] in ("psql", "setfacl", "mktemp")
-                              or (c[0] == "sudo" and c[1:2] != ["-v"] and c[1:3] != ["-n", "sh"])],
-                             self.calls())
+        result = self.create("--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        territory = str(self.root / "agents" / "weaver-m1")
+        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-state", "-m", "2750", territory], calls)
+        self.assertIn(["sudo", "install", "-d", "-o", "weaver-m1-state", "-g", "weaver-m1-state", "-m", "0700",
+                       territory + "/state"], calls)
+        self.assertIn(["sudo", "usermod", "-aG", "weaver-m1,weaver-m1-state", "fixture-no-home"], calls)
+        self.assertFalse([c for c in calls if "setfacl" in c or c[0] == "mktemp"], calls)
 
     def test_verify_load_reads_no_root_admin_does_not_validate(self):
         # Codex on #45, round 11: verify-load parsed the declaration, and counted
