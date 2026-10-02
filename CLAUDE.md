@@ -314,7 +314,9 @@ note and the scripts that produced its figures, on the operator's word of 2026-0
   or header histories; git is the archive, so superseded text is removed, not struck.
 - Canonical vocabulary is `trace` / `state management` / `memory`: three layers with
   authority running downward, on the operator's ruling of 2026-10-02.
-  - The **trace** is what happened: lossless, append-only, the floor under everything.
+  - The **trace** is what happened: append-only, and lossless for every event it
+    admits (records still queued when a worker dies are forfeited, per
+    `weaver-trace-PRD`), the floor under everything.
   - **State management** is what is supposed to happen, reconciled with what did, turn by
     turn. It is built from the trace's tee and rebuildable from it, and its schema,
     classifiers and re-rankers are the enforcement.

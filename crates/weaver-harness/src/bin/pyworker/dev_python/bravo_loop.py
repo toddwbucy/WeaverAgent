@@ -7,7 +7,7 @@
 # depth (four turns) and a nominal 600 quote budget, and differ where a run
 # can see it. The compiled loop seats its own system prompt at the first
 # turn and at recovery, and this one relies on the declaration's identity.
-# This one detects RECALL:/REMEMBER: lines and can run up to three memory
+# This one detects RECALL:/REMEMBER: lines and can run up to three state
 # follow-up turns, and the compiled loop runs one turn per request. The
 # budget counts Unicode characters here and UTF-8 bytes there, the empty
 # block and the ellipsis render differently, and the trigger is float
@@ -54,12 +54,12 @@
 # that runs none falls back to a plain unshaped turn.
 #
 # Every judgment below is the loop's alone: the trigger, the recall depth,
-# the quote budget, the memory conventions, and what every injected line
+# the quote budget, the state conventions, and what every injected line
 # says. The framework holds no threshold and no convention anywhere.
 #
-# THE MEMORY CONVENTIONS, series one. The model queries and saves its own
-# state through its outputs: a line "RECALL: <subject>" asks memory, a line
-# "REMEMBER: <fact>" saves one. Both are loop-detected in the emission and
+# THE STATE CONVENTIONS, series one. The model queries and saves its own
+# state through its outputs: a line "RECALL: <subject>" asks state, a line
+# "REMEMBER: <fact>" holds one in state. Both are loop-detected in the emission and
 # dispatched inward against the state seam - internal tools, never the
 # gate's. A REMEMBER needs no write call at all: the line is already in the
 # recorded emission, distilled into custody through the record's one
@@ -75,7 +75,7 @@
 import json
 
 # THE PROMPTS ARE NOT HERE EITHER, for the same reason the teaching is not:
-# the system prompt and the memory conventions are seated from the session's
+# the system prompt and the state conventions are seated from the session's
 # identity in state, which the declaration's identity block seeds on the
 # first load, and this file held a second copy of both that nothing read. Two copies of one text is one fact in two places with
 # no authority named, and the copy that is not the one in force is the one
@@ -92,7 +92,7 @@ PRESSURE = 4 / 5
 RECALL_TURNS = 4
 QUOTE_BOUND = 600
 
-# The memory conventions' own judgments. Rounds cap the detect-and-refeed
+# The state conventions' own judgments. Rounds cap the detect-and-refeed
 # cycle the way the tool rounds are capped. Asks per round and hits per
 # ask keep an answer a working set. The quote bound is per hit, centered
 # on the match. MISS_REDIRECT is the experiment's second arm: None tells
