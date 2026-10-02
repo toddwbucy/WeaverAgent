@@ -22,17 +22,21 @@ load where any piece is missing, so the pieces are made first and admin is asked
 |---|---|---|
 | Agent account, the worker's uid | `weaver-<name>`, home `/home/weaver-<name>` | system user, nologin, home 2750 |
 | Member account, the state store's uid (agents with a store) | `weaver-<name>-state`, no home | system user, nologin |
-| Territory | `<agent-directory>/weaver-<name>/`, the stack record's `agent-directory` (default `~operator/.weaveragent`) | root:operator 2750 |
+| Territory | `<agent-directory>/weaver-<name>/`, the stack record's `agent-directory` (default `/var/lib/weaver-agent`, root 0755) | root:weaver-<name>-state 0710, not setgid: the member passes to its room, lists nothing, and no access entry is set |
 | State room (agents with a store) | `<territory>/state/`, where a sqlite store keeps its file | member 0700, unreachable by the agent's uid |
-| Trace sink | `<territory>/trace.ndjson` | opened by admin under root at load |
+| Trace group (agents with a store) | `weaver-<name>-trace`, the trace's readers: the operator, never the member | system group |
+| Trace sink | `<territory>/trace.ndjson` | made by create-agent before the first load, root:weaver-<name>-trace 0640, so the member cannot read it; admin opens it append-only at load and leaves its owner and mode alone |
 | Agent root, which is the admission | `/etc/weaver/admin/<name>/`: `worker-binary`, `spu-binary`, `gate-binary`, `run-tool`, `control-tool`, `coordination-root`, `unit-properties` (and `headroom-bytes`, `state-store-socket` where the stack record has them), copied from the stack record, plus `log-path` | root, directory 0755, files 0644; admin refuses a root that is not root-owned or is group- or world-writable |
 | Declaration | `/etc/weaver/admin/<name>/agent.toml` | root, 0644 |
 | Operations log | `/var/log/weaver/<name>/admin.log`, named by `log-path` | directory root 0750; admin writes the file |
 | Store (postgres election only) | role and database `weaver_<name>`, one `peer map=weaver` line in `pg_hba.conf`, one `weaver` map line in `pg_ident.conf` | postgres |
 
-The operator joins group `weaver-<name>` so the trace, written under root with the
-territory's group, is readable without sudo. A session that predates the join needs a
-new login or `newgrp weaver-<name>`.
+The operator joins three groups: `weaver-<name>` for the gate's socket,
+`weaver-<name>-state` for passage through the territory, and `weaver-<name>-trace` to
+read the trace without sudo. The member is in none but its own, so it reaches its room
+and never the trace, whose content it receives only as the tee's distillate. A session
+that predates the join needs a fresh login before the groups apply: `newgrp` selects one
+group in one shell.
 
 ## 1. Before you start
 
@@ -42,7 +46,8 @@ new login or `newgrp weaver-<name>`.
 - The artifact is on the box, under `/opt/weaver/models`, and its hash is known. An
   agent's identity is its artifact as much as its prompt; record the sha256 in the run
   log with the declaration's.
-- The name collides with nothing: `id weaver-<name>` fails, `~/.weaveragent/weaver-<name>`,
+- The name collides with nothing: `id weaver-<name>` and `getent group weaver-<name>-trace`
+  fail, `<agent-directory>/weaver-<name>` (`/var/lib/weaver-agent/weaver-<name>` by default),
   `/etc/weaver/admin/<name>` and `/var/log/weaver/<name>` are absent, and for a
   postgres election the role and database do not exist. The script checks all of this
   and refuses rather than merging, because a half-made agent that looks whole is worse
@@ -94,7 +99,9 @@ root from the stack record, with the root made last because it is the admission:
 sudo useradd --system --shell /usr/sbin/nologin --create-home --user-group weaver-<name>
 sudo usermod -aG weaver-<name> "$USER"
 sudo chmod 2750 /home/weaver-<name>
-sudo install -d -o root -g "$USER" -m 2750 ~/.weaveragent/<name>
+T=/var/lib/weaver-agent/weaver-<name>      # the stack record's agent-directory, then the account
+[ ! -e "$T" ] || { echo "REFUSED: $T already exists"; exit 1; }   # install -d would merge
+sudo install -d -o root -g "$USER" -m 2750 "$T"
 sudo install -d -o root -g root -m 0750 /var/log/weaver/<name>
 R=/etc/weaver/admin/.<name>.partial
 sudo install -d -o root -g root -m 0755 "$R"
@@ -141,7 +148,7 @@ denied-uids = []
 
 [trace-sink]
 kind = "file"
-path = "/home/todd/.weaveragent/karl/trace.ndjson"
+path = "/var/lib/weaver-agent/weaver-karl/trace.ndjson"
 create = true
 
 [state-store]
@@ -204,7 +211,17 @@ first.
 `deploy/decommission.sh` does not yet understand the per-agent layout and must not be
 run on a box on it until toddwbucy/WeaverAgent#35 lands. Take an agent down by hand: the pieces of section 0 are removed in reverse: unload; remove its root
 `/etc/weaver/admin/<name>/`, which ends its admission; for postgres, drop the database,
-then the role, and remove its two authentication lines; `userdel -r` both accounts;
+then the role, and remove its two authentication lines; `userdel -r` both accounts, then
+delete the three groups the operator was added to, which `userdel` leaves while a member
+remains and which a later `useradd --user-group` of the same name would refuse on;
 remove the territory and the log directory `/var/log/weaver/<name>/`. Archive the
 territory, the root and the log before removing them, since the trace is the one
 record of what the agent did and the log the one record of what was done to it.
+
+The groups, once both accounts are gone:
+
+```sh
+for g in weaver-<name> weaver-<name>-state weaver-<name>-trace; do
+  getent group "$g" >/dev/null && sudo groupdel "$g"
+done
+```
