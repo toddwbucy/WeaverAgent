@@ -447,7 +447,7 @@ fi
 # which is 0700, and this pool answers `setfacl` with Operation not supported,
 # so the need and the means are checked together before anything is made.
 # **The probe sits on the filesystem that will hold the territory**, which is
-# not always the operator's home: `.weaveragents` can be a mount or a dataset
+# not always the operator's home: `.weaveragent` can be a mount or a dataset
 # of its own, and access entries are a property of the filesystem rather than
 # of the tree. Where that parent does not exist yet the home is the right
 # stand-in, being where the script is about to create it. **The entry names the

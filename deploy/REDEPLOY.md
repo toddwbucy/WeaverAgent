@@ -50,7 +50,7 @@ the runbook is what gets amended.
 | Model artifacts, hash-pinned | `<prefix>/models/` | operator, by hand |
 | The python SPU prefix and zipapp | `<prefix>/python-spu/` | `python-spu/README.md` |
 | Agent account `weaver-<name>` (home `/home/weaver-<name>`, 2750) and member account `weaver-<name>-state` (no home) | passwd | create-agent |
-| Territory `weaver-<name>/` (root:operator 2750) with `state/` (member 0700) and `trace.ndjson` | the stack record's `agent-directory`, default `~operator/.weaveragents` | create-agent |
+| Territory `weaver-<name>/` (root:operator 2750) with `state/` (member 0700) and `trace.ndjson` | the stack record's `agent-directory`, default `~operator/.weaveragent` | create-agent |
 | Postgres election only: role and database `weaver_<name>`, a `peer map=weaver` line in `pg_hba.conf`, a `weaver` map line in `pg_ident.conf` | PostgreSQL | create-agent |
 | The agent's operations log, one per agent | `/var/log/weaver/<name>/admin.log` (directory root 0750) | create-agent makes the directory, admin the file |
 | Transient unit per load, under one slice | systemd | admin, at load |
@@ -237,6 +237,18 @@ chose an SPU per agent. Admin now reads only `<base>/<agent>/`, and `update-stac
 refuses a box whose base still holds any of those four files. The migration is a
 one-time manual step, made with every agent unloaded, before the new admin is
 installed. `<prefix>` is the install prefix, `/opt/weaver` by default.
+
+0. A box whose agent directory is still the plural `~/.weaveragents` (the default before
+   2026-10-02) renames it, and every configuration key and top-level declaration that
+   names the old path, never the territories' traces beneath it:
+
+   ```sh
+   mv ~/.weaveragents ~/.weaveragent
+   sudo grep -l '\.weaveragents' /etc/weaver/admin/* ~/.weaveragent/*.toml ~/.weaveragent/*.yaml 2>/dev/null \
+     | xargs -r sudo sed -i 's#\.weaveragents#.weaveragent#g'
+   ```
+
+   Check that `agent-config-directory` and each declaration's paths now name `~/.weaveragent`.
 
 1. Keep the old configuration whole, and read the values below from the copy:
 
