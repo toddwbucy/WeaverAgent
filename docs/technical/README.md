@@ -22,17 +22,18 @@ the book is about, what authority it has, and where to start.
 
 **A local-first agent framework whose primary artifact is the trace.**
 
-An agent is four processes on one machine, plus a fifth program that stands outside
-every agent and does not run while one is serving. Every seam that crosses a process
-line is a Unix domain socket, and there is no listening network socket in the
-program at any depth.
+An agent is four processes on one machine, plus a fifth program, its own
+`weaver-admin`, that drives its lifecycle and does not run while it is serving. Every
+seam that crosses a process line is a Unix domain socket, and there is no listening
+network socket in the program at any depth.
 
 **The count follows the socket rule rather than a roster.** A seam is tagged socket
-where a process line is crossed and link where none is, so the sockets to
-`weaver-gate`, `weaver-spu`, and `weaver-state` each name a process, and the worker
-that holds the harness is the fourth. `weaver-admin` is the one outside. An earlier
-count of three predates `weaver-state`, chartered 2026-08-18, and is the same
-omission the apex's seven-crate roster carries.
+where a process line is crossed and link where none is, so the sockets to `weaver-gate`,
+`weaver-spu`, and `weaver-state` each name a process, and the worker that holds the
+harness is the fourth. `weaver-admin` is the agent's organ but no resident process: an
+invocation that runs per verb and exits. An earlier count of three predates
+`weaver-state`, chartered 2026-08-18, and is the same omission the apex's seven-crate
+roster carries.
 
 The harness is a content-neutral switchboard: it holds
 the sockets, routes between organs, and has no opinion about what it routes.

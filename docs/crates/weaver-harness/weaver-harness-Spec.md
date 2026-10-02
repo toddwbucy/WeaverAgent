@@ -822,7 +822,7 @@ to: axiom-floor-is-vocabulary-behavior-is-socket
 stores a filesystem path to the trace, per `weaver-harness-PRD` section 5, and the organ
 binaries of section 3 are the one exception, supplied by the composition root as a
 construction parameter the way `weaver-trace-Spec` section 6 takes its queue depth: a
-deployment fact the operator places in admin's configuration, the SPU's per agent per
+deployment fact the operator places in the agent's own admin configuration, per
 `weaver-admin-Spec` section 9, never an election in the declaration and never a
 discovery. **The three named shapes are pinned by the compile-fail doctests of section
 8, and the general prohibition stays review's,** three doctests reaching the shapes they

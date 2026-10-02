@@ -5,8 +5,9 @@
     deploy/turn.py <agent> "<text>" --raw      the answer line as the gate sent it
 
 The gate's inbound shape, as the determinism matrix drives it: dial the agent's
-world socket under the admin's coordination root, send one JSON line
-`{"text": ...}`, read one line back. The gate admits by the dialer's uid, so
+world socket under its coordination root, read from the agent's own admin root
+(`<WEAVER_ADMIN_CONFIG or /etc/weaver/admin>/<agent>/coordination-root`, required, as
+admin requires it), send one JSON line `{"text": ...}`, read one line back. The gate admits by the dialer's uid, so
 this runs as the operator the declaration's `allowed-uids` names, with no
 sudo. It is the smallest client the loop has; a refusal to connect means the
 agent is not loaded or the uid is not admitted, and the record of the turn is
@@ -24,13 +25,28 @@ def main() -> int:
         print(__doc__, file=sys.stderr)
         return 2
     agent, text = sys.argv[1], sys.argv[2]
+    # The name as admin's own check admits it, so it cannot walk the path
+    # below out of the base.
+    if not agent or not all(c.isascii() and (c.isalnum() or c in "-_") for c in agent):
+        print(f"'{agent}' is not an agent name: ASCII letters, digits, - and _", file=sys.stderr)
+        return 2
     raw = "--raw" in sys.argv[3:]
-    root = "/run"
+    base = os.environ.get("WEAVER_ADMIN_CONFIG") or "/etc/weaver/admin"
+    # **`coordination-root` is required, so there is no default to fall back
+    # to.** Admin refuses every verb on a root without it. A key this user
+    # cannot read once fell back to /run, which sent the turn to a gate that is
+    # not this agent's and reported none standing (Codex on #45). Absent,
+    # unreadable and empty are each named.
+    key = os.path.join(base, agent, "coordination-root")
     try:
-        with open("/etc/weaver/admin/coordination-root", encoding="utf-8") as f:
-            root = f.read().strip() or root
-    except OSError:
-        pass
+        with open(key, encoding="utf-8") as f:
+            root = f.read().strip()
+    except OSError as e:
+        print(f"cannot read {key}: {e.strerror or e}", file=sys.stderr)
+        return 1
+    if not root:
+        print(f"{key} names no directory", file=sys.stderr)
+        return 1
     path = os.path.join(root, f"weaver-{agent}", "gate.sock")
     # No existence check first: the socket's directory is the agent group's,
     # and a shell that joined that group after it started cannot see the path

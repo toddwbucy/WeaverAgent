@@ -40,7 +40,6 @@
 //!         LifecycleDirective::Load { .. } => "load",
 //!         LifecycleDirective::Unload { .. } => "unload",
 //!         LifecycleDirective::Validate { .. } => "validate",
-//!         LifecycleDirective::List => "list",
 //!         LifecycleDirective::Show { .. } => "show",
 //!         LifecycleDirective::Observe => "observe",
 //!     }
@@ -57,7 +56,6 @@
 //!         LifecycleAnswer::GateStopped => "gate_stopped",
 //!         LifecycleAnswer::Validated => "validated",
 //!         LifecycleAnswer::State { .. } => "state",
-//!         LifecycleAnswer::Agents { .. } => "agents",
 //!     }
 //! }
 //! fn refusal_name(r: &LifecycleRefusal) -> &'static str {
@@ -96,11 +94,10 @@ pub use config::{
 };
 pub use identity::{AccessRule, PeerIdentity, authorized};
 pub use wire::{
-    AgentName, AgentState, AgentSummary, Candidate, Composer, DECODE_MESSAGE_BOUND, EnterBinding,
-    EnterPayload, ExchangeId, FaultCase, FaultReport, Finish, Generation, KillCause, LabelAnswer,
-    LabelDirective, LabelRefusal, LifecycleAnswer, LifecycleAsk, LifecycleDirective,
-    LifecycleRefusal, Lineage, LoadFacts, MAX_ENVELOPE_BYTES, Opener, OrganEnvelope, Payload,
-    Position, RefusalRecord, RefusingOrgan, RunId, ScoredLabel, SegmentPreamble, SessionId,
-    TokenAnswer, TokenAsk, TokenDirective, TokenRefusal, ToolExecution, ToolOutcome, TurnFrame,
-    TurnKey,
+    AgentName, AgentState, Candidate, Composer, DECODE_MESSAGE_BOUND, EnterBinding, EnterPayload,
+    ExchangeId, FaultCase, FaultReport, Finish, Generation, KillCause, LabelAnswer, LabelDirective,
+    LabelRefusal, LifecycleAnswer, LifecycleAsk, LifecycleDirective, LifecycleRefusal, Lineage,
+    LoadFacts, MAX_ENVELOPE_BYTES, Opener, OrganEnvelope, Payload, Position, RefusalRecord,
+    RefusingOrgan, RunId, ScoredLabel, SegmentPreamble, SessionId, TokenAnswer, TokenAsk,
+    TokenDirective, TokenRefusal, ToolExecution, ToolOutcome, TurnFrame, TurnKey,
 };

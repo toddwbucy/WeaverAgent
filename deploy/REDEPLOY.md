@@ -8,9 +8,9 @@ measured fact, and the log of each run sits at `docs/project/redeploy-<date>-<bo
 The four scripts in this directory divide the work. `decommission.sh` takes down and
 archives, `bootstrap-stack.sh` builds and installs on a clean box, `create-agent.sh`
 makes one agent, `verify-load.sh` proves one agent loads. `update-stack.sh` is for
-every later install on a box this runbook has already stood up: it needs the
-installed config to read and a git tree to name the build, and it refuses without
-both.
+every later install on a box this runbook has already stood up: it needs the stack
+record and at least one agent root to read and a git tree to name the build, and it
+refuses without them.
 
 ## 0. Before touching anything: measure
 
@@ -25,30 +25,44 @@ rustup show active-toolchain
 sudo deploy/decommission.sh            # the plan: what stands, discovered
 ```
 
-The plan lists every config root under `/etc/weaver`, the install prefixes those
-configs name, every agent by allow-list, declaration and account, the transient
+The plan lists every key root under `/etc/weaver`, the install prefixes those roots
+name, every agent with its accounts and declaration, the transient
 `weaver-worker@<agent>.service` units and the `system-weaver\x2dworker.slice`, the
-territories, record and log directories, and the store's `weaver%` roles and
-databases. If it lists something this runbook does not mention, the runbook is what
-gets amended.
+territories, record and log directories, and the store's roles and databases.
+Discovery is by rule, not by one layout: a key root is any directory under
+`/etc/weaver` holding a `worker-binary` or an `allow-list` (an agent's root, the stack
+record, or the box-wide configuration of the layout before 2026-10-01); the agents are
+the agent roots' names, the old allow-lists' names and the old declarations; the
+databases and roles are `weaver_<agent>` for those agents and whatever their
+declarations name. A `weaver-*` account or database no agent found claims is printed
+as left alone and never touched. If it lists something this runbook does not mention,
+the runbook is what gets amended.
 
 **What a stack consists of**, so a reader knows what the plan is enumerating:
 
 | Piece | Where | Made by |
 |---|---|---|
-| Admin's configuration: one file per key | `/etc/weaver/admin/` (a second root per parallel stack, e.g. `admin-stageb`) | bootstrap |
+| Stack record: the box-wide defaults, one file per key, read by the scripts and never by admin | `/etc/weaver/stack/` | bootstrap |
+| Admin base, empty until an agent is made | `/etc/weaver/admin/` (root 0755; `WEAVER_ADMIN_CONFIG` names another) | bootstrap |
+| Agent root: the agent's admin configuration, one file per key, copied from the stack record, plus its own `log-path` and its declaration `agent.toml` | `/etc/weaver/admin/<name>/` (root 0755, files 0644) | create-agent |
 | Members: `worker pyworker weaver-admin weaver-gate weaver-spu weaver-state` | `<prefix>/bin/` | bootstrap, update-stack |
 | Engine libraries `libggml*`, `libllama*` | `<prefix>/lib/`, reached by `/etc/ld.so.conf.d/weaver.conf` and by `LD_LIBRARY_PATH` in `unit-properties` | bootstrap |
 | Model artifacts, hash-pinned | `<prefix>/models/` | operator, by hand |
 | The python SPU prefix and zipapp | `<prefix>/python-spu/` | `python-spu/README.md` |
 | Agent account `weaver-<name>` (home `/home/weaver-<name>`, 2750) and member account `weaver-<name>-state` (no home) | passwd | create-agent |
-| Territory `<agent-dir>/<name>/` (root:operator 2750) with `state/` (member 0700) and `trace.ndjson` | `agent-config-directory`, default `~operator/.weaveragents` | create-agent |
-| Declaration `<name>.toml` | same directory | create-agent (or by hand for `engine = "none"`) |
-| Store role and database `weaver_<name>`, a `peer map=weaver` line in `pg_hba.conf`, a `weaver` map line in `pg_ident.conf` | PostgreSQL | create-agent |
-| Admin's log | `/var/log/weaver/admin-operations.ndjson` | admin, at first verb |
+| Territory `weaver-<name>/` (root:operator 2750) with `state/` (member 0700) and `trace.ndjson` | the stack record's `agent-directory`, default `~operator/.weaveragents` | create-agent |
+| Postgres election only: role and database `weaver_<name>`, a `peer map=weaver` line in `pg_hba.conf`, a `weaver` map line in `pg_ident.conf` | PostgreSQL | create-agent |
+| The agent's operations log, one per agent | `/var/log/weaver/<name>/admin.log` (directory root 0750) | create-agent makes the directory, admin the file |
 | Transient unit per load, under one slice | systemd | admin, at load |
 
 ## 1. Decommission and archive
+
+> **`decommission.sh` does not yet understand the per-agent layout.** It was written for
+> the box-wide layout before 2026-10-01 (one `/etc/weaver/admin` with an `allow-list`).
+> **Do not run it on a box migrated to `/etc/weaver/admin/<agent>/` roots** until
+> toddwbucy/WeaverAgents#35 lands; until then take agents down by hand, per
+> `HowToDeployANewAgent.md` section 7. On a box still on the box-wide layout it runs as
+> described below.
 
 ```sh
 sudo deploy/decommission.sh --archive              # -> /mnt/bulk-store/dev-archive-<date>-<host>
@@ -112,7 +126,8 @@ deploy/bootstrap-stack.sh --install    # then install under sudo
 What it does, so the log can say which step a failure was at:
 
 1. Prints the box facts and refuses if `cccl` is outside the 3.1.4-3.3.4 window, if
-   there is no `nvcc`, or if `/etc/weaver/admin` or `<prefix>/bin` already stands.
+   there is no `nvcc`, if the stack record `/etc/weaver/stack` or `<prefix>/bin`
+   already stands, or if `/etc/weaver/admin` holds anything.
 2. Names the tree: the git revision, or `nogit-<lockfile sha>` on a tree without git.
 3. `cargo test --release --locked -p weaver-trace -p weaver-harness -p weaver-state
    --features weaver-harness/pyworker,weaver-state/sqlite,weaver-state/postgres`.
@@ -129,40 +144,47 @@ What it does, so the log can say which step a failure was at:
    dangle), versioned file, SONAME link and bare link together. Writes
    `/etc/ld.so.conf.d/weaver.conf`, runs `ldconfig`, and refuses if `weaver-spu`
    still has an unresolved library. The members carry no RUNPATH.
-6. Writes `/etc/weaver/admin`: an empty `allow-list`, `agent-config-directory`,
-   the three binary paths, `run-tool`, `control-tool`, `coordination-root=/run`,
-   `log-path`, and `unit-properties` carrying `UMask=0000`, the `LD_LIBRARY_PATH`,
-   and the journal rate limit turned off. Creates `/var/log/weaver` (root 0750) and
-   the agent config directory (operator 0755).
+6. Writes the stack record `/etc/weaver/stack/`: the three binary paths, `run-tool`,
+   `control-tool`, `coordination-root=/run`, `unit-properties` carrying `UMask=0000`,
+   the `LD_LIBRARY_PATH` and the journal rate limit turned off, and for the scripts
+   alone `prefix`, `log-directory` and `agent-directory`. Admin never reads it. An
+   operator who wants `headroom-bytes` or `state-store-socket` on every agent writes
+   it into the record before making agents. Creates the admin base `/etc/weaver/admin`
+   empty (root 0755), `/var/log/weaver` (root 0750) and the agent directory
+   (operator 0755).
 
 The python SPU is a separate install and not part of this step. Its procedure is
-`python-spu/README.md`, "Installing it on a box", and an agent that elects it needs
-`spu-implementations` and `agent-spu` in a config root, per the admin Spec section 9.
-Stand the Rust stack up first and add it only for an agent that needs it.
+`python-spu/README.md`, "Installing it on a box", and an agent that serves from it is
+made with `create-agent.sh --spu <prefix>/python-spu/python-spu.pyz`, which writes that
+path as its root's `spu-binary` in place of the stack record's. Stand the Rust stack
+up first and add it only for an agent that needs it.
 
 ## 4. Agents
 
 The per-agent procedure in full is `HowToDeployANewAgent.md`; this is the summary.
 One at a time, plan first, then `--apply`. The script refuses to merge with anything
-half-made, so a name that already has an account, a directory, a role or a database
-must be cleaned up first.
+half-made, so a name that already has an account, a directory, an agent root, a log
+directory, a role or a database must be cleaned up first.
 
 ```sh
-deploy/create-agent.sh m1 --artifact /opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf --engine postgres
-deploy/create-agent.sh m1 --artifact /opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf --engine postgres --apply
+deploy/create-agent.sh m1 --engine <sqlite|postgres> --artifact /opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf
+deploy/create-agent.sh m1 --engine <sqlite|postgres> --artifact /opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf --apply
 ```
 
-It makes both accounts, the territory with traversal ACLs along the operator's home,
-the role and database, the two authentication lines, the declaration, and the
-allow-list entry, then proves the member reaches the database and the agent's own uid
-does not. The operator's new group membership needs a fresh login or `newgrp`.
+The store is the one `--engine` names, `sqlite` or `postgres`, and the option is
+required since neither is the default. The script makes both
+accounts, the territory with traversal ACLs along the operator's home, for postgres
+the role, database and two authentication lines, and the agent root staged under a
+dot-name: every key copied from the stack record, `log-path`, and the declaration as
+`agent.toml`. It then proves the boundary (for sqlite, the member can write its state
+room and the agent's own uid cannot enter it; for postgres, the member reaches the
+database and the agent's own uid does not), and only then moves the root into place,
+which is the admission. The operator's new group membership needs a fresh login or
+`newgrp`.
 
-An agent electing no store (`[state-store] engine = "none"`) is declared by hand,
-since there is no store to provision or probe: make the accounts and territory the
-same way (the script's `accounts` and `territory` steps, minus the state directory),
-write the declaration from the surface in
-`docs/technical/weaver-agents/agent-declaration.md`, and append the name to the
-allow-list. Karl on the thinkpad is this case; its declaration is carried byte for
+An agent electing no store (`[state-store] engine = "none"`) is made by hand, since
+there is no member or store to provision or probe: `HowToDeployANewAgent.md`
+section 3. Karl on the thinkpad is this case; its declaration is carried byte for
 byte between boxes, system prompt included, because the determinism runs compare
 against it.
 
@@ -173,9 +195,11 @@ sudo WEAVER_ADMIN_CONFIG=/etc/weaver/admin /opt/weaver/bin/weaver-admin validate
 sudo deploy/verify-load.sh <name>              # load, read the load event from the sink, unload
 ```
 
-`verify-load.sh` counts the sink's lines before and after the load and refuses a load
-that wrote nothing, then prints the event kinds it saw and the load event, and unloads
-unless told `--keep`.
+`verify-load.sh` reads the agent's root, counts the sink's lines before and after the
+load and refuses a load that wrote nothing, then prints the event kinds it saw and the
+load event, and unloads unless told `--keep`. A failed load needs no clearing by hand:
+admin clears the failed unit itself (`systemctl reset-failed`), so the next load is
+not refused as `prior_unit_unreaped`. It does not retry the load.
 
 ## 5. What to record in the run log
 
@@ -196,10 +220,86 @@ hit first.
   the members are built from this tree and not compared against another project's
   output.
 - The bulk store is local (`/bulk-store`, exported to the thinkpad as
-  `/mnt/bulk-store`). Pass the archive path to `decommission.sh` explicitly.
+  `/mnt/bulk-store`). Name the archive path on the olympus side.
 - `~/.cargo/config.toml` may carry a `CUDARC_CUDA_VERSION` override; remove it
   (handoff of 2026-09-29, step 2).
 - Its recorded runs used the `e69916a` stack and its CUDA user-space libraries. The
   purge removes `<prefix>/lib` and the `backup-*` directories, so if olympus still
   needs that library set for the probe's B1 re-staging, the archive is where it will
   be, and `box-facts.txt` names each library's sha256.
+
+## 7. Migrating a box on the box-wide layout
+
+Until 2026-10-01 admin read one configuration for every agent: `/etc/weaver/admin`
+held the keys for all of them, an `allow-list` admitted them, `agent-config-directory`
+held their declarations as `<name>.toml`, and `spu-implementations` with `agent-spu`
+chose an SPU per agent. Admin now reads only `<base>/<agent>/`, and `update-stack.sh`
+refuses a box whose base still holds any of those four files. The migration is a
+one-time manual step, made with every agent unloaded, before the new admin is
+installed. `<prefix>` is the install prefix, `/opt/weaver` by default.
+
+1. Keep the old configuration whole, and read the values below from the copy:
+
+   ```sh
+   B=/etc/weaver/admin
+   sudo cp -a "$B" /etc/weaver/admin.before-migration
+   OLD=/etc/weaver/admin.before-migration
+   DECLS=$(cat "$OLD/agent-config-directory")
+   ```
+
+2. For each agent in `$OLD/allow-list`, make its root with every box-wide key except
+   the four retired ones, its own `spu-binary`, its own log, and its declaration:
+
+   ```sh
+   for a in $(cat "$OLD/allow-list"); do
+     sudo install -d -o root -g root -m 0755 "$B/$a"
+     for k in worker-binary spu-binary gate-binary run-tool control-tool \
+              coordination-root unit-properties headroom-bytes state-store-socket; do
+       [ ! -f "$OLD/$k" ] || sudo cp "$OLD/$k" "$B/$a/$k"
+     done
+     # The agent's agent-spu choice, if it had one, resolved through spu-implementations.
+     key=$(awk -v a="$a" '$1 == a {print $2}' "$OLD/agent-spu" 2>/dev/null)
+     if [ -n "$key" ]; then
+       awk -v k="$key" '$1 == k {print $2}' "$OLD/spu-implementations" | sudo tee "$B/$a/spu-binary" >/dev/null
+     fi
+     sudo install -d -o root -g root -m 0750 "/var/log/weaver/$a"
+     echo "/var/log/weaver/$a/admin.log" | sudo tee "$B/$a/log-path" >/dev/null
+     sudo mv "$DECLS/$a.toml" "$B/$a/agent.toml"
+     sudo chown root:root "$B"/"$a"/*
+     sudo chmod 0644 "$B"/"$a"/*
+   done
+   ```
+
+   Check each `spu-binary` names the path the agent served from before.
+
+3. Remove the old top-level files, so that the base holds only agent roots:
+
+   ```sh
+   sudo find "$B" -maxdepth 1 -type f -delete
+   ```
+
+4. Write the stack record from the old values, for `create-agent.sh` and
+   `update-stack.sh`:
+
+   ```sh
+   S=/etc/weaver/stack
+   sudo install -d -o root -g root -m 0755 "$S"
+   for k in worker-binary spu-binary gate-binary run-tool control-tool \
+            coordination-root unit-properties headroom-bytes state-store-socket; do
+     [ ! -f "$OLD/$k" ] || sudo cp "$OLD/$k" "$S/$k"
+   done
+   echo <prefix>          | sudo tee "$S/prefix" >/dev/null
+   echo /var/log/weaver   | sudo tee "$S/log-directory" >/dev/null
+   echo "$DECLS"          | sudo tee "$S/agent-directory" >/dev/null
+   ```
+
+   `agent-directory` is where the territories stand; the old declaration directory
+   held them beside the declarations. `create-agent.sh` requires it under the
+   operator's home.
+
+5. Install the new admin (`deploy/update-stack.sh --install`), which validates and
+   loads every agent root before it reports the box current. The old box-wide log
+   `/var/log/weaver/admin-operations.ndjson` stays where it is as the record of what
+   came before; each agent's acts from here on are in its own `admin.log`. When the
+   box has been verified, `/etc/weaver/admin.before-migration` can be archived and
+   removed.

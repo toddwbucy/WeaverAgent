@@ -128,11 +128,7 @@ fn a_release_before_any_admit_answers_out_of_order_on_the_seam() {
 #[test]
 fn a_directive_outside_the_vocabulary_is_refused_on_the_seam() {
     let (mut harness, mut child) = started();
-    for directive in [
-        LifecycleDirective::Leave,
-        LifecycleDirective::Stop,
-        LifecycleDirective::List,
-    ] {
+    for directive in [LifecycleDirective::Leave, LifecycleDirective::Stop] {
         let answer = harness.ask(directive.clone());
         assert_eq!(
             answer.payload,
@@ -188,7 +184,7 @@ fn a_second_admit_is_refused_on_the_ordering_across_the_seam() {
 fn one_directive_receives_one_answer_on_its_own_exchange() {
     let (mut harness, mut child) = started();
     for expected in 1..=3u64 {
-        let answer = harness.ask(LifecycleDirective::List);
+        let answer = harness.ask(LifecycleDirective::Stop);
         assert_eq!(answer.exchange.ordinal, expected);
         assert_eq!(answer.exchange.opener, Opener::Harness);
         assert_eq!(answer.position, Position::Close);

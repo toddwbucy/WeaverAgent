@@ -16,8 +16,8 @@ second box was declared, refused twice by name, corrected from the refusals
 alone, and loaded.
 
 One file per agent, TOML, kebab-case keys, owned by the operator and read by
-admin at `validate` and `load` from the directory admin's own config names
-(`agent-config-directory`). **Nothing defaults.** An absent required field
+admin at `validate` and `load` as `agent.toml` in the agent's own configuration
+root, `<base>/<agent>/`. **Nothing defaults.** An absent required field
 refuses the parse at any depth, because a default would be the program
 finishing a declaration the operator did not, and an unknown key refuses too,
 because a misspelled field that silently vanishes is a declaration that lies.
@@ -211,7 +211,8 @@ Three layers judge a declaration, in order, and each refusal is typed:
 2. **Inventory** (admin, at validate and load): the agent resolves in the
    account database and its home exists, the artifact is readable, the sink
    exists or is creatable, the sink directory's denial and custody both
-   hold, the allow-list carries the name, the cross-field binding rule.
+   hold, the agent's own configuration root exists and is root-owned, the
+   cross-field binding rule.
 3. **The organs** (at load): each may refuse its own instruction, the SPU's
    unsupplied-knob refusal being the one an operator meets first.
 

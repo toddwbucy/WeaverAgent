@@ -86,7 +86,7 @@ distribution admitted beside the lock. It runs isolated, so neither `PYTHONPATH`
 user site directory is read, and it writes nothing.
 
 The zipapp's first line names `/opt/weaver/python-spu/bin/python3.14`. Admin serves it
-to an agent through `spu-implementations` and `agent-spu`, per
+to an agent whose own root names it as `spu-binary`, per
 `docs/crates/weaver-admin/weaver-admin-Spec.md` section 9. The box facts record the
 lock's sha256 and the tree digest, which covers the interpreter, its standard library
 and every installed package. The packages are installed into the interpreter's own

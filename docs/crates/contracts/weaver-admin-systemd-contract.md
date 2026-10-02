@@ -104,20 +104,19 @@ and the classify binary joining it at issue #497. Neither addition crossed anyth
 at this boundary, which is why the omission went unnoticed and why it is corrected as a
 statement rather than as a change.
 
-**The vector widens nothing this boundary did not already
-carry.** The socket's path derives from the agent name the unit's name and its
-runtime directory already carry, the two organ binary paths are the operator's
-installed values, the SPU's chosen per agent among them per `weaver-admin-Spec`
-section 9, **the classify binary is a sibling of the worker binary** rather
-than a value of its own, and the loop file is a path in the operator's validated
-declaration. **The worker binary is the derivation's anchor and is not itself on the
-vector**, being the value the unit starts rather than a value the vector carries, so
-naming it here names a path the operator wrote and this boundary already knew. So a
+**The vector widens nothing this boundary did not already carry.** The socket's path
+derives from the agent name the unit's name and its runtime directory already carry, the
+two organ binary paths are the operator's installed values, the SPU's being the one the
+agent's own configuration root names, **the classify binary is a sibling of the worker
+binary** rather than a value of its own, and the loop file is a path in the operator's
+validated declaration. **The worker binary is the derivation's anchor and is not itself
+on the vector**, being the value the unit starts rather than a value the vector carries,
+so naming it here names a path the operator wrote and this boundary already knew. So a
 manager reading the vector learns the same agent name twice, paths the operator wrote,
 one path derived from a path the operator wrote, and one path the operator's own
-declaration named. Section 7's prohibition holds unchanged: no part of the
-agent's declaration is here, and a manager that logged the whole vector would still
-learn nothing about a turn.
+declaration named. Section 7's prohibition holds unchanged: no part of the agent's
+declaration is here, and a manager that logged the whole vector would still learn
+nothing about a turn.
 
 **The runtime directory is asked for here because its removal is the answer to a
 stale socket.** A Unix socket's pathname outlives the process that bound it, so a
@@ -133,6 +132,10 @@ when the unit stops.
 **A stop ask.** One unit named, stopped.
 
 **A state ask.** One unit named, its activity reported.
+
+**A clear ask.** One unit named, its failed state cleared so its name is free for
+the next start. Asked only after a state ask has answered `failed` for a load that
+was refused.
 
 **No handle crosses in either direction**, per section 0. The unit is started
 bare, it binds its own coordination socket, and the trace's handle reaches it
@@ -170,9 +173,12 @@ a later start ask for that name fails rather than replacing it. The failure is
 not distinguishable in the start ask's status, per the paragraph above, and the
 state ask reports it as `failed`, which is the one value this boundary states
 without ambiguity. Admin therefore reads the condition from the state ask and
-answers `PriorUnitUnreaped`, and reaping is the operator's act rather than
-admin's: a program that reset the unit before starting would discard the
-evidence of why the previous one failed, which is the operator's to read.
+answers `PriorUnitUnreaped`. **Admin clears the failed unit itself, on the
+operator's ruling of 2026-10-01,** as part of the refused load's rollback: the
+refusal is answered as it stood, the clear ask frees the name, and the operator's
+next load starts. The clear is a logged act of the rollback and the worker's own
+output stays in the journal, so what the clear discards is the manager's record
+that the unit failed and not the evidence of why. There is no automatic reload.
 
 **Two things carry what the outcome cannot, and both are the program's own.** The
 identity, the home, and the boundary are verified by admin before any ask is made,
@@ -195,6 +201,8 @@ condition so a later pass weighs a stated trade rather than rediscovering it.
   is bound by the worker the unit starts, per `weaver-admin-harness-contract`
   section 2.
 - A state ask is valid at any time and transitions nothing.
+- A clear ask follows a state ask that answered `failed`, inside a refused load's
+  rollback, and is followed by a state ask that says whether the name is free.
 - A stop ask is answered when the unit has stopped rather than when the stop was
   accepted, so an unload that returns has a stopped unit behind it.
 - Nothing here is ordered against the trace's handle, which crosses on a seam
@@ -205,12 +213,13 @@ condition so a later pass weighs a stated trade rather than rediscovering it.
 **Admin supplies** the validated agent name, the unit's properties as the operator's
 template fixes them, and the worker's argument vector of section 2.
 
-**Admin guarantees** that the name it interpolates is allow-listed and shaped as a
-name rather than a path, per `weaver-admin-PRD` section 7, so the delegated authority
-cannot be widened by an argument. It guarantees that every value in the argument
-vector is one the operator installed or one derived from that same validated name, so
-the vector is a second reading of the allow-list rather than a second authority
-beside it. It guarantees that it asks for one unit per agent
+**Admin guarantees** that the name it interpolates is shaped as a name rather than a
+path and names an agent whose own configuration root the operator wrote, root-owned
+and writable by no one else, per `weaver-admin-PRD` section 7, so the authority cannot
+be widened by an argument. It guarantees that every value in the argument vector is
+one the operator wrote into that agent's root or one derived from that same validated
+name, so the vector is a second reading of the agent's own root rather than a second
+authority beside it. It guarantees that it asks for one unit per agent
 and holds no second route to start one. It guarantees that the agent's identity and
 boundary were verified before the ask, so the manager is never asked to resolve what
 this program should have refused.
@@ -243,6 +252,8 @@ about the record, which is `weaver-admin-operator-contract`'s.
   could not undo, per `weaver-admin-PRD` section 5.
 - A state ask fails, which is reported as unknown rather than guessed at, because a
   state this boundary could not answer is not a state the program may invent.
+- A clear ask fails and the unit stays `failed`, which the rollback reports as an
+  act it could not undo, the next load then refusing `PriorUnitUnreaped` as before.
 
 **A unit that dies on its own is not a failure of this boundary.** The death is
 observed where it is observed, at the coordination socket the next verb finds absent,

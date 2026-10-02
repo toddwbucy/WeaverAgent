@@ -58,25 +58,6 @@ pub struct MemberAccount {
     pub gid: u32,
 }
 
-/// The fleet's allow-list: the names the operator delegated, per charter
-/// section 7.
-#[derive(Debug, Clone)]
-pub struct AllowList {
-    names: Vec<String>,
-}
-
-impl AllowList {
-    pub fn new(names: impl IntoIterator<Item = String>) -> Self {
-        AllowList {
-            names: names.into_iter().collect(),
-        }
-    }
-
-    pub fn admits(&self, name: &AgentName) -> bool {
-        self.names.iter().any(|n| n == &name.0)
-    }
-}
-
 /// The one identity-constructing site.
 ///
 /// The constructed identity is `weaver-<name>` **from the validated name,
@@ -131,8 +112,8 @@ pub struct Inventory {
 
 /// The one inventory function.
 ///
-/// The allow-list is consulted before anything else is touched. The parse is
-/// the floor's - `weaver_types::parse` yields a whole config or a typed error,
+/// The name was admitted by the agent's root before this runs, per
+/// `weaver-admin-Spec` section 9. The parse is the floor's - `weaver_types::parse` yields a whole config or a typed error,
 /// and this crate adds no partial reader. The existence checks are admin's,
 /// and **each is a look rather than an ask**: nothing is repaired and nothing
 /// is built.
@@ -145,10 +126,9 @@ pub struct Inventory {
 pub fn take_inventory(
     name: &AgentName,
     source: &str,
-    allow_list: &AllowList,
     boundary: &Boundary,
 ) -> Result<Inventory, LifecycleRefusal> {
-    take_inventory_against(name, source, allow_list, boundary, None)
+    take_inventory_against(name, source, boundary, None)
 }
 
 /// The whole of `take_inventory` with the host's answer about the agent's
@@ -167,13 +147,9 @@ pub fn take_inventory(
 fn take_inventory_against(
     name: &AgentName,
     source: &str,
-    allow_list: &AllowList,
     boundary: &Boundary,
     group: Option<&ResolvedGroup>,
 ) -> Result<Inventory, LifecycleRefusal> {
-    if !allow_list.admits(name) {
-        return Err(LifecycleRefusal::NoSuchAgent);
-    }
     let identity = identity_for(name);
 
     let config = weaver_types::parse(source).map_err(|e| match e.kind {
@@ -863,14 +839,6 @@ pub fn declaration_digest(source: &str) -> String {
     hex
 }
 
-/// The names the allow-list admits, in the operator's order, for the verbs
-/// that answer for every agent at once.
-impl AllowList {
-    pub fn names(&self) -> &[String] {
-        &self.names
-    }
-}
-
 /// The first peer an access rule admits that the socket's mode will turn
 /// away, named by its field, or `None` where the two agree.
 ///
@@ -1350,7 +1318,6 @@ mod tests {
         let home = root.join("home");
         std::fs::create_dir_all(&home).expect("home");
         std::fs::set_permissions(&sink_dir, std::fs::Permissions::from_mode(0o700)).expect("mode");
-        let allow = AllowList::new(["karl".to_string()]);
         let name = AgentName("karl".into());
         let bound = boundary(&home, 65533);
 
@@ -1373,7 +1340,6 @@ mod tests {
         let refused = take_inventory_against(
             &name,
             &source,
-            &allow,
             &bound,
             Some(&ResolvedGroup::UserWithoutGroup),
         );
@@ -1384,14 +1350,7 @@ mod tests {
 
         // And a box that provisioned no agent at all is refused on nothing.
         assert!(
-            take_inventory_against(
-                &name,
-                &source,
-                &allow,
-                &bound,
-                Some(&ResolvedGroup::NoAgent)
-            )
-            .is_ok(),
+            take_inventory_against(&name, &source, &bound, Some(&ResolvedGroup::NoAgent)).is_ok(),
             "an unprovisioned box is refused on no fact about an agent"
         );
     }
@@ -1424,7 +1383,6 @@ mod tests {
         let home = root.join("home");
         std::fs::create_dir_all(&home).expect("home");
         std::fs::set_permissions(&sink_dir, std::fs::Permissions::from_mode(0o700)).expect("mode");
-        let allow = AllowList::new(["karl".to_string()]);
         let name = AgentName("karl".into());
         let bound = boundary(&home, 65533);
 
@@ -1437,7 +1395,7 @@ mod tests {
         };
         let source = config_source(&sink_dir)
             .replace("allowed-uids = [0]\n", &format!("allowed-uids = [{me}]\n"));
-        let refused = take_inventory_against(&name, &source, &allow, &bound, Some(&group));
+        let refused = take_inventory_against(&name, &source, &bound, Some(&group));
         assert!(
             matches!(refused, Err(LifecycleRefusal::BoundaryUnverified)),
             "the unreachable uid refuses as a boundary fault: {refused:?}"
@@ -1456,7 +1414,7 @@ mod tests {
             ],
         };
         assert!(
-            take_inventory_against(&name, &source, &allow, &bound, Some(&reachable)).is_ok(),
+            take_inventory_against(&name, &source, &bound, Some(&reachable)).is_ok(),
             "a uid inside the group passes the same walk"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -1551,7 +1509,6 @@ mod tests {
     /// passes the inventory, each case naming the arm that catches it.
     #[test]
     fn the_store_election_is_judged_before_the_box() {
-        let allow = AllowList::new(["alpha".to_string()]);
         let name = AgentName("alpha".into());
         let root = crate::scratch::Scratch(
             std::env::temp_dir().join(format!("wt-store-decl-{}", std::process::id())),
@@ -1581,7 +1538,7 @@ mod tests {
         ];
         for (store, field) in cases {
             let source = config_source_electing(&home, store);
-            let refused = take_inventory(&name, &source, &allow, &boundary);
+            let refused = take_inventory(&name, &source, &boundary);
             match refused {
                 Err(LifecycleRefusal::ConfigInvalid { field: Some(ref f) }) if f.0 == field => {}
                 other => panic!("{store:?} should refuse naming {field}, got {other:?}"),
@@ -1598,7 +1555,6 @@ mod tests {
     /// directory holding no socket, failing as an ask rather than a look.
     #[test]
     fn every_election_but_none_requires_the_member_and_postgres_its_socket() {
-        let allow = AllowList::new(["alpha".to_string()]);
         let name = AgentName("alpha".into());
         let root = crate::scratch::Scratch(
             std::env::temp_dir().join(format!("wt-store-box-{}", std::process::id())),
@@ -1618,14 +1574,14 @@ mod tests {
         let embedded = config_source(&sink_dir);
         assert!(
             matches!(
-                take_inventory(&name, &embedded, &allow, &without_binary),
+                take_inventory(&name, &embedded, &without_binary),
                 Err(LifecycleRefusal::BoundaryUnverified)
             ),
             "an absent election is the embedded engine and requires the member"
         );
         let declined = config_source_electing(&sink_dir, "engine = \"none\"\n");
         assert!(
-            take_inventory(&name, &declined, &allow, &without_binary).is_ok(),
+            take_inventory(&name, &declined, &without_binary).is_ok(),
             "none declines the member and requires nothing"
         );
 
@@ -1637,7 +1593,7 @@ mod tests {
         );
         assert!(
             matches!(
-                take_inventory(&name, &service, &allow, &without_socket),
+                take_inventory(&name, &service, &without_socket),
                 Err(LifecycleRefusal::BoundaryUnverified)
             ),
             "the service engine requires the store's socket under the configured directory"
@@ -1660,7 +1616,6 @@ mod tests {
     /// conforms: admin-member-account-required-at-inventory
     #[test]
     fn every_election_but_none_requires_the_members_own_account() {
-        let allow = AllowList::new(["alpha".to_string()]);
         let name = AgentName("alpha".into());
         assert_eq!(
             member_identity_for(&name),
@@ -1683,18 +1638,18 @@ mod tests {
         let embedded = config_source(&sink_dir);
         assert!(
             matches!(
-                take_inventory(&name, &embedded, &allow, &unprovisioned),
+                take_inventory(&name, &embedded, &unprovisioned),
                 Err(LifecycleRefusal::BoundaryUnverified)
             ),
             "an absent election is the embedded engine and requires the account"
         );
         let declined = config_source_electing(&sink_dir, "engine = \"none\"\n");
         assert!(
-            take_inventory(&name, &declined, &allow, &unprovisioned).is_ok(),
+            take_inventory(&name, &declined, &unprovisioned).is_ok(),
             "none declines the member and requires nothing"
         );
         assert!(
-            take_inventory(&name, &embedded, &allow, &boundary(&sink_dir, 65533)).is_ok(),
+            take_inventory(&name, &embedded, &boundary(&sink_dir, 65533)).is_ok(),
             "and a box carrying the account passes, so the refusal is the account's"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -2105,13 +2060,12 @@ mod tests {
     #[test]
     fn a_kind_gate_disagreement_refuses_at_the_inventory() {
         let root = scratch("kind");
-        let allow = AllowList::new(["alpha".to_string()]);
         let name = AgentName("alpha".to_string());
         let bound = boundary(&root.join("absent-home"), 65533);
 
         // Diagnostic, carrying the instruction its kind excludes.
         let source = format!("binding-kind = \"diagnostic\"\n{}", config_source(&root));
-        let refused = take_inventory(&name, &source, &allow, &bound);
+        let refused = take_inventory(&name, &source, &bound);
         assert!(
             matches!(
                 refused,
@@ -2130,7 +2084,7 @@ mod tests {
             ),
             "",
         );
-        let refused = take_inventory(&name, &source, &allow, &bound);
+        let refused = take_inventory(&name, &source, &bound);
         assert!(
             matches!(
                 refused,
@@ -2154,7 +2108,6 @@ mod tests {
     #[test]
     fn a_declaration_granting_the_permission_refuses_at_the_inventory() {
         let root = scratch("permission");
-        let allow = AllowList::new(["alpha".to_string()]);
         let name = AgentName("alpha".to_string());
         let bound = boundary(&root.join("absent-home"), 65533);
 
@@ -2167,7 +2120,7 @@ mod tests {
             config_source(&root),
             "the grant landed in the source"
         );
-        let refused = take_inventory(&name, &source, &allow, &bound);
+        let refused = take_inventory(&name, &source, &bound);
         assert!(
             matches!(
                 refused,
@@ -2181,7 +2134,7 @@ mod tests {
             "residual-readout-election = false\n",
             "residual-readout-election = false\ncolumn-permission = true\n",
         );
-        let refused = take_inventory(&name, &source, &allow, &bound);
+        let refused = take_inventory(&name, &source, &bound);
         assert!(
             matches!(
                 refused,
@@ -2206,14 +2159,13 @@ mod tests {
         std::fs::create_dir_all(&sink_dir).expect("sink dir");
         let home = root.join("home");
         std::fs::create_dir_all(&home).expect("home");
-        let allow = AllowList::new(["alpha".to_string()]);
         let name = AgentName("alpha".to_string());
         // An agent uid that is nobody here, so ownership is not the route.
         let bound = boundary(&home, 65533);
 
         // World-searchable: the kernel would let the agent traverse.
         std::fs::set_permissions(&sink_dir, std::fs::Permissions::from_mode(0o755)).expect("mode");
-        let refused = take_inventory(&name, &config_source(&sink_dir), &allow, &bound);
+        let refused = take_inventory(&name, &config_source(&sink_dir), &bound);
         assert!(
             matches!(refused, Err(LifecycleRefusal::BoundaryUnverified)),
             "a traversable sink directory refuses, got {refused:?}"
@@ -2222,7 +2174,7 @@ mod tests {
         // Admin-owned and unsearchable by anyone else: the boundary the
         // operator is required to draw.
         std::fs::set_permissions(&sink_dir, std::fs::Permissions::from_mode(0o750)).expect("mode");
-        let admitted = take_inventory(&name, &config_source(&sink_dir), &allow, &bound);
+        let admitted = take_inventory(&name, &config_source(&sink_dir), &bound);
         assert!(
             admitted.is_ok(),
             "an unsearchable boundary admits: {admitted:?}"
@@ -2285,14 +2237,13 @@ mod tests {
         std::fs::set_permissions(&sink_dir, std::fs::Permissions::from_mode(0o750)).expect("mode");
         let home = root.join("home");
         std::fs::create_dir_all(&home).expect("home");
-        let allow = AllowList::new(["alpha".to_string()]);
         let name = AgentName("alpha".to_string());
 
         // This process owns the directory, so it holds custody and the load
         // is admitted: the denial half already passes at 0750.
         let held = boundary(&home, 65533);
         assert!(
-            take_inventory(&name, &config_source(&sink_dir), &allow, &held).is_ok(),
+            take_inventory(&name, &config_source(&sink_dir), &held).is_ok(),
             "an admin-owned directory holds custody"
         );
 
@@ -2316,27 +2267,12 @@ mod tests {
             !agent_can_traverse(&sink_dir, &third_party),
             "the denial half still passes, which is what makes this case reachable"
         );
-        let refused = take_inventory(&name, &config_source(&sink_dir), &allow, &third_party);
+        let refused = take_inventory(&name, &config_source(&sink_dir), &third_party);
         assert!(
             matches!(refused, Err(LifecycleRefusal::BoundaryUnverified)),
             "a directory a third principal owns refuses the load, got {refused:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
-    }
-
-    /// The allow-list is consulted before anything else is touched, and the
-    /// identity is built from the validated name rather than from any
-    /// caller-supplied string.
-    #[test]
-    fn an_unlisted_name_refuses_before_anything_is_read() {
-        let root = scratch("allow");
-        let allow = AllowList::new(["alpha".to_string()]);
-        let bound = boundary(&root, 65533);
-        // The source is not even valid TOML: if the allow-list were consulted
-        // second, the parse error would surface instead.
-        let refused = take_inventory(&AgentName("beta".into()), "%%%", &allow, &bound);
-        assert!(matches!(refused, Err(LifecycleRefusal::NoSuchAgent)));
-        assert_eq!(identity_for(&AgentName("alpha".into())), "weaver-alpha");
     }
 
     /// **The restore is judged here, and the session name decides what it
@@ -2374,14 +2310,13 @@ mod tests {
             ),
         )
         .expect("the record writes");
-        let allow = AllowList::new(["alpha".to_string()]);
         let name = AgentName("alpha".into());
         let bound = boundary(&home, 65533);
         let restore = |cut: &str| format!("\n[restore]\nrecord = \"{}\"\n{cut}", record.display());
 
         // A resume: the record's own session, whole, resolves to r-b's turn 3.
         let source = format!("{}{}", config_source(&sink_dir), restore(""));
-        let taken = take_inventory(&name, &source, &allow, &bound).expect("a resume admits");
+        let taken = take_inventory(&name, &source, &bound).expect("a resume admits");
         let lineage = taken.lineage.expect("a resume carries its lineage");
         assert_eq!(lineage.parent.0, "s-1");
         assert_eq!(lineage.run.0, "r-b");
@@ -2393,7 +2328,7 @@ mod tests {
             config_source(&sink_dir),
             restore("through = { run = \"r-b\", turn = 1 }\n")
         );
-        let refused = take_inventory(&name, &source, &allow, &bound);
+        let refused = take_inventory(&name, &source, &bound);
         assert!(
             matches!(refused, Err(LifecycleRefusal::ConfigInvalid { field: Some(ref f) }) if f.0 == "restore.through"),
             "a rewind under the record's own name refuses, got {refused:?}"
@@ -2405,7 +2340,7 @@ mod tests {
             "{branched}{}",
             restore("through = { run = \"r-a\", turn = 2 }\n")
         );
-        let taken = take_inventory(&name, &source, &allow, &bound).expect("a branch admits");
+        let taken = take_inventory(&name, &source, &bound).expect("a branch admits");
         let lineage = taken.lineage.expect("a branch carries its lineage");
         assert_eq!(
             (
@@ -2426,7 +2361,7 @@ mod tests {
             "through = { run = \"r-x\", turn = 9 }\n",
         ] {
             let source = format!("{branched}{}", restore(cut));
-            let refused = take_inventory(&name, &source, &allow, &bound);
+            let refused = take_inventory(&name, &source, &bound);
             assert!(
                 matches!(refused, Err(LifecycleRefusal::ConfigInvalid { field: Some(ref f) }) if f.0 == "restore.through"),
                 "an absent cut refuses naming the field, got {refused:?}"
@@ -2438,7 +2373,7 @@ mod tests {
             "{branched}\n[restore]\nrecord = \"{}\"\n",
             root.join("no-such-record.ndjson").display()
         );
-        let refused = take_inventory(&name, &source, &allow, &bound);
+        let refused = take_inventory(&name, &source, &bound);
         assert!(
             matches!(refused, Err(LifecycleRefusal::BoundaryUnverified)),
             "got {refused:?}"
@@ -2462,12 +2397,10 @@ mod tests {
         std::fs::create_dir_all(&sink_dir).expect("sink dir");
         std::fs::set_permissions(&sink_dir, std::fs::Permissions::from_mode(0o750)).expect("mode");
         let absent_home = root.join("no-such-home");
-        let allow = AllowList::new(["alpha".to_string()]);
         let bound = boundary(&absent_home, 65533);
         let refused = take_inventory(
             &AgentName("alpha".into()),
             &config_source(&sink_dir),
-            &allow,
             &bound,
         );
         assert!(matches!(refused, Err(LifecycleRefusal::BoundaryUnverified)));
@@ -2492,7 +2425,6 @@ mod tests {
         std::fs::set_permissions(&sink_dir, std::fs::Permissions::from_mode(0o750)).expect("mode");
         let home = root.join("home");
         std::fs::create_dir_all(&home).expect("home");
-        let allow = AllowList::new(["alpha".to_string()]);
         let name = AgentName("alpha".into());
         let bound = boundary(&home, 65533);
 
@@ -2500,7 +2432,7 @@ mod tests {
             "artifact = \"qwen3-4b-instruct\"",
             "artifact = \"/no/such/directory/model.gguf\"",
         );
-        let admitted = take_inventory(&name, &absent, &allow, &bound);
+        let admitted = take_inventory(&name, &absent, &bound);
         assert!(
             admitted.is_ok(),
             "an absent artifact path is the SPU's to refuse, got {admitted:?}"
@@ -2508,7 +2440,7 @@ mod tests {
 
         let unnamed =
             config_source(&sink_dir).replace("artifact = \"qwen3-4b-instruct\"", "artifact = \"\"");
-        let refused = take_inventory(&name, &unnamed, &allow, &bound);
+        let refused = take_inventory(&name, &unnamed, &bound);
         match refused {
             Err(LifecycleRefusal::ConfigInvalid { field: Some(ref f) })
                 if f.0 == "spu-instruction.decoder.model-binding.artifact" => {}

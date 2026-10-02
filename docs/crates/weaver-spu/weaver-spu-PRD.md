@@ -74,10 +74,10 @@ this charter says of the organ binds it: the residency, the device, the cache an
 rule, the seams it serves and the one organ per agent. What it says of this crate's own
 code does not, and the classify role of section 15 stays with this crate's classify
 process, which `python-spu` does not replace. Which implementation serves is chosen per
-agent in admin's configuration, per `weaver-admin-Spec` section 9, so two agents on one
-box may be served by two implementations at once, and the sentence above holds of the
-organ: whichever implementation serves an agent is the one process holding that agent's
-model on the device.
+agent in that agent's own admin configuration, per `weaver-admin-Spec` section 9, so two
+agents on one box may be served by two implementations at once, and the sentence above
+holds of the organ: whichever implementation serves an agent is the one process holding
+that agent's model on the device.
 
 **It is a domain root, and its members are not enumerated here.** The domain is semantic
 processing, all of it, per the reading the stub carried and this charter keeps: decode

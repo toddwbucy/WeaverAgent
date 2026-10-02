@@ -54,12 +54,15 @@ behind a boundary the kernel enforces.
 
 ## Architecture
 
-A deployed agent is four processes on one machine plus one program that stands outside
-every agent and does not run while one is serving. Every seam that crosses a process
+A deployed agent is four processes on one machine, and its own `weaver-admin`, the
+agent's lifecycle driver and management plane, which runs per verb as root and is not
+resident while the agent serves. Every organ is one agent's own: a second agent gets its
+own set, and managing several agents belongs to WeaverWeb or a separate application, not
+to admin (operator's ruling of 2026-10-01). Every seam that crosses a process
 line is a Unix domain socket, and there is no listening network socket anywhere.
 
 ```text
-                weaver-admin  (outside: loads, serves, unloads; systemd units)
+                weaver-admin  (the agent's management plane: loads, unloads; one unit)
                       |
    world --> weaver-gate --> [ worker: weaver-harness + weaver-trace + weaver-diagnostic ]
                                    |                 |
@@ -85,8 +88,10 @@ line is a Unix domain socket, and there is no listening network socket anywhere.
 - **`weaver-gate`** is the world-facing organ: it admits a dialer by uid, relays one JSON
   line in and one out, and holds the tool hooks.
 - **`weaver-state`** is the session store (`sqlite` default, `postgres` optional).
-- **`weaver-admin`** is the operator's program: inventory, units, verbs, the log sink,
-  and the choice of SPU implementation per agent.
+- **`weaver-admin`** is one agent's organ, invoked by the operator per verb: it reads only
+  that agent's config root `<base>/<agent>/` (base from `WEAVER_ADMIN_CONFIG`, default
+  `/etc/weaver/admin`), stands its unit, opens its trace sink and hands it to the worker,
+  and names its SPU by that root's `spu-binary`.
 - **`weaver-internal`** holds internal tools that run inside the loop (the calculator).
   A tool that binds a listening port is external and reaches the agent through the gate;
   one that does not is internal.
@@ -203,15 +208,16 @@ pytest -q                                                 # CPU; the venv is hel
 ### Deploying and driving an agent
 
 `deploy/REDEPLOY.md` (a box from scratch) and `deploy/HowToDeployANewAgent.md` (one
-agent on a standing stack) walk a postgres agent. An agent may elect sqlite or postgres
-(the build carries both, on the operator's ruling of 2026-09-30, #38). The scripts have
-known gaps, each an issue: `update-stack.sh` refuses at its test step (#33),
-`create-agent.sh` cannot make a sqlite agent (#34), `decommission.sh` discovers by one
-layout and matches every `weaver%` database (#35), small fixes (#39). The scripts are
+agent on a standing stack) are the runbooks. An agent elects sqlite or postgres (the
+build carries both, on the operator's ruling of 2026-09-30, #38). `create-agent.sh` still
+lays the territory out by POSIX ACLs under the operator's home, so it cannot stand an
+agent on a box whose home has no ACLs (#28); small fixes are #39. The scripts are
 `bootstrap-stack.sh`, `update-stack.sh`, `create-agent.sh`, `verify-load.sh`,
 `decommission.sh`, and `deploy/turn.py <agent> "<text>"` sends one turn through a
 loaded agent's gate as the operator's uid with no sudo. The installed stack lives under
-`/etc/weaver/admin`, `<prefix>/bin` and `/var/log/weaver`; each agent is a systemd unit
+`/etc/weaver/admin/<agent>/` (each agent's config root), `/etc/weaver/stack/` (the
+scripts' record of the install, which admin never reads), `<prefix>/bin` and
+`/var/log/weaver`; each agent is a systemd unit
 `weaver-worker@<agent>.service` under its own OS user. Run logs of redeploys are kept
 under `docs/project/redeploy-*.md`. The thinkpad runs a stack built from this tree at
 the split and completes turns through the gate (2026-09-30 15:33).

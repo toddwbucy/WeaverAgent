@@ -243,7 +243,6 @@ pub enum LifecycleDirective {
     Validate {
         agent: AgentName,
     },
-    List,
     Show {
         agent: AgentName,
     },
@@ -253,8 +252,8 @@ pub enum LifecycleDirective {
 /// `Leave` answers `Left`, `Stop` answers `TurnAborted` or `AtRest` by what it
 /// interrupted, `Admit` answers `Admitted`, `Release` answers `Released`,
 /// `Raise` answers `GateReady`, `Lower` answers `GateStopped`, `Validate`
-/// answers `Validated`, `Load`, `Unload`, and `Show` answer `State`, and `List`
-/// answers `Agents`. Any directive may answer a [`LifecycleRefusal`] instead,
+/// answers `Validated`, and `Load`, `Unload`, and `Show` answer `State`. Any
+/// directive may answer a [`LifecycleRefusal`] instead,
 /// which is the second half of what one answer per request means.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -279,9 +278,6 @@ pub enum LifecycleAnswer {
         /// section and issue.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         load: Option<Box<LoadFacts>>,
-    },
-    Agents {
-        agents: Vec<AgentSummary>,
     },
 }
 
@@ -472,15 +468,6 @@ pub enum AgentState {
     Idle,
     /// Work in flight.
     Active,
-}
-
-/// One row of the `List` answer.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentSummary {
-    pub name: AgentName,
-    pub state: AgentState,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub load: Option<LoadFacts>,
 }
 
 /// A turn frame, opaque to the gate: whatever the client sent, and the

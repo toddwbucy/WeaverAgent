@@ -170,7 +170,8 @@ states how it serves this path.
 
 1. A client reaches the agent's **Gate** at its world-opened Unix socket hook,
    per the demotion ruling of 2026-07-31 and `weaver-gate-world-contract`.
-   Admin's operator socket stands outside every agent, per section 12, and there
+   Admin, the agent's management plane, opens no socket the world can reach: it
+   is an invocation that dials the worker and exits, per section 12, and there
    is no listening network socket anywhere in the program. **The gate carries a
    second socket, opened by the agent rather than by the world, and step 7's
    tool traffic crosses it**, per the egress ruling of 2026-08-07. The two are
@@ -606,7 +607,7 @@ kind: axiom
 The administrative lifecycle has exactly two state-transition verbs, `load` and
 `unload`, and one verb that transitions nothing, `validate`, which confirms an
 agent's configuration and boundary without starting anything against them.
-Read-only `list` and `show` are observations, not transitions. Admitting and
+Read-only `show` is an observation, not a transition. Admitting and
 removing a principal are operator acts on the operating system, performed before
 an agent exists and after it stops existing. They sit outside the program's verb
 set, and what they bracket is the resting state the diagram names provisioned
@@ -645,7 +646,9 @@ The chain, in order:
 
 **Every organ is one agent's own**, on the operator's ruling of 2026-10-01: started
 under that agent's identity, constituted by that agent's configuration, and serving
-no other agent. An organ is a component of one agent and not a service of the host.
+no other agent. Admin is the one organ that does not run under the agent's identity:
+it is the operator's root invocation against that one agent, reading only the agent's
+own root, so it is that agent's by what it acts on rather than by its uid. An organ is a component of one agent and not a service of the host.
 A second agent gets its own admin, SPU, gate, state member, loop and harness, so two
 agents never share a process, everything an agent does is tied to its own
 processes, and the operating system enforces the identity between them.
@@ -1117,19 +1120,22 @@ holds what accumulates behind it, and every custody argument in this corpus is
 exclusion of the agent rather than evidence against the holder. A charter that
 appears to defend an artifact against its operator is misread.
 
-**The process topology, stated once so 5.1's test has something to read.** An
-agent is three processes, with the supervisor outside them arriving as an
-invocation rather than standing beside them. The worker is the composition
-root: its binary compiles the harness, `weaver-trace` under its contract, and
-the floor, and it binds the coordination socket admin dials, per the inversion
-of 2026-08-05. The SPU and the gate are each their own binary, forked by the
-harness during enter and holding one channel end each from their first
-instruction. `weaver-admin` stands outside every agent, compiles into its own
-processes, and is never linked into a worker. Those processes are the
-operator's verb invocations: one runs, dials, directs, and exits, so the
-supervisor is outside every agent in space and intermittent in time. A crate
-calling a crate inside one of those binaries is a link seam. Anything else
-crosses a process line and is a socket, per 5.1.
+**The process topology, stated once so 5.1's test has something to read.** An agent is
+four processes, with its supervisor arriving as an invocation rather than standing
+beside them. The state member is its own binary, which admin stands at the load beside
+the worker, per `weaver-state-Spec` section 2. The worker is the composition root: its binary compiles the harness,
+`weaver-trace` under its contract, and the floor, and it binds the coordination socket
+admin dials, per the inversion of 2026-08-05. The SPU and the gate are each their own
+binary, forked by the harness during enter and holding one channel end each from their
+first instruction. `weaver-admin` is one agent's own organ, its management plane beside
+the gate as its data plane, per the operator's ruling of 2026-10-01: it compiles into
+its own processes and is never linked into a worker. Those processes are the operator's
+verb invocations against that one agent: one runs, dials, directs, and exits, so the
+supervisor is outside the worker's address space and intermittent in time. Managing
+several agents is not an organ's and belongs to WeaverWeb or a separate application,
+which drives each agent through its own admin. A crate calling a crate inside one of
+those binaries is a link seam. Anything else crosses a process line and is a socket, per
+5.1.
 
 This is systems architecture at the OS level rather than at the network level,
 and the difference is not stylistic. At the network level the unit of
