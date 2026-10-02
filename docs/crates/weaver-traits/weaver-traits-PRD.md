@@ -10,7 +10,7 @@ conforms to.
 
 **Date filed:** 2026-07-29
 **Document ID:** `weaver-traits-PRD`
-**Parent:** `weaver-agents-PRD`
+**Parent:** `weaver-agent-PRD`
 **Editorial:** Per the Working Rules.
 **Landing PR:** #298
 
@@ -251,6 +251,6 @@ clause of the apex vocabulary-clause rule, and the first such naming is
 
 That distinction is worth keeping straight. `weaver-trace` is a **contract party**,
 because it records, validates, projects, and can refuse in named ways. It is not a floor
-crate, per `weaver-agents-PRD` section 5.1, since the floor is drawn by every domain and
+crate, per `weaver-agent-PRD` section 5.1, since the floor is drawn by every domain and
 this crate has one caller. This crate defines and does nothing, so it has
 obligations to no one and its governance runs through the clauses that cite it.

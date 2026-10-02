@@ -775,7 +775,7 @@ principal, every descriptor close-on-exec in the opening call itself.
 **This section runs for every binding and does not read the kind.** Both kinds
 declare a sink and both author a record into it, the kind selecting which
 mechanism the harness authors through rather than whether it authors, per
-`weaver-agents-PRD` section 6 as ruled 2026-08-24. So the discriminant is
+`weaver-agent-PRD` section 6 as ruled 2026-08-24. So the discriminant is
 opened the same way and the descriptor is sent the same way, and nothing here
 branches. An act earlier that date scoped this section to a serving binding on
 a reading the same day's ruling replaced, and the scoping is withdrawn rather
@@ -1217,7 +1217,7 @@ of the positionals, `--engine`, `--store-socket`, `--database`, and `--role`, ea
 followed by its value, the first on every vector and the other three under the service
 engine alone, so the territory and the preload path keep their places behind them. **The
 preload path is present where the resolved kind is diagnostic, and since 2026-09-04
-where a serving declaration elects a restore**, per `weaver-agents-PRD` section 6 as
+where a serving declaration elects a restore**, per `weaver-agent-PRD` section 6 as
 ruled 2026-08-24 and issue #432, and its absence is a serving load standing from nothing
 rather than a defect: the member binds the preload name only where this vector carries
 one, so a serving binding electing no restore stands no named door by the value not

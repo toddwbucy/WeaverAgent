@@ -4,7 +4,7 @@
 
 **Date filed:** 2026-08-18
 **Document ID:** `weaver-internal-PRD`
-**Parent:** `weaver-agents-PRD`
+**Parent:** `weaver-agent-PRD`
 **Editorial:** Per the Working Rules.
 
 ---
@@ -59,7 +59,7 @@ mechanism of the harness-SPU amendment prices, and it is the bar the framework
 holds itself to because the framework cannot accept risk on an operator's behalf.
 The calculator is the first framework member and the cap: no second framework
 member joins without an act that argues its corner the way the apex argues the
-calculator's at `weaver-agents-PRD` section 4.
+calculator's at `weaver-agent-PRD` section 4.
 
 **Operator-promoted members answer to the operator.** Admission, latency, and any
 reach beyond the pure bar are the operator's to accept, the same way the agent's
@@ -107,7 +107,7 @@ member's whole surface is call in, answer out.
 
 The calculator: a scientific expression evaluator, a pure function from an
 expression string to a value or a refusal in its own words. The apex places it at
-`weaver-agents-PRD` section 4 as a model-elected call whose result the harness
+`weaver-agent-PRD` section 4 as a model-elected call whose result the harness
 supplies deterministically, and the vision seats it in the elected inward corner.
 An operator control loop may also fire it autonomically for the eviction-and-splice
 pattern of the harness-SPU amendment, and the three-gate ladder of that mechanism -

@@ -6,7 +6,7 @@ human's ruling of 2026-07-31.
 
 **Date filed:** 2026-07-29
 **Document ID:** `weaver-admin-harness-contract`
-**Parent:** `weaver-agents-PRD`, invariant 5.3
+**Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
 **Landing PR:** #734
 
@@ -269,13 +269,13 @@ re-sent, revoked, or replaced. A harness that needs a handle it was not given
 has a failed load rather than a second request to make, because there is no
 exchange in which it asks for one. **The sink's count is one and does not
 follow the kind**, both kinds authoring a record and the kind selecting the
-mechanism the harness authors through, per `weaver-agents-PRD` section 6 as
+mechanism the harness authors through, per `weaver-agent-PRD` section 6 as
 ruled 2026-08-24. An act earlier that date had the handle crossing only for a
 serving binding, on a reading the ruling replaced, and this sentence is the
 correction rather than a second rule beside it. **The state channel's end
 follows the leg rather than the kind**, per the operator's ruling of
 2026-08-26: it crosses where admin stood the member and is absent where no
-member stands, either kind standing the member per `weaver-agents-PRD`
+member stands, either kind standing the member per `weaver-agent-PRD`
 section 6, and its absence reads as the leg not standing at the same site the
 dead-peer conversion already covers.
 
@@ -564,7 +564,7 @@ enter.** The standing argument holds in a shorter form than any seat's: the
 kind decides which components the fan-out stands up, the fan-out is the
 harness's, and a kind that does not cross this seam reaches no party that acts
 on it. The definition is `weaver-types-PRD` section 2.1's, per
-`weaver-agents-PRD` section 6 as amended this date, and it crosses at the
+`weaver-agent-PRD` section 6 as amended this date, and it crosses at the
 directive's top level rather than inside any instruction, because its consumer
 is the harness itself and no organ reads it.
 
@@ -676,7 +676,7 @@ reader of an earlier revision can tell a closed item from one that was never the
 - `weaver-harness-PRD`. The harness opens exchanges, and the alert emit point is not
   designed on the assumption that the record is its only sink. Landed in section 4,
   beside the seam table the clause describes.
-- `weaver-agents-PRD`. The organ definition, its two properties, and the harness as hub
+- `weaver-agent-PRD`. The organ definition, its two properties, and the harness as hub
   rather than spoke. Landed as invariant 5.4, taken early as a named exception to
   Working Process section 7 and recorded as such in apex section 5. This is the one
   item on this list that was registered and not applied under the apex rule, and the
@@ -690,6 +690,6 @@ reader of an earlier revision can tell a closed item from one that was never the
 - `weaver-harness-PRD` section 2. The interrupt's citation.
 - `weaver-trace-PRD` section 3.1 and `weaver-harness-trace-contract` section 3. The
   `turn.closed` payload states its close kind.
-- The `weaver-agents-PRD` correction list, deposited at review rather than by this
+- The `weaver-agent-PRD` correction list, deposited at review rather than by this
   act and cited by substance rather than position: the gate binds no network socket,
   restated at the apex re-authoring.

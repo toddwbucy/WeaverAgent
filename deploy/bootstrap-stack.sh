@@ -31,7 +31,7 @@
 #   WEAVER_ADMIN_CONFIG  /etc/weaver/admin      the admin base: one root per agent
 #   WEAVER_STACK_RECORD  /etc/weaver/stack      the scripts' record of this install
 #   WEAVER_OPERATOR      $SUDO_USER or $USER    owns the agent directory
-#   WEAVER_AGENT_DIR     /home/$OPERATOR/.weaveragents
+#   WEAVER_AGENT_DIR     /home/$OPERATOR/.weaveragent
 #   WEAVER_LOG_DIR       /var/log/weaver
 #   CUDA_LIB_DIR         /opt/cuda/lib64        joins LD_LIBRARY_PATH in unit-properties
 #   CARGO_TARGET_DIR     honoured; give the install its own, never a gate's
@@ -64,7 +64,7 @@ PREFIX=${WEAVER_PREFIX:-/opt/weaver}
 ADMIN_BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
 STACK=${WEAVER_STACK_RECORD:-/etc/weaver/stack}
 OPERATOR=${WEAVER_OPERATOR:-${SUDO_USER:-$USER}}
-AGENT_DIR=${WEAVER_AGENT_DIR:-/home/$OPERATOR/.weaveragents}
+AGENT_DIR=${WEAVER_AGENT_DIR:-/home/$OPERATOR/.weaveragent}
 LOG_DIR=${WEAVER_LOG_DIR:-/var/log/weaver}
 CUDA_LIB_DIR=${CUDA_LIB_DIR:-/opt/cuda/lib64}
 

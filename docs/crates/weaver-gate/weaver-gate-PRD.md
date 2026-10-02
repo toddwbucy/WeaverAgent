@@ -7,7 +7,7 @@ lower. The exchanges that carry work arrive with the token workflow.
 
 **Date filed:** 2026-07-31
 **Document ID:** `weaver-gate-PRD`
-**Parent:** `weaver-agents-PRD`
+**Parent:** `weaver-agent-PRD`
 **Editorial:** Per the Working Rules.
 **Landing PR:** #647
 
@@ -518,7 +518,7 @@ open-items entry on this contract's name settled with the name standing as filed
 - The section 2.3 entry this register carried dissolved with the naming ruling of
   2026-08-01: the seam draws loop 0's trio and owes the floor nothing, per the
   contract's section 7.
-- `weaver-agents-PRD`: the gate's rows and prose join the correction list's demotion
+- `weaver-agent-PRD`: the gate's rows and prose join the correction list's demotion
   entry, the component table, the section 3 path, and the organ framing of section 6,
   all filing with the re-authoring.
 

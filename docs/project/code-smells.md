@@ -11,7 +11,7 @@ invariant with no entry is now named.
 
 **Date filed:** 2026-08-03
 **Document ID:** `code-smells`
-**Parent:** `weaver-agents-PRD`
+**Parent:** `weaver-agent-PRD`
 **Editorial:** Per the Working Rules.
 
 ---

@@ -158,13 +158,13 @@ class PlanTests(unittest.TestCase):
             "coordination-root": "/run",
             "unit-properties": "UMask=0000\nEnvironment=LD_LIBRARY_PATH=/fixture/lib\n",
             "log-directory": str(self.logs),
-            "agent-directory": "/home/fixture-no-home/.weaveragents",
+            "agent-directory": "/home/fixture-no-home/.weaveragent",
             "prefix": str(self.root / "installed"),
         }
         for key, value in self.stack_keys.items():
             (self.stack / key).write_text(value + ("" if value.endswith("\n") else "\n"))
         self.home = self.root / "home"
-        (self.home / "fixture-no-home" / ".weaveragents").mkdir(parents=True)
+        (self.home / "fixture-no-home" / ".weaveragent").mkdir(parents=True)
         self.hba = self.root / "pg_hba.conf"
         self.hba.write_text("local all all peer\n")
         self.ident = self.root / "pg_ident.conf"
@@ -391,7 +391,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
 
     def test_apply_uses_privileged_collision_reads(self):
         for path in (self.config / "m1", self.home / "weaver-m1",
-                     self.home / "fixture-no-home" / ".weaveragents" / "weaver-m1"):
+                     self.home / "fixture-no-home" / ".weaveragent" / "weaver-m1"):
             with self.subTest(path=path):
                 self.log.unlink(missing_ok=True)
                 path.touch()
@@ -405,10 +405,10 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
                 path.unlink()
 
     def test_stack_values_are_trimmed(self):
-        (self.stack / "agent-directory").write_text("  /home/fixture-no-home/.weaveragents \r\n")
+        (self.stack / "agent-directory").write_text("  /home/fixture-no-home/.weaveragent \r\n")
         result = self.create()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("directory       /home/fixture-no-home/.weaveragents/weaver-m1 ", result.stdout)
+        self.assertIn("directory       /home/fixture-no-home/.weaveragent/weaver-m1 ", result.stdout)
 
     def test_agent_directory_outside_the_operators_home_refuses(self):
         (self.stack / "agent-directory").write_text("/srv/agents\n")

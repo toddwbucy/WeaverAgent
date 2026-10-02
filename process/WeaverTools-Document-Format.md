@@ -204,7 +204,7 @@ Those are settled by the seam and floor-link records, which do not read the
 directory. Nesting says which crate holds the domain, and its purpose is that
 someone who knows where a crate lives can find its documentation without a search.
 
-**The floor does not nest.** Which crates are floor is `weaver-agents-PRD` section 5.1's
+**The floor does not nest.** Which crates are floor is `weaver-agent-PRD` section 5.1's
 to say and not this document's, per section 8. What belongs here is where they sit:
 a floor crate is placed at the top of the crate tree rather than under a domain root.
 Filing one under a root would make every other root reach through that root's subtree
@@ -241,7 +241,7 @@ charter opened on its own should say what it belongs to without a directory list
 hand. An experiment's charter carries none, having no parent, as the apex carries
 none, and a probe's Spec names that charter.
 
-**A crate outside the agent boundary names the suite.** `weaver-agents-PRD` section 0
+**A crate outside the agent boundary names the suite.** `weaver-agent-PRD` section 0
 rules that such a crate does not refine that document and parents to the suite, and that
 what governs outside crates at the suite level is not yet written. So the value is the
 suite rather than a charter, and the graph parent edge still names the `WeaverTools`
@@ -250,10 +250,10 @@ system node, which is the same belonging under the name the graph has for it.
 it too until its crate left the repository on 2026-09-26.
 
 **What the apex's absent header reads against.** Working Rules section 1 elects which
-fields each kind carries and is authoritative for `weaver-agents-PRD` carrying none.
+fields each kind carries and is authoritative for `weaver-agent-PRD` carrying none.
 What this section owes is the reading against the edge, and the edge is missing rather
-than impossible: that document charters the weaver-agents domain and not the suite, per
-its own section 0, which records that the graph carries no `weaver-agents` node and that
+than impossible: that document charters the weaver-agent domain and not the suite, per
+its own section 0, which records that the graph carries no `weaver-agent` node and that
 the level lands either as a Format act adding a kind or with the crate tree gaining the
 directory. Until one of those happens there is nothing for a value in that header to
 agree with, and the act that builds the level is the act that says what the header then
@@ -320,7 +320,7 @@ representations at once per `weaver-trace-Spec` section 3. The kind is admitted 
 ruling of 2026-09-15, which took the five declarations the corpus already carried
 rather than retyping them into a kind that answers a different question.
 
-**axiom.** One of the apex's five invariants, declared by `weaver-agents-PRD` at the
+**axiom.** One of the apex's five invariants, declared by `weaver-agent-PRD` at the
 subsection that states it. An axiom is not a claim about a crate and binds no code
 directly. It is what a claim can be grounded in, so a query can ask which claims serve
 an invariant and which invariant a claim serves. There are five and the set is closed: a

@@ -1,5 +1,5 @@
 //! The run's record, one shape over two mechanisms, per `weaver-harness-Spec`
-//! section 9's settled election and `weaver-agents-PRD` section 6 as ruled
+//! section 9's settled election and `weaver-agent-PRD` section 6 as ruled
 //! 2026-08-24: a serving run authors the trace through `weaver-trace` and a
 //! diagnostic run authors a diagnostic-trace through `weaver-diagnostic`,
 //! this crate the sole writer under either kind and the kind selecting the

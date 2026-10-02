@@ -10,7 +10,7 @@ conforms to.
 
 **Date filed:** 2026-07-29
 **Document ID:** `weaver-types-PRD`
-**Parent:** `weaver-agents-PRD`
+**Parent:** `weaver-agent-PRD`
 **Depends on:** `weaver-traits`
 **Editorial:** Per the Working Rules.
 **Landing PR:** #731
@@ -202,7 +202,7 @@ measurement written before this act carries the vector with no election
 beside it, and a measurement written after carries the flag whichever way
 it fell.
 
-**The binding kind joins the file 2026-08-24**, on `weaver-agents-PRD` section 6
+**The binding kind joins the file 2026-08-24**, on `weaver-agent-PRD` section 6
 as amended that date. It is the operator's declaration of what the load is for,
 serving or diagnostic, and the components the load stands up follow from it: a
 serving binding raises the whole interior and a diagnostic binding raises it

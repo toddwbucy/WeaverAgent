@@ -6,7 +6,7 @@ separately.
 
 **Date filed:** 2026-07-29
 **Document ID:** `weaver-harness-trace-contract`
-**Parent:** `weaver-agents-PRD`, invariant 5.3
+**Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
 **Landing PR:** #713
 

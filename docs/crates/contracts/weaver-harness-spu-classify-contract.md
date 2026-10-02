@@ -10,7 +10,7 @@ the three restates another.
 
 **Date filed:** 2026-08-19
 **Document ID:** `weaver-harness-spu-classify-contract`
-**Parent:** `weaver-agents-PRD`, invariant 5.3
+**Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
 **Landing PR:** #300
 

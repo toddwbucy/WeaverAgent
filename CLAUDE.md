@@ -4,8 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repository is
 
-`WeaverAgents` is the agent of the WeaverTools suite: a ten-crate Rust workspace that
-builds the deployable proto-stateful agent, plus the documents that authorize its code,
+`WeaverAgent` is one agent of the WeaverTools suite, singular by the operator's ruling of
+2026-10-02 (it was `WeaverAgents`): a ten-crate Rust workspace that builds the deployable
+proto-stateful agent, plus the documents that authorize its code,
 the deploy scripts that install it on a box, and a Python prototype of one organ. It was
 split out of the monorepo `toddwbucy/WeaverTools-old2` on 2026-09-30 (root commit
 `a9d9827`, no history on `main`; the local `seed-history` branch holds the monorepo's
@@ -17,8 +18,11 @@ process or a network boundary, never linked:
 - `toddwbucy/WeaverAnalysis`, the analytical tools over the trace, driver and reader of
   the diagnostic record. Out of this tree's boundary; its Spec forbids any `weaver-*`
   dependency.
-- `toddwbucy/WeaverWeb`, the suite's frontend and first consumer, reached through
-  connectors that do not exist yet.
+- `toddwbucy/WeaverWeb`, the fleet: it connects to many agents and manages them. Its
+  connectors (gate-con and admin-con) run beside each agent as their own service users,
+  are WeaverWeb's and never this repository's, start under the operator's provisioning
+  and never under admin, and reach the agent only through its two doors. The role map
+  that bounds them is the box's (toddwbucy/WeaverTools#6).
 
 The rule that drew the line: a crate a consumer meets across a network boundary gets its
 own repository; the agent keeps everything interior. The suite-level documentation
@@ -26,19 +30,19 @@ repository (`toddwbucy/WeaverTools`) holds `experiments/` and will hold the visi
 cross-repository contracts and the process documents. Until it does, those live here.
 
 Issue and pull request numbers in inherited code and documents (`#689`, `#551`, ...) are
-monorepo numbers. Its 31 open issues were transferred to `toddwbucy/WeaverAgents` on
+monorepo numbers. Its 31 open issues were transferred to this repository on
 2026-09-30 and carry new numbers there. A `toddwbucy/WeaverTools` reference in a
 document or code written before 2026-09-30 means the monorepo; this file uses the name
 for the suite repository.
 
 All of these repositories were **public** on 2026-09-30. Check rather than assume:
-`gh repo view toddwbucy/WeaverAgents --json visibility`.
+`gh repo view toddwbucy/WeaverAgent --json visibility`.
 
 ## The deliverable
 
 **A deployable proto-stateful agent that completes a turn end to end against a real
 local model and emits a clean, turn-bracketed, correctly-custodied trace.** The trace is
-the primary artifact, not a diagnostic. `docs/crates/weaver-agents-PRD.md` is the apex:
+the primary artifact, not a diagnostic. `docs/crates/weaver-agent-PRD.md` is the apex:
 the deliverable, the five invariants, the lifecycle and the enforcement posture every
 other document answers to.
 
@@ -274,7 +278,7 @@ Commit subjects carry `code:`, `docs:` or `process:`.
 
 ## Enforcement
 
-Per `weaver-agents-PRD` section 11, what actually catches defects:
+Per `weaver-agent-PRD` section 11, what actually catches defects:
 
 - **Compile-time pins** for invariants that are type properties. A runtime test cannot
   pin the absence of a trait impl.

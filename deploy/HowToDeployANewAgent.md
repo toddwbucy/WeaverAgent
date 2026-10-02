@@ -5,7 +5,7 @@ redeploy, where m1 and karl were made this way and proven to load; the log of th
 `docs/project/redeploy-2026-09-30-thinkpad.md`. Standing the stack itself up is
 `REDEPLOY.md`, and this document starts where that one ends.
 
-Every command runs from the WeaverAgents tree. `<name>` is the agent's name: a unix
+Every command runs from the WeaverAgent tree. `<name>` is the agent's name: a unix
 user, a database role, a database and a directory, so `create-agent.sh` takes
 lowercase letters and digits, 2 to 16 characters. Paths below are the defaults; a
 box's real values are in the stack record `/etc/weaver/stack/`, one file per key,
@@ -22,7 +22,7 @@ load where any piece is missing, so the pieces are made first and admin is asked
 |---|---|---|
 | Agent account, the worker's uid | `weaver-<name>`, home `/home/weaver-<name>` | system user, nologin, home 2750 |
 | Member account, the state store's uid (agents with a store) | `weaver-<name>-state`, no home | system user, nologin |
-| Territory | `<agent-directory>/weaver-<name>/`, the stack record's `agent-directory` (default `~operator/.weaveragents`) | root:operator 2750 |
+| Territory | `<agent-directory>/weaver-<name>/`, the stack record's `agent-directory` (default `~operator/.weaveragent`) | root:operator 2750 |
 | State room (agents with a store) | `<territory>/state/`, where a sqlite store keeps its file | member 0700, unreachable by the agent's uid |
 | Trace sink | `<territory>/trace.ndjson` | opened by admin under root at load |
 | Agent root, which is the admission | `/etc/weaver/admin/<name>/`: `worker-binary`, `spu-binary`, `gate-binary`, `run-tool`, `control-tool`, `coordination-root`, `unit-properties` (and `headroom-bytes`, `state-store-socket` where the stack record has them), copied from the stack record, plus `log-path` | root, directory 0755, files 0644; admin refuses a root that is not root-owned or is group- or world-writable |
@@ -42,7 +42,7 @@ new login or `newgrp weaver-<name>`.
 - The artifact is on the box, under `/opt/weaver/models`, and its hash is known. An
   agent's identity is its artifact as much as its prompt; record the sha256 in the run
   log with the declaration's.
-- The name collides with nothing: `id weaver-<name>` fails, `~/.weaveragents/weaver-<name>`,
+- The name collides with nothing: `id weaver-<name>` fails, `~/.weaveragent/weaver-<name>`,
   `/etc/weaver/admin/<name>` and `/var/log/weaver/<name>` are absent, and for a
   postgres election the role and database do not exist. The script checks all of this
   and refuses rather than merging, because a half-made agent that looks whole is worse
@@ -80,7 +80,7 @@ a plain system identity, `permission-mode = "deny"`, an empty tool set, surprisa
 the sink in the territory, and the store's engine (with its database and role for
 postgres). Edit `/etc/weaver/admin/<name>/agent.toml` under sudo before validating if
 the agent wants another prompt, a wider context, or `ask`; the fields are in
-`docs/technical/weaver-agents/agent-declaration.md`, and nothing defaults, so an
+`docs/technical/weaver-agent/agent-declaration.md`, and nothing defaults, so an
 absent or misspelled key refuses the parse by name.
 
 ## 3. An agent without a store
@@ -94,7 +94,7 @@ root from the stack record, with the root made last because it is the admission:
 sudo useradd --system --shell /usr/sbin/nologin --create-home --user-group weaver-<name>
 sudo usermod -aG weaver-<name> "$USER"
 sudo chmod 2750 /home/weaver-<name>
-sudo install -d -o root -g "$USER" -m 2750 ~/.weaveragents/<name>
+sudo install -d -o root -g "$USER" -m 2750 ~/.weaveragent/<name>
 sudo install -d -o root -g root -m 0750 /var/log/weaver/<name>
 R=/etc/weaver/admin/.<name>.partial
 sudo install -d -o root -g root -m 0755 "$R"
@@ -141,7 +141,7 @@ denied-uids = []
 
 [trace-sink]
 kind = "file"
-path = "/home/todd/.weaveragents/karl/trace.ndjson"
+path = "/home/todd/.weaveragent/karl/trace.ndjson"
 create = true
 
 [state-store]
@@ -202,7 +202,7 @@ first.
 ## 7. Taking an agent down
 
 `deploy/decommission.sh` does not yet understand the per-agent layout and must not be
-run on a box on it until toddwbucy/WeaverAgents#35 lands. Take an agent down by hand: the pieces of section 0 are removed in reverse: unload; remove its root
+run on a box on it until toddwbucy/WeaverAgent#35 lands. Take an agent down by hand: the pieces of section 0 are removed in reverse: unload; remove its root
 `/etc/weaver/admin/<name>/`, which ends its admission; for postgres, drop the database,
 then the role, and remove its two authentication lines; `userdel -r` both accounts;
 remove the territory and the log directory `/var/log/weaver/<name>/`. Archive the

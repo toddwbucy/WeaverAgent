@@ -10,7 +10,7 @@ logout is the init system, and what the program relies on from it was stated now
 
 **Date filed:** 2026-08-05
 **Document ID:** `weaver-admin-systemd-contract`
-**Parent:** `weaver-agents-PRD`, invariant 5.3
+**Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
 **Landing PR:** #734
 

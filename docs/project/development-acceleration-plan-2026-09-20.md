@@ -444,7 +444,7 @@ checkout. GitHub histories are observations retrieved on 2026-09-20.
 [rules]: ../../process/WeaverTools-Working-Rules.md
 [format]: ../../process/WeaverTools-Document-Format.md
 [handoff]: ../../process/WeaverTools-Handoff-Format.md
-[apex]: ../crates/weaver-agents-PRD.md
+[apex]: ../crates/weaver-agent-PRD.md
 [internal]: ../crates/weaver-internal/weaver-internal-PRD.md
 [replay-loop]: ../crates/weaver-harness/Loops/diagnostic-replay-loop.md
 [p638]: https://github.com/toddwbucy/WeaverTools/pull/638

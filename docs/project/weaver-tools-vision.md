@@ -8,7 +8,7 @@ is written against it.
 **Document ID:** `weaver-tools-vision`
 **Editorial:** ASCII, no em-dashes, no semicolons.
 
-Companion to `weaver-agents-PRD`. The PRD is design and is checkable against code.
+Companion to `weaver-agent-PRD`. The PRD is design and is checkable against code.
 This document is motive and is not. Where the PRD specifies one turn of the
 proto-stateful agent, this document holds the arc that turn is the first step
 of.
@@ -226,7 +226,7 @@ whole of what that user owns.
 the action, and where it was dispatched. An earlier cut of this section ran them
 together as one inside-versus-outside axis, which cannot classify the ordinary case
 of a memory lookup that reaches a database over a network, and which the apex already
-avoids: `weaver-agents-PRD` section 4 calls the calculator **a model-elected call whose
+avoids: `weaver-agent-PRD` section 4 calls the calculator **a model-elected call whose
 result the harness supplies deterministically**, and reserves autonomic for
 **harness-initiated** action.
 
@@ -276,7 +276,7 @@ changing the axis bought.
 **The outward corner, elected and dispatched through the gate, is what the rest of
 this section is about.** A tool there is external to the agent and not constitutive
 of it, and this program builds none of them: what it owns is the grip they are built
-to fit, per `weaver-agents-PRD` section 9. Its call leaves as ordinary model output,
+to fit, per `weaver-agent-PRD` section 9. Its call leaves as ordinary model output,
 crossing the gate opaque and logged, and the harness owns dispatch on the far side, so
 the gate never distinguishes a tool call from any other output. The return is symmetric:
 the result re-enters through the gate, opaque and logged, and reaches the model only as
@@ -442,10 +442,10 @@ raises the development purpose one level, to the operator and the user, and
 what they meet is not a crate but a suite.
 
 **The suite moves up a level**, on the operator's ruling of 2026-09-27. **WeaverTools**
-names the suite and no longer this repository: HADES, weaver-agents, weaver-web,
-weaver-analysis, and whatever joins them. This repository becomes **weaver-agents**, the
-name of the domain it already holds, so the repository and its domain root carry one
-name and no second spelling stands one letter from it.
+names the suite and no longer this repository: HADES, weaver-agent, weaver-web,
+weaver-analysis, and whatever joins them. This repository is **WeaverAgent**, the name
+of the domain it holds, one agent, so the repository and its domain root carry one name
+and no second spelling stands one letter from it.
 
 **The ruling of 2026-08-23 that retired the rebrand is overturned**, and its reason is
 recorded here rather than deleted. It held because the repository was the suite. That
@@ -453,32 +453,32 @@ stopped being true when weaver-web left the tree on 2026-09-26 and HADES was cou
 member, being a repository of its own. One tree had also become a limit on the work, the
 frontend waiting on the backend because both moved through one queue.
 
-**The rename is triggered by an event and not scheduled.** weaver-web is already out.
-weaver-analysis stays in the tree while the feedback loop is worth more than the
-separation, uncoupled and held that way: it depends on no `weaver-*` crate, and an act
-that adds one is refused at review. Its extraction is the moment this repository takes
-the name weaver-agents.
+**The rename followed the extraction.** weaver-web left on 2026-09-26 and weaver-analysis
+on 2026-09-30, each to its own repository, and the agent's repository took its one name
+when the second had gone.
 
 **The agent keeps two doors and gains no others.** weaver-gate carries the data plane
 and weaver-admin the management plane, at `weaver-gate-world-contract` and
 `weaver-admin-operator-contract`. Each door gets a network connector outside it, a
-client of that door's socket rather than anything the agent listens to: `web-con`
-outside the gate and `admin-con` outside admin. They are separate clients, separately
+client of that door's socket rather than anything the agent listens to: `gate-con`
+outside the gate and `admin-con` outside admin, the names the 2026-10-02 ruling gives. They are separate clients, separately
 credentialed. Consumers talk to the connectors and never to the agent, so the agent's
-surface stays at two however many consumers and tools stand up. The connectors live in
-this repository and outside the weaver-agents domain, as weaver-analysis does, and each
-has its own planning session.
+surface stays at two however many consumers and tools stand up. The connectors are
+WeaverWeb's, in its repository or their own and never in this one, and start under
+the operator's provisioning, never under admin (operator's ruling of 2026-10-02,
+WeaverTools#6).
 
-**This repository stops at the connectors.** Each connector's Spec is its network
-interface, and that interface is what the repository publishes. weaver-web is its own
-repository and builds against those Specs and nothing deeper, so frontend and backend
-move at once from the day a connector's Spec merges, the frontend against a stub that
-answers it. A change to a connector's interface changes what an outside team builds
-against, and it moves with the care a contract takes.
+**This repository stops at its two doors.** Each door's contract is its interface, and
+that interface is what the repository publishes. weaver-web is its own repository and
+builds its connectors against those contracts and nothing deeper, so frontend and backend
+move at once from the day a contract merges, the frontend against a stub that answers it.
+A change to a door's contract changes what an outside team builds against, and it moves
+with the care a contract takes.
 
 **Credentials are issued on the server and dropped into a client's configuration**, and
 without one a client cannot talk to a connector. There is one credential per client per
-connector, so weaver-analysis, once it leaves, holds two. The server keeps a record of
+connector, so weaver-analysis, its own repository since 2026-09-30, holds two as a
+client of both. The server keeps a record of
 what it issued and revokes one credential without touching another, and a credential
 file never enters a repository. **A connector authenticates and never authorizes.** It
 passes a verified principal across the door, and weaver-gate and weaver-admin decide

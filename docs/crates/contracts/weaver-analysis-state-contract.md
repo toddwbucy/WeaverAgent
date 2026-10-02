@@ -26,7 +26,7 @@
 No third party reaches this seam. The agent holds no end of it: the harness never dials
 this door, the model has no path to it, and the door refuses the agent's own credential
 at the accept. The one ruled crossing into the agent that is not the two external
-contracts of 2026-08-01, per `weaver-agents-PRD` section 0 as amended 2026-08-24, and it
+contracts of 2026-08-01, per `weaver-agent-PRD` section 0 as amended 2026-08-24, and it
 exists only where the load declared the diagnostic kind or elected a restore, per
 section 1.
 
@@ -79,7 +79,7 @@ destination rewrite changes the session name alone, as section 2 governs.
 
 **From `weaver-types`.** Nothing crosses. The binding kind conditions this
 door's existence and never rides it, the declaration having done its work at
-the load, per `weaver-agents-PRD` section 6.
+the load, per `weaver-agent-PRD` section 6.
 
 **This seam's own.** Nothing. A seam whose whole vocabulary is drawn is the
 point rather than an omission: the preload's claim is that what it lands is

@@ -40,7 +40,7 @@ pub struct AgentConfig {
     pub tool_set: Vec<ToolName>,
     pub permission_mode: weaver_traits::PermissionMode,
     /// What this load is for, per `weaver-types-Spec` section 2 and
-    /// `weaver-agents-PRD` section 6: absence means serving, so a declaration
+    /// `weaver-agent-PRD` section 6: absence means serving, so a declaration
     /// written before the member existed declares what it always meant. Admin
     /// resolves the absence at inventory, the one site, per
     /// `weaver-admin-Spec` section 7.
@@ -141,7 +141,7 @@ pub enum StoreEngine {
     Postgres,
 }
 
-/// What a load is for, per `weaver-agents-PRD` section 6 as amended
+/// What a load is for, per `weaver-agent-PRD` section 6 as amended
 /// 2026-08-24: a serving binding raises the whole interior and a diagnostic
 /// binding raises it without Gate, for the replay apex section 8 places
 /// outside the agent.

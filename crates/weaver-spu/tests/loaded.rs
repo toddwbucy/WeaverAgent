@@ -1211,7 +1211,7 @@ mod seam_success {
     /// `weaver-spu-PRD` section 13.14 and the certification of
     /// `diagnostic-replay-loop` section 3 - the same derived seed from the
     /// same turn key and ordinal against the same weights on the same
-    /// device, which is `weaver-agents-PRD` section 8's reproducible claim
+    /// device, which is `weaver-agent-PRD` section 8's reproducible claim
     /// exercised across two processes. The empty-path refusal, the
     /// registry's second arm, is read on the way.
     ///

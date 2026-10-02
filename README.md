@@ -174,7 +174,7 @@ conformance check.
 
 - `process/WeaverTools-Working-Process.md` is the boot prompt: who is primary,
   in what order the work moves, and where it currently sits.
-- `docs/crates/weaver-agents-PRD.md` is the apex: the deliverable, the five
+- `docs/crates/weaver-agent-PRD.md` is the apex: the deliverable, the five
   invariants, the lifecycle, and the enforcement posture every other document
   answers to. It sits beside the crate directories rather than inside one,
   being the domain's own charter.

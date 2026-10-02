@@ -47,7 +47,7 @@ The operator sequences three acts, and the loop is the third:
    already derived, step 2's first half having run before this one, per
    `weaver-analysis-PRD` section 3 as amended 2026-09-01. Admin stands the
    interior without Gate and
-   the state member with its preload door, per `weaver-agents-PRD` section 6
+   the state member with its preload door, per `weaver-agent-PRD` section 6
    and `weaver-analysis-state-contract`. The run opens, the loop takes its
    seat, and its first act is the replay ask below, so the agent at this
    moment is waiting on custody rather than idle. **This loop's entry is not
@@ -115,7 +115,7 @@ rendered contribution `model.request` recorded, per the operator's ruling of
 2026-08-12 that the record holds the rendered form precisely so a replay
 does not re-render through a template that may have changed. Tokenization
 identity is verified against the recorded token identifiers of
-`model.measurement`, which is `weaver-agents-PRD` section 8's reproducible
+`model.measurement`, which is `weaver-agent-PRD` section 8's reproducible
 claim exercised rather than assumed, and a mismatch is a failed certification and not a
 lesser reading. **The post-flush input is the recorded rendered delta**: the re-entry a
 loop builds after a flush is inside the later turn's `model.request`, so the replay
@@ -152,7 +152,7 @@ The charter's section 4 procedure, as this loop performs it:
    partition. A record missing what its claim requires fails here, before any forward
    pass, which is the completeness-is-claim-relative rule doing its work. **A claim
    about the state rests on one fact beyond that list, and it is claim-relative the same
-   way**, per the charter's section 4 and `weaver-agents-PRD` section 8: the tee's
+   way**, per the charter's section 4 and `weaver-agent-PRD` section 8: the tee's
    election. It is the rule that decided what the original agent's state held, so a
    projection under a different one builds different holdings. This workflow
    explicitly names that projection as a different diagnostic session, and token-path
@@ -173,7 +173,7 @@ The charter's section 4 procedure, as this loop performs it:
    coordinate `weaver-diagnostic-Spec` section 3.3 states, the resident length
    at the draw, so the divergence and the field row it fell in share a key.
 3. **Again, with the reader, as its own load.** The readout election rides
-   the declaration and is read at the load, per `weaver-agents-PRD` section
+   the declaration and is read at the load, per `weaver-agent-PRD` section
    8, so the reader pass is a second load of the same declaration with the
    election on rather than a later phase of the first: the decode state is
    fresh by construction, each pass runs as its own run with its own run
@@ -189,7 +189,7 @@ The charter's section 4 procedure, as this loop performs it:
 **A failed certification refuses the readout and keeps the run.** What was
 attempted and where it diverged lands in the run's own record, the
 diagnostic-trace this run authors through `weaver-diagnostic`, per
-`weaver-agents-PRD` section 6 as ruled 2026-08-24. `weaver-analysis` reads it
+`weaver-agent-PRD` section 6 as ruled 2026-08-24. `weaver-analysis` reads it
 off the sink and judges there. An earlier form of this paragraph had the run
 authoring nothing and the divergence reaching the driver as an answer, which
 the same date's ruling replaced. The capture artifact act shapes what an
