@@ -634,6 +634,17 @@ fn a_misspelled_surprisal_election_refuses() {
     );
 }
 
+/// The analysis crate's pinned derivation, copied byte for byte into this tree
+/// from WeaverAnalysis `tests/fixtures/derived-surrogate.toml` at commit
+/// `10535e7` (2026-09-30), the commit that last changed it there. It is a copy
+/// rather than a path, because `include_str!` resolves at compile time and
+/// cannot follow `WEAVER_ANALYSIS_DIR` or a sibling checkout, and a workspace
+/// test must compile without one. When the fixture moves in WeaverAnalysis,
+/// the copy is replaced and this line names the new commit;
+/// `the_pinned_derivation_is_weaver_analysis_own` holds the two equal wherever
+/// the sibling stands.
+const DERIVED_SURROGATE: &str = include_str!("fixtures/derived-surrogate.toml");
+
 /// **The declaration `weaver-analysis derive` writes loads here**, per
 /// `weaver-analysis-Spec` section 3: the derived declaration is the one the
 /// operator loads. The file is the analysis crate's own pinned output, which
@@ -642,10 +653,7 @@ fn a_misspelled_surprisal_election_refuses() {
 /// surrogate pair, which crosses as the character.
 #[test]
 fn the_declaration_weaver_analysis_derives_parses() {
-    let config = parse(include_str!(
-        "../../weaver-analysis/tests/fixtures/derived-surrogate.toml"
-    ))
-    .expect("the derived declaration parses");
+    let config = parse(DERIVED_SURROGATE).expect("the derived declaration parses");
     assert_eq!(
         config.binding_kind,
         Some(weaver_types::BindingKind::Diagnostic)
@@ -658,6 +666,33 @@ fn the_declaration_weaver_analysis_derives_parses() {
             assert!(text.starts_with("You are Karl \u{1F600}"), "{text}")
         }
         other => panic!("one text block, got {other:?}"),
+    }
+}
+
+/// **The pinned copy is WeaverAnalysis's own text**, wherever that repository is
+/// checked out: `WEAVER_ANALYSIS_DIR`, or the sibling `../WeaverAnalysis` of the
+/// suite workshop. Where neither stands, there is nothing to compare, and the
+/// test says so on stderr rather than passing in silence. Where one stands and
+/// its fixture differs from the copy, the copy is stale and the test fails,
+/// naming the file to copy. Perturbation: change one byte of the copy, and with
+/// the sibling present it fails.
+#[test]
+fn the_pinned_derivation_is_weaver_analysis_own() {
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let analysis = std::env::var_os("WEAVER_ANALYSIS_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| workspace.join("../WeaverAnalysis"));
+    let source = analysis.join("tests/fixtures/derived-surrogate.toml");
+    match std::fs::read_to_string(&source) {
+        Ok(theirs) => assert!(
+            theirs == DERIVED_SURROGATE,
+            "the pinned crates/weaver-types/tests/fixtures/derived-surrogate.toml differs from {}: copy it over and name the WeaverAnalysis commit in config.rs",
+            source.display()
+        ),
+        Err(e) => eprintln!(
+            "SKIP the_pinned_derivation_is_weaver_analysis_own: no WeaverAnalysis fixture at {} ({e}); set WEAVER_ANALYSIS_DIR to compare",
+            source.display()
+        ),
     }
 }
 
