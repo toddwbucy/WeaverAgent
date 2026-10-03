@@ -902,8 +902,10 @@ fn run_load(
 ) -> Result<(), LifecycleRefusal> {
     let run_directory = config.run_directory();
     let Some(run_lock) = start::take_run_lock(&run_directory)? else {
-        return Err(match observe(config)? {
-            Observation::Silent => LifecycleRefusal::Unanswered,
+        // **Any answer, a refusal among them, is a run that stands**: only
+        // silence is `Unanswered`, per Spec section 3.
+        return Err(match observe(config) {
+            Ok(Observation::Silent) => LifecycleRefusal::Unanswered,
             _ => LifecycleRefusal::AgentRunning,
         });
     };
@@ -2712,6 +2714,29 @@ mod tests {
             );
             let _ = worker.join();
         }
+    }
+
+    /// **A load meeting a run whose worker refuses the observation answers
+    /// `AgentRunning`**, per Spec section 3: a refusal is an answer, so a run
+    /// stands, and the load touches nothing. Perturbation: propagate the
+    /// observation's refusal and the load answers `Malformed`.
+    #[test]
+    fn a_refused_observation_is_a_running_agent_to_a_load() {
+        let (config, _scratch) = scratch_config("load-refused-observe");
+        let mut holder = stand_in_holder(&config);
+        let worker = answering_worker(
+            &config,
+            vec![weaver_types::Payload::Refusal(LifecycleRefusal::Malformed)],
+        );
+        let mut standing = Standing::default();
+        assert_eq!(
+            run_load(&config, &AgentName("alpha".into()), &mut standing),
+            Err(LifecycleRefusal::AgentRunning)
+        );
+        assert!(holder.try_wait().unwrap().is_none(), "the run still stands");
+        let _ = holder.kill();
+        let _ = holder.wait();
+        let _ = worker.join();
     }
 
     /// **A refused leave returns to the operator unchanged**, per Spec

@@ -72,11 +72,19 @@ pub fn prepare_run_directory(
 /// between them is never the one repaired.
 pub fn hold_directory(path: &Path, uid: u32, gid: u32, mode: u32) -> Result<(), LifecycleRefusal> {
     match std::fs::symlink_metadata(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => match std::fs::create_dir(path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(_) => return Err(refuse_path("cannot be made", path)),
-        },
+        // **Made at its final mode, never wider**: the creating call carries
+        // the mode, which a umask can only narrow, so no inherited umask leaves
+        // a window in which another principal could plant an entry before the
+        // repair below.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            use std::os::unix::fs::DirBuilderExt;
+            let made = std::fs::DirBuilder::new().mode(mode).create(path);
+            match made {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(_) => return Err(refuse_path("cannot be made", path)),
+            }
+        }
         Err(_) => return Err(refuse_path("cannot be read", path)),
         Ok(_) => {}
     }
@@ -702,10 +710,16 @@ mod tests {
             take_run_lock(dir.0.as_path()).unwrap().is_none(),
             "a second take refuses while a constituent stands"
         );
+        // The stand-in is found at the run lock's number; a concurrent test's
+        // child between fork and exec may appear for an instant beside it.
         let found = holders(dir.0.as_path());
-        assert_eq!(found.len(), 1, "{found:?}");
-        assert_eq!(found[0].pid, child.id() as i32);
-        assert_eq!(found[0].fd, RUN_LOCK_FD);
+        assert!(
+            found.contains(&Holder {
+                pid: child.id() as i32,
+                fd: RUN_LOCK_FD
+            }),
+            "{found:?}"
+        );
         escalate_within(
             dir.0.as_path(),
             Duration::from_secs(5),
@@ -767,7 +781,13 @@ mod tests {
         let mut first = holding_child(&lock);
         let mut second = holding_child(&lock);
         drop(lock);
-        assert_eq!(holders(dir.0.as_path()).len(), 2);
+        // Both stand-ins are found. A concurrent test's child, between its
+        // fork and its exec, can hold this test's close-on-exec copy for an
+        // instant, which single-threaded admin never meets, so the scan is
+        // asked for both rather than for exactly two.
+        let found: Vec<i32> = holders(dir.0.as_path()).iter().map(|h| h.pid).collect();
+        assert!(found.contains(&(first.id() as i32)), "{found:?}");
+        assert!(found.contains(&(second.id() as i32)), "{found:?}");
         escalate_within(
             dir.0.as_path(),
             Duration::from_secs(5),
