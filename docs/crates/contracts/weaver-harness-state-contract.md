@@ -325,7 +325,8 @@ ask answers immediately, holding no event and parking never, like `shape`.
 **The `snapshot` ask writes a save point and answers where it stands**, added 2026-10-02
 on the operator's ruling on issue #1 and shaped by the rulings of the same day on #58:
 the store initiates nothing, so a save point is taken when the harness asks, at every
-leave and on the operator's demand. The ask carries no members. The custodian writes the
+serving leave and on the operator's demand, and never under a diagnostic binding, per
+`weaver-harness-Spec` section 6. The ask carries no members. The custodian writes the
 whole of its holdings with the schema they stand under as a new file in its own room,
 the territory's `state/`, never overwriting one that stands, per `weaver-state-PRD`
 section 4, and admin publishes each finished one into the operator's directory at the

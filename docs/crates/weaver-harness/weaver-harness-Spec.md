@@ -2009,14 +2009,19 @@ above being the precedents: a ranking the loop makes over held facts is authored
 own kind by the act that makes it, per `weaver-trace-Spec` section 3, so the state the
 store rebuilds holds the judgment as the record holds it and never asks a model again.
 **The save point is the loop's to time**: the store initiates nothing, so this crate
-sends the `snapshot` ask of `weaver-harness-state-contract` section 2 once at the leave,
-so that every unload takes one, and on the operator's demand, under the dead-peer
-conversion every state ask takes, per the operator's rulings of 2026-10-02 on #58. **The
-leave's save point is taken last**: this crate sends the leave's `snapshot` ask only
-after it has authored the `unload` event and the tee has sent that event's distillate
-where the election names it, and before it closes the state channel, so the ask,
-answered against the holdings the stream carried before it, holds every elected event of
-the run and the next load, replaying no tail, loses none. A save point is never
+sends the `snapshot` ask of `weaver-harness-state-contract` section 2 once at a serving
+leave, so that every serving unload takes one, and on the operator's demand under a
+serving binding. **A diagnostic binding takes no save point**, at the leave or on
+demand: its holdings are a preloaded replay the diagnostic loop manages no state over,
+and a save point of them would be published and could be selected by a later serving
+load as production state. The offline builder's save point is the builder's write, per
+`weaver-state-PRD` section 3, and never a diagnostic load's. The asks go under the
+dead-peer conversion every state ask takes, per the operator's rulings of 2026-10-02 on
+#58. **The leave's save point is taken last**: this crate sends the leave's `snapshot`
+ask only after it has authored the `unload` event and the tee has sent that event's
+distillate where the election names it, and before it closes the state channel, so the
+ask, answered against the holdings the stream carried before it, holds every elected
+event of the run and the next load, replaying no tail, loses none. A save point is never
 overwritten, so each answer names a new one, and this crate authors the event that
 records it, per `weaver-trace-PRD`. **A live restore is the loop's to trigger**: on the
 operator's demand this crate sends the `restore` ask naming a save point in the member's

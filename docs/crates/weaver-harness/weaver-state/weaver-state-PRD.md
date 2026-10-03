@@ -40,9 +40,9 @@ harness, organs never linking.
 **The store is an in-memory embedded SQLite in this member's own process.** One
 database, never more, with no server, no network and no pool, reached by exactly one
 peer, the harness, over one Unix socket. It keeps save points, files each stamped with
-the trace position it covers and never overwritten, taken at every unload and on
-demand. A load restores one, the latest by default, and with none rebuilds from the
-trace, per section 4.
+the trace position it covers and never overwritten, taken at every serving unload and
+on demand, and never under a diagnostic binding. A load restores one, the latest by
+default, and with none state is rebuilt from the trace offline, per section 4.
 
 **Two functions and no third: ingest and serve.** The tee's distillate flows
 in and is kept, and what is kept answers asks. The two were not symmetric
@@ -336,23 +336,24 @@ does.
 operator's rulings of 2026-10-02 on this act's second and third questions. A save point
 is a file of the whole store, stamped with the trace position it covers, the run and the
 sequence of the last distillate in it, and **never overwritten**: each is its own file,
-and the operator keeps, deletes or archives them. One is taken at every unload, and one
-on demand, when the harness asks; who triggers an on-demand save point, the loop on a
-setting, a later admin verb or WeaverWeb through admin-con under a role, is later work,
-and the primitive supports the ask. **A load restores a chosen save point, the latest by
-default**, chosen through the declaration's existing `restore` member pointed at a save
-point, data in `agent.toml`, so admin's verbs and answers stay as they are. **After an
-unclean stop, the load resets to the latest known-good save point**, and the reset is
-recorded on the trace, so a full rebuild honours it; there is no tail replay by default.
-**With no save point, state is rebuilt from the trace**, by the offline builder landing
-every distillate the record holds through the preload door of section 3 and writing a
-save point the next load restores, so deleting save points never loses state while the
-record stands, and a fresh state is a new agent, per the
+and the operator keeps, deletes or archives them. One is taken at every serving unload,
+and one on demand, a diagnostic binding taking none because its holdings are a replay
+and not the agent's state, when the harness asks; who triggers an on-demand save point,
+the loop on a setting, a later admin verb or WeaverWeb through admin-con under a role,
+is later work, and the primitive supports the ask. **A load restores a chosen save
+point, the latest by default**, chosen through the declaration's existing `restore`
+member pointed at a save point, data in `agent.toml`, so admin's verbs and answers stay
+as they are. **After an unclean stop, the load resets to the latest known-good save
+point**, and the reset is recorded on the trace, so a full rebuild honours it; there is
+no tail replay by default. **With no save point, state is rebuilt from the trace**, by
+the offline builder landing every distillate the record holds through the preload door
+of section 3 and writing a save point the next load restores, so deleting save points
+never loses state while the record stands, and a fresh state is a new agent, per the
 seventh question. **Taking, restoring and resetting each author a trace event**, which
 save point by digest and which position, per the fourth question, so the record says
 where state came from. A restore and a full rebuild to the same position arrive at the
-same holdings by construction, the save point being a cache of what the replay
-produces, and `weaver-state-Spec` section 5 names the instrument that holds them equal.
+same holdings by construction, the save point being a cache of what the replay produces,
+and `weaver-state-Spec` section 5 names the instrument that holds them equal.
 
 **A live restore swaps state without unloading**, on the operator's ruling of
 2026-10-02.

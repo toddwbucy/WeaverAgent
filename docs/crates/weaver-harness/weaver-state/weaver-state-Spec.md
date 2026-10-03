@@ -310,18 +310,18 @@ load refuses by the clause below and the offline builder rebuilds the holdings u
 new schema from the trace.
 
 **Durability is the save point's, and the charter is the license.** The derivative is
-rebuildable from the record and the session never depends on it, per the loss clause,
-so the live store pays no disk write per landing: it holds its rows in memory, and the
+rebuildable from the record and the session never depends on it, per the loss clause, so
+the live store pays no disk write per landing: it holds its rows in memory, and the
 crash cost is what landed since the latest save point, which the record keeps and no
 default replays. **A save point is the whole database serialized**, written as a new
 file in the member's room when the harness asks for one with the contract's `snapshot`
-ask, at every leave and on the operator's demand, and never on the store's own
-initiative. **It is stamped with the trace position it covers**, the run and the
-sequence of the last distillate landed in it and the last turn that run's holdings
-carry, and with a check over its own bytes, so a
-save point written in part or damaged since reads as corrupt rather than as holdings,
-and its finished name is given only once the write is whole, so a torn write leaves no
-file under a finished name.
+ask, at every serving leave and on the operator's demand, never under a diagnostic
+binding and never on the store's own initiative. **It is stamped with the trace position
+it covers**, the run and the sequence of the last distillate landed in it and the last
+turn that run's holdings carry, and with a check over its own bytes, so a save point
+written in part or damaged since reads as corrupt rather than as holdings, and its
+finished name is given only once the write is whole, so a torn write leaves no file
+under a finished name.
 
 **A load restores a save point and replays no tail.** At the spawn the member reads the
 save point through the descriptor into its in-memory database and holds its stamp, per
