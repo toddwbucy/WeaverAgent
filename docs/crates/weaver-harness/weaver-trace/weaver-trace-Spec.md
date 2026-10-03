@@ -311,7 +311,7 @@ pub struct StoreIdentity {
 }
 
 pub struct UnloadClose {
-    pub grant_surface: GrantSurface,
+    pub grant_surface: Option<GrantSurface>,
     pub cause: Cause,
 }
 
@@ -598,11 +598,12 @@ to: trace-payload-untagged-kind-discriminant
 `session.closed` and `turn.started` are identified entirely by their envelope, so
 `payload` is `Option<Payload>` and those two kinds carry `None` with
 `skip_serializing_if`, emitting `{"kind":"turn.started"}`. `unload` was among them until
-2026-09-04 and now carries `UnloadClose` where a state member stood, the grant surface
-read back at the leave against the enter's reading as unchanged, varied, or unreadable,
-per `weaver-trace-PRD` section 3.1, and stays payload-free where no member stood and
-there was no boundary to read, so `{"kind":"unload"}` still occurs and means exactly
-that. **The two are the whole of the payload-free set**, per the kind table below.
+2026-09-04 and always carries `UnloadClose` from 2026-10-03, on the operator's ruling on
+#63's sixth question: its `cause` on every unload, and its grant surface, read back at
+the leave against the enter's reading as unchanged, varied, or unreadable, per
+`weaver-trace-PRD` section 3.1, only where a state member stood, absent where none did
+and there was no boundary to read. **The two are the whole of the payload-free set**,
+per the kind table below.
 Neither bracket that opens a scope nor the turn's closing one is among them: `load`
 carries `Elections` and `turn.closed` carries `TurnClosed`. This clause named `load` as
 its example until 2026-08-25, which was wrong from the act of 2026-08-21 that gave the
@@ -612,8 +613,10 @@ statement that there is no content, and a consumer keying on member presence wou
 two stream shapes for one absence.
 
 **The same recorder test watches the absent payload member on a payload-free
-`unload`.** Removing `skip_serializing_if` from `Event.payload` emits a null
-member and fails the assertion that the line has no `payload` member.
+`turn.started`**, `unload` having left the payload-free set on 2026-10-03 when it began
+carrying its cause on every unload, and the code act that lands the cause moves the
+test's case. Removing `skip_serializing_if` from `Event.payload` emits a null member and
+fails the assertion that the line has no `payload` member.
 
 ```graph
 node: trace-bracket-kind-omits-payload
@@ -653,8 +656,8 @@ to: trace-turn-close-internally-tagged
 **The kind-to-payload mapping is total, twenty-four kinds and eighteen dispositions**,
 the payload-free case counting as one of them. `refusal` carries `Refusal`, spliced, the
 organ's own account of what it turned away. `session.closed` and `turn.started` carry
-`None`, and `unload` carries `UnloadClose` where a member stood and `None` where none
-did, the one kind with two licensed pairings. `load` carries `Elections`. The five
+`None`, and `unload` carries `UnloadClose`, its grant surface present where a member
+stood. `load` carries `Elections`. The five
 message kinds carry `Message`. `turn.closed` carries `TurnClosed`. `fault` carries
 `Fault`. `flush` carries `FlushCounts`, the resident token counts before and after, both
 plain integers. **`elision` carries `ElisionSpan` and not those counts**: an elision

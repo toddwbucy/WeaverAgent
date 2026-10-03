@@ -967,6 +967,12 @@ pub struct TraceHeader {
     pub birth_ns: i128,
 }
 
+pub enum TraceControl {
+    Header(TraceHeader),
+    Heartbeat { wall_ms: u64 },
+    IdentityChanged(TraceHeader),
+}
+
 pub struct Cause {
     pub uid: u32,
     pub groups: Vec<u32>,
@@ -1006,8 +1012,14 @@ the operator's ruling of 2026-10-03 on #63's fourth question: the header names t
 file's identity, its device, inode and birth time in nanoseconds since the epoch, so a
 reader holds what it is reading. At the end of the file the stream keeps following, with
 a heartbeat line while idle, and a change of the file's identity is reported, never
-smoothed over. The heartbeat's and the change report's spelling is the code act's, per
-section 6.
+smoothed over. **Every line the stream adds is a `TraceControl`**, so the reader in
+another repository parses one fixed shape: a JSON object whose one member is
+`trace_stream`, externally tagged by case, which no trace event carries, the envelope
+having no such member. The three lines are
+`{"trace_stream":{"header":{"device":...,"inode":...,"birth_ns":...}}}` first,
+`{"trace_stream":{"heartbeat":{"wall_ms":...}}}` while idle, and
+`{"trace_stream":{"identity_changed":{...}}}` naming the new file's identity when it
+changes. Every other line is the trace's own, byte for byte.
 
 **`RoleList` is the agent's `roles.toml`**, on the operator's rulings of 2026-10-03 on
 #63's second and fourth questions: a root-owned file in the agent's root,
@@ -2467,8 +2479,8 @@ the claim divides are both open and section 6 carries them together.
 
 - **The admin sockets' wire, opened 2026-10-02 on #50 and ruled 2026-10-03 on #63.**
   The role list's file, the trace stream's framing and the claim's bound are ruled and
-  fixed in section 3.1. What stays the code act's is spelling: the heartbeat line and
-  the identity-change report, `observed_wall_ms` on the wire, and the claim's alphabet
+  fixed in section 3.1, the stream's control lines included. What stays the code act's
+  is the heartbeat's interval, `observed_wall_ms` on the wire, and the claim's alphabet
   within its 256 bytes. `AdminVerb`'s membership grows by ruling, the on-demand
   save-point verb of #58 being the next named.
 - **`Generation`'s shape settled at section 4.4 and this bullet retires with it.**

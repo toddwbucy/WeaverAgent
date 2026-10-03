@@ -291,17 +291,22 @@ binary, started for the connection, reads one `TraceRequest`, opens the agent's 
 file read-only with `O_NOFOLLOW` beneath the sink's directory, verifies that the
 requested offset falls on a record boundary and that the record ending there hashes to
 the request's digest, and writes a `TraceHeader` line naming the file's identity, its
-device, inode and birth time, then the file's own lines from that offset exactly as
-written, following new lines as they land, with a heartbeat while idle. **A change of
-the file's identity is reported in the stream** and never smoothed over, so a rotation
-or a truncation reaches the reader as what it is. A position that does not verify
-refuses before a byte is streamed. Only a file sink is streamable, a pipe or a socket
-sink having no file to read, and a request against one refuses `ConfigInvalid` naming
-the sink. The stream parses no event: it hashes one record's bytes to verify a position
-and copies bytes, which keeps section 8 of the charter true that no lifecycle act parses
-events. Nothing else is done with root on this door, and the agent and its state member
-still reach neither the file nor the socket, the custody of section 5 being widened to
-the one declared reader, read-only.
+device, inode and birth time. **The file must be the loaded run's sink**: an operator's
+edit to the declaration's sink while a run stands names the next load's file and not the
+one the worker writes, and a per-connection process holds no memory of the load, so the
+code act records the loaded run's sink identity at load where such a process can read
+it, in the root-owned `/run/weaver-<agent>/`, and a stream whose opened file is not that
+one refuses, carried on #50. After the header come the file's own lines from that offset
+exactly as written, following new lines as they land, with a heartbeat while idle. **A
+change of the file's identity is reported in the stream** and never smoothed over, so a
+rotation or a truncation reaches the reader as what it is. A position that does not
+verify refuses before a byte is streamed. Only a file sink is streamable, a pipe or a
+socket sink having no file to read, and a request against one refuses `ConfigInvalid`
+naming the sink. The stream parses no event: it hashes one record's bytes to verify a
+position and copies bytes, which keeps section 8 of the charter true that no lifecycle
+act parses events. Nothing else is done with root on this door, and the agent and its
+state member still reach neither the file nor the socket, the custody of section 5 being
+widened to the one declared reader, read-only.
 
 **The answer is one JSON object on standard output and the exit status agrees
 with it.** One `lifecycle-answer` or one `lifecycle-refusal` in the floor's
@@ -2581,7 +2586,8 @@ Each names what settles it, and none is this Spec's to settle alone.
   log is split, a change to the agent on the trace with its cause and boundary activity
   in `admin.log`. What stays the code act's is spelling and mechanism: whether the
   connection arrives as the standard streams or a passed descriptor, the heartbeat's
-  interval and line, and `admin.log`'s mode and group within what section 8 fixes.
+  interval, the loaded run's sink identity and the follower's replacement, both carried
+  on #50, and `admin.log`'s mode and group within what section 8 fixes.
 
 - **How an agent's lifecycle state is observed. Settled 2026-09-04** by the observation
   exchange of `weaver-admin-harness-contract` section 3, per issue #435: the harness
