@@ -173,7 +173,9 @@ where the kind declares a Gate, the state election the tee applies, the store el
 the member stands on, resolved to the embedded engine where the declaration is silent,
 per `weaver-state-PRD` section 4, the lineage of the save point the load restores,
 whether the declaration's `restore` names it or the inventory selected the latest
-published by default, and none where no save point stands, the digests of the organ
+published by default, and none where no save point stands, beside it and apart from it
+the reset, where the agent's last run did not end in a clean unload, that run and the
+reason, whether or not a save point stands, the digests of the organ
 binaries admin started and of the two it hands the worker to fork, the agent's SPU and
 the gate, and the digests of the declaration and, as of 2026-10-02, of the prompt file
 it names. The state channel's end is the harness half of the socketpair admin created at

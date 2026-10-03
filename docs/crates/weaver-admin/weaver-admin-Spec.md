@@ -1314,6 +1314,13 @@ validate step before the inventory selects what to restore, per section 3, and a
 member has stopped at an unload, it copies each finished save point from the member's
 room into the declaration directory and never moves one, because a move keeps the
 member's uid and the inventory's entry judgment would refuse the file as wrongly owned.
+**Every source is a value the member's account chose, so it is judged before root reads
+it**, per section 9: this crate holds the member's room open as a directory, opens each
+entry beneath that descriptor without following links, requires a regular file owned by
+the member's uid that carries the save-point format and a finished name, refuses and
+leaves in place any entry that fails, naming it, and copies only from the descriptor it
+judged, so a link or a planted file in the room cannot make a root step read a path the
+member chose.
 The copy is written under a temporary name, owned by the uid the root's `operator` key
 names and mode `0600`, its owner and mode verified through the open file, then renamed
 to a new name stamped with the run and sequence it covers, overwriting nothing; only
