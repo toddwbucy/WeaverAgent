@@ -8,7 +8,7 @@ workflow. Code is written against it under the gates of Working Process section 
 **Document ID:** `weaver-gate-Spec`
 **Parent:** `weaver-gate-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #44
+**Landing PR:** #72
 
 ---
 
@@ -512,10 +512,10 @@ now can, and at `0077` the socket was the owner's alone. **That is the
 intent and it is conditional.** The operator reaches the socket by membership
 in the agent's group, which is what `0770` is for, and the whole boundary
 therefore rests on `Group={identity}` making that group exactly one agent -
-per `weaver-admin-Spec` section 6, which sets it on the unit and refuses a
-template that would take it back. Where the unit's group were a shared one,
+per `weaver-admin-Spec` section 6, whose start step drops the worker to that group by
+name. Where the worker's group were a shared one,
 `users` or `nogroup`, this mode would hand connect rights to everyone in it.
-A dev run outside systemd has no such guarantee and no such boundary.
+A dev run outside the start step has no such guarantee and no such boundary.
 
 **The election is made in the creating call and not on the path
 afterwards.** A `chmod` after the bind would answer the same question and

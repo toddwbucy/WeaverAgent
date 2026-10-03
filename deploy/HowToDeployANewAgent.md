@@ -195,7 +195,10 @@ Or `deploy/verify-load.sh <name> --keep` to load with the read-back and leave it
 The worker runs as the transient unit `weaver-worker@<name>.service` under the slice
 `system-weaver\x2dworker.slice`; `journalctl -u weaver-worker@<name>` is its log, and
 admin's own acts on this agent are in `/var/log/weaver/<name>/admin.log`, root's to
-read. Two
+read. This describes the scripts and admin as they ship. The agent leaves systemd by the
+operator's ruling of 2026-10-03 on #50, and the code act that follows replaces the unit
+with admin's start step, a run lock and a trace relay, moves `admin.log` to the
+declaration directory, and rewrites this section with it. Two
 declarations naming one device serve one loaded agent at a time: the SPU refuses a
 conflicted device and never evicts.
 

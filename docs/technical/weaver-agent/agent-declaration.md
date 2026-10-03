@@ -131,7 +131,7 @@ at inventory rather than by the parse.
 **`gate-instruction.access-rule`** - who may pass the gate, judged by
 `SO_PEERCRED` at connect: `allowed-uids`, `allowed-gids`, `denied-uids`.
 **The socket's path is deliberately not here.** Where the door stands is the
-program's (inside the unit's runtime directory, `/run/weaver-<agent>/`), and
+program's (inside the agent's runtime directory, `/run/weaver-<agent>/`), and
 only who may pass is the operator's.
 
 **A uid named here must also be in the agent's group.** The socket lands

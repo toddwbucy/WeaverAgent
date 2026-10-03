@@ -13,7 +13,7 @@ conforms to.
 **Parent:** `weaver-agent-PRD`
 **Depends on:** `weaver-traits`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #57
+**Landing PR:** #72
 
 ---
 
@@ -118,14 +118,14 @@ found as three:
   the rule demands**: the gate's bind failure carries a detail the closed
   set has no field for, so the seam carries `BindFailed` alone and the
   detail goes to standard error. **That satisfies the rule only because the
-  deployment retains it.** The organ's streams are inherited and
-  `weaver-admin-Spec` refuses to set `StandardError=` on the unit it starts,
-  so the manager's default carries the detail to its journal, which is where
-  `weaver-admin-systemd-contract` section 7 already places a failure's cause.
+  deployment retains it.** The organ's streams are inherited from the worker, whose
+  standard output and error the start step of `weaver-admin-Spec` section 6 points at
+  the agent's worker log, so the detail lands there, beside the operations log and never
+  in it.
 
   **The retention is out of band and the rule does not treat that as equal
-  to the record.** The journal is the manager's and this program does not
-  read it, per that same contract, so an operator clearing a bind path has
+  to the record.** The worker log is the deployment's and this program does not
+  read it, so an operator clearing a bind path has
   the detail and a consumer replaying a trace does not. **Naming which of
   the two a narrowing leaves behind is part of applying the rule**, and a
   narrowing whose only carrier is neither the record nor a retained
@@ -560,6 +560,17 @@ that left having been the one whose predicate a compromised group grant could wi
 the gate's agent-opened seam as a third, and what credential a registered tool presents
 on it is the tool-seam contract's, so this subsection states the shared rule and leaves
 the enumeration open rather than naming a consumer whose contract does not exist.
+**Admin's trace relay reads `peer-identity` from 2026-10-03**, on the operator's rulings
+on #50, and judges it against the one reader the agent's boundary file declares rather
+than by the shared allow-and-deny rule, so it draws the identity type and not the
+predicate, and `weaver-types-Spec` section 3.1 carries its request shape.
+
+**The trace door's stream is one vocabulary record, `trace-stream`**, defined here on
+the same rulings: the request a reader sends, the header the relay answers with, and the
+control lines it interleaves with the record's own lines, `TraceRequest`, `TraceHeader`,
+`TraceLine` and the `TraceControl` it wraps, of `weaver-types-Spec` section 3.1, are its
+satellites rather than four records, the way the token trio is carried, because no party
+draws one without the others. `weaver-admin-operator-contract` draws it.
 
 **Alongside the identity type, this crate carries the authorization predicate, and
 that is a deliberate exception to holding only data.** The rule that decides whether a
@@ -585,6 +596,13 @@ kind: vocabulary
 edge: defines
 from: weaver-types
 to: peer-identity
+
+node: trace-stream
+kind: vocabulary
+
+edge: defines
+from: weaver-types
+to: trace-stream
 
 edge: defines
 from: weaver-types

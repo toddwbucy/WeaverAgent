@@ -62,15 +62,13 @@ other door.
 **Where the door stands is the program's, and who may pass is the
 operator's.** The instruction declares the access rule - the operator's
 election - and the engine supplies the endpoint in the raise directive, this
-crate binding it: a path inside the unit's runtime directory, which the
-service manager creates before the unit's first instruction runs - so the
-directory exists before anything can bind in it - and destroys with the
-unit's contents at stop, measured against a live manager rather than
-assumed. Each party
-names what only it can know. A socket pathname outlives the process that
-bound it, so a name chosen anywhere else survives its worker and refuses the
-next load with a stale file. Placing it where nothing can outlive the unit
-makes the hazard unreachable rather than checked for.
+crate binding it: a path inside the agent's runtime directory, which admin's
+start step makes before the worker starts and clears of a dead worker's names before the
+next one, holding its invocation lock and the run lock it took (since 2026-10-03,
+#50, when the agent left systemd). Each party names what only it can know. A socket
+pathname outlives the process that bound it, so a name chosen anywhere else survives its
+worker and refuses the next load with a stale file. Placing it where the start step
+clears it makes the hazard unreachable rather than checked for.
 
 **The shell, as the crate's own outbound verb.** The one tool this crate
 executes is the shell - not a guest, but the general form of the agent's

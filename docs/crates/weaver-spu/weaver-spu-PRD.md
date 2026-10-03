@@ -12,7 +12,7 @@ later releasing it.
 **Parent:** `weaver-agent-PRD`
 **Companion contract:** `weaver-harness-spu-contract`, drafted with this document
 **Editorial:** Per the Working Rules.
-**Landing PR:** #58
+**Landing PR:** #72
 
 ---
 
@@ -183,8 +183,8 @@ the coordinator rather than one peer among several.
 compiled artifact handed from one residency to the next, and no cached device allocation
 held past release in anticipation of the next admit. Residency ends at unload, plainly,
 with no gesture toward keeping the expensive part warm. This is free rather than
-costly, because the process holding the state dies with the unit and
-there is nowhere for it to be kept.
+costly, because the process holding the state dies with the worker that forked it, per
+`weaver-harness-Spec` section 2.2, and there is nowhere for it to be kept.
 
 **Fleet knowledge.** It knows what it was asked to admit and what it holds. It does
 not know what other agents exist, what they hold, or whether one of them would
@@ -329,10 +329,11 @@ obligation from this side: **release is confirmed after the device is free and n
 before it,** so that a confirmation is a fact about the device rather than a statement
 of intent.
 
-**Release is the orderly end of a residency and process death is the abrupt one.**
-Both end it. Only one is confirmed. The abrupt path costs nothing that has to be
-reaped, because the process holding the device dies with the unit
-and the device is reclaimed with the process, which is section 5's second half.
+**Release is the orderly end of a residency and process death is the abrupt one.** Both
+end it. Only one is confirmed. The abrupt path costs nothing that has to be reaped,
+because the process holding the device dies with the worker that forked it, by the death
+signal the worker arms, and the device is reclaimed with the process, which is section
+5's second half.
 
 ### 4.3 The residency this crate moves between
 
@@ -358,7 +359,8 @@ load never being published as loaded, one level down, and it is what lets admin'
 rollback treat a refusal from this arm as needing nothing undone here.
 
 **A refused admit does not end the process.** This crate answers the refusal on the
-channel and stays alive to be reaped by the unit stop that follows. An organ that exited
+channel and stays alive to be ended with the worker, whose exit after the refused load
+its death signal follows. An organ that exited
 on refusal would close the channel instead of answering, and the harness would be left
 observing a death where a typed reason was available, which converts a refusal that
 names its cause into one that does not.
@@ -400,14 +402,14 @@ against a conflict that does not exist.
 
 **A failure this crate cannot recover from, having taken the device, is process death
 and is not an answer.** The device is reclaimed when the process exits, so the failure
-mode that would be worst under a long-lived unit, a leaked residency with no owner and
-no reaper, has no subject here. What the harness observes is closure, which the contract
-governs.
+mode that would be worst under a long-lived process, a leaked residency with no owner
+and no reaper, has no subject here. What the harness observes is closure, which the
+contract governs.
 
 **A release that cannot be confirmed is survivable here for the same reason.** The
 harness reports it as unconfirmed rather than synthesizing a confirmation, admin's leave
-answer names where the sequence stopped, and admin's own step of stopping the unit frees
-the device regardless.
+answer names where the sequence stopped, and the worker's exit, whose death signal ends
+this process, frees the device regardless.
 
 **Nothing here retries.** A refused admit returns to the harness, which unwinds. This
 crate does not re-attempt an admission under one directive, because two attempts behind

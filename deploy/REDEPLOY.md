@@ -53,7 +53,7 @@ the runbook is what gets amended.
 | Territory `weaver-<name>/` (root:weaver-<name>-state 0710, passage only) with `state/` (member 0700) and `trace.ndjson` (root:weaver-<name>-trace 0640) | the stack record's `agent-directory`, default `/var/lib/weaver-agent` | create-agent |
 | Postgres election only: role and database `weaver_<name>`, a `peer map=weaver` line in `pg_hba.conf`, a `weaver` map line in `pg_ident.conf` | PostgreSQL | create-agent |
 | The agent's operations log, one per agent | `/var/log/weaver/<name>/admin.log` (directory root 0750) | create-agent makes the directory, admin the file |
-| Transient unit per load, under one slice | systemd | admin, at load |
+| Transient unit per load, under one slice, until the code act of #50 replaces it with admin's start step (the operator's ruling of 2026-10-03) | systemd | admin, at load |
 
 ## 1. Decommission and archive
 
