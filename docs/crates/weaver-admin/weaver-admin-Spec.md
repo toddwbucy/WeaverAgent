@@ -57,14 +57,20 @@ its settler.
 
 ## 1. The crate
 
-**One binary, per the charter's ruled layout.** The crate builds a single
-executable, `weaver-admin`, and no library surface is published: nothing links
-admin, per the charter's section 7, and a `lib.rs` would be an API for a
-consumer the topology forbids. The instrument reads Cargo's target inventory,
-which includes both explicit declarations and targets found by convention.
-`one_binary_and_no_library_surface` of `crates/weaver-admin/tests/manifest.rs`
-requires exactly one binary named `weaver-admin`, permits integration test targets,
-and refuses every other target, including a library, build script, example or bench.
+**Two binaries, and still no library surface.** The crate builds `weaver-admin`, and
+since 2026-10-03 (#50) `weaver-trace-relay`, the trace door's relay of section 6, which
+belongs here because admin holds the trace's custody and its start step is the relay's
+only starter, and no other crate's layout admits it: the harness builds its two worker
+targets and `weaver-trace` is a library. The relay links nothing of admin's root code,
+being a separate `src/bin/weaver-trace-relay.rs` that shares only the floor's types, and
+it runs under the relay account and never as root. No library surface is published:
+nothing links admin, per the charter's section 7, and a `lib.rs` would be an API for a
+consumer the topology forbids. The instrument reads Cargo's target inventory, which
+includes both explicit declarations and targets found by convention.
+`one_binary_and_no_library_surface` of `crates/weaver-admin/tests/manifest.rs` becomes
+`two_binaries_and_no_library_surface` in the code act: it requires exactly the binaries
+`weaver-admin` and `weaver-trace-relay`, permits integration test targets, and refuses
+every other target, including a library, build script, example or bench.
 A comment or alternate TOML spacing cannot change the inventory. The reverse
 relation, that nothing links admin, remains review's.
 
@@ -92,6 +98,7 @@ to: axiom-floor-is-vocabulary-behavior-is-socket
     src/start.rs      the start step, the run lock and the trace relay, section 6
     src/channel.rs    the coordination channel's dial, section 7
     src/log.rs        the operations log, section 8
+    src/bin/weaver-trace-relay.rs   the trace relay, section 6, its own binary
 
 **Edition and toolchain.** Edition 2024 on the pinned nightly, no nightly
 feature used.
@@ -348,13 +355,18 @@ while the worker still held the old, starting a second worker of one agent.
 
 - **The invocation lock**, on `admin.lock`, says whether an invocation is changing this
   agent now. Every verb but `show` takes it exclusively at its first instruction and
-  holds it until it exits, and an invocation that finds it held refuses
-  `InvocationInFlight` before touching anything. **`show` reads it and never takes it**:
-  where `F_GETLK` finds it held, `show` answers `InTransition` at once, without dialing,
-  because before the worker exists there is no socket, and once it exists the harness
-  serves one connection at a time and the load's enter holds it, so a dial would only
-  wait out its bound. A caller polling `show` during a long load is therefore answered
-  that a transition is in flight, and never refused or left to time out.
+  holds it until it exits, and an invocation that finds it held exclusively refuses
+  `InvocationInFlight` before touching anything. **`show` holds it shared for the length
+  of its observation**, taking a shared lock without waiting: where an exclusive holder
+  stands, the shared lock is refused and `show` answers `InTransition` at once, without
+  dialing, because before the worker exists there is no socket and once it exists the
+  harness serves one connection at a time and the load's enter holds it. Where the
+  shared lock is granted, no load or unload can begin until `show` has read the run lock
+  and observed the worker, so its answer cannot straddle a transition. A verb that wants
+  the lock exclusively and finds only `show`'s shared hold waits on it within `show`'s
+  own bound, the dial's, rather than refusing, a read being no transition. A caller
+  polling `show` during a long load is therefore answered that a transition is in
+  flight, and never refused or left to time out.
 - **The run lock**, on `run.lock`, says whether a worker runs. The start step's worker
   child opens it, root-owned and mode `0600`, for writing while it is still root, takes
   it exclusively as its last act before the exec, and carries the descriptor across the
@@ -2099,8 +2111,9 @@ trace reader must hold. Section 4's walk resolves both and refuses by name where
 is missing, on the same ground the member's account is required: a process this crate
 starts under an account the box does not carry is a start that fails opaquely, and a
 reader outside the socket's group is a reader the filesystem turns away before the
-relay's credential check runs. The relay's binary is the worker binary's sibling,
-`weaver-trace-relay`, found as the state member's is, and never a value of its own.
+relay's credential check runs. The relay's binary, `weaver-trace-relay`, is this crate's
+second binary, per section 1, installed beside the worker binary and found as the state
+member's is, never a value of its own.
 
 ## 10. What is enforced, and by which instrument
 
@@ -2192,10 +2205,10 @@ charter claims.
 floor-link under gate H2, and no direct `weaver-traits` line exists, which
 is the charter's declared non-link as a checkable absence. No async runtime,
 no bus crate, and no logging crate in the resolved tree, by the build-time
-`cargo tree` assertion the floor Specs share. One binary and no library
-surface, read from Cargo's target inventory by
-`one_binary_and_no_library_surface`. The watch requires the named binary and
-permits integration test targets alone beside it, as section 1 states. Explicit
+`cargo tree` assertion the floor Specs share. Two binaries and no library surface,
+read from Cargo's target inventory by `two_binaries_and_no_library_surface` once the
+code act renames it. The watch requires the two named binaries and permits integration
+test targets alone beside them, as section 1 states. Explicit
 and convention-discovered targets pass through the same check.
 
 **Which invariant each claim serves, and why most serve none.** Twelve of the

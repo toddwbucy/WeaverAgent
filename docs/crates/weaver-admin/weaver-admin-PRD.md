@@ -807,15 +807,16 @@ conduct** - holding the seat does not make its holder careful. An agent driving 
 admin stays excluded: its uid is named by no rule and no boundary file, and a boundary
 naming it is a misconfiguration the inventory refuses.
 
-**The crate is the lifecycle tool the role runs.** One binary, run with root, one
-invocation per verb, exiting when the verb answers. It holds a two-initiator channel
-with the harness like every other organ, per apex section 5.4, the property living at
-the channel the harness holds open rather than in any standing process of admin's, and
-its narrow domain is authorization, the lifecycle's direction, and **custody of where
-the record leaves the system**. That last is the organ's reason rather than its
-bookkeeping: the trace exits through a sink opened under root, and routing it
-through `weaver-gate` instead would put the agent's own account on the one surface
-the agent reaches.
+**The crate is the lifecycle tool the role runs.** One binary run with root, one
+invocation per verb, beside the trace relay its start step launches under the relay's
+own account, per the Spec's sections 1 and 6, exiting when the verb answers. It holds a
+two-initiator channel with the harness like every other organ, per apex section 5.4, the
+property living at the channel the harness holds open rather than in any standing
+process of admin's, and its narrow domain is authorization, the lifecycle's direction,
+and **custody of where the record leaves the system**. That last is the organ's reason
+rather than its bookkeeping: the trace exits through a sink opened under root, and
+routing it through `weaver-gate` instead would put the agent's own account on the one
+surface the agent reaches.
 
 **This shape is inherited rather than invented, which is still the argument.** A
 machine's administrator holding root and starting a program under its own account is
@@ -1008,9 +1009,11 @@ who expects a third item is reading a count this section used to carry.
 
 **The binary layout is settled rather than staged, and it leaves this section.** It was
 staged as downstream of the grant mechanism, and the mechanism ruling of section 7
-removed the thing a second executable would have separated. One authority remains and
-it is delegated, so a split buys nothing and the layout is one binary. A staged item
-whose entry condition resolves to no work is closed rather than carried.
+removed the thing a second executable would have separated. One authority remains and it
+is delegated, so a split buys nothing and the layout is one root binary. A staged item
+whose entry condition resolves to no work is closed rather than carried. The trace relay
+of 2026-10-03 (#50) is a second binary of this crate for a different reason, a process
+under another account holding the trace door, and separates no authority of admin's.
 
 Nothing is staged here at present. The GID-mask item this section carried was
 written against admin owning the record's file, and it left with the record on
@@ -1028,9 +1031,10 @@ the operator's ruling of 2026-10-03 on #50 took systemd out of the agent. Root s
 the worker directly now, by the start step of the Spec's section 6, dropping to the
 agent's account before the exec. Section 7 carries the consequence.
 
-**The layout is closed with it.** One binary. The choice decided the layout rather than
-the other way round, and a delegation that holds no capability leaves a second
-executable separating nothing.
+**The layout is closed with it.** One root binary, the trace relay beside it since
+2026-10-03 being a second process under its own account. The choice decided the layout
+rather than the other way round, and a delegation that holds no capability leaves a
+second executable separating nothing.
 
 **The cgroup is closed, and by neither of the two candidates.** It was posed as a
 provisioning artifact that load populates against a residency artifact created at load
