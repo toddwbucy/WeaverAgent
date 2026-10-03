@@ -25,8 +25,9 @@ process or a network boundary, never linked:
   provisioning, never under admin. Gate-con reaches the gate's socket. Admin-con issues
   admin's fixed command lines through the box's strict sudo rule and, where the trace
   sink is a file, reads the trace door. The agent's lifetime is bound to its
-  admin-con, so the agent fails closed when admin-con stops (#72, toddwbucy/WeaverWeb#15). The role map that bounds them is the
-  box's (toddwbucy/WeaverTools#6).
+  admin-con, so the agent fails closed when admin-con stops (#72,
+  toddwbucy/WeaverWeb#15). The role map that bounds them is the box's
+  (toddwbucy/WeaverTools#6).
 
 The rule that drew the line: a crate a consumer meets across a network boundary gets its
 own repository; the agent keeps everything interior. The suite-level documentation
