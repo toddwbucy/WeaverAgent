@@ -1668,9 +1668,29 @@ fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<Servi
             .map(|s| Some(s.trim().to_string()))
             .map_err(|e| format!("the service configuration's {name} does not read: {e}"))
     };
-    let worker = PathBuf::from(read("worker-binary")?);
-    let spu = PathBuf::from(read("spu-binary")?);
-    let gate = PathBuf::from(read("gate-binary")?);
+    // **Every path a key names is absolute**, per Spec section 9, so no read
+    // resolves against the working directory a caller ran sudo from and two
+    // invocations of one root always name the same files.
+    let absolute = |name: &str, value: String| -> Result<PathBuf, String> {
+        let path = PathBuf::from(value);
+        if path.is_absolute() {
+            Ok(path)
+        } else {
+            Err(format!(
+                "the service configuration's {name} is not an absolute path"
+            ))
+        }
+    };
+    let path = |name: &str| -> Result<PathBuf, String> { absolute(name, read(name)?) };
+    let optional_path = |name: &str| -> Result<Option<PathBuf>, String> {
+        optional(name)?
+            .filter(|v| !v.is_empty())
+            .map(|v| absolute(name, v))
+            .transpose()
+    };
+    let worker = path("worker-binary")?;
+    let spu = path("spu-binary")?;
+    let gate = path("gate-binary")?;
     stack::judge_names(&worker, &gate, &spu)?;
     let operator = read("operator")?
         .parse::<u32>()
@@ -1678,7 +1698,16 @@ fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<Servi
     let load_bound = match optional("load-bound-seconds")?.filter(|v| !v.is_empty()) {
         None => DEFAULT_LOAD_BOUND,
         Some(text) => match text.parse::<u64>() {
-            Ok(seconds) if seconds > 0 => std::time::Duration::from_secs(seconds),
+            // A count that cannot form a deadline on this box refuses here,
+            // never at the enter's wait.
+            Ok(seconds)
+                if seconds > 0
+                    && std::time::Instant::now()
+                        .checked_add(std::time::Duration::from_secs(seconds))
+                        .is_some() =>
+            {
+                std::time::Duration::from_secs(seconds)
+            }
             _ => return Err(
                 "the service configuration's load-bound-seconds is not a positive count of seconds"
                     .to_string(),
@@ -1688,22 +1717,18 @@ fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<Servi
     let boundary = read_boundary(root);
     Ok(ServiceConfig {
         agent: agent.to_string(),
-        coordination_root: PathBuf::from(read("coordination-root")?),
+        coordination_root: path("coordination-root")?,
         worker,
         spu,
         gate,
         headroom_bytes: optional("headroom-bytes")?.filter(|v| !v.is_empty()),
-        library_path: optional("library-path")?
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from),
+        library_path: optional_path("library-path")?,
         load_bound,
-        declaration_directory: PathBuf::from(read("declaration-directory")?),
+        declaration_directory: path("declaration-directory")?,
         operator,
         operator_gid: 0,
         boundary,
-        state_store_socket: optional("state-store-socket")?
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
+        state_store_socket: optional_path("state-store-socket")?
             .unwrap_or_else(|| PathBuf::from(inventory::STORE_SOCKET_DIRECTORY)),
     })
 }
@@ -2377,6 +2402,56 @@ mod tests {
     }
 
     /// **An optional value is absent only where nothing stands at its path**,
+    /// **Every path a key names is absolute, and the enter's bound forms a
+    /// deadline**, per Spec sections 9 and 2: a relative value at each path key
+    /// fails the read naming the key, as does a `load-bound-seconds` too large
+    /// to add to the clock. Perturbations: accept a relative path and the
+    /// root reads with its paths resolved against the working directory;
+    /// accept any positive count and `u64::MAX` reads, to panic at the
+    /// enter's wait.
+    #[test]
+    fn a_relative_path_or_an_unreachable_bound_fails_the_read() {
+        let root =
+            std::env::temp_dir().join(format!("weaver-admin-relative-{}", std::process::id()));
+        let fresh = || {
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            write_root(&root);
+        };
+        for name in [
+            "worker-binary",
+            "spu-binary",
+            "gate-binary",
+            "coordination-root",
+            "declaration-directory",
+            "library-path",
+            "state-store-socket",
+        ] {
+            fresh();
+            std::fs::write(root.join(name), "relative/path").unwrap();
+            let failure = load_service_config_from(&root, "alpha")
+                .err()
+                .unwrap_or_default();
+            assert!(
+                failure.contains(name) && failure.contains("not an absolute path"),
+                "{name}: {failure:?}"
+            );
+        }
+        fresh();
+        std::fs::write(root.join("load-bound-seconds"), u64::MAX.to_string()).unwrap();
+        let failure = load_service_config_from(&root, "alpha")
+            .err()
+            .unwrap_or_default();
+        assert!(failure.contains("load-bound-seconds"), "{failure:?}");
+        fresh();
+        std::fs::write(root.join("load-bound-seconds"), "1800").unwrap();
+        assert_eq!(
+            load_service_config_from(&root, "alpha").unwrap().load_bound,
+            std::time::Duration::from_secs(1800)
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// per Spec section 9: at each optional path a directory and bytes that are
     /// not UTF-8 and a dangling link fail the read, naming the value, and an
     /// absent file leaves the read standing. Perturbations: read every error as

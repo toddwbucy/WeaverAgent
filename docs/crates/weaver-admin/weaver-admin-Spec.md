@@ -317,8 +317,9 @@ diagnostics and nothing a caller parses, its contents being no part of this inte
 **A load answers once the agent is up**: the worker has answered ready, or the load has
 refused, and the worker stays running, detached. Admitting a large model can take
 minutes, so this crate's own bound on the enter's answer is 900 seconds, the agent's
-root naming another as `load-bound-seconds` where a model needs it, and a caller's bound
-must exceed it, a caller giving up first reading the outcome from the next `show`.
+root naming another as `load-bound-seconds` where a model needs it, a positive count of
+seconds that must form a deadline on the box's clock or the read fails, and a caller's
+bound must exceed it, a caller giving up first reading the outcome from the next `show`.
 
 **An invocation finishes even when its caller disappears**, on the operator's ruling of
 2026-10-03 on #50, which folds in #60. **This crate ignores every catchable signal
@@ -2080,25 +2081,29 @@ the invocation as `ConfigInvalid` with no field.
 on 2026-10-03 (#50), the boundary file of section 9 below. Optional: `headroom-bytes`,
 `library-path`, per section 6, `load-bound-seconds`, per section 2, and
 `state-store-socket`, the last read under a service election alone, the service engine's
-conventional directory standing where the file is silent. **The agent's declaration
-stands in the operator's directory and not in the root**, on the operator's ruling of
-2026-10-02: `declaration-directory` names it, absolute, `~/.weaveragent/<agent>/` by
-convention, and it holds `agent.toml`, which this crate parses per `weaver-types-Spec`
-section 2, beside the prompt file the declaration's `identity-file` names. A declaration
-directory holding no `agent.toml` answers `NoSuchAgent`, as a root holding none did.
-**`operator` names the operator's uid**, on the operator's ruling of 2026-10-02 on this
-act's first question: a root-owned key `create-agent.sh` writes once, the box's own
-fact, set by root, about whose data defines the agent, and independent of who invokes a
-verb. The coordination name changed hands with the operator socket on 2026-08-05: the
-operator places it, the harness binds it, and admin dials it, so one value reaches two
-crates and the root is where they agree. These values are not the agent config and no
-seam carries them, which is why the root takes no contract of its own. **The file and
-its values part company at the start step, and the distinction is worth holding.** This
-crate is the only one that reads the root. Three of the values do not stay in it: the
-coordination socket's name and the two organ binary paths reach the worker in section
-6's argument vector, at the start step's exec rather than over any seam. What is fixed
-here is that these values exist, that they are the operator's to place, and that none of
-them is discovered at runtime by searching.
+conventional directory standing where the file is silent. **Every path a key names is
+absolute**, `worker-binary`, `spu-binary`, `gate-binary`, `coordination-root`,
+`declaration-directory`, `library-path` and `state-store-socket` alike, and a relative
+value fails the read naming the key, so no read resolves against the directory a caller
+ran sudo from and two invocations of one root always name the same files. **The agent's
+declaration stands in the operator's directory and not in the root**, on the operator's
+ruling of 2026-10-02: `declaration-directory` names it, absolute,
+`~/.weaveragent/<agent>/` by convention, and it holds `agent.toml`, which this crate
+parses per `weaver-types-Spec` section 2, beside the prompt file the declaration's
+`identity-file` names. A declaration directory holding no `agent.toml` answers
+`NoSuchAgent`, as a root holding none did. **`operator` names the operator's uid**, on
+the operator's ruling of 2026-10-02 on this act's first question: a root-owned key
+`create-agent.sh` writes once, the box's own fact, set by root, about whose data defines
+the agent, and independent of who invokes a verb. The coordination name changed hands
+with the operator socket on 2026-08-05: the operator places it, the harness binds it,
+and admin dials it, so one value reaches two crates and the root is where they agree.
+These values are not the agent config and no seam carries them, which is why the root
+takes no contract of its own. **The file and its values part company at the start step,
+and the distinction is worth holding.** This crate is the only one that reads the root.
+Three of the values do not stay in it: the coordination socket's name and the two organ
+binary paths reach the worker in section 6's argument vector, at the start step's exec
+rather than over any seam. What is fixed here is that these values exist, that they are
+the operator's to place, and that none of them is discovered at runtime by searching.
 
 **Nothing in one agent's root is read for another.** The box-wide values, the binaries,
 the tools, the coordination root and the headroom, are copied into each root by the

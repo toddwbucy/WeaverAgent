@@ -260,9 +260,15 @@ impl Coordination {
     /// unbounded, so the read waits on the descriptor for at most `bound` and
     /// answers `Unanswered` past it.
     pub fn recv_within(&self, bound: Duration) -> Result<OrganEnvelope, ChannelFault> {
-        let deadline = Instant::now() + bound;
+        // A bound past what the clock can hold never panics: it waits as long
+        // as poll's longest wait, again and again, which is the bound read
+        // as written.
+        let deadline = Instant::now().checked_add(bound);
         loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
+            let remaining = match deadline {
+                Some(deadline) => deadline.saturating_duration_since(Instant::now()),
+                None => Duration::MAX,
+            };
             if remaining.is_zero() {
                 return Err(ChannelFault::Unanswered);
             }
@@ -274,6 +280,7 @@ impl Coordination {
             };
             // SAFETY: poll over one pollfd this frame owns.
             match unsafe { nix::libc::poll(&mut poll, 1, millis) } {
+                0 if deadline.is_none() => {}
                 0 => return Err(ChannelFault::Unanswered),
                 n if n > 0 => return self.recv(),
                 _ if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted => {}
@@ -461,6 +468,26 @@ mod tests {
         let second = admin.recv().expect("second read decodes on its own");
         assert_eq!(first.exchange.ordinal, 1);
         assert_eq!(second.exchange.ordinal, 2);
+        drop(worker);
+        drop(listener);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A bound past the clock never panics**: `recv_within` given the
+    /// longest duration reads the answer its peer sends, rather than
+    /// overflowing the deadline it adds. Perturbation: add the bound to the
+    /// clock unchecked and the call panics.
+    #[test]
+    fn a_bound_past_the_clock_waits_and_reads() {
+        let dir = scratch("unbounded");
+        let (listener, path) = harness_listener(&dir);
+        let admin = dial(&path).expect("dial");
+        let worker = Coordination::adopt(harness_accepts(&listener));
+        worker.send(&directive(7, "alpha")).expect("write");
+        let read = admin
+            .recv_within(Duration::MAX)
+            .expect("the answer is read within an unreachable bound");
+        assert_eq!(read.exchange.ordinal, 7);
         drop(worker);
         drop(listener);
         let _ = std::fs::remove_dir_all(&dir);
