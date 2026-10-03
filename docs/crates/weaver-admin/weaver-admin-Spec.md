@@ -1654,25 +1654,27 @@ logged since no stream line carries one, and never more than one follower stands
 item carried on #50, issuecomment-5969438713). The stream is `weaver-types-Spec` section
 3.1's: a `TraceHeader` line, then the file's own lines from the verified position
 exactly as written, then following with a heartbeat while idle. **The relay parses no
-event**: it hashes one record's bytes, a block at a time so a record of any length costs
-it one block of memory, to verify a position and copies bytes, whole lines where it can,
-so no line of its own lands inside a record, and a truncation met inside a line longer
-than one chunk closes the connection without its `truncated` line for the same reason.
-Otherwise the `truncated` line, once queued, is written whole before the connection
-closes, the follower kept while the reader takes it within the write wait, so a full
-send buffer never cuts the stream's last line. **It copies at most one chunk per pass of
-its loop**, so however large the backlog and however slow the reader, the loop returns
-to the lifetime pipe, the door and the reader's hangup every pass, and the relay never
-outlives its worker behind a reader. **A request is read as it arrives, inside the same
-loop**, so a reader withholding its newline holds neither the lifetime pipe nor the
-standing follower for the request's five seconds. A heartbeat follows five seconds idle,
-and a queued write the reader has not taken whole within five seconds of its queuing
-drops the reader, logged. Its operations, connects, replacements, refusals and
-disconnects, go to the operations log through a descriptor the start step passes, never
-a line per streamed record. **Its descriptors stand at fixed numbers**: the listener at
-3, the read-only sink at 4, the operations log at 5, the lifetime pipe's read end at 6
-and the run lock's description at 9, and its vector is the declared reader's uid, the
-agent's name and the boundary file's digest, the last two for its log lines.
+event**: it hashes one record's bytes to verify a position, a bounded number of blocks
+per pass of its loop, so a record of any length costs it one block of memory and never
+holds the loop away from the lifetime pipe or the follower, and copies bytes, whole
+lines where it can, so no line of its own lands inside a record, and a truncation met
+inside a line longer than one chunk closes the connection without its `truncated` line
+for the same reason. Otherwise the `truncated` line, once queued, is written whole
+before the connection closes, the follower kept while the reader takes it within the
+write wait, so a full send buffer never cuts the stream's last line. **It copies at most
+one chunk per pass of its loop**, so however large the backlog and however slow the
+reader, the loop returns to the lifetime pipe, the door and the reader's hangup every
+pass, and the relay never outlives its worker behind a reader. **A request is read as it
+arrives, inside the same loop**, so a reader withholding its newline holds neither the
+lifetime pipe nor the standing follower for the request's five seconds. A heartbeat
+follows five seconds idle, and a queued write the reader has not taken whole within five
+seconds of its queuing drops the reader, logged. Its operations, connects, replacements,
+refusals and disconnects, go to the operations log through a descriptor the start step
+passes, never a line per streamed record. **Its descriptors stand at fixed numbers**:
+the listener at 3, the read-only sink at 4, the operations log at 5, the lifetime pipe's
+read end at 6 and the run lock's description at 9, and its vector is the declared
+reader's uid, the agent's name and the boundary file's digest, the last two for its log
+lines.
 
 **The trace stream across runs is stated, because a reader depends on it.** **A run's
 sink is not a new file**: the declaration names one sink per agent, which section 5

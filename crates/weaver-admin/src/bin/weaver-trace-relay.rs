@@ -32,6 +32,12 @@ const REQUEST_BOUND: usize = 4096;
 const CHUNK: usize = 64 * 1024;
 const TICK_MS: i32 = 50;
 
+/// How much of a position's verification one pass does: at most this many
+/// blocks of `CHUNK` bytes read back or hashed, so a resume after a record of
+/// any length never holds the loop away from the lifetime pipe, the door or
+/// the follower.
+const VERIFY_BLOCKS: usize = 16;
+
 /// The relay's three waits, per `weaver-admin-Spec` section 6: the request
 /// within five seconds of the connection, a heartbeat after five seconds
 /// idle, and five seconds for the reader to take each queued write, a reader
@@ -232,6 +238,9 @@ struct Candidate {
     uid: u32,
     line: Vec<u8>,
     deadline: Instant,
+    /// The request arrived whole and its position is being verified, a
+    /// bounded step per pass.
+    verifying: Option<Verification>,
 }
 
 /// What reading a candidate's request came to on one pass.
@@ -331,8 +340,18 @@ impl Relay {
                     revents: 0,
                 },
             ];
+            // A verification in progress takes its next step without waiting.
+            let wait = if self
+                .candidate
+                .as_ref()
+                .is_some_and(|candidate| candidate.verifying.is_some())
+            {
+                0
+            } else {
+                TICK_MS
+            };
             // SAFETY: poll over four pollfds this frame owns.
-            let ready = unsafe { nix::libc::poll(polls.as_mut_ptr(), 4, TICK_MS) };
+            let ready = unsafe { nix::libc::poll(polls.as_mut_ptr(), 4, wait) };
             if ready < 0 {
                 if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
                     continue;
@@ -410,33 +429,54 @@ impl Relay {
             uid,
             line: Vec::with_capacity(REQUEST_BOUND),
             deadline: Instant::now() + self.timing.request,
+            verifying: None,
         });
     }
 
     /// **Admits exactly one reader**: the candidate's one request line under
-    /// its bounds and a position that verifies, else the connection is
-    /// refused, logged and closed. The newest admitted connection replaces
-    /// the old.
+    /// its bounds and a position that verifies, a bounded step of the
+    /// verification per pass, else the connection is refused, logged and
+    /// closed. The newest admitted connection replaces the old.
     fn admit(&mut self) {
         let Some(mut candidate) = self.candidate.take() else {
             return;
         };
-        let request = match candidate.read() {
-            Request::Waiting => {
+        if candidate.verifying.is_none() {
+            let request = match candidate.read() {
+                Request::Waiting => {
+                    self.candidate = Some(candidate);
+                    return;
+                }
+                Request::Refused(why) => {
+                    self.log.record("refused", Some(candidate.uid), why);
+                    return;
+                }
+                Request::Whole(request) => request,
+            };
+            match Verification::begin(&self.sink, request) {
+                Ok(verification) => candidate.verifying = Some(verification),
+                Err(why) => {
+                    self.log.record("refused", Some(candidate.uid), why);
+                    return;
+                }
+            }
+        }
+        let Some(verification) = candidate.verifying.as_mut() else {
+            return;
+        };
+        match verification.step(&self.sink, VERIFY_BLOCKS) {
+            None => {
                 self.candidate = Some(candidate);
                 return;
             }
-            Request::Refused(why) => {
+            Some(Err(why)) => {
                 self.log.record("refused", Some(candidate.uid), why);
                 return;
             }
-            Request::Whole(request) => request,
-        };
-        let Candidate { socket, uid, .. } = candidate;
-        if let Err(why) = verify_position(&self.sink, &request) {
-            self.log.record("refused", Some(uid), why);
-            return;
+            Some(Ok(())) => {}
         }
+        let offset = verification.offset;
+        let Candidate { socket, uid, .. } = candidate;
         if let Some(old) = self.follower.take() {
             self.log.record(
                 "replaced",
@@ -447,7 +487,7 @@ impl Relay {
         let mut follower = Follower {
             socket,
             uid,
-            position: request.offset,
+            position: offset,
             pending: Vec::new(),
             pending_since: None,
             last_write: Instant::now(),
@@ -455,11 +495,8 @@ impl Relay {
             closing: false,
         };
         follower.queue_line(TraceControl::Header(identity(&self.sink)));
-        self.log.record(
-            "connect",
-            Some(uid),
-            &format!("from offset {}", request.offset),
-        );
+        self.log
+            .record("connect", Some(uid), &format!("from offset {offset}"));
         self.follower = Some(follower);
     }
 
@@ -548,70 +585,133 @@ impl Relay {
     }
 }
 
-/// **Verifies a position before a byte is sent**: offset zero carries no
-/// digest, and any other offset must fall just after a newline, inside the
-/// file, with the record ending there hashing to the digest, the record's bytes
-/// from the start of its line through its newline.
-fn verify_position(sink: &std::fs::File, request: &TraceRequest) -> Result<(), &'static str> {
-    use sha2::Digest;
-    use std::os::unix::fs::FileExt;
-    if request.offset == 0 {
-        return match request.prior_digest {
-            None => Ok(()),
-            Some(_) => Err("offset zero carries no prior digest"),
-        };
-    }
-    let Some(digest) = &request.prior_digest else {
-        return Err("a position past zero needs its prior digest");
-    };
-    let size = sink
-        .metadata()
-        .map_err(|_| "the sink cannot be read")?
-        .len();
-    if request.offset > size {
-        return Err("the position is past the end of the file");
-    }
-    // Walk back from the newline before the offset to the start of its line.
-    let end = request.offset;
-    let mut start = end - 1;
-    let mut last = [0u8; 1];
-    sink.read_exact_at(&mut last, end - 1)
-        .map_err(|_| "the sink cannot be read")?;
-    if last[0] != b'\n' {
-        return Err("the position is not on a record boundary");
-    }
-    let mut block = vec![0u8; 4096];
-    while start > 0 {
-        let from = start.saturating_sub(block.len() as u64);
-        let len = (start - from) as usize;
-        sink.read_exact_at(&mut block[..len], from)
-            .map_err(|_| "the sink cannot be read")?;
-        if let Some(at) = block[..len].iter().rposition(|b| *b == b'\n') {
-            start = from + at as u64 + 1;
-            break;
+/// **A position's verification, in bounded steps**, before a byte is sent:
+/// offset zero carries no digest, and any other offset must fall just after a
+/// newline, inside the file, with the record ending there hashing to the
+/// digest, the record's bytes from the start of its line through its newline.
+/// The record is found by reading back from the offset and hashed forward,
+/// one block at a time, a record of any length costing one block of memory
+/// and each step at most a fixed number of blocks.
+struct Verification {
+    offset: u64,
+    digest: String,
+    phase: Phase,
+    block: Vec<u8>,
+}
+
+enum Phase {
+    /// Reading back for the start of the record that ends at the offset.
+    Back { start: u64 },
+    /// Hashing the record forward from its start.
+    Forward { at: u64, hasher: sha2::Sha256 },
+    /// Nothing to read: offset zero.
+    Verified,
+}
+
+impl Verification {
+    /// The checks a single read answers, made at once: the digest's presence,
+    /// the offset inside the file, and a newline just before it.
+    fn begin(sink: &std::fs::File, request: TraceRequest) -> Result<Self, &'static str> {
+        use std::os::unix::fs::FileExt;
+        if request.offset == 0 {
+            return match request.prior_digest {
+                None => Ok(Verification {
+                    offset: 0,
+                    digest: String::new(),
+                    phase: Phase::Verified,
+                    block: Vec::new(),
+                }),
+                Some(_) => Err("offset zero carries no prior digest"),
+            };
         }
-        start = from;
-    }
-    // **Hashed a block at a time**, so a record of any length costs the relay
-    // one block of memory and never the record's own size.
-    let mut hasher = sha2::Sha256::new();
-    let mut at = start;
-    while at < end {
-        let len = ((end - at) as usize).min(block.len());
-        sink.read_exact_at(&mut block[..len], at)
+        let Some(digest) = request.prior_digest else {
+            return Err("a position past zero needs its prior digest");
+        };
+        let size = sink
+            .metadata()
+            .map_err(|_| "the sink cannot be read")?
+            .len();
+        if request.offset > size {
+            return Err("the position is past the end of the file");
+        }
+        let mut last = [0u8; 1];
+        sink.read_exact_at(&mut last, request.offset - 1)
             .map_err(|_| "the sink cannot be read")?;
-        hasher.update(&block[..len]);
-        at += len as u64;
+        if last[0] != b'\n' {
+            return Err("the position is not on a record boundary");
+        }
+        Ok(Verification {
+            offset: request.offset,
+            digest,
+            // The walk back starts before the record's own newline.
+            phase: Phase::Back {
+                start: request.offset - 1,
+            },
+            block: vec![0u8; CHUNK],
+        })
     }
-    let found: String = hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    if &found != digest {
-        return Err("the position does not verify");
+
+    /// At most `budget` blocks of the walk back and the hash. Answers `None`
+    /// while work remains, else whether the position verifies.
+    fn step(&mut self, sink: &std::fs::File, budget: usize) -> Option<Result<(), &'static str>> {
+        use sha2::Digest;
+        use std::os::unix::fs::FileExt;
+        let Verification {
+            offset,
+            digest,
+            phase,
+            block,
+        } = self;
+        for _ in 0..budget {
+            match phase {
+                Phase::Verified => return Some(Ok(())),
+                Phase::Back { start } => {
+                    let from = start.saturating_sub(block.len() as u64);
+                    let len = (*start - from) as usize;
+                    if sink.read_exact_at(&mut block[..len], from).is_err() {
+                        return Some(Err("the sink cannot be read"));
+                    }
+                    match block[..len].iter().rposition(|b| *b == b'\n') {
+                        Some(at) => {
+                            *phase = Phase::Forward {
+                                at: from + at as u64 + 1,
+                                hasher: sha2::Sha256::new(),
+                            }
+                        }
+                        None if from == 0 => {
+                            *phase = Phase::Forward {
+                                at: 0,
+                                hasher: sha2::Sha256::new(),
+                            }
+                        }
+                        None => *start = from,
+                    }
+                }
+                Phase::Forward { at, hasher } => {
+                    if *at >= *offset {
+                        let found: String = hasher
+                            .clone()
+                            .finalize()
+                            .iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect();
+                        return Some(if &found == digest {
+                            Ok(())
+                        } else {
+                            Err("the position does not verify")
+                        });
+                    }
+                    let len = ((*offset - *at) as usize).min(block.len());
+                    if sink.read_exact_at(&mut block[..len], *at).is_err() {
+                        return Some(Err("the sink cannot be read"));
+                    }
+                    hasher.update(&block[..len]);
+                    *at += len as u64;
+                }
+            }
+        }
+        None
     }
-    Ok(())
 }
 
 /// The served file's identity: device, inode, and the birth time where the
@@ -676,6 +776,16 @@ mod tests {
             .collect()
     }
 
+    /// A verification run to its end.
+    fn verify_position(sink: &std::fs::File, request: &TraceRequest) -> Result<(), &'static str> {
+        let mut verification = Verification::begin(sink, request.clone())?;
+        loop {
+            if let Some(answer) = verification.step(sink, 1) {
+                return answer;
+            }
+        }
+    }
+
     /// **A record longer than many blocks verifies, hashed whole**: the
     /// position after a 300 KiB record resumes with that record's digest and
     /// refuses another's. Perturbation: hash only the last block read and the
@@ -696,9 +806,73 @@ mod tests {
         };
         assert_eq!(verify_position(&sink, &at(hex(&long))), Ok(()));
         assert_eq!(
-            verify_position(&sink, &at(hex(&long[long.len() - 4096..]))),
+            verify_position(&sink, &at(hex(&long[long.len() - CHUNK..]))),
             Err("the position does not verify")
         );
+    }
+
+    fn relay_over(dir: &Scratch, path: &std::path::Path) -> Relay {
+        Relay {
+            reader: 0,
+            timing: Timing {
+                request: Duration::from_secs(5),
+                heartbeat: Duration::from_secs(5),
+                write: Duration::from_secs(5),
+            },
+            log: Log {
+                file: std::fs::File::create(dir.0.join("admin.log")).unwrap(),
+                agent: "alpha".into(),
+                boundary: "b0b0".into(),
+            },
+            sink: std::fs::File::open(path).unwrap(),
+            follower: None,
+            candidate: None,
+        }
+    }
+
+    /// **A resume's verification is spread over passes**: after a record far
+    /// longer than one pass's blocks, a pass of `admit` leaves the candidate
+    /// waiting, the loop free to look at the lifetime pipe and the follower,
+    /// and later passes promote it. Perturbation: verify the whole record in
+    /// one pass and the first `admit` promotes it.
+    #[test]
+    fn a_resume_after_a_long_record_is_verified_across_passes() {
+        let dir = scratch("verify-passes");
+        let path = dir.0.join("trace.ndjson");
+        let mut long = vec![b'x'; 3 * VERIFY_BLOCKS * CHUNK];
+        long.push(b'\n');
+        std::fs::write(&path, &long).unwrap();
+        let mut relay = relay_over(&dir, &path);
+        let (ours, _theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+        ours.set_nonblocking(true).unwrap();
+        let request = TraceRequest {
+            offset: long.len() as u64,
+            prior_digest: Some(hex(&long)),
+        };
+        relay.candidate = Some(Candidate {
+            socket: ours,
+            uid: 0,
+            line: Vec::new(),
+            deadline: Instant::now() + Duration::from_secs(5),
+            verifying: Some(Verification::begin(&relay.sink, request).unwrap()),
+        });
+        relay.admit();
+        assert!(
+            relay.follower.is_none(),
+            "one pass does not finish the record"
+        );
+        assert!(
+            relay.candidate.is_some(),
+            "and the candidate waits for the next"
+        );
+        let mut passes = 1;
+        while relay.follower.is_none() {
+            assert!(relay.candidate.is_some(), "the verification refused");
+            relay.admit();
+            passes += 1;
+            assert!(passes < 100, "the verification never finished");
+        }
+        assert!(passes >= 3, "{passes} passes");
     }
 
     /// **The `truncated` line reaches a reader whose send buffer is full**:
