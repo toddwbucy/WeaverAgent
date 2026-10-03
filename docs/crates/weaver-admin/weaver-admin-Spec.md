@@ -642,8 +642,11 @@ to: admin-store-gate-asks-as-the-member
 ```
 
 **A restore is judged here too, and it names a save point**, on the operator's ruling of
-2026-10-02 on #58, which retires the record restore of 2026-09-04 (issue #432). A
-declaration electing one names a save point by its bare file name in the declaration
+2026-10-02 on #58, which retires the record restore of 2026-09-04 (issue #432). **It is
+judged only where a state member stands**: under the `none` store engine the inventory
+selects no save point and resolves no lineage, and a declaration naming `restore` beside
+that engine refuses `ConfigInvalid` naming `restore`, per `weaver-types-Spec` section 2.
+A declaration electing one names a save point by its bare file name in the declaration
 directory of section 9, and the walk reads it under this crate's own custody: the name
 is judged as `identity-file`'s is, a save point absent from the directory refuses
 `ConfigInvalid` naming `restore`, and one that fails section 9's judgment of the entries

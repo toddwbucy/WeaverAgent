@@ -619,13 +619,16 @@ record with no reductions in it. This is why `AgentConfig` derives no `Default` 
 ruling of 2026-10-02 on #58, which retires the record restore of 2026-09-04 (issue
 #432) and its cut. It may be absent because `weaver-state-PRD` section 4 rules what
 absence means: the load restores the latest save point published, and with none state is
-rebuilt from the trace offline. Present, `save-point` is a bare file name in the
-declaration's own directory, judged as `identity-file` is, carrying no `/`, not `.` or
-`..`, not empty and with no control character, refusing `BadValue` naming
-`restore.save-point` otherwise; admin opens it under its own custody, per
-`weaver-admin-Spec` section 4, and the harness never sees it. A save point the operator
-built offline from a record names that record and cut inside itself, not here, so a
-branch from a record is the builder's act and this member keeps one meaning.
+rebuilt from the trace offline. **Restoring needs a member to restore into**: where the
+declaration's store engine is `none`, no save point is selected, by name or by default,
+and a `restore` member present beside that engine refuses `ConfigInvalid` naming
+`restore`, so no load names holdings that no member restored. Present, `save-point` is a
+bare file name in the declaration's own directory, judged as `identity-file` is,
+carrying no `/`, not `.` or `..`, not empty and with no control character, refusing
+`BadValue` naming `restore.save-point` otherwise; admin opens it under its own custody,
+per `weaver-admin-Spec` section 4, and the harness never sees it. A save point the
+operator built offline from a record names that record and cut inside itself, not here,
+so a branch from a record is the builder's act and this member keeps one meaning.
 
 ```graph
 node: types-required-field-refuses
