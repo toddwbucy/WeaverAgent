@@ -3524,9 +3524,11 @@ mod tests {
     /// session with no signal ignored and no new privileges, and crosses the
     /// exec with exactly its allowlist: its standard streams at `/dev/null`,
     /// the listener at 3, the sink at 4, the log at 5, the lifetime pipe at 6
-    /// and the run lock at 9. The stand-in is a script that becomes `sleep`.
-    /// Run by the watch below. Perturbation: drop the log's placement and 5 is
-    /// absent from the list.
+    /// and the run lock at 9. Its environment is the fixed set, so the relay's
+    /// test-only wait knob, set in this process, never reaches it. The
+    /// stand-in is a script that becomes `sleep`. Run by the watch below.
+    /// Perturbations: drop the log's placement and 5 is absent from the list,
+    /// and pass the knob through and the environment carries it.
     #[test]
     #[ignore = "needs root; run inside a user namespace by the watch below"]
     fn the_relay_spawn_lands_its_identity_and_allowlist_as_root() {
@@ -3554,6 +3556,8 @@ mod tests {
         let log = start::open_log(&base.join("admin.log"), None).unwrap();
         let (lifetime_read, lifetime_write) =
             nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC).unwrap();
+        // SAFETY: the watch runs this instrument alone, one thread.
+        unsafe { std::env::set_var("WEAVER_TRACE_RELAY_TEST_MS", "1") };
         let mut child = start::spawn_relay(start::RelayStart {
             binary: &stand_in,
             reader_uid: 4246,
@@ -3599,6 +3603,22 @@ mod tests {
         assert_eq!(line("Groups:"), "4245", "the trace group alone");
         assert_eq!(line("SigIgn:"), "0000000000000000");
         assert_eq!(line("NoNewPrivs:"), "1");
+        let environ = std::fs::read(proc.join("environ")).unwrap();
+        let names: Vec<String> = environ
+            .split(|b| *b == 0)
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| {
+                let name = entry.split(|b| *b == b'=').next().unwrap_or_default();
+                String::from_utf8_lossy(name).into_owned()
+            })
+            .collect();
+        assert!(
+            !names
+                .iter()
+                .any(|name| name == "WEAVER_TRACE_RELAY_TEST_MS"),
+            "the test-only knob never reaches a started relay: {names:?}"
+        );
+        assert!(names.iter().any(|name| name == "PATH"), "{names:?}");
         let table = || {
             let mut fds: Vec<u32> = std::fs::read_dir(proc.join("fd"))
                 .unwrap()
