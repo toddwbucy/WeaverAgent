@@ -228,7 +228,15 @@ rule's lines**: the `grants` verb #50 once drafted does not return, admin holdin
 view of what a sudo rule grants, so admin-con reads its ceiling from the rule itself on
 the box. **What a compromised admin-con can do is start and stop this agent**, and the
 threat that matters, a model, binary, configuration or state swapped and then loaded, is
-#71's to answer, independently of this mechanism.
+#71's to answer, independently of this mechanism, the declaration pin being required
+wherever the lifecycle is delegated. **Every verb is a command line, `show` and the
+running-agent verbs included**, so a connector never speaks on the coordination channel:
+that channel sits in a directory only root enters and checks its peer at accept, per
+section 7, so only a root-run `weaver-admin` dials it, and the connector's one direct
+contact with the agent is the trace door. **The only lines granted without a password
+are the agent's fixed command lines**: the connector runs `sudo -n`, so it can run those
+and nothing else, any wider sudo the operator holds still asks for a password, and no
+cached credential is within the connector's reach.
 
 ```graph
 node: admin-runs-as-root-or-performs-nothing
@@ -253,6 +261,27 @@ two never disagree. No organ envelope appears here, because this is not an organ
 channel and no contract draws one across it. What the earlier form asserted of
 the wire, one answer per request in request order, is structural now: one
 invocation carries one verb and emits one object.
+
+**The answer's bounds are named, so anything outside them is a fault.** The object on
+standard output is at most 64 KiB, the largest being `show`'s with its load facts, well
+inside it. Exit status 0 is an answer and 1 is a refusal, as `surface.rs` already pins.
+Any other status, or a status with no object, is a fault of this crate's, and a caller
+reads the agent's state with the next `show`. Standard error carries human-readable
+diagnostics and nothing a caller parses, its contents being no part of this interface.
+**A load answers once the agent is up**: the worker has answered ready, or the load has
+refused, and the worker stays running, detached. Admitting a large model can take
+minutes, so this crate's own bound on the enter's answer is 900 seconds, the agent's
+root naming another as `load-bound-seconds` where a model needs it, and a caller's bound
+must exceed it, a caller giving up first reading the outcome from the next `show`.
+
+**An invocation finishes even when its caller disappears**, on the operator's ruling of
+2026-10-03 on #50, which folds in #60. This crate ignores `SIGPIPE` and `SIGHUP` from
+its first instruction, so a caller that hangs up, closes the pipe or is killed does not
+end the verb. A write of the answer to a closed standard output fails and is ignored,
+and the verb runs to completion all the same. Its outcome is recorded in `admin.log`
+whatever became of the caller, and the next `show` reads the agent's state. A caller
+that times out therefore leaves the process running, answers that the outcome is
+unknown, and reads it with the next `show`.
 
 ```graph
 node: admin-answer-and-exit-status-agree
@@ -319,6 +348,17 @@ refuses `NoSuchAgent` as every verb does, and whether a declaration validates st
 one agent named, admin being one agent's organ on the operator's ruling of 2026-10-01,
 and managing several WeaverWeb's or a separate application's.
 
+**A worker stranded before enter is recovered by the next `unload` or `load`**, the
+second half of #60. An invocation that ended between the start step and the enter,
+before this crate's signal handling existed or by `SIGKILL` now, leaves a worker holding
+the run lock whose observation answers `Unloaded`, no enter having reached it. The lock
+makes it detectable and the observation makes it safe to end: `unload` meeting it ends
+it by the escalation below and answers provisioned-and-unloaded, and `load` meeting it
+ends it the same way, logs the reap, and proceeds, where a worker answering `Idle` or
+`Active` refuses the load `AgentRunning`. A worker whose observation does not answer at
+all inside the dial's bound is treated as stranded too, the lock being the only fact it
+offers.
+
 **The record's instrument stays a test.** `show` on an admitted agent whose run lock is
 held by a worker that has not yet answered enter answers through the exchange and
 constructs no state from the lock, watched to fail when the verb is made to read a held
@@ -370,6 +410,12 @@ point an unclean stop left in the member's room is published and selectable by t
 load that follows it. It adds no step to the seven, being the inventory's first read
 of what the load restores. Each step's failure returns a typed
 `lifecycle-refusal` and enters the rollback below carrying the step's name.
+
+**`validate` stays the load's front half, and it is left room to grow.** WeaverWeb's
+registration is where proper setup is confirmed, and `validate` is the natural command
+line for it to call. This act does not extend it: what it answers is section 4's
+inventory and nothing more. It closes nothing off either, its answer being a
+`lifecycle-answer` case a later act may widen with the setup facts registration needs.
 
 **`validate` is the load's front half, and the pin is one function.** The
 inventory of section 4 is a single function that both the verb and the load
@@ -1371,6 +1417,18 @@ event**: it hashes one record's bytes to verify a position and copies bytes. Its
 operations, connects, replacements, refusals and disconnects, go to the operations log
 through a descriptor the start step passes, never a line per streamed record.
 
+**The trace stream across runs is stated, because a reader depends on it.** **A run's
+sink is not a new file**: the declaration names one sink per agent, which section 5
+opens for appending at every load, so every run of the agent appends to the same file
+and no per-run naming is introduced. **A run's records open with its `load` event**, the
+first line the harness authors for a serving run, so a reader finds each run's start in
+the file it is already reading. **A stream resumes across runs within that file**: the
+relay runs only while the agent runs, so between runs nothing streams and the door is
+closed, and a reader that held a position at the last run's end resumes at the next load
+from the same offset and prior digest, the file having only grown. Where the operator
+replaces or truncates the file between runs, the relay's header names a different file
+or the position fails to verify, and the reader starts again from offset zero.
+
 **The relay's lifetime is bound to the worker's by a pipe, and the failure mode is
 stated.** The start step makes one pipe before it forks either process. The worker
 inherits the write end across its exec and marks it close-on-exec at once, so the organs
@@ -1758,26 +1816,27 @@ the invocation as `ConfigInvalid` with no field.
 **The root holds one file per key.** Required: `worker-binary`, `spu-binary`,
 `gate-binary`, `run-tool`, `control-tool`, `coordination-root`, `declaration-directory`,
 `operator` and `roles.toml`, the boundary file of section 9 below. Optional:
-`headroom-bytes` and `state-store-socket`, the last read under a service election alone,
-the service engine's conventional directory standing where the file is silent. **The
-agent's declaration stands in the operator's directory and not in the root**, on the
-operator's ruling of 2026-10-02: `declaration-directory` names it, absolute,
-`~/.weaveragent/<agent>/` by convention, and it holds `agent.toml`, which this crate
-parses per `weaver-types-Spec` section 2, beside the prompt file the declaration's
-`identity-file` names. A declaration directory holding no `agent.toml` answers
-`NoSuchAgent`, as a root holding none did. **`operator` names the operator's uid**, on
-the operator's ruling of 2026-10-02 on this act's first question: a root-owned key
-`create-agent.sh` writes once, the box's own fact, set by root, about whose data defines
-the agent, and independent of who invokes a verb. The coordination name changed hands
-with the operator socket on 2026-08-05: the operator places it, the harness binds it,
-and admin dials it, so one value reaches two crates and the root is where they agree.
-These values are not the agent config and no seam carries them, which is why the root
-takes no contract of its own. **The file and its values part company at the start ask,
-and the distinction is worth holding.** This crate is the only one that reads the root.
-Three of the values do not stay in it: the coordination socket's name and the two organ
-binary paths reach the worker in section 6's argument vector, at the start step's exec
-rather than over any seam. What is fixed here is that these values exist, that they are
-the operator's to place, and that none of them is discovered at runtime by searching.
+`headroom-bytes`, `load-bound-seconds`, per section 2, and `state-store-socket`, the
+last read under a service election alone, the service engine's conventional directory
+standing where the file is silent. **The agent's declaration stands in the operator's
+directory and not in the root**, on the operator's ruling of 2026-10-02:
+`declaration-directory` names it, absolute, `~/.weaveragent/<agent>/` by convention, and
+it holds `agent.toml`, which this crate parses per `weaver-types-Spec` section 2, beside
+the prompt file the declaration's `identity-file` names. A declaration directory holding
+no `agent.toml` answers `NoSuchAgent`, as a root holding none did. **`operator` names
+the operator's uid**, on the operator's ruling of 2026-10-02 on this act's first
+question: a root-owned key `create-agent.sh` writes once, the box's own fact, set by
+root, about whose data defines the agent, and independent of who invokes a verb. The
+coordination name changed hands with the operator socket on 2026-08-05: the operator
+places it, the harness binds it, and admin dials it, so one value reaches two crates and
+the root is where they agree. These values are not the agent config and no seam carries
+them, which is why the root takes no contract of its own. **The file and its values part
+company at the start ask, and the distinction is worth holding.** This crate is the only
+one that reads the root. Three of the values do not stay in it: the coordination
+socket's name and the two organ binary paths reach the worker in section 6's argument
+vector, at the start step's exec rather than over any seam. What is fixed here is that
+these values exist, that they are the operator's to place, and that none of them is
+discovered at runtime by searching.
 
 **Nothing in one agent's root is read for another.** The box-wide values, the binaries,
 the tools, the coordination root and the headroom, are copied into each root by the
@@ -1857,7 +1916,7 @@ as its identity prefix at load, and that gives the agent process no read of the 
 and no way to change it.
 
 **An optional value is absent only where nothing stands at its path.** Every optional
-value of this section, `headroom-bytes` and `state-store-socket`,
+value of this section, `headroom-bytes`, `load-bound-seconds` and `state-store-socket`,
 reads as absent only where the path itself names nothing, which is
 asked of the link and never of its target. A dangling link, a directory, bytes that are
 not UTF-8, or a read the kernel refuses is the operator's file failing to read, and
@@ -2342,6 +2401,13 @@ perturbation-verified:
 - **The relay dies with the worker**, watched by killing the worker with `SIGKILL`: the
   relay exits on the pipe's end-of-file. The perturbation leaves the write end open in
   the start step, and the relay outlives the worker.
+- **A verb finishes when its caller disappears**, watched by a `load` whose caller is
+  killed after the start step: the agent loads and `admin.log` records the outcome. The
+  perturbation leaves `SIGHUP` at its default, and the load dies part way.
+- **A worker stranded before enter is reaped**, watched by a load killed between the
+  start step and the enter: the next `load` ends the stranded worker, logs the reap and
+  loads. The perturbation refuses `AgentRunning` on any held lock, and the agent stays
+  stuck until a person intervenes.
 - **The relay streams the loaded run's file**, watched by an edit to the declaration's
   sink while the run stands: the stream still reads the worker's file. The perturbation
   reopens the declared path, and the stream reads the new file.

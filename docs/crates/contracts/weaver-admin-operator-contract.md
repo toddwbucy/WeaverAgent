@@ -133,7 +133,14 @@ through a handle and reaches nothing behind it.
 **For a command line, one answer object on standard output**: one `lifecycle-answer`
 or one `lifecycle-refusal` in the floor's rendering, the exit status agreeing with it,
 per `weaver-admin-Spec` section 2. That pair, the granted lines and the object each
-prints, is this repository's interface to a connector, and nothing else is.
+prints, is this repository's interface to a connector, and nothing else is. **Its bounds
+are named.** The object is at most 64 KiB. Exit 0 is an answer and 1 a refusal, and any
+other status, or a status with no object, is a fault the caller answers by reading the
+next `show`. Standard error carries human-readable diagnostics no caller parses. A
+`load` answers once the agent is up or refused, within admin's own bound of 900 seconds
+by default, which a caller's bound must exceed. **An invocation finishes even when its
+caller disappears**, its outcome recorded in the agent's `admin.log`, so a caller that
+gives up reads the outcome from the next `show`.
 
 **At the trace door, the record as a read-only stream**: the relay writes a header line
 naming the file's identity (device, inode, birth time), then the trace's own lines from
