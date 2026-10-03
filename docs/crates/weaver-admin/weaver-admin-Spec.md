@@ -410,20 +410,20 @@ agent.
 exists.** The invocation lock is taken first. The run lock is then read and must be
 free, or the load refuses `AgentRunning` or reaps a stranded worker, per below.
 Everything the start step does next, repairing the runtime directory, clearing a dead
-worker's names, standing the member and the relay, happens under the invocation lock
-with the run lock found free, which is what makes clearing safe: no other invocation can
-start a worker while this one holds the invocation lock, and no worker runs. **The
-worker child takes the run lock before anything else, and the parent waits for it**, so
-no interval leaves a worker child alive with neither lock held. The child arms
-`PR_SET_PDEATHSIG` to `SIGKILL` and checks that its parent still stands, so a parent
-killed before the next step takes the child with it. It takes the run lock. It writes
-one byte on a close-on-exec handshake pipe. Only then does it clear the death signal,
-since the worker must outlive the invocation that starts it. The parent reads that byte
-before it proceeds, and a child that dies first closes the pipe and fails the load. So a
-`SIGKILL` of the invocation before the handshake ends the child too, with nothing left
-to strand, and one after it leaves a child holding the run lock, which the
-stranded-worker recovery below finds: from the handshake on, the run lock speaks for the
-worker.
+worker's names and a dead relay's `trace.sock`, standing the member and the relay,
+happens under the invocation lock with the run lock found free, which is what makes
+clearing safe: no other invocation can start a worker while this one holds the
+invocation lock, and no worker runs. **The worker child takes the run lock before
+anything else, and the parent waits for it**, so no interval leaves a worker child alive
+with neither lock held. The child arms `PR_SET_PDEATHSIG` to `SIGKILL` and checks that
+its parent still stands, so a parent killed before the next step takes the child with
+it. It takes the run lock. It writes one byte on a close-on-exec handshake pipe. Only
+then does it clear the death signal, since the worker must outlive the invocation that
+starts it. The parent reads that byte before it proceeds, and a child that dies first
+closes the pipe and fails the load. So a `SIGKILL` of the invocation before the
+handshake ends the child too, with nothing left to strand, and one after it leaves a
+child holding the run lock, which the stranded-worker recovery below finds: from the
+handshake on, the run lock speaks for the worker.
 
 **A held lock says a worker runs and nothing about its lifecycle state.** A held lock
 may be a worker that has not yet answered enter, one serving a turn, or one unwinding
@@ -1144,27 +1144,30 @@ to: admin-runtime-directory-mode-is-stated
 
 **The worker is started bare, under its own account, detached, and owning its organs.**
 The start step forks, and once the child holds the run lock by section 3's handshake it
-does six more things before it executes the worker with
-the vector below. It takes a new session (`setsid`), so the worker belongs to no
-terminal and survives the invocation that started it. It points its standard input at
-`/dev/null` and its standard output and error at the agent's worker log, a file of its
-own beside the operations log and never that log, since an agent holding a writable
-handle to the boundary's record could write into it. It replaces its environment with a
-fixed one, `PATH=/usr/bin:/bin`, `HOME` the agent's home, `LANG=C.UTF-8`, and
-`LD_LIBRARY_PATH` where the root's optional `library-path` names the engine libraries,
-the value `unit-properties` carried before it retired, and nothing else, so no variable
-of the caller's or of sudo's reaches the worker or the organs that inherit its
-environment. **`library-path` is judged and recorded**: the directory it names is held
-to the root's own judgment, root-owned and writable by no group or other, its ancestors
-closed as the root's are, because whatever it holds is loaded into the worker and its
-organs, and its value rides the enter for the harness to record on the `load` event
-beside the stack, so the record names the libraries a run loaded, pinning their digests
-being #71's. **It resets `SIGPIPE`, `SIGHUP`, `SIGINT` and `SIGTERM` to their default
-dispositions and clears its signal mask**, because the invocation ignores those four,
-per section 2, and an ignored disposition survives a fork and an exec, so without the
-reset the worker, and through it every organ, would ignore the unload's `SIGTERM` and a
-packager's stop alike. The relay's and the member's children reset the same four the
-same way before their own execs. It sets `PR_SET_NO_NEW_PRIVS`. It narrows its
+does six more things before it executes the worker with the vector below. It takes a new
+session (`setsid`), so the worker belongs to no terminal and survives the invocation
+that started it. It points its standard input at `/dev/null` and its standard output and
+error at the agent's worker log, a file of its own beside the operations log and never
+that log, since an agent holding a writable handle to the boundary's record could write
+into it. It replaces its environment with a fixed one, `PATH=/usr/bin:/bin`, `HOME` the
+agent's home, `LANG=C.UTF-8`, and `LD_LIBRARY_PATH` where the root's optional
+`library-path` names the engine libraries, the value `unit-properties` carried before it
+retired, and nothing else, so no variable of the caller's or of sudo's reaches the
+worker or the organs that inherit its environment. **`library-path` is judged and
+recorded**: the directory it names is held to the root's own judgment, root-owned and
+writable by no group or other, its ancestors closed as the root's are, because whatever
+it holds is loaded into the worker and its organs, and its value rides the enter for the
+harness to record on the `load` event beside the stack, so the record names the
+libraries a run loaded, pinning their digests being #71's. **It resets `SIGPIPE`,
+`SIGHUP`, `SIGINT` and `SIGTERM` to their default dispositions and clears its signal
+mask**, because the invocation ignores those four, per section 2, and an ignored
+disposition survives a fork and an exec, so without the reset the worker, and through it
+every organ, would ignore the unload's `SIGTERM` and a packager's stop alike. **The
+relay's and the member's children take their own new session first and reset the same
+four the same way after it**, before their own execs, so neither belongs to the invoking
+terminal's process group: a caller's hangup or interrupt reaching that group then
+reaches only the invocation, which ignores both, and never a child whose dispositions
+are already back at their defaults. It sets `PR_SET_NO_NEW_PRIVS`. It narrows its
 supplementary groups to `weaver-<agent>`, then its gid, then its uid, in that order,
 because the narrowings need the privilege the last one gives away. Then it executes. It
 carries across the exec exactly two descriptors besides its standard streams: the run
@@ -1510,33 +1513,36 @@ where every orphan is.
 ruling of 2026-10-03 on #50. It is a small process the start step launches beside the
 worker, under the relay account `weaver-<agent>-relay`, whose one group is the trace
 group `weaver-<agent>-trace`, and never under the agent's account or the member's. **The
-start step binds its socket and hands it over**: as root it binds `trace.sock` in the
-agent's run directory of section 3, `<coordination-root>/weaver.run/<agent>/`, root's
-and apart from the agent's runtime directory, the socket root-owned, mode `0660` and
-grouped to the agent's per-agent access group `weaver-<agent>-admin`, which the declared
-trace reader must hold, and passes the listening descriptor to the relay at its exec, so
-the relay never binds and never needs to write the directory. **The door stands only for
-a file sink.** A pipe's reader is the operator's, and a second reader would steal its
-bytes, and a socket sink cannot be opened for reading at all, so where the declaration's
-sink is a pipe or a socket the start step starts no relay, binds no `trace.sock`, and
-the door stays closed. For a file sink it passes the relay a read-only descriptor of the
-same open file section 5 opened for the worker, reopened through `/proc/self/fd/N` of
-the write descriptor and never by the declaration's path, and confirmed by comparing the
-two descriptors' device and inode before it is passed, so **the relay serves the loaded
-run's own file by descriptor and records its identity**, and an operator's edit to the
-declaration's sink while the run stands changes nothing the relay reads (the item
-carried on #50, issuecomment-5969507004). **It admits exactly one reader**, the
-`trace-reader` of the agent's `roles.toml`, judged by the kernel's peer credential
-before a byte of the request is read, and refuses and logs every other caller. **The
-newest connection from that reader replaces the old**, the relay holding one follower at
-a time inside its one process, so the replaced follower ends with a reason, the
-replacement is logged, and never more than one follower stands (the item carried on #50,
-issuecomment-5969438713). The stream is `weaver-types-Spec` section 3.1's: a
-`TraceHeader` line, then the file's own lines from the verified position exactly as
-written, then following with a heartbeat while idle. **The relay parses no event**: it
-hashes one record's bytes to verify a position and copies bytes. Its operations,
-connects, replacements, refusals and disconnects, go to the operations log through a
-descriptor the start step passes, never a line per streamed record.
+start step binds its socket and hands it over**: as root, having first removed a
+`trace.sock` a previous run's relay left, which a relay cannot unlink from the root's
+directory and whose name outlives its listener, and doing so under the invocation lock
+with the run lock found free, as it clears the worker's names, it binds `trace.sock` in
+the agent's run directory of section 3, `<coordination-root>/weaver.run/<agent>/`,
+root's and apart from the agent's runtime directory, the socket root-owned, mode `0660`
+and grouped to the agent's per-agent access group `weaver-<agent>-admin`, which the
+declared trace reader must hold, and passes the listening descriptor to the relay at its
+exec, so the relay never binds and never needs to write the directory. **The door stands
+only for a file sink.** A pipe's reader is the operator's, and a second reader would
+steal its bytes, and a socket sink cannot be opened for reading at all, so where the
+declaration's sink is a pipe or a socket the start step starts no relay, binds no
+`trace.sock`, and the door stays closed. For a file sink it passes the relay a read-only
+descriptor of the same open file section 5 opened for the worker, reopened through
+`/proc/self/fd/N` of the write descriptor and never by the declaration's path, and
+confirmed by comparing the two descriptors' device and inode before it is passed, so
+**the relay serves the loaded run's own file by descriptor and records its identity**,
+and an operator's edit to the declaration's sink while the run stands changes nothing
+the relay reads (the item carried on #50, issuecomment-5969507004). **It admits exactly
+one reader**, the `trace-reader` of the agent's `roles.toml`, judged by the kernel's
+peer credential before a byte of the request is read, and refuses and logs every other
+caller. **The newest connection from that reader replaces the old**, the relay holding
+one follower at a time inside its one process, so the replaced follower ends with a
+reason, the replacement is logged, and never more than one follower stands (the item
+carried on #50, issuecomment-5969438713). The stream is `weaver-types-Spec` section
+3.1's: a `TraceHeader` line, then the file's own lines from the verified position
+exactly as written, then following with a heartbeat while idle. **The relay parses no
+event**: it hashes one record's bytes to verify a position and copies bytes. Its
+operations, connects, replacements, refusals and disconnects, go to the operations log
+through a descriptor the start step passes, never a line per streamed record.
 
 **The trace stream across runs is stated, because a reader depends on it.** **A run's
 sink is not a new file**: the declaration names one sink per agent, which section 5
@@ -2559,6 +2565,12 @@ perturbation-verified:
 - **A verb finishes when its caller disappears**, watched by a `load` whose caller is
   killed after the start step: the agent loads and `admin.log` records the outcome. The
   perturbation leaves `SIGHUP` at its default, and the load dies part way.
+- **A second file-sink load binds its trace door**, watched by two loads in sequence
+  with an unload between: the second binds `trace.sock`. The perturbation skips the
+  stale name's removal, and the second load fails its bind.
+- **A caller's hangup ends no child**, watched by a load whose terminal hangs up after
+  the relay and the member are forked: both stand. The perturbation drops their
+  `setsid`, and the hangup kills them.
 - **No worker child outlives a load killed before the handshake**, watched by a load
   sent `SIGKILL` after the fork and before the child's handshake byte: the child dies
   with it and the next `load` finds both locks free. The perturbation clears the death
