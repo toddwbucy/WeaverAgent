@@ -46,7 +46,11 @@ to: weaver-admin
 
 The second party is the operator, one person in the operator role, per
 `weaver-admin-PRD` section 7: at a root shell a human holding sudo, and through a sudo
-rule the operator installs, this agent's own connector acting for that person. The graph
+rule the operator installs, this agent's own connector acting for that person under its
+own service user, never the operator's account, on the operator's ruling of 2026-10-03
+on #50: human and machine accounts stay separate, the connector holds only the fixed
+lines, so it can write none of the operator's files, and WeaverWeb's audit names the
+person while the box's record names the service uid sudo reports. The graph
 carries no node for a principal outside the program, so the party is named in prose and
 the missing category is registered rather than improvised.
 

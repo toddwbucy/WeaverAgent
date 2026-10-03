@@ -238,6 +238,20 @@ are the agent's fixed command lines**: the connector runs `sudo -n`, so it can r
 and nothing else, any wider sudo the operator holds still asks for a password, and no
 cached credential is within the connector's reach.
 
+**The rule names the connector's own service user, never the operator's account**, on
+the operator's ruling of 2026-10-03 on #50, the toddwbucy/WeaverTools#6 addendum
+standing. It grants that user exactly the agent's fixed command lines, as root, without
+a password, used with `sudo -n`. The operator's human account is never used by the
+machine, and the operator's own sudo keeps asking for a password. The reasoning is three
+rules at once. **Human and machine accounts stay separate**, so nothing the machine does
+runs as the person. **Least privilege**: the connector holds the fixed lines and nothing
+else, and since the operator's account owns the declaration, the prompt and the
+published save points, a compromised connector can write none of them. **Two audit
+records each answer their own question**: WeaverWeb's audit names the operator as the
+person who asked, and the box's record carries the service uid sudo reports as the
+account that ran it. The same service user is the boundary file's `trace-reader`, per
+section 9, so the connector's one other contact with the agent is that same account.
+
 ```graph
 node: admin-runs-as-root-or-performs-nothing
 kind: assertion
