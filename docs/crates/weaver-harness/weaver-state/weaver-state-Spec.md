@@ -12,7 +12,8 @@
 
 ## 0. What this document is
 
-How the custodian is represented: its process, its store, its territory, and
+How the store primitive is represented: its process, its store and the save points
+that carry it across loads, its territory, the slot for the loop's schema, and
 the shapes both halves of the seam take. Written from the merged corpus
 alone. The charter carries every why, and where reasoning appears here it
 restates a charter clause and cites it. The serve half stood deliberately
@@ -21,11 +22,14 @@ with the context-injection loop's act of 2026-08-19 at section 4.
 
 ## 1. The crate
 
-A binary crate, one process per session member, spawned at load and retired at
-unload while its holdings stand, per `weaver-state-PRD` section 3. The
-charter's one sentence is asserted at the crate: custody without policy,
-nothing judged, ranked, or initiated, which review checks by reading the
-crate's surface for any door a judgment could enter by.
+A binary crate, one process per run of one agent, spawned at load and retired at
+unload while its holdings stand in the latest save point, per `weaver-state-PRD`
+sections 3 and 4. The charter's one sentence is asserted at the crate: custody without
+policy. **The store initiates nothing and holds only its schema's shape**, and the
+judging and the ranking are the loop's, made through the SPU and recorded on the
+trace before they reach this crate as distillates, per the charter's section 2.
+Review checks it by reading the crate's surface for any door a judgment could enter
+by.
 
 ```graph
 node: state-custody-without-policy
@@ -53,32 +57,38 @@ They build the opener and distillate through `weaver_trace::opener` and
 and the dependency cell is closed by the operator's ruling of 2026-09-22,
 recorded in charter section 5 under Working Process section 6.
 
-**Dependencies, external.** One per engine, each behind a feature named for
-its engine so a build compiles the integrations it deploys and no other, per
-the ruling of 2026-09-04 that the store is a port: `rusqlite` with its bundled
-engine for the embedded store, so that store's version is the build's fact
-rather than the host's, and `postgres`, the synchronous client, for the service
-store, so no async runtime enters with it. Both pinned by the lock file like
-every dependency. `serde_json` for the canonical event JSON the ingest reads.
-`nix` for the preload door's credential check and for the descriptor handling
-both doors require. Nothing else: no async runtime, no logging
-crate, no HTTP, per the corpus's standing refusals.
+**Dependencies, external.** One engine, behind the feature named for it: `rusqlite` with
+its bundled engine, so the store's version is the build's fact rather than the host's,
+its serialization interface carrying the save point, pinned by the lock file like every
+dependency. **The `postgres` client and its feature retire** with the service engine, on
+the operator's ruling of 2026-10-02 reversing #38, in the code act that removes the
+engine. `serde_json` for the canonical event JSON the ingest reads. `nix` for the
+preload door's credential check and for the descriptor handling both doors and the save
+point's descriptor require. Nothing else: no async runtime, no logging crate, no HTTP,
+per the corpus's standing refusals.
 
 ## 2. The process and its territory
 
 The member runs under its own account, owning one subdirectory in the
 operator-side territory where the session record lives, per the charter's
-custody ruling. Under the embedded engine the store opens by path in that
-subdirectory and keeps sibling files, so custody is by ownership, mode-locked
-against the agent's uid, and nothing else writes there. Under the service
-engine the subdirectory holds the preload door's name and nothing of the
-store, the store being reached by a connection the member alone holds: it
-dials the store's unix socket under its own account, the store's peer
-authentication maps that account to the role the binding declares, and the
-agent's uid maps to no role, which is the second gate of the charter's section
-4 standing where the first did not already refuse. The engine and, for the
-service engine, the socket, the database, and the role arrive on the member's
-vector from the binding, per `weaver-admin-Spec` section 6.
+custody ruling. **The live store is not in that subdirectory**: it lives in the
+member's memory. The subdirectory, the territory's `state/`, is the member's room: it
+holds the preload door's name where one stands and **the save points the member
+writes**, a new file each and never one rewritten, per the operator's ruling of
+2026-10-02 on #58 and `weaver-state-PRD` section 4, and admin, as root, publishes each
+finished one into the operator's declaration directory at the next load or unload.
+**The save point a load restores arrives as a descriptor and never as a path**, per
+`weaver-admin-Spec` section 6: admin opens the chosen save point in the operator's
+directory for reading, the latest by default or the one `restore` names, and the member
+inherits it at its spawn the way it inherits the first door's end. Where no save point
+exists the descriptor is absent, which is an agent's first load or every save point
+deleted, and the load of section 3 rebuilds. The descriptor's number is a fixed
+convention between this crate and admin, the code act's to elect beside the first
+door's, and it is probed before it is adopted, by the rule below, a regular file open
+for reading. A live restore reads a save point from the member's own room by name, per
+section 4, and needs no descriptor. The engine flag and the
+service engine's three flags leave the vector with that engine, in the code act that
+removes it, `weaver-admin-Spec` section 6 moving in the same act.
 
 The first door's end arrives with the process, per the operator's ruling of 2026-08-26:
 admin creates the pair at the spawn and this member inherits its end, so the peer is
@@ -94,26 +104,26 @@ traffic and close it on exit. The probe borrows and owns nothing, so the refusal
 nothing that is not this process's own. The choreography election below is narrowed once
 already by section 4 and now again by the ruling: what remains that act's is the number
 and the probe's mechanics. The preload door's name arrives on the vector under a
-diagnostic binding or a serving load that elects a restore, per issue #432, this member
-binding whatever name it is given and none it is not, and binds under this member's own
-territory, the credential judgment of section 4 unchanged on it.
+diagnostic binding alone, the record restore of issue #432 retiring on the operator's
+rulings of 2026-10-02 on #58, this member binding whatever name it is given and none it
+is not, and binds under this member's own territory, the credential judgment of section
+4 unchanged on it.
 
 ## 3. The store
 
-**The store is a port and the engine is elected, per the operator's ruling of
-2026-09-04.** `src/store.rs` declares `Store`, the port: open under the
-binding's election, retire a session's prior holdings, land a distillate
-whole, build the elected indexes, and answer the three asks. Every engine
-implements it whole and the ingest and serve of section 4 speak to the port
-and never to an engine, so the seam's traffic is the same whatever engine
-answers. Two engines stand, one module each behind its feature: `Sqlite`, the
-embedded engine of the 2026-08-18 ruling, its file `state.sql` in the member's
-territory, opened or created at load, reopened by later loads of the same
-session, and retired with the session, and `Postgres`, the service engine, one
-database per agent named by the binding, reached over the store's unix socket
-under the member's account. The port is the one place a query language is
-spelled, each engine spelling its own dialect of the same two-table shape
-below, and a third engine is an implementation of the port in its own act.
+**The store is a port and one engine stands behind it, per the operator's ruling of
+2026-10-02 on issue #1.** `src/store.rs` declares `Store`, the port: open with the
+loop's schema, load a save point, land a distillate whole, build the elected indexes,
+answer the asks, and write a save point. The ingest and serve of section 4 speak to the
+port and never to an engine, so the seam's traffic is the same whatever answers it.
+**One engine stands**, `Sqlite`, an embedded database opened in memory in this process,
+one database and never more, with no file of its own, no server, no network and no
+pool. Its holdings reach the disk only as a save point, per the clause below. **The
+service engine, `Postgres`, retires** with its module, its feature and its suites, in
+the code act that removes it, the ruling of 2026-09-04 that elected it being reversed
+because a shared database server breaks individuation, per the charter's section 4.
+The port is the one place a query language is spelled, and a further engine is an
+implementation of the port in its own act.
 
 ```graph
 node: state-store-is-a-port
@@ -198,8 +208,7 @@ CREATE TABLE IF NOT EXISTS series (
 );
 ```
 
-The service engine spells the same four in its own dialect, `BIGINT` for the
-integers and `DOUBLE PRECISION` for the readings. **What lands typed is what
+**What lands typed is what
 the seam's vocabulary names**, per `weaver-harness-state-contract`'s Vocabulary
 clause. A message kind's `role` and `content` are read through the floor's
 message model, `weaver_traits::Role` and `weaver_traits::ContentBlock`: the role
@@ -222,14 +231,14 @@ through the renderer every answer uses and compares it with the pair, and a valu
 does not decode as its named type, or decodes and renders differently, lands as a
 `field` row instead. So a typed row cannot serve a spelling the record did not hold, and
 the contract's served-as-it-crossed clause holds by construction. A decoded string
-carrying U+0000 lands verbatim too, in any string the message model holds, because the
-service engine's `TEXT` refuses it where the escaped JSON in `field` holds it, and it
-does so under both engines so the two answer alike rather than one typing what the other
-rolls back. A block the floor adds after this build, or a named member the SPU spells
-some other way, lands whole and verbatim rather than typed in part or refused. The
-canonical form spells each value one way, so what the tee sends from a record types
-where the vocabulary names it unless a string in it carries U+0000, and the other
-fallbacks are reached only by frames the tee does not produce.
+carrying U+0000 lands verbatim too, in any string the message model holds, a rule the
+retired service engine's `TEXT` forced and that stands unchanged until the act that
+moves these tables into the loop's schema re-elects it. A block the floor adds after
+this build, or a named member the SPU spells some other way, lands whole and verbatim
+rather than typed in part or refused. The canonical form spells each value one way, so
+what the tee sends from a record types where the vocabulary names it unless a string in
+it carries U+0000, and the other fallbacks are reached only by frames the tee does not
+produce.
 
 **A pair lands one way and never both.** The `field` row and the typed rows
 never hold one pair twice, so the elected index over `field` for a path that
@@ -269,25 +278,72 @@ beneath an earlier load's, which is the whole reason the name is derived from
 the path rather than from the key's position in the election. Where an engine's
 identifier limit cannot hold a path's name the load refuses the election with a
 named fault, because building the subset that fits is the same silent loss read
-from the other end. The encoding is the code act's under this election, the way
-the pragmas below are. **The ceiling belongs to the engine and so does the
-encoding.** The service engine measures every name against the identifier width
-its store states at open, which that store truncates a longer name past rather
-than refusing, so an election carrying a path it cannot name is refused entire
-rather than built in the part that fits. The width is asked for rather than
-assumed, a store built to another one being the same collision read from a
-number this crate would have guessed. The embedded engine is unaffected, sqlite
-setting no such limit, and the two engines encode one path differently on that
-ground.
+from the other end. The encoding is the code act's under this election. **The
+ceiling belongs to the engine and so does the encoding**, and sqlite sets no
+identifier limit, so the refusal stands for an engine a later act integrates rather
+than for this one.
 
-**Durability yields to speed, and the charter is the license.** The
-derivative is rebuildable from the record and the session never depends on
-it, per the loss clause, so the embedded engine runs with synchronization
-relaxed and the journal in memory, the crash cost being a rebuild or an empty
-stand rather than a lost account. The exact pragmas are the code act's, under
-this election. The service engine's durability is the store's own and this
-crate asks nothing of it, its rows being the same derivative under the same
-license.
+**The typed tables are loop opinions held here until the loop's schema takes them**,
+per the operator's ruling of 2026-10-02 on issue #1. The `message`, `part`,
+`measurement` and `series` tables above, and the selection rules section 4's recall and
+identity carry, the message kinds the recall reads and the newest run the identity
+answers from, were each elected against a real ask, and each is a judgment about what a
+turn needs rather than a mechanic of keeping. They leave custody into the loop and its
+schema with the act that writes that schema, the asks that serve them moving with them
+under the contract's change protocol, and until it lands the store holds and serves them
+as this section and section 4 state. **The neutral substrate stays**: the `event` and
+`field` tables carry the envelope and the elected pairs with no opinion in either, and
+every schema the loop provides stands beside them rather than in their place.
+
+**The schema slot.** The loop provides its schema and the store stands it at open: the
+tables the loop's state takes, their keys and constraints, and for each distilled kind
+the rows a distillate of that kind lands as. It crosses the seam in the opener, per
+`weaver-harness-state-contract` section 2, so a restarted member stands the identical
+schema with its reopened channel exactly as it builds the identical indexes. **What the
+schema does not admit has nowhere to land**: a distillate whose landing the schema's
+constraints refuse rolls back whole, by the transaction rule of section 4, and stands
+in the trace and in the neutral substrate and nowhere else. The store applies the
+schema mechanically and holds no opinion about it, so a schema is never this crate's
+to write, repair or extend. **A save point carries the schema it was taken under**, and
+a load whose opener carries a different schema is a save point that disagrees, so the
+load refuses by the clause below and the offline builder rebuilds the holdings under the
+new schema from the trace.
+
+**Durability is the save point's, and the charter is the license.** The derivative is
+rebuildable from the record and the session never depends on it, per the loss clause, so
+the live store pays no disk write per landing: it holds its rows in memory, and the
+crash cost is what landed since the latest save point, which the record keeps and no
+default replays. **A save point is the whole database serialized**, written as a new
+file in the member's room when the harness asks for one with the contract's `snapshot`
+ask, at every serving leave and on the operator's demand, never under a diagnostic
+binding and never on the store's own initiative. **It is stamped with the trace position
+it covers**, the run and the sequence of the last distillate landed in it and the last
+turn that run's holdings carry, and with a check over its own bytes, so a save point
+written in part or damaged since reads as corrupt rather than as holdings, and its
+finished name is given only once the write is whole, so a torn write leaves no file
+under a finished name.
+
+**A load restores a save point and replays no tail.** At the spawn the member reads the
+save point through the descriptor into its in-memory database and holds its stamp, per
+the operator's rulings of 2026-10-02 on #58. After an unclean stop that is the latest
+known-good save point, and the harness records the reset on the trace, so a rebuild
+honours it; nothing the record holds past the stamp lands by default. **A save point
+whose bytes fail never reaches the member**: admin judges its check and stamp at the
+inventory, per `weaver-admin-Spec` section 4, and refuses the load. **A save point that
+disagrees with the opener's schema is refused on the `restored` ask**: the member holds
+the restore's outcome from the opener on, and answers the enter's `restored` ask of the
+contract's section 2 with the restored lineage or with a refusal naming the schema
+mismatch, so the harness refuses the enter before it authors `load` and no `load` event
+claims a lineage the holdings did not come from; the operator names another save point
+through `restore` or rebuilds one. **Where the descriptor is absent the member
+stands empty**, which is an agent's first load. **A rebuild from the trace is the
+offline save-point builder's**, per `weaver-state-PRD` section 3 and the operator's
+ruling of 2026-10-02 on #58: the builder lands the record through the preload door of
+section 4 by the same path as every other landing, honouring every reset the record
+names, and writes a save point the next load restores. A restore and a rebuild to the
+same position arrive at the same holdings by construction, and section 5 names the
+instrument that holds them equal. Which party runs the builder before a serving load
+whose record holds events and no save point stands is section 6's to elect.
 
 ## 4. The ingest and the serve
 
@@ -318,11 +374,11 @@ to: state-distillate-lands-whole
 **The serve half, shaped by its first asker per the charter's cell.** An
 `ask` frame arriving on the stream is handled in stream order by the same
 loop that lands distillates, which is what delivers the contract's
-answered-against clause without a lock or a snapshot: the holdings at the
+answered-against clause without a lock or an isolation level: the holdings at the
 ask's position are the holdings, because nothing lands between reading the
 ask and answering it.
 
-**Every serve query restricts to the opener's session, and the restriction
+**Every standing serve query restricts to the opener's session, and the restriction
 is the query's rather than the caller's.** The contract's `election` carries
 the session the load declared, per its 2026-08-20 amendment, and this crate
 holds it for the channel's life and puts it in the `WHERE` of every read
@@ -333,14 +389,16 @@ looked perfectly well formed - a shape ask reporting a lifetime's runs as
 this session's, and a recall reaching a fact the operator believed a session
 cut had retired. Nothing surfaced it until a fresh session reported
 twenty-eight earlier runs it never had. **A store holding more than one
-session is the normal case rather than the broken one**, sessions outliving
-runs and the store outliving sessions under either engine, so the restriction
-is what makes `weaver-state-PRD` section 4's within-a-session boundary a
-property of the answers instead of an assumption about the store. What
-becomes of an earlier session's rows on disk is section 6's open question and
-deliberately not
-settled here, per the operator's ruling of the same date: unreachable is
-what this act delivers, and removal is its own election.
+session is the normal case rather than the broken one**, and since the operator's
+ruling of 2026-10-02 it is the design: state carries across sessions under custody,
+per `weaver-state-PRD` section 3, and the store holds one database for the agent with
+no boundary of its own between its sessions. **So the restriction is each standing
+ask's definition and not a wall of the store's**: the asks that read held events,
+`shape`, `recall`, `replay` and `identity`, each answer within the declared session
+because that is what each was elected to answer,
+and an ask the loop's schema brings may reach across sessions where its definition
+says so. Which sessions an answer reaches is a loop opinion like the typed tables of
+section 3, and it moves with them.
 
 ```graph
 node: state-serve-restricts-to-the-session
@@ -358,25 +416,49 @@ run groups are ordered by the least `id` each holds, each carrying its kinds and
 counts as the envelope spelled them, rendered as the contract's answer frame and written
 back on the channel as one answer frame, the frame's byte shape riding the encoding
 election of section 6. The `recall` ask reads the event rows of the four message kinds
-and of `message.restored`, a branch's inherited conversation (#697), with their pairs,
-ordered by the `id` column like every landing-order answer, and where `last-turns`
-bounds it the bound resolves as the distinct session, run, and turn triples of the most
-recent turns by id, the rows outside them left unread, a turn label recurring across
-runs naming two different turns. The answer serves each event as the distillate's own
-shape, envelope and pairs, each pair the value that crossed: read back from `field`, or
-rendered from section 3's typed rows through the renderer the landing checked it
-against. One reader per engine serves every answer, so the recall, the replay and the
+and of `message.restored`, which records written before 2026-10-02 carry, with their
+pairs, ordered by the `id` column like every landing-order answer, and where
+`last-turns` bounds it the bound resolves as the distinct session, run, and turn triples
+of the most recent turns by id, the rows outside them left unread, a turn label
+recurring across runs naming two different turns. The answer serves each event as the
+distillate's own shape, envelope and pairs, each pair the value that crossed: read back
+from `field`, or rendered from section 3's typed rows through the renderer the landing
+checked it against. One reader serves every answer, so the recall, the replay and the
 identity cannot spell one event two ways. The `grants` ask reads no event row: it reads
-the engine's own boundary, the catalog's lines for the connected role under the service
-engine and the file's owner, group, and mode under the embedded one, and answers them in
-the engine's order as `{"answer":{"grants":{"surface":[...]}}}`, each line a string, per
-the contract's fourth ask of 2026-09-04. The `identity` ask reads the event rows of kind
-`message.system` whose turn is absent and whose run is the run of the newest such row,
-ordered by the `id` column, with their pairs, and answers them as
+the store's own boundary, which with the store in memory is the member's room, the
+owner, group and mode of the territory's `state/`, read through the descriptor the
+member holds for the room and never by path, and answers them in a fixed order as
+`{"answer":{"grants":{"surface":[...]}}}`, each line a string, per the contract's fourth
+ask of 2026-09-04. The `identity` ask reads the event rows of kind `message.system`
+whose turn is absent and whose run is the run of the newest such row, ordered by the
+`id` column, with their pairs, and answers them as
 `{"answer":{"identity":{"messages":[...]}}}`, each the distillate's own shape, an empty
 list where the session holds none, per the contract's fifth ask of 2026-09-04. A
 malformed ask is dropped whole the way a malformed distillate is, and the resulting
-silence is the harness's bound to convert into a missing answer.
+silence is the harness's bound to convert into a missing answer. **The `restored` ask
+answers the load's outcome**, per the contract's eighth ask of 2026-10-02: the member
+judges the descriptor's save point against the opener's schema when the opener lands,
+holds the outcome, and answers `{"answer":{"restored":{"lineage":{...}}}}` with the
+stamp it restored, `{"answer":{"restored":{}}}` where it stood empty, or
+`{"answer":{"restored":{"refused":"schema-mismatch"}}}`, immediately and parking never.
+**The `snapshot` ask
+writes a save point and answers its stamp**, per the contract's sixth ask of 2026-10-02:
+the member serializes the whole database with its schema and its stamp, writes it as a
+new file in its room, never over one that stands, and answers
+`{"answer":{"snapshot":{"save-point":...,"run":...,"sequence":...,"digest":...}}}`
+naming the file, the position it covers and the digest of its bytes, or drops the ask
+unanswered where the write failed, the silence converting at the harness into a missing
+answer like every other. It runs in stream order like every ask, so the save point
+covers exactly the distillates the stream carried before it, and a write that failed
+part way is what the load's check exists to catch. **The `restore` ask replaces the
+holdings from a save point in the room**, per the contract's seventh ask of 2026-10-02:
+the member opens the named file relative to its room's descriptor, refusing a name that
+is not a plain entry of the room, checks it and its schema as a load does, and only then
+swaps it in for the live database whole, answering `{"answer":{"restore":{...}}}`
+carrying the `snapshot` answer's four members and `identity`, the prefix read from the
+restored holdings as the `identity` ask reads it, or drops the ask unanswered with the
+holdings as they stood. The distillates the stream carries after the ask land on the
+restored holdings.
 
 **Three protocol bounds are this crate's elections, each named with what its
 breach means, per the audit of 2026-08-26.** The answer ceiling is one
@@ -406,20 +488,25 @@ the contract's section 2. The path is thereby idempotent at the preload grain -
 re-running it replaces the session's holdings rather than appending to them - and a dead
 driver's prefix needs no cleanup act, the next opener being the cleanup. The first
 door's path performs no retirement and gains no branch: the delete hangs on the preload
-opener alone. What is new is the door's standing and its judgment, and both are
-conditioned facts: the member binds the preload name only where the party that stands it
-names one, and that party names it under a diagnostic binding or a serving load that
-elects a restore, per issue #432, holding the resolved kind from the inventory per
-`weaver-admin-Spec` section 4. **That party is `weaver-admin` and the name rides the
-vector**, per that Spec's section 6 as amended 2026-08-25, no exchange this member holds
-carrying a path. **Section 2's election is narrowed rather than closed**: the descriptor
-choreography it leaves to the code act is still that act's, and what is settled here is
-only that a name arrives on the vector and not on a descriptor. The credential judgment
-is this member's one, the first door authenticating by possession per the operator's
-ruling of 2026-08-26: the accept on the preload name admits the operator principal and
-refuses every other peer before any byte is read, the agent's among them and no longer
-knowable by number, the vector having dropped the agent's uid with the first door's
-judgment.
+opener alone. **A tail, where one is ever elected over a save point, is the one preload
+that must not retire**, landing on top of the save point section 3 loaded, so its opener
+names the position it follows and retires nothing, where the builder's rebuild opener
+retires everything the member held and honours every reset the record names.
+`weaver-analysis-state-contract` carries neither the tail opener nor the reset event
+yet, and the charter's section 5 names both owed. What is new is the door's standing and
+its judgment, and both are conditioned facts: the member binds the preload name only
+where the party that stands it names one, and that party names it under a diagnostic
+binding alone, the record restore of issue #432 retiring on the operator's rulings of
+2026-10-02 on #58, holding the resolved kind from the inventory per `weaver-admin-Spec`
+section 4. **That party is `weaver-admin` and the name rides the vector**, per that
+Spec's section 6 as amended 2026-08-25, no exchange this member holds carrying a path.
+**Section 2's election is narrowed rather than closed**: the descriptor choreography it
+leaves to the code act is still that act's, and what is settled here is only that a name
+arrives on the vector and not on a descriptor. The credential judgment is this member's
+one, the first door authenticating by possession per the operator's ruling of
+2026-08-26: the accept on the preload name admits the operator principal and refuses
+every other peer before any byte is read, the agent's among them and no longer knowable
+by number, the vector having dropped the agent's uid with the first door's judgment.
 
 **The seal is a per-standing fact, held apart from the transport, and the
 replay ask reads it alone.** The member holds, for its own standing's life,
@@ -429,17 +516,16 @@ mid-stream, false after a sealless close, and true from the seal frame on.
 Where the member stands with the preload door, a `replay` ask parks until
 the fact is true, surviving the preload channel's close, answered at the
 seal against the sealed holdings in one frame stream like any answer. **The
-`identity` and `recall` asks park on the same fact**, as of 2026-09-06 per
-the contract's section 2 on issue #432: a session
-standing from a preloaded record asks for its prefix and its conversation at
-the enter, before the driver has sealed, so the two park where the door
-stands and no seal has landed and answer at the seal in arrival order,
-against the sealed holdings, the replay ask's replacement rule reaching the
-replay ask alone. Where no door stands they answer immediately as before.
-The member cannot tell a restoring load from a diagnostic one and need not:
-the door's standing is the fact, and a diagnostic load's `identity` ask
-answered at the seal is the record's own prefix, which is what
-`weaver-analysis-Spec` section 3 says the preloaded store answers. **The
+`identity` ask parks on the same fact**, per the contract's section 2: a
+diagnostic load asks for its prefix at the enter, before the driver has
+sealed, so the ask parks where the door stands and no seal has landed and
+answers at the seal against the sealed holdings, the replay ask's
+replacement rule reaching the replay ask alone. Where no door stands it
+answers immediately. The door's standing is the fact the member reads, and
+a diagnostic load's `identity` ask answered at the seal is the record's own
+prefix, which is what `weaver-analysis-Spec` section 3 says the preloaded
+store answers. The parked `recall` of the record restore retires with issue
+#432's restore on the operator's rulings of 2026-10-02 on #58. **The
 door itself survives the channel too**: on any close of the preload
 channel the member unlinks and rebinds the name and the per-channel opener
 state resets, per the contract's retry mechanism, while the seal fact
@@ -504,13 +590,12 @@ to: state-preload-door-states-its-mode
 claim.** This crate's half is that the member binds no name it is not given. The other
 half is `weaver-admin`'s, `admin-preload-name-follows-the-kind` at `weaver-admin-Spec`
 section 6, which holds the vector in **both** directions: a serving inventory carries no
-name, and a diagnostic one, or a serving one whose declaration elects a restore, carries
-one, per issue #432. **The two records do not divide the fact evenly.** This crate's
-covers what the member does with what it is given, and the vector is entirely the other
-side's, because a member given a name binds it and a member given none binds none, which
-is this record holding rather than failing whichever way the name was wrong. The claim
-is recorded twice because the two crates' behaviours are two facts, and the seam between
-them is the other record's alone.
+name, restoring or not, and a diagnostic one carries one. **The two records do not
+divide the fact evenly.** This crate's covers what the member does with what it is
+given, and the vector is entirely the other side's, because a member given a name binds
+it and a member given none binds none, which is this record holding rather than failing
+whichever way the name was wrong. The claim is recorded twice because the two crates'
+behaviours are two facts, and the seam between them is the other record's alone.
 
 **The identifier below still names the pair's claim and this half is narrower
 than its name.** `state-preload-door-stands-only-diagnostic` reads as the whole
@@ -555,21 +640,19 @@ is cited at a test.** Every `conforms:` line in the crate sits at a `//!` file
 header but one, the line inside `stand_preload_name`, which is a function the
 binary runs, so none of the nine is a sighting under that rule.
 
-**Requiring a perturbation-verified test.** Eleven claims, each watched where the
-behaviour sits.
+**Requiring a perturbation-verified test.** Eleven claims stand today, each watched
+where the behaviour sits, and three join them with the store primitive, owed by the
+code act that lands it.
 
-- The serve restricts to the opener's session, watched by dropping any of the
+- The standing asks restrict to the opener's session, watched by dropping any of the
   three `WHERE session` predicates the reads carry, which returns an earlier
-  session's runs to a shape answer and an earlier session's rows to a recall.
+  session's runs to a shape answer and an earlier session's rows to a recall. The
+  claim is now each ask's definition rather than the store's boundary, per section
+  4, and it moves with the asks when the loop's schema takes them.
 - The indexes are built at load, watched by naming them positionally: a later
   load's differing election then falls under the earlier name through
   `CREATE INDEX IF NOT EXISTS` and one index stands where the election asks
-  two. At the service engine the perturbation is the scheme that engine carried
-  before its names were derived as they are, the key's hex under a prefix and
-  the store's truncation in place of a refusal, which the two together collide
-  to one name for two elected paths of thirty bytes. Truncation alone collides
-  nothing under the naming that stands, those two paths naming indexes well
-  inside the width. **The timing is the half no test reaches.** The build sits
+  two. **The timing is the half no test reaches.** The build sits
   on the binary's startup path between the opener's parse and the serve loop,
   and every test that drives it calls the port directly, so what is watched is
   that the election's own indexes are built and not that they are built before
@@ -584,16 +667,15 @@ behaviour sits.
   serving load stands a door nothing should dial.
 - The preload door refuses every peer but the operator, watched by dropping
   the root arm from the accept, which admits the agent's own uid.
-- A distillate lands whole, watched at the service engine as of PR #644 by an
-  insert forced to fail inside the landing's transaction with the holdings
-  counted after: `a_failed_pair_insert_leaves_no_partial_distillate` lands a
-  good event, then one whose second pair carries a NUL that `TEXT` refuses, and
-  requires the refusal, an unchanged `held()`, an unchanged replay and one field
-  row. The perturbation commits the event before its pairs, and the count moves
-  by one. The embedded suite still watches the persistence half, a good landing
-  surviving a reopen.
-- A named member lands typed and serves what the record reads, watched at both
-  engines by `recorded_lines_land_typed`. It distills four recorded lines through
+- A distillate lands whole. Its watch stood at the service engine as of PR #644,
+  a pair carrying a NUL that engine's `TEXT` refuses forcing the failure inside the
+  transaction, and it leaves with that engine. **The embedded engine owes the
+  watch**: the code act that retires the service engine forces a failure inside
+  the embedded landing's transaction, the loop schema's own constraint refusing a
+  row being the natural lever, requires the refusal and unchanged holdings, and
+  perturbs by committing the event before its rows.
+- A named member lands typed and serves what the record reads, watched by
+  `recorded_lines_land_typed`. It distills four recorded lines through
   the tee, lands them, and requires the replay to serve every pair as it crossed,
   the served message read through the floor's type to equal the record's payload
   read the same way, and the typed tables to hold the rows. The perturbation makes
@@ -605,89 +687,90 @@ behaviour sits.
   drops the render comparison from `typed::split`, and a perplexity crossing as
   `1.50` lands typed and would serve as `1.5`.
 - An absent reading is absent and not zero, watched by
-  `an_absent_reading_is_absent_and_not_zero` and at both engines by the null
-  perplexity the recorded test lands. The perturbation defaults a measurement's
-  missing perplexity to zero, and all three fail.
-- A string no engine can hold lands verbatim, watched by
-  `a_nul_in_a_string_lands_verbatim` and at both engines by
-  `a_nul_in_a_message_lands_verbatim`, which lands a message whose text carries
-  U+0000 and requires it served byte for byte from a `field` row with no part
-  typed. The perturbation drops the holdable check from `typed::split`: the
-  service engine refuses the landing and rolls it back, and the embedded engine
-  holds the part typed, so each engine's test fails.
+  `an_absent_reading_is_absent_and_not_zero` and by the null perplexity the
+  recorded test lands. The perturbation defaults a measurement's missing
+  perplexity to zero, and both fail.
+- A string carrying U+0000 lands verbatim, watched by
+  `a_nul_in_a_string_lands_verbatim` and `a_nul_in_a_message_lands_verbatim`,
+  which lands a message whose text carries U+0000 and requires it served byte for
+  byte from a `field` row with no part typed. The perturbation drops the holdable
+  check from `typed::split`, and the embedded engine holds the part typed.
+- **A reloaded store equals a full replay, and this is the store primitive's
+  instrument**, per the operator's rulings of 2026-10-02 on issue #1 and #58. The
+  test lands a recorded session's distillates, takes a save point part way, lands
+  the rest, then stands a second store from the save point and a third from the
+  record rebuilt through the save point's stamp with no save point, and requires the
+  second and third to answer every ask alike and to hold the same rows, table by
+  table, the loop's schema included; a live restore of the same save point on the
+  first store must hold the same. The perturbations are the stamp written one
+  position late and one position early, each naming a position the holdings do not
+  cover, and a rebuild that ignores a reset the record names: each must fail the
+  equality.
+- A save point that fails its check is not loaded, watched at a live restore by one
+  truncated part way and by one with a byte flipped, each of which must leave the
+  holdings standing; at a load the same two are admin's to refuse, per
+  `weaver-admin-Spec` section 4. The perturbation drops the check, and a torn save
+  point is read as holdings.
+- A save point under another schema is refused on the `restored` ask, watched by a
+  load whose opener carries a schema the save point does not: the answer must name the
+  mismatch. The perturbation answers the restored lineage regardless, and the enter
+  stands on holdings the schema does not admit.
+- A save point is never overwritten, watched by two `snapshot` asks on unchanged
+  holdings answering two names with both files standing. The perturbation writes
+  to a fixed name, and the first file is lost.
+- What the schema does not admit lands nowhere, watched by a distillate whose
+  landing the loop schema's constraint refuses: the landing rolls back whole and
+  the neutral substrate holds the event. The perturbation drops the constraint from
+  the schema the store stands, and the row lands.
 
-**The session claim is watched at both engines, as of PR #644.** The service
-engine's in-file suite stands a scratch PostgreSQL per test, lands two sessions
-and asks about one, and `postgres.rs` cites the claim where that suite sits. The
-perturbation is recorded rather than performed by the suite: PR #644's body
-records the removal of each of the five `WHERE session` predicates the reads
-carry, one at a time, and the review seats independently reproduced selected
-removals. Four removals widen an answer to the other session's rows,
-a shape holding two runs or a count of two. The fifth, on the turn selection,
-fails the other way: the bound is spent on the other session's newest turn while
-the outer predicate still excludes that turn's rows, and the requested session's
-bounded recall comes back empty. The suite catches both shapes. **The index
-naming is watched at both.** The service engine
-holds a suite over the derivation section 3's election asks it for, a name made
-from the key path, carried into the statement the build would issue, and a
-refusal where the store's identifier limit cannot hold one, and it cites the
-claim where that suite sits. **That arm holds under one flag and not under the
-crate's default.** The service engine is behind a feature the crate does not
-default to, so a suite run without it compiles none of that engine and answers
-nothing about it. The flag alone reaches the statement suite. The live
-instruments of PR #644 are ignored by default, a loud skip that the ordinary run
-reports as fourteen ignored rather than passes, and they run under a scratch
-instance with `WEAVER_STATE_TEST_PG` naming its socket directory and
-`cargo test -p weaver-state --features postgres --locked -- --ignored`, which runs
-the live suite alongside the separately invoked statement suite. The ordinary
-featured run and the ignored run together supply this section's test evidence
-for that engine.
-As of PR #644 the suite reaches the store as well: the live tests construct a
-service engine on a scratch database and read `pg_indexes` for the indexes the
-store then holds, and the arms of the session, lands-whole, retirement and
-ask-vocabulary claims at that engine rest on runs. **What still rests on a
-reading at that engine** is the timing half of indexes-at-load, the build
-sitting on the binary's startup path where no port-level test reaches it.
+**The service engine's suites retire with it.** The scratch PostgreSQL suites of
+PR #644, the statement suite over the index naming, and the `--features postgres`
+runs leave in the code act that removes the engine, and nothing here rests on them
+after it.
 
 **Enforced by review, and each clause names what would buy it.** Review here
 means the instrument was not bought and never that none exists, per Document
 Format section 5.
 
 - **Custody without policy** is read off the crate's surface for any door a
-  judgment could enter by. The claim is an absence spread across a surface
-  rather than a shape, so no single compile-fail pin names it and a test can
-  only watch the doors that exist. What would buy it is a check over the
-  crate's exported items refusing any that ranks, judges or initiates, which
-  is a shape this corpus has no instance of, and naming it is what keeps the
-  claim from reading as unbuyable.
+  judgment could enter by, a save point taken unasked among them. The claim is an
+  absence spread across a surface rather than a shape, so no single compile-fail
+  pin names it and a test can only watch the doors that exist. What would buy it
+  is a check over the crate's exported items refusing any that ranks, judges or
+  initiates, which is a shape this corpus has no instance of, and naming it is
+  what keeps the claim from reading as unbuyable.
 - **The store is a port** and the nearest thing to an instrument is the
   signature: the ingest and the serve take the port behind a reference and can
   name no engine, so a call reaching past it would not compile as this code
   stands. Nothing holds that signature in place, so a later act widening one of
   them to a concrete engine compiles and this claim goes quiet. What would buy
   it is a compile-fail pin over an ingest path that names an engine.
+- **The member sees a descriptor and never the operator's path** is read off the vector
+  and the spawn: no positional or flag names a save point in the operator's directory,
+  and the member opens files by name only inside its own room. What would buy it is a
+  test over the vector admin composes refusing any member naming the declaration
+  directory, which is admin's side and its Spec's.
 
-**The walks the seam's conformance asks for are not in this tree.** The
-contract's section 8 names them and says both directions land with the acts
-that open the seam and shape the surface, which have landed: the election round
-trip and real events to attributable rows against the living producer, the
-dead-peer clause watched by killing the member mid-run and by asking with the
-member gone, the replay ask observed waiting in all three unsealed states and
-its retry sequence, and the answered-against clause read in time with asks
-interleaved among distillates. The suites here reach most of those properties
-through the port or through the unit that holds them rather than across the
-seam, which is the cheaper instrument and not the one the contract names, and
-**the dead-peer clause is reached by nothing here in either direction**. The
-territory's mode is owed the same kind of walk, the agent's uid asked to read
-the file and refused, and the service engine's second gate the same at the
-store, the agent's uid asked to connect as any role and refused by the store's
-own authentication. The `grants` ask reports the file's owner and mode and
-asserts nothing about either, so it is a surface for that walk rather than the
-walk.
+**The walks the seam's conformance asks for are not in this tree.** The contract's
+section 8 names them and says both directions land with the acts that open the seam and
+shape the surface, which have landed: the election round trip and real events to
+attributable rows against the living producer, the dead-peer clause watched by killing
+the member mid-run and by asking with the member gone, the replay ask observed waiting
+in all three unsealed states and its retry sequence, and the answered-against clause
+read in time with asks interleaved among distillates. The suites here reach most of
+those properties through the port or through the unit that holds them rather than across
+the seam, which is the cheaper instrument and not the one the contract names, and **the
+dead-peer clause is reached by nothing here in either direction**. The save points'
+custody is owed the same kind of walk, the agent's uid asked to open one in the member's
+room and in the operator's directory and refused, and the member's own process asked to
+open the operator's copy by path and refused. The `grants` ask reports the room's owner
+and mode and asserts nothing about either, so it is a surface for that walk rather than
+the walk.
 
 **Where the records sit.** The assertion records are at the clauses that argue
 the claims, across sections 1 through 4 rather than gathered here, per Document
-Format section 6.
+Format section 6. The three claims the store primitive adds carry no record, the
+assertion record being required of nothing new until release.
 
 ## 6. Open elections
 
@@ -695,7 +778,8 @@ The serve surface's election closed 2026-08-19: its shape and vocabulary
 landed in the contract, its query-side representation at section 4, and the
 store shape's trigger fired and was answered at section 3, all elected
 against the context-injection loop's real ask per the charter's cell. The
-store shape was answered again 2026-09-29 with the typed landing.
+store shape was answered again 2026-09-29 with the typed landing, and the
+operator's ruling of 2026-10-02 moves that landing toward the loop's schema.
 
 - **The measurement's remaining members.** The SPU renders a generation's
   model, weights hash, token identifiers, prompt blocks, timings and residual
@@ -703,23 +787,31 @@ store shape was answered again 2026-09-29 with the typed landing.
   section 6 spells none of their member names, so they land verbatim. Each types
   by section 3's rule once that section spells it and the contract's vocabulary
   names it, an act of the SPU's Spec and this seam's together rather than a name
-  this crate takes from the SPU's code.
-
+  this crate takes from the SPU's code, and once the loop's schema holds the
+  typed tables, an act of that schema's too.
 - **The transformation vocabulary, beyond its first member.** The shape
   aggregate landed with the serve act, and which further derivations
   custody performs stays elected ask by ask, because a derivation is named
   by what reads it.
-- **The retirement mechanics.** The session's close retires the holdings,
-  and the act that gives sessions a close in practice elects how the
-  embedded engine's file is removed and how the service engine's rows are
-  dropped, sessions today outliving every run this workshop has
-  produced. **Sharpened 2026-08-20 rather than closed**: the serve
-  restriction of section 4 makes an earlier session's holdings unreachable,
-  so the charter's boundary now holds in the answers, and what remains open
-  is the disk - whether a session's close removes its rows, and what an
-  operator may recover after it. The operator ruled the two apart in that
-  act, so a reader meeting this cell is meeting a narrowed question rather
-  than the original one.
+- **The save point's format and its write.** Section 3 fixes what a save point holds,
+  the whole database with its schema, its stamp and a check, and that it is a new
+  file never rewritten, and leaves to the code act how it is laid out, how its name
+  is formed, what the check and the digest are, and how a whole write earns its
+  finished name.
+- **The builder's runner.** Section 3 has the offline save-point builder rebuild
+  through the preload door, which stands otherwise only under a diagnostic binding
+  and is dialed by the operator's driver, so which party runs the builder before a
+  serving load whose record holds events and no save point, and how such a load is
+  told from an agent's first load, is an election owed with
+  `weaver-analysis-state-contract` and admin's vector, neither of which this act
+  moves.
+- **The retirement of an agent's holdings.** A session's close no longer retires
+  anything, state carrying across sessions per the charter's section 3, so what
+  remains is what an operator does to retire an agent's state: the save points are
+  files in the operator's own directory and the member's room, and deleting them
+  makes the next load a full rebuild rather than an empty store, the trace still
+  holding everything; a fresh state is a new agent, on the operator's ruling of
+  2026-10-02 on #58.
 - **The member's account name and the territory's exact key.** Deployment
   facts, elected where the spawn path lands, the way every path in the
   admin configuration is.

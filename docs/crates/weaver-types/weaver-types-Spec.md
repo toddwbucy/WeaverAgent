@@ -211,13 +211,7 @@ pub struct AgentConfig {
 }
 
 pub struct Restore {
-    pub record: PathBuf,
-    pub through: Option<Cut>,
-}
-
-pub struct Cut {
-    pub run: RunId,
-    pub turn: u64,
+    pub save_point: String,
 }
 
 pub struct StateStore {
@@ -295,16 +289,22 @@ pub enum ConfigErrorKind {
 }
 ```
 
-**`identity` is the seed and not the session's identity, per the operator's ruling of
-2026-09-04 on issue #422.** The field keeps its shape and its refusals: canonical
-messages, every one `role: system`, required with an empty list legitimate. What changed
-is its authority. Where a state member stands, the session's identity is what the store
-holds under the turnless `message.system` events at the session's opening, and this
-field is what the first load of a session seats and lands there, the store governing
-every later load of the session, per `weaver-state-PRD` section 4. Where no member
-stands the field governs alone, which is what it did before the ruling. Divergence
-between the two is not a defect, because they answer different questions, the seed and
-the session, and G5 names the store authoritative within the session.
+**`identity` is what every load seats**, on the operator's ruling of 2026-10-02 on #58's
+fifth question, which revises the ruling of 2026-09-04 on issue #422 that the store
+governed a session's later loads. The field keeps its shape and its refusals: canonical
+messages, every one `role: system`, required with an empty list legitimate. **The
+prompt file is authoritative at every load**: an edit to it takes effect at the next
+load, its digest recorded, and where a state member stands the store keeps the history
+of what the loads seated, under the turnless `message.system` events at each run's
+opening, per `weaver-state-PRD` section 4, deciding none of them.
+
+**`[state-management]` is the declaration's table for the compiled loop's settings**,
+and its grammar is this crate's, on the operator's ruling of 2026-10-02 on #58's sixth
+question; its meaning is `weaver-harness-Spec`'s, with the loop. It is an optional
+top-level table: absent, every setting stands at its compiled default. Its members
+arrive with the act that compiles the loop, each a typed key this section then names,
+and until then the table carries no key, so any member refuses `UnknownField` under the
+unknown-key rule below, as every key no organ registered does.
 
 **The operator writes the seed as a file, and the field is what the parse seats from
 it**, on the operator's ruling of 2026-10-02. On disk the decoder's section carries
@@ -566,7 +566,9 @@ sentence rather than by a parser's guess. The resolved spelling of that default 
 here so two resolvers cannot disagree: `all_kinds` true and `keys` empty. The empty list
 is only the default's spelling, not a constraint on the pair: `keys` stays meaningful
 beside `all_kinds` true, each named kind adding payload paths on top of the envelope
-every kind already crosses with. `EnterPayload` carries the election resolved, admin
+every kind already crosses with. **Every kind means every kind but the save-point
+kinds**, which no election matches, per `weaver-harness-state-contract` section 3 on
+the rulings of 2026-10-02 on #58. `EnterPayload` carries the election resolved, admin
 filling that ruled default at inventory, so the worker never re-derives an absence. When
 the block is present, both its members are required, the required-field discipline
 resuming inside it. `loop_file` may be absent because `weaver-harness-PRD` section 2
@@ -615,17 +617,22 @@ builder will reach to default, to off, and it is exactly the one that must not: 
 operator who stated no readout has not thereby declined it, and admin refusing the load
 is how that operator learns the file is incomplete rather than discovering it in a
 record with no reductions in it. This is why `AgentConfig` derives no `Default` and
-`parse` returns no partial value. `restore` may be absent because `weaver-state-PRD`
-section 4 rules what absence means, the load standing from nothing, which is what every
-load did before the ruling of 2026-09-04 on issue #432. Present, it names the record the
-session stands from, a path admin reads under its own custody and the harness never
-sees, and `through`, the cut, a run of the record by its reference and a turn within it,
-because a turn's number recurs across a session's runs and a cut that named the turn
-alone would name several. Absent, the record whole. The session name decides what the
-restore is, per that section and `weaver-admin-Spec` section 4: the declaration's own
-session name with the record whole is a resume, a new session name is a branch, at the
-cut where one is named and at the record's end where none is, and a cut under the
-record's own session name refuses at the inventory.
+`parse` returns no partial value. **`restore` names a save point**, on the operator's
+ruling of 2026-10-02 on #58, which retires the record restore of 2026-09-04 (issue
+#432) and its cut. It may be absent because `weaver-state-PRD` section 4 rules what
+absence means: the load restores the latest save point published, the order that
+makes one latest being a durable publication ordinal the save-point code act elects and
+not a run reference, a name or a file time, carried on #1, and with none state is
+rebuilt from the trace offline. **Restoring needs a member to restore into**: where the
+declaration's store engine is `none`, no save point is selected, by name or by default,
+and a `restore` member present beside that engine refuses `ConfigInvalid` naming
+`restore`, so no load names holdings that no member restored. Present, `save-point` is a
+bare file name in the declaration's own directory, judged as `identity-file` is,
+carrying no `/`, not `.` or `..`, not empty and with no control character, refusing
+`BadValue` naming `restore.save-point` otherwise; admin opens it under its own custody,
+per `weaver-admin-Spec` section 4, and the harness never sees it. A save point the
+operator built offline from a record names that record and cut inside itself, not here,
+so a branch from a record is the builder's act and this member keeps one meaning.
 
 ```graph
 node: types-required-field-refuses
@@ -1216,15 +1223,35 @@ pub struct EnterPayload {
     pub state_election: StateElection,
     pub state_store: StateStore,
     pub restore: Option<Lineage>,
+    pub reset: Option<Reset>,
     pub stack: BTreeMap<String, String>,
     pub declaration: String,
     pub identity_file: String,
 }
 
 pub struct Lineage {
+    pub save_point: String,
+    pub run: RunId,
+    pub sequence: u64,
+    pub turn: u64,
+    pub operator_supplied: bool,
+    pub built_from: Option<Branch>,
+}
+
+pub struct Branch {
     pub parent: SessionId,
     pub run: RunId,
     pub through: u64,
+}
+
+pub struct Reset {
+    pub prior_run: RunId,
+    pub reason: ResetReason,
+}
+
+pub enum ResetReason {
+    NoCleanUnload,
+    UnitFailed,
 }
 
 pub enum EnterBinding {
@@ -1263,36 +1290,47 @@ rule having been judged before any process existed, and the member's own
 vector carries the same three, per `weaver-admin-Spec` section 6, so the two
 parties that need them read one resolution.
 
-**`restore` and `stack` ride the enter as of 2026-09-04, per issue #432.** `restore`
-rides as `Lineage`, resolved by admin: the parent's session, the run the cut falls in,
-and the turn the holdings stop at, a whole record resolved to its last run's last turn,
-and never the record's path, which admin read under its own custody and the harness has
-no business holding, on the same discipline as the sink. The harness names the parent on
-the load event and starts its turn ordinal from the cut without opening anything, the
-record having been preloaded into the member before the enter per `weaver-admin-Spec`
-section 6. `stack` is the digests of the organ binaries admin started and of the agent's
-SPU and the gate it hands the worker to fork, keyed by the binary's name, so the load
-event names the stack that ran it and a record is sufficient for its own conditions
-without a deposit beside it, per `weaver-trace-PRD` section 3.1. Both are admin's facts
-and the harness authors them as it authors the store's. **`declaration` rides beside
-them as of 2026-09-04**, the digest of the declaration file as admin read it at the
-inventory, so the harness names it on the load event and answers it to an observation
-without holding the file, per issue #435. **`identity_file` rides beside it as of
-2026-10-02**, the digest of the prompt file the declaration names, sha256 hex of the
-bytes admin read at the inventory and seated, per section 2: the declaration's digest
-covered the prompt while the prompt was a string inside it, and stopped covering it the
-day the prompt became its own file, so the second digest is what keeps the load event
-able to say which prompt the operator's files held. It is additive, a member the
-harness copies onto the load event and reads nowhere else. **`LoadFacts` does not take
-it**: `LoadFacts` is the shape `show` answers the operator with under
-`weaver-admin-operator-contract`, which this act does not move, so the record carries
-the prompt's digest and the observation does not, and the observation's answer is
-widened only in an act that moves that contract. **The digest joins `show` in the later
-act that reworks `show` as a whole**, on the operator's ruling of 2026-10-02 on this
-act's fifth question, once the admin freeze lifts: bundled with #52's observation time
-and the load confirmation, each organ listed and confirmed up with what it runs, as one
-change to `weaver-admin-operator-contract` and one WeaverWeb adjustment. Until then the
-digest rides on the load event, which WeaverWeb already receives.
+**`restore` and `stack` ride the enter as of 2026-09-04.** `restore` rides as `Lineage`,
+resolved by admin from the save point the load restores, on the operator's ruling of
+2026-10-02 on #58: the save point's digest, the run, sequence and last turn it covers,
+whether the operator supplied it, and, where the offline builder made it from a record,
+that record's session and the run and turn of its cut. **`reset` rides beside it and
+apart from it, present where the agent's last run did not end in a clean unload**,
+whether or not any save point stands, because a run that stopped before its first save
+point still owes the record its reset, on the operator's ruling of 2026-10-02 on #58
+that an unclean stop resets to the latest known-good save point and records the reset:
+admin resolves it from its own clean-unload marker, per `weaver-admin-Spec` section 4,
+naming the prior run and the reason, `NoCleanUnload` where the marker says the run never
+unloaded cleanly and `UnitFailed` where the unit's result also says it failed, and the
+harness authors the reset event from it. It never carries the save point's path, which
+admin read under its own custody and the harness has no business holding, on the same
+discipline as the sink. The harness names the save point on the load event, its last
+turn a recorded fact that numbers nothing, a restoring run's turns starting at one per
+`weaver-harness-Spec` section 6.1, without opening anything, the save point having
+reached the member by descriptor at the spawn per `weaver-admin-Spec` section 6. `stack`
+is the digests of the organ binaries admin started and of the agent's SPU and the gate
+it hands the worker to fork, keyed by the binary's name, so the load event names the
+stack that ran it and a record is sufficient for its own conditions without a deposit
+beside it, per `weaver-trace-PRD` section 3.1. Both are admin's facts and the harness
+authors them as it authors the store's. **`declaration` rides beside them as of
+2026-09-04**, the digest of the declaration file as admin read it at the inventory, so
+the harness names it on the load event and answers it to an observation without holding
+the file, per issue #435. **`identity_file` rides beside it as of 2026-10-02**, the
+digest of the prompt file the declaration names, sha256 hex of the bytes admin read at
+the inventory and seated, per section 2: the declaration's digest covered the prompt
+while the prompt was a string inside it, and stopped covering it the day the prompt
+became its own file, so the second digest is what keeps the load event able to say which
+prompt the operator's files held. It is additive, a member the harness copies onto the
+load event and reads nowhere else. **`LoadFacts` does not take it**: `LoadFacts` is the
+shape `show` answers the operator with under `weaver-admin-operator-contract`, which
+this act does not move, so the record carries the prompt's digest and the observation
+does not, and the observation's answer is widened only in an act that moves that
+contract. **The digest joins `show` in the later act that reworks `show` as a whole**,
+on the operator's ruling of 2026-10-02 on this act's fifth question, once the admin
+freeze lifts: bundled with #52's observation time and the load confirmation, each organ
+listed and confirmed up with what it runs, as one change to
+`weaver-admin-operator-contract` and one WeaverWeb adjustment. Until then the digest
+rides on the load event, which WeaverWeb already receives.
 
 **`EnterBinding` is the kind resolved, and a directive disagreeing with its
 kind is unrepresentable rather than refused.** The config holds the kind as

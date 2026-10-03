@@ -1850,8 +1850,8 @@ half-open span of resident positions forwarded to the directive unjudged,
 and answers the resident counts either side, `None` where the seam refused.
 
 **Which span to elide is the loop's election and this crate holds no
-policy about it.** The mechanic is here and what to keep is the operator's,
-written in the loop that operator owns: a port that judged a span would be
+policy about it.** The mechanic is here and what to keep is the loop's, with the
+operator's settings where the loop exposes one: a port that judged a span would be
 this crate deciding what a context is worth, which is the possession
 `weaver-spu-PRD` section 13.9 places with the loop and 13.13 keeps there.
 The seat forwards, the seam refuses a span describing no removable region,
@@ -1989,6 +1989,58 @@ frame does not renew the bound and a stream of them cannot postpone the retireme
 loop asking about many positions in a turn waits up to the bound on each, since the asks
 are serial and each one blocks.
 
+**The loop these ports serve is state management**, per the operator's rulings of
+2026-10-02 on issue #1 and `weaver-agent-PRD` section 5.5. **One loop is deployed, the
+Rust loop compiled into the worker under `dev_loop`**, which is the freeze section 1
+already names, and no declaration elects another: the Python-iterating worker stays as
+section 1 states it, untouched, the bench and experiments lane a loop is iterated on.
+The ports above are the loop's whole reach into the store and the classifier, so state
+management composes against the same granted surface as every loop and mints nothing.
+**Its opinions are settings in the declaration's `[state-management]` table**, each with
+a compiled default, wherever an operator could reasonably want a different answer, and
+the `load` event this crate authors records every value in effect, per
+`weaver-trace-PRD` section 3.1. **This Spec gives the table its meaning and
+`weaver-types-Spec` gives it its grammar**, with the declaration's other keys, on the
+operator's ruling of 2026-10-02 on #58's sixth question. The table's members are a later
+act's, and this clause states only the rule: custody, the rebuild from the trace, and
+every state write passing through the tee are never settings. **Every judgment the loop
+makes reaches the record before the loop acts on it**, the classify pair and the score
+above being the precedents: a ranking the loop makes over held facts is authored as its
+own kind by the act that makes it, per `weaver-trace-Spec` section 3, so the state the
+store rebuilds holds the judgment as the record holds it and never asks a model again.
+**The save point is the loop's to time**: the store initiates nothing, so this crate
+sends the `snapshot` ask of `weaver-harness-state-contract` section 2 once at a serving
+leave, so that every serving unload takes one, and on the operator's demand under a
+serving binding. **A diagnostic binding takes no save point**, at the leave or on
+demand: its holdings are a preloaded replay the diagnostic loop manages no state over,
+and a save point of them would be published and could be selected by a later serving
+load as production state. The offline builder's save point is the builder's write, per
+`weaver-state-PRD` section 3, and never a diagnostic load's. The asks go under the
+dead-peer conversion every state ask takes, per the operator's rulings of 2026-10-02 on
+#58. **The leave's save point is taken last**: this crate sends the leave's `snapshot`
+ask only after it has authored the `unload` event and the tee has sent that event's
+distillate where the election names it, and before it closes the state channel, so the
+ask, answered against the holdings the stream carried before it, holds every elected
+event of the run and the next load, replaying no tail, loses none. **A leave whose save
+point is not answered is an open design item**, carried on #1 to the save-point code
+act: under the dead-peer conversion the unload would still finish clean and the next
+load would restore an older save point with no reset recorded, so whether a missed leave
+save point refuses the leave or keeps the run marked unclean is that act's to elect. A
+save point is never overwritten, so each answer names a new one, and this crate authors
+the event that records it, per `weaver-trace-PRD`, an event the tee never sends to state
+under any election, so the save point and a rebuild to its position hold the same. **A
+live restore is the loop's to trigger**: on the operator's demand this crate sends the
+`restore` ask naming a save point in the member's room, and on its answer flushes the
+decode session to `keep = 0` through the decode contract's existing cut before the next
+turn feeds the model, so no cached context outlives the state it was built from. **A
+save point whose identity differs from the one seated reopens the decode session**
+rather than reloading the model, per `weaver-spu-PRD`: the `restore` answer carries the
+save point's prefix, this crate compares it with the prefix seated, and where they
+differ it closes the session and opens it on the answered prefix, authoring that prefix
+through the identity door as an open does, so the record names the prefix the model runs
+under from that point. The channel that carries the operator's demand to the loop is the
+loop act's to name.
+
 ### 6.1 The decode surface, chartered
 
 **This subsection closes what section 6 deferred and section 9's first election
@@ -2001,87 +2053,96 @@ loop that composes them, which stays the builder's.
 ruling of 2026-08-11 answering the handoff's first question. Loop 0 opens the decode
 session as the last step of standing the interior up, after the SPU's admit confirms
 residency, so the surface loop 0 grants at loaded-and-idle is already a session at rest.
-The identity material the open carries has two sources and one rule, per the operator's
-ruling of 2026-09-04 on issue #422. Where the state member's end arrived on this enter,
-the harness asks the store for the session's identity, the `identity` ask of
-`weaver-harness-state-contract` section 2, once the seam stands and before the open: a
-prefix answered is the open's `messages`, and an empty answer, the store holding no
-turnless `message.system` for the session, means the first load of the session, so the
-decoder instruction's `identity` field seeds the open and the tee lands what it seated.
-Where no end arrived the field governs alone, as it did before the ruling.
-**This choice is the one site where the identity's source is read**, and the prefix the
-open seats comes from nowhere else. The seed it reads is the decoder instruction's
-`identity` as the enter carried it, which since the operator's ruling of 2026-10-02
-admin seated at the inventory from the prompt file the declaration names, per
-`weaver-types-Spec` section 2, so this crate holds the file's text and never the file,
-its path or a handle into the operator's directory. **The operator's long-range
-direction moves the source here and not elsewhere**: state management supplying the
-identity, a semantic-graph store that sleep-cycle consolidation keeps current, in place
-of a file the operator edits. That is the memory leg, out of scope per
+The identity material the open carries has two sources, one per binding. **Under a
+serving binding the prompt file is authoritative at every load**, on the operator's
+ruling of 2026-10-02 on #58's fifth question, which revises the ruling of 2026-09-04 on
+issue #422 that the store governed every load after a session's first: the open seats
+the decoder instruction's `identity`, an edit to the file takes effect at the next load,
+and where the state member's end arrived the tee lands what the open seated, the store
+keeping the history of the identities the loads seated and deciding none of them.
+**Under a diagnostic binding the identity is the preloaded store's**, on the operator's
+ruling of 2026-10-02 on #57's sixth question: the harness asks the store for it, the
+`identity` ask of `weaver-harness-state-contract` section 2, once the seam stands and
+before the open, and the record's own `message.system` events seat, in order and with
+their boundaries, byte for byte, the derived declaration's prompt file being empty. **A
+missed ask there refuses the enter**, the dead-peer conversion of every other ask
+notwithstanding: a replay whose bounding cannot be read is not a replay with no
+bounding, so the enter fails closed through the same after-load failure a refused open
+uses, per ruling 2 of issue #422. **This is the one site where the identity's source is
+read**, and the prefix the open seats comes from nowhere else. The seed it reads is the
+decoder instruction's `identity` as the enter carried it, which since the operator's
+ruling of 2026-10-02 admin seated at the inventory from the prompt file the declaration
+names, per `weaver-types-Spec` section 2, so this crate holds the file's text and never
+the file, its path or a handle into the operator's directory. **The operator's
+long-range direction moves the source here and not elsewhere**: state management
+supplying the identity, a semantic-graph store that sleep-cycle consolidation keeps
+current, in place of a file the operator edits. That is the memory leg, out of scope per
 `weaver-agent-PRD` section 9 and not built here, and nothing in this crate is shaped for
-it: the choice stays two-way, the store's answer or the seed, and a new source arrives
-as that leg's own act. **A missed
-ask refuses the enter**, the dead-peer conversion of every other ask notwithstanding: a
-run whose bounding cannot be read is not a run with no bounding, so the enter fails
-closed through the same after-load failure a refused open uses, per ruling 2 of the
-issue. The run's session identity is the open's `session` in every case. A refused open
-is a refused enter, returned through the fan-out's after-load failure so the authored
-bracket stands for the leave to unwind, the aggregate naming the decode seam as where
-the fan-out stopped. **Under a restoring load the open carries the restored conversation
-beside the identity**, per the ruling of 2026-09-04 on issue #432: the harness asks the
-store for the session's messages whole, the `recall` ask with no bound, the identity ask
-and this one parking until the driver's seal per the contract's section 2 because the
-holdings are being landed through the door as the enter stands, and the message events
-through the cut, rebuilt as canonical messages in landing order, follow the identity in
-the open's `messages`. **A restore from a branch carries what the branch inherited**, as
-of 2026-09-26 (#697): the branch recorded that conversation at its own open as
-`message.restored` rows, and those rows are rebuilt beside the turned ones, so a record
-restored from is never the parent's alone. **Each answered ask reaches the record as a
-`recall` before the open is built from it**, the identity ask's and the restoring
-recall's alike, as of 2026-09-26 per `weaver-trace-Spec` section 3, a recall the
+it: the choice stays two-way by binding, the seed or the preloaded store's answer, and a
+new source arrives as that leg's own act. The run's session identity is the open's
+`session` in every case. A refused open is a refused enter, returned through the
+fan-out's after-load failure so the authored bracket stands for the leave to unwind, the
+aggregate naming the decode seam as where the fan-out stopped. **Under a restoring load
+the store answers from the save point**, per the operator's rulings of 2026-10-02 on
+#58: admin hands the member the save point at spawn, per `weaver-admin-Spec`, the member
+holds what it held, and the open carries the identity the prompt file seats and nothing
+more, the loop composing each turn's context from the restored state as it composes it
+from any held state. The record restore of issue #432, which seated a session's
+conversation as prefix and wrote it as `message.restored`, retires with those rulings: a
+session branches from a record offline, by a rebuild to a cut that writes a save point,
+per `weaver-state-PRD` section 4. **Every serving enter where the member stands asks
+`restored` before it authors `load`**, per `weaver-harness-state-contract` section 2 on
+the ruling of 2026-10-02 on #58's fourth review round: the answered stamp, the save
+point's digest, run, sequence and last turn, must equal the same four members of the
+enter's `Lineage`, or be absent where the enter names none, the other members,
+`operator_supplied` and `built_from`, being admin's resolution and never the member's to
+answer, and a refusal, a miss, or a disagreement refuses the enter through the fan-out's
+after-load failure, so no `load` event names state the member did not restore. **The
+reset is authored from the enter**: where the enter carries `reset`, beside its lineage
+and whether or not a save point stands, resolved by admin from its clean-unload marker
+per `weaver-admin-Spec` section 4, this crate authors the reset event after the `load`
+event, naming the prior run, the reason, and the save point reset to or none where the
+store stands empty, so a rebuild from the record honours it, per `weaver-trace-PRD`.
+**Each enter ask that returns events reaches the record as a `recall` before the open is
+built from it**, as of 2026-09-26 per `weaver-trace-Spec` section 3, a recall the
 recorder will not take being named in an `identity_prefix_unrecorded` fault rather than
-refusing the enter. **Under a diagnostic binding the enter records nothing**, its asks
-being setup the diagnostic record does not carry as it carries no load and no prefix:
-that record opens with `replay.opened`, and the ask that feeds the model is the replay
-port's. They are prefix material, permanent for the residency and the floor a flush
-returns to, because the point of standing from a record is to condition the possibility
-space the way the identity does, only longer, and a prefix a flush could drop would not
-be one. The window pays for it and the declaration's capacity is where the operator sees
-the cost. **The turn ordinal starts at the cut**: the first turn of a restoring run is
-numbered one past the turn the enter's lineage names, within the parent run it names, a
-bare turn number recurring across a session's runs and naming nothing on its own, so the
-derived seeds of `weaver-spu-Spec` section 8.5, which fix a generation's stream from the
-declared seed, the turn's reference, and the generation ordinal, continue the parent's
-streams, and a branch that changes nothing draws what the parent drew. **Where the door
-stands the enter's asks wait on the driver's seal**, under the parked ask's bound rather
-than the two seconds a member answering from holdings at rest takes, per
-`weaver-harness-state-contract` section 2 and `weaver-state-Spec` section 4 as of
-2026-09-06, and one typed line on standard error names what is waited on and for how
-long before the first ask is written, so an operator who has not started the driver
-reads why the load stands still. The harness knows which load it holds where the member
-does not, and spends the bound on the diagnostic case anyway, because the member parks
-the identity ask under the door whatever the binding and a short bound there would
-refuse the enter unless the driver had sealed inside it, the identity ask's miss being
-the one the dead-peer clause does not convert. **A diagnostic enter therefore waits on
-the driver as its replay already did and refuses without one after the bound**, where
-before this act it opened on the seed while the preload elected no prefix, and the
-answer it now opens on is the record's own. **The instrument is perturbation, as of
-2026-09-06, on two claims this clause makes**: the restored conversation is the turned
-messages and the `message.restored` rows the recall answered, the turnless system rows
-being the identity ask's and seated once, watched to fail when the turn filter is
-dropped and the prefix is seated twice, and since 2026-09-26 when the restored rows are
-filtered out and a restore from a branch loses what the branch inherited, and the first
-turn of a restoring run is numbered one past the cut, watched to fail when the ordinal
-starts at zero.
+refusing the enter. **The `restored` ask is not one**: it returns a stamp or a refusal
+and no event, and it is answered before `load`, so it is recorded by the `load` event's
+lineage it confirms and never as a `recall`. **Under a diagnostic binding the enter
+records nothing**, its asks being setup the diagnostic record does not carry as it
+carries no load and no prefix: that record opens with `replay.opened`, and the ask that
+feeds the model is the replay port's. **A restoring run numbers its turns from one**, on
+the operator's ruling of 2026-10-02 on #59: a restore from a save point is a new branch
+and so a new run, and a turn key counts within its run and restarts with the next, per
+`weaver-gate-world-contract` section 2. The save point's last turn stays on the record
+as a fact of the lineage and numbers nothing. The derived seeds of `weaver-spu-Spec`
+section 8.5, which fix a generation's stream from the declared seed, the turn's
+reference, and the generation ordinal, therefore draw the new run's own streams, its run
+reference distinguishing them from those of the run the save point was taken from.
+**Where the door stands the enter's identity ask waits on the driver's seal**, under the
+parked ask's bound rather than the two seconds a member answering from holdings at rest
+takes, per `weaver-harness-state-contract` section 2 and `weaver-state-Spec` section 4,
+and one typed line on standard error names what is waited on and for how long before the
+ask is written, so an operator who has not started the driver reads why the load stands
+still. The door stands only under a diagnostic binding, the preload being that binding's
+alone, and a short bound would refuse the enter unless the driver had sealed inside it,
+the identity ask's miss being one of the two the dead-peer clause does not convert. **A
+diagnostic enter therefore waits on the driver as its replay does and refuses without
+one after the bound**, and the answer it opens on is the record's own. **The instrument
+is perturbation, on the ordinal**: the first turn of a restoring run is numbered one,
+watched to fail when the ordinal is taken from the lineage's last turn. The perturbation
+that watched the restored conversation retires with the record restore, and the code act
+that lands the save point removes its test and rewrites the one-past-the-cut test of
+2026-09-06 to this rule.
 
 ```graph
-node: harness-restoring-open-seats-the-record
+node: harness-restoring-run-numbers-turns-from-one
 kind: assertion
 tag: perturbation
 
 edge: asserts
 from: weaver-harness
-to: harness-restoring-open-seats-the-record
+to: harness-restoring-run-numbers-turns-from-one
 ```
 
 **The column ask is written where and only where the binding is diagnostic
@@ -2181,14 +2242,11 @@ the message itself, and refuses every role but system, because the only thing it
 to write is a prefix. **A role reaching it that is not system is a defect in the
 declaration rather than a message to record**, and it refuses on the same reasoning the
 tool-result door refuses in the message door: a door that writes what it was not built
-for launders a bad declaration into a record that looks well formed. **Under a restoring
-load the door admits the roles the restored prefix carries**, per issue #432: the
-restored conversation is seated as prefix and the door authors what the open carried, so
-each restored message, whatever its role, reaches the record turnless as
-`message.restored`, per `weaver-trace-Spec` section 3's restored-prefix clause as of
-2026-09-26, and the record of a branch is complete without its parent. The system-only
-rule stands for the declaration's own field, which is still the only prefix a
-declaration can write.
+for launders a bad declaration into a record that looks well formed. **The system-only
+rule has no exception**: the record restore of issue #432, which wrote a restored
+conversation through this door as `message.restored`, retires with the operator's
+rulings of 2026-10-02 on #58, and a restoring load seats the identity alone, per section
+6.1, where the save-point event records where its state came from.
 
 ```graph
 node: harness-identity-door-writes-system-only

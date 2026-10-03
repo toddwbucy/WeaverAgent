@@ -136,16 +136,31 @@ rather than a peer of the harness loop.
 
 ## 2. What proto-stateful means, precisely
 
-Proto-stateful means **the agent holds real state within a session and none
-across sessions**. It begins each session with no accumulated experience: no
-belief graph, no consolidation, no recall, no sleep or nap pass, and no memory
-substrate of any kind. Conversation context within a session is not agent
-memory, and the distinction is the whole of what this program defers. The
-prefix reads as protoautonomic does in section 4, naming the mechanics alone
-and claiming nothing about the finished behavior. An earlier vocabulary called
-this stage stateless, which the human's ruling of 2026-08-01 corrected as an
-overstatement: an agent holding a working structure and a hot cache is not
-stateless, it is an agent whose state dies with the session.
+**The goal is three layers, reached one step at a time, and authority runs
+downward**, per the operator's rulings of 2026-10-02 on issue #1. **The trace** is what
+happened, the primary artifact of section 1. **State management** is what is supposed to
+happen, reconciled turn by turn with what did, built only from the tee of
+`weaver-trace-PRD` section 11 and rebuildable from the trace without re-asking a model.
+**Memory** is a lossy compression of state, written only by sleep-cycle consolidation.
+Memory proposes and state enforces, and the trace outranks both. **State management is
+the current step**: its primitives are a contract and a proven connection to a
+database, `weaver-state`, and a contract and a proven connection to a classifier on the
+SPU, `weaver-harness-spu-classify-contract`, and the loop of section 5.5 is state
+management itself. Memory is the step after it and is out, per section 9.
+
+Proto-stateful means **the agent holds real state, within a session and across
+sessions under custody, and no memory**. It holds no belief graph, no consolidation,
+no sleep or nap pass, and no memory substrate of any kind. The prefix reads as
+protoautonomic does in section 4, naming the mechanics alone and claiming nothing
+about the finished behavior. An earlier vocabulary called this stage stateless, which
+the human's ruling of 2026-08-01 corrected as an overstatement: an agent holding a
+working structure and a hot cache is not stateless. That ruling also held that the
+agent's state died with the session, and the operator's ruling of 2026-10-02 revises
+it: **state management accumulates across sessions**, its holdings carried between
+loads by save points in the operator's directory, which the agent never reaches, and
+rebuildable from a record the agent never reaches either. The custody is what makes
+the crossing lawful, and memory, which will read from those save points, is still to
+come.
 
 Two things hold state across turns inside one session, both deliberate, and
 they are not two things of a kind:
@@ -163,6 +178,18 @@ they are not two things of a kind:
   if the line is not drawn. Its owner, its flush trigger, and who is forbidden
   to touch it are named in `weaver-spu-PRD` as a rule the code can be checked
   against.
+
+**Across sessions one thing holds state, and it is neither of those.** The state
+member's store, per `weaver-state-PRD`, holds what the loop's schema admits of what the
+tee carried, in memory while the agent serves and in save points between loads, each
+stamped with the trace position it covers and never overwritten. It is a derivative of
+the record and never a second account: a load restores a save point, the latest by
+default or the one the declaration's `restore` names, and with no save point state is
+rebuilt from the trace by the offline builder, whose save point the next load restores.
+An unclean stop resets to the latest known-good save point, the reset recorded on the
+trace, so a rebuild from the record arrives where the reset did. A save point the
+operator edits is an input like a prompt file, recorded by digest, per
+`weaver-state-PRD` section 4.
 
 ## 3. One turn, end to end
 
@@ -543,6 +570,26 @@ is the thing that does it. This is why the composition root is new code rather t
 carried code, and why loop 0 is the framework's rather than a builder's: the mechanism
 that makes the parts one program cannot itself be a part.
 
+**The loop is state management**, per the operator's rulings of 2026-10-02 on issue #1,
+and every agentic loop is: it decides what reaches the model and when, and reconciles
+what happened with what is supposed to happen, turn by turn. **There is one loop,
+written in Rust and compiled into the worker**, which is the deployment path
+`weaver-harness-Spec` section 1 already states, the Python-iterating worker staying
+untouched as the bench and experiments lane. There is no loop election and no pluggable
+loop, and an operator bringing a loop of its own is parked by name at section 9. The
+loop calls on the state member's store and on the SPU's classifier through the harness,
+organs never linking, and both are primitives in the sense of section 2: mechanics
+without motive, the schema and the purpose being the loop's. **Its opinions are the
+operator's to set**: wherever an operator could reasonably want a different answer, the
+loop exposes the choice as a setting in a `[state-management]` table of the agent's
+declaration, each setting with a compiled default, and the `load` event records the
+values in effect, so a record says what its loop was told. Which settings exist is a
+later act's. Custody, the rebuild from the trace, and every state write passing through
+the tee are never settings. **Every judgment the loop makes is recorded on the trace**,
+the model-made ones included, a classification or a ranking as surely as a flush, so
+state stays rebuildable from the record without re-asking a model, per
+`weaver-trace-PRD` section 3.1.
+
 **Each organ presents its contracts to the harness and presents nothing to any other
 organ.** A contract is what an organ offers the integrator, being the vocabulary it
 speaks, the errors it returns, and the ordering it relies on and provides, per section
@@ -896,27 +943,18 @@ construction rather than by nobody dialing a live ingress.
 ## 9. Out of scope, and how it returns
 
 **Out entirely:** the memory leg in every form - belief graph, consolidation, sleep
-and nap passes, recall, and any memory substrate. Also out: offline analysis,
+and nap passes, and any memory substrate. Also out: offline analysis,
 training, and the desktop frontend.
 
 **The identity's source is parked here by name**, on the operator's ruling of
 2026-10-02. Today an agent's system prompt is a file the operator edits, named by the
-declaration and read by admin, and the harness carries it to the session's open, per
+declaration and read by admin, and the harness carries it to every load's open, per
 `weaver-harness-Spec` section 6.1, which names the one site where the identity's source
 is read. The operator's long-range direction is for state management to supply that
 identity instead, a semantic-graph store kept current by sleep-cycle consolidation.
 That is the memory leg above and is out, not built here, and it returns by the
 mechanism this section states: naming the site is not a slot, and no field, ask or
 seam is carried for it.
-
-**The operator bringing the loop is parked here by name**, on the operator's ruling of
-2026-10-02 on #1. The state-management loop is compiled into the worker, and
-`loop-file`, a declaration naming code the worker runs, retires for the compiled path
-with the pyworker lane. An operator supplying a loop of its own is a future feature,
-not built here, and it returns by the mechanism this section states. The compiled
-loop's tunable opinions become a `[state-management]` settings table in the
-declaration, recorded on the load event; the table itself is `weaver-state`'s Spec to
-state.
 
 **External tooling is out entirely as well, and stays out.** This program builds no
 tool crate, and the reason differs on each side of the boundary.
@@ -976,7 +1014,33 @@ built for it until the tool workflow charters its contract and a party to it exi
 What the ruling of 2026-08-07 added is a requirement in this document, not a shape in
 a crate.
 
-Statefulness returns as a **feature add**, not as a retrofit. The mechanism is
+**Memory alone stays out, and state management is in**, per the operator's rulings of
+2026-10-02 on issue #1. State management came back through the door this section
+fixed: `weaver-state` is a schema extension behind a new socket and contract, with its
+own PRD, and nothing in the base set moved for it. Holding what the agent was asked to
+hold, and answering a query over what it holds, are state management's and in scope.
+What stays out is the layer below it, the lossy compression consolidation writes, which
+returns by the same door and reads from state's save points when it comes.
+
+**The operator bringing the loop is parked here by name**, on the same rulings. The
+loop of section 5.5 is one loop, compiled into the worker, and `loop-file`, a
+declaration naming code the worker runs, retires for the compiled path with the
+pyworker lane. Its opinions are settings in the declaration's `[state-management]`
+table, recorded on the load event: the table's grammar is `weaver-types-Spec`'s, with
+the declaration's other keys, and its meaning is `weaver-harness-Spec`'s, with the
+loop, per the operator's ruling of 2026-10-02 on #58's sixth question. An operator
+supplying a loop of its own, by a declared file or any other path, is a possible
+future feature, not built here, and it returns by the mechanism below if it returns at
+all. Naming it is not a slot: no field, flag or seam is carried for it.
+
+**Save points as task- or workflow-level presets are parked here by name**, on the
+operator's ruling of 2026-10-02 on #58: a known-good context returned to repeatedly for
+different tasks on one project, like a system prompt but at a task or workflow level.
+State management keeps save points and restores one on demand, per `weaver-state-PRD`
+section 4, and a preset built on them is a future feature, not built here: no field,
+flag or seam is carried for it.
+
+Memory returns as a **feature add**, not as a retrofit. The mechanism is
 fixed now, in three parts:
 
 1. **Schema extension.** The durable NDJSON event schema is the one schema,
@@ -985,7 +1049,7 @@ fixed now, in three parts:
    reshape existing ones.
 2. **A new socket and a new contract.** Per invariant 5.1, memory arrives as a
    socket peer with a complete contract, never as a linked crate.
-3. **Its own PRDs.** Stateful PRDs are written per crate as required, and
+3. **Its own PRDs.** Memory's PRDs are written per crate as required, and
    contracts are amended or added by the order of work in section 10.
 
 No seam, stub, reserved slot, or dormant contract party is carried in
@@ -1172,20 +1236,23 @@ things this document refuses to trade away.
 The trade in section 12 is not evenly justified across the program, and this
 document is the wrong place to pretend otherwise.
 
-A proto-stateful agent is precisely the workload a network architecture serves
-well. Holding nothing across sessions, it is replicable by construction, and
-replicable workloads are what horizontal scale, failover, and rolling
+A proto-stateful agent that holds nothing across sessions is precisely the workload a
+network architecture serves well. Holding nothing, it is replicable by construction,
+and replicable workloads are what horizontal scale, failover, and rolling
 replacement exist for. Measured at stage one and nowhere else, giving up
 redundancy in order to co-locate a proto-stateful agent is the worse
 engineering choice, and no amount of saved latency repays it. A local
 proto-stateful agent is not a better version of a networked service of the
 same shape. It is a worse one with a faster interior.
 
-The trade pays only once the agent holds state bound to it. At that point the
-thing redundancy would protect is unique by construction and cannot be
-replicated regardless of architecture, so the reliability being given up was
-never available. The latency being bought stops being a per-request saving and
-becomes the budget a continuous coordination loop runs inside.
+The trade pays only once the agent holds state bound to it. At that point the thing
+redundancy would protect is unique by construction and cannot be replicated regardless
+of architecture, so the reliability being given up was never available. **State
+management carried across sessions under custody is the first step on which the trade
+starts to pay**, per section 2: one embedded store per agent, bound to it, which a
+shared database server would have broken, and which is why the operator's ruling of
+2026-10-02 retired that engine. The latency being bought stops being a per-request
+saving and becomes the budget a continuous coordination loop runs inside.
 
 So this document specifies a floor and not a product. A proto-stateful local
 agent is a defensible intermediate and an indefensible end state, and building one

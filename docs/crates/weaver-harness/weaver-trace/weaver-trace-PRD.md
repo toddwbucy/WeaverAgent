@@ -73,11 +73,11 @@ program-side is alive between two of them.
 
 **A session** is the identity the runs share, and the unit the agent's conversation
 belongs to. It is the boundary the proto-stateful definition of apex section 2 is
-drawn against: a new session begins with nothing. What continuity a later run of
-the same session holds is the enter cell `weaver-admin-PRD` section 10 names, the
-program promising none since the ruling of 2026-08-01, and the stream's account of
-the session accumulating on the operator's side rather than in anything the
-program keeps.
+drawn against, as revised on the operator's ruling of 2026-10-02: what carries across
+runs and sessions is state management's holdings, under custody and through save
+points, per `weaver-state-PRD` sections 3 and 4, never the working structure or the hot
+cache, which begin empty at every run. The stream's account of the session accumulates
+on the operator's side, and the holdings are rebuildable from it.
 
 ### 2.2 The session has two materializations
 
@@ -331,17 +331,46 @@ is what the election exists to buy: the volume is an order of magnitude
 past everything else the record carries, so a kind always present would
 make the record unaffordable rather than complete.
 
-**`elision` is the twentieth and `refusal` the twenty-first**, both of
-2026-08-22 and both argued at their own clauses below - the table and the
-count word above caught up to them on 2026-08-26. **`recall` is the twenty-second**, on
-the operator's ruling of 2026-09-26 under epic #690: the M1 run's post-flush input was
-drawn from a state-seam ask the record did not hold, and `weaver-trace-Spec` section 3
-argues the shape. **`message.restored` is the twenty-third**, on the operator's ruling
-of 2026-09-26 under the same epic: a branch's record did not hold the conversation its
-model was opened with, each restored message refused turnless under its turned kind, and
-the same section argues the shape. **`score` is the twenty-fourth**, on the operator's
+**`elision` is the twentieth and `refusal` the twenty-first**, both of 2026-08-22 and
+both argued at their own clauses below - the table and the count word above caught up to
+them on 2026-08-26. **`recall` is the twenty-second**, on the operator's ruling of
+2026-09-26 under epic #690: the M1 run's post-flush input was drawn from a state-seam
+ask the record did not hold, and `weaver-trace-Spec` section 3 argues the shape.
+**`message.restored` is the twenty-third**, on the operator's ruling of 2026-09-26 under
+the same epic: a branch's record did not hold the conversation its model was opened
+with, each restored message refused turnless under its turned kind, and the same section
+argues the shape. No load authors it since the operator's rulings of 2026-10-02 on #58,
+which retire the record restore it recorded, and it stays in the vocabulary so the
+records that carry it stay readable. **`score` is the twenty-fourth**, on the operator's
 rulings of 2026-09-09 and 2026-09-26 on issue #523: a task's verdict on a run is a fact
 about that run, so the record carries it, and the same section argues the shape.
+
+**Every judgment the loop makes is a fact on the record**, on the operator's ruling of
+2026-10-02 on issue #1, and the kinds above are its precedents. The loop is state
+management, per `weaver-agent-PRD` section 5.5, and state is rebuilt from this record
+alone, so a judgment the record did not hold would make state unrebuildable without
+asking a model again, and a model asked again need not answer the same. The classifier's
+verdict already crosses as `classify.request` and `classify.output`, a task's as
+`score`, a flush's and an elision's as their own kinds, and a recall's answer as
+`recall`. **A judgment with no kind yet, a ranking the loop makes over held facts the
+first of them, is recorded as its own kind when the loop act that makes it lands**, and
+that act names and shapes it in full and adds it here and to every contract whose
+vocabulary names the set. No kind is named ahead of its emitter, per apex section 9's
+rule against a reserved slot.
+
+**Where state came from is a fact on the record too**, on the operator's ruling of
+2026-10-02 on #58's fourth question. Taking a save point, restoring one, at a load or
+live, and resetting to one after an unclean stop each author an event naming which save
+point, by digest, and which trace position it covers, so a rebuild from this record
+arrives where the store did and honours every reset. A save point the operator edited
+is marked operator-supplied on the event that restores it, its digest recorded and the
+file kept as an input. A live restore's KV flush is recorded as the `flush` it is. Each
+of these kinds is named and shaped by the act that lands its emitter, the save-point
+act, on the rule above, and added here then. **These kinds never cross the tee into
+state**, whatever the election: they are provenance about the holdings, authored after
+the holdings they name were taken, so a save point could never hold its own event and a
+rebuild that landed them would hold what no restore holds. A rebuild reads the reset
+kind to decide what to land and lands none of the three.
 
 **The record declares the posture it was written in.** Section 3.1's `load`
 event carries every diagnostic election of the load by name, because
@@ -519,31 +548,41 @@ taken with the member standing and one taken without are not comparable
 either. **From this act the `load` event names both**, the loop by the binary
 that ran it and the file and digest where the loop is a file, and the member
 not by that election but by whether its end arrived on the enter, which is the
-harness's own knowledge whatever admin decided from.
+harness's own knowledge whatever admin decided from. **The loop's settings are one more
+such fact**, on the operator's ruling of 2026-10-02 on issue #1: the compiled loop's
+opinions are the operator's to set in the declaration's `[state-management]` table, per
+`weaver-agent-PRD` section 5.5, so two records run under different settings are
+records of different loops. The `load` event carries every setting's value in effect,
+the declared value or the compiled default it fell back to, and the act that lands the
+table shapes the member.
 
 **The store the member stands on is a third such fact, as of 2026-09-04.** Per
-`weaver-state-PRD` section 4 the engine is the deployment's
-election and, under the service engine, the database and the role are the object gate's
-own members, changing only across the load boundary. What a record was built into
-decides what can be asked of it later, so the `load` event names the engine and, where
-the service engine stands, its database and role, resolved as the enter carried them.
-**The leave reads the boundary back**: the harness reads the role's grant surface from
-the store's catalog at the enter through the member and again at the leave, and the
-`unload` event carries the reading as unchanged, varied, or unreadable, the envelope the
-confirm drivers already carry for the engine libraries. A grant surface that varied
-inside a session is a boundary move the record carries and never absorbs, and one
-unreadable at the close is said to be so rather than reported unchanged. Absence means a
-record older than the act and is read as those facts being unrecoverable, never as a
-default. The record then says what the agent's prompts were built by and what its state
-was built into, which the elections alone could not. **The `load` event names its
-lineage and its stack as of 2026-09-04**, per issue #432. Where the session stands from
-a record it names the parent's session and run and the turn the holdings stop at, so a
-resume and a branch each say what they came from, and every load names the digests of
-the organ binaries that ran it, keyed by name, so a record is sufficient for its own
-conditions and the experiment deposits stop being where the stack is remembered. The
-record is the cache's canonical form and nothing derived from it is kept: a session that
-stands from a record recomputes its prefix from the record under whatever conditions the
-load declares, and the load event is where those conditions and that lineage are read.
+`weaver-state-PRD` section 4 the engine is the deployment's election and, under the
+service engine, the database and the role are the object gate's own members, changing
+only across the load boundary. What a record was built into decides what can be asked of
+it later, so the `load` event names the engine and, where the service engine stands, its
+database and role, resolved as the enter carried them. **The leave reads the boundary
+back**: the harness reads the role's grant surface from the store's catalog at the enter
+through the member and again at the leave, and the `unload` event carries the reading as
+unchanged, varied, or unreadable, the envelope the confirm drivers already carry for the
+engine libraries. A grant surface that varied inside a session is a boundary move the
+record carries and never absorbs, and one unreadable at the close is said to be so
+rather than reported unchanged. Absence means a record older than the act and is read as
+those facts being unrecoverable, never as a default. The record then says what the
+agent's prompts were built by and what its state was built into, which the elections
+alone could not. **The `load` event names its lineage and its stack as of 2026-09-04**,
+the lineage reshaped on the operator's rulings of 2026-10-02 on #58, which retire the
+record restore of issue #432. Where the load restores a save point it names the save
+point by digest, the run, sequence and last turn it covers, whether the operator
+supplied it, where the offline builder made it from a record that record's session and
+the run and turn of its cut, and, apart from the lineage and whether or not a save point
+stands, where the agent's last run did not end in a clean unload that run and the
+reason, so a resume and a branch each say what they came from;
+and every load names the digests of the organ binaries that ran it, keyed by name, so a
+record is sufficient for its own conditions and the experiment deposits stop being where
+the stack is remembered. The record is the canonical form and a save point is a cache of
+what its replay produces, so the load event is where the conditions and the lineage of a
+session's state are read.
 
 **The prompt file the load was given is one more such fact, as of 2026-10-02.** On the
 operator's ruling of that date the system prompt is a file the declaration names rather
@@ -551,9 +590,10 @@ than text inside it, so the declaration's digest the `load` event carries stoppe
 covering the prompt, and a record holding only that digest could not say which prompt
 the agent's operator had written. **From this act the `load` event names the prompt
 file's digest beside the declaration's**, as admin read both at the inventory, and never
-a path. The seated prefix the record carries is what the session ran under, and under a
-standing state member that is the store's and not the file's after the session's first
-load, so the two answer different questions and both are kept. Absence means a record
+a path. The seated prefix the record carries is what the session ran under, which at a
+serving load is the file's, seated at every load on the operator's ruling of 2026-10-02
+on #58; the digest is the file's bytes as admin read them, so the two answer different
+questions and both are kept. Absence means a record
 older than the act and is read as the digest being unrecoverable, never as a default.
 `weaver-trace-Spec` section 3 carries the member.
 

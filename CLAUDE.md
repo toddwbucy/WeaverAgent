@@ -46,12 +46,12 @@ the primary artifact, not a diagnostic. `docs/crates/weaver-agent-PRD.md` is the
 the deliverable, the five invariants, the lifecycle and the enforcement posture every
 other document answers to.
 
-**Proto-stateful, not stateless** (PRD section 2, on the ruling of 2026-08-01). The
-agent holds real state within a session and none across sessions. Two things hold state
-across turns inside one session, deliberately and not two of a kind: the working
-structure (the run's trace events held in RAM in the canonical form the stream carries)
-and the hot KV cache (an optimization whose owner, flush trigger and forbidden touchers
-`weaver-spu-PRD` names). "Stateless" anywhere outside a record of the rename is stale.
+**Proto-stateful, not stateless** (PRD section 2, on the rulings of 2026-08-01 and
+2026-10-02). The agent holds real state within and across sessions, under custody, and
+no memory yet. State management (the loop, its in-memory store and its save points, #1)
+carries across sessions; the hot KV cache (an optimization whose owner, flush trigger
+and forbidden touchers `weaver-spu-PRD` names) lives within one. Memory, consolidated
+and lossy, is still to come. "Stateless" anywhere outside a record of the rename is stale.
 
 **Correctly custodied** means the agent cannot reach its own record: the stream lands
 behind a boundary the kernel enforces.
@@ -91,7 +91,9 @@ line is a Unix domain socket, and there is no listening network socket anywhere.
   `kernels/PROVENANCE.md` records what hardware has run what.
 - **`weaver-gate`** is the world-facing organ: it admits a dialer by uid, relays one JSON
   line in and one out, and holds the tool hooks.
-- **`weaver-state`** is the session store (`sqlite` default, `postgres` optional).
+- **`weaver-state`** is state management's store: an in-memory embedded SQLite in the
+  state member's process, with save points (#58); postgres is retired as a state engine
+  on the ruling of 2026-10-02, and leaves the code in a later act.
 - **`weaver-admin`** is one agent's organ, invoked by the operator per verb: it reads only
   that agent's config root `<base>/<agent>/` (base from `WEAVER_ADMIN_CONFIG`, default
   `/etc/weaver/admin`), stands its unit, opens its trace sink and hands it to the worker,
@@ -209,10 +211,10 @@ pytest -q                                                 # CPU; the venv is hel
 ### Deploying and driving an agent
 
 `deploy/REDEPLOY.md` (a box from scratch) and `deploy/HowToDeployANewAgent.md` (one
-agent on a standing stack) are the runbooks. An agent elects sqlite or postgres (the
-build carries both, on the operator's ruling of 2026-09-30, #38). `create-agent.sh` still
-lays the territory out by POSIX ACLs under the operator's home, so it cannot stand an
-agent on a box whose home has no ACLs (#28); small fixes are #39. The scripts are
+agent on a standing stack) are the runbooks. sqlite is the state engine; postgres is
+retired by the ruling of 2026-10-02 (#1, reversing #38), though the scripts still build
+it until the act that removes it. `create-agent.sh` lays each territory out by group,
+with the trace in its own group (#56); small fixes are #39. The scripts are
 `bootstrap-stack.sh`, `update-stack.sh`, `create-agent.sh`, `verify-load.sh`,
 `decommission.sh`, and `deploy/turn.py <agent> "<text>"` sends one turn through a
 loaded agent's gate as the operator's uid with no sudo. The installed stack lives under

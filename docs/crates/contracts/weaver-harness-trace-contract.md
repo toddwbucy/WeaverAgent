@@ -244,6 +244,13 @@ family library returns it on the report path, per `weaver-spu-PRD` section
 forces a replay through a template that may have changed, per
 `weaver-trace-PRD` section 3.2.
 
+**Every judgment the loop makes, recorded.** The loop is state management and state is
+rebuilt from the record alone, per `weaver-agent-PRD` section 5.5, so the harness
+authors every judgment its loop makes before the loop acts on it, a model-made
+classification or ranking as surely as a flush or a verdict, on the precedents of
+`classify.request`, `classify.output` and `score`. A judgment whose kind the closed set
+does not yet carry enters by section 7 with the loop act that makes it.
+
 **Faults as the floor's report.** A fault the worker survives is submitted as
 a `fault` event carrying `weaver-types`' `fault-report`, the same shape the
 reporting organ handed the harness, against the case set closed across the
@@ -347,7 +354,11 @@ permitted when they name the committed source range they represent and do not cl
 completeness beyond it. A derived view is never a durable home. The divergence
 artifact an earlier version excepted here left with the leave-time comparison on
 2026-08-01, there being no program-owned record for the working structure to
-diverge from.
+diverge from. **The state member's save point is a derived view of the kind this rule
+permits and stands outside this seam**: it names the trace position it covers, claims
+nothing past it, and yields to the record wherever the two disagree, per
+`weaver-state-PRD` section 4. It is durable as a cache is and never a home, every
+holding it carries being rebuildable from the record.
 
 **Neither may make a span durable.** Spans are views over event ranges, produced on
 demand. Writing a span into the record makes it a primitive and reintroduces the

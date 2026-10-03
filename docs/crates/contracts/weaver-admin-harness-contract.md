@@ -171,12 +171,15 @@ session identity, the run reference, the kind of the binding, the trace sink han
 state channel's end where the member stands, the SPU instruction, the gate instruction
 where the kind declares a Gate, the state election the tee applies, the store election
 the member stands on, resolved to the embedded engine where the declaration is silent,
-per `weaver-state-PRD` section 4, the lineage of the restore where
-the declaration elects one, the digests of the organ binaries admin started and of
-the two it hands the worker to fork, the agent's SPU and the gate, and the digests of
-the declaration and, as of 2026-10-02, of the prompt file it names. The
-state channel's end is the harness half of the socketpair admin created at the member's
-spawn, per the operator's ruling of 2026-08-26 carried at
+per `weaver-state-PRD` section 4, the lineage of the save point the load restores,
+whether the declaration's `restore` names it or the inventory selected the latest
+published by default, and none where no save point stands, beside it and apart from it
+the reset, where the agent's last run did not end in a clean unload, that run and the
+reason, whether or not a save point stands, the digests of the organ
+binaries admin started and of the two it hands the worker to fork, the agent's SPU and
+the gate, and the digests of the declaration and, as of 2026-10-02, of the prompt file
+it names. The state channel's end is the harness half of the socketpair admin created at
+the member's spawn, per the operator's ruling of 2026-08-26 carried at
 `weaver-harness-state-contract`: admin couriers it and speaks on it never. Its absence
 is the state leg not standing, never a refused load, and the two failure moments read
 differently on purpose: a member whose spawn failed puts no end on the enter, and one
@@ -323,15 +326,19 @@ fan-out admits, the gate instruction the fan-out starts where the kind declares 
 the state election the tee applies, resolved to the ruled default where the declaration
 is silent, the store election the member stands on with its database and role under the
 service engine, resolved to the embedded engine where the declaration is silent, the
-lineage of the restore where the declaration elects one, the parent's session, the run
-the cut falls in, and the turn the holdings stop at, resolved by admin and never the
-record's path, so the harness names its parent without opening anything, the digests of
-the organ binaries admin started and of the agent's SPU and the gate it hands the
-worker, keyed by name, the declaration's digest as this crate
-read the file at the inventory, so the run and the record can both name what they were
-built from, the prompt file's digest as this crate read the file the declaration names,
-as of 2026-10-02, so the record can say which prompt the agent was given now that the
-declaration's digest no longer covers it, and the intent to stop.
+lineage of the save point the load restores, its digest, the run, sequence and last turn
+it covers, whether the operator supplied it, where the offline builder made it from a
+record that record's session and the run and turn of its cut, resolved by admin and
+never the save point's path, beside it and apart from it the reset, where the agent's
+last run did not end in a clean unload, that run and the reason, whether or not a save
+point stands, on the operator's rulings of 2026-10-02 on #58, so the harness names where
+its state came from without opening anything, the digests of the organ binaries admin
+started and of the agent's SPU and the gate it hands the worker, keyed by name, the
+declaration's digest as this crate read the file at the inventory, so the run and the
+record can both name what they were built from, the prompt file's digest as this crate
+read the file the declaration names, as of 2026-10-02, so the record can say which
+prompt the agent was given now that the declaration's digest no longer covers it, and
+the intent to stop.
 
 **Admin guarantees** that the trace sink handle it passes refers to the sink the
 session's configuration declares, that the run reference distinguishes this run

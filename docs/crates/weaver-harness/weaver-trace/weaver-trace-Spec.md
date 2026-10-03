@@ -266,13 +266,28 @@ pub struct Elections {
     pub declaration: String,
     pub identity_file: String,
     pub lineage: Option<Lineage>,
+    pub reset: Option<Reset>,
     pub stack: BTreeMap<String, String>,
 }
 
 pub struct Lineage {
+    pub save_point: String,
+    pub run: String,
+    pub sequence: u64,
+    pub turn: u64,
+    pub operator_supplied: bool,
+    pub built_from: Option<Branch>,
+}
+
+pub struct Branch {
     pub parent: String,
     pub run: String,
     pub through: u64,
+}
+
+pub struct Reset {
+    pub prior_run: String,
+    pub reason: String,
 }
 
 pub struct LoopIdentity {
@@ -779,19 +794,25 @@ from: weaver-trace
 to: trace-load-names-its-loop-and-its-member
 ```
 
-**The `load` event names its lineage and its stack**, as of 2026-09-06, per the
-charter's section 3.1 on issue #432. `lineage` is present where the session stands from
-a record and absent otherwise, never null: `parent` is the record's session, `run` the
-run the cut falls in, and `through` the turn the holdings stop at, a whole record
-resolved to its last run's last turn, copied from the enter's `Lineage` per
-`weaver-types-Spec` section 4 and never the record's path, which the harness does not
-hold. `stack` is the digests of the organ binaries admin started and of the agent's SPU
-and the gate it hands the worker to fork, keyed by the binary's name, sha256 hex, copied
-from the enter, so a record is sufficient for its own conditions without a deposit
-beside it. Both ride the `Elections` payload on the drift reason above, and a record
-older than this act lacks the members, which reads as those facts being unrecoverable
-and never as a default. Neither is read from the deployment: the harness authors what
-the enter carried, as it authors the store's identity.
+**The `load` event names its lineage and its stack**, as of 2026-09-06, the lineage
+reshaped on the operator's rulings of 2026-10-02 on #58, per the charter's section 3.1.
+`lineage` is present where the load restores a save point and absent otherwise, never
+null: `save_point` is the save point's digest, `run` and `sequence` the position it
+covers, `turn` the last turn that run holds in it, `operator_supplied` whether the
+operator supplied it, and `built_from`, present only where the offline builder made it
+from a record, carries that record's session as `parent`, the run the cut falls in as
+`run`, and the turn the holdings stop at as `through`. `reset` stands beside `lineage`
+and apart from it, present only where the agent's last run did not end in a clean
+unload, whether or not a save point stands, and carries that run as `prior_run` and the
+reason as admin resolved it. Both are copied from the enter per `weaver-types-Spec`
+section 4 and never the save point's path, which the
+harness does not hold. `stack` is the digests of the organ binaries admin started and of
+the agent's SPU and the gate it hands the worker to fork, keyed by the binary's name,
+sha256 hex, copied from the enter, so a record is sufficient for its own conditions
+without a deposit beside it. Both ride the `Elections` payload on the drift reason
+above, and a record older than this act lacks the members, which reads as those facts
+being unrecoverable and never as a default. Neither is read from the deployment: the
+harness authors what the enter carried, as it authors the store's identity.
 
 **The `load` event names its declaration and its prompt file by digest**, the first as
 of 2026-09-04 per issue #435 and the second as of 2026-10-02, per the charter's section
@@ -802,10 +823,11 @@ ride the `Elections` payload on the drift reason above. **The second exists beca
 first stopped covering the prompt**: while the prompt was a string inside the
 declaration one digest named both, and once it is its own file an edit to the prompt
 leaves the declaration's digest unchanged. The seated prefix the record already carries
-does not stand in for it, because under a standing state member every later load of a
-session seats the store's identity and not the file's, so the digest is the record's
-one account of what the operator's file held at that load, and a seat that diverged from
-the file is visible as the two disagreeing. **The member is additive**: a record older
+does not stand in for it: at every serving load the prompt file is authoritative, on
+the operator's ruling of 2026-10-02 on #58, and the store keeps earlier runs' prefixes
+without supplying one, so the digest is the record's account of the file's bytes as
+admin read them at that load, and a seat that diverged from the file is visible as the
+two disagreeing. **The member is additive**: a record older
 than this act lacks it, which reads as the prompt file's digest being unrecorded and
 never as a default, and every consumer of the `load` event sees one new member and no
 other change, WeaverWeb's ingest, `weaver-analysis`, and the deployment tuple's harness
@@ -847,8 +869,9 @@ a reader grouping by turn reads the turn from the account without a second looku
 
 **The harness authors one for every answered ask that returns events, before the
 answer reaches its consumer**, per `weaver-harness-Spec` section 6: the seat's recall
-port, the seat's replay port, the enter's identity ask, and the enter's recall under a
-restoring load, one kind and the verb naming which. The replay's ask is recorded by the
+port, the seat's replay port, and the enter's identity ask, one kind and the verb naming
+which, the enter's recall under a restoring load retiring with the record restore on the
+operator's rulings of 2026-10-02 on #58. The replay's ask is recorded by the
 seat that made it and not inferred from `replay.identity`, which is the loop's finding
 about the holdings rather than the seam's answer. **Under a diagnostic binding the enter
 records nothing**, as it records no load and no prefix there: that record opens with
@@ -947,9 +970,12 @@ property an elected diagnostic is held to and the one this act holds itself
 to as well.
 
 **A restored conversation is recorded under `message.restored`, the twenty-third
-kind**, on the operator's ruling of 2026-09-26 under epic #690 item C2.7. A restoring
-load seats the parent's conversation at the open beside the identity, per
-`weaver-harness-Spec` section 6.1. Until this kind the harness authored each restored
+kind**, on the operator's ruling of 2026-09-26 under epic #690 item C2.7. No load
+authors it since the operator's rulings of 2026-10-02 on #58, which retire the record
+restore, and it stays in the vocabulary so the records that carry it stay readable; the
+clause below is the history of why it was shaped as it was and binds no new load. A
+restoring load under the retired record restore seated the parent's conversation at the
+open beside the identity. Until this kind the harness authored each restored
 message turnless under its turned kind, which the writer refused as it refuses any
 turnless user message, so a branch's record did not hold the conversation its model
 was opened with. **One kind serves every role, and the message carries the role and
@@ -1009,6 +1035,14 @@ edge: asserts
 from: weaver-trace
 to: trace-score-records-the-verdict-and-its-terms
 ```
+
+**`score` and the classify pair are the precedents for every loop judgment**, per the
+charter's section 3.1 on the operator's ruling of 2026-10-02: a judgment the loop makes,
+a model-made one included, is authored by the harness before the loop acts on it,
+carries what was judged and the verdict, and lands turnless where it was made between
+turns. A ranking is the first judgment with no kind, and the loop act that makes one
+names its kind and shapes its payload in full on these precedents, the closed set and
+`Kind` moving in that act and in no earlier one.
 
 **The surprisal's election is a plain boolean and is present rather than
 skipped when false**, which is the opposite election from the field's
@@ -1800,8 +1834,8 @@ the fact exists.
 - A restored message is recorded turnless under `message.restored` with the message
   whole, per section 3: the recorder refuses one carrying a turn or another kind's
   payload, watched to fail when the kind leaves `turn_forbidden` or the message
-  pairing row, and a restoring enter lands the restored exchange with no fault,
-  watched to fail when the harness authors it under the turned kinds again.
+  pairing row. The watch that a restoring enter lands the restored exchange with no
+  fault retires with the record restore, and the save-point code act removes it.
 - A score is recorded turnless with the verdict and the ratio's two terms, per section
   3: the recorder refuses one carrying a turn or another kind's payload, watched to fail
   when the kind leaves `turn_forbidden` or its pairing row, and the port records one per
