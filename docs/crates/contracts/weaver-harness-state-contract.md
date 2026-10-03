@@ -316,11 +316,13 @@ so the session holds one prefix per run and the one in force is the newest run's
 served as the distillate's own shape, envelope and pairs, the pairs being the prefix's
 payload whole because that kind crosses the tee whole under every election. An empty
 list is an answer and not a miss: it says the preloaded record holds no prefix for the
-session, and the open seats the empty identity. **Under a diagnostic load this is the
-one ask the dead-peer clause of section 5 does not convert**: a missed answer refuses
-the enter, because a replay whose bounding cannot be read is not a replay with no
-bounding. The
-ask answers immediately, holding no event and parking never, like `shape`.
+session, and the open seats the empty identity. **Under a diagnostic load this is one
+of the two asks the dead-peer clause of section 5 does not convert**, `restored` being
+the other: a missed answer refuses the enter, because a replay whose bounding cannot be
+read is not a replay with no bounding. **Where the preload door stands the ask parks on
+the seal**, per the clause on the parked replay ask above, so it never answers from a
+store the driver has not yet sealed; where no door stands it answers immediately,
+parking never, like `shape`.
 
 **The `snapshot` ask writes a save point and answers where it stands**, added 2026-10-02
 on the operator's ruling on issue #1 and shaped by the rulings of the same day on #58:
