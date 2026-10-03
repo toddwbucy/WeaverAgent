@@ -252,8 +252,10 @@ pub enum Payload {
     ModelField(ModelField),
     /// The diagnostic elections the load declared, carried by its `load`
     /// event so a record declares the posture it was written in, per
-    /// charter section 3.2.
-    Elections(Elections),
+    /// charter section 3.2. Boxed, as the lineage inside it is (#475): the
+    /// boundary, the cause and the library path of 2026-10-03 took the case
+    /// past the enum's size bound, and a box crosses as its contents do.
+    Elections(Box<Elections>),
     /// The flush's account: the resident token counts before and after the
     /// decode context returned to its prefix, per charter section 3.1's
     /// sixteenth kind. Both from the SPU's confirmation, the one authority

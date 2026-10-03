@@ -94,7 +94,7 @@ fn event(kind: Kind, turn: Option<&str>, payload: Option<Payload>) -> Event {
 /// The elections a load declares. Every `load` event carries them as of
 /// 2026-08-21, so a record says what posture it was written in.
 fn elections() -> Payload {
-    Payload::Elections(weaver_trace::Elections {
+    Payload::Elections(Box::new(weaver_trace::Elections {
         residual_readout: false,
         field: None,
         surprisal: false,
@@ -108,7 +108,7 @@ fn elections() -> Payload {
         library_path: None,
         state_store: Default::default(),
         composer: weaver_trace::LoopIdentity::compiled("test"),
-    })
+    }))
 }
 
 fn user_message(turn: &str) -> Event {
@@ -877,7 +877,7 @@ fn the_load_carries_the_tee_election() {
     r.submit(event(
         Kind::Load,
         None,
-        Some(Payload::Elections(weaver_trace::Elections {
+        Some(Payload::Elections(Box::new(weaver_trace::Elections {
             residual_readout: false,
             field: None,
             surprisal: false,
@@ -897,7 +897,7 @@ fn the_load_carries_the_tee_election() {
             library_path: None,
             state_store: Default::default(),
             composer: weaver_trace::LoopIdentity::compiled("test"),
-        })),
+        }))),
     ))
     .unwrap();
     r.drain().unwrap();
@@ -933,7 +933,7 @@ fn a_declined_surprisal_election_is_written_down() {
     r.submit(event(
         Kind::Load,
         None,
-        Some(Payload::Elections(weaver_trace::Elections {
+        Some(Payload::Elections(Box::new(weaver_trace::Elections {
             residual_readout: false,
             field: None,
             surprisal: true,
@@ -947,7 +947,7 @@ fn a_declined_surprisal_election_is_written_down() {
             library_path: None,
             state_store: Default::default(),
             composer: weaver_trace::LoopIdentity::compiled("test"),
-        })),
+        }))),
     ))
     .unwrap();
     r.drain().unwrap();

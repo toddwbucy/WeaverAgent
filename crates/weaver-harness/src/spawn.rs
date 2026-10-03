@@ -608,10 +608,11 @@ mod death_tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while alive(organ) {
             if std::time::Instant::now() > deadline {
-                drop(nix::sys::signal::kill(
+                // Best effort: the organ is ended either way before the panic.
+                let _ = nix::sys::signal::kill(
                     nix::unistd::Pid::from_raw(organ),
                     nix::sys::signal::Signal::SIGKILL,
-                ));
+                );
                 panic!("the organ outlived its worker");
             }
             std::thread::sleep(std::time::Duration::from_millis(20));

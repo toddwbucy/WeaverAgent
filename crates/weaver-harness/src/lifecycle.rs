@@ -1425,7 +1425,7 @@ impl Harness {
                     Kind::Load,
                     Subsystem::Harness,
                     None,
-                    Some(Payload::Elections(elections)),
+                    Some(Payload::Elections(Box::new(elections))),
                 )
                 .map_err(|_| EnterFailure::BeforeLoad(LifecycleRefusal::Malformed))?;
         }
@@ -2645,7 +2645,7 @@ mod tests {
                 Kind::Load,
                 Subsystem::Harness,
                 None,
-                Some(Payload::Elections(weaver_trace::Elections {
+                Some(Payload::Elections(Box::new(weaver_trace::Elections {
                     residual_readout: false,
                     field: None,
                     surprisal: false,
@@ -2659,7 +2659,7 @@ mod tests {
                     library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
-                })),
+                }))),
             )
             .expect("load");
         if let Some(turn) = turn {

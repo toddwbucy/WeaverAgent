@@ -2146,7 +2146,7 @@ mod tests {
                 Kind::Load,
                 Subsystem::Harness,
                 None,
-                Some(Payload::Elections(weaver_trace::Elections {
+                Some(Payload::Elections(Box::new(weaver_trace::Elections {
                     residual_readout: false,
                     field: None,
                     surprisal: false,
@@ -2160,7 +2160,7 @@ mod tests {
                     library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
-                })),
+                }))),
             )
             .expect("load");
         let mut turn_ordinal = 0u64;
@@ -2279,7 +2279,7 @@ mod tests {
                 Kind::Load,
                 Subsystem::Harness,
                 None,
-                Some(Payload::Elections(weaver_trace::Elections {
+                Some(Payload::Elections(Box::new(weaver_trace::Elections {
                     residual_readout: false,
                     field: None,
                     surprisal: false,
@@ -2293,7 +2293,7 @@ mod tests {
                     library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
-                })),
+                }))),
             )
             .expect("load");
         let mut turn_ordinal = 0u64;
@@ -2407,7 +2407,7 @@ mod tests {
                 Kind::Load,
                 Subsystem::Harness,
                 None,
-                Some(Payload::Elections(weaver_trace::Elections {
+                Some(Payload::Elections(Box::new(weaver_trace::Elections {
                     residual_readout: false,
                     field: None,
                     surprisal: false,
@@ -2421,7 +2421,7 @@ mod tests {
                     library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
-                })),
+                }))),
             )
             .expect("load");
         let mut turn_ordinal = 0u64;
@@ -2561,7 +2561,7 @@ mod tests {
                 Kind::Load,
                 Subsystem::Harness,
                 None,
-                Some(Payload::Elections(weaver_trace::Elections {
+                Some(Payload::Elections(Box::new(weaver_trace::Elections {
                     residual_readout: false,
                     field: None,
                     surprisal: false,
@@ -2575,7 +2575,7 @@ mod tests {
                     library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
-                })),
+                }))),
             )
             .expect("load");
         let mut turn_ordinal = 0u64;
@@ -2757,7 +2757,7 @@ mod tests {
                 Kind::Load,
                 Subsystem::Harness,
                 None,
-                Some(Payload::Elections(weaver_trace::Elections {
+                Some(Payload::Elections(Box::new(weaver_trace::Elections {
                     residual_readout: false,
                     field: None,
                     surprisal: false,
@@ -2771,7 +2771,7 @@ mod tests {
                     library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
-                })),
+                }))),
             )
             .expect("load");
         let mut turn_ordinal = 0u64;
@@ -2970,7 +2970,7 @@ mod tests {
                 Kind::Load,
                 Subsystem::Harness,
                 None,
-                Some(Payload::Elections(weaver_trace::Elections {
+                Some(Payload::Elections(Box::new(weaver_trace::Elections {
                     residual_readout: false,
                     field: None,
                     surprisal: false,
@@ -2984,7 +2984,7 @@ mod tests {
                     library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
-                })),
+                }))),
             )
             .expect("load");
         let mut turn_ordinal = 0u64;
@@ -3159,7 +3159,7 @@ mod tests {
                 Kind::Load,
                 Subsystem::Harness,
                 None,
-                Some(Payload::Elections(weaver_trace::Elections {
+                Some(Payload::Elections(Box::new(weaver_trace::Elections {
                     residual_readout: false,
                     field: Some(2),
                     surprisal: false,
@@ -3173,7 +3173,7 @@ mod tests {
                     library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
-                })),
+                }))),
             )
             .expect("load");
         let mut turn_ordinal = 0u64;
@@ -3406,7 +3406,7 @@ mod tests {
                 Kind::Load,
                 Subsystem::Harness,
                 None,
-                Some(Payload::Elections(weaver_trace::Elections {
+                Some(Payload::Elections(Box::new(weaver_trace::Elections {
                     residual_readout: false,
                     field: None,
                     surprisal: false,
@@ -3420,7 +3420,7 @@ mod tests {
                     library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
-                })),
+                }))),
             )
             .expect("load");
         let mut turn_ordinal = 0u64;
@@ -3688,7 +3688,7 @@ mod tests {
                 Kind::Load,
                 Subsystem::Harness,
                 None,
-                Some(Payload::Elections(weaver_trace::Elections {
+                Some(Payload::Elections(Box::new(weaver_trace::Elections {
                     residual_readout: false,
                     field: None,
                     surprisal: false,
@@ -3702,7 +3702,7 @@ mod tests {
                     library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
-                })),
+                }))),
             )
             .expect("load");
         let mut turn_ordinal = 0;
@@ -3908,7 +3908,7 @@ mod tests {
                 Kind::Load,
                 Subsystem::Harness,
                 None,
-                Some(Payload::Elections(weaver_trace::Elections {
+                Some(Payload::Elections(Box::new(weaver_trace::Elections {
                     residual_readout: false,
                     field: None,
                     surprisal: false,
@@ -3922,7 +3922,7 @@ mod tests {
                     library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
-                })),
+                }))),
             )
             .expect("load");
         let mut turn_ordinal = 0u64;
@@ -4232,7 +4232,7 @@ mod tests {
                 Kind::Load,
                 Subsystem::Harness,
                 None,
-                Some(Payload::Elections(weaver_trace::Elections {
+                Some(Payload::Elections(Box::new(weaver_trace::Elections {
                     residual_readout: false,
                     field: None,
                     surprisal: false,
@@ -4246,7 +4246,7 @@ mod tests {
                     library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
-                })),
+                }))),
             )
             .expect("load");
         (recorder, author)

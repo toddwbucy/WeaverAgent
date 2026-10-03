@@ -227,7 +227,7 @@ pub enum Payload {
     ModelRequest(Box<serde_json::value::RawValue>),
     ModelOutput(ModelOutput),
     ModelField(ModelField),
-    Elections(Elections),
+    Elections(Box<Elections>),
     Flush(FlushCounts),
     Elision(ElisionSpan),
     Refusal(Box<serde_json::value::RawValue>),
