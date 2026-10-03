@@ -63,15 +63,15 @@ behind a boundary the kernel enforces.
 
 ## Architecture
 
-A deployed agent is four processes on one machine, and its own `weaver-admin`, the
+A deployed agent is four processes on one machine (five where the trace sink is a file,
+the trace relay being the fifth), and its own `weaver-admin`, the
 agent's lifecycle driver and management plane. Admin runs per verb as root, from the
 operator's root shell or, for admin-con, through a strict sudo rule that grants fixed
 command lines with no caller-chosen argument, and is not resident while the agent
 serves. No supervisor is part of the agent. By the Spec
 merged in #72 (2026-10-03), the agent leaves systemd: admin's start step does custody
 itself, and restart or hardening belongs to whoever packages the agent. The code
-follows since #77, with the relay in #80. The deploy scripts still assume systemd units until #79, so
-no box is redeployed from main before #79 lands. The verbs
+landed in #75, #77, #80 and #79. The verbs
 are the application layer's primitives, and their orchestration is interior to the
 agent. Every organ is one agent's own: a second agent gets its
 own set, and managing several agents belongs to WeaverWeb or a separate application, not
@@ -235,12 +235,13 @@ with the trace in its own group (#56); small fixes are #39. The scripts are
 `decommission.sh`, and `deploy/turn.py <agent> "<text>"` sends one turn through a
 loaded agent's gate as the operator's uid with no sudo. The installed stack lives under
 `/etc/weaver/admin/<agent>/` (each agent's config root), `/etc/weaver/stack/` (the
-scripts' record of the install, which admin never reads), `<prefix>/bin` and
-`/var/log/weaver`. Each agent runs under its own OS user, started by admin's start step
-(#77). Until #79 lands, the scripts and runbooks still describe a transient systemd unit
-`weaver-worker@<agent>.service`, and #79 rewrites them. Run logs of redeploys are
-kept under `docs/project/redeploy-*.md`. The thinkpad runs a stack built from this tree
-at the split and completes turns through the gate (2026-09-30 15:33).
+scripts' record of the install, which admin never reads) and `<prefix>/bin`. Each
+agent's declaration, prompt, `admin.log` and `worker.log` live in the operator's
+`~/.weaveragent/<agent>/`. Each agent runs under its own OS user, started by admin's
+start step, with no systemd unit. `create-agent.sh` writes the connector's strict sudo
+rule. Taking down a single agent is still by hand (#35). A box installed before #50
+migrates by `REDEPLOY.md` section 8, which is the thinkpad's case, since it runs a stack
+built at the split. Run logs of redeploys are kept under `docs/project/redeploy-*.md`.
 
 ### Reading command output
 
