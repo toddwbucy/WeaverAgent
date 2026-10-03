@@ -270,8 +270,10 @@ pub enum LifecycleAnswer {
     GateStopped,
     Validated,
     /// The agent's state and, where a run stands, the load's facts, per
-    /// `weaver-types-Spec` section 4 as of 2026-09-04. `load` is absent
-    /// exactly where the state is `Absent` or `Unloaded`.
+    /// `weaver-types-Spec` section 4 as of 2026-09-04. `load` is present only
+    /// where an observation of a standing run answered it: it is absent where
+    /// the state is `Absent` or `Unloaded`, and the `load` verb's own answer,
+    /// `Idle` from a ready aggregate, carries none.
     State {
         state: AgentState,
         /// Boxed on the same ground as the enter's payload, per the same
@@ -282,9 +284,10 @@ pub enum LifecycleAnswer {
 }
 
 /// **What a standing run was built from**, per `weaver-types-Spec` section
-/// 4.2 as of 2026-09-04: the floor's shape of what the `load` event names,
-/// answered to the observation exchange from the run and never read from the
-/// record.
+/// 4.2, answered to the observation exchange from the run and never read from
+/// the record. It overlaps what the `load` event names without being its shape:
+/// it carries the session, run and artifact, and lacks the event's stack,
+/// lineage, reset and prompt digest.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoadFacts {
     pub session: SessionId,

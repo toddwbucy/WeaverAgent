@@ -71,16 +71,17 @@ crosses no process line, so it authenticates nothing. Read-out not drafted.
 
 ## The two external contracts
 
-**These two are the program's public surface**, written by the ruling of
-2026-08-01 for an outside consumer and for nothing else. A frontend or any other
-consumer builds against these and against no other document on this site.
-weaver-web, in its own repository beside this one since 2026-09-26, is the first to
-build against them, and being first is what turned the sufficiency claim into a
-checkable one. **It found one reach these two do not cover.** Turns and the record are
-here. The lifecycle verbs are not: the operator contract governs the record and says
-outright that running the admin binary is running the crate rather than a channel it
-governs, so an outside consumer has no page for that surface and builds it on deployment
-fact. The ask for one is filed.
+**These two are the program's public surface**, written by the ruling of 2026-08-01 for
+an outside consumer and for nothing else. A frontend or any other consumer builds
+against these and against no other document on this site. weaver-web, in its own
+repository beside this one since 2026-09-26, is the first to build against them, and
+being first is what turned the sufficiency claim into a checkable one. **It found one
+reach these two did not cover**, the lifecycle verbs, which the operator contract left
+to running the admin binary as root. The answer is not a deployment fact: WeaverWeb
+invokes admin nowhere, its earlier sudo path having been deleted, and only its admin-con
+connector will reach the verbs, through a lifecycle socket admin holds per agent and
+admits by role, on the operator's rulings of 2026-10-02 on WeaverAgent#50. The operator
+contract carries that socket once the #50 Spec act merges.
 
 ### weaver-gate-world-contract
 

@@ -7,7 +7,7 @@ agent. Code is written against it under the gates of Working Process section 6.
 **Document ID:** `weaver-admin-Spec`
 **Parent:** `weaver-admin-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #734
+**Landing PR:** #65
 
 ---
 
@@ -262,16 +262,19 @@ signal and nothing more. Reading it as loaded-and-idle would also contradict the
 charter's own rule that the state publishes only on a ready aggregate, since a
 unit is running well before any aggregate returns.
 
-**So `show` answers through the observation exchange, as of 2026-09-04, and residency
-is read only where no worker answers.** `show` dials the agent's coordination
-socket and opens `Observe`, per `weaver-admin-harness-contract` section 3, and what
-returns is the harness's own word: `Unloaded` before any enter or after a leave, `Idle`
-or `Active` with the load's facts beside it where a run stands, the same facts the
-`load` event carries, read from the run and never from the record. Where the socket does
-not exist or nothing answers the dial, there is no exchange to open, and this crate
-reports `Unloaded` from that absence, which is the one place residency is read and it is
-read as the absence of a worker and not as a state. A name with no root refuses
-`NoSuchAgent` as every verb does, and whether a declaration validates stays
+**So `show` answers through the observation exchange, as of 2026-09-04, and residency is
+read only where no worker answers.** `show` dials the agent's coordination socket and
+opens `Observe`, per `weaver-admin-harness-contract` section 3, and what returns is the
+harness's own word: `Unloaded` before any enter or after a leave, `Idle` or `Active`
+with the load's facts beside it where a run stands, read from the run and never from the
+record. **Those facts are `LoadFacts`, which overlaps the `load` event and is not its
+shape**, per `weaver-types-Spec` section 4.2: it carries the session, run and artifact
+the event carries in its envelope or not at all, and lacks the event's stack, lineage,
+reset and prompt digest, so a consumer that stores both stores two shapes. Where the
+socket does not exist or nothing answers the dial, there is no exchange to open, and
+this crate reports `Unloaded` from that absence, which is the one place residency is
+read and it is read as the absence of a worker and not as a state. A name with no root
+refuses `NoSuchAgent` as every verb does, and whether a declaration validates stays
 `validate`'s own answer, since no verb chains another. No verb answers for more than the
 one agent named, admin being one agent's organ on the operator's ruling of 2026-10-01,
 and managing several WeaverWeb's or a separate application's.
@@ -1874,21 +1877,24 @@ resolved once to its canonical path, the look not following a link at the direct
 itself, and every read goes through the directory as opened at the judgment. **The
 directory is closed to everyone but its owner**: its owner must be exactly the uid the
 root's `operator` key names, and a directory any other uid owns, the agent's or the
-member's account among them, refuses. Once WeaverWeb's admin-con is the caller under
-#50's roles, WeaverWeb decides which person may act as the agent's operator, and the box
-never takes the server's word for which local account owns the agent's data ("the box
-decides", toddwbucy/WeaverTools#6). The directory
-grants no permission to group or other and carries no access-control entry beyond its
-mode, so neither of the agent's uids, whatever passage the territory's provisioning
-opened through the directories above, can list it, enter it or read a file in it. **The
-entries this crate reads are held closed**: `agent.toml` and the prompt file are each a
-regular file and never a link, owned by that uid or by uid 0, and writable by no
-group or other. Their read bits are not judged, the closed directory already denying
-every other principal the path, so a file an editor writes under an ordinary umask
-passes. Other entries are the operator's and are not read. **Every directory above it is
-held closed as the root's ancestors are**, each owned by uid 0 or by the operator and
-writable by no group or other unless its sticky bit is set, since a directory another
-principal could write would let it rename the judged directory away. Any failure refuses
+member's account among them, refuses. **The operator is one person in the operator
+role**, on the operator's ruling of 2026-10-02 on #59, named in three places that never
+disagree. On the box it is the uid the root's `operator` key names, which owns the
+agent's data. Under #50 it is the operator role on the agent's lifecycle socket. In
+WeaverWeb it is that person's authenticated identity. WeaverWeb authenticates the person
+and never chooses the box's operator uid, which is the box's to name and never taken
+from a server ("the box decides", toddwbucy/WeaverTools#6). The directory grants no
+permission to group or other and carries no access-control entry beyond its mode, so
+neither of the agent's uids, whatever passage the territory's provisioning opened
+through the directories above, can list it, enter it or read a file in it. **The entries
+this crate reads are held closed**: `agent.toml` and the prompt file are each a regular
+file and never a link, owned by that uid or by uid 0, and writable by no group or other.
+Their read bits are not judged, the closed directory already denying every other
+principal the path, so a file an editor writes under an ordinary umask passes. Other
+entries are the operator's and are not read. **Every directory above it is held closed
+as the root's ancestors are**, each owned by uid 0 or by the operator and writable by no
+group or other unless its sticky bit is set, since a directory another principal could
+write would let it rename the judged directory away. Any failure refuses
 `BoundaryUnverified`, naming the path on stderr, before a value is read, and a
 declaration directory that does not exist or is not a directory refuses the same way,
 the operator's provisioning being incomplete rather than the agent absent. The deploy
@@ -2355,8 +2361,9 @@ Each names what settles it, and none is this Spec's to settle alone.
   builder's choice bounded by what that section fixes, and the natural candidate is the
   same dialect the agent config elected, one syntax for everything the operator writes,
   per the common-syntax direction the composability batch recorded on the working list.
-  - **`AgentState` and `AgentSummary` field lists.** The floor names the types in
-  `lifecycle-answer` and their fields are satellites there, consumed here as drawn. -
+  - **`AgentState` and `LoadFacts` field lists.** The floor names the types in
+  `lifecycle-answer` and their fields are satellites there, consumed here as drawn.
+  `AgentSummary` left with `list` on the operator's ruling of 2026-10-02. -
   **The two values the argument vector does not carry.** Section 6's vector carries the
   socket path, the two placed organ binaries, the SPU's the agent's own, the loop file
   where a declaration names
