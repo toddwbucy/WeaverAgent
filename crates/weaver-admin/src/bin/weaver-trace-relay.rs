@@ -23,18 +23,43 @@ const LIFETIME_FD: RawFd = 6;
 const RUN_LOCK_FD: RawFd = 9;
 
 /// The request's bound, per `weaver-types-Spec` section 3.1: one line of at
-/// most 4096 bytes, newline included, within five seconds of the connection.
+/// most 4096 bytes, newline included.
 const REQUEST_BOUND: usize = 4096;
-const REQUEST_WAIT: Duration = Duration::from_secs(5);
 
-/// A heartbeat line while idle, and the bound on one write to the reader, a
-/// reader that takes nothing for that long being dropped and logged.
-const HEARTBEAT: Duration = Duration::from_secs(5);
-const WRITE_WAIT: Duration = Duration::from_secs(5);
-
-/// How much of the sink one pass reads, and how often the loop looks.
+/// How much of the sink one tick copies, and how often the loop looks. One
+/// chunk per tick at most, so the loop always returns to the lifetime pipe,
+/// the door and the reader's hangup, however large the backlog.
 const CHUNK: usize = 64 * 1024;
-const TICK_MS: i32 = 250;
+const TICK_MS: i32 = 50;
+
+/// The relay's three waits, per `weaver-admin-Spec` section 6: the request
+/// within five seconds of the connection, a heartbeat after five seconds
+/// idle, and five seconds for the reader to take each queued write, a reader
+/// that misses it being dropped. Fixed in production; a test shortens them
+/// through `WEAVER_TRACE_RELAY_TEST_MS`, which the start step never sets, its
+/// spawn clearing the environment.
+#[derive(Clone, Copy)]
+struct Timing {
+    request: Duration,
+    heartbeat: Duration,
+    write: Duration,
+}
+
+impl Timing {
+    fn read() -> Self {
+        let production = Duration::from_secs(5);
+        let wait = std::env::var("WEAVER_TRACE_RELAY_TEST_MS")
+            .ok()
+            .and_then(|ms| ms.parse::<u64>().ok())
+            .map(Duration::from_millis)
+            .unwrap_or(production);
+        Timing {
+            request: wait,
+            heartbeat: wait,
+            write: wait,
+        }
+    }
+}
 
 fn main() -> std::process::ExitCode {
     // **The first act**: every handed descriptor is kept close-on-exec, the
@@ -81,6 +106,7 @@ fn main() -> std::process::ExitCode {
     };
     let mut relay = Relay {
         reader,
+        timing: Timing::read(),
         log: Log {
             file: log,
             agent,
@@ -131,29 +157,93 @@ fn wall_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// The one reader currently following the record.
+/// The one reader currently following the record. Its socket is
+/// non-blocking, and what the relay owes it waits in `pending`, written as the
+/// reader takes it within the write wait.
 struct Follower {
     socket: std::os::unix::net::UnixStream,
     uid: u32,
+    /// The sink offset through which bytes have been queued.
     position: u64,
+    /// Bytes queued and not yet taken, and when the oldest was queued.
+    pending: Vec<u8>,
+    pending_since: Option<Instant>,
+    /// When the reader last took a write, for the heartbeat.
     last_write: Instant,
-    /// Bytes of an unfinished line have crossed, so no line of the relay's
-    /// own may be written until that line completes.
+    /// Bytes of an unfinished line have been queued, so no line of the
+    /// relay's own may follow until that line completes.
     mid_line: bool,
+}
+
+impl Follower {
+    fn queue(&mut self, bytes: &[u8]) {
+        if self.pending.is_empty() {
+            self.pending_since = Some(Instant::now());
+        }
+        self.pending.extend_from_slice(bytes);
+    }
+
+    fn queue_line(&mut self, control: TraceControl) {
+        let mut line = serde_json::to_string(&TraceLine {
+            trace_stream: control,
+        })
+        .unwrap_or_default();
+        line.push('\n');
+        self.queue(line.as_bytes());
+    }
+
+    /// Writes what the reader will take now without blocking. Answers
+    /// `false` where the reader has gone, or missed the write wait on a
+    /// queued write.
+    fn flush(&mut self, wait: Duration) -> bool {
+        while !self.pending.is_empty() {
+            match self.socket.write(&self.pending) {
+                Ok(0) => return false,
+                Ok(written) => {
+                    self.pending.drain(..written);
+                    self.last_write = Instant::now();
+                    // The wait is the whole queued write's, from its queuing
+                    // to its last byte, so a trickling reader misses it.
+                    if self.pending.is_empty() {
+                        self.pending_since = None;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => return false,
+            }
+        }
+        self.pending_since
+            .is_none_or(|since| since.elapsed() < wait)
+    }
 }
 
 struct Relay {
     reader: u32,
+    timing: Timing,
     log: Log,
     sink: std::fs::File,
     follower: Option<Follower>,
 }
 
 impl Relay {
-    /// The loop: accept on the door, follow the sink, and end on the
-    /// lifetime pipe's end-of-file, which is the worker's death.
+    /// The loop: accept on the door, follow the sink one chunk per tick at
+    /// most, and end on the lifetime pipe's end-of-file, which is the
+    /// worker's death, a slow reader never holding the loop away from it.
     fn serve(&mut self, listener: &OwnedFd, lifetime: &OwnedFd) {
         loop {
+            let (follower_fd, follower_events) = match &self.follower {
+                Some(follower) => (
+                    follower.socket.as_raw_fd(),
+                    nix::libc::POLLRDHUP
+                        | if follower.pending.is_empty() {
+                            0
+                        } else {
+                            nix::libc::POLLOUT
+                        },
+                ),
+                None => (-1, 0),
+            };
             let mut polls = [
                 nix::libc::pollfd {
                     fd: listener.as_raw_fd(),
@@ -166,11 +256,8 @@ impl Relay {
                     revents: 0,
                 },
                 nix::libc::pollfd {
-                    fd: self
-                        .follower
-                        .as_ref()
-                        .map_or(-1, |follower| follower.socket.as_raw_fd()),
-                    events: nix::libc::POLLRDHUP,
+                    fd: follower_fd,
+                    events: follower_events,
                     revents: 0,
                 },
             ];
@@ -183,10 +270,13 @@ impl Relay {
                 return;
             }
             if polls[1].revents != 0 {
-                // The worker's death: tell the follower by closing, and say why.
+                // The worker's death: the follower's connection is closed and
+                // the reason logged, no stream line carrying one.
                 if let Some(follower) = self.follower.take() {
                     self.log
                         .record("ended", Some(follower.uid), "the worker exited");
+                } else {
+                    self.log.record("ended", None, "the worker exited");
                 }
                 return;
             }
@@ -233,7 +323,7 @@ impl Relay {
                 .record("refused", Some(uid), "not the declared trace reader");
             return;
         }
-        let request = match read_request(&socket) {
+        let request = match read_request(&socket, self.timing.request) {
             Ok(request) => request,
             Err(why) => {
                 self.log.record("refused", Some(uid), why);
@@ -244,7 +334,9 @@ impl Relay {
             self.log.record("refused", Some(uid), why);
             return;
         }
-        let _ = socket.set_write_timeout(Some(WRITE_WAIT));
+        if socket.set_nonblocking(true).is_err() {
+            return;
+        }
         if let Some(old) = self.follower.take() {
             self.log.record(
                 "replaced",
@@ -252,18 +344,16 @@ impl Relay {
                 "a newer connection from the reader",
             );
         }
-        let header = TraceControl::Header(identity(&self.sink));
         let mut follower = Follower {
             socket,
             uid,
             position: request.offset,
+            pending: Vec::new(),
+            pending_since: None,
             last_write: Instant::now(),
             mid_line: false,
         };
-        if write_line(&mut follower, header).is_err() {
-            self.log.record("disconnect", Some(uid), "at the header");
-            return;
-        }
+        follower.queue_line(TraceControl::Header(identity(&self.sink)));
         self.log.record(
             "connect",
             Some(uid),
@@ -272,13 +362,28 @@ impl Relay {
         self.follower = Some(follower);
     }
 
-    /// **Follows the sink**: the record's own bytes from the follower's
-    /// position, whole lines where it can, a heartbeat while idle, and
-    /// `truncated` then the end where the file shrank below the position.
+    /// **Follows the sink, one chunk per tick at most**: the reader's queued
+    /// bytes are written as it takes them, a reader missing the write wait is
+    /// dropped, and only an empty queue takes the next chunk of whole lines, a
+    /// heartbeat while idle, or `truncated` then the end where the file shrank
+    /// below the position. A truncation met mid-line closes without the line,
+    /// since a line of the relay's own may not land inside a record.
     fn follow(&mut self) {
         let Some(mut follower) = self.follower.take() else {
             return;
         };
+        if !follower.flush(self.timing.write) {
+            self.log.record(
+                "disconnect",
+                Some(follower.uid),
+                "the reader did not take a write in time",
+            );
+            return;
+        }
+        if !follower.pending.is_empty() {
+            self.follower = Some(follower);
+            return;
+        }
         let size = match self.sink.metadata() {
             Ok(metadata) => metadata.len(),
             Err(_) => {
@@ -288,69 +393,58 @@ impl Relay {
             }
         };
         if size < follower.position {
-            let _ = write_line(&mut follower, TraceControl::Truncated { size });
+            if !follower.mid_line {
+                follower.queue_line(TraceControl::Truncated { size });
+                let _ = follower.flush(self.timing.write);
+            }
             self.log
                 .record("truncated", Some(follower.uid), &format!("to {size} bytes"));
             return;
         }
-        while follower.position < size {
+        if follower.position < size {
             let want = ((size - follower.position) as usize).min(CHUNK);
             let mut buffer = vec![0u8; want];
-            let read = match std::os::unix::fs::FileExt::read_at(
-                &self.sink,
-                &mut buffer,
-                follower.position,
-            ) {
-                Ok(0) | Err(_) => break,
-                Ok(read) => read,
-            };
-            buffer.truncate(read);
-            // Whole lines only, unless one line outruns a chunk, so no line of
-            // the relay's own ever lands inside a record.
-            let send = match buffer.iter().rposition(|b| *b == b'\n') {
-                Some(last) => last + 1,
-                None if read == CHUNK => read,
-                None => break,
-            };
-            if follower.socket.write_all(&buffer[..send]).is_err() {
-                self.log
-                    .record("disconnect", Some(follower.uid), "while streaming");
-                return;
+            if let Ok(read) =
+                std::os::unix::fs::FileExt::read_at(&self.sink, &mut buffer, follower.position)
+                && read > 0
+            {
+                buffer.truncate(read);
+                // Whole lines only, unless one line outruns a chunk.
+                let send = match buffer.iter().rposition(|b| *b == b'\n') {
+                    Some(last) => Some(last + 1),
+                    None if read == CHUNK => Some(read),
+                    None => None,
+                };
+                if let Some(send) = send {
+                    follower.queue(&buffer[..send]);
+                    follower.position += send as u64;
+                    follower.mid_line = buffer[send - 1] != b'\n';
+                }
             }
-            follower.position += send as u64;
-            follower.mid_line = buffer[send - 1] != b'\n';
-            follower.last_write = Instant::now();
+        } else if !follower.mid_line && follower.last_write.elapsed() >= self.timing.heartbeat {
+            follower.queue_line(TraceControl::Heartbeat { wall_ms: wall_ms() });
         }
-        if !follower.mid_line && follower.last_write.elapsed() >= HEARTBEAT {
-            let heartbeat = TraceControl::Heartbeat { wall_ms: wall_ms() };
-            if write_line(&mut follower, heartbeat).is_err() {
-                self.log
-                    .record("disconnect", Some(follower.uid), "at a heartbeat");
-                return;
-            }
+        if !follower.flush(self.timing.write) {
+            self.log.record(
+                "disconnect",
+                Some(follower.uid),
+                "the reader did not take a write in time",
+            );
+            return;
         }
         self.follower = Some(follower);
     }
 }
 
-/// Writes one `TraceLine`, newline-terminated, as one write.
-fn write_line(follower: &mut Follower, control: TraceControl) -> std::io::Result<()> {
-    let mut line = serde_json::to_string(&TraceLine {
-        trace_stream: control,
-    })
-    .map_err(std::io::Error::other)?;
-    line.push('\n');
-    follower.socket.write_all(line.as_bytes())?;
-    follower.last_write = Instant::now();
-    Ok(())
-}
-
 /// **Reads the one request**, per `weaver-types-Spec` section 3.1: a
 /// `TraceRequest` JSON object on one newline-terminated line of at most 4096
 /// bytes, within five seconds of the connection, and nothing after the newline.
-fn read_request(socket: &std::os::unix::net::UnixStream) -> Result<TraceRequest, &'static str> {
+fn read_request(
+    socket: &std::os::unix::net::UnixStream,
+    wait: Duration,
+) -> Result<TraceRequest, &'static str> {
     use std::io::Read as _;
-    let deadline = Instant::now() + REQUEST_WAIT;
+    let deadline = Instant::now() + wait;
     let mut line = Vec::with_capacity(REQUEST_BOUND);
     let mut byte = [0u8; 1];
     loop {

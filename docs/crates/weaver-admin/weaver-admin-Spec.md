@@ -1649,20 +1649,25 @@ agent's own among them, is refused by the socket's mode at `connect` and never r
 the peer check, so the relay logs refusals of group members that are not the reader, and
 the kernel's refusal of everyone else leaves no record of this crate's. **The newest
 connection from that reader replaces the old**, the relay holding one follower at a time
-inside its one process, so the replaced follower ends with a reason, the replacement is
-logged, and never more than one follower stands (the item carried on #50,
-issuecomment-5969438713). The stream is `weaver-types-Spec` section 3.1's: a
-`TraceHeader` line, then the file's own lines from the verified position exactly as
-written, then following with a heartbeat while idle. **The relay parses no event**: it
-hashes one record's bytes to verify a position and copies bytes, whole lines where it
-can, so no line of its own lands inside a record. A heartbeat follows five seconds idle,
-and a reader that takes nothing for five seconds is dropped and logged. Its operations,
-connects, replacements, refusals and disconnects, go to the operations log through a
-descriptor the start step passes, never a line per streamed record. **Its descriptors
-stand at fixed numbers**: the listener at 3, the read-only sink at 4, the operations log
-at 5, the lifetime pipe's read end at 6 and the run lock's description at 9, and its
-vector is the declared reader's uid, the agent's name and the boundary file's digest,
-the last two for its log lines.
+inside its one process, so the replaced follower's connection is closed, the reason
+logged since no stream line carries one, and never more than one follower stands (the
+item carried on #50, issuecomment-5969438713). The stream is `weaver-types-Spec` section
+3.1's: a `TraceHeader` line, then the file's own lines from the verified position
+exactly as written, then following with a heartbeat while idle. **The relay parses no
+event**: it hashes one record's bytes to verify a position and copies bytes, whole lines
+where it can, so no line of its own lands inside a record, and a truncation met inside a
+line longer than one chunk closes the connection without its `truncated` line for the
+same reason. **It copies at most one chunk per pass of its loop**, so however large the
+backlog and however slow the reader, the loop returns to the lifetime pipe, the door and
+the reader's hangup every pass, and the relay never outlives its worker behind a reader.
+A heartbeat follows five seconds idle, and a queued write the reader has not taken whole
+within five seconds of its queuing drops the reader, logged. Its operations, connects,
+replacements, refusals and disconnects, go to the operations log through a descriptor
+the start step passes, never a line per streamed record. **Its descriptors stand at
+fixed numbers**: the listener at 3, the read-only sink at 4, the operations log at 5,
+the lifetime pipe's read end at 6 and the run lock's description at 9, and its vector is
+the declared reader's uid, the agent's name and the boundary file's digest, the last two
+for its log lines.
 
 **The trace stream across runs is stated, because a reader depends on it.** **A run's
 sink is not a new file**: the declaration names one sink per agent, which section 5
@@ -1686,15 +1691,16 @@ end. The worker never writes it, so the relay's read blocks for the run's life a
 returns end-of-file only when the last holder of the write end is gone, which is the
 worker's death, clean or not, the kernel closing the descriptor whatever killed the
 process. The relay exits on that end-of-file, closing its follower's connection and
-logging why, since no stream line carries a reason. **The one
-remaining failure mode runs the other way**: if the relay dies first, the worker serves
-on, the trace keeps landing in the sink, and the door is closed until the next load,
-which the reader sees as a refused connection and the operations log records. **The
-relay test watches the start step's copy and not an organ's**, because an organ that
-somehow held the write end would die with the worker by its death signal anyway, which
-masks that case, so the watch that can fail is the start step forgetting to close its
-own copy. Neither process waits on the other, and the start step's detach leaves both
-reparented to pid 1.
+logging why, since no stream line carries a reason. **The one remaining failure mode
+runs the other way**: if the relay dies first, the worker serves on, the trace keeps
+landing in the sink, and the door is closed until the next load, which the reader sees
+as a refused connection, and which nothing records, a dead relay writing no line. **The
+relay's tests watch the pipe's end ending the relay**, behind a slow reader too. The
+start step closing its own copy once the worker holds the write end, which an organ's
+copy would mask since an organ dies with the worker by its death signal, is held at
+review here, the load path needing a provisioned box, and watched by the deploy act's
+end-to-end run, where the relay must exit with the unload. Neither process waits on the
+other, and the start step's detach leaves both reparented to pid 1.
 
 **Worker death is observed, not reported.** The channel's closure is the observation,
 per `weaver-organ-channel` section 2, and the run lock's release is the fact `show` and

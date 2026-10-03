@@ -47,8 +47,13 @@ fn high(fd: RawFd) -> OwnedFd {
 }
 
 /// Starts the relay over a sink holding `contents`, telling it the reader is
-/// `reader`.
+/// `reader`, at production timing.
 fn start(tag: &str, contents: &[u8], reader: u32) -> Relay {
+    start_timed(tag, contents, reader, None)
+}
+
+/// As `start`, the relay's three waits set to `wait_ms` where given.
+fn start_timed(tag: &str, contents: &[u8], reader: u32, wait_ms: Option<u64>) -> Relay {
     let dir = std::env::temp_dir().join(format!("weaver-relay-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -83,6 +88,9 @@ fn start(tag: &str, contents: &[u8], reader: u32) -> Relay {
         (lock_fd.as_raw_fd(), 9),
     ];
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_weaver-trace-relay"));
+    if let Some(ms) = wait_ms {
+        command.env("WEAVER_TRACE_RELAY_TEST_MS", ms.to_string());
+    }
     command
         .args([reader.to_string(), "alpha".to_string(), "b0b0".to_string()])
         .stdin(std::process::Stdio::null())
@@ -300,4 +308,179 @@ fn the_relay_dies_with_the_worker() {
     let _ = line(&mut reader);
     assert_eq!(line(&mut reader), "", "the follower is ended");
     assert!(logged(&relay).contains("the worker exited"));
+}
+
+/// A sink of many short lines, about `bytes` long.
+fn backlog(bytes: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes + 64);
+    let mut n = 0u64;
+    while out.len() < bytes {
+        out.extend_from_slice(format!("{{\"n\":{n},\"pad\":\"xxxxxxxxxxxxxxxx\"}}\n").as_bytes());
+        n += 1;
+    }
+    out
+}
+
+/// A reader that takes 4 KiB every 200 ms in its own thread, as a slow
+/// connection resuming from zero on a large trace does.
+fn trickle(relay: &Relay) -> std::thread::JoinHandle<()> {
+    let mut stream = UnixStream::connect(&relay.socket).unwrap();
+    stream.write_all(b"{\"offset\":0}\n").unwrap();
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buffer = [0u8; 4096];
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+        for _ in 0..200 {
+            match stream.read(&mut buffer) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => std::thread::sleep(Duration::from_millis(200)),
+            }
+        }
+    })
+}
+
+/// **The relay dies with its worker however slow its reader**, per Spec
+/// section 6: with a large backlog and a reader trickling it, the lifetime
+/// pipe's end still ends the relay within a bound, the loop returning to the
+/// pipe every tick and never draining the backlog in one pass. Perturbation:
+/// copy the whole backlog before returning to poll and the relay outlives
+/// its worker past the bound, holding the run lock.
+#[test]
+fn the_relay_dies_with_its_worker_behind_a_slow_reader() {
+    let mut relay = start("slow-lifetime", &backlog(8 << 20), me());
+    let reader = trickle(&relay);
+    std::thread::sleep(Duration::from_millis(300));
+    drop(relay.lifetime.take());
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while relay.child.try_wait().unwrap().is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the relay outlived its worker behind a slow reader"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // The reader thread ends on its own once the closed socket drains.
+    drop(reader);
+}
+
+/// **A reader that does not take a queued write in time is dropped**: with
+/// the write wait shortened, a trickling reader misses it and is logged.
+/// Perturbation: reset the wait on every partial write and the trickler is
+/// never dropped.
+#[test]
+fn a_reader_too_slow_for_the_write_wait_is_dropped() {
+    let relay = start_timed("slow-reader", &backlog(8 << 20), me(), Some(300));
+    let reader = trickle(&relay);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !logged(&relay).contains("did not take a write in time") {
+        assert!(std::time::Instant::now() < deadline, "{}", logged(&relay));
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = reader.join();
+}
+
+/// **A request that arrives late is refused**, the wait shortened for the
+/// test. Perturbation: drop the request's deadline and the silent connection
+/// holds the door.
+#[test]
+fn a_late_request_is_refused() {
+    let relay = start_timed("late", b"{\"a\":1}\n", me(), Some(300));
+    let stream = UnixStream::connect(&relay.socket).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut reader = BufReader::new(stream);
+    assert_eq!(line(&mut reader), "", "closed without a byte");
+    assert!(logged(&relay).contains("arrived late"));
+}
+
+/// **A heartbeat follows the idle wait**, shortened for the test, once the
+/// record is streamed. Perturbation: drop the heartbeat and the read times
+/// out.
+#[test]
+fn a_heartbeat_follows_while_idle() {
+    let relay = start_timed("heartbeat", b"{\"a\":1}\n", me(), Some(300));
+    let mut reader = dial(&relay, "{\"offset\":0}\n");
+    let _header = line(&mut reader);
+    assert_eq!(line(&mut reader), "{\"a\":1}\n");
+    let heartbeat = line(&mut reader);
+    assert!(
+        heartbeat.starts_with("{\"trace_stream\":{\"heartbeat\":"),
+        "{heartbeat}"
+    );
+}
+
+/// **The position's edges refuse**: an offset past the end, offset zero
+/// carrying a digest, and an offset past zero carrying none. Perturbation:
+/// skip any one check and its case streams.
+#[test]
+fn the_positions_edges_refuse() {
+    let first = b"{\"a\":1}\n";
+    let relay = start("edges", first, me());
+    for (request, why) in [
+        (
+            format!(
+                "{{\"offset\":999,\"prior_digest\":\"{}\"}}\n",
+                digest(first)
+            ),
+            "past the end",
+        ),
+        (
+            format!("{{\"offset\":0,\"prior_digest\":\"{}\"}}\n", digest(first)),
+            "carries no prior digest",
+        ),
+        (
+            format!("{{\"offset\":{}}}\n", first.len()),
+            "needs its prior digest",
+        ),
+    ] {
+        let mut refused = dial(&relay, &request);
+        assert_eq!(line(&mut refused), "", "{why}");
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(logged(&relay).contains(why), "{why}: {}", logged(&relay));
+    }
+}
+
+/// **A line longer than one chunk streams whole**, unbroken by any line of
+/// the relay's own. Perturbation: hold every chunk without a newline and the
+/// long line never arrives.
+#[test]
+fn a_line_longer_than_a_chunk_streams_whole() {
+    let mut long = format!("{{\"pad\":\"{}\"}}", "y".repeat(100 * 1024)).into_bytes();
+    long.push(b'\n');
+    let relay = start("long-line", &long, me());
+    let mut reader = dial(&relay, "{\"offset\":0}\n");
+    let _header = line(&mut reader);
+    assert_eq!(line(&mut reader).as_bytes(), long.as_slice());
+}
+
+/// **The header carries the birth time exactly where the filesystem reports
+/// one**: compared against this test's own `statx` of the sink.
+/// Perturbation: always write zero and the absent case carries a value.
+#[test]
+fn the_header_carries_the_birth_time_where_reported() {
+    let relay = start("birth", b"{\"a\":1}\n", me());
+    let mut reader = dial(&relay, "{\"offset\":0}\n");
+    let header: serde_json::Value = serde_json::from_str(&line(&mut reader)).unwrap();
+    let c_path = std::ffi::CString::new(relay.sink.as_os_str().as_encoded_bytes()).unwrap();
+    // SAFETY: statx into a buffer this test owns.
+    let mut buffer: nix::libc::statx = unsafe { std::mem::zeroed() };
+    let rc = unsafe {
+        nix::libc::statx(
+            nix::libc::AT_FDCWD,
+            c_path.as_ptr(),
+            0,
+            nix::libc::STATX_BTIME,
+            &mut buffer,
+        )
+    };
+    let reported = rc == 0 && buffer.stx_mask & nix::libc::STATX_BTIME != 0;
+    let birth = &header["trace_stream"]["header"]["birth_ns"];
+    if reported {
+        let expected =
+            buffer.stx_btime.tv_sec as i128 * 1_000_000_000 + buffer.stx_btime.tv_nsec as i128;
+        assert_eq!(birth.as_i64().map(i128::from), Some(expected), "{header}");
+    } else {
+        assert!(birth.is_null(), "absent where unreported: {header}");
+    }
 }
