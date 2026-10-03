@@ -231,11 +231,17 @@ caller's groups may do. **No group is ever shared across agents**, because a sha
 group would let one agent's connector reach another agent's sockets, against
 individuation and the ruling that a connector is one agent's own appendage
 (toddwbucy/WeaverTools#6). **Before serving a byte, this binary checks the socket it was
-handed**, on the ruling of the same date on the fifth question: one `fstat` of the
-descriptor the init system passed, which must be owned by root, grouped to
-`weaver-<agent>-admin` and of mode `0660`. Anything else refuses, is logged with what
-was found, and serves nothing, so a misconfigured unit never fails silently by serving
-callers it should not.
+handed**, on the ruling of the same date on the fifth question. Under per-connection
+activation the descriptor the init system passes is the accepted connection, whose own
+`fstat` reports the anonymous socket object rather than the listening path's owner,
+group and mode, so the check reads the listener: the connection's local address names
+the socket's path, and this binary opens the agent's `/run/weaver-<agent>/` directory
+with `O_DIRECTORY` and `O_NOFOLLOW`, requires it root-owned and writable by no one else,
+and judges the socket entry in it with one `fstatat` that does not follow a link. The
+entry must be a socket, owned by root, grouped to `weaver-<agent>-admin` and of mode
+`0660`, and the path the address names must be that entry. Anything else refuses, is
+logged with what was found, and serves nothing, so a misconfigured unit never fails
+silently by serving callers it should not.
 
 **At the lifecycle socket, authorization is a role, judged by the peer credential before
 the request is read.** The agent's role list, `roles.toml` in its root, per section 4
@@ -2107,7 +2113,8 @@ shapes what happens inside the agent, is the declaration and the facts the `load
 names, and it is the tuple. The role list says who may reach the agent from outside, as
 its OS identity does, so it stays out of the declaration's digest, and granting access
 never makes the agent another agent. It is declared all the same: its digest is written
-on every socket request's line in `admin.log`, `show` carries it in the `show` rework,
+on every socket request's line in `admin.log`, the `show` rework adds it to `show`'s
+answer, which carries no boundary member until then,
 and the enter hands it to the harness for the `load` event's member marked boundary.
 
 **Why one role list per agent, and not one file for every agent on the box**, a
@@ -2513,7 +2520,7 @@ the request, and the tests the code act owes are each perturbation-verified:
   invocation.
 - **A socket of the wrong mode or group serves nothing**, watched by a socket handed to
   the binary at `0666` and by one grouped to another agent's `weaver-<agent>-admin`:
-  each refuses before a byte is read, and the log names what the `fstat` found. The
+  each refuses before a byte is read, and the log names what the `fstatat` found. The
   perturbation drops the check, and the misconfigured socket serves.
 - **A missing role list refuses by name**, watched by a root with no `roles.toml` and
   by one whose file carries a wildcard or an unknown key: `validate` and `load` refuse
@@ -2566,9 +2573,9 @@ Each names what settles it, and none is this Spec's to settle alone.
   file is `roles.toml`, explicit and required. The role list is boundary, outside the
   declaration's digest and declared on the load event. The trace socket has one declared
   reader, the newest connection replacing the old, framed as a header and raw lines with
-  a heartbeat. The handed socket is checked by `fstat` before a byte is served. The log
-  is split, a change to the agent on the trace with its cause and boundary activity in
-  `admin.log`. What stays the code act's is spelling and mechanism: whether the
+  a heartbeat. The listening socket is checked by `fstatat` before a byte is served. The
+  log is split, a change to the agent on the trace with its cause and boundary activity
+  in `admin.log`. What stays the code act's is spelling and mechanism: whether the
   connection arrives as the standard streams or a passed descriptor, the heartbeat's
   interval and line, and `admin.log`'s mode and group within what section 8 fixes.
 

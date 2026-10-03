@@ -589,7 +589,11 @@ the agent**, on the operator's rulings of 2026-10-03 on #63. The constitution, w
 shapes what happens inside the agent, is the declaration and the facts above, and it is
 the tuple. The boundary, who may reach the agent from outside, is the agent's role list,
 and the `load` event carries its digest as a separate member marked boundary, so every
-run declares its boundary without the role list joining the tuple. A verb that changes
+run declares the boundary it was loaded under without the role list joining the tuple.
+The role list is read at every socket connection, so an edit while the agent stays
+loaded governs later access at once, and admin's operations log, whose every line names
+the role list's digest in force, is where the boundary that governed each access is
+declared. A verb that changes
 the agent, a load, an unload or a stop, is recorded with its cause, the caller's kernel
 identity and the person it claimed to act for, the claim never an authorization input.
 The harness writes all of it from facts admin hands over, and boundary activity that

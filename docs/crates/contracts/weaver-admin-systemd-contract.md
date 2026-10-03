@@ -248,21 +248,21 @@ and holds no second route to start one. It guarantees that the agent's identity 
 boundary were verified before the ask, so the manager is never asked to resolve what
 this program should have refused.
 
-**The init system guarantees**, and this is the reliance set a reviewer checks, that
-a started unit runs at the declared `User=` from its first instruction with no
-interval at any other identity, that the declared sandbox properties are in force
-before that instruction rather than applied after, that a unit name is unique so a
-second start for a live agent fails rather than racing, that the unit's runtime
-directory exists before that first instruction and is removed with its contents when
-the unit stops, that the unit's cgroup arrives with the unit and is removed with it,
-and that a stopped unit stays stopped without the program watching it. **For the admin
-sockets** it guarantees that the listening socket exists with the owner, group and mode
-the socket unit declares before any caller can connect, that each accepted connection
-starts its own service instance as root, and that a service instance under
-`KillMode=process` takes down only its main process when it ends. Admin does not lean
-on the first of these alone: it checks the handed socket's owner, group and mode by one
-`fstat` before serving a byte, per `weaver-admin-Spec` section 2, so a unit that
-declared them wrongly serves nothing.
+**The init system guarantees**, and this is the reliance set a reviewer checks, that a
+started unit runs at the declared `User=` from its first instruction with no interval at
+any other identity, that the declared sandbox properties are in force before that
+instruction rather than applied after, that a unit name is unique so a second start for
+a live agent fails rather than racing, that the unit's runtime directory exists before
+that first instruction and is removed with its contents when the unit stops, that the
+unit's cgroup arrives with the unit and is removed with it, and that a stopped unit
+stays stopped without the program watching it. **For the admin sockets** it guarantees
+that the listening socket exists with the owner, group and mode the socket unit declares
+before any caller can connect, that each accepted connection starts its own service
+instance as root, and that a service instance under `KillMode=process` takes down only
+its main process when it ends. Admin does not lean on the first of these alone: it
+checks the listening socket's owner, group and mode by one `fstatat` in the agent's
+`/run/weaver-<agent>/` before serving a byte, per `weaver-admin-Spec` section 2, so a
+unit that declared them wrongly serves nothing.
 
 **The runtime directory's removal is the load-bearing half of that list**, because
 it is what makes the coordination socket's pathname unable to outlive its worker.
