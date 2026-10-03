@@ -465,13 +465,14 @@ started holding the run lock, the member alone, the member and the relay, or tho
 worker whose observation answers `Unloaded`, no enter having reached it, and an
 invocation lock nobody holds. **A run is stranded only when all three hold**: the run
 lock held, the invocation lock free, and the observation `Unloaded` or silent inside the
-dial's bound, silent where no worker was forked. The invocation lock is what tells a
-stranded run from a healthy start: a load in flight holds it for the whole verb, the
-enter's 900-second wait included, so a worker still admitting its weights is never
-mistaken for an abandoned one. The three facts make it safe to end: `unload` meeting it
-ends every holder by the escalation below and answers provisioned-and-unloaded, and
-`load` meeting it ends it the same way, logs the reap, takes the released lock, and
-proceeds, where a worker answering `Idle` or `Active` refuses the load `AgentRunning`.
+dial's bound and the observation's below, silent where no worker was forked. The
+invocation lock is what tells a stranded run from a healthy start: a load in flight
+holds it for the whole verb, the enter's 900-second wait included, so a worker still
+admitting its weights is never mistaken for an abandoned one. The three facts make it
+safe to end: `unload` meeting it ends every holder by the escalation below and answers
+provisioned-and-unloaded, and `load` meeting it ends it the same way, logs the reap,
+takes the released lock, and proceeds, where a worker answering `Idle` or `Active`
+refuses the load `AgentRunning`.
 
 **The record's instrument stays a test.** `show` on an admitted agent whose run lock is
 held by a worker that has not yet answered enter answers through the exchange and
@@ -633,13 +634,15 @@ not conduct.
 
 **Every answer a verb waits for under its invocation lock has a bound, and the stop's
 is sixty seconds from the directive.** The enter's is section 2's 900 seconds, the
-leave's sixty above, and `show`'s observation the dial's bound under its shared hold.
+leave's sixty above, and the observation's five seconds from the `Observe`, after the
+dial's bound, which covers only the connect.
 A worker that accepts stop and answers nothing inside its bound is not ended, a stop
 being no unload: the verb refuses `Unanswered`, exits, and releases the invocation
 lock with the run as it stands, so `show` and `unload` reach the agent next, and
-`unload`'s own bounds and escalation are the recovery. An observation that goes
-unanswered is `show`'s silence, read as section 3's stranded-run fact where the
-invocation lock is free. **No verb holds the invocation lock past a bound it states**,
+`unload`'s own bounds and escalation are the recovery. **An observation unanswered
+inside its bound** refuses `show` with `Unanswered` too, releasing the shared hold, and
+claims no state, and inside `load` or `unload` it is the silence section 3's
+stranded-run fact reads. **No verb holds the invocation lock past a bound it states**,
 since the invocation ignores the catchable signals and a wait without end would leave
 every later verb refusing `InvocationInFlight` and `show` answering `InTransition`.
 The interior verbs of section 2 take the same rule by the recipe.
@@ -1717,7 +1720,10 @@ A blocking connect would therefore leave the bound stated here and unheld,
 which is the failure the election exists to prevent, reached by a different
 road. The flag is cleared once the connection is made, because the enter
 directive and the answer it waits for are blocking work and a nonblocking read
-would report an empty channel as a fault rather than waiting.
+would report an empty channel as a fault rather than waiting. Blocking is not
+unbounded: every answer read after the connect is read under its exchange's bound of
+section 3, the enter's, the leave's, the stop's or the observation's, so clearing the
+flag never leaves a verb waiting without end.
 
 ```graph
 node: admin-dial-retries-within-a-bound
@@ -2622,6 +2628,11 @@ perturbation-verified:
   left and does not exit: the escalation signals the lock's holders and the answer
   waits on the release. The perturbation answers on the leave alone, and the worker
   still runs.
+- **A wedged observation is bounded**, watched by a stand-in worker that accepts
+  `Observe` and never answers: `show` refuses `Unanswered` once the observation's bound
+  expires, and a following `unload` takes the invocation lock. The perturbation drops
+  the observation's bound, `show` never returns, and its shared hold keeps every
+  exclusive verb refusing `InvocationInFlight`.
 - **A wedged stop is bounded**, watched by a stand-in worker that accepts stop and
   never answers: the verb refuses `Unanswered` once the stop's bound expires and a
   following `unload` takes the invocation lock. The perturbation drops the stop's
