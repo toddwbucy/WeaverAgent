@@ -109,7 +109,8 @@ line is a Unix domain socket, and there is no listening network socket anywhere.
   that agent's config root `<base>/<agent>/` (base from `WEAVER_ADMIN_CONFIG`, default
   `/etc/weaver/admin`), opens its trace sink and hands it to the worker, and names its
   SPU by that root's `spu-binary`. Its start step takes the run lock and stands the
-  trace relay, the state member and the worker (Spec section 6, #72).
+  state member and the worker, and the trace relay where the sink is a file (Spec
+  section 6, #72).
 - **`weaver-internal`** holds internal tools that run inside the loop (the calculator).
   A tool that binds a listening port is external and reaches the agent through the gate;
   one that does not is internal.
