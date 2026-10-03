@@ -47,17 +47,17 @@ reached over the decode socket behind a provider interface, so the harness drive
 generation without hosting it.
 
 **There is no privilege window.** The harness runs inside the worker process, and the
-worker runs as the agent uid for the whole of its life. `weaver-admin-PRD` section 7
-has admin holding no capability of its own and asking the init system to start the
-worker as a transient unit carrying the agent's `User=`, so the process begins at
-`weaver-<name>` and never holds anything above it. Everything the harness does happens
-under that identity, and the descriptors arrive into it.
+worker runs as the agent uid for the whole of its life. `weaver-admin-PRD` section 7 has
+admin's start step drop to the agent's account before it executes the worker, on the
+operator's ruling of 2026-10-03 on #50, so the process begins at `weaver-<name>` and
+never holds anything above it. Everything the harness does happens under that identity,
+and the descriptors arrive into it.
 
 **Custody rests on possession of the passed descriptor and not on the receiving
 identity.** An earlier reading of this section had the worker begin under the admin
 principal, receive its descriptors, and drop, and it argued the ordering of that
-drop. The drop is retired: the init system starts the unit at the agent identity, so
-there is no interval in which worker code runs as anything else and the ordering has
+drop. That drop is retired: admin's start step drops before the exec, so there is no
+interval in which worker code runs as anything else and the ordering has
 no subject. What survives, and what this paragraph is kept to say, is the reason the
 ordering never mattered. A descriptor passed over a Unix socket is a capability
 rather than a permission, the kernel runs no permission check at the receiving end,
@@ -246,18 +246,17 @@ them unloads it. Activity is the only lifecycle layer the harness owns.
 back.** Authorizing a load or unload, opening the record, starting and stopping the
 worker unit, rolling back what its own acts built, and supervising worker and gate
 lifetimes are `weaver-admin`'s, which the operator runs with root, one invocation per
-verb, per that charter's section 1 as recut on 2026-08-05. The party that is
-long-lived where the harness is mortal is the init system, which holds the unit and
-outlives every invocation that drives it. The harness is one of the things a load
-assembles, not the thing that assembles it, and it cannot drive the early steps of
-its own creation, because the worker spawn runs before the harness is running as the
-harness at all. What the
-harness does own is the interior of the enter and leave directives: admin holds one
-seam and no channel to the SPU or the gate, per `weaver-admin-PRD` section 6, so the
-harness fans admin's directive out along its own seams, collects each organ's
-confirmation, and returns one aggregate. Sequencing the organs is the harness's
-because the seams are, and the previous tree carried roughly four and a half thousand
-lines of multi-agent coordination inside the opposite reading.
+verb, per that charter's section 1 as recut on 2026-08-05. Nothing of the program's is
+long-lived where the harness is mortal: the agent leaves systemd on 2026-10-03 (#50),
+the worker detaches into its own session, and restarting it is the packaging's. The
+harness is one of the things a load assembles, not the thing that assembles it, and it
+cannot drive the early steps of its own creation, because the worker spawn runs before
+the harness is running as the harness at all. What the harness does own is the interior
+of the enter and leave directives: admin holds one seam and no channel to the SPU or the
+gate, per `weaver-admin-PRD` section 6, so the harness fans admin's directive out along
+its own seams, collects each organ's confirmation, and returns one aggregate. Sequencing
+the organs is the harness's because the seams are, and the previous tree carried roughly
+four and a half thousand lines of multi-agent coordination inside the opposite reading.
 
 **Network ingress goes to `weaver-gate`.** The harness binds no socket the world
 can reach and has no first-contact surface. Work arrives already authenticated.
@@ -270,11 +269,11 @@ one. The outward count became two with the egress ruling of 2026-08-07 and the
 inward count is unchanged.
 
 **Boundary verification and lifecycle supervision go to `weaver-admin`.** Provisioning
-is the operator's rather than admin's, per `weaver-admin-PRD` section 1, and there is
-no privileged startup window to assign. The operator produces the configuration file and
+is the operator's rather than admin's, per `weaver-admin-PRD` section 1, and there is no
+privileged startup window to assign. The operator produces the configuration file and
 admin reads it, per `weaver-admin-PRD` section 2: this crate receives what the enter
-carries, the sink's descriptor beside it, and the loop's path on the unit's vector, and
-holds no parser and no path. **The `reads` edge this paragraph declared to
+carries, the sink's descriptor beside it, and the loop's path on the worker's vector,
+and holds no parser and no path. **The `reads` edge this paragraph declared to
 `agent-config` retired on 2026-09-04, per issue #311**, because it recorded a read the
 crate does not perform and no chartered workflow exercises, which is the reserved slot
 in graph form. It returns, declared here again, with the tool workflow that consumes the

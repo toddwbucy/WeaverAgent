@@ -24,15 +24,16 @@ management plane, beside the gate as its data plane. Managing several agents
 belongs to WeaverWeb or a separate application, not here. Two facts put
 lifecycle here: an engine cannot drive the early steps of its own creation,
 because the worker spawn runs before the engine exists at all - and the acts a
-verb performs, starting a unit under another identity, opening a sink the
+verb performs, starting a worker under another identity, opening a sink the
 agent could not, are root's acts, belonging to the one seat that holds root.
 
 It is not a daemon, and a reader expecting one should spend that assumption
 here. The crate is an invocation rather than a resident: it runs
 when the operator runs a verb, exits when the verb answers, and holds nothing
-between verbs. What persists across invocations is what the init system and
-the filesystem already hold - the standing party in the agent's lifetime is
-the init system, which this program inherits rather than shadows.
+between verbs. What persists across invocations is what the filesystem and the
+kernel already hold: a running worker holds a lock the kernel releases at its death.
+Since 2026-10-03 (#50) no init system stands in the agent's lifetime: the agent starts
+like an appliance, and supervision belongs to whoever packages and deploys it.
 
 **It verifies the agent's boundary and authors none of it.** The regulation
 model rests on the agent being an operating-system user whose reach the kernel
@@ -103,10 +104,11 @@ outlives every invocation. All three are on
 4. **Resolve the session and open the sink.** Which session is being loaded is
    admin's decision - the engine is structurally unable to make it, never
    learning a path - and the descriptor is obtained here, under root.
-5. **Ask the init system to start the worker** as a transient unit carrying
-   the agent's identity and the worker's provisioning. The unit receives no
-   descriptor: the worker starts bare, and its first act is to bind the
-   coordination socket inside its own sandbox.
+5. **Run the start step**, root's act since 2026-10-03 (#50): make the agent's
+   runtime directory, take the run lock, stand the trace relay and the state member,
+   and start the worker in its own session under the agent's account. The worker
+   starts bare of the sink, and its first act is to bind the coordination socket in
+   its runtime directory.
 6. **Dial the channel, direct enter, receive the aggregate.** The directive
    carries the session identity, the run reference minted for this load, the
    binding's kind, the trace descriptor, the model binding, and - where the
@@ -166,10 +168,8 @@ good, over any artifact it touches.
 
 ## What is not built
 
-- **The status ask.** `show` refuses today: the init system reports
-  three unit values and the lifecycle has four agent states, and a translation
-  between them is where invention would enter. The observation exchange
-  retires the refusal when it lands.
+- **The start step.** The Spec moved to it on 2026-10-03 (#50), and the code still
+  starts a systemd transient unit until the act that removes `unit.rs` lands.
 - **The log's format and retention.** Deferred on stated grounds: a format
   decided before a rollback has run is a format decided from no measurement.
   The artifact is named regardless, so the privileged half of the lifecycle

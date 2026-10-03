@@ -14,19 +14,19 @@ one's Spec pass. Code is written against it under the gates of Working Process s
 
 ## 0. What this document is
 
-Build instructions for `weaver-types`: the module layout, the item signatures, the
-file format the operator writes, the wire encoding the organ channels carry, and
-the elections a builder would otherwise invent. It is derived from
-`weaver-types-PRD` and from every contract that draws this crate, which is
-eight: the coordination agreement, the residency agreement with its decode and
-classify siblings, the gate agreement, and the three outward boundaries,
-`weaver-admin-operator-contract` and `weaver-admin-systemd-contract` each
-drawing the refusal alone and `weaver-gate-world-contract` drawing the identity
-pair with the gate instruction. **The trace agreement is not among them and an
-earlier wording counted it.** Its vocabulary clause answers `weaver-types` with
-nothing in as many words, so the count stood at six while naming a contract that
-draws none of this crate and omitting three that do, and the identity pair it
-credited to the operator boundary left that clause on 2026-08-05.
+Build instructions for `weaver-types`: the module layout, the item signatures, the file
+format the operator writes, the wire encoding the organ channels carry, and the
+elections a builder would otherwise invent. It is derived from `weaver-types-PRD` and
+from every contract that draws this crate, which is seven: the coordination agreement,
+the residency agreement with its decode and classify siblings, the gate agreement, and
+the two outward boundaries, `weaver-admin-operator-contract` drawing the refusal and the
+trace door's shapes and `weaver-gate-world-contract` drawing the identity pair with the
+gate instruction, `weaver-admin-systemd-contract` having retired with systemd on
+2026-10-03 (#50). **The trace agreement is not among them and an earlier wording counted
+it.** Its vocabulary clause answers `weaver-types` with nothing in as many words, so the
+count stood at six while naming a contract that draws none of this crate and omitting
+three that do, and the identity pair it credited to the operator boundary left that
+clause on 2026-08-05.
 
 Level discipline. The charter says what the crate holds and why. This document
 says how it is represented, which for this crate means two representation
@@ -916,6 +916,101 @@ predicate is weakened. The second is named here because the rule is defined here
 and owed by `weaver-gate-Spec`, which is the G7 shape read forward rather than a
 test this crate can pretend to run.
 
+### 3.1 The boundary file, the trace door's wire, and a change's cause
+
+**Admin's lifecycle has no wire of its own**, on the operator's rulings of 2026-10-03 on
+#50: a caller that is not the operator at the shell reaches the verbs through a sudo
+rule the operator installs, which grants this agent's connector fixed `weaver-admin`
+command lines and reads nothing else from the caller, per `weaver-admin-Spec` section 2.
+What crosses is the command line the rule names and the one `lifecycle-answer` or
+`lifecycle-refusal` object it prints, the floor's existing shapes, so this section
+carries no request type for it. **The trace door has one**, and the boundary file and a
+change's cause are the two other shapes the act adds.
+
+```rust
+pub struct BoundaryFile {
+    pub trace_reader: Principal,
+}
+
+pub enum Principal {
+    User(String),
+    Group(String),
+}
+
+pub struct TraceRequest {
+    pub offset: u64,
+    pub prior_digest: Option<String>,
+}
+
+pub struct TraceHeader {
+    pub device: u64,
+    pub inode: u64,
+    pub birth_ns: i128,
+}
+
+pub enum TraceControl {
+    Header(TraceHeader),
+    Heartbeat { wall_ms: u64 },
+    IdentityChanged(TraceHeader),
+    Truncated { size: u64 },
+}
+
+pub struct Cause {
+    pub uid: u32,
+}
+```
+
+**`BoundaryFile` is the agent's `roles.toml`, and it keeps only the trace door's
+half**, on the operator's rulings of 2026-10-03 on #50 and #63. The lifecycle half
+#63 drafted, a map of role groups to verbs, does not return: who may issue which verb is
+the sudo rule's, the box's own boundary, and never a file admin reads. What stays is the
+one `trace_reader` the trace relay admits, in a root-owned file in the agent's root,
+`/etc/weaver/admin/<agent>/roles.toml`, required, an unknown key refused. It is boundary
+and never constitution, per `weaver-admin-Spec` section 9. **The trace reader names its
+kind**: `Principal` is a user or a group, written `{ user = "..." }` or
+`{ group = "..." }`, exactly one, because a bare name could resolve to both a user and a
+group of that name and so to two principals, and an implicit precedence would decide who
+receives the agent's whole record. A user admits that uid alone, and a group admits a
+peer whose groups include it. **The name resolves at `validate` and `load`**, and a
+trace reader that is the agent's or its state member's account, or a group either
+belongs to, refuses, per `weaver-admin-PRD` section 7's rule that no grant names the
+agent, so the agent never reaches its own record through the boundary.
+
+```toml
+trace-reader = { user = "weaver-<agent>-admincon" }
+```
+
+**`TraceRequest` names where the stream starts**: a byte offset that falls on a record
+boundary, and the sha256 hex of the record that ends at that offset, absent only at
+offset zero. The relay refuses a position whose prior record does not hash to the
+digest, so a reader resuming after a rotation or a truncation learns that its position
+no longer names the record it read rather than receiving bytes from another file. **The
+stream is a `TraceHeader` line and then the trace's own lines exactly as written**, on
+the operator's ruling of 2026-10-03 on #63's fourth question: the header names the
+file's identity, its device, inode and birth time in nanoseconds since the epoch, so a
+reader holds what it is reading. At the end of the file the stream keeps following, with
+a heartbeat line while idle. **Every line the stream adds is a `TraceControl`**, so the
+reader in another repository parses one fixed shape: a JSON object whose one member is
+`trace_stream`, externally tagged by case, which no trace event carries, the envelope
+having no such member. The four lines are
+`{"trace_stream":{"header":{"device":...,"inode":...,"birth_ns":...}}}` first,
+`{"trace_stream":{"heartbeat":{"wall_ms":...}}}` while idle,
+`{"trace_stream":{"identity_changed":{...}}}` when the sink's path comes to name another
+file than the one the run writes, and `{"trace_stream":{"truncated":{"size":...}}}` when
+the run's file shrinks below the stream's position, which leaves its identity unchanged.
+After either of the last two the stream ends, and the reader resumes with a new request
+from offset zero, so no follower stays positioned past the end of a file that was
+rewritten. Every other line is the trace's own, byte for byte.
+
+**`Cause` is who changed the agent, and it is the uid sudo reports and nothing else**,
+on the operator's ruling of 2026-10-03 on #50: admin reads it from sudo's own
+`SUDO_UID`, or takes uid 0 for the operator at a root shell, and reads nothing from the
+caller, neither an argument it chose nor its standard input, so the rule's command lines
+stay fixed. Which person asked is WeaverWeb's record and never the agent's. It rides the
+enter payload as `cause`, and the `Leave` and `Stop` directives as theirs, per section
+4.2, and the harness records it on the `load`, `unload` or stop event, per
+`weaver-trace-Spec` section 3, admin never writing the trace.
+
 ## 4. The organ wire vocabulary
 
 **What this section owns is loop 0's definitions in full, plus the carriage of
@@ -1140,8 +1235,8 @@ ruling.
 ```rust
 pub enum LifecycleDirective {
     Enter { payload: Box<EnterPayload> },
-    Leave,
-    Stop,
+    Leave { cause: Cause },
+    Stop { cause: Cause },
     Observe,
     Admit { instruction: SpuInstruction },
     Release,
@@ -1210,7 +1305,7 @@ pub enum LifecycleRefusal {
     DeviceCannotAdmit,
     NoResidency,
     BindFailed,
-    PriorUnitUnreaped,
+    AgentRunning,
     OrganRefused { organ: RefusingOrgan, reason: Box<LifecycleRefusal> },
     ActivityNotAtRest,
 }
@@ -1227,6 +1322,8 @@ pub struct EnterPayload {
     pub stack: BTreeMap<String, String>,
     pub declaration: String,
     pub identity_file: String,
+    pub boundary: String,
+    pub cause: Cause,
 }
 
 pub struct Lineage {
@@ -1251,7 +1348,6 @@ pub struct Reset {
 
 pub enum ResetReason {
     NoCleanUnload,
-    UnitFailed,
 }
 
 pub enum EnterBinding {
@@ -1301,12 +1397,12 @@ point still owes the record its reset, on the operator's ruling of 2026-10-02 on
 that an unclean stop resets to the latest known-good save point and records the reset:
 admin resolves it from its own clean-unload marker, per `weaver-admin-Spec` section 4,
 naming the prior run and the reason, `NoCleanUnload` where the marker says the run never
-unloaded cleanly and `UnitFailed` where the unit's result also says it failed, and the
-harness authors the reset event from it. It never carries the save point's path, which
-admin read under its own custody and the harness has no business holding, on the same
-discipline as the sink. The harness names the save point on the load event, its last
-turn a recorded fact that numbers nothing, a restoring run's turns starting at one per
-`weaver-harness-Spec` section 6.1, without opening anything, the save point having
+unloaded cleanly, `UnitFailed` having retired with the unit it read on 2026-10-03 (#50),
+and the harness authors the reset event from it. It never carries the save point's path,
+which admin read under its own custody and the harness has no business holding, on the
+same discipline as the sink. The harness names the save point on the load event, its
+last turn a recorded fact that numbers nothing, a restoring run's turns starting at one
+per `weaver-harness-Spec` section 6.1, without opening anything, the save point having
 reached the member by descriptor at the spawn per `weaver-admin-Spec` section 6. `stack`
 is the digests of the organ binaries admin started and of the agent's SPU and the gate
 it hands the worker to fork, keyed by the binary's name, so the load event names the
@@ -1315,22 +1411,29 @@ beside it, per `weaver-trace-PRD` section 3.1. Both are admin's facts and the ha
 authors them as it authors the store's. **`declaration` rides beside them as of
 2026-09-04**, the digest of the declaration file as admin read it at the inventory, so
 the harness names it on the load event and answers it to an observation without holding
-the file, per issue #435. **`identity_file` rides beside it as of 2026-10-02**, the
-digest of the prompt file the declaration names, sha256 hex of the bytes admin read at
-the inventory and seated, per section 2: the declaration's digest covered the prompt
-while the prompt was a string inside it, and stopped covering it the day the prompt
-became its own file, so the second digest is what keeps the load event able to say which
-prompt the operator's files held. It is additive, a member the harness copies onto the
-load event and reads nowhere else. **`LoadFacts` does not take it**: `LoadFacts` is the
-shape `show` answers the operator with under `weaver-admin-operator-contract`, which
-this act does not move, so the record carries the prompt's digest and the observation
-does not, and the observation's answer is widened only in an act that moves that
-contract. **The digest joins `show` in the later act that reworks `show` as a whole**,
-on the operator's ruling of 2026-10-02 on this act's fifth question, once the admin
-freeze lifts: bundled with #52's observation time and the load confirmation, each organ
-listed and confirmed up with what it runs, as one change to
-`weaver-admin-operator-contract` and one WeaverWeb adjustment. Until then the digest
-rides on the load event, which WeaverWeb already receives.
+the file, per issue #435. **`boundary` and `cause` ride beside them as of 2026-10-03**,
+on the operator's rulings on #50 and #63: `boundary` is the sha256 hex of the agent's
+`roles.toml` as admin read it at the inventory, which the harness copies onto the load
+event as a member marked boundary and never constitution, so each run's record declares
+who could read it without the boundary file joining the tuple or the declaration's
+digest. `cause` is section 3.1's `Cause`, which the harness records on the load event,
+as the `Leave` and `Stop` directives' own causes are recorded on the unload and stop
+events. **`identity_file` rides beside them as of 2026-10-02**, the digest of the prompt
+file the declaration names, sha256 hex of the bytes admin read at the inventory and
+seated, per section 2: the declaration's digest covered the prompt while the prompt was
+a string inside it, and stopped covering it the day the prompt became its own file, so
+the second digest is what keeps the load event able to say which prompt the operator's
+files held. It is additive, a member the harness copies onto the load event and reads
+nowhere else. **`LoadFacts` does not take it**: `LoadFacts` is the shape `show` answers
+the operator with under `weaver-admin-operator-contract`, which this act does not move,
+so the record carries the prompt's digest and the observation does not, and the
+observation's answer is widened only in an act that moves that contract. **The digest
+joins `show` in the later act that reworks `show` as a whole**, on the operator's ruling
+of 2026-10-02 on this act's fifth question, once the admin freeze lifts: bundled with
+#52's observation time and the load confirmation, each organ listed and confirmed up
+with what it runs, as one change to `weaver-admin-operator-contract` and one WeaverWeb
+adjustment. Until then the digest rides on the load event, which WeaverWeb already
+receives.
 
 **`EnterBinding` is the kind resolved, and a directive disagreeing with its
 kind is unrepresentable rather than refused.** The config holds the kind as
@@ -1357,32 +1460,14 @@ from: weaver-types
 to: types-enter-binding-disagreement-unrepresentable
 ```
 
-**`PriorUnitUnreaped` is added because `BindFailed` was answering for two
-conditions.** A unit whose process exited non-zero leaves its name registered
-with the manager, and every later start under that name refuses until it is
-reaped. That is what refused the load, and it is a different fact from a socket
-that would not bind, which is what `BindFailed` names.
-
-**What the case claims is exactly what the state reports and no more.** It says
-a prior process exited non-zero and its name is still held. It does not say the
-worker never bound, or never started, or died before serving, because `failed`
-carries none of that: a unit that bound its socket, served, and exited non-zero
-later reads `failed` too. An earlier wording of this clause said the worker was
-never there, which is the error `weaver-admin-systemd-contract` section 3 warns
-against in the neighbouring value, a program rendering a state as one of the
-conditions it covers.
-
-**It is expressible because it is the one thing the boundary says plainly.**
-`weaver-admin-systemd-contract` section 3 measures what the init system reports
-and finds most of it ambiguous: a duplicate unit name and a malformed property
-fail with the same status, and `inactive` covers three conditions. `failed`
-covers one, a unit whose process exited non-zero, so a refusal resting on that
-value rests on the only reading the boundary gives without inference.
-
-**The case is not derived from the start ask's status**, which the same section
-measures as unable to say which failure it was. It comes from the state ask that
-follows, which is where a program may ask a narrow question and get a narrow
-answer.
+**`AgentRunning` replaces `PriorUnitUnreaped`**, on the operator's ruling of
+2026-10-03 on #50 that the agent leaves systemd. `PriorUnitUnreaped` named a failed unit
+whose name the manager still held, and with no unit there is no name to hold. What a
+second `load` meets instead is the run lock of `weaver-admin-Spec` section 3, held by a
+running worker and released by the kernel at its death, so the refusal says one thing
+and no more: a worker of this agent holds the lock now. It does not say the worker is
+serving or healthy, which `show` answers through the observation exchange. A worker that
+died leaves no lock behind, so no case for a dead one is needed and none is kept.
 
 **`FaultReport` is two members, and the custody rule of apex section 5.2 is
 the whole argument for the split.** The `case` is what the harness itself
@@ -2331,6 +2416,9 @@ the claim divides are both open and section 6 carries them together.
 
 ## 6. Open elections
 
+- **The trace door's wire, opened 2026-10-02 on #50 and ruled 2026-10-03 on #50 and
+  #63.** Section 3.1 fixes the boundary file, the stream's framing and its control
+  lines, and the cause. What stays the code act's is the heartbeat's interval.
 - **`Generation`'s shape settled at section 4.4 and this bullet retires with it.**
   The emission, the canonical content, and the finish are shaped in the floor
   because the harness consumes them, and the measurement splices because nothing

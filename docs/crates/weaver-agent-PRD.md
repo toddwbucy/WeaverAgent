@@ -713,8 +713,9 @@ refuses. The harness cannot drive the early steps of its own creation, because
 the worker spawn runs before the harness exists at all, and the acts a verb
 performs are root's, held by the operator in the admin role rather than by any
 standing process of the program's, per `weaver-admin-PRD` section 7 as recut on
-2026-08-05. What is long-lived where the harness is mortal is the init system,
-which holds the unit and outlives every invocation that drives it. What the
+2026-08-05. Nothing of the program's is long-lived where the harness is mortal: since
+the operator's ruling of 2026-10-03 on #50 the agent starts like an appliance, admin's
+start step detaching the worker, and supervision is whoever packages the agent. What the
 harness owns is the interior of the directives:
 admin holds no channel to the SPU or the gate, so the harness fans the directive
 out along its own seams, collects each organ's confirmation, and returns one

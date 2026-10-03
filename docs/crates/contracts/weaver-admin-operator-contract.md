@@ -17,10 +17,11 @@ same ruling.
 
 ## 0. What this document is
 
-The agreement over the trace's exit: how the program's one output leaves it, where it
-lands, and what either side may rely on at that boundary. It is read alongside
-`weaver-admin-PRD`, whose section 8 names the interface the operator's asks now enter
-by, which is running the crate rather than a channel this document governs.
+The agreement over the program's outward boundary, as the operator's rulings of
+2026-10-03 on #50 draw it: the `weaver-admin` command lines a caller may run and the
+answer each prints, how the program's one output leaves it and where it lands, and the
+trace relay's read-only stream to the one declared reader. It is read alongside
+`weaver-admin-PRD`, whose section 8 names the interface.
 
 It carries no representation beyond the two format rulings of sections 2 and 3. Those
 are stated here rather than in a Spec because the party on the far end is outside the
@@ -43,37 +44,52 @@ from: weaver-admin-operator-contract
 to: weaver-admin
 ```
 
-The second party is the operator, a human role holding root on the machine, per
-`weaver-admin-PRD` section 7. The graph carries no node for a principal outside the
-program, so the party is named in prose and the missing category is registered rather
-than improvised.
+The second party is the operator, one person in the operator role, per
+`weaver-admin-PRD` section 7: at a root shell a human holding sudo, and through a sudo
+rule the operator installs, this agent's own connector acting for that person. The graph
+carries no node for a principal outside the program, so the party is named in prose and
+the missing category is registered rather than improvised.
 
 ## 1. The boundary
 
-**The stream's sink is where this contract binds, and it is the one crossing left.**
-The operator's asks reach the program by an invocation the operating system already
-governs, per `weaver-admin-PRD` section 8, and an executed program is no seam by the
-Working Process test, so the socket this section carried until 2026-08-05 has no
-subject. What remains is a real crossing: **admin passes the sink handle across the
-boundary
-and the program writes through it**, something of the operator's stands behind it, and
-neither side sees the other's interior. It is
-not network ingress and breaches nothing Gate holds, on the grounds
-`weaver-admin-PRD` section 3 states.
+**This contract binds three crossings: the command lines, the sink, and the trace
+door.** **The command lines** are `weaver-admin <verb> <agent>` run as root, at a root
+shell or through a sudo rule the operator installs as the box's own boundary, which
+names this agent's connector user and the exact command lines for this agent and allows
+no caller-chosen argument, per `weaver-admin-Spec` section 2. An executed program is no
+seam by the Working Process test, and what this contract fixes is which lines exist and
+what each prints. **The wire between WeaverWeb and its connector is WeaverWeb's**:
+WeaverWeb sends admin-con an abstract verb, admin-con maps it locally to one of the
+fixed command lines, and no command crosses a network. **The sink** is a real crossing:
+admin passes the sink handle across the boundary and the program writes through it,
+something of the operator's stands behind it, and neither side sees the other's
+interior. **The trace door** is the relay's socket, `trace.sock` in the agent's
+root-owned run directory, grouped to the agent's own access group `weaver-<agent>-admin`
+and admitting exactly one declared reader by the kernel's peer credential, per
+`weaver-admin-Spec` section 6. None is network ingress, and none breaches anything Gate
+holds, on the grounds `weaver-admin-PRD` section 3 states.
 
 ## 2. What crosses in
 
-**Nothing.** The ask set this section enumerated until 2026-08-05, the three verbs,
-the stop conveyance, and the two observations, still exists and no longer crosses
-here: it arrives as an invocation's arguments, per `weaver-admin-PRD` section 8, and
-its shape is that charter's and its Spec's rather than this contract's. No prompt,
-turn, task, or run crosses, per apex section 6, and the stream is one-way by
-construction, so what an operator decides after reading it re-enters by running a
-verb rather than by answering on this boundary.
+**A granted command line, and nothing else from the caller.** The verbs are `show`,
+`validate`, `load`, `unload`, `stop`, and against a running agent `save-point` and
+`restore`, each with the agent's name, on the operator's rulings of 2026-10-03 on #50.
+**Which lines a caller may run is the rule the operator installs**: an observer's rule
+grants `show`, and an operator's adds `validate`, `load`, `unload`, `stop`, `save-point`
+and `restore`, the role split of #50 mapped onto command lines. Nothing else crosses in:
+no argument the caller chooses, no standard input, which the program never reads, and no
+claim of who asked. **The cause the record carries is the uid sudo reports**, and which
+person asked is WeaverWeb's record and never the agent's. No prompt, turn, task, or run
+crosses, per apex section 6.
 
-**The section is kept with that answer rather than deleted,** because a contract
-states what crosses in even when the answer is nothing, and because the numbering of
-what follows is cited across the corpus.
+**At the trace door, one request line**: a byte offset on a record boundary and the
+digest of the record before it, the shape `TraceRequest` of `weaver-types-Spec` section
+3.1, from the one `trace-reader` the agent's boundary file declares, the agent's own
+admin-con. Every other caller is refused and logged, and the newest connection from the
+reader replaces the old.
+
+The record is one-way by construction, so what an operator decides after reading it
+re-enters by a command line rather than by answering on this boundary.
 
 ## 3. What crosses out, and its format
 
@@ -114,6 +130,20 @@ root, which narrows the set of parties that can reach the record rather than wid
 it. What it did not change is the direction of the exclusion: the agent writes
 through a handle and reaches nothing behind it.
 
+**For a command line, one answer object on standard output**: one `lifecycle-answer`
+or one `lifecycle-refusal` in the floor's rendering, the exit status agreeing with it,
+per `weaver-admin-Spec` section 2. That pair, the granted lines and the object each
+prints, is this repository's interface to a connector, and nothing else is.
+
+**At the trace door, the record as a read-only stream**: the relay writes a header line
+naming the file's identity (device, inode, birth time), then the trace's own lines from
+the verified position exactly as written, following new lines with a heartbeat while
+idle, every added line a `TraceControl` of `weaver-types-Spec` section 3.1. It serves
+the loaded run's own file by descriptor, reports a change of the sink path's file or a
+truncation rather than smoothing it over, and refuses a position that does not verify
+before a byte is sent. A reader of the record this way reads the file through no grant
+of its own, so the territory's layout gives it nothing.
+
 **The stream is also the program's one fault carrier,** per the fault-carrier
 ruling of 2026-08-01. A fault the worker survives rides it as the `fault` event of
 `weaver-trace-PRD` section 3.1, in order with everything else, and the operator's
@@ -134,38 +164,56 @@ comes back by running a verb, per section 6.
 
 ## 5. Failure
 
-**This boundary has one failure and it is the sink's.** A sink that cannot be opened
-refuses the load, per `weaver-admin-PRD` section 4.1 step 4, and a sink that fails
-mid-run is the tee's bounded loss of section 3 rather than a refusal, because a run
-does not stop for its reader.
+**At the sink, one failure.** A sink that cannot be opened refuses the load, per
+`weaver-admin-PRD` section 4.1 step 4, and a sink that fails mid-run is the tee's
+bounded loss of section 3 rather than a refusal, because a run does not stop for its
+reader.
 
-The ask-side cases this section enumerated until 2026-08-05 travelled with the socket
-to `weaver-admin-PRD` section 8 and its Spec: the malformed request, the unknown
-agent, the request carrying work, and the config's registered-field failure are all
-still refusals, typed as `lifecycle-refusal` and returned by the invocation. The peer
-predicate is not among them anywhere, having retired with the surface that applied
-it. An organ refusing a field it registered is still not on any of these lists: that
-refusal is the organ's, travels back through the harness on its own seam, and reaches
-the operator inside the aggregate.
+**At a command line, the floor's refusals**: a second `load` of a running agent answers
+`AgentRunning`, a missing or malformed boundary file refuses `ConfigInvalid` naming
+`roles.toml`, and an `unload` whose worker still holds the run lock after the
+escalation refuses with that carried and no state, per `weaver-admin-Spec` section 3. A
+line a caller's rule does not grant never reaches the program, sudo refusing it, so it
+has no refusal here. **At the trace door, refusals before a byte is sent**: any caller
+but the declared reader, a position that does not verify, and a sink that is not a file,
+each logged in the agent's `admin.log`. A relay that has died closes the door until the
+next load, which a reader sees as a refused connection.
+
+The ask-side cases this section enumerated until 2026-08-05 travelled with the socket to
+`weaver-admin-PRD` section 8 and its Spec: the malformed request, the unknown agent, the
+request carrying work, and the config's registered-field failure are all still refusals,
+typed as `lifecycle-refusal` and returned by the invocation. The peer predicate is not
+among them anywhere, the trace relay judging one declared reader and the command lines
+judging nothing of the caller. An organ refusing a field it registered is still not on
+any of these lists: that refusal is the organ's, travels back through the harness on its
+own seam, and reaches the operator inside the aggregate.
 
 ## 6. Prohibitions
 
-**On admin.** It carries no work inward, however an invocation frames it. It emits
-the stream to the declared sink and to no other reader, and it repairs, reconciles,
-and adjudicates nothing on the way through, per `weaver-admin-PRD` section 2.
+**On admin.** It carries no work inward, however an invocation frames it. It reads
+nothing from a caller but the granted command line. It emits the stream to the declared
+sink, and serves the sink's file read-only through the trace relay to its one declared
+reader, and to no other reader, and it repairs, reconciles, and adjudicates nothing on
+the way through, per `weaver-admin-PRD` section 2. The relay does nothing with the
+record but read it.
 
 **On the operator's tooling.** Nothing behind the sink reaches back. The stream is
-one-way, and tooling that wants to act on what it reads comes back by running a verb.
+one-way, and tooling that wants to act on what it reads comes back by running a granted
+command line. **On a connector.** It maps WeaverWeb's verbs to the fixed lines locally,
+asserts no identity the kernel did not supply, and reads the record through the trace
+door rather than through any grant into the territory, fanning it out, if at all, on
+WeaverWeb's side and never the box's.
 The monitoring is the outside's job and the verb is admin's, per the basic loop's
 section 2.
 
 ## 7. Vocabulary
 
-**Drawn from `weaver-types`:** `lifecycle-refusal`, and nothing else as of
-2026-08-05. `peer-identity` and `authorization-predicate` left this clause with the
-socket that read them, and the consequence for `weaver-types-PRD` section 2.2 is
-named in section 8: that pair now finds its consumers at the gate's client boundary
-and at the coordination seam, and not here.
+**Drawn from `weaver-types`:** `lifecycle-refusal` and `lifecycle-answer`, which a
+command line prints, and since 2026-10-03 (#50) the trace door's shapes of
+`weaver-types-Spec` section 3.1, `TraceRequest`, `TraceHeader` and `TraceControl`, with
+`peer-identity`, which the relay reads from the kernel. `authorization-predicate` stays
+undrawn: the relay judges one declared reader, not the allow-and-deny rule the gate's
+client boundary and the coordination seam share.
 
 **Drawn from `weaver-trace`:** the durable event schema, as the content of the
 output stream. It is drawn as published format rather than as a linked type, which
@@ -174,11 +222,9 @@ is the contract-coupled reading `weaver-admin-PRD` section 8 states.
 **Drawn from `weaver-traits`:** nothing. The clause is present with that answer
 because `weaver-types-PRD` section 5 asks for it even when it is empty.
 
-The directive and answer draws left this clause with the asks, per the recut: the
-verbs and the stop are directive cases still, and they enter as an invocation's
-arguments where `weaver-admin-PRD` section 8 governs them rather than crossing here.
-The refusal stays drawn, because a sink that cannot be opened refuses a load and that
-refusal reaches the operator as the floor's own type. Nothing is owed to the floor.
+The directive draws left this clause with the asks at the recut and stay out: the verbs
+enter as a command line's arguments, which `weaver-admin-PRD` section 8 governs. The
+answer and the refusal are drawn because each command line prints one.
 
 **The clause above is stated in edge form here**, per Document Format section 4, which
 makes `draws` the vocabulary clause a query can walk and is what turns G4 from a
@@ -189,6 +235,14 @@ beside the party edge, per that format's section 6.
 edge: draws
 from: weaver-admin-operator-contract
 to: lifecycle-refusal
+
+edge: draws
+from: weaver-admin-operator-contract
+to: lifecycle-answer
+
+edge: draws
+from: weaver-admin-operator-contract
+to: peer-identity
 ```
 
 **The draw from `weaver-trace` takes no edge and the reason is stated rather than
@@ -219,3 +273,10 @@ gate rather than a defect in this clause.
   record-based session resume left the corpus, `weaver-types-PRD` section 2.1
   gained `trace-sink` on this contract's demand, and what the batch left behind is
   the enter cell `weaver-admin-PRD` section 10 holds.
+- The agent leaving systemd, 2026-10-03 (#50), landing in one act.
+  `weaver-admin-systemd-contract` retires. `weaver-admin-PRD` sections 1, 2, 4, 5, 6, 7,
+  8 and 10 and `weaver-admin-Spec` sections 2, 3, 6, 8, 9, 10 and 11 move to the start
+  step, the run lock, the sudo rule and the trace relay. `weaver-types-Spec` section 3.1
+  carries the trace door's shapes and the cause, and `weaver-harness-Spec` section 2
+  the worker's ownership of its organs. WeaverWeb's admin-con maps its verbs to the
+  granted lines and reads the trace door, toddwbucy/WeaverWeb#12.

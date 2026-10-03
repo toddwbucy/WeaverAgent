@@ -87,7 +87,7 @@ the drawn shape whole, and this seam is the one that left it.
 creating party is not the initiating party.** Any socket connecting to the harness
 is an internal connection and lives inside the agent's sandbox, so the harness
 binds the coordination socket and listens as its first act, before any directive
-can arrive, and admin dials in. The earlier form had admin binding before the unit
+can arrive, and admin dials in. The earlier form had admin binding before the worker
 started because admin was the only party that existed then, and the inversion
 retires the premise: nothing needs to exist before the worker, because the worker
 brings its own end.
@@ -97,8 +97,9 @@ per `weaver-admin-PRD` sections 1 and 7, so each verb's invocation connects to t
 socket the worker holds, is served, and closes with the verb. The bind is the
 worker's first act and the dial may arrive before it, so the dialing party retries
 within a bound the Spec states, and a bound exceeded is a refusal of the verb
-rather than a wait without end. The init system carries no handle and holds no
-end, in transit or otherwise: it starts the unit and that is the whole of its part.
+rather than a wait without end. Admin's start step carries no handle of this channel
+across the worker's exec: it starts the worker and that is the whole of its part, the
+sink crossing in the enter directive below.
 
 **The credential is this seam's authentication, per apex 5.1's first case.** The
 invariant reads by credential where the channel has a name and by possession where
@@ -114,10 +115,10 @@ stays rejected, by refusal at accept rather than by an absent name.
 
 **The worker holds the agent's own principal from its first instruction and makes its
 memory unreadable to that principal's other processes after its final image
-replacement.** There is no drop, because the init system starts the unit at the agent's
-principal under the delegation `weaver-admin-PRD` section 7 rules. An earlier
-form of this clause ordered a drop against the handoff, and the ordering had a subject
-only while the worker began life holding a higher principal.
+replacement.** The worker's code never runs above the agent's principal, because admin's
+start step drops before the exec, per `weaver-admin-PRD` section 7 as ruled 2026-10-03.
+An earlier form of this clause ordered a drop against the handoff, and the ordering had
+a subject only while the worker began life holding a higher principal.
 
 **Nothing about the handoff rested on the drop, which is why removing it costs nothing
 here.** **What crosses is a capability rather than a name**: the receiver is granted
@@ -175,11 +176,13 @@ per `weaver-state-PRD` section 4, the lineage of the save point the load restore
 whether the declaration's `restore` names it or the inventory selected the latest
 published by default, and none where no save point stands, beside it and apart from it
 the reset, where the agent's last run did not end in a clean unload, that run and the
-reason, whether or not a save point stands, the digests of the organ
-binaries admin started and of the two it hands the worker to fork, the agent's SPU and
-the gate, and the digests of the declaration and, as of 2026-10-02, of the prompt file
-it names. The state channel's end is the harness half of the socketpair admin created at
-the member's spawn, per the operator's ruling of 2026-08-26 carried at
+reason, whether or not a save point stands, the digests of the organ binaries admin
+started and of the two it hands the worker to fork, the agent's SPU and the gate, the
+digests of the declaration and, as of 2026-10-02, of the prompt file it names, and as of
+2026-10-03 the digest of the agent's boundary file, `roles.toml`, marked boundary and
+never constitution, and the cause, the uid sudo reports, on the operator's rulings on
+#50. The state channel's end is the harness half of the socketpair admin created at the
+member's spawn, per the operator's ruling of 2026-08-26 carried at
 `weaver-harness-state-contract`: admin couriers it and speaks on it never. Its absence
 is the state leg not standing, never a refused load, and the two failure moments read
 differently on purpose: a member whose spawn failed puts no end on the enter, and one
@@ -204,31 +207,35 @@ was built without asking a second question. The answer, either way, closes the e
 and is the aggregate: one directive out, one answer back, and the organs appear in the
 answer's content rather than as parties to this seam.
 
-**Leave the run.** Opened by admin. Admin directs the harness to leave. The harness
+**Leave the run.** Opened by admin. Admin directs the harness to leave, supplying the
+cause as the enter does, which the harness records on its closing event. The harness
 stops Gate first where one stands, refuses while a turn is in flight, authors
 its closing event, `unload` on a serving binding and the diagnostic
 mechanism's counterpart where that vocabulary is elected,
 drains the writer's queue to the stream, and releases the SPU. It answers left, or
-it refuses, and a refusal names where the sequence stopped. The stream ends where
+it refuses, and a refusal names where the sequence stopped. **After answering left the
+worker exits**, its run being its only purpose, and admin reads that exit as the run
+lock's release, per `weaver-admin-Spec` section 3. The stream ends where
 the run did, finalized by nothing, per the ruling of 2026-08-01. As with enter, the
 answer is the aggregate and the organs appear in its content rather than as parties
 to this seam.
 
-**Stop the turn.** Opened by admin. Admin conveys the operator's intent to stop, one
-bit and no work. The harness aborts the turn in flight, the turn closes with the stop
-reason marked in place of a response, and the run stays open. The harness answers
-with the turn's fate, aborted naming the turn it closed, or at rest because nothing
-was in flight, and both are clean closes of the exchange rather than refusals,
-because the operator's intent is satisfied by the state either way. The answer is
-given only after the close event is placed, which is the announce-after-record
-discipline. Stop touches no run bracket. It is the channel
-the operator interrupt of `weaver-harness-PRD` section 2 arrives on, and it exists on
-this seam because the operator holds no other crossing. How the abort lands at the
-decoder is the harness's interior and crosses nowhere on this seam, and since
-2026-09-22 the same holds of a tool running when the stop arrives: the harness
-cancels the execution through `weaver-harness-gate-contract` section 2 and
-answers here after the turn's close is placed, the promise above carrying no
-invocation exception.
+**Stop the turn.** Opened by admin. Admin conveys the operator's intent to stop, one bit
+and no work beside its cause, which the harness records on the stop's turn close. A stop
+that finds no turn in flight closes no turn and changes nothing in the agent, so admin
+writes it with its cause to its operations log instead. The harness aborts the turn in
+flight, the turn closes with the stop reason marked in place of a response, and the run
+stays open. The harness answers with the turn's fate, aborted naming the turn it closed,
+or at rest because nothing was in flight, and both are clean closes of the exchange
+rather than refusals, because the operator's intent is satisfied by the state either
+way. The answer is given only after the close event is placed, which is the
+announce-after-record discipline. Stop touches no run bracket. It is the channel the
+operator interrupt of `weaver-harness-PRD` section 2 arrives on, and it exists on this
+seam because the operator holds no other crossing. How the abort lands at the decoder is
+the harness's interior and crosses nowhere on this seam, and since 2026-09-22 the same
+holds of a tool running when the stop arrives: the harness cancels the execution through
+`weaver-harness-gate-contract` section 2 and answers here after the turn's close is
+placed, the promise above carrying no invocation exception.
 
 **Observe the run.** Opened by admin, added 2026-09-04 per issue #435 as the observation
 exchange this contract's parties named as owed on 2026-08-06. Admin asks what stands and
@@ -337,8 +344,11 @@ started and of the agent's SPU and the gate it hands the worker, keyed by name, 
 declaration's digest as this crate read the file at the inventory, so the run and the
 record can both name what they were built from, the prompt file's digest as this crate
 read the file the declaration names, as of 2026-10-02, so the record can say which
-prompt the agent was given now that the declaration's digest no longer covers it, and
-the intent to stop.
+prompt the agent was given now that the declaration's digest no longer covers it, the
+boundary file's digest, so the record declares who could read the run without that file
+joining the tuple, the cause of every load, unload and stop, the uid sudo reports, and
+the intent to stop. Admin never writes the trace: it hands these facts to the harness,
+the single writer, as it hands the declaration's digest.
 
 **Admin guarantees** that the trace sink handle it passes refers to the sink the
 session's configuration declares, that the run reference distinguishes this run
@@ -346,7 +356,7 @@ from every other run of that session, distinctness being the guarantee rather
 than any particular rendering of it and the session possibly spanning agents,
 and
 that the boundary the worker runs inside exists and is correct, because
-admin verified it before the unit started and is the only party positioned to. The
+admin verified it before the worker started and is the only party positioned to. The
 guarantee is of verification rather than of authorship, since the boundary is the
 operator's artifact. It guarantees that no directive carries work of any kind.
 

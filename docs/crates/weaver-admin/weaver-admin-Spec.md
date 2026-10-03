@@ -14,13 +14,12 @@ agent. Code is written against it under the gates of Working Process section 6.
 ## 0. What this document is
 
 Build instructions for `weaver-admin`: the binary's layout, the invocation's
-interface, the verb sequencing, the sink openings, the transient unit's
-invocation, the coordination channel's dial, and the elections a builder
-would otherwise invent. It is derived from `weaver-admin-PRD` and from the three
-contracts this crate is party to, `weaver-admin-harness-contract`,
-`weaver-admin-operator-contract`, the second now bounding the trace's exit alone,
-and `weaver-admin-systemd-contract`, cut this date for the boundary the recut made
-load-bearing, together with `weaver-organ-channel`, the drawn material the first
+interface, the verb sequencing, the sink openings, the start step, the
+coordination channel's dial, and the elections a builder would otherwise invent. It is
+derived from `weaver-admin-PRD` and from the two contracts this crate is party to,
+`weaver-admin-harness-contract` and `weaver-admin-operator-contract`,
+`weaver-admin-systemd-contract` having retired with systemd on 2026-10-03 (#50),
+together with `weaver-organ-channel`, the drawn material the first
 of them draws in part.
 
 Level discipline. The charter says what the crate needs and why. This document
@@ -90,7 +89,7 @@ to: axiom-floor-is-vocabulary-behavior-is-socket
     src/verbs.rs      load, unload, validate, stop, and rollback, section 3
     src/inventory.rs  config validation and boundary verification, section 4
     src/sink.rs       sink resolution and opening, section 5
-    src/unit.rs       the transient unit, section 6
+    src/start.rs      the start step, the run lock and the trace relay, section 6
     src/channel.rs    the coordination channel's dial, section 7
     src/log.rs        the operations log, section 8
 
@@ -158,8 +157,8 @@ to: admin-descriptors-owned-types
 **No async runtime, no D-Bus crate, no logging crate.** The surface's traffic
 is operator-paced and the coordination traffic is per-load, so nothing here
 needs an executor, and threads from the standard library carry the concurrency
-section 2 needs. The init system is reached by its command-line interface, per
-section 6, so no bus library enters the tree. The operations log of section 8
+section 2 needs. No init system is reached at all, per section 6, so no bus library
+enters the tree. The operations log of section 8
 is this crate's own file with this crate's own writer, and a logging framework
 would be a second account with its own schema, which is the arrangement charter
 section 2 rules out for the trace and this Spec declines for the log. The
@@ -183,13 +182,17 @@ verb per run. The socket this section carried until 2026-08-05 retired with the
 service account, and what replaces it is the process boundary the operating
 system already draws around an executed program.
 
-**The verb and its agent arrive as arguments.** One verb per invocation,
-`load`, `unload`, `validate`, `stop`, or `show`, with the agent name as the one further
-argument, which every verb takes. Arguments rather than a
-parsed request line, because the kernel already delivered them as a vector and
-re-encoding them into a wire format would be inventing a wire where no seam
-crosses. The base the agent's root stands under is the one environment variable read,
-per section 9.
+**The verb and its agent arrive as arguments.** One verb per invocation, `load`,
+`unload`, `validate`, `stop`, or `show`, or, against a running agent, `save-point` or
+`restore`, with the agent name as the one further argument, which every verb takes. The
+last two ask the running worker for a save point on demand and for a live restore of the
+latest save point the member holds, over the coordination channel of section 7, on the
+operator's ruling of 2026-10-03 on #50, the save points themselves being #58's and not
+restated here. A live restore of a named save point stays the operator's act at a root
+shell, because the sudo rule below grants no caller-chosen argument. Arguments rather
+than a parsed request line, because the kernel already delivered them as a vector and
+re-encoding them into a wire format would be inventing a wire where no seam crosses. The
+base the agent's root stands under is the one environment variable read, per section 9.
 
 **Authorization is the kernel's, and what this crate checks is the name.** The
 invocation runs as root or performs nothing, so no predicate, no allow set, and
@@ -200,6 +203,32 @@ and the agent's root of section 9, which are about which agent may be named rath
 than about who may name it. The refusal is enacted before any verb touches anything, and the
 instrument is a test running the binary as a non-root uid and finding it
 refuses, watched to fail when the check is removed.
+
+**A caller that is not the operator at a root shell reaches the verbs through a sudo
+rule, and the rule is strict**, on the operator's rulings of 2026-10-03 on #50, which
+revise the ruling of 2026-10-02 that WeaverWeb carries no sudo. The operator is assumed
+to hold sudo and starts the agent as root so that its permissions can be established:
+its user, its runtime directory, its sink. Where WeaverWeb's admin-con issues the
+lifecycle for the operator, it does so through a rule the operator installs as the box's
+own boundary, which names this agent's admin-con user, names the exact `weaver-admin
+<verb> <agent>` command lines for this agent, and allows no caller-chosen argument.
+**The role split of #50 is which command lines a role's rule grants**: an observer's
+grants `show`, and an operator's adds `validate`, `load`, `unload`, `stop`, `save-point`
+and `restore`. **Nothing is read from the caller**: no argument the caller chose, which
+the rule forbids, and nothing on standard input, which this crate never reads. **The
+cause is the uid sudo reports and nothing else**: where the invocation runs as root
+under sudo, this crate reads sudo's own `SUDO_UID`, and at a root shell with no sudo it
+takes uid 0, and it hands that uid to the harness as the `Cause` of a verb that changes
+the agent, per `weaver-types-Spec` section 3.1. Which person asked is WeaverWeb's record
+and never the agent's. **The command never crosses a wire**: WeaverWeb sends admin-con
+an abstract verb, and admin-con maps it locally to one of the fixed command lines, so
+the wire between WeaverWeb and admin-con is WeaverWeb's, and this crate's interface is
+the granted command lines and the one answer object each prints. **The ceiling is the
+rule's lines**: the `grants` verb #50 once drafted does not return, admin holding no
+view of what a sudo rule grants, so admin-con reads its ceiling from the rule itself on
+the box. **What a compromised admin-con can do is start and stop this agent**, and the
+threat that matters, a model, binary, configuration or state swapped and then loaded, is
+#71's to answer, independently of this mechanism.
 
 ```graph
 node: admin-runs-as-root-or-performs-nothing
@@ -247,20 +276,31 @@ section 3 states where that obligation lands now.
 
 ## 3. The verbs, the agent's state, and rollback
 
-**Residency is read from the init system rather than held, per the recut of
-2026-08-05.** A per-invocation crate has nowhere to keep a map across verbs, and
-the map is not missed for what it truly knew: whether an agent's unit is
-running is a question the init system answers authoritatively, through the same
-command-line interface section 6 uses, where a map of admin's own would be a
-second account of a fact the process manager already holds.
+**Whether a worker runs is read from a lock the kernel holds, per the operator's ruling
+of 2026-10-03 on #50.** A per-invocation crate has nowhere to keep a map across verbs,
+and with the init system gone the question it answered, whether this agent's worker is
+running, is answered by the **run lock**: a POSIX record lock on `run.lock` in the
+agent's **run directory**, `<coordination-root>/weaver-<agent>-run/`, which the start
+step makes owned by root, mode `0755` and writable by no one else. The start step's
+child opens `run.lock`, root-owned and mode `0600`, for writing while it is still root,
+takes an exclusive lock on it, and carries the descriptor across its exec into the
+worker, a record lock surviving the exec, so the lock is held from before the worker
+exists to the instant it dies, when the kernel releases it whatever killed the process.
+**A pidfile can go stale, and this cannot**, the lock having no holder once its holder
+is gone. Any verb asks the kernel which process holds it (`F_GETLK`), so the answer
+names the holder's pid from the kernel rather than from a file a process wrote. **It
+stands in a root-owned directory and not the agent's runtime directory** because the
+agent owns that one: a process of the agent's could unlink a lock file there and leave
+the next `load` finding a free lock on a new file while the worker still held the old,
+starting a second worker of one agent. The worker holds the lock only by the descriptor
+it inherited, and it never opens `run.lock` again, a record lock being dropped when its
+holder closes any descriptor of the file.
 
-**What that answer is not is the agent's lifecycle state, and conflating them
-would be this crate inventing a fact.** A running unit may be one that has not
-yet answered enter, one serving a turn, or one unwinding after leave, and apex
-section 6's states distinguish exactly those. The unit's presence is a residency
-signal and nothing more. Reading it as loaded-and-idle would also contradict the
-charter's own rule that the state publishes only on a ready aggregate, since a
-unit is running well before any aggregate returns.
+**A held lock says a worker runs and nothing about its lifecycle state.** A held lock
+may be a worker that has not yet answered enter, one serving a turn, or one unwinding
+after leave, and apex section 6's states distinguish exactly those, so reading it as
+loaded-and-idle would be this crate inventing a fact, and would contradict the charter's
+rule that the state publishes only on a ready aggregate.
 
 **So `show` answers through the observation exchange, as of 2026-09-04, and residency is
 read only where no worker answers.** `show` dials the agent's coordination socket and
@@ -270,28 +310,21 @@ with the load's facts beside it where a run stands, read from the run and never 
 record. **Those facts are `LoadFacts`, which overlaps the `load` event and is not its
 shape**, per `weaver-types-Spec` section 4.2: it carries the session, run and artifact
 the event carries in its envelope or not at all, and lacks the event's stack, lineage,
-reset and prompt digest, so a consumer that stores both stores two shapes. Where the
-socket does not exist or nothing answers the dial, there is no exchange to open, and
-this crate reports `Unloaded` from that absence, which is the one place residency is
-read and it is read as the absence of a worker and not as a state. A name with no root
+reset and prompt digest, so a consumer that stores both stores two shapes. Where the run
+lock is free there is no worker and no exchange to open, and this crate reports
+`Unloaded` from that absence without dialing, which is the one place the lock is read
+and it is read as the absence of a worker and not as a state. A name with no root
 refuses `NoSuchAgent` as every verb does, and whether a declaration validates stays
 `validate`'s own answer, since no verb chains another. No verb answers for more than the
 one agent named, admin being one agent's organ on the operator's ruling of 2026-10-01,
 and managing several WeaverWeb's or a separate application's.
 
-**The manager's three values stay the manager's and reach no answer.** `active`,
-`failed`, and `inactive` are residency and not lifecycle state, per the paragraph above,
-and mapping them onto `AgentState` would be the invention this section has always
-refused: `active` covers both `Idle` and `Active`, and `failed` has no case. The harness
-holds the run and answers from it, which is why the exchange and not a mapping closes
-the election section 11 filed on 2026-08-06. `StateNotObservable` leaves the floor's
-vocabulary with this act, the scheduled death `weaver-types-Spec` section 4.2 gave it.
-
-**The record's instrument stays a test.** `show` on an admitted agent whose socket is
-absent answers `Unloaded` with no load and constructs no state from the unit, watched to
-fail when the verb is made to read the manager's `active` as `Idle`, which is the
-invention this clause forbids. Review could confirm the absence of a mapping and could
-not confirm that the verb answers the harness's word rather than something plausible.
+**The record's instrument stays a test.** `show` on an admitted agent whose run lock is
+held by a worker that has not yet answered enter answers through the exchange and
+constructs no state from the lock, watched to fail when the verb is made to read a held
+lock as `Idle`, which is the invention this clause forbids. Review could confirm the
+absence of a mapping and could not confirm that the verb answers the harness's word
+rather than something plausible.
 
 ```graph
 node: admin-residency-is-not-lifecycle-state
@@ -307,16 +340,13 @@ from: admin-residency-is-not-lifecycle-state
 to: axiom-harness-integrates-by-the-loop
 ```
 
-**Two invocations for one agent are ordered by the init system, and the
-consequence is stated rather than glossed.** The in-flight flag that held one
-transition per agent went with the map, and what remains is that starting a
-transient unit whose name already exists fails at the init system, so two
-concurrent loads of one agent cannot both start a worker. Two concurrent
-unloads reach a worker that answers leave once and refuses the second by the
-channel's own ordering, per the contract's section 4. Neither race is prevented
-by a lock of this crate's, and the honest statement is that the ordering is
-delegated to the two parties that already serialize: the process manager and
-the worker.
+**Two invocations for one agent are ordered by the run lock.** The in-flight flag that
+held one transition per agent went with the map, and the unit-name uniqueness that
+replaced it went with the init system. What holds now is the lock itself: a second
+`load` whose start step cannot take the exclusive lock refuses `AgentRunning` before it
+starts anything, so two loads of one agent cannot both start a worker. Two concurrent
+unloads reach a worker that answers leave once and refuses the second by the channel's
+own ordering, per the contract's section 4.
 
 ```graph
 node: admin-publishes-only-on-ready
@@ -331,7 +361,7 @@ to: admin-publishes-only-on-ready
 **`load` runs the charter's seven steps in order and the sequence is code
 rather than convention.** Authorize the name, validate through section 4's one
 inventory, verify the boundary in the same inventory, resolve the session and
-open the sink per section 5, start the unit per section 6, dial the worker's
+open the sink per section 5, run the start step per section 6, dial the worker's
 socket and direct enter per section 7, publish. Seven actions, the charter's
 own, the bind-and-listen act the earlier form interleaved here having moved to
 the worker with the inversion. **The save-point publication of section 6 opens the
@@ -374,66 +404,29 @@ from: weaver-admin
 to: admin-validate-starts-no-process
 ```
 
-**`unload` runs the charter's three steps, and the third waits on the second.**
-Direct leave and await the aggregate, stop the unit through section 6's
-interface, publishing the member's finished save points per section 6 once the stop
-is confirmed and the member has stopped, and answer provisioned-and-unloaded **only once
-the stop has been confirmed**. The publication adds no step to the three, being the
-second step's tail. A refusal on leave, `ActivityNotAtRest` above all, returns to the
-operator unchanged and answers nothing further.
+**`unload` runs the charter's three steps, and the third waits on the second.** Direct
+leave and await the aggregate, then await the worker's exit, which the harness makes
+after it answers left, read as the run lock's release, publishing the member's finished
+save points per section 6 once the member has stopped, and answer
+provisioned-and-unloaded **only once the lock is free**. The publication adds no step to
+the three, being the second step's tail. A refusal on leave, `ActivityNotAtRest` above
+all, returns to the operator unchanged and answers nothing further.
 
-**A stop that is accepted is not a stop that has happened, and this verb waits
-for the difference.** `weaver-admin-systemd-contract` section 4 promises that a
-stop ask is answered when the unit has stopped rather than when the stop was
-accepted, so the ask itself is the confirmation and this Spec elects no timeout
-of its own beside it. What the verb owes is not to run ahead of that answer:
-**a following state ask that finds the unit `active` refuses with the failure
-carried and answers no state**, because an agent reported unloaded while its
-worker still runs is the one report this verb must never produce. Where the
-unit stands, the run has already left, which the rollback of this section
-records as an act it could not undo, per charter section 5.
+**The wait has a bound and an escalation, and the report never runs ahead of the lock.**
+A worker that answered left and still holds the lock past the bound is sent `SIGTERM`,
+then `SIGKILL` after a second bound, the target being the pid the kernel names as the
+lock's holder, never a pid a file recorded, so a reused pid is never signalled. **An
+agent reported unloaded while its worker still runs is the one report this verb must
+never produce**: where the lock is still held after the escalation, the verb refuses
+with that carried and answers no state, which the rollback of this section records as an
+act it could not undo, per charter section 5.
 
-**The state ask decides and the stop ask's status does not, because that status
-cannot say why it failed.** `weaver-admin-systemd-contract` section 3 records
-the measurement: the boundary returns the same status for a duplicate unit name
-as for a malformed property, and a failed ask reports that an ask failed rather
-than which failure it was. So a non-zero stop carries two readings that want
-opposite answers. **A unit that is still there** is the case this clause was
-written for, and the state ask finds it `active` and refuses. **A unit that is
-already gone** is the other, and it is the ordinary end of a clean unload:
-the leave the previous step confirmed causes the worker to exit, a transient
-unit is collected the moment its main process does, and the stop that follows
-then names a unit the manager no longer knows. Refusing there reports a failure
-over an agent that unloaded exactly as asked.
-
-**A failed prior unit is its own refusal, and this crate stopped calling it a
-bind failure on 2026-08-16.** `BindFailed` answered for two conditions that a
-state ask already tells apart. Where the manager reports the unit `active` and
-the socket was unreachable, a bind is what failed and the name is right. Where
-it reports `failed`, a prior process exited non-zero and the name it leaves
-registered refuses every later start under it until the manager is asked to clear
-it. That answers `PriorUnitUnreaped`, and the answer claims that and no more:
-`failed` does not say whether the worker bound, or how long it served, because a
-unit that bound and exited non-zero later reads the same.
-
-**It rests on the one value the boundary states plainly.**
-`weaver-admin-systemd-contract` section 3 measures the start ask's status as
-unable to say which failure it was, a duplicate name and a malformed property
-sharing it, so the refusal is not read from that status. It is read from the
-state ask, where `failed` covers one condition and nothing is inferred.
-
-**Found by running the verb rather than by reading it**, as the unload defect
-below was: a load whose organ refused a construction parameter left a failed
-unit, and every load after it answered `bind_failed` over a socket that was
-never the problem, which sent the reading to the wrong place.
-
-**An earlier form of this clause refused on either reading** and its reason
-named only the first, which is how it came to over-fire. The defect was found
-by running the verb rather than by reading it: every unload of a live agent
-answered `bind_failed` and exited non-zero while the device was freed, the
-worker gone, and the `unload` event standing in the record. A builder reading
-the retired wording would write that again, which is why the ordering is stated
-here rather than left to follow from the reason.
+**A held lock after a clean leave is the case this clause exists for, and a free lock is
+the ordinary end.** The leave the previous step confirmed causes the worker to exit, the
+kernel releases the lock, and the verb answers. The defect an earlier form of this
+section carried, every unload of a live agent answering `bind_failed` while the worker
+was gone, came from reading an init system's ambiguous stop status, and the lock leaves
+nothing ambiguous to read.
 
 ```graph
 node: admin-unload-answers-after-confirmed-stop
@@ -478,24 +471,18 @@ from: admin-stop-answer-relayed-unchanged
 to: axiom-harness-integrates-by-the-loop
 ```
 
-**Rollback is the reap plus one directive, as data.** What a failed load can
-leave is a worker unit, a connected sink, and a device the SPU took, per
-charter section 5, and the rollback walks what stands: direct leave where a
-run was entered, stop the unit where a unit started, close the sink where one
-opened. Each act's failure is logged per section 8, the rollback reports what
-it could not undo, and no state is published on any partial outcome, which is
-the same rule as the partial load and not a second one.
+**Rollback is the reap plus one directive, as data.** What a failed load can leave is a
+running worker, a connected sink, and a device the SPU took, per charter section 5, and
+the rollback walks what stands: direct leave where a run was entered, end the worker by
+the escalation above where the start step started one, close the sink where one opened.
+Each act's failure is logged per section 8, the rollback reports what it could not undo,
+and no state is published on any partial outcome, which is the same rule as the partial
+load and not a second one.
 
-**The rollback clears a failed unit, on the operator's ruling of 2026-10-01.**
-Where the load started a unit, or its start was refused `PriorUnitUnreaped`, the
-rollback asks the unit's state after the stop, and on `failed` asks the manager to
-clear it, per `weaver-admin-systemd-contract` section 2, logging the clear as one
-more act of the account. The refusal is answered as it stood and nothing reloads:
-the operator's next load is the retry, and it is not refused unreaped. A unit that
-failed while serving is cleared the same way by the first load that meets it,
-which answers `PriorUnitUnreaped` and leaves the name free for the one after. Only
-`failed` is cleared, the state ask deciding, and a load that started nothing asks
-the manager nothing.
+**No failed unit is left to clear.** The clear the rollback asked of the manager, on
+the operator's ruling of 2026-10-01, retired with the manager on 2026-10-03: a worker
+that died leaves no name held and no lock behind, so the next load proceeds, and a
+worker still holding the lock is ended by the escalation above.
 
 ```graph
 node: admin-rollback-logs-its-account
@@ -667,21 +654,20 @@ answers on the enter's `restored` ask of `weaver-harness-state-contract` section
 config root under its own custody, a marker naming the run it mints as open, and a clean
 unload marks that run closed. A load that finds a marker naming a run still open
 resolves the enter's `reset`, which rides apart from the lineage and whether or not a
-save point stands, to that run, `NoCleanUnload`, or `UnitFailed` where the
-unit's result corroborates a failure, per `weaver-types-Spec` section 4. An agent's
-first load finds no marker and resolves no reset. The lineage that crosses the enter is
-resolved here from the save point's stamp: the run, the sequence and the last turn it
-covers, and, where the operator's offline builder made it from a record, the record and
-the cut it names. The save point is never handed to the agent and never named to the
-worker, on the same descriptor discipline as the sink: what the member receives is a
-descriptor this crate opened, per section 6. Branching from a record is the builder's,
-outside the agent, and this crate never reads a record for a load. **The judgment is
-this crate's because the save point is**, per charter section 4.3's custody rule: a look
-at a thing admin holds, taken at the load's cheapest moment before any process exists,
-and an ask of nobody. **The instrument is perturbation**: a `restore` naming an absent
-save point refuses naming `restore`, watched to fail when the presence check is dropped,
-and a linked save point refuses `BoundaryUnverified`, watched to fail when the entry
-judgment is dropped.
+save point stands, to that run with `NoCleanUnload`, per `weaver-types-Spec` section 4.
+An agent's first load finds no marker and resolves no reset. The lineage that crosses
+the enter is resolved here from the save point's stamp: the run, the sequence and the
+last turn it covers, and, where the operator's offline builder made it from a record,
+the record and the cut it names. The save point is never handed to the agent and never
+named to the worker, on the same descriptor discipline as the sink: what the member
+receives is a descriptor this crate opened, per section 6. Branching from a record is
+the builder's, outside the agent, and this crate never reads a record for a load. **The
+judgment is this crate's because the save point is**, per charter section 4.3's custody
+rule: a look at a thing admin holds, taken at the load's cheapest moment before any
+process exists, and an ask of nobody. **The instrument is perturbation**: a `restore`
+naming an absent save point refuses naming `restore`, watched to fail when the presence
+check is dropped, and a linked save point refuses `BoundaryUnverified`, watched to fail
+when the entry judgment is dropped.
 
 ```graph
 node: admin-restore-save-point-judged-at-the-inventory
@@ -725,19 +711,18 @@ from: weaver-admin
 to: admin-boundary-denies-agent-traversal
 ```
 
-**"Through any membership" is the whole of the requirement, and the gid set
-the walk reads is where it is met.** The unit carries `Group={identity}` per
-section 6, so the worker's runtime egid is the agent's own group whatever
-primary group passwd records. A walk reading the passwd gid alone therefore
-asks about a credential the worker does not run under, and where the operator
-provisioned a shared primary - which is the case section 6's own argument for
-naming the group cites - the two disagree: a sink directory at
-`root:weaver-<agent>` mode `0710` passes a walk that sees only `users`, and
-the running worker traverses it. So the walk reads the group the unit sets,
-the passwd primary, and the user's supplementary memberships, and it
-**over-approximates on purpose** - the question is what the agent could
-reach, so a gid too many refuses a boundary that might have held and a gid
-too few admits one that does not.
+**"Through any membership" is the whole of the requirement, and the gid set the walk
+reads is where it is met.** The start step drops the worker to the agent's own group by
+name, per section 6, so the worker's runtime egid is the agent's own group whatever
+primary group passwd records. A walk reading the passwd gid alone therefore asks about a
+credential the worker does not run under, and where the operator provisioned a shared
+primary - which is the case section 6's own argument for naming the group cites - the
+two disagree: a sink directory at `root:weaver-<agent>` mode `0710` passes a walk that
+sees only `users`, and the running worker traverses it. So the walk reads the group the
+start step sets, the passwd primary, and the user's supplementary memberships, and it
+**over-approximates on purpose** - the question is what the agent could reach, so a gid
+too many refuses a boundary that might have held and a gid too few admits one that does
+not.
 
 ```graph
 node: admin-boundary-reads-every-gid-the-worker-holds
@@ -792,8 +777,8 @@ validated as a name, non-empty ASCII letters, digits, `-` and `_`, its root of
 section 9 is admitted, and the constructed identity is `weaver-<name>` from the
 validated name, never from a caller-supplied string, which is the name-validation discipline of charter
 section 7 landing at the one site that constructs. It is the one site because
-the same validated name is what section 6 interpolates into the unit template,
-so a name reaching a path or a unit has one origin and review reads that origin
+the same validated name is what section 6's start step interpolates,
+so a name reaching a path or a process has one origin and review reads that origin
 rather than every use.
 
 ```graph
@@ -883,52 +868,47 @@ from: weaver-admin
 to: admin-sink-path-dies-at-open-site
 ```
 
-## 6. The unit
+## 6. The start step
 
-**The init system is asked over its command-line interface, and the election
-is argued.** Starting the worker is one invocation per load of the system's
-own run tool, with the unit's properties declared on the invocation: the
-agent's `User=`, the fixed template's hardening, and the runtime-directory
-declaration the coordination socket is bound inside, per
-`weaver-admin-systemd-contract` section 2. Stopping it is one invocation of the
-stop verb, clearing a failed one is one invocation of the clear verb, and the same
-interface answers the state query of section 3. The
-alternative is a bus library, and it loses on the tree, for a handful of
-invocations per lifecycle that are neither hot nor latency-bound.
+**The agent starts the way an appliance does, and the start step is this crate's root
+act**, on the operator's ruling of 2026-10-03 on #50 that the agent leaves systemd. No
+unit is asked of an init system and nothing is installed to wait for the agent: restart
+on a crash or a reboot, sandbox hardening and log collection belong to whoever packages
+and deploys the agent, with systemd, a container or anything else, and are not this
+framework's. What the transient unit did for the agent, the start step does itself, as
+root, in the `load` verb, after section 4's inventory has passed and section 5 has
+opened the sink: it prepares the runtime directory, takes the run lock of section 3,
+stands the trace relay, starts the state member, and starts the worker under the agent's
+own account. Each is below, and `weaver-admin-systemd-contract` retired with the unit.
+The code sites the later act removes are `crates/weaver-admin/src/unit.rs` and the
+`weaver-worker@<agent>` naming in the deploy scripts.
 
-**The runtime directory's mode is declared, because the default is not the
-one this boundary wants.** systemd creates a `RuntimeDirectory=` at `0755`
-absent an instruction, so every uid on the box may traverse to the agent's
-sockets and the gate's own mode is left as the only thing between a stranger
-and the front door. The invocation therefore carries
-`RuntimeDirectoryMode=0750` **and `Group={identity}` beside `User={identity}`**:
-the agent owns the directory, the operator reaches it through membership in the
-agent's group, and no one else reaches it.
+**The runtime directory is made by the start step, with its owner and mode stated**:
+`<coordination-root>/weaver-<agent>/`, `/run/weaver-<agent>/` by default, owned by the
+agent's account and the agent's own group, `weaver-<agent>`, mode `0750`, so the agent
+binds its coordination socket and its gate socket there, the operator reaches it through
+membership in the agent's group, and no one else reaches it. Systemd made it at `0755`
+absent an instruction, which is why the mode was always stated rather than inherited, a
+boundary whose permissions come from an ambient default being a boundary nobody
+elected, per `weaver-gate-Spec` section 3. **The directory outlives the worker now**,
+where the unit's cleanup removed it at every stop, so the start step finds one standing
+and repairs it rather than trusting it: it is opened without following a link, judged
+for its owner, group and mode, and set right, and a socket name left in it by a dead
+worker is removed, which is safe only because the run lock is held first and proves no
+worker of this agent runs.
 
-**The group is named rather than inherited, and the mode rests on that.**
-Without it the init system takes whatever primary group the agent user was
-provisioned with, so where that is shared - `users`, or `nogroup` - `0750`
-grants traversal to every member of it and the sentence above is false. Naming
-it also fixes the group the access rule is checked against at section 4's
-inventory, so the two locks narrow one set rather than two.
-
-**It carries a provisioning requirement**: an agent user created without a
-group of its own makes the invocation fail to determine its credentials, and
-the unit does not start.
-
-**Validate catches that, and the reachability check below is where.** A box
-carrying the agent user and not its group is refused there by name, the
-missing group being a fact about a provisioned agent rather than a fact never
-established. **A box carrying neither is not refused**, on the ground that
-unresolvable is not unreachable: a declaration may not be refused on a fact
-never established, and a bare checkout carries no agent group at all. The two
-are different absences and the check answers them differently. Section 4
-states the refusal in full and this sentence records only that the
-requirement is enforced rather than owed.
-
-The mode figure is stated here rather than inherited for the same reason the
-gate states its socket's, per `weaver-gate-Spec` section 3 - a boundary whose
-permissions come from an ambient default is a boundary nobody elected.
+**The group is named rather than inherited, and the mode rests on that.** The worker is
+dropped to the agent's uid and to `weaver-<agent>` as its group by name, never to
+whatever primary group the agent user was provisioned with, so where that is shared,
+`users` or `nogroup`, `0750` would grant traversal to every member of it and the
+sentence above would be false. Naming it also fixes the group the access rule is
+checked against at section 4's inventory, so the two locks narrow one set rather than
+two. **It carries a provisioning requirement**: an agent user created without a group of
+its own cannot be started, and validate catches that at the reachability check below. A
+box carrying the agent user and not its group is refused there by name, the missing
+group being a fact about a provisioned agent. **A box carrying neither is not refused**,
+on the ground that unresolvable is not unreachable: a declaration may not be refused on
+a fact never established, and a bare checkout carries no agent group at all.
 
 **The access rule is checked against the mode that will carry it**, and the
 check is this section's. The gate binds its socket `0770` owned by the agent's
@@ -943,7 +923,7 @@ designed behaviour unless the two are made to agree.
 
 **Two locks on one door may narrow the same set and may not contradict.** So
 the inventory refuses a declaration whose `allowed-uids` name a uid outside
-the agent's group, before any unit starts.
+the agent's group, before the start step runs.
 
 **It refuses as `BoundaryUnverified` and not as `ConfigInvalid`.** The declaration is
 well formed and the fault is the box's: the operator wrote a uid that ought to reach the
@@ -954,12 +934,11 @@ for good, the credential check then denying it at `accept` with nothing saying w
 is the same fault an unprovisioned home or sink is, and it answers as they do, naming
 the group on the way out. 
 
-**A user without its group is named too.** `Group={identity}` is a hard
-start-time requirement, so a box that provisioned the agent user and not its
-group fails the unit start with an opaque credential error. That state is
-checkable and is checked. A box carrying neither has provisioned no agent and
-is not refused on a fact about an agent it does not have, which is what lets a
-bare checkout and CI run this at all.
+**A user without its group is named too.** Starting the worker under its
+group is a hard requirement, so a box that provisioned the agent user and not its group
+is checked and refused by name rather than failing the start opaquely. A box carrying
+neither has provisioned no agent and is not refused on a fact about an agent it does not
+have, which is what lets a bare checkout and CI run this at all.
 
 **`allowed-gids` is not judged and uid 0 is skipped.** A gid names no
 particular peer, and whether one holding it reaches the socket turns on that
@@ -969,30 +948,6 @@ group, and an arm refusing every gid but the agent's own refused it. Root is
 skipped for a different reason: `CAP_DAC_OVERRIDE` reaches a `0770` socket
 whatever group it holds. Both halves rest on the credential check, which is
 where they were always decided.
-
-**The template may not take the boundary back.** `systemd-run` honours the
-last assignment, so an installed hardening template naming a key this crate
-elects would revert the boundary with no diagnostic - and this check's
-premise, that the socket's group is `weaver-<agent>` and the worker runs as
-the agent, would go with it, so admin would validate a rule against an
-identity the worker does not hold. A template naming one has that property
-dropped rather than emitted **and the drop announced on stderr**, an override
-this crate cannot honour being a configuration it says no to rather than one
-it silently wins, and a silent drop being the same failure in the other
-direction.
-
-**The set of keys is the closure of what the boundary rests on, not the keys
-this crate writes**, and two of its members do their damage without looking
-like an override. `SupplementaryGroups=` is **additive**: it grants gids
-without displacing anything, so `User=` and `Group=` still read correctly
-while the worker holds a gid the denial walk never computed - which reopens
-the sink traversal along a second route once the first is closed. An empty
-`RuntimeDirectory=` **resets the list rather than setting it**, so systemd
-creates no runtime directory and the coordination socket has nowhere to bind,
-which is a start failure rather than a boundary one and no less this crate's
-to refuse. So the set is `User`, `Group`, `SupplementaryGroups`,
-`DynamicUser`, `RuntimeDirectory`, and `RuntimeDirectoryMode`, derived from
-what would have to hold rather than enumerated from what is set.
 
 **The check runs last of the inventory's walks**, so it preempts none of them:
 an unverified boundary is the older and narrower fact, and a check running
@@ -1021,84 +976,64 @@ from: weaver-admin
 to: admin-runtime-directory-mode-is-stated
 ```
 
-**No descriptor is declared on the invocation, and the negative is the point.**
-The trace's sink is opened by this crate under root and crosses inside the enter
-directive, per section 5 and section 7, so nothing about the record reaches the
-unit's properties. An earlier form of this clause named a standard-output
-declaration placing the trace's far end, written while that route was under
-consideration and left standing after it was declined. It is struck:
-`weaver-admin-systemd-contract` section 0 rejects the route because the unit's
-standard output is inherited across fork and exec, which would hand every organ
-the harness forks a writable handle to the agent's own record. One record path,
-and it is the descriptor.
-
-**What this crate relies on from the init system is the contract's and not this
-election's.** `weaver-admin-systemd-contract` section 5 states the reliance set,
-the identity holding from the first instruction, the sandbox in force before it,
-unit-name uniqueness as the concurrency guard, and the cgroup's arrival and
-removal with the unit. This Spec elects only how those asks are carried, so a
-builder replacing the command line with a bus library would change this election
-and breach nothing in that contract.
-
-**The election's ground is no new dependency, stated exactly because a looser
-ground was written first.** The clause above said a bus crate brings an async
-runtime, and that is not true as written: `zbus` publishes a blocking API and
-`dbus-rs` is synchronous over a C library. What holds is narrower and enough.
-`zbus` carries async machinery into the resolved tree whatever its surface API,
-which this crate's own manifest assertion forbids, and `dbus-rs` trades that for
-a C library dependency in a binary that otherwise links none. The command line
-costs neither, at a handful of invocations per lifecycle that are neither hot nor
-latency-bound. What it costs instead is failure discrimination, named at the
-contract's section 3 and not defended here.
-
-**A failed dial is followed by a state ask, so a refusal names the right thing.**
-The contract's section 3 records the measurement: a start ask can succeed over a
-unit that never runs, so the dial's bound is what proves liveness and the bound
-alone would report an absent residency where the truth is a unit that is not
-running. Section 7's refusal therefore consults the unit's state before
-returning.
-
-**What that ask yields is a state and never a reason, and what the state
-separates is narrower than it looks.** `weaver-admin-systemd-contract` section 3
-says outcomes carry status and not the failure's cause, so this clause promises no
-diagnostic, and why a unit failed is the manager's journal to answer where this
-program does not read, per that contract's section 7. Measured 2026-08-05 against
-a live manager, the activity value separates three cases and conflates several:
-a unit whose process ran and exited non-zero reads `failed`, a running one reads
-`active`, and `inactive` covers a unit that stopped cleanly, one that never
-existed, and one whose exec never succeeded because its binary was absent. So the
-refusal carries the value and claims nothing beyond it. A dial that timed out
-over a unit reading `failed` refuses naming that state, and one over a unit
-reading `inactive` refuses saying the worker is not running without asserting
-which of the three reasons applies, because the boundary cannot tell them apart
-and a refusal that guessed would be inventing a fact.
-
-**The instrument is a test whose watch turns on the state it names.** A unit
-started against a binary that exits non-zero reaches `failed`, and the test
-watches the refusal carry that state rather than the absent residency, watched to
-fail when the state ask is removed. The obvious test, a binary that does not
-exist, is the one this clause must not use: that case reads `inactive` and would
-pass whether or not the state ask ran, which is the never-failing perturbation
-apex section 11 counts as worse than no test.
+**The worker is started bare, under its own account, detached, and owning its organs.**
+The start step forks, and the child does five things before it executes the worker with
+the vector below. It takes a new session (`setsid`), so the worker belongs to no
+terminal and survives the invocation that started it. It points its standard input at
+`/dev/null` and its standard output and error at the agent's worker log, a file of its
+own beside the operations log and never that log, since an agent holding a writable
+handle to the boundary's record could write into it. It sets `PR_SET_NO_NEW_PRIVS`. It
+narrows its supplementary groups to `weaver-<agent>`, then its gid, then its uid, in
+that order, because the narrowings need the privilege the last one gives away. Then it
+executes. It carries across the exec exactly two descriptors besides its standard
+streams: the run lock, which section 3 needs held from the start step's lock to the
+worker's death, and the write end of the relay's lifetime pipe, below. **The sink does
+not cross at the exec.** It crosses in the enter directive as ancillary data over the
+coordination channel, per section 5 and section 7, the route the harness contract
+already holds and tests, so nothing of the record rides the worker's start and the
+organs the worker forks inherit no handle to it. The worker binds its own coordination
+socket in the runtime directory, per `weaver-harness-Spec` section 2.3, and this crate
+dials it per section 7 as before. The worker kills its organs when it dies, per
+`weaver-harness-Spec` section 2, so an orphaned SPU never holds the device.
 
 ```graph
-node: admin-failed-dial-consults-unit-state
+node: admin-access-rule-reaches-the-socket
 kind: assertion
 tag: perturbation
 
 edge: asserts
 from: weaver-admin
-to: admin-failed-dial-consults-unit-state
+to: admin-access-rule-reaches-the-socket
 ```
 
 ```graph
-node: admin-init-system-over-command-line
+node: admin-runtime-directory-mode-is-stated
 kind: assertion
-tag: review
+tag: perturbation
 
 edge: asserts
 from: weaver-admin
-to: admin-init-system-over-command-line
+to: admin-runtime-directory-mode-is-stated
+```
+
+**A failed dial is answered from the worker's own exit, which the start step can read.**
+The invocation is the worker's parent until it exits, so where the dial's bound expires
+it reads the child's status without waiting and the run lock's state. A worker that
+exited refuses naming its exit status or the signal that ended it, which says more than
+the manager's three values ever did. A worker still running with no socket is a bind
+that failed, `BindFailed`, and the rollback of section 3 ends it. **The instrument is a
+test whose watch turns on the status it names**: a worker binary that exits non-zero
+refuses naming that status, watched to fail when the status read is removed and the
+refusal falls back to the absent residency.
+
+```graph
+node: admin-failed-dial-reads-the-worker-exit
+kind: assertion
+tag: perturbation
+
+edge: asserts
+from: weaver-admin
+to: admin-failed-dial-reads-the-worker-exit
 ```
 
 **The subprocess inherits nothing it was not deliberately given, because every
@@ -1132,31 +1067,29 @@ from: admin-cloexec-atomic-at-creation
 to: axiom-floor-is-vocabulary-behavior-is-socket
 ```
 
-**The unit template is fixed and the name is the one variable.** The template lives in
-admin's own service configuration, per section 9, and the only value interpolated is the
-validated agent name of section 4, so the delegated authority stays bounded by the
-agent's root exactly as charter section 7 requires. **The argument vector the ask carries
-takes no value the invocation's own input composes.** Its values are the coordination
-socket path of section 7, which this crate already derives from that same validated
-name, the two organ binary paths section 9 holds among the operator's installed values,
-the SPU's being the agent's own, and, where the declaration carries one, the agent's
-loop file as the named flag `--loop-file`, one token on both sides of the vector,
-composed here and parsed by the worker under the same spelling, per `weaver-types-Spec`
-section 2 and the operator's ruling of 2026-08-20 on issue #243. A worker that holds no
-file-read loop refuses the flag at its own argument parse, named rather than ignored, so
-a declaration the installation cannot honor fails the load loudly instead of standing as
-a fact with no effect. The loop file is the vector's one declaration-sourced value and
-it widens nothing: the declaration is the operator's file, validated at section 4's
-inventory before any unit is asked, and the worker resolves the path under the agent's
-own identity, so the value grants nothing the agent uid did not already have, per the
-bare clause below. An absent member puts no flag on the vector, the worker's own default
-standing, per `weaver-harness-PRD` section 2. A builder who let any of these values be
-composed from the invocation's own input would be widening the delegated authority by
-the route the name check closes, so the shape to hold is that the vector reads the
-checked name and the agent's root, the installed values and the validated declaration,
-and reads nothing else. An earlier form of this clause counted three values
-and named the name the one variable, written before any declaration member rode the
-vector.
+**The worker's argument vector takes no value the invocation's own input composes.** The
+only value the start step interpolates is the validated agent name of section 4, so the
+authority stays bounded by the agent's root exactly as charter section 7 requires. Its
+values are the coordination socket path of section 7, which this crate already derives
+from that same validated name, the two organ binary paths section 9 holds among the
+operator's installed values, the SPU's being the agent's own, and, where the declaration
+carries one, the agent's loop file as the named flag `--loop-file`, one token on both
+sides of the vector, composed here and parsed by the worker under the same spelling, per
+`weaver-types-Spec` section 2 and the operator's ruling of 2026-08-20 on issue #243. A
+worker that holds no file-read loop refuses the flag at its own argument parse, named
+rather than ignored, so a declaration the installation cannot honor fails the load
+loudly instead of standing as a fact with no effect. The loop file is the vector's one
+declaration-sourced value and it widens nothing: the declaration is the operator's file,
+validated at section 4's inventory before the start step runs, and the worker resolves
+the path under the agent's own identity, so the value grants nothing the agent uid did
+not already have, per the bare clause below. An absent member puts no flag on the
+vector, the worker's own default standing, per `weaver-harness-PRD` section 2. A builder
+who let any of these values be composed from the invocation's own input would be
+widening the delegated authority by the route the name check closes, so the shape to
+hold is that the vector reads the checked name and the agent's root, the installed
+values and the validated declaration, and reads nothing else. An earlier form of this
+clause counted three values and named the name the one variable, written before any
+declaration member rode the vector.
 
 **The classify arm's binary rides the vector too, where it stands, as
 `--classify-binary`.** It is the third organ path the vector carries and the
@@ -1173,13 +1106,9 @@ the custody rule of issue #456. Admin passing a flag for a file that is
 there, and staying silent about a file that is not, is the whole of its
 part.
 
-**The state member is started here too, and it is not a unit.** The custodian
-runs as a direct child of this crate rather than through the init system, per
-`weaver-admin-PRD` section 2: the worker is asked of the manager because the
-agent's identity and hardening are the unit template's, and the member's
-custody is a territory this crate prepares rather than a sandbox the template
-declares. Nothing of section 6's manager interface above reaches it, and this
-crate holds no channel to it once it runs.
+**The state member is started here too, as it always was, a direct child of this
+crate.** The custodian runs under its own account over a territory this crate prepares,
+per `weaver-admin-PRD` section 2, and this crate holds no channel to it once it runs.
 
 **The member runs under its own account, and the charter's sentence is met as
 of 2026-09-15**, per issue #545 and the operator's ruling of that date.
@@ -1363,8 +1292,8 @@ what keeps the worker's identity from ever reaching the name.
 
 **The two costs the shared directory carried are settled by the ruling, named
 so a reader does not hunt for them.** The lifetime coupling dies with the
-location, the member's territory outliving the worker unit, so the manager's
-cleanup no longer takes a name whose peer is the operator's. The squat defect
+location, the member's territory outliving the worker, so no cleanup of the
+worker's takes a name whose peer is the operator's. The squat defect
 closes the same way: the name stands where the agent's uid cannot write, so a
 name replaced before the operator dials it is unrepresentable rather than
 defended. The act that closed it is this ruling's and not the account act the
@@ -1385,20 +1314,19 @@ nothing.** The territory is the member's, the member unlinks before binding,
 which keeps its bind clean, and this crate holds no reason to touch a
 directory whose names it no longer watches, the pathname wait having retired.
 What made an unconditional removal safe still holds and now guards the
-member's own unlink: a second load of a live agent fails at section 4.1's
-step 5, unit-name uniqueness being the concurrency guard
-`weaver-admin-systemd-contract` section 5 relies on, and the member is
-started only after that ask returns, so a name found standing belongs to a
+member's own unlink: a second load of a live agent refuses `AgentRunning` at
+the run lock of section 3, the lock being the concurrency guard, and the member is
+started only after the start step holds it, so a name found standing belongs to a
 load that has ended, the one-member rule of `weaver-state-PRD` section 4 held
 by the guard rather than by a handshake at the name.
 
-**The member retires itself and the init system reaps it.** `weaver-state-PRD`
+**The member retires itself and pid 1 reaps it.** `weaver-state-PRD`
 section 4 has the process retiring with each unload while its holdings stand for
 the next, and the mechanism is the first door's closure: the worker's channel
 closes at unload and the member's serve loop ends with it. A load that fails
 before the enter delivers the harness's end leaves that end with this crate,
 whose invocation exits, closing it, and a load that fails after the delivery
-ends the same way, section 5's rollback stopping the worker and the stop
+ends the same way, section 3's rollback ending the worker and its exit
 closing the end the worker took: the member reads either closure as the
 first door's end and retires, so an abandoned member is a bounded cost
 rather than a resident one, on every path alike.
@@ -1406,7 +1334,7 @@ rather than a resident one, on every path alike.
 **This crate observes the child and does not reap it, and the distinction is
 load-bearing.** The wait above reads the child's exit only to end early, so a
 member that dies before binding does not cost the load the full bound. **Reaping
-is the init system's by reparenting**: this crate is one invocation per verb,
+is pid 1's by reparenting**: this crate is one invocation per verb,
 per section 2, and exits when the verb answers, so the member outlives it and is
 inherited by pid 1. That is the arrangement the residency needs rather than an
 accident of it, a member reaped by its starter being a member that dies with the
@@ -1416,48 +1344,51 @@ verb that started it.
 on every exit path: what would be reaped retires on its own and is collected
 where every orphan is.
 
-**The unit declares no descriptor-bearing open, and the absence is the
-assertion.** Under the
-inversion the worker starts bare and builds its own coordination socket inside
-the sandbox, per `weaver-harness-Spec` section 2.3, so nothing is placed into
-the unit at start and no descriptor crosses the init system at all. The sink's
-descriptor crosses later and elsewhere, inside the enter directive as ancillary
-data over the connection admin dialed, per charter section 4.1 step 6. A
-builder adding a socket declaration to this invocation would be reviving the
-route the inversion retired, so what this clause asserts is that the start
-invocation carries no descriptor-bearing property.
+**The trace relay holds the trace door, and the agent never does**, on the operator's
+ruling of 2026-10-03 on #50. It is a small process the start step launches beside the
+worker, under the relay account `weaver-<agent>-relay`, whose one group is the trace
+group `weaver-<agent>-trace`, and never under the agent's account or the member's. **The
+start step binds its socket and hands it over**: as root it binds `trace.sock` in the
+agent's run directory of section 3, `<coordination-root>/weaver-<agent>-run/`, owned by
+root and writable by no one else, apart from the agent's runtime directory,
+root-owned, mode `0660` and grouped to the agent's per-agent access group
+`weaver-<agent>-admin`, which the declared trace reader must hold, and passes the
+listening descriptor to the relay at its exec, so the relay never binds and never needs
+to write the directory. It also passes a read-only descriptor of the sink, opened
+without following a link from the same file section 5 opened for the worker, so **the
+relay serves the loaded run's own file by descriptor and records its identity**, and an
+operator's edit to the declaration's sink while the run stands changes nothing the relay
+reads (the item carried on #50, issuecomment-5969507004). **It admits exactly one
+reader**, the `trace-reader` of the agent's `roles.toml`, judged by the kernel's peer
+credential before a byte of the request is read, and refuses and logs every other
+caller. **The newest connection from that reader replaces the old**, the relay holding
+one follower at a time inside its one process, so the replaced follower ends with a
+reason, the replacement is logged, and never more than one follower stands (the item
+carried on #50, issuecomment-5969438713). The stream is `weaver-types-Spec` section
+3.1's: a `TraceHeader` line, then the file's own lines from the verified position
+exactly as written, then following with a heartbeat while idle. **The relay parses no
+event**: it hashes one record's bytes to verify a position and copies bytes. Its
+operations, connects, replacements, refusals and disconnects, go to the operations log
+through a descriptor the start step passes, never a line per streamed record.
 
-**Bare is a statement about descriptors and the argument vector does not
-qualify it.** The distinction is worth holding because the two are easy to
-read as one absence: a descriptor is a capability the manager would have to
-hold and pass, and an argument is a value the worker reads and then resolves
-for itself under its own identity. The worker opens what its arguments name, so
-a path in the vector grants nothing the agent uid did not already have, which
-is why the vector leaves the reliance set of
-`weaver-admin-systemd-contract` section 5 untouched while a descriptor route
-would not. The assertion below is unchanged by this act and is the one a
-reviewer checks: the invocation carries no descriptor-bearing property, whatever
-else it carries.
+**The relay's lifetime is bound to the worker's by a pipe, and the failure mode is
+stated.** The start step makes one pipe before it forks either process. The worker
+inherits the write end across its exec and marks it close-on-exec at once, so the organs
+it forks do not hold it, and the relay holds the read end. The worker never writes it,
+so the relay's read blocks for the run's life and returns end-of-file only when the last
+holder of the write end is gone, which is the worker's death, clean or not, the kernel
+closing the descriptor whatever killed the process. The relay exits on that end-of-file
+after telling its follower why. **The failure modes run one way each.** If the worker
+forks an organ in the window before the flag is set, that organ holds the write end too
+and the relay outlives the worker until the organ dies, which the organs' death with
+their worker bounds. If the relay dies first, the worker serves on, the trace keeps
+landing in the sink, and the door is closed until the next load, which the reader sees
+as a refused connection and the operations log records. Neither process waits on the
+other, and the start step's detach leaves both reparented to pid 1.
 
-The earlier form of this clause named a listen-fds route, and the measurement
-of 2026-08-05 is kept in the charter's section 10 rather than here: the
-manager's own descriptor passing does deliver a caller-held end into a unit,
-and the design no longer needs it.
-
-```graph
-node: admin-unit-declares-no-open
-kind: assertion
-tag: review
-
-edge: asserts
-from: weaver-admin
-to: admin-unit-declares-no-open
-```
-
-**Worker death is observed, not reported.** The channel's closure is the
-observation, per `weaver-organ-channel` section 2, and the unit's status is
-consulted through the same command-line interface for the report the log
-carries. Admin repairs nothing on either, per the charter.
+**Worker death is observed, not reported.** The channel's closure is the observation,
+per `weaver-organ-channel` section 2, and the run lock's release is the fact `show` and
+`unload` read, per section 3. Admin repairs nothing on either, per the charter.
 
 ## 7. The coordination channel
 
@@ -1508,7 +1439,7 @@ configuration places, with the close-on-exec flag asked for in the socket call
 itself and the connection closed when the verb answers.
 
 **The dial retries within a bound because the bind is the worker's first act
-and the load's dial may arrive first.** The load starts the unit and then
+and the load's dial may arrive first.** The load's start step starts the worker and then
 dials, so the race is real and structural rather than incidental: the elected
 bound is one second of attempts at ten millisecond intervals, and a bound
 exceeded refuses the load with `NoResidency` rather than waiting without end.
@@ -1596,9 +1527,9 @@ resolved kind: a serving enter takes the declaration's gate instruction into
 `EnterBinding`'s serving case, and a diagnostic enter takes its absence. The cross-field
 rule lands here because only this crate sees the file whole: a serving declaration
 omitting the gate instruction and a diagnostic declaration carrying one are both refused
-at inventory as `ConfigInvalid` naming `gate-instruction`, before any unit starts, which
-is the taxonomy of `weaver-types-PRD` section 2.1 run over one more field. **The rule
-reaches one field and not two.** An act earlier on 2026-08-24 extended it to
+at inventory as `ConfigInvalid` naming `gate-instruction`, before the start step runs,
+which is the taxonomy of `weaver-types-PRD` section 2.1 run over one more field. **The
+rule reaches one field and not two.** An act earlier on 2026-08-24 extended it to
 `trace-sink`, which the same day's ruling undid by making every binding declare a sink,
 so that field is required under either kind and no cross-field question arises for it.
 Past the inventory no disagreement exists to carry, the payload's shape holding what was
@@ -1710,15 +1641,21 @@ structural rather than disciplined.
 
 ## 8. The operations log
 
-**The format is NDJSON, one act per line, and it shares no schema with the
-trace.** The charter fixes the custody, 0640 in a 0750 directory, both owned
-by root, one per agent at the path its root names, and never inside an agent home. What this Spec adds is
-the rendering: one JSON object per line, the same reading tools the stream's
-consumers already hold, and a
-field set that is this crate's own and deliberately not the event envelope,
-because a shared schema is how a second author drifts into the first's
-record. The file opens with `O_APPEND` and `O_CLOEXEC` like every descriptor
-this crate holds.
+**The format is NDJSON, one act per line, and it shares no schema with the trace.** **It
+is one per agent, at `admin.log` in the agent's declaration directory**,
+`~/.weaveragent/<agent>/admin.log` by default, beside `agent.toml`, the prompt file and
+the save points, on the operator's ruling of 2026-10-03 on #63's sixth question, carried
+forward on #50, which moves it from the root's `log-path` of #45. The agent's uids never
+reach it, that directory being closed to them by section 9's judgment, and the operator
+can read it. This crate appends to it as root, opening it with `O_NOFOLLOW` so a link
+planted at the name is refused rather than followed. **The worker's own output is not
+this log**: the start step points the worker's standard output and error at `worker.log`
+beside it, per section 6, because the worker holds that descriptor and an agent holding
+a writable handle to the boundary's record could write into it. What this Spec adds is
+the rendering: one JSON object per line, the same reading tools the stream's consumers
+already hold, and a field set that is this crate's own and deliberately not the event
+envelope, because a shared schema is how a second author drifts into the first's record.
+The file opens with `O_APPEND` and `O_CLOEXEC` like every descriptor this crate holds.
 
 ```graph
 node: admin-log-ndjson-own-schema
@@ -1730,10 +1667,19 @@ from: weaver-admin
 to: admin-log-ndjson-own-schema
 ```
 
+**`admin.log` is the boundary's record, and the trace is the constitution's and the
+agent's own**, on the same ruling. A verb that changes the agent, a load, an unload or a
+stop that closes a turn, goes on the trace with its cause, the uid sudo reports, through
+the harness, per section 2. Boundary activity that changes nothing in the agent goes
+here: a refused verb, a read-only verb, `show`, a `stop` answered at rest, and the trace
+relay's connects, replacements, refusals and disconnects, never a line per streamed
+record. Each such line carries the wall time, the command line, the caller's uid, what
+was asked, the boundary file's digest in force, and the outcome.
+
 **What is logged is the charter's set.** Transitions directed and their outcomes,
-refusals issued, rollbacks with what each act undid or could not, and units started and
-stopped, a load's `ready` line naming the agent's SPU key and path per section 9. Never
-a fact about what an agent did, per charter section 2: the moment a line describes
+refusals issued, rollbacks with what each act undid or could not, and workers started
+and stopped, a load's `ready` line naming the agent's SPU key and path per section 9.
+Never a fact about what an agent did, per charter section 2: the moment a line describes
 conduct rather than supervision it is a second record of the agent, and the review that
 finds one has found a defect. The instrument is named in that sentence and is the only
 one available, no mechanism being able to tell a line about supervision from a line
@@ -1745,8 +1691,8 @@ harness is answerable for, and the trace is where that working is recorded. A
 line describing conduct would make this crate a second author of an account it
 sees only a part of, which is an organ reasoning about a domain that is not its
 own, per apex section 5.5. What stays is supervision, which is this crate's own
-domain: the transitions it directed, the refusals it issued, and the units it
-started and stopped.
+domain: the transitions it directed, the refusals it issued, and the workers it
+started and ended.
 
 ```graph
 node: admin-log-never-records-agent-conduct
@@ -1810,28 +1756,28 @@ value below is read from the root before any verb, and a value that fails to rea
 the invocation as `ConfigInvalid` with no field.
 
 **The root holds one file per key.** Required: `worker-binary`, `spu-binary`,
-`gate-binary`, `run-tool`, `control-tool`, `coordination-root`, `log-path`,
-`declaration-directory` and `operator`. Optional: `unit-properties`, `headroom-bytes` and
-`state-store-socket`, the last read under a service election alone, the service engine's
-conventional directory standing where the file is silent. **The agent's declaration
-stands in the operator's directory and not in the root**, on the operator's ruling of
-2026-10-02: `declaration-directory` names it, absolute, `~/.weaveragent/<agent>/` by
-convention, and it holds `agent.toml`, which this crate parses per `weaver-types-Spec`
-section 2, beside the prompt file the declaration's `identity-file` names. A declaration
-directory holding no `agent.toml` answers `NoSuchAgent`, as a root holding none did.
-**`operator` names the operator's uid**, on the operator's ruling of 2026-10-02 on this
-act's first question: a root-owned key `create-agent.sh` writes once, the box's own fact,
-set by root, about whose data defines the agent, and independent of who invokes a verb. The
-coordination name changed hands with the operator socket on 2026-08-05: the operator
-places it, the harness binds it, and admin dials it, so one value reaches two crates and
-the root is where they agree. These values are not the agent config and no seam carries
-them, which is why the root takes no contract of its own. **The file and its values part
-company at the start ask, and the distinction is worth holding.** This crate is the only
-one that reads the root. Three of the values do not stay in it: the coordination
-socket's name and the two organ binary paths reach the worker in section 6's argument
-vector, over the external boundary `weaver-admin-systemd-contract` holds rather than
-over any seam. What is fixed here is that these values exist, that they are the
-operator's to place, and that none of them is discovered at runtime by searching.
+`gate-binary`, `run-tool`, `control-tool`, `coordination-root`, `declaration-directory`,
+`operator` and `roles.toml`, the boundary file of section 9 below. Optional:
+`headroom-bytes` and `state-store-socket`, the last read under a service election alone,
+the service engine's conventional directory standing where the file is silent. **The
+agent's declaration stands in the operator's directory and not in the root**, on the
+operator's ruling of 2026-10-02: `declaration-directory` names it, absolute,
+`~/.weaveragent/<agent>/` by convention, and it holds `agent.toml`, which this crate
+parses per `weaver-types-Spec` section 2, beside the prompt file the declaration's
+`identity-file` names. A declaration directory holding no `agent.toml` answers
+`NoSuchAgent`, as a root holding none did. **`operator` names the operator's uid**, on
+the operator's ruling of 2026-10-02 on this act's first question: a root-owned key
+`create-agent.sh` writes once, the box's own fact, set by root, about whose data defines
+the agent, and independent of who invokes a verb. The coordination name changed hands
+with the operator socket on 2026-08-05: the operator places it, the harness binds it,
+and admin dials it, so one value reaches two crates and the root is where they agree.
+These values are not the agent config and no seam carries them, which is why the root
+takes no contract of its own. **The file and its values part company at the start ask,
+and the distinction is worth holding.** This crate is the only one that reads the root.
+Three of the values do not stay in it: the coordination socket's name and the two organ
+binary paths reach the worker in section 6's argument vector, at the start step's exec
+rather than over any seam. What is fixed here is that these values exist, that they are
+the operator's to place, and that none of them is discovered at runtime by searching.
 
 **Nothing in one agent's root is read for another.** The box-wide values, the binaries,
 the tools, the coordination root and the headroom, are copied into each root by the
@@ -1839,9 +1785,10 @@ deployment scripts from a stack record of their own that this crate never reads,
 agent's configuration is that agent's even where two roots carry the same values. The
 installed program files may stand once on disk and be named by every root, while the
 configuration and the processes are each agent's own. **The operations log is one per
-agent**, at the path the agent's `log-path` names. Managing several agents, listing
-them or holding a map across them, is not this crate's and belongs to WeaverWeb or a
-separate application, which drives each agent through its own admin.
+agent**, at `admin.log` in the agent's declaration directory, per section 8. Managing
+several agents, listing them or holding a map across them, is not this crate's and
+belongs to WeaverWeb or a separate application, which drives each agent through its own
+admin.
 
 **The organ binaries are in the root and not in the agent's declaration, and the
 placement is the ruling rather than a convenience.** Which program runs under an agent's
@@ -1855,9 +1802,9 @@ ruling of 2026-09-28 that `python-spu` is an option and not a takeover: one agen
 serve from the Rust SPU while another serves from `python-spu`, each root naming its
 own. **The names the root's binaries carry differ pairwise**: the worker's, the state
 member's, the gate's and the SPU's, and a root naming two of them under one file name
-fails the invocation as an unreadable configuration fails it, before any unit is asked.
-They are held distinct rather than keyed around because the stack below is keyed by
-file name and `weaver-analysis` carries it into a run's code identity by those names.
+fails the invocation as an unreadable configuration fails it, before the start step
+runs. They are held distinct rather than keyed around because the stack below is keyed
+by file name and `weaver-analysis` carries it into a run's code identity by those names.
 No new refusal names any of them, the configuration's failure having no lifecycle case
 to be.
 
@@ -1891,14 +1838,15 @@ this crate reads are held closed**: `agent.toml` and the prompt file are each a 
 file and never a link, owned by that uid or by uid 0, and writable by no group or other.
 Their read bits are not judged, the closed directory already denying every other
 principal the path, so a file an editor writes under an ordinary umask passes. Other
-entries are the operator's and are not read. **Every directory above it is held closed
-as the root's ancestors are**, each owned by uid 0 or by the operator and writable by no
-group or other unless its sticky bit is set, since a directory another principal could
-write would let it rename the judged directory away. Any failure refuses
-`BoundaryUnverified`, naming the path on stderr, before a value is read, and a
-declaration directory that does not exist or is not a directory refuses the same way,
-the operator's provisioning being incomplete rather than the agent absent. The deploy
-scripts are bound by this judgment as by the root's, per the line above.
+entries are the operator's and are not read, save `admin.log` and `worker.log`, the two
+this crate creates and appends to, without following a link, per section 8. **Every
+directory above it is held closed as the root's ancestors are**, each owned by uid 0 or
+by the operator and writable by no group or other unless its sticky bit is set, since a
+directory another principal could write would let it rename the judged directory away.
+Any failure refuses `BoundaryUnverified`, naming the path on stderr, before a value is
+read, and a declaration directory that does not exist or is not a directory refuses the
+same way, the operator's provisioning being incomplete rather than the agent absent. The
+deploy scripts are bound by this judgment as by the root's, per the line above.
 
 **Admin reads both files as root and the agent never reads either.** What crosses to the
 agent's processes is what the parse yields and the enter carries, the prompt's text
@@ -1909,7 +1857,7 @@ as its identity prefix at load, and that gives the agent process no read of the 
 and no way to change it.
 
 **An optional value is absent only where nothing stands at its path.** Every optional
-value of this section, `unit-properties`, `headroom-bytes` and `state-store-socket`,
+value of this section, `headroom-bytes` and `state-store-socket`,
 reads as absent only where the path itself names nothing, which is
 asked of the link and never of its target. A dangling link, a directory, bytes that are
 not UTF-8, or a read the kernel refuses is the operator's file failing to read, and
@@ -1982,6 +1930,38 @@ tidiness, because a worker reading this file would take a dependency on a shape
 section 11 holds open and would put a second reader on values only one party
 places.
 
+**The boundary file names the trace door's one reader, and it must be declared**, on the
+operator's rulings of 2026-10-03 on #63 and #50. `roles.toml` stands in the agent's root
+under the root's judgments, root-owned, writable by no group or other, and never a link,
+and it is **required**: a file missing or malformed refuses by name at `validate` and at
+`load`, `ConfigInvalid` naming `roles.toml`, and no reader is ever admitted because a
+file was absent. Its shape is `BoundaryFile` of `weaver-types-Spec` section 3.1, the one
+`trace-reader` and nothing else: **the lifecycle half #63 drafted, groups mapped to
+verbs, does not return**, who may issue which verb being the sudo rule's of section 2,
+which this crate does not read. A trace reader that is, or holds, the agent's account or
+its state member's refuses at the same judgment, so the agent never reaches its own
+record through the boundary. **It is boundary and never constitution.** The
+constitution, what shapes what happens inside the agent, is the declaration and the
+facts the `load` event names, and it is the tuple. The boundary file says who may read
+the agent from outside, as its OS identity does, so it stays out of the declaration's
+digest, and granting a reader never makes the agent another agent. It is declared all
+the same: its digest is written on every line of `admin.log`, `show` carries it in the
+`show` rework, and the enter hands it to the harness for the `load` event's member
+marked boundary. **It is one file per agent** because it names that agent's reader, its
+connector being one agent's own appendage (toddwbucy/WeaverTools#6), and a shared file
+would be a roster of every agent's readers, the fleet view #45 removed from admin.
+
+**The trace relay's account and the agent's access group are provisioned, and the walk
+requires them.** `weaver-<agent>-relay`, whose one group is the trace group
+`weaver-<agent>-trace`, is the account section 6 starts the relay under, and
+`weaver-<agent>-admin` is the group the trace socket is grouped to, which the declared
+trace reader must hold. Section 4's walk resolves both and refuses by name where either
+is missing, on the same ground the member's account is required: a process this crate
+starts under an account the box does not carry is a start that fails opaquely, and a
+reader outside the socket's group is a reader the filesystem turns away before the
+relay's credential check runs. The relay's binary is the worker binary's sibling,
+`weaver-trace-relay`, found as the state member's is, and never a value of its own.
+
 ## 10. What is enforced, and by which instrument
 
 Per apex section 11, with the threat walks stated first and each test a walk
@@ -2032,8 +2012,8 @@ yields a uid, so what the harness can know is that its peer holds root, not that
 its peer is `weaver-admin`. Any root process on the host may therefore dial an
 agent's coordination socket and direct its lifecycle. **That is not an
 additional exposure and the reason is worth naming**: a root process already may
-`ptrace` the worker, read and write its memory, replace the binary the unit
-starts, or kill it, so a channel that admitted root adds nothing to what root
+`ptrace` the worker, read and write its memory, replace the binary the start
+step runs, or kill it, so a channel that admitted root adds nothing to what root
 held before it. The boundary this program draws is between the agent and root,
 and it is drawn where the agent cannot cross it. A check that separated admin
 from other root processes would need a credential the operating system does not
@@ -2136,10 +2116,10 @@ is that integrating is the loop's: the stop answer is relayed unchanged because 
 stop found is a fact about a run the harness conducts, the devices a binding assigns are
 unchecked because forming a view of them would be this crate reasoning about a domain it
 cannot see, the operations log stops at supervision because conduct is recorded in the
-trace the harness authors, and the residency read stays the manager's three values
-because telling a run at rest from a run serving is known to the party that conducts it
-and not to the one that started the unit. The ten owings below are the same rule at the
-document level.
+trace the harness authors, and the run lock is read as a worker's presence and never as
+a state because telling a run at rest from a run serving is known to the party that
+conducts it and not to the one that started the worker. The ten owings below are the
+same rule at the document level.
 
 **One edge moved and one was added beside an existing one.** Both of the organ
 invariant's edges were placed in the labelling pass, before the apex held a
@@ -2333,6 +2313,57 @@ directive is asserted where the run happens.
   section 5 owes the pair-creating crates, argued at section 7, and it
   discharges this crate's side of that owing alone.
 
+**The walk at the start step and the trace door, opened 2026-10-03 on #50.** The
+adversaries are a process of the agent's reaching for the run lock or the trace, a
+caller reaching for a verb or an argument the sudo rule did not grant, and a relay or
+an organ outliving the worker it belongs to. The tests the code act owes are each
+perturbation-verified:
+
+- **The worker runs as the agent and holds no group root left it**, watched by a
+  stand-in worker recording its credentials after the start step's exec. The
+  perturbation skips the supplementary narrowing, and the worker holds root's groups.
+- **A second load refuses while the run lock is held**, watched by two loads of one
+  agent, the second answering `AgentRunning` before starting anything. The perturbation
+  takes the lock after the fork, and both start a worker.
+- **The lock stands where the agent cannot replace it**, watched by the agent's uid
+  trying to unlink and recreate `run.lock`: refused by the root-owned run directory.
+  The perturbation places it in the runtime directory, and a second worker starts.
+- **`unload` answers only once the lock is free**, watched by a worker that ignores
+  leave: the escalation signals the lock's holder and the answer waits on the release.
+  The perturbation answers on the leave alone, and the worker still runs.
+- **The cause is the uid sudo reports**, watched by a `load` under sudo whose `load`
+  event names `SUDO_UID`. The perturbation reads the uid from standard input, and a
+  caller names any uid it likes.
+- **The trace relay admits only its declared reader**, watched by any other caller and
+  by the agent's uid connecting: each refused and logged. The perturbation admits any
+  member of the socket's group, and a stranger receives the record.
+- **The newest reader connection replaces the old**, watched by the declared reader
+  connecting twice: the first follower ends with a reason. The perturbation keeps both.
+- **The relay dies with the worker**, watched by killing the worker with `SIGKILL`: the
+  relay exits on the pipe's end-of-file. The perturbation leaves the write end open in
+  the start step, and the relay outlives the worker.
+- **The relay streams the loaded run's file**, watched by an edit to the declaration's
+  sink while the run stands: the stream still reads the worker's file. The perturbation
+  reopens the declared path, and the stream reads the new file.
+
+```graph
+node: admin-start-step-holds-the-run-lock
+kind: assertion
+tag: perturbation
+
+edge: asserts
+from: weaver-admin
+to: admin-start-step-holds-the-run-lock
+
+node: admin-trace-relay-admits-one-reader
+kind: assertion
+tag: perturbation
+
+edge: asserts
+from: weaver-admin
+to: admin-trace-relay-admits-one-reader
+```
+
 ## 11. Open elections
 
 Each names what settles it, and none is this Spec's to settle alone.
@@ -2376,16 +2407,15 @@ Each names what settles it, and none is this Spec's to settle alone.
   tool set reaching this crate and going no further while nothing dispatches a tool.
   **Settled by:** the assembly and distillation act for the first, and the tool workflow
   that charters dispatch for the second. Until then the worker defaults both, which is
-  why a load stands without either. - **The unit template's hardening set.** Which
-  properties beyond `User=` the fixed template carries is the operator's policy surface,
-  named in section 9's configuration and deliberately not enumerated by this Spec,
-  because a hardening list frozen in a Spec is a security posture that cannot track its
-  host. **The properties the sandbox must deliver are required and their directives are
-  not**, per the operator's ruling of 2026-08-05 and `weaver-admin-PRD` section 7: no
-  privilege escalation from inside, no reach into another principal's home, and a bound
-  on what the agent may consume. The operator owns the posture the way an operator owns
-  a firewall configuration. - **Whether the unit restricts the agent's address families
-  to `AF_UNIX`.** Open with a stated cost rather than required, per the same ruling. It
+  why a load stands without either. - **The sandbox's hardening. Settled 2026-10-03**
+  with the agent's departure from systemd (#50): hardening is the operator's to wrap
+  around a packaged agent, with systemd, a container or anything else, and is not this
+  framework's, per `weaver-admin-PRD` section 7. What the start step itself delivers is
+  the floor: the agent's own uid and group, no new privileges across the exec, and a
+  runtime directory only the agent and the operator reach. The template and
+  `unit-properties` key that carried the rest retire. - **Whether a packaging restricts
+  the agent's address families to `AF_UNIX`.** Open with a stated cost rather than
+  required, per the ruling of 2026-08-05. It
   is **not** a restatement of the rule that no crate here exposes a network surface:
   that rule binds what these crates link, and this would bind what an agent's tools may
   reach, so an agent whose tools fetch anything would break under it. Settled by an

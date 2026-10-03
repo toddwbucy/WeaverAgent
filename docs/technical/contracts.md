@@ -99,11 +99,10 @@ and owns. Bounded loss is named twice and never silent. Read-out not drafted.
 
 ## The system contract
 
-### weaver-admin-systemd-contract
+### weaver-admin-systemd-contract, retired
 
-`weaver-admin` to the init system. Not an external consumer surface and listed
-apart from the two above for that reason: what is on the far side is the service
-manager rather than anyone building against this program. Read-out not drafted.
+Retired on 2026-10-03 (#50), when the agent left systemd. Admin's start step does what
+the unit did, per `weaver-admin-Spec` section 6.
 
 ## Drawn material
 

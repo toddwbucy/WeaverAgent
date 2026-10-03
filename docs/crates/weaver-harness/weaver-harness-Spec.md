@@ -85,7 +85,7 @@ leftovers.
 
     src/lib.rs         re-exports, and nothing else
     src/channel.rs     organ-channel I/O and descriptor custody, section 2
-    src/spawn.rs       the organ fork's three calls, section 2.2
+    src/spawn.rs       the organ fork's five calls, section 2.2
     src/lifecycle.rs   the harness type, the run state, the fan-out, section 3
     src/authorship.rs  trace authorship, section 4
     src/assembly.rs    prompt assembly's deterministic floor, section 5
@@ -176,7 +176,7 @@ interpreter and the deployed worker's build is untouched. The blade holds
 by the same placement rule: a bin target links this library as an external
 crate, the crate-private constructor stays unreachable, and Python reaches
 only what the connector's proxy forwards from the granted seat, the proxy
-dying with its crossing. Which binary a unit starts stays a provisioning
+dying with its crossing. Which binary the start step runs stays a provisioning
 fact, and no document elects it.
 
 ```graph
@@ -536,8 +536,8 @@ from: weaver-harness
 to: harness-child-flag-clear-unconditional
 ```
 
-**Between fork and exec the child performs three calls, `dup2`, `fcntl`, and
-`execve`, and nothing else.** All three are async-signal-safe, and the bound
+**Between fork and exec the child performs five calls, `prctl`, `getppid`, `dup2`,
+`fcntl`, and `execve`, and nothing else.** All five are async-signal-safe, and the bound
 is stated because the worker holds the writer's thread at every fork: a child
 of a multithreaded process may safely run only async-signal-safe calls before
 its exec, so the enumeration is the safety argument and not a style. An
@@ -549,30 +549,59 @@ call list between fork and exec, and this suite buying the walks of section 8
 instead.
 
 ```graph
-node: harness-fork-to-exec-three-calls
+node: harness-fork-to-exec-bounded-calls
 kind: assertion
 tag: review
 
 edge: asserts
 from: weaver-harness
-to: harness-fork-to-exec-three-calls
+to: harness-fork-to-exec-bounded-calls
 ```
 
-**The organ's argv carries the construction parameters its composition root is
-owed, and its environment is the worker's.** The exec passes the worker's
-environment as `envp`, on the operator's ruling of 2026-10-01: an organ starts as
-the agent is constituted, never empty. The agent is the service and each organ one
-of its components, the worker's environment is the agent's unit as admin
-configured it, `unit-properties` `Environment=` included, and an organ exec'd with
-less is a component the agent was never configured to be. The environment is read
-and its array built in the parent before the fork, as the vector below is.
+**The organs die with the worker, so an orphaned SPU never holds the device**, on the
+operator's ruling of 2026-10-03 on #50 that the agent leaves systemd, whose cgroup ended
+every process of the unit when the unit stopped. The worker owns its organs now: the
+child sets `PR_SET_PDEATHSIG` to `SIGKILL` as its first call, so the kernel kills the
+SPU, the classify arm or the gate the instant the worker dies, cleanly or not, and then
+compares `getppid` with the worker's pid read before the fork, exiting at once where
+they differ, because a worker that died between the fork and the first call would
+otherwise leave a child the signal was armed too late to reach. **The signal follows the
+thread that forked, not the process**, so the worker forks its organs from its main
+thread, which lives for the process, and never from a thread that may end while the
+worker serves. **The worker exits after it answers left**, the run being its only
+purpose, so the run lock admin's `unload` waits on is released by its exit, per
+`weaver-admin-Spec` section 3. **Two descriptors cross the start step's exec into the
+worker and are the worker's to keep**: the run lock, which it holds for its life and
+never reopens, a record lock being dropped when its holder closes any descriptor of the
+file, and the write end of the trace relay's lifetime pipe, which it marks close-on-exec
+at once so no organ holds it, per `weaver-admin-Spec` section 6. **The instrument is
+perturbation**: an organ stand-in still running after the worker is killed with
+`SIGKILL`, watched to fail when the death signal is not set.
+
+```graph
+node: harness-organs-die-with-the-worker
+kind: assertion
+tag: perturbation
+
+edge: asserts
+from: weaver-harness
+to: harness-organs-die-with-the-worker
+```
+
+**The organ's argv carries the construction parameters its composition root is owed, and
+its environment is the worker's.** The exec passes the worker's environment as `envp`,
+on the operator's ruling of 2026-10-01: an organ starts as the agent is constituted,
+never empty. The agent is the service and each organ one of its components, the worker's
+environment is the one admin's start step composes for it, never the caller's, since
+under sudo a caller's environment is not the agent's, and an organ exec'd with less is a
+component the agent was never configured to be. The environment is read and its array
+built in the parent before the fork, as the vector below is.
 
 **The environment is the agent's, and argv stays the route for what an organ's
 composition root is owed.** A parameter this crate hands an organ is named on the
 vector at the call site, where the act that added it is the act that can be read.
-A variable reaches an organ because the operator wrote it into the agent's unit, so
-what the environment carries is the operator's declaration and not a value this
-crate chose to pass.
+A variable reaches an organ because the start step composed it for the agent, so
+what the environment carries is the agent's and not a value this crate chose to pass.
 
 **What travels here is a host's fact and not an agent's.** A number two agents
 sharing this host cannot sensibly disagree about belongs on this vector, the
@@ -583,17 +612,17 @@ section 8, because the declaration is per agent and this vector is per worker.
 The distinction is worth stating because both routes end at the same composition
 root and a parameter on the wrong one is not visibly wrong from inside it.
 
-**The bound above is untouched by this and the reason is where the work
-happens.** Every argument and every pair of the environment is a `CString` built
-in the parent before the fork, the way the program name already is, so the
-vectors the child hands `execve` are finished before the child exists. The child performs the same three calls. A
-parameter that could only be assembled after the fork would not be expressible
-here, which is a constraint on what may travel this way rather than a cost.
+**The bound above is untouched by this and the reason is where the work happens.** Every
+argument and every pair of the environment is a `CString` built in the parent before the
+fork, the way the program name already is, so the vectors the child hands `execve` are
+finished before the child exists. The child performs the same five calls. A parameter
+that could only be assembled after the fork would not be expressible here, which is a
+constraint on what may travel this way rather than a cost.
 
 **Descriptor 2 is the worker's pipe, and the dying organ's last word
 reaches the record through it.** The parent opens a pipe before the fork
 and the child places the write end at descriptor 2 - one more `dup2`, the
-call kind the three-call bound already enumerates, so the bound holds as
+call kind the five-call bound already enumerates, so the bound holds as
 stated. The worker's end is a reader thread that tees every line to the
 worker's own stderr, so the journal loses nothing it carries today, and
 retains the last line that parses as JSON - the SPU already dies printing
@@ -620,7 +649,7 @@ clause. The corner is the pipe call's numbering rather than a race,
 because the lowest free numbers are what it answers and a parent that has
 closed its own stderr leaves 2 free. **The repair is the parent moving the
 end and not the child clearing the flag**, for two reasons pointing the
-same way: the child's three-call bound is left as it stands, and the same
+same way: the child's five-call bound is left as it stands, and the same
 corner would put the parent's own stderr on this pipe, where the tee
 writes its own input back. This is the equal-descriptor corner the
 placement above meets at descriptor 3, answered differently because the
@@ -710,26 +739,27 @@ worker's first act.** Per the inversion ruling of 2026-08-05 and
 `weaver-admin-harness-contract` section 2, any socket connecting to the harness
 is an internal connection: the composition root creates a `SOCK_SEQPACKET`
 socket with close-on-exec in the creating call, binds it to the per-agent name
-inside the unit's own runtime directory, and listens, before any directive can
+inside the agent's runtime directory, and listens, before any directive can
 arrive. It runs before the serving loop because an admin invocation dials
-immediately after starting the unit and a name not yet bound is the race the
+immediately after starting the worker and a name not yet bound is the race the
 ordering exists to prevent, admin's bounded retry covering what remains.
 `Harness::adopt` becomes `Harness::listen`, taking the bound listener rather
 than a handed end, and the earlier declared-open route retires with the party
 that placed it.
 
-**The bind never unlinks, and the runtime directory is why it does not have to.**
-A Unix socket's pathname outlives the process that bound it, so a bind against a
-name a dead worker left would fail. The directory this socket lives in is created
-by the init system at the unit's start and removed with the unit, per
-`weaver-admin-systemd-contract` sections 2 and 5, so the name cannot be inherited
-from a previous run and there is nothing to clear. **A bind that finds its name
-occupied is a fault and never a thing to remove**, because the only ways a name is
-occupied are that a live worker holds it, in which case unlinking would strand the
-running agent's supervisor, or that the manager did not honor the directory, in
-which case the program's assumption is wrong and it should say so rather than
-repair. The instrument is review, no test in this crate being able to produce a
-manager that misbehaves.
+**The bind never unlinks, and admin's start step is why it does not have to.** A Unix
+socket's pathname outlives the process that bound it, so a bind against a name a dead
+worker left would fail. The directory this socket lives in now outlives the worker, the
+init system that removed it having left the agent on 2026-10-03 (#50), so admin's start
+step clears a name a dead worker left before it starts the next, which is safe because
+it holds the run lock first and the lock proves no worker runs, per `weaver-admin-Spec`
+section 6. The worker therefore meets no inherited name and has nothing to clear. **A
+bind that finds its name occupied is a fault and never a thing to remove**, because the
+only ways a name is occupied are that a live worker holds it, in which case unlinking
+would strand the running agent's supervisor, or that the start step did not clear it, in
+which case the program's assumption is wrong and it should say so rather than repair.
+The instrument is review, no test in this crate being able to produce a manager that
+misbehaves.
 
 ```graph
 node: harness-bind-never-unlinks
@@ -1194,12 +1224,11 @@ to: harness-diagnostic-enter-forks-no-gate
 derivation is the whole of this crate's part in it.** Per `weaver-gate-PRD`
 section 2 the pathname is the program's rather than the operator's, and this
 crate is the party positioned to know it: the coordination socket it bound as
-its first act sits in the unit's runtime directory, so the gate's name is that
-directory and a fixed leaf. **What that buys is the manager's lifecycle rather
-than a rule this crate enforces.** The directory is created at start and
-destroyed with the unit, per `weaver-admin-systemd-contract` section 2, so a
-socket inside it cannot outlive its worker and the next bind meets no stale
-name. A derivation reaching anywhere else would need a cleanup this program
+its first act sits in the agent's runtime directory, so the gate's name is that
+directory and a fixed leaf. **What that buys is admin's start step rather than a rule
+this crate enforces.** The start step clears a dead worker's names under the run lock
+before the next worker starts, per `weaver-admin-Spec` section 6, so the next bind meets
+no stale name. A derivation reaching anywhere else would need a cleanup this program
 has already refused to write, an unlink racing a live successor.
 
 The listener therefore retains the path it bound, which is the one thing this
@@ -1284,16 +1313,15 @@ from: weaver-harness
 to: harness-scoped-refusal-account
 ```
 
-**Leave runs the reverse order and drains before it answers.** Lower the gate
-first where one stands, the run state's arm answering whether it does,
-refuse `ActivityNotAtRest` while a turn is in flight, author the
-`unload` event, drain the writer's queue, and release the SPU. Left is
-answered only after the drain returns, which is what makes the answer mean
-what `weaver-admin-harness-contract` section 4 says it means, that everything
-admitted reached the stream. **The ordering is review's by election,** a double
-sink that drains slowly reaching it, which is the shape the gate's
-ready-follows-bind test takes for its own ordering, and this suite not buying
-one.
+**Leave runs the reverse order and drains before it answers.** Lower the gate first
+where one stands, the run state's arm answering whether it does, refuse
+`ActivityNotAtRest` while a turn is in flight, author the `unload` event with the leave
+directive's cause, drain the writer's queue, and release the SPU. Left is answered only
+after the drain returns, which is what makes the answer mean what
+`weaver-admin-harness-contract` section 4 says it means, that everything admitted
+reached the stream. **The ordering is review's by election,** a double sink that drains
+slowly reaching it, which is the shape the gate's ready-follows-bind test takes for its
+own ordering, and this suite not buying one.
 
 ```graph
 node: harness-left-follows-drain
@@ -1305,14 +1333,13 @@ from: weaver-harness
 to: harness-left-follows-drain
 ```
 
-**Stop answers after the record holds the close.** The stop directive aborts
-the turn in flight, the turn's close event is placed with the stop reason, and
-only then does the answer carry `TurnAborted`, the announce-after-record
-discipline of `weaver-admin-harness-contract` section 3. A stop at rest
-answers `AtRest`, a clean close and not a refusal. How the abort lands at the
-decoder is deferred with the decode seam, per section 8, and the trace
-semantics are settled either way, which is what `basic-inference-loop` section
-7 already records.
+**Stop answers after the record holds the close.** The stop directive aborts the turn in
+flight, the turn's close event is placed with the stop reason and the stop directive's
+cause, and only then does the answer carry `TurnAborted`, the announce-after-record
+discipline of `weaver-admin-harness-contract` section 3. A stop at rest answers
+`AtRest`, a clean close and not a refusal. How the abort lands at the decoder is
+deferred with the decode seam, per section 8, and the trace semantics are settled either
+way, which is what `basic-inference-loop` section 7 already records.
 
 **Observe answers from any position and authors nothing**, per
 `weaver-admin-harness-contract` section 3 as of 2026-09-04. Before an enter the answer
@@ -1706,7 +1733,7 @@ to: harness-tool-result-granted-not-minted
 **`src/engine.rs` is loop 1's seat, and the seam it composes across is this
 crate's public surface.** The loop itself is the builder's, per the charter's
 rescope of 2026-08-02: written at the worker composition root, compiled into
-the worker binary, and immutable there, which binary the unit starts being a
+the worker binary, and immutable there, which binary the start step runs being a
 provisioning fact. What this crate holds is the seat and the granted surface
 the loop composes against, which is the whole of sections 2 through 5, the
 channels and their custody, the run state, trace authorship, and assembly's
@@ -2222,7 +2249,9 @@ with what ran. A third member that is not an election joins on 2026-09-04: the
 declaration's digest, which admin computed at the inventory and the enter carries, so
 the record names what the run was built from without this crate reading a file, per
 issue #435. A fourth joins on 2026-10-02 by the same route: the digest of the prompt
-file the declaration names, `identity_file` on the enter and on the load event, per
+file the declaration names, `identity_file` on the enter and on the load event, with the
+boundary file's digest and the load's cause beside it as of 2026-10-03 (#50), each
+copied from the enter and the boundary's marked boundary and never constitution, per
 `weaver-trace-Spec` section 3, which this crate copies and does not compute, the file
 being admin's to read and never this crate's.
 
@@ -2759,7 +2788,7 @@ no reason to bound a receive, to demand that one write arrive as one read, to fl
 descriptor before an exec, to create a pair before a fork, or to keep a loop from
 minting a port, so those ground in it. Remove it and `nix` is still the OS crate,
 descriptors are still owned types, the child's ends still land at 3 and 4, and the
-fork still runs three calls, so those ground in nothing. **Forty-nine claims
+fork still runs a bounded call list, so those ground in nothing. **Forty-nine claims
 grounding in no invariant is the expected result and not a gap**, per Document
 Format section 4: most of what a Spec elects is a format, a name shape, a count, or
 an ordering of its own interior, and representation is what the invariants are not
@@ -2981,9 +3010,9 @@ Each names what settles it, and none is this Spec's to settle alone.
   carries, this section holding the election rather than the implementation. An
   earlier form of this item had the measurement relayed outward to an assembler
   outside the agent, which the ruling replaced with the member composed inside.
-- **The config read.** No chartered workflow reads the declaration from this crate,
-  and the crate links no parser: admin reads the file at its inventory and what this
-  crate receives is the enter, the sink's descriptor, and the loop's path on the unit's
+- **The config read.** No chartered workflow reads the declaration from this crate, and
+  the crate links no parser: admin reads the file at its inventory and what this crate
+  receives is the enter, the sink's descriptor, and the loop's path on the worker's
   vector, per `weaver-admin-Spec` section 4. The read this charter once declared returns
   with the tool workflow, which consumes the tool set and the permission mode, and the
   charter's section 5 names that re-entry in place of the edge it retired on 2026-09-04.

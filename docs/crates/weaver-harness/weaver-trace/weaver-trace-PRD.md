@@ -584,6 +584,18 @@ the stack is remembered. The record is the canonical form and a save point is a 
 what its replay produces, so the load event is where the conditions and the lineage of a
 session's state are read.
 
+**The record declares the boundary apart from the constitution, and says who changed the
+agent**, on the operator's rulings of 2026-10-03 on #50 and #63. The constitution, what
+shapes what happens inside the agent, is the declaration and the facts above, and it is
+the tuple. The boundary, who may read the agent from outside, is the agent's boundary
+file, and the `load` event carries its digest as a separate member marked boundary, so
+every run declares the boundary it was loaded under without that file joining the tuple.
+A verb that changes the agent, a load, an unload or a stop that closes a turn, is
+recorded with its cause, the uid sudo reports, and which person asked is WeaverWeb's
+record and never this one. The harness writes all of it from facts admin hands over, and
+boundary activity that changes nothing in the agent stays in admin's operations log.
+`weaver-trace-Spec` section 3 carries the members.
+
 **The prompt file the load was given is one more such fact, as of 2026-10-02.** On the
 operator's ruling of that date the system prompt is a file the declaration names rather
 than text inside it, so the declaration's digest the `load` event carries stopped
@@ -889,8 +901,8 @@ protocol is the reserved slot apex section 9 forbids.
 
 The sink is opened by `weaver-admin` under root, the role's principal, per
 `weaver-admin-operator-contract` section 3, and the descriptor is passed to a worker
-that has held the agent uid from its first instruction, because the init system
-starts the unit under `User=` and there is no drop to order, per
+that has held the agent uid from its first instruction, because admin's start step
+drops before the exec and there is no drop of the worker's to order, per
 `weaver-admin-harness-contract` section 2. The receiving uid confers nothing either
 way: a descriptor crossing a Unix socket is a capability and the kernel rechecks no
 permission at receipt. `weaver-admin` resolves which session is being loaded. The
