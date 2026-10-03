@@ -63,8 +63,9 @@ behind a boundary the kernel enforces.
 
 ## Architecture
 
-A deployed agent is four processes on one machine (five where the trace sink is a file,
-the trace relay being the fifth), and its own `weaver-admin`, the
+A deployed agent is up to five processes on one machine: the worker, the SPU and the
+gate, the state member unless the store engine is `none`, and the trace relay where the
+sink is a file. Beside them stands its own `weaver-admin`, the
 agent's lifecycle driver and management plane. Admin runs per verb as root, from the
 operator's root shell or, for admin-con, through a strict sudo rule that grants fixed
 command lines with no caller-chosen argument, and is not resident while the agent
@@ -112,8 +113,8 @@ line is a Unix domain socket, and there is no listening network socket anywhere.
   that agent's config root `<base>/<agent>/` (base from `WEAVER_ADMIN_CONFIG`, default
   `/etc/weaver/admin`), opens its trace sink and hands it to the worker, and names its
   SPU by that root's `spu-binary`. Its start step takes the run lock and stands the
-  state member and the worker, and the trace relay where the sink is a file (Spec
-  section 6, #72).
+  worker, the state member unless the store engine is `none`, and the trace relay
+  where the sink is a file (Spec section 6, #72).
 - **`weaver-internal`** holds internal tools that run inside the loop (the calculator).
   A tool that binds a listening port is external and reaches the agent through the gate;
   one that does not is internal.
@@ -236,7 +237,8 @@ with the trace in its own group (#56); small fixes are #39. The scripts are
 loaded agent's gate as the operator's uid with no sudo. The installed stack lives under
 `/etc/weaver/admin/<agent>/` (each agent's config root), `/etc/weaver/stack/` (the
 scripts' record of the install, which admin never reads) and `<prefix>/bin`. Each
-agent's declaration, prompt, `admin.log` and `worker.log` live in the operator's
+agent's declaration, `admin.log` and `worker.log` (and its prompt, once #76 lands) live
+in the directory the root's `declaration-directory` names, by default the operator's
 `~/.weaveragent/<agent>/`. Each agent runs under its own OS user, started by admin's
 start step, with no systemd unit. `create-agent.sh` writes the connector's strict sudo
 rule. Taking down a single agent is still by hand (#35). A box installed before #50
