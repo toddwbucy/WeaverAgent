@@ -245,7 +245,7 @@ seam.
 | --- | --- | --- | --- |
 | resolve | artifact.rs `resolve`: nothing at the path or a path through a file, a directory with no container or containers that are not one split, anything but a directory or a regular file | `resolve_directory`, `containers` | `artifact_unresolvable` |
 | | the same: any other failed look, a lookup the kernel refuses among them | | `artifact_unreadable` |
-| pin | artifact.rs `pin`: a reference in the split pattern pins its whole set, first shard first, then a shard absent, then any other failure to open, or a non-regular file | `split_members`, `containers`, `pin` | `artifact_unresolvable`, then `artifact_unreadable` |
+| pin | artifact.rs `pin`: a reference in the split pattern pins its whole set, first shard first. A shard absent is one refusal, and any other failure to open, or a non-regular file, is the other | `split_members`, `containers`, `pin` | `artifact_unresolvable` for an absent shard, `artifact_unreadable` for any other failure |
 | header | artifact.rs `read_header`, step two: GGUF's walk with its caps, or safetensors' length-prefixed JSON, and the sidecars `config.json` and `tokenizer_config.json` where present beside the pinned container (`sidecar_dir_of`), all read by `serde_json` | `read_header`, `sidecar_dir_of`, `strict_json` | `artifact_unreadable` |
 | select | family `select`: `UnknownFamily`, `TemplateAbsent` | `select` over `REGISTRY` | `artifact_unreadable` |
 | width | family `judge_width`: `WidthNotDeclared` | the selected entries' widths | `device_cannot_admit` |
