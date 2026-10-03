@@ -794,13 +794,18 @@ account now names root, and `weaver-<n>` continues to name the agent.
 **`weaver-admin-role` is what a human assumes, and the human is the operator
 holding root.** The role is assumed at install, when the operator sets up
 WeaverTools on a machine they administer, and it is the seat: the acts the
-supervisor may perform, taken on and later dropped. **Only a human assumes it, and
-never an AI or an automation.** That is a statement about what this program is
-designed for and **not a guarantee about conduct** - assuming the role does not
-make its holder careful, and nothing here prevents a human from doing something
-unwise inside the bound they hold. What it fixes is who occupies the seat, so
-scripted management of agents, or an agent driving another agent's admin, is a
-**new role with its own ruling** rather than a quiet reuse of this one.
+supervisor may perform, taken on and later dropped. **The seat at the shell is a human
+holding root, and an automated caller acts only through a granted role**, on the
+operator's rulings of 2026-10-02 on #50, which settle the line this paragraph held,
+that scripted management is a new role with its own ruling. The ruling is the role
+list: a caller that is not a human at the shell, a connector acting for a person or any
+other automation, reaches the verbs only through the agent's lifecycle socket, admitted
+by its group's role and bounded to that role's verbs, and never holds root. That is a
+statement about what this program is designed for and **not a guarantee about
+conduct** - assuming a role does not make its holder careful, and nothing here prevents
+a holder from doing something unwise inside the bound they hold. An agent driving its
+own admin stays excluded: its uid is in no role, per section 2's boundary, and a role
+list that named it would be a misconfiguration the boundary verification refuses.
 
 **The crate is the lifecycle tool the role runs.** One binary, run with root, one
 invocation per verb, exiting when the verb answers. It holds a two-initiator channel
@@ -947,20 +952,30 @@ a constraint rather than rediscovered.
 
 ## 8. The operator interface, and the domain that left
 
-**The operator interface is the invocation itself.** The role of section 7 runs the
-crate with root: a verb and an agent name in, a typed answer or a typed
-`lifecycle-refusal` out, the exit status agreeing with the answer. It reports the
-agent's state, drives the three verbs, and conveys the operator's intent to stop across
-the contract's stop exchange. It answers for the one agent it is invoked for and lists
-no others, since there are no others in its domain. It carries no work, per section 3.
-The socket, the group, and the peer-credential check the earlier form of this section
-carried retired with the recut of 2026-08-05: a surface that authenticated the operator
-to a service has no subject when the operator is root running the tool, the kernel
-having settled who may execute it. What state an agent is in between invocations is the
-init system's answer, which `show` consults rather than shadows. The trace's exit
-remains the contracted external boundary, governed by `weaver-admin-operator-contract`,
-which the recut narrows to that boundary: the stream that crosses out, its sink shapes,
-and the custody either side may rely on.
+**The operator interface is the invocation, through one of two doors to one verb code**,
+on the operator's rulings of 2026-10-02 on #50. At the shell the role of section 7 runs
+the crate with root: a verb and an agent name in, a typed answer or a typed
+`lifecycle-refusal` out, the exit status agreeing with the answer. At the agent's
+lifecycle socket a caller holding a granted role sends one request line, a verb and an
+optional claim of the person it acts for, and receives the same answer object; at the
+agent's trace socket a caller holding observer or wider reads the record as a read-only
+stream from a position it names. Both sockets are held by the init system and start the
+crate as root per connection, so no standing process of admin's is added, and the
+caller's admission is the kernel's peer credential against the agent's role list. It
+reports the agent's state, drives the three verbs, and conveys the operator's intent to
+stop across the contract's stop exchange. It answers for the one agent it is invoked for
+and lists no others, since there are no others in its domain. It carries no work, per
+section 3. The socket, the group, and the peer-credential check the earlier form of this
+section carried retired with the recut of 2026-08-05, because a surface that
+authenticated the operator to a service has no subject when the operator is root running
+the tool. A remote console brings the subject back, which is #50's measurement: a
+connector acting for a person cannot hold root without putting the box's root one parser
+from the network, so the sockets return with a role as their subject and root never
+handed to the caller. What state an agent is in between invocations is the init system's
+answer, which `show` consults rather than shadows. The trace's exit remains the
+contracted external boundary, governed by `weaver-admin-operator-contract`, which the
+recut narrows to that boundary: the stream that crosses out, its sink shapes, and the
+custody either side may rely on.
 
 **Reading and analysis of finished records is not this crate's, and not this
 repository's.** An earlier reading named `weaver-admin-tools` a member of this domain,
@@ -980,10 +995,12 @@ the operator's ruling of 2026-10-01: admin is one agent's organ, so a view acros
 several agents, and driving their verbs together, belong to WeaverWeb or a separate
 application that invokes each agent's admin, and this crate keeps no list of agents.
 
-**Admin reads nothing of the record at all, as of 2026-08-01.** The manifest this
-paragraph once held open dissolved with the program-owned record, per the ruling
-section 2 restates, so no lifecycle act parses events and the reader edge section
-10 once held has no subject.
+**Admin parses nothing of the record, as of 2026-08-01.** The manifest this paragraph
+once held open dissolved with the program-owned record, per the ruling section 2
+restates, so no lifecycle act parses events and the reader edge section 10 once held
+has no subject. The trace socket of 2026-10-02 (#50) reads the record's bytes and parses
+none: it hashes the one record before a requested position to verify it and copies what
+follows, so the line stands.
 
 ## 9. Staged requirements
 

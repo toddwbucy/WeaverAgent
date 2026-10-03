@@ -22,19 +22,18 @@ The agreement over the boundary between this program and the init system: what a
 asks of it, what it does on the program's behalf, what each side may rely on, and how
 it fails. It is read alongside `weaver-admin-PRD`.
 
-**Its subject is the agent's service lifetime and nothing else, per the operator's
-ruling of 2026-08-05.** The trace's handoff was weighed at this boundary and stays
-where it was: admin opens the sink under root and passes the handle inside the
-enter directive, per `weaver-admin-harness-contract` section 3. Placing it here was
-examined and declined, because the far side of every sink shape is already the
-operator's, a file persisting on its own and a pipe or socket held by the operator's
-own reader, so nothing needed a holder that a per-invocation admin lacks. The
-placement would also have put the record on the unit's own output stream, **which is
-inherited by every process the unit starts, by design**, handing each organ the
-harness creates a writable handle to the agent's own account. That is the leak the
-non-inheritance
-discipline exists to prevent, and buying it back would have cost a new obligation
-where a tested one already stands.
+**Its subject is the agent's service lifetime, per the operator's ruling of 2026-08-05,
+and since the rulings of 2026-10-02 on #50 the two sockets the init system holds for the
+agent's admin.** The trace's handoff was weighed at this boundary and stays where it
+was: admin opens the sink under root and passes the handle inside the enter directive,
+per `weaver-admin-harness-contract` section 3. Placing it here was examined and
+declined, because the far side of every sink shape is already the operator's, a file
+persisting on its own and a pipe or socket held by the operator's own reader, so nothing
+needed a holder that a per-invocation admin lacks. The placement would also have put the
+record on the unit's own output stream, **which is inherited by every process the unit
+starts, by design**, handing each organ the harness creates a writable handle to the
+agent's own account. That is the leak the non-inheritance discipline exists to prevent,
+and buying it back would have cost a new obligation where a tested one already stands.
 
 **The name pins an implementation and that is deliberate.** The corpus says the init
 system in prose where the mechanism is generic, and this document says systemd
@@ -75,6 +74,13 @@ boundary is this document's.
 transient unit the init system starts, holds, and reaps. It outlives the invocation
 that asked for it and outlives the operator's login session, which is the property
 `weaver-admin-PRD` section 7 names as the honest answer to keep-alive.
+
+**The agent's two admin sockets, lifecycle and trace, as of 2026-10-02 (#50).** Each is
+a socket unit per agent the init system holds open, root-owned and connectable by the
+groups the agent's role list names, with a service unit it starts as root for each
+accepted connection, running admin in socket mode for that one connection. No standing
+process of admin's results: the manager holds the listening socket, and admin lives
+for one connection, as it lives for one verb at the shell.
 
 **It is not the program's to hold, and that is the point of contracting it.** A
 program that kept an agent alive itself would be writing a process supervisor beside
@@ -141,13 +147,20 @@ was refused.
 bare, it binds its own coordination socket, and the trace's handle reaches it
 over that socket rather than through the manager.
 
+**The admin socket units are installed, not asked for.** The two socket units and
+their service templates are written by the operator's provisioning beside the agent's
+configuration root, never by admin, which writes no unit file, per section 7. Admin asks
+nothing of the manager for them; the manager starts admin on a connection, per section
+3.
+
 **No agent work of any kind crosses**, in either direction and under any framing. The
 init system starts a process and learns nothing of what the process is for.
 
 ## 3. What crosses out, from the init system to the program
 
 **An outcome per ask.** A start that succeeded or failed, a stop that succeeded or
-failed, and an activity state. These are the whole of what admin learns here, and
+failed, and an activity state. These, and a connection at the admin sockets below, are
+the whole of what admin learns here, and
 admin holds no other source for them since the recut, per `weaver-admin-Spec`
 section 3.
 
@@ -195,6 +208,15 @@ reachable through the shim, both are ordinary on the manager's own interface, an
 cost is the dependency `weaver-admin-Spec` section 6 weighs. This clause names the
 condition so a later pass weighs a stated trade rather than rediscovering it.
 
+**A connection to an agent's admin socket starts admin**, as of 2026-10-02 (#50): the
+manager accepts the connection on the socket it holds and starts one instance of the
+socket's service as root with that connection, and nothing else of the caller's crosses
+here, the caller's request being read by admin from the connection after the kernel's
+peer credential admits the caller, per `weaver-admin-operator-contract`. The service
+runs with `KillMode=process`, so when the invocation ends the manager stops admin's own
+process and no other: a state member or a worker the verb stood stays, each being its
+own unit's or the agent unit's.
+
 ## 4. Ordering
 
 - The unit is started before admin dials the coordination socket, because the socket
@@ -231,7 +253,11 @@ before that instruction rather than applied after, that a unit name is unique so
 second start for a live agent fails rather than racing, that the unit's runtime
 directory exists before that first instruction and is removed with its contents when
 the unit stops, that the unit's cgroup arrives with the unit and is removed with it,
-and that a stopped unit stays stopped without the program watching it.
+and that a stopped unit stays stopped without the program watching it. **For the admin
+sockets** it guarantees that the listening socket exists with the owner, group and mode
+the socket unit declares before any caller can connect, that each accepted connection
+starts its own service instance as root, and that a service instance under
+`KillMode=process` takes down only its main process when it ends.
 
 **The runtime directory's removal is the load-bearing half of that list**, because
 it is what makes the coordination socket's pathname unable to outlive its worker.
@@ -261,11 +287,11 @@ and this boundary reports what it is asked rather than announcing.
 
 ## 7. Prohibitions
 
-**On admin.** It starts no process under another identity by any route but this ask.
-It writes no unit file and edits no manager configuration, the template being the
-operator's installed artifact. It does not read the manager's journal as a source of
-program state, the trace being the program's one account. It holds no capability that
-would let it bypass this boundary.
+**On admin.** It starts no process under another identity by any route but this ask. It
+writes no unit file and edits no manager configuration, the template and the admin
+socket units being the operator's installed artifacts. It does not read the manager's
+journal as a source of program state, the trace being the program's one account. It
+holds no capability that would let it bypass this boundary.
 
 **On the init system's side, stated as what the program may not lean on.** The
 program does not rely on the manager parsing, transforming, or interpreting anything
@@ -313,3 +339,6 @@ be claiming authorship of an interface it consumes.
 - `WeaverTools-Document-Format`. The party-edge category for an external principal
   gains a third instance and is still owed, per
   `weaver-admin-operator-contract` section 8.
+- The admin sockets of 2026-10-02 (#50): `weaver-admin-Spec` section 2 cites sections 1,
+  2 and 3 here for the socket and service units and `KillMode=process`, and the deploy
+  scripts' provisioning owes the units, landing with the code act.

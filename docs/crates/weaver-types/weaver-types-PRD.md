@@ -560,6 +560,10 @@ that left having been the one whose predicate a compromised group grant could wi
 the gate's agent-opened seam as a third, and what credential a registered tool presents
 on it is the tool-seam contract's, so this subsection states the shared rule and leaves
 the enumeration open rather than naming a consumer whose contract does not exist.
+**Admin's two sockets read `peer-identity` again from 2026-10-02**, on the operator's
+rulings on #50, and judge it against the agent's role list, a group granted a set of
+verbs, rather than by the shared allow-and-deny rule, so they draw the identity type and
+not the predicate; `weaver-types-Spec` section 3.1 carries their request shapes.
 
 **Alongside the identity type, this crate carries the authorization predicate, and
 that is a deliberate exception to holding only data.** The rule that decides whether a

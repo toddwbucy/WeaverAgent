@@ -178,18 +178,23 @@ to: admin-no-runtime-no-bus-no-logging
 
 ## 2. The invocation's interface
 
-The interface of charter section 8: the operator runs the binary with root, one
-verb per run. The socket this section carried until 2026-08-05 retired with the
-service account, and what replaces it is the process boundary the operating
-system already draws around an executed program.
+The interface of charter section 8 has two doors to one verb code, on the operator's
+rulings of 2026-10-02 on #50. **The command line** is the operator's shell: the binary
+run with root, one verb per run, the process boundary the operating system draws around
+an executed program being the whole of its authorization. **The two sockets** are for a
+caller holding a role rather than root: a lifecycle socket carrying the verbs and a
+trace socket carrying a read-only stream of the record, each held by the init system per
+agent and starting this binary as root for each connection, per
+`weaver-admin-systemd-contract` section 2. The socket this section carried until
+2026-08-05 retired with the service account; these are not it returning, because no
+standing service of admin's exists and none is added.
 
-**The verb and its agent arrive as arguments.** One verb per invocation,
-`load`, `unload`, `validate`, `stop`, or `show`, with the agent name as the one further
-argument, which every verb takes. Arguments rather than a
-parsed request line, because the kernel already delivered them as a vector and
-re-encoding them into a wire format would be inventing a wire where no seam
-crosses. The base the agent's root stands under is the one environment variable read,
-per section 9.
+**At the command line the verb and its agent arrive as arguments.** One verb per
+invocation, `load`, `unload`, `validate`, `stop`, or `show`, with the agent name as the
+one further argument, which every verb takes. Arguments rather than a parsed request
+line, because the kernel already delivered them as a vector and re-encoding them into a
+wire format would be inventing a wire where no seam crosses. The base the agent's root
+stands under is the one environment variable read, per section 9.
 
 **Authorization is the kernel's, and what this crate checks is the name.** The
 invocation runs as root or performs nothing, so no predicate, no allow set, and
@@ -199,7 +204,9 @@ party the kernel already admitted. What survives is the name check of section 4
 and the agent's root of section 9, which are about which agent may be named rather
 than about who may name it. The refusal is enacted before any verb touches anything, and the
 instrument is a test running the binary as a non-root uid and finding it
-refuses, watched to fail when the check is removed.
+refuses, watched to fail when the check is removed. **This holds at the socket doors
+too**: the init system starts the binary as root for a connection, and a role-holder
+reaches the verbs only through that connection and never by executing the binary.
 
 ```graph
 node: admin-runs-as-root-or-performs-nothing
@@ -214,6 +221,50 @@ edge: grounds
 from: admin-runs-as-root-or-performs-nothing
 to: axiom-floor-is-vocabulary-behavior-is-socket
 ```
+
+**At the lifecycle socket, authorization is a role, judged by the peer credential
+before the request is read.** On the operator's ruling of 2026-10-02 on #50 the agent's
+root-owned configuration root carries a role list mapping a group to the verbs it
+permits, per `weaver-types-Spec` section 3.1, with two roles to start: observer, `show`
+and `grants`; operator, adding `validate`, `load`, `unload` and `stop`. On each
+connection this binary, started as root in socket mode with the accepted connection,
+reads the peer's uid and groups from the kernel (`SO_PEERCRED`, and `SO_PEERGROUPS` for
+the supplementary groups), never from the request and never by a lookup a caller could
+influence, and admits the peer only if one of its groups holds a role on this agent. It
+then reads one request line, `LifecycleRequest` of `weaver-types-Spec` section 3.1, and
+**a verb outside the peer's roles refuses `Unauthorized` before anything is touched**,
+written to the operations log of section 8 with the peer's uid, the verb, and the
+principal the request claimed. An admitted verb runs the same verb code the command line
+runs, against the agent the socket's unit instance names, and writes one answer line,
+the same `lifecycle-answer` or `lifecycle-refusal` object the command line writes, so a
+caller parses one form whichever door it used. The principal claim of #51 is logged with
+the verb and read by nothing that decides. **`grants`** answers the verbs the peer's
+roles permit on this agent and the time of the observation, per #52, and is the one verb
+the command line does not need, root holding them all.
+
+**A dropped connection does not cancel a verb.** The verb runs to completion in the
+service the connection started, and its outcome is readable afterwards through `show`
+and the trace; an answer with no reader is discarded. The service runs under
+`KillMode=process`, per `weaver-admin-systemd-contract`, so the end of an invocation
+never kills a state member or a worker the verb stood. Two connections for one agent
+are ordered as two shells are, by the parties section 3 names, and the socket adds no
+lock of this crate's.
+
+**At the trace socket, root reads the record and does nothing else.** A peer holding
+observer or a wider role is admitted as at the lifecycle socket. This binary, started
+for the connection, reads one `TraceRequest`, opens the agent's trace file read-only
+with `O_NOFOLLOW` beneath the sink's directory, verifies that the requested offset falls
+on a record boundary and that the record ending there hashes to the request's digest,
+and streams the file from that offset, following new lines as they land. **A change of
+the file's identity, its device, inode, or birth time, is reported in the stream** and
+never smoothed over, so a rotation or a truncation reaches the caller as what it is. A
+position that does not verify refuses before a byte is streamed. Only a file sink is
+streamable, a pipe or a socket sink having no file to read, and a request against one
+refuses `ConfigInvalid` naming the sink. The stream parses no event: it hashes one
+record's bytes to verify a position and copies bytes, which keeps section 8 of the
+charter true that no lifecycle act parses events. Nothing else is done with root on this
+door, and the agent and its state member still reach neither the file nor the socket,
+the custody of section 5 being widened only to role-holders, read-only.
 
 **The answer is one JSON object on standard output and the exit status agrees
 with it.** One `lifecycle-answer` or one `lifecycle-refusal` in the floor's
@@ -882,6 +933,17 @@ edge: asserts
 from: weaver-admin
 to: admin-sink-path-dies-at-open-site
 ```
+
+**The trace socket reads what this section opened, and widens custody to role-holders
+alone**, on the operator's ruling of 2026-10-02 on #50. A role-holder reads the record
+through the trace socket of section 2 and never through the file: no group grant into
+the territory is made for it, so the state room and the trace keep the layout the
+deployment gives them, with no extra readers, and a trace recreated `root:root` stays
+streamable. The agent's uid and its state member's reach neither the file nor the
+socket, which the role list never names, so the custody this section holds is unchanged
+for them and narrowed for everyone else to a read-only stream behind a role. The sink's
+file is the only shape the stream serves; a pipe or a socket sink's reader is the
+operator's, as before.
 
 ## 6. The unit
 
@@ -2333,9 +2395,79 @@ directive is asserted where the run happens.
   section 5 owes the pair-creating crates, argued at section 7, and it
   discharges this crate's side of that owing alone.
 
+**The walk at the sockets, opened 2026-10-02 on #50.** The adversary is a process on the
+box that can reach a socket's path: a caller holding a lesser role reaching for a verb
+it was not granted, a peer holding no role, the agent's uid or its state member's
+reaching for either socket, or a caller crafting a request that tries to authorize
+itself. Admission rests on the kernel's peer credential and the role list, never on
+the request, and the tests the code act owes are each perturbation-verified:
+
+- **A verb outside the peer's roles refuses `Unauthorized` before anything is touched**,
+  watched by an observer asking `load`: no unit starts, the sink is not opened, and the
+  log names the refusal. The perturbation drops the role check and the load proceeds.
+- **A peer holding no role is refused before its request is read**, watched by a uid in
+  no granted group and by the agent's uid, each connecting to both sockets. The
+  perturbation reads the request first, and a malformed line from an unadmitted peer
+  reaches the parser.
+- **The principal claim authorizes nothing**, watched by an observer whose request
+  claims an operator's identity: `load` still refuses. The perturbation lets the claim
+  select the role, and the load proceeds.
+- **A dropped connection runs its verb to completion**, watched by a `load` whose caller
+  closes the socket after the request: the agent loads and `show` reports it. The
+  perturbation ties the verb to the connection, and the load is abandoned part way.
+- **The service's end kills nothing the verb stood**, watched by a `load` through the
+  socket followed by the service's exit: the state member and the worker stand. The
+  perturbation drops `KillMode=process` from the unit, and the member dies with the
+  invocation.
+- **The trace socket refuses a position that does not verify**, watched by an offset
+  inside a record and by a digest of a different record. The perturbation drops the
+  digest check, and bytes from the wrong position stream.
+- **The trace socket follows no link**, watched by a trace path replaced by a symlink
+  to a root-only file. The perturbation drops `O_NOFOLLOW`, and root streams the
+  target.
+- **A change of file identity is reported**, watched by a trace rotated and by one
+  truncated under a live stream. The perturbation compares the size alone, and the
+  rotation streams on as if it were the same file.
+
+```graph
+node: admin-socket-admits-by-role-before-reading
+kind: assertion
+tag: perturbation
+
+edge: asserts
+from: weaver-admin
+to: admin-socket-admits-by-role-before-reading
+
+node: admin-trace-socket-verifies-and-follows-no-link
+kind: assertion
+tag: perturbation
+
+edge: asserts
+from: weaver-admin
+to: admin-trace-socket-verifies-and-follows-no-link
+```
+
 ## 11. Open elections
 
 Each names what settles it, and none is this Spec's to settle alone.
+
+- **The admin sockets, opened 2026-10-02 on #50**, each settled by the code act that
+  stands the sockets unless a ruling takes it first:
+  - **socket paths and modes**: where the two sockets stand per agent, their owner,
+    group and mode, and how the mode admits every role group of one agent when a socket
+    takes one group;
+  - **the role list's file**: its name in the agent's root, its format, and how a group
+    is named in it, by name or by gid;
+  - **whether the role list belongs in the declaration digest** the load event records,
+    a grant being a fact about the agent's conditions or about its operators;
+  - **the trace stream's framing and its end of file**: raw lines or framed records,
+    how a change of identity is spelled and whether the stream ends there, how long a
+    follower stands with no new lines, and what bounds the number of followers;
+  - **socket mode's handover**: whether the connection arrives as the standard streams
+    or as a passed descriptor, and how the binary knows it was started for a socket and
+    which one;
+  - **the operations log's lines for a socket verb**: the peer's uid, the principal
+    claim and the verb, in section 8's field set.
 
 - **How an agent's lifecycle state is observed. Settled 2026-09-04** by the observation
   exchange of `weaver-admin-harness-contract` section 3, per issue #435: the harness

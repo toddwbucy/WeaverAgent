@@ -916,6 +916,74 @@ predicate is weakened. The second is named here because the rule is defined here
 and owed by `weaver-gate-Spec`, which is the G7 shape read forward rather than a
 test this crate can pretend to run.
 
+### 3.1 The admin sockets' requests and the role list
+
+**Admin's two sockets take one JSON request line each**, on the operator's rulings of
+2026-10-02 on #50: the lifecycle socket carries a verb and answers with the same
+`lifecycle-answer` or `lifecycle-refusal` object the command line writes, and the trace
+socket carries a starting position and answers with the agent's trace. Both are judged
+by the kernel's peer credential against the agent's role list before a byte of the
+request is read, per `weaver-admin-Spec` section 2, so the types here describe what a
+role-holder may ask and never who it is.
+
+```rust
+pub enum AdminVerb {
+    Show,
+    Grants,
+    Validate,
+    Load,
+    Unload,
+    Stop,
+}
+
+pub struct LifecycleRequest {
+    pub verb: AdminVerb,
+    pub principal: Option<String>,
+}
+
+pub struct TraceRequest {
+    pub offset: u64,
+    pub prior_digest: Option<String>,
+}
+
+pub struct Grants {
+    pub verbs: Vec<AdminVerb>,
+    pub observed_wall_ms: u64,
+}
+```
+
+**The agent is never named in a request.** Each socket belongs to one agent, its unit
+instance naming the agent, so a request that named one could only name the same agent
+or a different one, and the second is the confusion the per-agent socket exists to
+rule out. The command line keeps its agent argument because one binary serves every
+agent there.
+
+**`principal` is a claim and never an input to authorization**, per #51: the caller
+may name the person it acts for, admin writes the claim beside the verb in its
+operations log, and no admission, role or refusal reads it. A request that omits it is
+whole. Its contents are the caller's and admin judges only that it is a bounded
+printable string, refusing `Malformed` otherwise, because a log line carrying a
+caller's bytes is a log the caller can forge.
+
+**`Grants` is the answer to the `grants` verb**: the verb names the peer's roles
+permit on this agent, in `AdminVerb`'s order, and the wall-clock time in milliseconds
+admin took the observation, in the trace's own unit, per #52. It rides
+`LifecycleAnswer` as the `Grants` case below. A caller declares exactly that list as
+its ceiling, so the answer is what admin would admit and nothing it would refuse.
+
+**`TraceRequest` names where the stream starts**: a byte offset that falls on a record
+boundary, and the sha256 hex of the record that ends at that offset, absent only at
+offset zero. Admin refuses a position whose prior record does not hash to the digest,
+so a caller resuming after a rotation or a truncation learns that its position no
+longer names the record it read rather than receiving bytes from another file.
+
+**The role list maps a group to the verbs it permits**, per agent, in the agent's
+root-owned configuration root. Two roles start it, observer with `show` and `grants`,
+and operator adding `validate`, `load`, `unload` and `stop`, the trace socket admitting
+observer and up. Its file format and field names are open, per section 6; what this
+section fixes is that a role is a group and its grant is a set of `AdminVerb`, so the
+role list never names a verb this enum does not.
+
 ## 4. The organ wire vocabulary
 
 **What this section owns is loop 0's definitions in full, plus the carriage of
@@ -1151,6 +1219,7 @@ pub enum LifecycleDirective {
     Unload { agent: AgentName },
     Validate { agent: AgentName },
     Show { agent: AgentName },
+    Grants { agent: AgentName },
 }
 
 pub enum LifecycleAnswer {
@@ -1164,6 +1233,7 @@ pub enum LifecycleAnswer {
     GateStopped,
     Validated,
     State { state: AgentState, load: Option<Box<LoadFacts>> },
+    Grants(Grants),
 }
 ```
 
@@ -2331,6 +2401,14 @@ the claim divides are both open and section 6 carries them together.
 
 ## 6. Open elections
 
+- **The admin sockets' wire, opened 2026-10-02 on #50.** Section 3.1 fixes the request
+  shapes and the role list's meaning and leaves to the code act, with
+  `weaver-admin-Spec` section 11: the role list's file format and field names; the
+  trace stream's framing, whether the raw NDJSON lines or each wrapped with its offset
+  and digest, and how it signals a change of file identity and the file's end; the
+  bound on `principal`'s length and alphabet; and the spelling of `observed_wall_ms` on
+  the wire. `AdminVerb`'s membership grows by ruling, the on-demand save-point verb of
+  #58 being the next named.
 - **`Generation`'s shape settled at section 4.4 and this bullet retires with it.**
   The emission, the canonical content, and the finish are shaped in the floor
   because the harness consumes them, and the measurement splices because nothing
