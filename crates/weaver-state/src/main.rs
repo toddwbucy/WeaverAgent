@@ -56,13 +56,24 @@ fn main() -> std::process::ExitCode {
     // descriptor is marked close-on-exec and kept for the member's life. Its
     // absence is said, never silent: a member without it is one a later load
     // cannot see.
-    if !keep_run_lock(RUN_LOCK_FD) {
-        eprintln!(
+    match keep_run_lock(RUN_LOCK_FD) {
+        Ok(true) => {}
+        Ok(false) => eprintln!(
             "{}",
             serde_json::json!({
                 "state_notice": "no run lock at descriptor 9: not started by admin's start step"
             })
-        );
+        ),
+        // A present run lock left inheritable is refused, never served on.
+        Err(error) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "state_fault": format!("the run lock could not be made close-on-exec: {error}")
+                })
+            );
+            return std::process::ExitCode::FAILURE;
+        }
     }
     member_entry(std::env::args().skip(1), FIRST_DOOR_FD)
 }
@@ -70,16 +81,24 @@ fn main() -> std::process::ExitCode {
 /// Marks the inherited run lock close-on-exec and never closes it: the member
 /// reads nothing through it and writes nothing, holding it being the whole of
 /// its use, and it closes no descriptor it was not told about. A number
-/// holding nothing, a hand-run member, is skipped. Answers whether one stood.
-fn keep_run_lock(fd: std::os::fd::RawFd) -> bool {
+/// holding nothing, a hand-run member, is skipped, and only `EBADF` reads as
+/// nothing: any other failure is an error the member refuses to start on.
+fn keep_run_lock(fd: std::os::fd::RawFd) -> std::io::Result<bool> {
     // SAFETY: F_GETFD on a number that may hold nothing fails with EBADF and
     // touches nothing.
     let flags = unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFD) };
     if flags == -1 {
-        return false;
+        let error = std::io::Error::last_os_error();
+        return match error.raw_os_error() {
+            Some(nix::libc::EBADF) => Ok(false),
+            _ => Err(error),
+        };
     }
     // SAFETY: as above, on a number that holds a descriptor.
-    unsafe { nix::libc::fcntl(fd, nix::libc::F_SETFD, flags | nix::libc::FD_CLOEXEC) != -1 }
+    if unsafe { nix::libc::fcntl(fd, nix::libc::F_SETFD, flags | nix::libc::FD_CLOEXEC) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(true)
 }
 
 fn member_entry(
@@ -955,7 +974,10 @@ mod run_lock_tests {
         let before = unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFD) };
         assert_eq!(before & nix::libc::FD_CLOEXEC, 0);
 
-        assert!(super::keep_run_lock(fd), "a descriptor stood there");
+        assert!(
+            super::keep_run_lock(fd).unwrap(),
+            "a descriptor stood there"
+        );
 
         // SAFETY: F_GETFD on the number, which must still be open.
         let after = unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFD) };
@@ -967,7 +989,7 @@ mod run_lock_tests {
         // A number holding nothing is skipped, a hand-run member's case.
         // SAFETY: closing the test's own duplicate.
         unsafe { nix::libc::close(fd) };
-        assert!(!super::keep_run_lock(fd), "nothing to keep");
+        assert!(!super::keep_run_lock(fd).unwrap(), "nothing to keep");
         drop(std::fs::remove_file(&path));
     }
 }

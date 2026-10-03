@@ -97,11 +97,13 @@ pub const RELAY_LIFETIME_DESCRIPTOR: RawFd = 8;
 /// released by its death, and the relay reads end-of-file only when the last
 /// write end is gone. A number holding nothing, a worker started by hand or
 /// by a stack that predates the start step, is skipped: there is nothing to
-/// keep. Answers which of the two were held.
-pub fn keep_start_step_descriptors() -> (bool, bool) {
+/// keep. Answers which of the two were held, and **an error where a present
+/// descriptor could not be marked**, which the worker refuses to start on,
+/// since serving with it inheritable would hand an organ root's lock file.
+pub fn keep_start_step_descriptors() -> std::io::Result<(bool, bool)> {
     let held = (
-        keep_close_on_exec(RUN_LOCK_DESCRIPTOR),
-        keep_close_on_exec(RELAY_LIFETIME_DESCRIPTOR),
+        keep_close_on_exec(RUN_LOCK_DESCRIPTOR)?,
+        keep_close_on_exec(RELAY_LIFETIME_DESCRIPTOR)?,
     );
     // **Said, never silent**: a worker serving without a run lock is one a
     // later load cannot see, so its absence, or a number holding something
@@ -114,7 +116,7 @@ pub fn keep_start_step_descriptors() -> (bool, bool) {
     } else if !is_regular_file(RUN_LOCK_DESCRIPTOR) {
         eprintln!("worker: descriptor {RUN_LOCK_DESCRIPTOR} is not a regular file, not a run lock");
     }
-    held
+    Ok(held)
 }
 
 /// Whether the number holds a regular file, read by `fstat`.
@@ -126,16 +128,26 @@ fn is_regular_file(fd: RawFd) -> bool {
 }
 
 /// Marks one inherited number close-on-exec and leaves it open, answering
-/// whether a descriptor stood there.
-pub fn keep_close_on_exec(fd: RawFd) -> bool {
+/// whether a descriptor stood there. **An empty number is `EBADF` and only
+/// `EBADF`**: any other failure of either call, a seccomp policy's rejection
+/// among them, is an error, never an absence, because a present descriptor
+/// left inheritable is the leak this exists to prevent.
+pub fn keep_close_on_exec(fd: RawFd) -> std::io::Result<bool> {
     // SAFETY: fcntl on a number this process may or may not hold; F_GETFD on
     // an empty number fails with EBADF and touches nothing.
     let flags = unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFD) };
     if flags == -1 {
-        return false;
+        let error = std::io::Error::last_os_error();
+        return match error.raw_os_error() {
+            Some(nix::libc::EBADF) => Ok(false),
+            _ => Err(error),
+        };
     }
     // SAFETY: as above, on a number that holds a descriptor.
-    unsafe { nix::libc::fcntl(fd, nix::libc::F_SETFD, flags | nix::libc::FD_CLOEXEC) != -1 }
+    if unsafe { nix::libc::fcntl(fd, nix::libc::F_SETFD, flags | nix::libc::FD_CLOEXEC) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(true)
 }
 
 /// One end of an organ channel: a `SOCK_SEQPACKET` socket carrying one
@@ -1280,14 +1292,20 @@ mod start_step_descriptor_tests {
             )
         };
         assert!(fd >= 800);
-        assert!(super::keep_close_on_exec(fd), "a descriptor stood there");
+        assert!(
+            super::keep_close_on_exec(fd).unwrap(),
+            "a descriptor stood there"
+        );
         // SAFETY: F_GETFD on the number, which must still be open.
         let flags = unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFD) };
         assert_ne!(flags, -1, "kept, never closed");
         assert_ne!(flags & nix::libc::FD_CLOEXEC, 0, "marked close-on-exec");
         // SAFETY: closing the test's own duplicate.
         unsafe { nix::libc::close(fd) };
-        assert!(!super::keep_close_on_exec(fd), "an empty number is skipped");
+        assert!(
+            !super::keep_close_on_exec(fd).unwrap(),
+            "an empty number is skipped"
+        );
         drop((read_end, write_end));
     }
 }
