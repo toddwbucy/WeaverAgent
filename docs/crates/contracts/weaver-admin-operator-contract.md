@@ -153,11 +153,11 @@ gives up reads the outcome from the next `show`.
 naming the file's identity (device, inode, birth time), then the trace's own lines from
 the verified position exactly as written, following new lines with a heartbeat while
 idle, every added line a `TraceControl` of `weaver-types-Spec` section 3.1. It serves
-the loaded run's own file by descriptor, tells the reader when the sink's path comes to
-name another file and goes on serving the run's own, ends the stream on a truncation
-rather than smoothing it over, and refuses a position that does not verify
-before a byte is sent. A reader of the record this way reads the file through no grant
-of its own, so the territory's layout gives it nothing.
+the loaded run's own file by descriptor, so a rotation of the sink's path changes
+nothing it reads and reaches the reader as a new identity in the next run's header, ends
+the stream on a truncation rather than smoothing it over, and refuses a position that
+does not verify before a byte is sent. A reader of the record this way reads the file
+through no grant of its own, so the territory's layout gives it nothing.
 
 **The stream is also the program's one fault carrier,** per the fault-carrier
 ruling of 2026-08-01. A fault the worker survives rides it as the `fault` event of

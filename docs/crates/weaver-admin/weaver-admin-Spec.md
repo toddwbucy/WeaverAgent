@@ -203,6 +203,19 @@ already delivered them as a vector and re-encoding them into a wire format would
 inventing a wire where no seam crosses. The base the agent's root stands under is the
 one environment variable read, per section 9.
 
+**A new interior verb has one recipe, so the state-management acts can add them
+cheaply**, on the operator's direction of 2026-10-03 on #50. Start and stop need no
+socket, and interior control exists only while the agent runs, over the coordination
+channel. An interior verb is one fixed `weaver-admin <verb> <agent>` command line with
+no argument, which a role's sudo rule grants. It is one directive and one answer on
+section 7's coordination channel, valid only while the worker holds the run lock. Its
+case is added to `LifecycleAnswer` and to the operator contract's case list, so it
+breaks a consumer loudly under `weaver-types-Spec`'s exhaustive-enum rule. Its outcome
+is written to `admin.log`, and any change it makes to the agent is recorded on the trace
+with its cause. Any value it needs is taken from the declaration, recorded or pinned
+under #71, and never from the caller. `save-point` and `restore` are the first two to
+follow it, in A3.
+
 **Authorization is the kernel's, and what this crate checks is the name.** The
 invocation runs as root or performs nothing, so no predicate, no allow set, and
 no deny set exist here: the earlier form's `authorized` call, its group allow
@@ -339,32 +352,48 @@ section 3 states where that obligation lands now.
 
 **Two locks the kernel holds answer the two questions a per-invocation crate cannot keep
 across verbs**, per the operator's ruling of 2026-10-03 on #50. Both stand in the
-agent's **run directory**, `<coordination-root>/weaver.run/<agent>/`, which the start
-step makes owned by root, mode `0755` and writable by no one else, under a parent
-`weaver.run/` that is root's too. **The run directory has its own namespace**, which no
-agent name can produce: an agent's runtime directory is `weaver-<agent>/` and a name
-carries no `.`, so `weaver.run/` is never any agent's, where `weaver-run/` would be the
-runtime directory of an agent named `run`, and `weaver-<agent>-run/` that of an agent
-named `<agent>-run`, each owned by that agent. Each is a POSIX
-record lock, which the kernel releases when its holder dies, so neither can go stale the
-way a pidfile does, and `F_GETLK` names the holder's pid from the kernel rather than
-from a file a process wrote. **They stand in a root-owned directory and not the agent's
-runtime directory** because the agent owns that one: a process of the agent's could
-unlink a lock file there and leave the next `load` finding a free lock on a new file
-while the worker still held the old, starting a second worker of one agent.
+agent's **run directory**, `<coordination-root>/weaver.run/<agent>/`, which every verb
+makes, before it takes a lock, owned by root, mode `0755` and writable by no one else,
+under a parent `weaver.run/` that is root's too. **The run directory has its own
+namespace**, which no agent name can produce: an agent's runtime directory is
+`weaver-<agent>/` and a name carries no `.`, so `weaver.run/` is never any agent's,
+where `weaver-run/` would be the runtime directory of an agent named `run`, and
+`weaver-<agent>-run/` that of an agent named `<agent>-run`, each owned by that agent.
+Each is a POSIX record lock, which the kernel releases when its holder dies, so neither
+can go stale the way a pidfile does, and `F_GETLK` names the holder's pid from the
+kernel rather than from a file a process wrote. **They stand in a root-owned directory
+and not the agent's runtime directory** because the agent owns that one: a process of
+the agent's could unlink a lock file there and leave the next `load` finding a free lock
+on a new file while the worker still held the old, starting a second worker of one
+agent.
 
 - **The invocation lock**, on `admin.lock`, says whether an invocation is changing this
-  agent now. Every verb but `show` takes it exclusively at its first instruction and
-  holds it until it exits, and an invocation that finds it held exclusively refuses
+  agent now. **The run directory is made before either lock is taken**: every verb's
+  first act after the name check and the root's admission, `show` and `validate`
+  included, makes `<coordination-root>/weaver.run/` and `weaver.run/<agent>/` beneath it
+  where they are absent, which they are at an agent's first invocation and after every
+  reboot clears `/run`, and judges them where they stand, opened without following a
+  link and set to root's ownership and `0755` as the start step sets the runtime
+  directory. Every verb but `show` then takes the invocation lock exclusively and holds
+  it until it exits, and an invocation that finds it held exclusively refuses
   `InvocationInFlight` before touching anything. **`show` holds it shared for the length
   of its observation**, taking a shared lock without waiting: where an exclusive holder
   stands, the shared lock is refused and `show` answers `InTransition` at once, without
   dialing, because before the worker exists there is no socket and once it exists the
   harness serves one connection at a time and the load's enter holds it. Where the
   shared lock is granted, no load or unload can begin until `show` has read the run lock
-  and observed the worker, so its answer cannot straddle a transition. A verb that wants
-  the lock exclusively and finds only `show`'s shared hold waits on it within `show`'s
-  own bound, the dial's, rather than refusing, a read being no transition. A caller
+  and observed the worker, so its answer cannot straddle a transition. **A verb that
+  wants the lock exclusively tries it without waiting and, refused, reads the holder's
+  kind from `F_GETLK`'s `l_type`**: an exclusive holder is another transition and the
+  verb refuses `InvocationInFlight` at once, and a shared holder is a `show` and the
+  verb retries, re-reading `l_type` before every attempt, for at most `show`'s own
+  bound, the dial's, a read being no transition. A holder that changes between the read
+  and the next attempt is judged afresh on that attempt, so a shared hold that gives way
+  to an exclusive one turns the wait into the refusal. **A poller can starve the
+  exclusive taker, and the behaviour is stated**: Linux record locks give a waiting
+  writer no priority, so back-to-back `show` calls can keep a shared hold standing past
+  the bound, and the verb then refuses `InvocationInFlight` with the cause named as
+  readers holding the lock, the caller retrying after its poller pauses. A caller
   polling `show` during a long load is therefore answered that a transition is in
   flight, and never refused or left to time out.
 - **The run lock**, on `run.lock`, says whether a worker runs. The start step's worker
@@ -1816,7 +1845,12 @@ the harness, per section 2. Boundary activity that changes nothing in the agent 
 here: a refused verb, a read-only verb, `show`, a `stop` answered at rest, and the trace
 relay's connects, replacements, refusals and disconnects, never a line per streamed
 record. Each such line carries the wall time, the command line, the caller's uid, what
-was asked, the boundary file's digest in force, and the outcome.
+was asked, the boundary file's digest in force, and the outcome. **The digest is absent
+where no boundary file was read**, a missing or malformed `roles.toml` among them, and
+the line says so rather than inventing a value. **A refusal before the agent's root is
+admitted has no `admin.log` to reach**: a malformed name or `NoSuchAgent` names no agent
+whose declaration directory this crate may write, so that refusal goes to standard
+error alone, beside the answer object, and to no log.
 
 **What is logged is the charter's set.** Transitions directed and their outcomes,
 refusals issued, rollbacks with what each act undid or could not, and workers started

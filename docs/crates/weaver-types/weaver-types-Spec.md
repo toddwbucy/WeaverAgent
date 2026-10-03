@@ -946,7 +946,6 @@ pub struct TraceHeader {
 pub enum TraceControl {
     Header(TraceHeader),
     Heartbeat { wall_ms: u64 },
-    IdentityChanged(TraceHeader),
     Truncated { size: u64 },
 }
 
@@ -989,22 +988,21 @@ reader holds what it is reading. At the end of the file the stream keeps followi
 a heartbeat line while idle. **Every line the stream adds is a `TraceControl`**, so the
 reader in another repository parses one fixed shape: a JSON object whose one member is
 `trace_stream`, externally tagged by case, which no trace event carries, the envelope
-having no such member. The four lines are
+having no such member. The three lines are
 `{"trace_stream":{"header":{"device":...,"inode":...,"birth_ns":...}}}` first,
-`{"trace_stream":{"heartbeat":{"wall_ms":...}}}` while idle,
-`{"trace_stream":{"identity_changed":{...}}}` when the sink's path comes to name another
-file than the one the run writes, and `{"trace_stream":{"truncated":{"size":...}}}` when
-the run's file shrinks below the stream's position, which leaves its identity unchanged.
-**`identity_changed` is informational and the stream goes on**: the relay serves the
-run's own file by descriptor, so a path that now names another file changes nothing it
-reads, and the line tells the reader that the next run will append elsewhere. **After
-`truncated` the stream ends**, and the reader resumes with a new request from offset
-zero, so no follower stays positioned past the end of a file that was rewritten. The
-check is the file's size against the stream's position, so a file truncated and grown
-back past that position between two checks goes unseen until the reader's next request,
-whose digest check then refuses the stale position, and that regrowth is the check's
-blind spot, named rather than hidden. Every other line is the trace's own, byte for
-byte.
+`{"trace_stream":{"heartbeat":{"wall_ms":...}}}` while idle, and
+`{"trace_stream":{"truncated":{"size":...}}}` when the run's file shrinks below the
+stream's position, which leaves its identity unchanged. **No line reports the sink's
+path naming another file**: the relay holds the run's file by descriptor and never its
+path, which dies at section 5's open, so it cannot see a rotation, and a rotation
+changes nothing it reads. A reader learns of one at the next run, whose header names the
+new file's identity. **After `truncated` the stream ends**, and the reader resumes with
+a new request from offset zero, so no follower stays positioned past the end of a file
+that was rewritten. The check is the file's size against the stream's position, so a
+file truncated and grown back past that position between two checks goes unseen until
+the reader's next request, whose digest check then refuses the stale position, and that
+regrowth is the check's blind spot, named rather than hidden. Every other line is the
+trace's own, byte for byte.
 
 **`Cause` is who changed the agent, and it is the uid sudo reports and nothing else**,
 on the operator's ruling of 2026-10-03 on #50: admin reads it from sudo's own
