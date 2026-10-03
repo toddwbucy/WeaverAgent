@@ -39,6 +39,13 @@ pub enum ChannelFault {
     /// socket, and section 7's ceiling is what turns that into an answer
     /// rather than a wait.
     NotDialable,
+    /// **Positive evidence that no worker listens**, per `weaver-admin-Spec`
+    /// section 3: through the dial's whole bound the name stood bound to
+    /// nothing or the connection was refused, never a full backlog, which is
+    /// a busy worker and so not evidence.
+    NoListener,
+    /// An answer did not arrive within its exchange's bound, per section 3.
+    Unanswered,
 }
 
 /// The connected end this invocation holds for the life of one verb.
@@ -112,6 +119,9 @@ fn dial_once(socket_path: &Path) -> Result<Coordination, ChannelFault> {
         // and the one this crate would otherwise block on.
         Err(nix::errno::Errno::EAGAIN) | Err(nix::errno::Errno::EINPROGRESS) => {
             return Err(ChannelFault::NotDialable);
+        }
+        Err(nix::errno::Errno::ENOENT) | Err(nix::errno::Errno::ECONNREFUSED) => {
+            return Err(ChannelFault::NoListener);
         }
         Err(_) => return Err(ChannelFault::NotDialable),
     }
@@ -245,6 +255,40 @@ impl Coordination {
         serde_json::from_slice(&buffer[..read]).map_err(|_| ChannelFault::Undecodable)
     }
 
+    /// **Reads one envelope within `bound`**, per section 3's rule that no verb
+    /// holds the invocation lock past a bound it states: blocking is not
+    /// unbounded, so the read waits on the descriptor for at most `bound` and
+    /// answers `Unanswered` past it.
+    pub fn recv_within(&self, bound: Duration) -> Result<OrganEnvelope, ChannelFault> {
+        // A bound past what the clock can hold never panics: it waits as long
+        // as poll's longest wait, again and again, which is the bound read
+        // as written.
+        let deadline = Instant::now().checked_add(bound);
+        loop {
+            let remaining = match deadline {
+                Some(deadline) => deadline.saturating_duration_since(Instant::now()),
+                None => Duration::MAX,
+            };
+            if remaining.is_zero() {
+                return Err(ChannelFault::Unanswered);
+            }
+            let millis = remaining.as_millis().min(i32::MAX as u128) as i32;
+            let mut poll = nix::libc::pollfd {
+                fd: self.fd.as_raw_fd(),
+                events: nix::libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: poll over one pollfd this frame owns.
+            match unsafe { nix::libc::poll(&mut poll, 1, millis) } {
+                0 if deadline.is_none() => {}
+                0 => return Err(ChannelFault::Unanswered),
+                n if n > 0 => return self.recv(),
+                _ if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted => {}
+                _ => return Err(ChannelFault::Closed),
+            }
+        }
+    }
+
     /// Adopts a connected end, for a test peer standing in for the worker.
     #[cfg(test)]
     pub fn adopt(fd: OwnedFd) -> Self {
@@ -329,8 +373,9 @@ mod tests {
         let refused = dial(&path);
         let elapsed = started.elapsed();
         assert!(
-            matches!(refused, Err(ChannelFault::NotDialable)),
-            "a dial against an unbound name refuses, got {refused:?}"
+            matches!(refused, Err(ChannelFault::NoListener)),
+            "a dial against an unbound name refuses as no listener, the positive \
+             evidence section 3 reads, got {refused:?}"
         );
         assert!(
             elapsed >= DIAL_CEILING,
@@ -428,6 +473,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **A bound past the clock never panics**: `recv_within` given the
+    /// longest duration reads the answer its peer sends, rather than
+    /// overflowing the deadline it adds. Perturbation: add the bound to the
+    /// clock unchecked and the call panics.
+    #[test]
+    fn a_bound_past_the_clock_waits_and_reads() {
+        let dir = scratch("unbounded");
+        let (listener, path) = harness_listener(&dir);
+        let admin = dial(&path).expect("dial");
+        let worker = Coordination::adopt(harness_accepts(&listener));
+        worker.send(&directive(7, "alpha")).expect("write");
+        let read = admin
+            .recv_within(Duration::MAX)
+            .expect("the answer is read within an unreachable bound");
+        assert_eq!(read.exchange.ordinal, 7);
+        drop(worker);
+        drop(listener);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// **Truncation is a fault**, never a message: a read returning with
     /// `MSG_TRUNC` set carries a prefix the kernel shortened.
     ///
@@ -451,7 +516,7 @@ mod tests {
             )
         };
         if written < 0 {
-            eprintln!(
+            diag!(
                 "SKIP truncation_is_a_channel_fault: the kernel refused the oversized \
                  datagram (errno {}), so the MSG_TRUNC branch was not exercised here",
                 std::io::Error::last_os_error()

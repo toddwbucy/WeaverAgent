@@ -63,8 +63,8 @@ pub struct MemberAccount {
 /// The constructed identity is `weaver-<name>` **from the validated name,
 /// never from a caller-supplied string**, which is the argless-grant
 /// discipline landing at the one site that constructs. It is the one site
-/// because the same validated name is what the unit template interpolates, so
-/// the delegated authority has one origin.
+/// because the same validated name is what the start step drops the worker to,
+/// so the delegated authority has one origin.
 pub fn identity_for(name: &AgentName) -> String {
     format!("weaver-{}", name.0)
 }
@@ -300,7 +300,7 @@ fn take_inventory_against(
     // `ConfigInvalid`, for the reason the group case below gives: the
     // declaration is well formed and the fault is the provisioning's.
     if store.engine != StoreEngine::None && boundary.member_binary.is_none() {
-        eprintln!("boundary unverified: no weaver-state binary beside the worker's");
+        diag!("boundary unverified: no weaver-state binary beside the worker's");
         return Err(LifecycleRefusal::BoundaryUnverified);
     }
     // **And its account**, per `weaver-state-PRD` section 4: the member holds
@@ -313,7 +313,7 @@ fn take_inventory_against(
     //
     // conforms: admin-member-account-required-at-inventory
     if store.engine != StoreEngine::None && boundary.member_account.is_none() {
-        eprintln!(
+        diag!(
             "boundary unverified: no {} account for the state member to run as. \
              Run deploy/create-agent.sh, or useradd --system --no-create-home \
              --user-group it.",
@@ -331,7 +331,7 @@ fn take_inventory_against(
             .map(|m| std::os::unix::fs::FileTypeExt::is_socket(&m.file_type()))
             .unwrap_or(false)
         {
-            eprintln!(
+            diag!(
                 "boundary unverified: no store socket at {}",
                 socket.display()
             );
@@ -375,13 +375,12 @@ fn take_inventory_against(
     //
     // **The two locks may narrow the same set and may not contradict.** So a
     // rule the mode would silently defeat refuses here, named, before any
-    // unit starts, rather than at a `connect` no layer reports.
+    // worker starts, rather than at a `connect` no layer reports.
     //
     // **The rule half is the serving binding's and the group half is every
-    // binding's.** `start_arguments` emits `--property=Group={identity}` for
-    // every unit, so a box carrying the agent user and not its group fails
-    // `systemd-run` with the opaque credential error whatever the binding is,
-    // and gating the whole check on `Serving` let a diagnostic declaration
+    // binding's.** The start step drops every worker to the group named
+    // `{identity}`, so a box carrying the agent user and not its group fails
+    // the start whatever the binding is, and gating the whole check on `Serving` let a diagnostic declaration
     // pass validate clean and fail at load. A diagnostic binding is asked
     // with an empty rule, which reaches the group arm and names no peer.
     let empty_rule = weaver_types::AccessRule {
@@ -411,7 +410,7 @@ fn take_inventory_against(
         // two refusals want different instructions, and a single sentence
         // here told a deployer whose group was missing to run `gpasswd`,
         // which is the command that fails on exactly that box.
-        eprintln!(
+        diag!(
             "boundary unverified: {}: {}",
             unreachable.field(&identity),
             unreachable.remedy(&identity)
@@ -443,14 +442,14 @@ fn judge_restore(
     session: &weaver_types::SessionId,
 ) -> Result<weaver_types::Lineage, LifecycleRefusal> {
     let text = std::fs::read_to_string(&restore.record).map_err(|error| {
-        eprintln!(
+        diag!(
             "boundary unverified: the restore's record {} does not read: {error}",
             restore.record.display()
         );
         LifecycleRefusal::BoundaryUnverified
     })?;
     let held = RecordHoldings::read(&text).ok_or_else(|| {
-        eprintln!(
+        diag!(
             "boundary unverified: the restore's record {} holds no event",
             restore.record.display()
         );
@@ -463,7 +462,7 @@ fn judge_restore(
     // own name with the record whole is a resume, and a cut under it refuses.
     if session.0 == held.session {
         if restore.through.is_some() {
-            eprintln!("config invalid: a session cannot rewind under its own name");
+            diag!("config invalid: a session cannot rewind under its own name");
             return Err(through_refusal());
         }
         return Ok(held.whole());
@@ -479,15 +478,16 @@ fn judge_restore(
                 .find(|(run, _)| *run == cut.run.0)
                 .map(|(_, turns)| turns)
                 .ok_or_else(|| {
-                    eprintln!("config invalid: the record holds no run {:?}", cut.run.0);
+                    diag!("config invalid: the record holds no run {:?}", cut.run.0);
                     through_refusal()
                 })?;
             // Membership and never a bound: a run holding turns one and
             // three holds no turn two, and a cut there names nothing.
             if !turns.contains(&cut.turn) {
-                eprintln!(
+                diag!(
                     "config invalid: run {:?} holds no turn {}",
-                    cut.run.0, cut.turn
+                    cut.run.0,
+                    cut.turn
                 );
                 return Err(through_refusal());
             }
@@ -793,13 +793,13 @@ fn store_gate(
         // Unreachable from the walk, which requires the account above, and
         // stated rather than unwrapped: a gate that assumed an account would
         // be asking the store about nobody.
-        eprintln!("boundary unverified: no member account to ask the store about");
+        diag!("boundary unverified: no member account to ask the store about");
         return Err(LifecycleRefusal::BoundaryUnverified);
     };
     match ask(member.uid, &[member.gid]) {
         Ok(true) => {}
         Ok(false) => {
-            eprintln!(
+            diag!(
                 "boundary unverified: the store does not map the member's uid {} to role \
                  {role:?} on database {database:?}",
                 member.uid
@@ -807,21 +807,21 @@ fn store_gate(
             return Err(LifecycleRefusal::BoundaryUnverified);
         }
         Err(e) => {
-            eprintln!("boundary unverified: the store could not be asked as the member: {e}");
+            diag!("boundary unverified: the store could not be asked as the member: {e}");
             return Err(LifecycleRefusal::BoundaryUnverified);
         }
     }
     match ask(boundary.agent_uid, &boundary.agent_gids) {
         Ok(false) => Ok(()),
         Ok(true) => {
-            eprintln!(
+            diag!(
                 "boundary unverified: the store maps the agent's uid {} to role {role:?}",
                 boundary.agent_uid
             );
             Err(LifecycleRefusal::BoundaryUnverified)
         }
         Err(e) => {
-            eprintln!("boundary unverified: the store could not be asked as the agent: {e}");
+            diag!("boundary unverified: the store could not be asked as the agent: {e}");
             Err(LifecycleRefusal::BoundaryUnverified)
         }
     }
@@ -1295,9 +1295,9 @@ mod tests {
     /// **The group half of the check covers every binding, not the serving
     /// one.**
     ///
-    /// `start_arguments` emits `--property=Group={identity}` for every unit,
-    /// so a box carrying the agent user and not its group fails
-    /// `systemd-run` with an opaque credential error whatever the binding is.
+    /// The start step drops every worker to the group named `{identity}`, so
+    /// a box carrying the agent user and not its group fails the start
+    /// whatever the binding is.
     /// Gating the whole check on `EnterBinding::Serving` let a diagnostic
     /// declaration pass validate clean and fail at load, which is exactly the
     /// failure the `GroupMissing` arm exists to preempt.
@@ -1374,7 +1374,7 @@ mod tests {
     fn a_rule_the_mode_would_defeat_refuses_at_the_inventory() {
         let me = nix::unistd::Uid::current().as_raw();
         if me == 0 {
-            eprintln!("SKIP: the check skips root by design");
+            diag!("SKIP: the check skips root by design");
             return;
         }
         let root = scratch("reach");
@@ -2028,14 +2028,14 @@ mod tests {
         let output = match ran {
             Ok(output) => output,
             Err(e) => {
-                eprintln!("SKIP identity drop watch: unshare could not run: {e}");
+                diag!("SKIP identity drop watch: unshare could not run: {e}");
                 return;
             }
         };
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         if stderr.starts_with("unshare:") {
-            eprintln!(
+            diag!(
                 "SKIP identity drop watch: no user namespace here: {}",
                 stderr.trim()
             );
@@ -2225,7 +2225,7 @@ mod tests {
         // Asserting through it would be a watch that reports on the runner
         // rather than on the check.
         if nix::unistd::getuid().is_root() {
-            eprintln!(
+            diag!(
                 "SKIP a_third_party_owned_sink_directory_refuses_the_load: run as root, \
                  so a created directory is root-owned and holds custody by name"
             );

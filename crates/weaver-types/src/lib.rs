@@ -89,14 +89,14 @@ mod config;
 mod identity;
 mod wire;
 
-#[cfg(feature = "config")]
-pub use config::parse;
 pub use config::{
     AgentConfig, ArtifactRef, BindingKind, ClassifyInstruction, ConfigError, ConfigErrorKind, Cut,
     DecoderInstruction, DeviceOrdinal, ElectedKindConfig, FieldElection, FieldName,
     GateInstruction, ModelBinding, Restore, SpuInstruction, StateElection, StateStore, StoreEngine,
     ToolName, TraceSink,
 };
+#[cfg(feature = "config")]
+pub use config::{parse, parse_boundary};
 pub use identity::{
     AccessRule, BoundaryFile, Cause, PeerIdentity, TraceControl, TraceHeader, TraceLine,
     TraceRequest, authorized,

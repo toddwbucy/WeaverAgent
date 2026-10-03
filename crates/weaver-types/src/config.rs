@@ -422,6 +422,16 @@ impl std::fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
+/// **The boundary file's parse**, per `weaver-types-Spec` section 3.1: the
+/// agent's `roles.toml`, read by admin from the agent's root, the one trace
+/// reader and nothing else, an unknown key refused. A total parse like the
+/// declaration's, and kept apart from it, the file being boundary and never
+/// constitution.
+#[cfg(feature = "config")]
+pub fn parse_boundary(source: &str) -> Result<crate::BoundaryFile, ConfigError> {
+    toml::from_str(source).map_err(|e| classify_toml_error(e.message()))
+}
+
 /// A total parse into a typed value: the whole config or a typed refusal, and
 /// nothing partial, so a half-valid config is unrepresentable rather than
 /// merely refused.

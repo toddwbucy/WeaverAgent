@@ -963,18 +963,21 @@ half**, on the operator's rulings of 2026-10-03 on #50 and #63. The lifecycle ha
 #63 drafted, a map of role groups to verbs, does not return: who may issue which verb is
 the sudo rule's, the box's own boundary, and never a file admin reads. What stays is the
 one `trace_reader` the trace relay admits, in a root-owned file in the agent's root,
-`/etc/weaver/admin/<agent>/roles.toml`, required, an unknown key refused. It is boundary
-and never constitution, per `weaver-admin-Spec` section 9. **The trace reader is a
-user, and only a user**, the connector's own service user, on the operator's ruling of
-2026-10-03 on #50: a group would admit every member of it to the agent's whole record,
-and a bare name that could resolve to a user and a group of the same name is what an
-explicit kind once guarded against, so the kind is fixed instead. The relay admits that
-uid alone. **The name resolves at `validate` and `load`**: a reader that is the agent's
-or its state member's account refuses, per `weaver-admin-PRD` section 7's rule that no
-grant names the agent, so the agent never reaches its own record through the boundary,
-and a reader that does not hold the agent's access group `weaver-<agent>-admin`, which
-the trace socket is grouped to, refuses too, a reader the filesystem would turn away
-before the relay's credential check runs being a door that cannot open.
+`/etc/weaver/admin/<agent>/roles.toml`, required, an unknown key refused. **It is read
+by `parse_boundary`**, behind the `config` feature beside `parse`, a total parse like
+the declaration's, `fn parse_boundary(source: &str) -> Result<BoundaryFile,
+ConfigError>`, kept apart from it because the file is boundary and never constitution,
+per `weaver-admin-Spec` section 9. **The trace reader is a user, and only a user**, the
+connector's own service user, on the operator's ruling of 2026-10-03 on #50: a group
+would admit every member of it to the agent's whole record, and a bare name that could
+resolve to a user and a group of the same name is what an explicit kind once guarded
+against, so the kind is fixed instead. The relay admits that uid alone. **The name
+resolves at `validate` and `load`**: a reader that is the agent's or its state member's
+account refuses, per `weaver-admin-PRD` section 7's rule that no grant names the agent,
+so the agent never reaches its own record through the boundary, and a reader that does
+not hold the agent's access group `weaver-<agent>-admin`, which the trace socket is
+grouped to, refuses too, a reader the filesystem would turn away before the relay's
+credential check runs being a door that cannot open.
 
 ```toml
 trace-reader = "weaver-<agent>-admincon"

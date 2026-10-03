@@ -24,13 +24,26 @@
 //! on 2026-08-05, and what replaces them is the process boundary the operating
 //! system already draws around an executed program, per section 2.
 
+/// **A diagnostic line on standard error that can never end the verb**, per
+/// `weaver-admin-Spec` section 2: the invocation ignores `SIGPIPE`, so a write
+/// to a closed or broken standard error fails with `EPIPE` instead of killing
+/// the process, and `eprintln!` would panic on that failure part way through a
+/// verb. This writes and discards the error, the line being diagnostics no
+/// caller parses.
+macro_rules! diag {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), $($arg)*);
+    }};
+}
+
 mod channel;
 mod inventory;
 mod log;
 mod sink;
 mod stack;
+mod start;
 mod surface;
-mod unit;
 mod verbs;
 
 /// A path under the temp directory for this crate's tests, removed when the
@@ -70,51 +83,116 @@ use std::path::PathBuf;
 use weaver_types::{AgentName, LifecycleAnswer, LifecycleDirective, LifecycleRefusal};
 
 /// One agent's operator-installed configuration, read from that agent's own
-/// root, per Spec section 9: the coordination socket's per-agent name, the
-/// log, the unit template with the agent's own binaries, and the declaration
-/// beside them. **These are deployment facts the operator installs** - crossing
-/// no seam, and **none of them discovered at runtime by searching**. Admin is
-/// one agent's organ, on the operator's ruling of 2026-10-01, so it reads this
-/// agent's root and nothing shared.
-///
-/// The operator socket's path left this list with the socket on 2026-08-05.
-/// The coordination name stayed and changed hands: the operator places it, the
-/// harness binds it, and admin dials it.
+/// root, per Spec section 9: the coordination root, the agent's binaries, the
+/// optional values, the operator's declaration directory and uid, and the
+/// boundary file. **These are deployment facts the operator installs** -
+/// crossing no seam, and **none of them discovered at runtime by searching**.
+/// Admin is one agent's organ, on the operator's ruling of 2026-10-01, so it
+/// reads this agent's root and nothing shared.
 struct ServiceConfig {
     /// The agent this configuration is, named by the root it was read from.
     agent: String,
-    /// The agent's root, `<base>/<agent>/`, which holds the declaration as
-    /// `agent.toml` beside the values below.
-    root: PathBuf,
     coordination_root: PathBuf,
-    log_path: PathBuf,
-    unit: unit::UnitTemplate,
+    worker: PathBuf,
+    spu: PathBuf,
+    gate: PathBuf,
+    headroom_bytes: Option<String>,
+    /// The engine libraries' directory, judged as the root is, per section 6.
+    library_path: Option<PathBuf>,
+    /// The bound on the enter's answer, per section 2: 900 seconds, or the
+    /// root's `load-bound-seconds`.
+    load_bound: std::time::Duration,
+    /// The operator's directory holding `agent.toml`, `admin.log` and
+    /// `worker.log`, canonical as judged, per sections 8 and 9.
+    declaration_directory: PathBuf,
+    /// The operator's uid, the box's own fact about whose data defines the
+    /// agent, per section 9.
+    operator: u32,
+    /// The declaration directory's group, the group the operator's logs take.
+    operator_gid: u32,
+    /// The boundary file, `roles.toml`, as read: its sha256 hex and its one
+    /// trace reader, or why it did not read. **Required at `validate` and
+    /// `load` alone**, per section 9: a damaged file never takes `unload`,
+    /// `stop` or `show` from a running agent, whose log lines then carry no
+    /// digest.
+    boundary: Result<BoundaryRead, String>,
     /// The directory the store's unix socket stands in, per Spec section 9
     /// as of 2026-09-04: read under a service election and otherwise idle.
-    /// Optional in the file, the engine's conventional directory standing
-    /// where the file is silent.
     state_store_socket: PathBuf,
 }
 
-impl ServiceConfig {
-    /// The unit a load of this agent starts, per Spec sections 6 and 9: the
-    /// template the agent's root names, and the only value `unit::start` takes.
-    fn agent_unit(&self, agent: &str) -> unit::AgentUnit {
-        unit::AgentUnit::for_agent(&self.unit, agent)
-    }
+/// A boundary file that read and parsed.
+#[derive(Debug, Clone)]
+struct BoundaryRead {
+    digest: String,
+    reader: String,
+}
 
-    /// The per-agent socket the harness binds inside the unit's runtime
+/// The enter's bound where the root names none, per Spec section 2.
+const DEFAULT_LOAD_BOUND: std::time::Duration = std::time::Duration::from_secs(900);
+
+impl ServiceConfig {
+    /// The per-agent socket the harness binds inside the agent's runtime
     /// directory. Admin resolves the same name to dial it, which is the one
     /// value that reaches two crates and the reason the operator's file is
     /// where they agree.
-    fn coordination_socket(&self, agent: &str) -> PathBuf {
-        self.coordination_root
-            .join(unit::runtime_directory_name(agent))
-            .join("coordination.sock")
+    fn coordination_socket(&self) -> PathBuf {
+        start::runtime_directory(&self.coordination_root, &self.agent).join("coordination.sock")
+    }
+
+    /// The agent's root-owned run directory of section 3.
+    fn run_directory(&self) -> PathBuf {
+        start::run_directory(&self.coordination_root, &self.agent)
+    }
+
+    /// The boundary file's digest where it read, for the operations log.
+    fn boundary_digest(&self) -> Option<&str> {
+        self.boundary.as_ref().ok().map(|read| read.digest.as_str())
+    }
+
+    /// **The boundary file, required**, at `validate` and `load`: missing or
+    /// malformed refuses `ConfigInvalid` naming `roles.toml`, per section 9.
+    fn require_boundary(&self) -> Result<&BoundaryRead, LifecycleRefusal> {
+        self.boundary.as_ref().map_err(|why| {
+            diag!("weaver-admin: {why}");
+            LifecycleRefusal::ConfigInvalid {
+                field: Some(weaver_types::FieldName(BOUNDARY_FILE.to_string())),
+            }
+        })
+    }
+
+    /// The operations log, per section 8.
+    fn admin_log(&self) -> PathBuf {
+        self.declaration_directory.join("admin.log")
+    }
+
+    /// The worker's own log, per section 6, never the operations log.
+    fn worker_log(&self) -> PathBuf {
+        self.declaration_directory.join("worker.log")
+    }
+
+    /// Who owns the operator's logs: the `operator` uid and the declaration
+    /// directory's group, set through the open descriptor, per section 8.
+    fn operator_owner(&self) -> (u32, u32) {
+        (self.operator, self.operator_gid)
     }
 }
 
+/// The one answer object on standard output, written and flushed with the
+/// error discarded, so a closed or broken standard output leaves the exit
+/// status, which still agrees with the object, as the answer's carrier.
+fn say(object: &str) {
+    use std::io::Write as _;
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{object}");
+    let _ = out.flush();
+}
+
 fn main() {
+    // **The first instruction ignores every catchable terminating signal**,
+    // per Spec section 2, so a caller cancelling, timing out or hanging up,
+    // which sudo relays, cannot end a verb part way.
+    start::ignore_terminating_signals();
     // **The store's second question is answered by this binary under the
     // agent's uid**, per `weaver-admin-Spec` section 4 as of 2026-09-04: the
     // parent sets the variable and three arguments, and the child asks the
@@ -143,11 +221,13 @@ fn main() {
     // two never disagree.
     match outcome {
         Ok(answer) => {
-            println!("{}", surface::render_answer(&answer));
+            // The answer's write is discarded on failure, a caller that went
+            // away leaving the verb's outcome in `admin.log`, per Spec section 2.
+            say(&surface::render_answer(&answer));
             std::process::exit(0);
         }
         Err(refusal) => {
-            println!("{}", surface::render_refusal(&refusal));
+            say(&surface::render_refusal(&refusal));
             std::process::exit(surface::EXIT_REFUSED);
         }
     }
@@ -198,7 +278,14 @@ fn run() -> Result<LifecycleAnswer, LifecycleRefusal> {
     // touched nothing.
     cause_from(std::env::var_os("SUDO_UID").as_deref())?;
     let request = surface::parse_arguments(std::env::args().skip(1))?;
-    let config = load_service_config(request.agent())?;
+    // **A refusal before the agent's root is admitted has no admin.log to
+    // reach**, per Spec section 8: it goes to standard error alone.
+    let config = load_service_config(request.agent()).inspect_err(|refusal| {
+        diag!(
+            "weaver-admin: refused before admission: {}",
+            surface::render_refusal(refusal)
+        );
+    })?;
     dispatch(&config, request)
 }
 
@@ -206,18 +293,59 @@ fn dispatch(
     config: &ServiceConfig,
     request: surface::Request,
 ) -> Result<LifecycleAnswer, LifecycleRefusal> {
-    match request {
-        surface::Request::Validate(agent) => validate(config, &agent),
-        surface::Request::Load(agent) => load(config, &agent),
-        surface::Request::Unload(agent) => unload(config, &agent),
-        surface::Request::Stop(agent) => stop(config, &agent),
-        // **`show` answers through the observation exchange**, per Spec
-        // section 3 as of 2026-09-04: the harness's own word where a worker
-        // answers the dial, and `Unloaded` from the absence where none does,
-        // which is the one place residency is read and it is read as the
-        // absence of a worker and not as a state.
-        surface::Request::Show(agent) => show(config, &agent),
+    admissible(config, request.agent())?;
+    // **The run directory is made before either lock is taken**, every verb's
+    // first act after the root's admission, per Spec section 3, under a
+    // coordination root judged closed first.
+    prepare_run_directory(config, 0)?;
+    let (verb, outcome) = match request {
+        surface::Request::Validate(agent) => ("validate", validate(config, &agent)),
+        surface::Request::Load(agent) => ("load", load(config, &agent)),
+        surface::Request::Unload(_) => ("unload", unload(config)),
+        surface::Request::Stop(_) => ("stop", stop(config)),
+        surface::Request::Show(_) => ("show", show(config)),
+    };
+    record(
+        config,
+        verb,
+        &match &outcome {
+            Ok(answer) => surface::render_answer(answer),
+            Err(refusal) => surface::render_refusal(refusal),
+        },
+    );
+    outcome
+}
+
+/// **The coordination root is held closed before the run directory is made in
+/// it**, per Spec section 3: the root itself owned by `owner`, uid 0 in
+/// production, or by uid 0, and writable by no group or other, sticky or not,
+/// since a sticky world-writable root would let any local user pre-create
+/// `weaver.run` and squat the agent; every directory above it held closed by
+/// section 9's ancestor rule. Otherwise the verb refuses `BoundaryUnverified`, since a
+/// principal that could write the coordination root could rename `weaver.run/`
+/// away and leave the next `load` a fresh `run.lock` while a run still holds
+/// the old one. Then the run directory is made and judged, owned by `owner`.
+fn prepare_run_directory(config: &ServiceConfig, owner: u32) -> Result<PathBuf, LifecycleRefusal> {
+    use std::os::unix::fs::MetadataExt;
+    let root = &config.coordination_root;
+    let metadata = std::fs::symlink_metadata(root).map_err(|_| {
+        diag!(
+            "weaver-admin: the coordination root {} does not exist",
+            root.display()
+        );
+        LifecycleRefusal::BoundaryUnverified
+    })?;
+    let closed = metadata.mode() & 0o022 == 0;
+    let held = metadata.uid() == owner || metadata.uid() == 0;
+    if !metadata.is_dir() || !held || !closed {
+        diag!(
+            "weaver-admin: the coordination root {} is not a directory {owner} holds closed",
+            root.display()
+        );
+        return Err(LifecycleRefusal::BoundaryUnverified);
     }
+    let canonical = judge_ancestors(root, &[owner, 0])?;
+    start::prepare_run_directory(&canonical, &config.agent, owner)
 }
 
 /// **`validate` is the load's front half**, and it stops at the report: it
@@ -227,6 +355,7 @@ fn validate(
     config: &ServiceConfig,
     agent: &AgentName,
 ) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    let _invocation = start::take_invocation_lock(&config.run_directory())?;
     take_inventory(config, agent)?;
     Ok(LifecycleAnswer::Validated)
 }
@@ -248,12 +377,17 @@ fn admissible(config: &ServiceConfig, agent: &AgentName) -> Result<(), Lifecycle
 
 /// The name's shape, judged before any path is built from it: non-empty
 /// ASCII letters, digits, `-` and `_`, so `.`, `..` and anything carrying `/`
-/// are refused.
+/// are refused. **A name ending in a reserved suffix is refused too**, per
+/// Spec section 4, since the agent's derived accounts and groups append
+/// `-state`, `-trace`, `-relay`, `-admin` and `-admincon` to `weaver-<name>`,
+/// and an agent named `x-relay` would collide with agent `x`'s relay.
 fn well_formed(agent: &str) -> bool {
+    const RESERVED: &[&str] = &["-state", "-trace", "-relay", "-admin", "-admincon"];
     !agent.is_empty()
         && agent
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && !RESERVED.iter().any(|suffix| agent.ends_with(suffix))
 }
 
 /// The one inventory, called by both `validate` and `load`, so the two cannot
@@ -273,6 +407,7 @@ fn well_formed(agent: &str) -> bool {
 fn stand_state_member(
     config: &ServiceConfig,
     inventory: &inventory::Inventory,
+    run_lock: &start::RunLock,
 ) -> Option<std::os::fd::OwnedFd> {
     // `none` declines the member, per `weaver-state-PRD` section 4 as of
     // 2026-09-04: nothing is stood, no territory is made, and the harness's
@@ -281,7 +416,7 @@ fn stand_state_member(
     if store.engine == weaver_types::StoreEngine::None {
         return None;
     }
-    let binary_directory = config.unit.worker.parent()?;
+    let binary_directory = config.worker.parent()?;
     let binary = binary_directory.join("weaver-state");
     if !binary.exists() {
         return None;
@@ -304,10 +439,10 @@ fn stand_state_member(
         nix::sys::socket::SockFlag::SOCK_CLOEXEC,
     )
     .ok()?;
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(territory.join("state.log"));
+    // **Opened as root in the member's own room, so never through a link**:
+    // the member could otherwise aim root's append at any file, and a FIFO
+    // could hold the load.
+    let log = log::open_append(&territory.join("state.log"), None);
     let mut member = std::process::Command::new(&binary);
     member
         .args(member_vector(
@@ -324,38 +459,34 @@ fn stand_state_member(
     } else {
         member.stderr(std::process::Stdio::null());
     }
-    // The member's end arrives at the fixed number `weaver-state` adopts.
-    // Relocated first where it sits at or below the arming target, because
-    // the spawn places the standard streams onto 0 through 2 before any
-    // pre-exec closure runs, and the arming itself carries the
-    // equal-number corner `weaver-harness-Spec` section 2.2 records,
-    // repaired inside `arm_member_end`.
-    let member_end = {
-        use std::os::fd::AsRawFd;
-        if member_end.as_raw_fd() <= 3 {
-            match nix::fcntl::fcntl(&member_end, nix::fcntl::FcntlArg::F_DUPFD_CLOEXEC(4)) {
-                Ok(raw) => {
-                    // SAFETY: F_DUPFD_CLOEXEC answered a fresh descriptor
-                    // this process owns, adopted exactly once, and the low
-                    // original drops here.
-                    unsafe {
-                        use std::os::fd::FromRawFd;
-                        std::os::fd::OwnedFd::from_raw_fd(raw)
-                    }
-                }
-                Err(_) => return None,
-            }
-        } else {
-            member_end
-        }
-    };
-    let raw_member_end = {
+    // The member's end arrives at the fixed number `weaver-state` adopts, and
+    // the run lock's description at 9. **Both sources are copied above 100
+    // first**, so neither is a number the child places, the spawn placing
+    // the standard streams onto 0 through 2 before any pre-exec runs and a
+    // `dup2` onto its own number leaving the close-on-exec flag standing.
+    let member_end = start::high({
         use std::os::fd::AsRawFd;
         member_end.as_raw_fd()
+    })
+    .ok()?;
+    let lock = start::high(run_lock.raw()).ok()?;
+    let (raw_member_end, raw_lock) = {
+        use std::os::fd::AsRawFd;
+        (member_end.as_raw_fd(), lock.as_raw_fd())
     };
+    // SAFETY: every call below is async-signal-safe, run in the child
+    // between fork and exec.
     unsafe {
         use std::os::unix::process::CommandExt;
         member.pre_exec(move || {
+            // **The member takes its own session and resets the invocation's
+            // ignored signals**, per Spec section 6, and holds the run lock's
+            // description for its life, per section 3.
+            start::place(raw_lock, start::RUN_LOCK_FD)?;
+            // The member's allowlist: its first door's end at 3, armed below,
+            // and the run lock at 9.
+            start::seal_except(&[3, start::RUN_LOCK_FD])?;
+            start::detach_and_reset()?;
             become_member(member_account)?;
             arm_member_end(raw_member_end)
         });
@@ -516,19 +647,25 @@ fn member_vector(
 fn stack_digests(
     config: &ServiceConfig,
     member_started: bool,
+    classify: Option<&std::path::Path>,
 ) -> std::collections::BTreeMap<String, String> {
-    let worker = config.unit.worker.as_path();
+    let worker = config.worker.as_path();
     let member = worker
         .parent()
         .map(|directory| directory.join("weaver-state"))
         .unwrap_or_else(|| std::path::PathBuf::from("weaver-state"));
-    let spu = config.unit.spu.as_path();
+    let spu = config.spu.as_path();
     let mut binaries = vec![worker];
     if member_started {
         binaries.push(member.as_path());
     }
     binaries.push(spu);
-    binaries.push(config.unit.gate.as_path());
+    binaries.push(config.gate.as_path());
+    // The classify arm's binary where it is handed, so a run that classifies
+    // names the program that did.
+    if let Some(classify) = classify {
+        binaries.push(classify);
+    }
     let mut stack = std::collections::BTreeMap::new();
     for binary in binaries {
         let name = binary
@@ -545,8 +682,9 @@ fn take_inventory(
     agent: &AgentName,
 ) -> Result<inventory::Inventory, LifecycleRefusal> {
     admissible(config, agent)?;
+    judge_reader(&config.require_boundary()?.reader, agent)?;
     let identity = inventory::identity_for(agent);
-    let source_path = config.root.join("agent.toml");
+    let source_path = config.declaration_directory.join("agent.toml");
     let source =
         std::fs::read_to_string(&source_path).map_err(|_| LifecycleRefusal::NoSuchAgent)?;
     // The home comes from the account database rather than from a constructed
@@ -579,7 +717,6 @@ fn take_inventory(
         // 2026-09-04: the member's binary beside the worker's, and the
         // store's socket directory from this crate's own file.
         member_binary: config
-            .unit
             .worker
             .parent()
             .map(|directory| directory.join("weaver-state"))
@@ -698,163 +835,159 @@ mod gid_tests {
     }
 }
 
-/// `load` runs the charter's seven steps in order, and answers only on a ready
-/// aggregate: every other outcome enters the rollback carrying the step's name
-/// and answers nothing.
-fn load(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer, LifecycleRefusal> {
-    let mut operations = log::OperationsLog::open(&config.log_path)
-        .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
-    let mut standing = verbs::Standing::default();
+/// The observation's bound, per Spec section 3: five seconds from the
+/// `Observe`, after the dial's bound, which covers only the connect.
+const OBSERVE_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
 
-    let outcome = run_load(config, agent, &mut standing);
-    match outcome {
-        Ok(()) => {
-            // The line names the agent's SPU, per Spec section 8: the
-            // `spu-binary` its root names.
-            let _ = operations.record(&log::Act {
-                verb: "load",
-                agent: agent.0.clone(),
-                outcome: "ready".into(),
-                undone: None,
-                spu: Some(config.unit.spu.display().to_string()),
-            });
-            // Idle is honest here and only here: the enter aggregate came back
-            // ready, which is the interior serving and at rest. It is not read
-            // from the unit, which could not tell idle from active.
-            Ok(LifecycleAnswer::State {
-                state: weaver_types::AgentState::Idle,
-                load: None,
-                constituents: Vec::new(),
-            })
-        }
+/// The leave's own bound, per Spec section 3: sixty seconds from the
+/// directive.
+const LEAVE_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The stop's bound, per Spec section 3: sixty seconds from the directive.
+const STOP_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// What an observation of a held run found, per Spec section 3. **Silence is
+/// not evidence**: only `Unloaded` or no listener at all says no run entered.
+enum Observation {
+    State(
+        weaver_types::AgentState,
+        Option<Box<weaver_types::LoadFacts>>,
+    ),
+    /// No worker listens: no name bound, or the connection refused, through
+    /// the dial's whole bound.
+    NoListener,
+    /// A worker accepted, or the backlog was full, and nothing answered
+    /// inside the bounds: a busy run, never a stranded one.
+    Silent,
+}
+
+/// **Observes the run through the harness's own word**, per Spec section 3
+/// and `weaver-admin-harness-contract` section 3, within the dial's bound and
+/// the observation's.
+fn observe(config: &ServiceConfig) -> Result<Observation, LifecycleRefusal> {
+    let mut coordination = match channel::dial(&config.coordination_socket()) {
+        Ok(coordination) => coordination,
+        Err(channel::ChannelFault::NoListener) => return Ok(Observation::NoListener),
+        Err(_) => return Ok(Observation::Silent),
+    };
+    let ordinal = coordination.next_ordinal();
+    if coordination
+        .send_directive(ordinal, LifecycleDirective::Observe)
+        .is_err()
+    {
+        return Ok(Observation::Silent);
+    }
+    match coordination.recv_within(OBSERVE_BOUND) {
+        Ok(answer) => match answer.payload {
+            weaver_types::Payload::Answer(LifecycleAnswer::State { state, load, .. }) => {
+                Ok(Observation::State(state, load))
+            }
+            weaver_types::Payload::Refusal(refusal) => Err(refusal),
+            _ => Err(LifecycleRefusal::Malformed),
+        },
+        Err(_) => Ok(Observation::Silent),
+    }
+}
+
+/// What a load has stood up, for its rollback: the run lock it took, whether
+/// it forked any constituent, and whether the enter reached the worker.
+#[derive(Default)]
+struct Standing {
+    run_lock: Option<start::RunLock>,
+    forked: bool,
+    entered: bool,
+    sink_opened: bool,
+}
+
+/// **`load` keeps one promise**, per Spec section 3 and the operator's ruling
+/// of 2026-10-03 on #72: a run started by this load, or a refusal with nothing
+/// changed. A held run lock refuses `AgentRunning`, or `Unanswered` where the
+/// worker is silent, and a load never ends an existing run.
+fn load(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    let _invocation = start::take_invocation_lock(&config.run_directory())?;
+    let mut standing = Standing::default();
+    match run_load(config, agent, &mut standing) {
+        Ok(()) => Ok(LifecycleAnswer::State {
+            state: weaver_types::AgentState::Idle,
+            load: None,
+            constituents: Vec::new(),
+        }),
         Err(refusal) => {
-            settle_refused_load(config, agent, &standing, &refusal, &mut operations);
+            let account = roll_back(config, &mut standing);
+            if !account.is_empty() {
+                record(config, "load", &format!("rolled back: {account}"));
+            }
             Err(refusal)
         }
     }
 }
 
-/// What a refused load leaves is undone and logged before the refusal is
-/// answered: the rollback of what stood, then the failed unit cleared.
-///
-/// **The unit is cleared by admin, not left for the operator**, on the
-/// operator's ruling of 2026-10-01, per `weaver-admin-Spec` section 3. A worker
-/// that exited non-zero leaves its unit `failed`, holding the name, and the
-/// next load under it would be refused `NoResidency`. The state ask
-/// decides, and only `failed` is cleared. The ask runs where this load
-/// started a unit, or where its start was refused over a failed one, which
-/// covers a unit that failed while serving: that load answers
-/// `NoResidency` and the one after it starts. **There is no automatic
-/// reload.** The refusal is answered as it stood, and a retry is the
-/// operator's next load. The clear is a logged act of the rollback, so the
-/// log records that the unit was failed, and the worker's own output stays in
-/// the journal, so the clear discards the manager's record of the failure and
-/// not the evidence of its cause.
-///
-/// A function rather than a branch inside `load` so a test drives it with a
-/// manager double: `load` reaches it only past an inventory that needs a
-/// provisioned account.
-fn settle_refused_load(
-    config: &ServiceConfig,
-    agent: &AgentName,
-    standing: &verbs::Standing,
-    refusal: &LifecycleRefusal,
-    operations: &mut log::OperationsLog,
-) {
-    // **Rollback walks what stands**, and its account is logged.
-    let mut account = verbs::rollback(
-        standing,
-        // **The leave is directed where a run was entered**, per charter
-        // section 5 and Spec section 3. A refused fan-out leaves the harness
-        // holding a partial run it will unwind along the seams it fanned out
-        // on, and the directive is what asks it to. The account reports
-        // whether the ask landed, so a leave that could not be sent is
-        // recorded as held rather than claimed.
-        || direct_leave(config, agent).is_ok(),
-        || unit::stop(&config.unit, &agent.0).is_ok(),
-        || true,
-    );
-    if (standing.unit_started || *refusal == LifecycleRefusal::NoResidency)
-        && unit::residency(&config.unit, &agent.0) == unit::Residency::Failed
-    {
-        // **Undone only on two answers**: the clear's own status, and the state
-        // after it reading `inactive`. A clear that did not run, or a state no
-        // one could read, is held: the name may still be taken, and the log
-        // must not say otherwise.
-        let cleared = unit::reset_failed(&config.unit, &agent.0).is_ok_and(|s| s.success());
-        account.push(verbs::Undone {
-            act: "unit-reset-failed",
-            succeeded: cleared
-                && unit::residency(&config.unit, &agent.0) == unit::Residency::Inactive,
-        });
-    }
-    for undone in &account {
-        let _ = operations.record(&log::Act {
-            verb: "rollback",
-            agent: agent.0.clone(),
-            outcome: format!("{refusal:?}"),
-            undone: Some(format!(
-                "{}:{}",
-                undone.act,
-                if undone.succeeded { "undone" } else { "held" }
-            )),
-            spu: None,
-        });
-    }
-}
-
+/// The load's order, per Spec section 3: the run lock taken by this
+/// invocation before anything forks, then the inventory, the sink, the
+/// runtime directory, the member and the worker, each child inheriting the
+/// run lock's description, then the dial and the enter under its bound.
 fn run_load(
     config: &ServiceConfig,
     agent: &AgentName,
-    standing: &mut verbs::Standing,
+    standing: &mut Standing,
 ) -> Result<(), LifecycleRefusal> {
+    let run_directory = config.run_directory();
+    let Some(run_lock) = start::take_run_lock(&run_directory)? else {
+        // **Any answer, a refusal among them, is a run that stands**: only
+        // silence is `Unanswered`, per Spec section 3.
+        return Err(match observe(config) {
+            Ok(Observation::Silent) => LifecycleRefusal::Unanswered,
+            _ => LifecycleRefusal::AgentRunning,
+        });
+    };
     let inventory = take_inventory(config, agent)?;
     let sink = sink::open(&inventory.config.trace_sink)?;
     standing.sink_opened = true;
+    let account = AgentAccount::resolve(&inventory.identity)?;
+    start::prepare_runtime_directory(
+        &config.coordination_root,
+        &agent.0,
+        account.uid,
+        account.gid,
+    )?;
+    let worker_log = start::open_log(&config.worker_log(), Some(config.operator_owner()))
+        .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
 
-    // The unit starts bare and binds its own coordination socket as its first
-    // act, so nothing is placed into it here.
-    // **A start ask that returns non-zero started nothing**, and the status is
-    // what carries that. Unit-name uniqueness is the concurrency guard
-    // `weaver-admin-systemd-contract` section 5 relies on, so a second load of
-    // a live agent fails here, and a discarded status would let it proceed to
-    // dial the first load's worker.
-    // The socket path is derived here from the same validated name the unit's
-    // own name carries, and the worker binds what it is told, so the two
-    // agree by construction rather than by two readings of one convention.
-    let socket_path = config.coordination_socket(&agent.0);
-    started(unit::start(
-        &config.agent_unit(&agent.0),
-        &inventory.identity,
-        &socket_path,
-        inventory.config.loop_file.as_deref(),
-    ))
-    .map_err(|from_status| refusal_for_failed_start(config, &agent.0, from_status))?;
-    standing.unit_started = true;
+    let state_end = stand_state_member(config, &inventory, &run_lock);
+    standing.forked |= state_end.is_some();
+    let classify = config
+        .worker
+        .parent()
+        .map(|directory| directory.join("weaver-spu-classify"))
+        .filter(|binary| binary.is_file());
+    let stack = stack_digests(config, state_end.is_some(), classify.as_deref());
+    let socket_path = config.coordination_socket();
+    let mut worker = start::spawn_worker(start::WorkerStart {
+        binary: &config.worker,
+        arguments: start::worker_arguments(
+            &socket_path,
+            &config.spu,
+            &config.gate,
+            config.headroom_bytes.as_deref(),
+            inventory.config.loop_file.as_deref(),
+            classify.as_deref(),
+        ),
+        uid: account.uid,
+        gid: account.gid,
+        home: &account.home,
+        library_path: config.library_path.as_deref(),
+        log: &worker_log,
+        run_lock: &run_lock,
+        relay_write: None,
+    })
+    .map_err(|_| LifecycleRefusal::BindFailed)?;
+    standing.forked = true;
+    standing.run_lock = Some(run_lock);
 
-    // **The dial races the worker's bind and the bound covers it.** A bound
-    // exceeded is not an absent residency, so the refusal consults the unit's
-    // state before returning and carries what the manager said. The path is
-    // the one the start ask carried, so admin dials exactly what it told the
-    // worker to bind.
     let mut coordination = match channel::dial(&socket_path) {
         Ok(coordination) => coordination,
-        Err(_) => return Err(refusal_for_absent_worker(config, &agent.0)),
+        Err(_) => return Err(refusal_from_worker(&mut worker)),
     };
-
-    // The state member stands after the worker's bind and before the enter,
-    // and nothing is waited on: the pair exists before the member does, per
-    // the ruling of 2026-08-26. Best-effort whole, per the contract's
-    // dead-peer clause - an absent binary or a failed spawn leaves the leg
-    // down and the load unrefused, the harness's end below then absent from
-    // the enter and the directive carrying the sink alone.
-    let state_end = stand_state_member(config, &inventory);
-    // **The stack names the binaries this crate started and handed the
-    // worker**, per `weaver-admin-harness-contract` section 3: the worker
-    // always, the member only where it stood, a declined or failed spawn being
-    // a binary admin did not start, and the agent's SPU and the gate always.
-    let stack = stack_digests(config, state_end.is_some());
-
     let ordinal = coordination.next_ordinal();
     // **The session is read and the run is minted**, per Spec section 7. The
     // session is the operator's, declared in the config and carried
@@ -885,33 +1018,21 @@ fn run_load(
                     instruction.decoder.column_permission = diagnostic;
                     instruction
                 },
-                // The resolution happened at the inventory, the one site, so
-                // what crosses is the kind decided with what it requires
-                // riding inside it.
                 binding: inventory.binding.clone(),
-                // The resolution site the contract names: an absent
-                // declaration becomes the ruled default here, so what
-                // crosses is always the election whole and the worker
-                // never re-derives an absence.
                 state_election: inventory.config.state_election.clone().unwrap_or_default(),
-                // The same resolution for the store, per `weaver-types-Spec`
-                // section 4 as of 2026-09-04: an absent election is the
-                // embedded engine, and the record names what was resolved.
                 state_store: inventory.config.state_store.clone().unwrap_or_default(),
                 declaration: inventory.declaration.clone(),
-                // The lineage the inventory resolved, never the record's
-                // path, and the digests of the two binaries this crate
-                // starts, per `weaver-admin-harness-contract` section 3 as
-                // of 2026-09-04 and issue #432.
                 restore: inventory.lineage.clone(),
                 stack,
-                // Owed to C2 of #50: the boundary file's digest from the
-                // inventory's read of `roles.toml`, and the root's judged
-                // `library-path`. Neither is read yet, so the enter carries
-                // the empty digest and no path.
-                boundary: String::new(),
+                // The boundary file's digest, the cause and the judged
+                // libraries, per `weaver-types-Spec` section 4 as of
+                // 2026-10-03, which the harness records on the load event.
+                boundary: config.require_boundary()?.digest.clone(),
                 cause: invocation_cause(),
-                library_path: None,
+                library_path: config
+                    .library_path
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
             }),
         }),
     };
@@ -924,8 +1045,7 @@ fn run_load(
         )
         .map_err(|_| LifecycleRefusal::DescriptorsUnusable)?;
     standing.entered = true;
-
-    match coordination.recv() {
+    match coordination.recv_within(config.load_bound) {
         Ok(answer) => match answer.payload {
             weaver_types::Payload::Answer(LifecycleAnswer::Ready) => Ok(()),
             weaver_types::Payload::Refusal(refusal) => Err(refusal),
@@ -933,251 +1053,215 @@ fn run_load(
         },
         Err(_) => Err(LifecycleRefusal::NoResidency),
     }
-    // The connection closes here with the verb: a per-invocation admin holds
-    // no standing end.
 }
 
-/// Whether a start ask started anything.
-///
-/// **A start ask that returns non-zero started nothing**, and the status is
-/// what carries that. Unit-name uniqueness is the concurrency guard
-/// `weaver-admin-systemd-contract` section 5 relies on, so a second load of a
-/// live agent fails here, and a discarded status would let that load proceed
-/// to dial the first load's worker and direct a second enter at it.
-///
-/// It is a function rather than a match inside `run_load` so that the decision
-/// is reachable by a test: discarding the status compiles, so nothing but a
-/// watch catches it.
-fn started(asked: std::io::Result<std::process::ExitStatus>) -> Result<(), LifecycleRefusal> {
-    match asked {
-        Ok(status) if status.success() => Ok(()),
-        _ => Err(LifecycleRefusal::BindFailed),
-    }
-}
-
-/// **A failed start ask is asked about rather than guessed at.**
-///
-/// The status cannot say which failure it was: `weaver-admin-systemd-contract`
-/// section 3 measures a duplicate unit name and a malformed property failing
-/// with the same status, differing only in prose this crate does not read. So
-/// the refusal comes from the state ask, where `failed` covers one condition,
-/// and every other reading keeps the answer the status alone could give.
-///
-/// It is a function rather than a branch inside `run_load` for the reason
-/// `started` is: the decision is reachable by a test.
-fn refusal_for_failed_start(
-    config: &ServiceConfig,
-    agent: &str,
-    from_status: LifecycleRefusal,
-) -> LifecycleRefusal {
-    start_refusal_for_residency(unit::residency(&config.unit, agent), from_status)
-}
-
-/// The mapping alone, testable without a manager.
-fn start_refusal_for_residency(
-    residency: unit::Residency,
-    from_status: LifecycleRefusal,
-) -> LifecycleRefusal {
-    match residency {
-        // Owed to C2 of #50, which retires the unit with `unit.rs`. Until then
-        // a failed unit, a worker that exited non-zero and runs no more,
-        // refuses as `NoResidency`: never `AgentRunning`, which says a live
-        // run holds the lock, and the rollback clears the failed name.
-        unit::Residency::Failed => LifecycleRefusal::NoResidency,
-        _ => from_status,
-    }
-}
-
-/// **A failed dial is followed by a state ask, so a refusal names the right
-/// thing.** A start ask can succeed over a unit that never runs, so the dial's
-/// bound is what proves liveness, and the bound alone would report an absent
-/// residency where the truth is a unit that is not running.
-///
-/// What the ask yields is a state and never a reason. `Failed` means one
-/// thing; `Inactive` covers a unit that stopped cleanly, one that never
-/// existed, and one whose exec never succeeded, so nothing is claimed beyond
-/// the value.
-/// **Observe one agent**, per `weaver-admin-harness-contract` section 3 as
-/// of 2026-09-04: dial the coordination socket and open the exchange, and
-/// carry the harness's answer whole. No socket, or no worker answering the
-/// dial, is `Unloaded` with no load, read from the absence and never from
-/// the unit.
-fn observe(
-    config: &ServiceConfig,
-    agent: &AgentName,
-) -> Result<
-    (
-        weaver_types::AgentState,
-        Option<Box<weaver_types::LoadFacts>>,
-    ),
-    LifecycleRefusal,
-> {
-    let socket_path = config.coordination_socket(&agent.0);
-    let Ok(mut coordination) = channel::dial(&socket_path) else {
-        return Ok((weaver_types::AgentState::Unloaded, None));
-    };
-    let ordinal = coordination.next_ordinal();
-    if coordination
-        .send_directive(ordinal, LifecycleDirective::Observe)
-        .is_err()
-    {
-        return Ok((weaver_types::AgentState::Unloaded, None));
-    }
-    match coordination.recv() {
-        Ok(answer) => match answer.payload {
-            weaver_types::Payload::Answer(LifecycleAnswer::State { state, load, .. }) => {
-                Ok((state, load))
-            }
-            weaver_types::Payload::Refusal(refusal) => Err(refusal),
-            _ => Err(LifecycleRefusal::Malformed),
-        },
-        Err(_) => Ok((weaver_types::AgentState::Unloaded, None)),
-    }
-}
-
-fn show(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer, LifecycleRefusal> {
-    admissible(config, agent)?;
-    let (state, load) = observe(config, agent)?;
-    // Owed to C2 of #50: the run lock's holders from the escalation's scan,
-    // per toddwbucy/WeaverWeb#15. The unit path has no run lock to scan.
-    Ok(LifecycleAnswer::State {
-        state,
-        load,
-        constituents: Vec::new(),
-    })
-}
-
-fn refusal_for_absent_worker(config: &ServiceConfig, agent: &str) -> LifecycleRefusal {
-    refusal_for_residency(unit::residency(&config.unit, agent))
-}
-
-/// The mapping alone, separated from the ask for the reason `unload_answer` is:
-/// a decision reachable by a test rather than only by a live manager.
-fn refusal_for_residency(residency: unit::Residency) -> LifecycleRefusal {
-    match residency {
-        // A prior process exited non-zero and its name is still held, which
-        // is what refuses a later start under it. Not a bind failure: the
-        // state says a process exited non-zero and says nothing about whether
-        // it bound, so naming a socket here would assert what the boundary
-        // did not, per `weaver-admin-systemd-contract` section 3.
-        // Owed to C2 of #50, which retires the unit with `unit.rs`. Until then
-        // a failed unit, a worker that exited non-zero and runs no more,
-        // refuses as `NoResidency`: never `AgentRunning`, which says a live
-        // run holds the lock, and the rollback clears the failed name.
-        unit::Residency::Failed => LifecycleRefusal::NoResidency,
-        // The unit is running and its socket was not reachable, so what failed
-        // is the bind rather than the residency. Reporting no residency here
-        // would name the one thing the manager just said was present.
-        unit::Residency::Active => LifecycleRefusal::BindFailed,
-        unit::Residency::Inactive | unit::Residency::Unknown => LifecycleRefusal::NoResidency,
-    }
-}
-
-/// `unload` directs leave, stops the unit, and answers only once the stop has
-/// been confirmed.
-fn unload(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer, LifecycleRefusal> {
-    take_inventory(config, agent).map(|_| ()).or_else(|e| {
-        // A name that does not resolve cannot be unloaded, but a config that
-        // has since gone bad must not strand a running worker, so only the
-        // name's own refusal stops this verb.
-        if matches!(e, LifecycleRefusal::NoSuchAgent) {
-            Err(e)
-        } else {
-            Ok(())
+/// **A failed dial is answered from the worker's own exit**, per Spec
+/// section 6: a worker that exited refuses naming its status on standard
+/// error, and one still running with no socket is a bind that failed.
+fn refusal_from_worker(worker: &mut std::process::Child) -> LifecycleRefusal {
+    match worker.try_wait() {
+        Ok(Some(status)) => {
+            diag!("weaver-admin: the worker exited before binding: {status}");
+            LifecycleRefusal::NoResidency
         }
-    })?;
-
-    let socket_path = config.coordination_socket(&agent.0);
-    let mut coordination =
-        channel::dial(&socket_path).map_err(|_| LifecycleRefusal::NoResidency)?;
-    let ordinal = coordination.next_ordinal();
-    coordination
-        .send_directive(
-            ordinal,
-            LifecycleDirective::Leave {
-                cause: invocation_cause(),
-            },
-        )
-        .map_err(|_| LifecycleRefusal::NoResidency)?;
-    match coordination.recv() {
-        Ok(answer) => match answer.payload {
-            weaver_types::Payload::Answer(LifecycleAnswer::Left) => Ok(()),
-            weaver_types::Payload::Refusal(refusal) => Err(refusal),
-            _ => Err(LifecycleRefusal::Malformed),
-        },
-        Err(_) => Err(LifecycleRefusal::NoResidency),
-    }?;
-    drop(coordination);
-
-    // **A stop that is accepted is not a stop that has happened**, and this
-    // verb waits for the difference. An agent reported unloaded while its
-    // worker still runs is the one report this verb must never produce.
-    let stopped = unit::stop(&config.unit, &agent.0);
-    let mut operations = log::OperationsLog::open(&config.log_path)
-        .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
-    let residency = unit::residency(&config.unit, &agent.0);
-    let _ = operations.record(&log::Act {
-        verb: "unload",
-        agent: agent.0.clone(),
-        outcome: residency.as_str().into(),
-        undone: None,
-        spu: None,
-    });
-    // **The state ask decides and the stop ask's status does not**, per Spec
-    // section 6. That status returns the same value for a unit that is still
-    // there as for one already gone, and the second is the ordinary end of a
-    // clean unload: the leave confirmed above causes the worker to exit and a
-    // transient unit is collected the moment its main process does, so the
-    // stop that follows names a unit the manager no longer knows. The status
-    // is still read, because the log records what the ask returned.
-    let _ = stopped;
-    unload_answer(residency)
+        _ => LifecycleRefusal::BindFailed,
+    }
 }
 
-/// The unload's answer from the state ask alone, split out so the rule is
-/// reachable by a test rather than reachable only by unloading a live agent.
-///
-/// **Two of the four cases refuse and the reason is one rule**: an agent
-/// reported unloaded while its worker still runs is the report this verb must
-/// never produce, per `weaver-admin-Spec` section 6. `Active` is that case
-/// directly. `Unknown` is the ask itself having failed, so the verb cannot
-/// tell, and answering unloaded over a state nobody could read would risk the
-/// same report by another route. The Spec's clause names `active` because that
-/// is the case it was written against, and the rule behind it is what carries
-/// `Unknown` here.
-///
-/// `Inactive` and `Failed` both mean the worker is not running, which is the
-/// outcome charter step 2 asks for. A unit that failed is reported by the log,
-/// which carries the residency's own name, rather than by refusing an unload
-/// that achieved what it directed.
-fn unload_answer(residency: unit::Residency) -> Result<LifecycleAnswer, LifecycleRefusal> {
-    match residency {
-        unit::Residency::Active => Err(LifecycleRefusal::ActivityNotAtRest),
-        unit::Residency::Unknown => Err(LifecycleRefusal::BindFailed),
-        unit::Residency::Inactive | unit::Residency::Failed => Ok(LifecycleAnswer::State {
+/// **Rollback is the reap plus one directive, as data**, per Spec section 3:
+/// leave where a run was entered, then this invocation's own copy of the run
+/// lock's description closed and every constituent it started ended by the
+/// escalation, which never signals this invocation, then the sink closed.
+/// Answers the account, empty where nothing stood.
+fn roll_back(config: &ServiceConfig, standing: &mut Standing) -> String {
+    let mut account = Vec::new();
+    if standing.entered {
+        let left = direct_leave(config).is_ok();
+        account.push(format!("leave {}", if left { "undone" } else { "held" }));
+    }
+    standing.run_lock = None;
+    if standing.forked {
+        let ended = start::escalate(&config.run_directory());
+        account.push(format!(
+            "constituents {}",
+            match ended {
+                Ok(()) => "ended".to_string(),
+                Err(refusal) => format!("held: {}", surface::render_refusal(&refusal)),
+            }
+        ));
+    }
+    if standing.sink_opened {
+        account.push("sink closed".to_string());
+    }
+    account.join(", ")
+}
+
+/// The agent's account, resolved by name as the start step needs it: the
+/// uid, the agent's own group by name, never a provisioned primary, and the
+/// home, per Spec section 6.
+struct AgentAccount {
+    uid: u32,
+    gid: u32,
+    home: PathBuf,
+}
+
+impl AgentAccount {
+    fn resolve(identity: &str) -> Result<Self, LifecycleRefusal> {
+        let user = nix::unistd::User::from_name(identity)
+            .ok()
+            .flatten()
+            .ok_or(LifecycleRefusal::BoundaryUnverified)?;
+        let group = nix::unistd::Group::from_name(identity)
+            .ok()
+            .flatten()
+            .ok_or(LifecycleRefusal::BoundaryUnverified)?;
+        Ok(AgentAccount {
+            uid: user.uid.as_raw(),
+            gid: group.gid.as_raw(),
+            home: user.dir,
+        })
+    }
+}
+
+/// **`show` answers through the observation exchange**, per Spec section 3,
+/// holding the invocation lock shared: `InTransition` where an exclusive
+/// holder stands, `Unloaded` without dialing where the run lock is free, and
+/// otherwise the harness's word with the run's constituents beside it,
+/// `Unanswered` where the worker is silent.
+fn show(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    let run_directory = config.run_directory();
+    let _shared = match start::take_shared_invocation_lock(&run_directory)? {
+        start::Shared::Held(lock) => lock,
+        start::Shared::InTransition => return Ok(LifecycleAnswer::InTransition),
+    };
+    if !start::run_lock_held(&run_directory)? {
+        return Ok(LifecycleAnswer::State {
             state: weaver_types::AgentState::Unloaded,
             load: None,
             constituents: Vec::new(),
-        }),
+        });
     }
+    let (state, load) = match observe(config)? {
+        Observation::State(state, load) => (state, load),
+        // The lock held with no worker listening: a run that never entered,
+        // whose constituents the caller may end with `unload`.
+        Observation::NoListener => (weaver_types::AgentState::Unloaded, None),
+        Observation::Silent => return Err(LifecycleRefusal::Unanswered),
+    };
+    Ok(LifecycleAnswer::State {
+        state,
+        load,
+        constituents: constituents(&run_directory),
+    })
 }
 
-/// Direct one leave over a fresh dial, for the rollback path.
-///
-/// **Admin is per-invocation, so the connection the load used is gone by the
-/// time the rollback runs.** Dialing again is what every verb does, and the
-/// worker is still there to answer: a refused fan-out leaves the harness
-/// holding the partial run rather than exiting, which is what makes the
-/// directive reach something.
-///
-/// A dial that fails is not an error to report upward. It means the worker is
-/// already gone, so the run it held is gone with it, and the rollback's
-/// account records the leave as held rather than done. That is the truthful
-/// reading, and the act after this one stops the unit either way.
-fn direct_leave(config: &ServiceConfig, agent: &AgentName) -> Result<(), LifecycleRefusal> {
-    let socket_path = config.coordination_socket(&agent.0);
-    let mut coordination =
-        channel::dial(&socket_path).map_err(|_| LifecycleRefusal::NoResidency)?;
+/// The run's constituent pids, every holder of the run lock's description,
+/// per toddwbucy/WeaverWeb#15, sorted and each named once.
+fn constituents(run_directory: &std::path::Path) -> Vec<u32> {
+    let mut pids: Vec<u32> = start::holders(run_directory)
+        .into_iter()
+        .map(|holder| holder.pid as u32)
+        .collect();
+    pids.sort_unstable();
+    pids.dedup();
+    pids
+}
+
+/// **`unload` ends whatever holds the run lock**, per Spec section 3: its own
+/// promise, acting on the lock and not on a classification. Where the
+/// observation answers `Idle`, or the worker is silent, it directs leave under
+/// the leave's bound; where it answers `Unloaded`, or no worker listens, no run
+/// was entered and it goes straight to the escalation. It answers
+/// provisioned-and-unloaded only once the lock is free.
+fn unload(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    unload_within(config, UNLOAD_BOUNDS)
+}
+
+/// The unload's four waits, fixed in production by Spec section 3 and
+/// passed in so a test can run the same path at a test's pace.
+#[derive(Clone, Copy)]
+struct UnloadBounds {
+    leave: std::time::Duration,
+    after_left: std::time::Duration,
+    term: std::time::Duration,
+    kill: std::time::Duration,
+}
+
+/// Spec section 3's values: the leave's sixty seconds, thirty after `left`,
+/// ten from `SIGTERM` to `SIGKILL` and five for the last read, at most 105
+/// seconds in all, a number WeaverWeb builds against.
+const UNLOAD_BOUNDS: UnloadBounds = UnloadBounds {
+    leave: LEAVE_BOUND,
+    after_left: start::AFTER_LEFT,
+    term: start::TERM_GRACE,
+    kill: start::KILL_GRACE,
+};
+
+fn unload_within(
+    config: &ServiceConfig,
+    bounds: UnloadBounds,
+) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    let run_directory = config.run_directory();
+    let _invocation = start::take_invocation_lock(&run_directory)?;
+    // **The leave's budget runs from here**, per Spec section 3: the
+    // observation and both dials spend it, so the verb holds the invocation
+    // lock at most the leave's sixty seconds and the escalation's forty-five.
+    let leave_deadline = std::time::Instant::now() + bounds.leave;
+    let unloaded = Ok(LifecycleAnswer::State {
+        state: weaver_types::AgentState::Unloaded,
+        load: None,
+        constituents: Vec::new(),
+    });
+    if !start::run_lock_held(&run_directory)? {
+        return unloaded;
+    }
+    // **A refused observation is silence**, `unload`'s promise being to end
+    // whatever holds the lock: it directs leave as for any silent run.
+    let entered = match observe(config).unwrap_or(Observation::Silent) {
+        Observation::State(weaver_types::AgentState::Unloaded, _) | Observation::NoListener => {
+            false
+        }
+        Observation::State(..) | Observation::Silent => true,
+    };
+    if entered {
+        match direct_leave_within(config, leave_deadline) {
+            Ok(()) => {
+                if start::wait_free(&run_directory, bounds.after_left) {
+                    return unloaded;
+                }
+            }
+            // A refusal on leave, `ActivityNotAtRest` above all, returns to
+            // the operator unchanged and answers nothing further.
+            Err(LeaveFault::Refused(refusal)) => return Err(refusal),
+            // The leave went unanswered inside its bound: a worker that
+            // would not exit, so the escalation follows.
+            Err(LeaveFault::Unanswered) => {}
+        }
+    }
+    start::escalate_within(&run_directory, bounds.term, bounds.kill)?;
+    unloaded
+}
+
+/// Why a directed leave did not answer `Left`.
+enum LeaveFault {
+    Refused(LifecycleRefusal),
+    Unanswered,
+}
+
+/// **Directs leave under the leave's own bound**, per Spec section 3.
+fn direct_leave(config: &ServiceConfig) -> Result<(), LeaveFault> {
+    direct_leave_within(config, std::time::Instant::now() + LEAVE_BOUND)
+}
+
+/// Directs leave and waits for its answer until `deadline`, the dial spending
+/// the same budget.
+fn direct_leave_within(
+    config: &ServiceConfig,
+    deadline: std::time::Instant,
+) -> Result<(), LeaveFault> {
+    let Ok(mut coordination) = channel::dial(&config.coordination_socket()) else {
+        return Err(LeaveFault::Unanswered);
+    };
     let ordinal = coordination.next_ordinal();
     coordination
         .send_directive(
@@ -1186,28 +1270,24 @@ fn direct_leave(config: &ServiceConfig, agent: &AgentName) -> Result<(), Lifecyc
                 cause: invocation_cause(),
             },
         )
-        .map_err(|_| LifecycleRefusal::NoResidency)?;
-    match coordination.recv() {
+        .map_err(|_| LeaveFault::Unanswered)?;
+    match coordination.recv_within(deadline.saturating_duration_since(std::time::Instant::now())) {
         Ok(answer) => match answer.payload {
             weaver_types::Payload::Answer(LifecycleAnswer::Left) => Ok(()),
-            weaver_types::Payload::Refusal(refusal) => Err(refusal),
-            _ => Err(LifecycleRefusal::Malformed),
+            weaver_types::Payload::Refusal(refusal) => Err(LeaveFault::Refused(refusal)),
+            _ => Err(LeaveFault::Refused(LifecycleRefusal::Malformed)),
         },
-        Err(_) => Err(LifecycleRefusal::NoResidency),
+        Err(_) => Err(LeaveFault::Unanswered),
     }
 }
 
-/// `stop` is a conveyance and its answer is a relay. Admin holds no opinion
-/// about which fate the harness reports: authorizing a stop and deciding what
-/// a stop found are different acts, and the second is the harness's.
-fn stop(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer, LifecycleRefusal> {
-    // This verb reaches no inventory, so the name check is called directly:
-    // a path is built from the name below, and an unchecked name would
-    // traverse out of the runtime root.
-    admissible(config, agent)?;
-    let socket_path = config.coordination_socket(&agent.0);
+/// **`stop` is a conveyance and its answer is a relay**, per Spec section 3,
+/// under the stop's own bound: a worker that accepts stop and answers nothing
+/// is not ended, a stop being no unload, and the verb refuses `Unanswered`.
+fn stop(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    let _invocation = start::take_invocation_lock(&config.run_directory())?;
     let mut coordination =
-        channel::dial(&socket_path).map_err(|_| LifecycleRefusal::NoResidency)?;
+        channel::dial(&config.coordination_socket()).map_err(|_| LifecycleRefusal::NoResidency)?;
     let ordinal = coordination.next_ordinal();
     coordination
         .send_directive(
@@ -1217,21 +1297,39 @@ fn stop(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer, Li
             },
         )
         .map_err(|_| LifecycleRefusal::NoResidency)?;
-    match coordination.recv() {
-        // The relay is a function rather than a bare return so that
-        // "unchanged" is a property one place holds and one test reads.
+    match coordination.recv_within(STOP_BOUND) {
         Ok(answer) => match answer.payload {
             weaver_types::Payload::Answer(answer) => Ok(verbs::relay_stop_answer(answer)),
             weaver_types::Payload::Refusal(refusal) => Err(refusal),
             _ => Err(LifecycleRefusal::Malformed),
         },
+        Err(channel::ChannelFault::Unanswered) => Err(LifecycleRefusal::Unanswered),
         Err(_) => Err(LifecycleRefusal::NoResidency),
     }
 }
 
-/// The service configuration is the operator's to place. Its shape is section
-/// 11's open election, so this reads the minimum the modules need and refuses
-/// rather than searching for a default.
+/// **One line of the operations log**, per Spec section 8: the wall time,
+/// the command line, the caller's uid, what was asked, the boundary file's
+/// digest in force, and the outcome. A log that cannot open costs the line,
+/// never the verb.
+fn record(config: &ServiceConfig, verb: &'static str, outcome: &str) {
+    let Ok(mut operations) =
+        log::OperationsLog::open(&config.admin_log(), Some(config.operator_owner()))
+    else {
+        diag!("weaver-admin: admin.log did not open; the {verb} line is lost");
+        return;
+    };
+    let _ = operations.record(&log::Act {
+        verb,
+        agent: config.agent.clone(),
+        command: format!("weaver-admin {verb} {}", config.agent),
+        uid: invocation_cause().uid,
+        boundary: config.boundary_digest().map(str::to_string),
+        outcome: outcome.to_string(),
+        spu: (verb == "load").then(|| config.spu.display().to_string()),
+    });
+}
+
 /// The base the agents' roots stand under where `WEAVER_ADMIN_CONFIG` is unset.
 const DEFAULT_BASE: &str = "/etc/weaver/admin";
 
@@ -1252,13 +1350,11 @@ fn load_service_config(agent: &AgentName) -> Result<ServiceConfig, LifecycleRefu
     load_service_config_at(&base, &agent.0, 0)
 }
 
-/// The admission and the read under a given base and owner, so a test can judge a
-/// root it made; every invocation passes the environment's base and root's uid.
-/// **A root with no declaration is no agent, for every verb**: `agent.toml` must be
-/// a regular file and never a link, `judge_entries` refusing any link in the root,
-/// judged here with the root, so `show` and `stop`, which take no inventory, refuse a
-/// root without one as `load` and `validate` do. A directory or a link at the name is
-/// no declaration.
+/// The judgments in Spec section 9's order, against `owner` for the root's
+/// files, which production fixes at uid 0 and a test sets to its own uid: the
+/// root admitted and closed, its ancestors closed, its entries closed, its
+/// values read, then the operator's declaration directory judged against the
+/// `operator` the root names and `library-path` judged as the root is.
 fn load_service_config_at(
     base: &std::path::Path,
     agent: &str,
@@ -1266,26 +1362,87 @@ fn load_service_config_at(
 ) -> Result<ServiceConfig, LifecycleRefusal> {
     let root = base.join(agent);
     judge_root(&root, owner)?;
-    // Every read below goes through the canonical root whose every ancestor was
-    // judged, never a pathname another principal could re-point after the judgment.
-    let root = judge_ancestors(&root, owner)?;
-    match std::fs::metadata(root.join("agent.toml")) {
-        Ok(declaration) if declaration.is_file() => {}
-        _ => return Err(LifecycleRefusal::NoSuchAgent),
-    }
+    let root = judge_ancestors(&root, &[owner, 0])?;
     judge_entries(&root, owner)?;
-    load_service_config_from(&root, agent)
-        .map_err(|_| LifecycleRefusal::ConfigInvalid { field: None })
+    let mut config = load_service_config_from(&root, agent).map_err(|failure| {
+        diag!("weaver-admin: {failure}");
+        // A value of the root's failing names no field; the boundary file is
+        // named where it is required, at `validate` and `load`.
+        LifecycleRefusal::ConfigInvalid { field: None }
+    })?;
+    config.declaration_directory =
+        judge_declaration_directory(&config.declaration_directory, config.operator)?;
+    config.operator_gid = {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(&config.declaration_directory)
+            .map_err(|_| LifecycleRefusal::BoundaryUnverified)?
+            .gid()
+    };
+    if let Some(libraries) = &config.library_path {
+        config.library_path = Some(judge_library_path(libraries, owner)?);
+    }
+    Ok(config)
 }
 
-/// **Every entry of the root is closed as the root is**, per Spec section 9: a
-/// regular file, never a link, held by `owner`, and writable by no group or other.
-/// The values name programs this invocation runs as root, `run-tool` and
-/// `control-tool` among them, so a key another principal could rewrite, or a link
-/// to a file it holds, would hand that principal root; the directory's own mode
-/// does not stop a file inside it being writable, nor a link leading out.
-/// Anything else stands refuses the whole root `BoundaryUnverified`, the look
-/// failing included.
+/// **The boundary file's reader, judged at `validate` and `load`**, per Spec
+/// section 9: a user the box carries, never the agent's account or its state
+/// member's, and holding the agent's access group `weaver-<agent>-admin`, so the
+/// agent never reaches its own record through the boundary and the declared
+/// reader can always reach the door. A missing access group is the box's
+/// provisioning and refuses `BoundaryUnverified`; every fault of the reader
+/// itself refuses `ConfigInvalid` naming `roles.toml`.
+fn judge_reader(reader: &str, agent: &AgentName) -> Result<(), LifecycleRefusal> {
+    let group_name = format!("{}-admin", inventory::identity_for(agent));
+    let user = nix::unistd::User::from_name(reader)
+        .ok()
+        .flatten()
+        .map(|user| user.gid.as_raw());
+    let group = nix::unistd::Group::from_name(&group_name)
+        .ok()
+        .flatten()
+        .map(|group| (group.gid.as_raw(), group.mem));
+    reader_verdict(reader, agent, user, group)
+}
+
+/// The reader's verdict over what the box answered, separated so a test
+/// reaches every case without provisioning accounts.
+fn reader_verdict(
+    reader: &str,
+    agent: &AgentName,
+    user_primary_gid: Option<u32>,
+    access_group: Option<(u32, Vec<String>)>,
+) -> Result<(), LifecycleRefusal> {
+    let named = || LifecycleRefusal::ConfigInvalid {
+        field: Some(weaver_types::FieldName(BOUNDARY_FILE.to_string())),
+    };
+    if reader == inventory::identity_for(agent) || reader == inventory::member_identity_for(agent) {
+        diag!("weaver-admin: roles.toml names the agent's own account as its trace reader");
+        return Err(named());
+    }
+    let Some((gid, members)) = access_group else {
+        diag!(
+            "weaver-admin: the access group {}-admin is not provisioned",
+            inventory::identity_for(agent)
+        );
+        return Err(LifecycleRefusal::BoundaryUnverified);
+    };
+    let Some(primary) = user_primary_gid else {
+        diag!("weaver-admin: roles.toml names {reader}, which is no user on this box");
+        return Err(named());
+    };
+    if primary != gid && !members.iter().any(|member| member == reader) {
+        diag!("weaver-admin: the trace reader {reader} does not hold the agent's access group");
+        return Err(named());
+    }
+    Ok(())
+}
+
+/// The boundary file's name in the agent's root, per Spec section 9.
+const BOUNDARY_FILE: &str = "roles.toml";
+
+/// **Every entry of the root is held closed**: a regular file, never a link,
+/// owned by `owner` and writable by no group or other, since the values name
+/// programs this invocation runs as root.
 fn judge_entries(root: &std::path::Path, owner: u32) -> Result<(), LifecycleRefusal> {
     use std::os::unix::fs::MetadataExt;
     let entries = std::fs::read_dir(root).map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
@@ -1297,40 +1454,40 @@ fn judge_entries(root: &std::path::Path, owner: u32) -> Result<(), LifecycleRefu
             || metadata.uid() != owner
             || metadata.mode() & 0o022 != 0
         {
+            diag!(
+                "weaver-admin: {} in the agent's root is not a closed regular file",
+                entry.path().display()
+            );
             return Err(LifecycleRefusal::BoundaryUnverified);
         }
     }
     Ok(())
 }
 
-/// **Every directory above the root is closed too**, per Spec section 9, as
-/// sshd's StrictModes judges a path: the root is resolved once to its canonical
-/// path, and each directory from its parent up to `/` must be held by `owner` or
-/// by root, and writable by no group or other unless its sticky bit is set, which
-/// keeps another principal from renaming an entry it does not own. A directory
-/// another principal could write would let it rename the judged root away and
-/// stand its own in its place, with a `run-tool` this invocation then runs as
-/// root, between the judgment and the reads. The refusal is `BoundaryUnverified`,
-/// and the directory is named on stderr. Answers the canonical root, which every
-/// later read uses.
+/// **Every directory above a judged one is held closed**, as sshd's
+/// StrictModes judges a path: resolved once to its canonical path, each
+/// directory from its parent up to `/` owned by one of `owners` and writable
+/// by no group or other unless its sticky bit is set. Answers the canonical
+/// path, through which every later read goes.
 fn judge_ancestors(
-    root: &std::path::Path,
-    owner: u32,
+    path: &std::path::Path,
+    owners: &[u32],
 ) -> Result<std::path::PathBuf, LifecycleRefusal> {
     use std::os::unix::fs::MetadataExt;
     let canonical =
-        std::fs::canonicalize(root).map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
+        std::fs::canonicalize(path).map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
     let mut above = canonical.parent();
     while let Some(directory) = above {
         let metadata = std::fs::symlink_metadata(directory)
             .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
-        let held = metadata.uid() == owner || metadata.uid() == 0;
+        let held = owners.contains(&metadata.uid());
         let closed = metadata.mode() & 0o022 == 0 || metadata.mode() & 0o1000 != 0;
         if !held || !closed {
-            eprintln!(
-                "weaver-admin: {} above the agent's root is held or writable by another \
-                 principal, so the root cannot be vouched for",
-                directory.display()
+            diag!(
+                "weaver-admin: {} above {} is held or writable by another principal, so it \
+                 cannot be vouched for",
+                directory.display(),
+                path.display()
             );
             return Err(LifecycleRefusal::BoundaryUnverified);
         }
@@ -1339,13 +1496,9 @@ fn judge_ancestors(
     Ok(canonical)
 }
 
-/// **The agent's root is admitted only as a directory `owner` holds that no
-/// other principal may write**, per Spec section 9: absent, or not a
-/// directory, is no such agent, and a root another uid owns or a group or the
-/// world may write is a boundary this invocation cannot vouch for. The owner
-/// is a parameter so a test can judge a directory it made; every invocation
-/// passes root's uid. The look does not follow a link at the root itself, so
-/// what is judged is what is read.
+/// **The agent's root is the admission**: no root, or one that is not a
+/// directory, is no agent, and the look does not follow a link at the root
+/// itself. A root is root's and writable by no group or other.
 fn judge_root(root: &std::path::Path, owner: u32) -> Result<(), LifecycleRefusal> {
     use std::os::unix::fs::MetadataExt;
     let metadata = match std::fs::symlink_metadata(root) {
@@ -1364,12 +1517,129 @@ fn judge_root(root: &std::path::Path, owner: u32) -> Result<(), LifecycleRefusal
     Ok(())
 }
 
-/// The agent's configuration read from its root, so a test can hand one in
-/// without the process environment.
+/// **The operator's declaration directory, judged before a value in it is
+/// read**, per Spec section 9 and the operator's ruling of 2026-10-02: not a
+/// link, a directory owned by exactly the `operator` uid, granting nothing to
+/// group or other and carrying no access-control entry beyond its mode, every
+/// directory above it owned by uid 0 or the operator and closed, and the
+/// `agent.toml` in it a regular file, never a link, owned by the operator or
+/// uid 0 and writable by no group or other. A directory with no `agent.toml`
+/// is no agent. Answers the canonical directory.
+fn judge_declaration_directory(
+    directory: &std::path::Path,
+    operator: u32,
+) -> Result<std::path::PathBuf, LifecycleRefusal> {
+    use std::os::unix::fs::MetadataExt;
+    let refuse = |what: &str| {
+        diag!(
+            "weaver-admin: the declaration directory {} {what}",
+            directory.display()
+        );
+        LifecycleRefusal::BoundaryUnverified
+    };
+    let metadata = std::fs::symlink_metadata(directory).map_err(|_| refuse("does not exist"))?;
+    if !metadata.is_dir() {
+        return Err(refuse("is not a directory"));
+    }
+    if metadata.uid() != operator {
+        return Err(refuse("is not the operator's"));
+    }
+    if metadata.mode() & 0o077 != 0 {
+        return Err(refuse("grants a permission to group or other"));
+    }
+    if carries_access_entries(directory) {
+        return Err(refuse("carries an access-control entry beyond its mode"));
+    }
+    let canonical = judge_ancestors(directory, &[operator, 0])?;
+    let declaration = canonical.join("agent.toml");
+    match std::fs::symlink_metadata(&declaration) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(LifecycleRefusal::NoSuchAgent);
+        }
+        Err(_) => return Err(refuse("holds an agent.toml that cannot be read")),
+        Ok(file) => {
+            if !file.file_type().is_file()
+                || (file.uid() != operator && file.uid() != 0)
+                || file.mode() & 0o022 != 0
+            {
+                return Err(refuse(
+                    "holds an agent.toml that is not a closed regular file",
+                ));
+            }
+        }
+    }
+    Ok(canonical)
+}
+
+/// Whether a path carries a POSIX access-control list, access or default,
+/// read without following a link.
+fn carries_access_entries(path: &std::path::Path) -> bool {
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()) else {
+        return true;
+    };
+    [c"system.posix_acl_access", c"system.posix_acl_default"]
+        .iter()
+        .any(|name| {
+            // SAFETY: a size query with no buffer, on NUL-terminated strings.
+            let size = unsafe {
+                nix::libc::lgetxattr(c_path.as_ptr(), name.as_ptr(), std::ptr::null_mut(), 0)
+            };
+            size >= 0
+        })
+}
+
+/// **`library-path` is judged as the root is**, per Spec section 6: a
+/// directory, never a link at its own name, owned by `owner` and writable by
+/// no group or other, its ancestors closed, because whatever it holds is
+/// loaded into the worker and its organs. Answers the canonical directory.
+fn judge_library_path(
+    libraries: &std::path::Path,
+    owner: u32,
+) -> Result<std::path::PathBuf, LifecycleRefusal> {
+    use std::os::unix::fs::MetadataExt;
+    let refuse = |what: &str| {
+        diag!("weaver-admin: library-path {} {what}", libraries.display());
+        LifecycleRefusal::BoundaryUnverified
+    };
+    let metadata = std::fs::symlink_metadata(libraries).map_err(|_| refuse("does not exist"))?;
+    if !metadata.is_dir() {
+        return Err(refuse("is not a directory"));
+    }
+    if metadata.uid() != owner || metadata.mode() & 0o022 != 0 {
+        return Err(refuse("is not root's and closed"));
+    }
+    judge_ancestors(libraries, &[owner, 0])
+}
+
+/// Reads the boundary file, answering why where it does not read or parse.
+fn read_boundary(root: &std::path::Path) -> Result<BoundaryRead, String> {
+    let bytes = std::fs::read(root.join(BOUNDARY_FILE))
+        .map_err(|e| format!("{BOUNDARY_FILE}: the boundary file does not read: {e}"))?;
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| format!("{BOUNDARY_FILE}: the boundary file is not UTF-8"))?;
+    let parsed = weaver_types::parse_boundary(text).map_err(|e| format!("{BOUNDARY_FILE}: {e}"))?;
+    let digest = {
+        use sha2::Digest;
+        sha2::Sha256::digest(&bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    };
+    Ok(BoundaryRead {
+        digest,
+        reader: parsed.trace_reader,
+    })
+}
+
+/// Reads the root's values, per Spec section 9. Required: `worker-binary`,
+/// `spu-binary`, `gate-binary`, `coordination-root`, `declaration-directory`,
+/// `operator` and `roles.toml`. Optional: `headroom-bytes`, `library-path`,
+/// `load-bound-seconds` and `state-store-socket`. A failure names the value;
+/// a failure of the boundary file starts with its name, which the caller
+/// carries as the refusal's field.
 fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<ServiceConfig, String> {
-    // A required value refuses where it is absent and where it does not read,
-    // and the message says which, a file that stands and fails not being one
-    // the operator never placed.
+    // **A required value fails whether absent or unreadable**, and the
+    // message says which, per Spec section 9.
     let read = |name: &str| -> Result<String, String> {
         std::fs::read_to_string(root.join(name))
             .map(|s| s.trim().to_string())
@@ -1380,15 +1650,10 @@ fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<Servi
                 _ => format!("the service configuration's {name} does not read: {e}"),
             })
     };
-    // **An optional value is absent only where nothing stands at its path.** Any
-    // other failure - a directory, bytes that are not UTF-8, a read the kernel
-    // refuses - is the operator's file failing to read, and it fails the
-    // invocation before any verb rather than reading as absent and standing a
-    // default the operator did not choose, per Spec section 9.
-    // **Presence is `symlink_metadata`'s answer**: nothing at the path is
-    // absence, and anything there, a dangling link included, is read and fails
-    // if it does not read, a link's missing target answering `NotFound` to the
-    // read itself.
+    // **An optional value is absent only where nothing stands at its path**,
+    // asked of the link and never of its target, per Spec section 9: a
+    // dangling link, a directory, bytes that are not UTF-8 or a refused read
+    // is the operator's file failing to read, never a default.
     let optional = |name: &str| -> Result<Option<String>, String> {
         match std::fs::symlink_metadata(root.join(name)) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -1403,37 +1668,67 @@ fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<Servi
             .map(|s| Some(s.trim().to_string()))
             .map_err(|e| format!("the service configuration's {name} does not read: {e}"))
     };
-    let worker = PathBuf::from(read("worker-binary")?);
-    // Required rather than defaulted, on the same ground as every other value
-    // here: a missing one refuses and names itself rather than being searched
-    // for, per Spec section 9. `spu-binary` is this agent's SPU.
-    let spu = PathBuf::from(read("spu-binary")?);
-    let gate = PathBuf::from(read("gate-binary")?);
+    // **Every path a key names is absolute**, per Spec section 9, so no read
+    // resolves against the working directory a caller ran sudo from and two
+    // invocations of one root always name the same files.
+    let absolute = |name: &str, value: String| -> Result<PathBuf, String> {
+        let path = PathBuf::from(value);
+        if path.is_absolute() {
+            Ok(path)
+        } else {
+            Err(format!(
+                "the service configuration's {name} is not an absolute path"
+            ))
+        }
+    };
+    let path = |name: &str| -> Result<PathBuf, String> { absolute(name, read(name)?) };
+    let optional_path = |name: &str| -> Result<Option<PathBuf>, String> {
+        optional(name)?
+            .filter(|v| !v.is_empty())
+            .map(|v| absolute(name, v))
+            .transpose()
+    };
+    let worker = path("worker-binary")?;
+    let spu = path("spu-binary")?;
+    let gate = path("gate-binary")?;
     stack::judge_names(&worker, &gate, &spu)?;
+    let operator = read("operator")?
+        .parse::<u32>()
+        .map_err(|_| "the service configuration's operator is not a uid".to_string())?;
+    let load_bound = match optional("load-bound-seconds")?.filter(|v| !v.is_empty()) {
+        None => DEFAULT_LOAD_BOUND,
+        Some(text) => match text.parse::<u64>() {
+            // A count that cannot form a deadline on this box refuses here,
+            // never at the enter's wait.
+            Ok(seconds)
+                if seconds > 0
+                    && std::time::Instant::now()
+                        .checked_add(std::time::Duration::from_secs(seconds))
+                        .is_some() =>
+            {
+                std::time::Duration::from_secs(seconds)
+            }
+            _ => return Err(
+                "the service configuration's load-bound-seconds is not a positive count of seconds"
+                    .to_string(),
+            ),
+        },
+    };
+    let boundary = read_boundary(root);
     Ok(ServiceConfig {
         agent: agent.to_string(),
-        root: root.to_path_buf(),
-        coordination_root: PathBuf::from(read("coordination-root")?),
-        log_path: PathBuf::from(read("log-path")?),
-        unit: unit::UnitTemplate {
-            run_tool: read("run-tool")?,
-            control_tool: read("control-tool")?,
-            properties: optional("unit-properties")?
-                .unwrap_or_default()
-                .lines()
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect(),
-            worker,
-            spu,
-            gate,
-            // Optional, unlike the binaries above: an installation that states
-            // no headroom leaves the organ's compiled default standing.
-            headroom_bytes: optional("headroom-bytes")?.filter(|v| !v.is_empty()),
-        },
-        state_store_socket: optional("state-store-socket")?
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
+        coordination_root: path("coordination-root")?,
+        worker,
+        spu,
+        gate,
+        headroom_bytes: optional("headroom-bytes")?.filter(|v| !v.is_empty()),
+        library_path: optional_path("library-path")?,
+        load_bound,
+        declaration_directory: path("declaration-directory")?,
+        operator,
+        operator_gid: 0,
+        boundary,
+        state_store_socket: optional_path("state-store-socket")?
             .unwrap_or_else(|| PathBuf::from(inventory::STORE_SOCKET_DIRECTORY)),
     })
 }
@@ -1688,49 +1983,94 @@ mod tests {
     #[test]
     fn the_stack_names_what_was_started_and_handed() {
         let config = unread_config();
-        let without = stack_digests(&config, false);
+        let without = stack_digests(&config, false, None);
         let names: Vec<&str> = without.keys().map(String::as_str).collect();
         assert_eq!(names, ["python-spu.pyz", "weaver-gate", "worker"]);
-        let with = stack_digests(&config, true);
+        let with = stack_digests(&config, true, None);
         assert_eq!(
             with.len(),
             4,
             "the worker, the member, the SPU and the gate"
         );
         assert!(with.contains_key("weaver-state"));
+        // The classify arm's binary is named where it is handed.
+        // Perturbation: drop it from the set and the key is absent.
+        let classified = stack_digests(
+            &config,
+            false,
+            Some(std::path::Path::new("/nonexistent/bin/weaver-spu-classify")),
+        );
+        assert!(classified.contains_key("weaver-spu-classify"));
     }
 
-    /// **The vector carries the SPU the agent's root names**, per Spec
-    /// sections 6 and 9. `unit::start` takes an `AgentUnit` alone, and this
-    /// watches the one constructor. Perturbation: `for_agent` substituting a
-    /// fixed SPU path, and the assertion fails.
+    /// **The vector carries the root's values and the declaration's loop
+    /// file, and nothing composed from the invocation's input**, per Spec
+    /// section 6: the socket, the SPU the root names and the gate, then each
+    /// named flag only where its value stands. Perturbation: substitute a
+    /// fixed SPU path in `worker_arguments` and the first assertion fails;
+    /// emit `--classify-binary` unconditionally and the bare vector carries it.
     #[test]
     fn the_roots_spu_reaches_the_vector() {
         let config = unread_config();
-        let socket = std::path::Path::new("/run/weaver/alpha/coordination.sock");
-        let alpha = config.agent_unit("alpha").arguments("alpha", socket, None);
-        assert!(
-            alpha
-                .iter()
-                .any(|a| a == "/nonexistent/python/python-spu.pyz"),
-            "{alpha:?}"
+        let socket = config.coordination_socket();
+        let bare = start::worker_arguments(&socket, &config.spu, &config.gate, None, None, None);
+        assert_eq!(
+            bare,
+            vec![
+                socket.display().to_string(),
+                "/nonexistent/python/python-spu.pyz".to_string(),
+                "/nonexistent/bin/weaver-gate".to_string(),
+            ]
         );
+        let full = start::worker_arguments(
+            &socket,
+            &config.spu,
+            &config.gate,
+            Some("4096"),
+            Some(std::path::Path::new("/home/op/loop.py")),
+            Some(std::path::Path::new("/opt/weaver/bin/weaver-spu-classify")),
+        );
+        for (flag, value) in [
+            ("--headroom-bytes", "4096"),
+            ("--loop-file", "/home/op/loop.py"),
+            ("--classify-binary", "/opt/weaver/bin/weaver-spu-classify"),
+        ] {
+            let at = full.iter().position(|a| a == flag).expect(flag);
+            assert_eq!(full[at + 1], value);
+        }
     }
 
-    /// The values every root carries, written into a scratch root.
-    fn write_root(root: &std::path::Path) {
+    /// The values every root carries, written into a scratch root, with the
+    /// operator's declaration directory beside it, `<root>.decl`, owned by
+    /// this test's uid as the root's `operator`, closed, and holding an empty
+    /// `agent.toml`. Answers the declaration directory.
+    fn write_root(root: &std::path::Path) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
         std::fs::create_dir_all(root).unwrap();
+        let declarations = root.with_extension("decl");
+        let _ = std::fs::remove_dir_all(&declarations);
+        std::fs::create_dir_all(&declarations).unwrap();
+        std::fs::set_permissions(&declarations, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(declarations.join("agent.toml"), "").unwrap();
+        std::fs::set_permissions(
+            declarations.join("agent.toml"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let operator = nix::unistd::getuid().as_raw().to_string();
+        let declaration_directory = declarations.display().to_string();
         for (name, text) in [
             ("coordination-root", "/run/weaver"),
-            ("log-path", "/var/log/weaver/alpha/admin.log"),
-            ("run-tool", "/usr/bin/systemd-run"),
-            ("control-tool", "/usr/bin/systemctl"),
             ("worker-binary", "/opt/weaver/bin/worker"),
             ("spu-binary", "/opt/weaver/bin/weaver-spu"),
             ("gate-binary", "/opt/weaver/bin/weaver-gate"),
+            ("declaration-directory", declaration_directory.as_str()),
+            ("operator", operator.as_str()),
+            ("roles.toml", "trace-reader = \"weaver-alpha-admincon\"\n"),
         ] {
             std::fs::write(root.join(name), text).unwrap();
         }
+        declarations
     }
 
     /// **A root naming two binaries under one file name fails the read**,
@@ -1745,7 +2085,11 @@ mod tests {
         write_root(&root);
         let config = load_service_config_from(&root, "alpha").expect("a sound root reads");
         assert_eq!(config.agent, "alpha");
-        assert_eq!(config.root.join("agent.toml"), root.join("agent.toml"));
+        assert_eq!(
+            config.boundary.as_ref().unwrap().digest.len(),
+            64,
+            "the boundary file's sha256 hex"
+        );
         std::fs::write(root.join("gate-binary"), "/opt/other/worker").unwrap();
         let failure = load_service_config_from(&root, "alpha")
             .err()
@@ -1824,7 +2168,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         let root = base.join("alpha");
         write_root(&root);
-        std::fs::write(root.join("agent.toml"), "").unwrap();
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
         let base_mode =
             |bits| std::fs::set_permissions(&base, std::fs::Permissions::from_mode(bits)).unwrap();
@@ -1846,7 +2189,6 @@ mod tests {
         // A writable directory two levels up refuses as the parent does.
         let deeper = base.join("deeper");
         write_root(&deeper.join("beta"));
-        std::fs::write(deeper.join("beta").join("agent.toml"), "").unwrap();
         std::fs::set_permissions(deeper.join("beta"), std::fs::Permissions::from_mode(0o755))
             .unwrap();
         std::fs::set_permissions(&deeper, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -1860,52 +2202,142 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// **A root with no declaration is no agent, for every verb**, per Spec
-    /// section 9: the root's other keys standing do not make one. Found by
-    /// Codex on #45, where `show` and `stop`, taking no inventory, read such a
-    /// root as an agent, and then a directory or dangling link at the name.
-    /// Perturbations: drop the declaration check, or judge presence alone with
-    /// `symlink_metadata`, and a case here reads.
+    /// **A declaration directory with no `agent.toml` is no agent, and one
+    /// that is not a closed regular file refuses**, per Spec section 9: the
+    /// root's keys standing do not make an agent. Perturbations: drop the
+    /// declaration check, or judge presence alone, and a case here reads.
     #[test]
-    fn a_root_without_a_declaration_is_no_agent() {
+    fn a_declaration_directory_without_a_declaration_is_no_agent() {
         use std::os::unix::fs::PermissionsExt;
         let me = nix::unistd::getuid().as_raw();
         let base =
             std::env::temp_dir().join(format!("weaver-admin-no-decl-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let root = base.join("alpha");
-        write_root(&root);
+        let declarations = write_root(&root);
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let config = load_service_config_at(&base, "alpha", me).expect("a declared agent reads");
+        assert_eq!(config.agent, "alpha");
         assert_eq!(
-            load_service_config_at(&base, "alpha", me).err(),
-            Some(LifecycleRefusal::NoSuchAgent)
+            config.declaration_directory,
+            std::fs::canonicalize(&declarations).unwrap()
         );
-        // A directory, and a link that leads nowhere, at the name are no declaration.
-        std::fs::create_dir(root.join("agent.toml")).unwrap();
+        std::fs::remove_file(declarations.join("agent.toml")).unwrap();
         assert_eq!(
             load_service_config_at(&base, "alpha", me).err(),
             Some(LifecycleRefusal::NoSuchAgent),
+            "no agent.toml is no agent"
+        );
+        std::fs::create_dir(declarations.join("agent.toml")).unwrap();
+        assert_eq!(
+            load_service_config_at(&base, "alpha", me).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
             "a directory named agent.toml"
         );
-        std::fs::remove_dir(root.join("agent.toml")).unwrap();
-        std::os::unix::fs::symlink(root.join("gone"), root.join("agent.toml")).unwrap();
+        std::fs::remove_dir(declarations.join("agent.toml")).unwrap();
+        std::os::unix::fs::symlink(declarations.join("gone"), declarations.join("agent.toml"))
+            .unwrap();
         assert_eq!(
             load_service_config_at(&base, "alpha", me).err(),
-            Some(LifecycleRefusal::NoSuchAgent),
-            "a dangling link named agent.toml"
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a link named agent.toml"
         );
-        std::fs::remove_file(root.join("agent.toml")).unwrap();
-        std::fs::write(root.join("agent.toml"), "").unwrap();
-        let config = load_service_config_at(&base, "alpha", me).expect("a declared root reads");
-        assert_eq!(config.agent, "alpha");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **The declaration directory is closed to everyone but the operator**,
+    /// per Spec section 9: owned by exactly the root's `operator`, granting
+    /// nothing to group or other, and never a link at its own name.
+    /// Perturbations: drop the owner comparison and the foreign operator
+    /// reads; test only the write bits and the group-readable directory reads.
+    #[test]
+    fn the_declaration_directory_is_the_operators_and_closed() {
+        use std::os::unix::fs::PermissionsExt;
+        let me = nix::unistd::getuid().as_raw();
+        let base = std::env::temp_dir().join(format!("weaver-admin-decl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("alpha");
+        let declarations = write_root(&root);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(load_service_config_at(&base, "alpha", me).is_ok());
+        for open in [0o740, 0o750, 0o704, 0o701] {
+            std::fs::set_permissions(&declarations, std::fs::Permissions::from_mode(open)).unwrap();
+            assert_eq!(
+                load_service_config_at(&base, "alpha", me).err(),
+                Some(LifecycleRefusal::BoundaryUnverified),
+                "{open:o} grants group or other a permission"
+            );
+        }
+        std::fs::set_permissions(&declarations, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(root.join("operator"), (me + 1).to_string()).unwrap();
+        assert_eq!(
+            load_service_config_at(&base, "alpha", me).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a directory another operator owns"
+        );
+        std::fs::write(root.join("operator"), me.to_string()).unwrap();
+        let link = base.join("linked.decl");
+        std::os::unix::fs::symlink(&declarations, &link).unwrap();
+        std::fs::write(
+            root.join("declaration-directory"),
+            link.display().to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            load_service_config_at(&base, "alpha", me).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a link at the directory's own name"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **A missing or malformed boundary file refuses naming it, at the verbs
+    /// that require it and no others**, per Spec section 9: the root still
+    /// reads, so `unload`, `stop` and `show` keep a running agent's recovery
+    /// path with no digest in their log lines, and `require_boundary`, which
+    /// `validate` and `load` call, refuses naming `roles.toml`. Every other
+    /// value's failure names nothing. Perturbation: refuse the read itself on
+    /// a damaged boundary file and the first assertion fails.
+    #[test]
+    fn the_boundary_file_is_required_only_where_named() {
+        use std::os::unix::fs::PermissionsExt;
+        let me = nix::unistd::getuid().as_raw();
+        let base = std::env::temp_dir().join(format!("weaver-admin-roles-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("alpha");
+        write_root(&root);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let named = Err(LifecycleRefusal::ConfigInvalid {
+            field: Some(weaver_types::FieldName("roles.toml".into())),
+        });
+        for (damage, why) in [
+            (None, "missing"),
+            (Some("trace-reader = \"x\"\nroles = 1\n"), "an unknown key"),
+        ] {
+            match damage {
+                None => std::fs::remove_file(root.join("roles.toml")).unwrap(),
+                Some(text) => std::fs::write(root.join("roles.toml"), text).unwrap(),
+            }
+            let config = load_service_config_at(&base, "alpha", me)
+                .unwrap_or_else(|e| panic!("{why}: the root still reads, got {e:?}"));
+            assert_eq!(config.boundary_digest(), None, "{why}: no digest to log");
+            assert_eq!(config.require_boundary().map(|_| ()), named, "{why}");
+        }
+        std::fs::write(root.join("roles.toml"), "trace-reader = \"x\"\n").unwrap();
+        std::fs::remove_file(root.join("spu-binary")).unwrap();
+        assert_eq!(
+            load_service_config_at(&base, "alpha", me).err(),
+            Some(LifecycleRefusal::ConfigInvalid { field: None }),
+            "another value names nothing"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
     /// **Every key is closed as the root is.** A key a group or the world may
     /// write, a key that is a link, and a directory inside the root each refuse
     /// `BoundaryUnverified`; a root of closed files reads. Codex on #45, round 7:
-    /// the directory's own mode let a writable `run-tool` name the program admin
-    /// runs as root. Perturbation: drop `judge_entries`, and each case reads.
+    /// the directory's own mode let a writable key name the program admin runs
+    /// as root. Perturbation: drop `judge_entries`, and each case reads.
     #[test]
     fn every_key_of_the_root_is_closed() {
         use std::os::unix::fs::PermissionsExt;
@@ -1915,7 +2347,6 @@ mod tests {
             let _ = std::fs::remove_dir_all(&base);
             let root = base.join("alpha");
             write_root(&root);
-            std::fs::write(root.join("agent.toml"), "").unwrap();
             std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
             for entry in std::fs::read_dir(&root).unwrap() {
                 let path = entry.unwrap().path();
@@ -1929,7 +2360,7 @@ mod tests {
             "a closed root reads"
         );
         std::fs::set_permissions(
-            root.join("run-tool"),
+            root.join("worker-binary"),
             std::fs::Permissions::from_mode(0o666),
         )
         .unwrap();
@@ -1939,9 +2370,9 @@ mod tests {
             "a world-writable key"
         );
         let root = fresh();
-        std::fs::remove_file(root.join("control-tool")).unwrap();
-        std::fs::write(base.join("elsewhere"), "/usr/bin/systemctl").unwrap();
-        std::os::unix::fs::symlink(base.join("elsewhere"), root.join("control-tool")).unwrap();
+        std::fs::remove_file(root.join("gate-binary")).unwrap();
+        std::fs::write(base.join("elsewhere"), "/opt/weaver/bin/weaver-gate").unwrap();
+        std::os::unix::fs::symlink(base.join("elsewhere"), root.join("gate-binary")).unwrap();
         assert_eq!(
             load_service_config_at(&base, "alpha", me).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
@@ -1971,6 +2402,56 @@ mod tests {
     }
 
     /// **An optional value is absent only where nothing stands at its path**,
+    /// **Every path a key names is absolute, and the enter's bound forms a
+    /// deadline**, per Spec sections 9 and 2: a relative value at each path key
+    /// fails the read naming the key, as does a `load-bound-seconds` too large
+    /// to add to the clock. Perturbations: accept a relative path and the
+    /// root reads with its paths resolved against the working directory;
+    /// accept any positive count and `u64::MAX` reads, to panic at the
+    /// enter's wait.
+    #[test]
+    fn a_relative_path_or_an_unreachable_bound_fails_the_read() {
+        let root =
+            std::env::temp_dir().join(format!("weaver-admin-relative-{}", std::process::id()));
+        let fresh = || {
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            write_root(&root);
+        };
+        for name in [
+            "worker-binary",
+            "spu-binary",
+            "gate-binary",
+            "coordination-root",
+            "declaration-directory",
+            "library-path",
+            "state-store-socket",
+        ] {
+            fresh();
+            std::fs::write(root.join(name), "relative/path").unwrap();
+            let failure = load_service_config_from(&root, "alpha")
+                .err()
+                .unwrap_or_default();
+            assert!(
+                failure.contains(name) && failure.contains("not an absolute path"),
+                "{name}: {failure:?}"
+            );
+        }
+        fresh();
+        std::fs::write(root.join("load-bound-seconds"), u64::MAX.to_string()).unwrap();
+        let failure = load_service_config_from(&root, "alpha")
+            .err()
+            .unwrap_or_default();
+        assert!(failure.contains("load-bound-seconds"), "{failure:?}");
+        fresh();
+        std::fs::write(root.join("load-bound-seconds"), "1800").unwrap();
+        assert_eq!(
+            load_service_config_from(&root, "alpha").unwrap().load_bound,
+            std::time::Duration::from_secs(1800)
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// per Spec section 9: at each optional path a directory and bytes that are
     /// not UTF-8 and a dangling link fail the read, naming the value, and an
     /// absent file leaves the read standing. Perturbations: read every error as
@@ -1985,7 +2466,12 @@ mod tests {
             std::fs::create_dir_all(&root).unwrap();
             write_root(&root);
         };
-        for name in ["unit-properties", "headroom-bytes", "state-store-socket"] {
+        for name in [
+            "headroom-bytes",
+            "library-path",
+            "load-bound-seconds",
+            "state-store-socket",
+        ] {
             fresh();
             assert!(
                 load_service_config_from(&root, "alpha").is_ok(),
@@ -2015,234 +2501,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// A manager double for the unit's state: `is-active` reads a state file,
-    /// `reset-failed` empties a failed one to `inactive`, and every call is
-    /// appended to a calls file. Answers the configuration pointed at it and
-    /// the two files.
-    fn manager_double(root: &std::path::Path, state: &str) -> (ServiceConfig, PathBuf, PathBuf) {
-        manager_double_with(root, state, "echo inactive > \"$STATE\"")
-    }
-
-    /// The double with the reset's own behaviour supplied as shell, `$STATE` naming
-    /// the state file.
-    fn manager_double_with(
-        root: &std::path::Path,
-        state: &str,
-        reset: &str,
-    ) -> (ServiceConfig, PathBuf, PathBuf) {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::create_dir_all(root).unwrap();
-        let state_file = root.join("state");
-        let calls = root.join("calls");
-        std::fs::write(&state_file, format!("{state}\n")).unwrap();
-        let tool = root.join("control-tool");
-        std::fs::write(
-            &tool,
-            format!(
-                "#!/bin/sh\nSTATE='{state}'\necho \"$1\" >> '{calls}'\ncase \"$1\" in\n  is-active) cat \"$STATE\";;\n  reset-failed) {reset};;\nesac\n",
-                calls = calls.display(),
-                state = state_file.display(),
-            ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let mut config = unread_config();
-        config.unit.control_tool = tool.to_string_lossy().into_owned();
-        config.log_path = root.join("operations.log");
-        (config, calls, root.join("operations.log"))
-    }
-
-    /// **A failed load leaves its unit cleared, so the next load is not
-    /// refused unreaped**, per `weaver-admin-Spec` section 3 and the
-    /// operator's ruling of 2026-10-01. The clear is logged as a rollback
-    /// act, and the refusal itself is not this function's to change.
-    ///
-    /// Perturbation: remove the clear from `settle_refused_load` and the
-    /// state stays `failed`, which the next start reads as
-    /// `NoResidency`.
-    #[test]
-    fn a_failed_load_clears_its_unit_for_the_next() {
-        let root = std::env::temp_dir().join(format!("weaver-admin-reap-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let (config, calls, log_path) = manager_double(&root, "failed");
-        let agent = AgentName("alpha".into());
-        let standing = verbs::Standing {
-            unit_started: true,
-            ..Default::default()
-        };
-        let mut operations = log::OperationsLog::open(&log_path).unwrap();
-        settle_refused_load(
-            &config,
-            &agent,
-            &standing,
-            &LifecycleRefusal::NoResidency,
-            &mut operations,
-        );
-        let residency = unit::residency(&config.unit, &agent.0);
-        assert_eq!(residency, unit::Residency::Inactive);
-        assert_ne!(
-            start_refusal_for_residency(residency, LifecycleRefusal::BindFailed),
-            LifecycleRefusal::NoResidency,
-            "the next start is not refused over the failed unit"
-        );
-        let logged = std::fs::read_to_string(&log_path).unwrap();
-        assert!(logged.contains("unit-reset-failed:undone"), "{logged}");
-        assert!(
-            std::fs::read_to_string(&calls)
-                .unwrap()
-                .contains("reset-failed")
-        );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    /// **A clear is logged undone only where it ran and the unit then reads at
-    /// rest.** A reset that fails, or a state after it no one can read, is held.
-    /// Codex on #45, round 6: `Unknown != Failed` had logged an unread state as
-    /// cleared. Perturbation: compare against `Failed` alone again, and the
-    /// unreadable case logs `undone`.
-    #[test]
-    fn a_clear_that_cannot_be_confirmed_is_held() {
-        for (name, reset) in [
-            ("refused", "exit 1"),
-            ("unread", "echo garbled > \"$STATE\""),
-        ] {
-            let root = std::env::temp_dir()
-                .join(format!("weaver-admin-held-{name}-{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&root);
-            let (config, _, log_path) = manager_double_with(&root, "failed", reset);
-            let standing = verbs::Standing {
-                unit_started: true,
-                ..Default::default()
-            };
-            let mut operations = log::OperationsLog::open(&log_path).unwrap();
-            settle_refused_load(
-                &config,
-                &AgentName("alpha".into()),
-                &standing,
-                &LifecycleRefusal::NoResidency,
-                &mut operations,
-            );
-            let logged = std::fs::read_to_string(&log_path).unwrap();
-            assert!(
-                logged.contains("unit-reset-failed:held"),
-                "{name}: {logged}"
-            );
-            assert!(
-                !logged.contains("unit-reset-failed:undone"),
-                "{name}: {logged}"
-            );
-            let _ = std::fs::remove_dir_all(&root);
-        }
-    }
-
-    /// **Only `failed` is cleared, and the state ask decides.** A unit the
-    /// manager reports at rest is not asked to reset, and a load that never
-    /// reached a start does not touch the manager at all.
-    #[test]
-    fn a_unit_not_failed_is_not_reset() {
-        let root = std::env::temp_dir().join(format!("weaver-admin-noreap-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let (config, calls, log_path) = manager_double(&root, "inactive");
-        let agent = AgentName("alpha".into());
-        let mut operations = log::OperationsLog::open(&log_path).unwrap();
-        let started = verbs::Standing {
-            unit_started: true,
-            ..Default::default()
-        };
-        settle_refused_load(
-            &config,
-            &agent,
-            &started,
-            &LifecycleRefusal::NoResidency,
-            &mut operations,
-        );
-        let asked = std::fs::read_to_string(&calls).unwrap();
-        assert!(!asked.contains("reset-failed"), "{asked}");
-
-        std::fs::write(root.join("state"), "failed\n").unwrap();
-        std::fs::write(&calls, "").unwrap();
-        settle_refused_load(
-            &config,
-            &agent,
-            &verbs::Standing::default(),
-            &LifecycleRefusal::ConfigInvalid { field: None },
-            &mut operations,
-        );
-        assert_eq!(
-            std::fs::read_to_string(&calls).unwrap(),
-            "",
-            "a load that started nothing asks nothing"
-        );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
     /// A configuration whose values are never read by the arm under test.
     /// `dispatch`'s observation arm touches no field, which is what lets this
     /// stand without a filesystem.
     fn unread_config() -> ServiceConfig {
         ServiceConfig {
-            state_store_socket: PathBuf::from(inventory::STORE_SOCKET_DIRECTORY),
-            coordination_root: PathBuf::from("/nonexistent"),
-            log_path: PathBuf::from("/nonexistent/log"),
             agent: "alpha".into(),
-            root: PathBuf::from("/nonexistent/admin/alpha"),
-            unit: unit::UnitTemplate {
-                run_tool: "/bin/false".into(),
-                control_tool: "/bin/false".into(),
-                properties: vec![],
-                worker: PathBuf::from("/nonexistent/bin/worker"),
-                spu: PathBuf::from("/nonexistent/python/python-spu.pyz"),
-                gate: PathBuf::from("/nonexistent/bin/weaver-gate"),
-                headroom_bytes: None,
-            },
+            coordination_root: PathBuf::from("/nonexistent"),
+            worker: PathBuf::from("/nonexistent/bin/worker"),
+            spu: PathBuf::from("/nonexistent/python/python-spu.pyz"),
+            gate: PathBuf::from("/nonexistent/bin/weaver-gate"),
+            headroom_bytes: None,
+            library_path: None,
+            load_bound: DEFAULT_LOAD_BOUND,
+            declaration_directory: PathBuf::from("/nonexistent/declarations"),
+            operator: 1000,
+            operator_gid: 1000,
+            boundary: Ok(BoundaryRead {
+                digest: "0".repeat(64),
+                reader: "weaver-alpha-admincon".into(),
+            }),
+            state_store_socket: PathBuf::from(inventory::STORE_SOCKET_DIRECTORY),
         }
-    }
-
-    /// **`show` constructs no `AgentState`.** The party that knows an
-    /// agent's lifecycle state is the harness and no chartered exchange asks
-    /// it, so these verbs refuse rather than return a value read from
-    /// residency, which is a different fact.
-    ///
-    /// This tests `dispatch` rather than the binary because the root guard
-    /// answers first in an unprivileged suite, so the binary can never reach
-    /// this arm. A test that ran the binary here would pass under the very
-    /// invention it claims to forbid, which is the never-failing perturbation
-    /// apex section 11 counts as worse than no test. That is not hypothetical:
-    /// the binary-level form of this test was written first and passed under
-    /// the substitution, which is how the flaw was found.
-    ///
-    /// Perturbation: make the `Show` arm answer with a state read from
-    /// `unit::residency` and this test fails. Watched under exactly that
-    /// substitution.
-    /// **Every verb that builds a path from a name checks the name first.**
-    /// `stop` reaches no inventory, so it calls the shared check directly: a
-    /// name carrying a separator or `..` would otherwise be interpolated into
-    /// the runtime path and traverse out of the root the operator placed.
-    ///
-    /// Perturbation: remove the `admissible` call from `stop` and the
-    /// traversal names below reach `coordination_socket`. Watched under
-    /// exactly that removal.
-    /// **A start ask that returns non-zero started nothing.** The manager
-    /// reports a duplicate unit name that way, which is the concurrency guard
-    /// this crate leans on, so a discarded status would let a second load of a
-    /// live agent dial the first load's worker.
-    ///
-    /// Perturbation: replace `started` with a discard and this test fails.
-    /// Watched under exactly that removal, which compiles, which is why the
-    /// decision is a function rather than a match.
-    #[test]
-    fn a_non_success_start_starts_nothing() {
-        use std::os::unix::process::ExitStatusExt;
-        let ok = std::process::ExitStatus::from_raw(0);
-        assert_eq!(started(Ok(ok)), Ok(()));
-        // The manager's own answer for a duplicate unit name is a non-zero
-        // status, measured 2026-08-05.
-        let refused = std::process::ExitStatus::from_raw(1 << 8);
-        assert_eq!(started(Ok(refused)), Err(LifecycleRefusal::BindFailed));
-        assert_eq!(
-            started(Err(std::io::Error::other("no such tool"))),
-            Err(LifecycleRefusal::BindFailed)
-        );
     }
 
     #[test]
@@ -2280,29 +2560,518 @@ mod tests {
         }
     }
 
+    /// **`show` reads the run lock before it dials, and names the run's
+    /// constituents beside the harness's word**, per Spec section 3 and
+    /// toddwbucy/WeaverWeb#15. A free lock answers `Unloaded` without
+    /// dialing, so no state is invented from a missing socket. A lock held by
+    /// a stand-in constituent with no worker listening answers `Unloaded`
+    /// with that constituent's pid, a run that never entered, for the caller
+    /// to end with `unload`. Perturbation: answer the constituents empty and
+    /// the second case fails; read a held lock as `Idle` and it fails too.
     #[test]
-    fn show_answers_the_absence_as_unloaded() {
-        // **Where no worker answers the dial, the answer is `Unloaded` from
-        // the absence and constructs no state from the unit**, per Spec
-        // section 3 as of 2026-09-04. Perturbation: map the manager's
-        // `active` onto `Idle` in `observe` and a box with the unit running
-        // fails this, which is the invention the clause forbids. The
-        // coordination root below does not exist, so no socket does.
-        let config = unread_config();
+    fn show_reads_the_lock_and_names_the_constituents() {
+        use std::os::unix::process::CommandExt;
+        let base = std::env::temp_dir().join(format!("weaver-admin-show-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let mut config = unread_config();
+        config.coordination_root = base.clone();
+        let run_directory = config.run_directory();
+        std::fs::create_dir_all(&run_directory).unwrap();
         assert_eq!(
-            dispatch(&config, surface::Request::Show(AgentName("alpha".into()))),
+            show(&config),
             Ok(LifecycleAnswer::State {
                 state: weaver_types::AgentState::Unloaded,
                 load: None,
                 constituents: Vec::new(),
             }),
-            "an admitted agent with no socket answers unloaded with no load"
+            "a free lock is no run"
+        );
+        let lock = start::take_run_lock(&run_directory).unwrap().unwrap();
+        let high = start::high(lock.raw()).unwrap();
+        let raw = std::os::fd::AsRawFd::as_raw_fd(&high);
+        let mut command = std::process::Command::new("/bin/sleep");
+        command.arg("30");
+        // SAFETY: dup2 is async-signal-safe.
+        unsafe {
+            command.pre_exec(move || start::place(raw, start::RUN_LOCK_FD));
+        }
+        let mut child = command.spawn().unwrap();
+        drop((high, lock));
+        assert_eq!(
+            show(&config),
+            Ok(LifecycleAnswer::State {
+                state: weaver_types::AgentState::Unloaded,
+                load: None,
+                constituents: vec![child.id()],
+            }),
+            "a held lock with no worker names who holds it"
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A scratch coordination root for one test, with the agent's run
+    /// directory made inside it as this test's user.
+    fn scratch_config(tag: &str) -> (ServiceConfig, crate::scratch::Scratch) {
+        let base = std::env::temp_dir().join(format!("weaver-admin-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let mut config = unread_config();
+        config.coordination_root = base.clone();
+        std::fs::create_dir_all(config.run_directory()).unwrap();
+        (config, crate::scratch::Scratch(base))
+    }
+
+    /// A stand-in constituent: `sleep` holding the run lock's description at
+    /// its fixed number, as a member or a worker does.
+    fn stand_in_holder(config: &ServiceConfig) -> std::process::Child {
+        use std::os::unix::process::CommandExt;
+        let lock = start::take_run_lock(&config.run_directory())
+            .unwrap()
+            .expect("a free run lock");
+        let high = start::high(lock.raw()).unwrap();
+        let raw = std::os::fd::AsRawFd::as_raw_fd(&high);
+        let mut command = std::process::Command::new("/bin/sleep");
+        command.arg("30");
+        // SAFETY: dup2 is async-signal-safe.
+        unsafe {
+            command.pre_exec(move || start::place(raw, start::RUN_LOCK_FD));
+        }
+        command.spawn().unwrap()
+    }
+
+    /// A stand-in worker that binds the coordination socket and accepts, and
+    /// then answers nothing: a silent run.
+    fn silent_worker(config: &ServiceConfig) -> std::os::fd::OwnedFd {
+        let socket = config.coordination_socket();
+        std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+        let listener = nix::sys::socket::socket(
+            nix::sys::socket::AddressFamily::Unix,
+            nix::sys::socket::SockType::SeqPacket,
+            nix::sys::socket::SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .unwrap();
+        let address = nix::sys::socket::UnixAddr::new(&socket).unwrap();
+        nix::sys::socket::bind(std::os::fd::AsRawFd::as_raw_fd(&listener), &address).unwrap();
+        nix::sys::socket::listen(&listener, nix::sys::socket::Backlog::new(8).unwrap()).unwrap();
+        listener
+    }
+
+    /// **The coordination root and every directory above it are held closed
+    /// before the run directory is made**, per Spec section 3: an open root,
+    /// sticky or not, or an open directory above it, refuses
+    /// `BoundaryUnverified` and makes nothing, and a closed one admits and
+    /// makes the run directory.
+    /// Judged against this test's uid, production's owner being uid 0.
+    /// Perturbation: drop the judgment from `prepare_run_directory` and the
+    /// open cases make the run directory.
+    #[test]
+    fn the_coordination_root_is_judged_before_any_lock() {
+        use std::os::unix::fs::PermissionsExt;
+        let me = nix::unistd::getuid().as_raw();
+        let base = std::env::temp_dir().join(format!("weaver-admin-coord-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("run");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut config = unread_config();
+        config.coordination_root = root.clone();
+        let mode = |path: &std::path::Path, bits| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(bits)).unwrap()
+        };
+        for open in [0o775, 0o757, 0o777, 0o1777] {
+            mode(&root, open);
+            assert_eq!(
+                prepare_run_directory(&config, me).err(),
+                Some(LifecycleRefusal::BoundaryUnverified),
+                "a coordination root of mode {open:o}, sticky or not"
+            );
+            assert!(
+                !root.join("weaver.run").exists(),
+                "and nothing is made in it"
+            );
+        }
+        mode(&root, 0o755);
+        assert!(
+            prepare_run_directory(&config, me).is_ok(),
+            "a closed root admits"
+        );
+        assert!(
+            config.run_directory().is_dir(),
+            "and the run directory stands"
+        );
+        mode(&base, 0o777);
+        assert_eq!(
+            prepare_run_directory(&config, me).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "an open directory above the root"
+        );
+        mode(&base, 0o755);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **The trace reader is judged at `validate` and `load`**, per Spec
+    /// section 9: the agent's own account or its member's refuses naming
+    /// `roles.toml`, a reader the box does not carry refuses the same way, a
+    /// reader outside the access group refuses too, and a box with no access
+    /// group refuses `BoundaryUnverified`. A reader holding the group by its
+    /// primary gid or by membership is admitted. Perturbation: drop the
+    /// membership test and the outsider is admitted.
+    #[test]
+    fn the_trace_reader_is_judged() {
+        let agent = AgentName("alpha".into());
+        let named = Err(LifecycleRefusal::ConfigInvalid {
+            field: Some(weaver_types::FieldName("roles.toml".into())),
+        });
+        let group = || Some((5000, vec!["weaver-alpha-admincon".to_string()]));
+        assert_eq!(
+            reader_verdict("weaver-alpha", &agent, Some(5000), group()),
+            named
         );
         assert_eq!(
-            dispatch(&config, surface::Request::Show(AgentName("nobody".into()))),
-            Err(LifecycleRefusal::NoSuchAgent),
-            "a name that is not this root's agent refuses as every verb does"
+            reader_verdict("weaver-alpha-state", &agent, Some(5000), group()),
+            named
         );
+        assert_eq!(
+            reader_verdict("ghost", &agent, None, group()),
+            named,
+            "no such user"
+        );
+        assert_eq!(
+            reader_verdict("outsider", &agent, Some(100), group()),
+            named,
+            "not in the group"
+        );
+        assert_eq!(
+            reader_verdict("weaver-alpha-admincon", &agent, Some(100), None),
+            Err(LifecycleRefusal::BoundaryUnverified),
+            "the box carries no access group"
+        );
+        assert_eq!(
+            reader_verdict("weaver-alpha-admincon", &agent, Some(100), group()),
+            Ok(())
+        );
+        assert_eq!(
+            reader_verdict("primary", &agent, Some(5000), group()),
+            Ok(()),
+            "by primary gid"
+        );
+    }
+
+    /// A stand-in worker that answers each dial with the next scripted payload:
+    /// it accepts, reads the directive, and closes the exchange with the
+    /// answer, one connection per answer, as admin dials once per exchange.
+    fn answering_worker(
+        config: &ServiceConfig,
+        answers: Vec<weaver_types::Payload>,
+    ) -> std::thread::JoinHandle<()> {
+        let listener = silent_worker(config);
+        std::thread::spawn(move || {
+            for payload in answers {
+                let Ok(raw) = nix::sys::socket::accept(std::os::fd::AsRawFd::as_raw_fd(&listener))
+                else {
+                    return;
+                };
+                // SAFETY: accept answered a fresh descriptor this thread owns.
+                let fd =
+                    unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(raw) };
+                let peer = channel::Coordination::adopt(fd);
+                let Ok(request) = peer.recv() else { return };
+                let _ = peer.send(&weaver_types::OrganEnvelope {
+                    exchange: request.exchange,
+                    position: weaver_types::Position::Close,
+                    payload,
+                });
+            }
+        })
+    }
+
+    /// Short bounds for the unload path, the production values being fixed.
+    const TEST_UNLOAD_BOUNDS: UnloadBounds = UnloadBounds {
+        leave: std::time::Duration::from_secs(2),
+        after_left: std::time::Duration::from_millis(300),
+        term: std::time::Duration::from_secs(2),
+        kill: std::time::Duration::from_secs(2),
+    };
+
+    /// **`unload`'s leave, the wait after `left`, then the escalation**, per
+    /// Spec section 3: a worker observed `Idle` is directed to leave and
+    /// answers `Left`, but a constituent keeps the run lock past the wait, so
+    /// the escalation ends it and the verb answers once the lock is free. The
+    /// same path runs where the observation is refused, a refusal being
+    /// silence to `unload`. Perturbation: answer on `Left` alone and the holder
+    /// survives; propagate the observation's refusal and the second run
+    /// refuses `Malformed` with the holder standing.
+    #[test]
+    fn unload_leaves_waits_and_escalates() {
+        for (tag, observed) in [
+            (
+                "idle",
+                weaver_types::Payload::Answer(LifecycleAnswer::State {
+                    state: weaver_types::AgentState::Idle,
+                    load: None,
+                    constituents: Vec::new(),
+                }),
+            ),
+            (
+                "refused",
+                weaver_types::Payload::Refusal(LifecycleRefusal::Malformed),
+            ),
+        ] {
+            let (config, _scratch) = scratch_config(&format!("unload-leave-{tag}"));
+            let mut holder = stand_in_holder(&config);
+            let worker = answering_worker(
+                &config,
+                vec![
+                    observed,
+                    weaver_types::Payload::Answer(LifecycleAnswer::Left),
+                ],
+            );
+            assert_eq!(
+                unload_within(&config, TEST_UNLOAD_BOUNDS),
+                Ok(LifecycleAnswer::State {
+                    state: weaver_types::AgentState::Unloaded,
+                    load: None,
+                    constituents: Vec::new(),
+                }),
+                "{tag}"
+            );
+            assert!(holder.wait().is_ok(), "{tag}: the holder ended");
+            assert!(
+                !start::run_lock_held(&config.run_directory()).unwrap(),
+                "{tag}"
+            );
+            let _ = worker.join();
+        }
+    }
+
+    /// **A load meeting a run whose worker refuses the observation answers
+    /// `AgentRunning`**, per Spec section 3: a refusal is an answer, so a run
+    /// stands, and the load touches nothing. Perturbation: propagate the
+    /// observation's refusal and the load answers `Malformed`.
+    #[test]
+    fn a_refused_observation_is_a_running_agent_to_a_load() {
+        let (config, _scratch) = scratch_config("load-refused-observe");
+        let mut holder = stand_in_holder(&config);
+        let worker = answering_worker(
+            &config,
+            vec![weaver_types::Payload::Refusal(LifecycleRefusal::Malformed)],
+        );
+        let mut standing = Standing::default();
+        assert_eq!(
+            run_load(&config, &AgentName("alpha".into()), &mut standing),
+            Err(LifecycleRefusal::AgentRunning)
+        );
+        assert!(holder.try_wait().unwrap().is_none(), "the run still stands");
+        let _ = holder.kill();
+        let _ = holder.wait();
+        let _ = worker.join();
+    }
+
+    /// **A refused leave returns to the operator unchanged**, per Spec
+    /// section 3: `ActivityNotAtRest` answers and nothing is ended.
+    /// Perturbation: escalate on any leave failure and the busy run dies.
+    #[test]
+    fn a_refused_leave_ends_nothing() {
+        let (config, _scratch) = scratch_config("unload-busy");
+        let mut holder = stand_in_holder(&config);
+        let worker = answering_worker(
+            &config,
+            vec![
+                weaver_types::Payload::Answer(LifecycleAnswer::State {
+                    state: weaver_types::AgentState::Active,
+                    load: None,
+                    constituents: Vec::new(),
+                }),
+                weaver_types::Payload::Refusal(LifecycleRefusal::ActivityNotAtRest),
+            ],
+        );
+        assert_eq!(
+            unload_within(&config, TEST_UNLOAD_BOUNDS),
+            Err(LifecycleRefusal::ActivityNotAtRest)
+        );
+        assert!(holder.try_wait().unwrap().is_none(), "the busy run stands");
+        let _ = holder.kill();
+        let _ = holder.wait();
+        let _ = worker.join();
+    }
+
+    /// **A failed dial is answered from the worker's own exit**, per Spec
+    /// section 6: a worker that already exited refuses `NoResidency`, its
+    /// status named on standard error, and one still running with no socket
+    /// is a bind that failed. Perturbation: drop the status read and the exited
+    /// worker reads as `BindFailed`.
+    #[test]
+    fn a_failed_dial_reads_the_worker_exit() {
+        let mut exited = std::process::Command::new("/bin/sh")
+            .args(["-c", "exit 3"])
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::fs::read_to_string(format!("/proc/{}/stat", exited.id()))
+            .map(|stat| {
+                !stat
+                    .rsplit(')')
+                    .next()
+                    .unwrap_or("")
+                    .trim_start()
+                    .starts_with('Z')
+            })
+            .unwrap_or(false)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            refusal_from_worker(&mut exited),
+            LifecycleRefusal::NoResidency
+        );
+        let mut running = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        assert_eq!(
+            refusal_from_worker(&mut running),
+            LifecycleRefusal::BindFailed
+        );
+        let _ = running.kill();
+        let _ = running.wait();
+    }
+
+    /// **The reserved suffixes refuse at the name check**, per Spec section
+    /// 4: an agent named `x-relay` would share agent `x`'s relay account.
+    /// Perturbation: drop the suffix check and each name passes.
+    #[test]
+    fn a_reserved_suffix_refuses() {
+        for reserved in ["x-state", "x-trace", "x-relay", "x-admin", "x-admincon"] {
+            assert!(!well_formed(reserved), "{reserved}");
+            assert_eq!(
+                load_service_config(&AgentName(reserved.into())).err(),
+                Some(LifecycleRefusal::NoSuchAgent),
+                "{reserved}"
+            );
+        }
+        assert!(well_formed("x-relays"), "a suffix is matched whole");
+    }
+
+    /// **A load never ends an existing run**, per Spec section 3: a held run
+    /// lock with no worker listening refuses `AgentRunning`, and the holder
+    /// still runs. Perturbation: let the load end what holds the lock and the
+    /// holder dies under it.
+    #[test]
+    fn a_load_never_ends_an_existing_run() {
+        let (config, _scratch) = scratch_config("load-held");
+        let mut holder = stand_in_holder(&config);
+        let mut standing = Standing::default();
+        assert_eq!(
+            run_load(&config, &AgentName("alpha".into()), &mut standing),
+            Err(LifecycleRefusal::AgentRunning)
+        );
+        assert!(holder.try_wait().unwrap().is_none(), "the run still stands");
+        let _ = holder.kill();
+        let _ = holder.wait();
+    }
+
+    /// **A silent worker is never reaped, and the observation is bounded**,
+    /// per Spec section 3: a held lock whose worker accepts and answers
+    /// nothing refuses the load `Unanswered` and `show` `Unanswered`, each
+    /// within the observation's bound, and the holder runs on. Perturbation:
+    /// drop the bound from the observation's read and the verb never returns;
+    /// read silence as no listener and the load answers `AgentRunning`.
+    #[test]
+    fn a_silent_run_is_bounded_and_never_reaped() {
+        let (config, _scratch) = scratch_config("silent");
+        let mut holder = stand_in_holder(&config);
+        let _listener = silent_worker(&config);
+        let started = std::time::Instant::now();
+        let mut standing = Standing::default();
+        assert_eq!(
+            run_load(&config, &AgentName("alpha".into()), &mut standing),
+            Err(LifecycleRefusal::Unanswered)
+        );
+        assert_eq!(show(&config), Err(LifecycleRefusal::Unanswered));
+        assert!(
+            started.elapsed() < OBSERVE_BOUND * 2 + std::time::Duration::from_secs(4),
+            "both answered within their bounds"
+        );
+        assert!(
+            holder.try_wait().unwrap().is_none(),
+            "the silent run still stands"
+        );
+        let _ = holder.kill();
+        let _ = holder.wait();
+    }
+
+    /// **`unload` ends a run that never entered**, per Spec section 3: a held
+    /// lock with no worker listening goes straight to the escalation, and the
+    /// verb answers once the lock is free. Perturbation: direct leave at the
+    /// unentered run and refuse on its answer, and the holder survives.
+    #[test]
+    fn unload_ends_a_run_that_never_entered() {
+        let (config, _scratch) = scratch_config("unload-unentered");
+        let mut holder = stand_in_holder(&config);
+        assert_eq!(
+            unload(&config),
+            Ok(LifecycleAnswer::State {
+                state: weaver_types::AgentState::Unloaded,
+                load: None,
+                constituents: Vec::new(),
+            })
+        );
+        assert!(holder.wait().is_ok());
+        assert!(!start::run_lock_held(&config.run_directory()).unwrap());
+    }
+
+    /// **`show` answers a transition in flight**, per Spec section 3: another
+    /// process holding the invocation lock exclusively makes `show` answer
+    /// `InTransition` at once, without dialing. Perturbation: dial instead and
+    /// the answer is the observation's.
+    #[test]
+    fn show_answers_a_transition_in_flight() {
+        let (config, _scratch) = scratch_config("in-transition");
+        let path = config.run_directory().join("admin.lock");
+        let (ready_read, ready_write) = nix::unistd::pipe().unwrap();
+        // Built before the fork, so the child only calls what a fork of a
+        // threaded process may.
+        let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: the child calls only async-signal-safe functions.
+        match unsafe { nix::unistd::fork() }.unwrap() {
+            nix::unistd::ForkResult::Child => {
+                // SAFETY: open, fcntl, write and pause are async-signal-safe.
+                unsafe {
+                    let fd = nix::libc::open(
+                        c_path.as_ptr(),
+                        nix::libc::O_RDWR | nix::libc::O_CREAT,
+                        0o600 as nix::libc::c_uint,
+                    );
+                    let lock = nix::libc::flock {
+                        l_type: nix::libc::F_WRLCK as i16,
+                        l_whence: nix::libc::SEEK_SET as i16,
+                        l_start: 0,
+                        l_len: 0,
+                        l_pid: 0,
+                    };
+                    nix::libc::fcntl(fd, nix::libc::F_SETLK, &lock);
+                    nix::libc::write(
+                        std::os::fd::AsRawFd::as_raw_fd(&ready_write),
+                        [1u8].as_ptr().cast(),
+                        1,
+                    );
+                    nix::libc::pause();
+                    nix::libc::_exit(0);
+                }
+            }
+            nix::unistd::ForkResult::Parent { child } => {
+                drop(ready_write);
+                let mut byte = [0u8; 1];
+                nix::unistd::read(&ready_read, &mut byte).unwrap();
+                assert_eq!(show(&config), Ok(LifecycleAnswer::InTransition));
+                // SAFETY: kill on the child this test forked.
+                unsafe { nix::libc::kill(child.as_raw(), nix::libc::SIGKILL) };
+                let _ = nix::sys::wait::waitpid(child, None);
+            }
+        }
     }
 
     /// **The member's territory is the member's own, and a load closes a
@@ -2421,6 +3190,7 @@ mod tests {
                 "for a; do t=$a; done
 ",
                 "/usr/bin/readlink /proc/self/fd/3 > \"$t/fd3\"\n",
+                "/usr/bin/readlink /proc/self/fd/9 > \"$t/fd9\"\n",
                 "/bin/cat /proc/self/status > \"$t/status.part\" && ",
                 "/bin/mv \"$t/status.part\" \"$t/status\"\n",
             ),
@@ -2477,9 +3247,14 @@ mod tests {
             member_account: Some(member),
         };
         let mut service = unread_config();
-        service.unit.worker = bin.join("weaver-worker");
+        service.worker = bin.join("weaver-worker");
+        let run_directory = sink.join("run");
+        std::fs::create_dir_all(&run_directory).unwrap();
+        let run_lock = start::take_run_lock(&run_directory)
+            .unwrap()
+            .expect("a free run lock");
 
-        let harness_end = stand_state_member(&service, &inventory);
+        let harness_end = stand_state_member(&service, &inventory, &run_lock);
         assert!(harness_end.is_some(), "the member stands");
         let territory = sink.join("state");
         let status = territory.join("status");
@@ -2505,6 +3280,201 @@ mod tests {
         assert!(
             fd3.starts_with("socket:"),
             "the member's end is a socket at the fixed number: {fd3}"
+        );
+        // **The member holds the run lock's description at 9**, per Spec
+        // section 3. Perturbation: drop the placement from the member's
+        // spawn and nothing stands at 9.
+        let fd9 = std::fs::read_to_string(territory.join("fd9")).expect("the lock was read");
+        assert_eq!(
+            fd9.trim(),
+            run_directory.join("run.lock").display().to_string(),
+            "the member holds the run lock at its fixed number"
+        );
+    }
+
+    /// **The worker's spawn, as root inside a user namespace**, per Spec
+    /// sections 6 and 10's third walk: the worker runs as the agent and holds
+    /// no group root left it, leads its own session with no signal ignored and
+    /// no new privileges, carries the fixed environment and nothing else, and
+    /// crosses the exec with exactly its allowlist of descriptors: standard
+    /// input at `/dev/null`, output and error at the worker log, the run lock
+    /// at 9 and the relay's write end at 8. A stand-in worker, `sh -c`,
+    /// records itself and sleeps. Run by the watch below.
+    ///
+    /// Perturbations: skip the supplementary narrowing and `Groups:` holds
+    /// root's; drop the run lock's placement and 9 is absent from the list;
+    /// let the caller's environment through and the environment carries more.
+    #[test]
+    #[ignore = "needs root; run inside a user namespace by the watch below"]
+    fn the_worker_spawn_lands_its_identity_and_allowlist_as_root() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("weaver-admin-worker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let run_directory = base.join("run");
+        std::fs::create_dir_all(&run_directory).unwrap();
+        let run_lock = start::take_run_lock(&run_directory).unwrap().unwrap();
+        let (relay_read, relay_write) = nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC).unwrap();
+        let log = start::open_log(&base.join("worker.log"), None).unwrap();
+        // **A descriptor the caller left inheritable**, as a root shell may:
+        // without the seal it would cross the worker's exec.
+        // SAFETY: F_DUPFD without the flag on a descriptor this test owns.
+        let leaked = unsafe {
+            nix::libc::fcntl(
+                std::os::fd::AsRawFd::as_raw_fd(&relay_read),
+                nix::libc::F_DUPFD,
+                50,
+            )
+        };
+        assert!(leaked >= 50);
+        let mut child = start::spawn_worker(start::WorkerStart {
+            binary: std::path::Path::new("/bin/sleep"),
+            arguments: vec!["30".to_string()],
+            uid: 4242,
+            gid: 4243,
+            home: std::path::Path::new("/nonexistent/home/alpha"),
+            library_path: Some(std::path::Path::new("/opt/weaver/lib")),
+            log: &log,
+            run_lock: &run_lock,
+            relay_write: Some(std::os::fd::AsRawFd::as_raw_fd(&relay_write)),
+        })
+        .expect("the worker spawns");
+        // The stand-in is `sleep` itself, which changes nothing it inherited,
+        // read from outside once its exec has landed.
+        let pid = child.id();
+        let proc = std::path::PathBuf::from(format!("/proc/{pid}"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::fs::read_to_string(proc.join("comm"))
+            .map(|c| c.trim() != "sleep")
+            .unwrap_or(true)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let status = std::fs::read_to_string(proc.join("status")).unwrap();
+        let line = |key: &str| {
+            status
+                .lines()
+                .find_map(|l| l.strip_prefix(key))
+                .map(|rest| rest.split_whitespace().collect::<Vec<_>>().join(" "))
+                .unwrap_or_default()
+        };
+        assert_eq!(line("Uid:"), "4242 4242 4242 4242", "every uid the agent's");
+        assert_eq!(line("Gid:"), "4243 4243 4243 4243", "every gid its group's");
+        assert_eq!(line("Groups:"), "4243", "its group alone, none of root's");
+        assert_eq!(line("SigIgn:"), "0000000000000000", "no signal ignored");
+        assert_eq!(line("NoNewPrivs:"), "1", "no new privileges");
+        assert_eq!(line("Umask:"), "0027", "a fixed file-creation mask");
+        assert_eq!(
+            std::fs::read_link(proc.join("cwd")).unwrap(),
+            std::path::Path::new("/"),
+            "a fixed working directory"
+        );
+        let stat = std::fs::read_to_string(proc.join("stat")).unwrap();
+        let fields: Vec<&str> = stat
+            .rsplit(')')
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .collect();
+        assert_eq!(fields[3], pid.to_string(), "it leads its own session");
+        // **Read once the stand-in is actually sleeping**: `sleep` opens its
+        // locale files for an instant after the exec, so the table is read
+        // until it settles, within the bound, and the last reading is judged.
+        let table = || {
+            let mut fds: Vec<u32> = std::fs::read_dir(proc.join("fd"))
+                .unwrap()
+                .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
+                .collect();
+            fds.sort_unstable();
+            fds
+        };
+        let settle = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut fds = table();
+        while fds != [0, 1, 2, 8, 9] && std::time::Instant::now() < settle {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            fds = table();
+        }
+        assert_eq!(
+            fds,
+            vec![0, 1, 2, 8, 9],
+            "exactly the allowlist crosses the exec"
+        );
+        assert_eq!(
+            std::fs::read_link(proc.join("fd/0")).unwrap(),
+            std::path::Path::new("/dev/null")
+        );
+        let lock_meta = std::fs::metadata(run_directory.join("run.lock")).unwrap();
+        let held = std::fs::metadata(proc.join("fd/9")).unwrap();
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!((held.dev(), held.ino()), (lock_meta.dev(), lock_meta.ino()));
+        }
+        let environ = std::fs::read(proc.join("environ")).unwrap();
+        let mut environment: Vec<String> = environ
+            .split(|b| *b == 0)
+            .filter(|v| !v.is_empty())
+            .map(|v| String::from_utf8_lossy(v).into_owned())
+            .collect();
+        environment.sort();
+        assert_eq!(
+            environment,
+            vec![
+                "HOME=/nonexistent/home/alpha".to_string(),
+                "LANG=C.UTF-8".to_string(),
+                "LD_LIBRARY_PATH=/opt/weaver/lib".to_string(),
+                "PATH=/usr/bin:/bin".to_string(),
+            ],
+            "the fixed environment and nothing else"
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+        drop(relay_read);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The watch for the worker spawn, the member's pattern: re-executes this
+    /// test binary inside `unshare --map-auto --map-root-user` and requires
+    /// the instrument above to report exactly one test passed. A box where the
+    /// namespace cannot be entered prints a SKIP naming why and passes.
+    #[test]
+    fn the_worker_spawn_is_watched_inside_a_user_namespace() {
+        if nix::unistd::geteuid().is_root() {
+            return the_worker_spawn_lands_its_identity_and_allowlist_as_root();
+        }
+        let exe = std::env::current_exe().expect("the test binary names itself");
+        let ran = std::process::Command::new("unshare")
+            .args(["--map-auto", "--map-root-user"])
+            .arg(&exe)
+            .args([
+                "--exact",
+                "tests::the_worker_spawn_lands_its_identity_and_allowlist_as_root",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .stdin(std::process::Stdio::null())
+            .output();
+        let output = match ran {
+            Ok(output) => output,
+            Err(e) => {
+                diag!("SKIP worker spawn watch: unshare could not run: {e}");
+                return;
+            }
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.starts_with("unshare:") {
+            diag!(
+                "SKIP worker spawn watch: no user namespace here: {}",
+                stderr.trim()
+            );
+            return;
+        }
+        assert!(
+            output.status.success() && stdout.contains("test result: ok. 1 passed"),
+            "the worker spawn failed inside the namespace\nstdout:\n{stdout}\nstderr:\n{stderr}"
         );
     }
 
@@ -2538,14 +3508,14 @@ mod tests {
         let output = match ran {
             Ok(output) => output,
             Err(e) => {
-                eprintln!("SKIP member spawn watch: unshare could not run: {e}");
+                diag!("SKIP member spawn watch: unshare could not run: {e}");
                 return;
             }
         };
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         if stderr.starts_with("unshare:") {
-            eprintln!(
+            diag!(
                 "SKIP member spawn watch: no user namespace here: {}",
                 stderr.trim()
             );
@@ -2555,125 +3525,5 @@ mod tests {
             output.status.success() && stdout.contains("test result: ok. 1 passed"),
             "the member spawn failed inside the namespace\nstdout:\n{stdout}\nstderr:\n{stderr}"
         );
-    }
-}
-
-#[cfg(test)]
-mod unload_answer_tests {
-    use super::*;
-
-    /// **A clean unload answers unloaded**, which is the defect this rule
-    /// closes: the leave confirmed, the worker gone, and the transient unit
-    /// collected with it, so the stop that followed named a unit the manager
-    /// no longer knew and the verb refused over an agent that unloaded
-    /// exactly as asked.
-    ///
-    /// Perturbation: let the stop ask's status decide again and every unload
-    /// of a live agent refuses. Watched by running the verb, which is how the
-    /// defect was found.
-    #[test]
-    fn a_stopped_unit_answers_unloaded() {
-        assert!(matches!(
-            unload_answer(unit::Residency::Inactive),
-            Ok(LifecycleAnswer::State {
-                state: weaver_types::AgentState::Unloaded,
-                load: None,
-                ..
-            })
-        ));
-    }
-
-    /// A unit still running refuses, which is the report this verb must never
-    /// produce and the case the clause was written against.
-    #[test]
-    fn a_running_unit_refuses_not_at_rest() {
-        assert!(matches!(
-            unload_answer(unit::Residency::Active),
-            Err(LifecycleRefusal::ActivityNotAtRest)
-        ));
-    }
-
-    /// **A state nobody could read refuses too.** The ask having failed is not
-    /// evidence the worker stopped, and answering unloaded over it would risk
-    /// the same false report by another route.
-    #[test]
-    fn an_unreadable_state_refuses() {
-        assert!(matches!(
-            unload_answer(unit::Residency::Unknown),
-            Err(LifecycleRefusal::BindFailed)
-        ));
-    }
-
-    /// **The two conditions stop sharing a word**, per `weaver-admin-Spec`
-    /// and the ruling of 2026-08-16. A unit the manager reports `failed` left
-    /// a name held, which is what refuses a later start. A unit it reports
-    /// `active` with an unreachable socket is a bind that failed.
-    ///
-    /// Perturbation: answer `BindFailed` for `Failed` and this test fails,
-    /// which is the state the defect was found in.
-    #[test]
-    fn a_failed_prior_unit_is_not_a_bind_failure() {
-        assert_eq!(
-            refusal_for_residency(unit::Residency::Failed),
-            LifecycleRefusal::NoResidency,
-            "a failed unit runs nothing, so it never reads as a running agent"
-        );
-        assert_eq!(
-            refusal_for_residency(unit::Residency::Active),
-            LifecycleRefusal::BindFailed,
-            "a running unit with an unreachable socket is still a bind failure"
-        );
-        // Both patterns of the shared arm, not one of them. They answer
-        // together today and a later act splitting them would pass a test
-        // that named only `Inactive`.
-        for absent in [unit::Residency::Inactive, unit::Residency::Unknown] {
-            assert_eq!(
-                refusal_for_residency(absent),
-                LifecycleRefusal::NoResidency,
-                "neither reading claims more than an absent residency"
-            );
-        }
-    }
-
-    /// **A failed start ask is asked about rather than guessed at.** The
-    /// status cannot say which failure it was, so the state decides, and every
-    /// reading but `failed` keeps the answer the status alone could give.
-    ///
-    /// Perturbation: return `from_status` for every residency and the first
-    /// case fails, which is how an operator came to read `bind_failed` over a
-    /// healthy socket.
-    #[test]
-    fn a_failed_start_consults_the_state() {
-        let from_status = LifecycleRefusal::BindFailed;
-        assert_eq!(
-            start_refusal_for_residency(unit::Residency::Failed, from_status.clone()),
-            LifecycleRefusal::NoResidency
-        );
-        for other in [
-            unit::Residency::Active,
-            unit::Residency::Inactive,
-            unit::Residency::Unknown,
-        ] {
-            assert_eq!(
-                start_refusal_for_residency(other, from_status.clone()),
-                LifecycleRefusal::BindFailed,
-                "nothing but failed is claimed beyond the status"
-            );
-        }
-    }
-
-    /// A unit that ran and exited non-zero is not running, which is the
-    /// outcome the step asks for. The log carries the residency's own name, so
-    /// the failure is reported rather than swallowed.
-    #[test]
-    fn a_failed_unit_answers_unloaded() {
-        assert!(matches!(
-            unload_answer(unit::Residency::Failed),
-            Ok(LifecycleAnswer::State {
-                state: weaver_types::AgentState::Unloaded,
-                load: None,
-                ..
-            })
-        ));
     }
 }
