@@ -174,6 +174,10 @@ struct Follower {
     /// Bytes of an unfinished line have been queued, so no line of the
     /// relay's own may follow until that line completes.
     mid_line: bool,
+    /// The stream's last line, `truncated`, is queued: the follower is kept
+    /// only until the reader takes it whole or misses the write wait, and the
+    /// connection then closes.
+    closing: bool,
 }
 
 impl Follower {
@@ -448,6 +452,7 @@ impl Relay {
             pending_since: None,
             last_write: Instant::now(),
             mid_line: false,
+            closing: false,
         };
         follower.queue_line(TraceControl::Header(identity(&self.sink)));
         self.log.record(
@@ -480,6 +485,10 @@ impl Relay {
             self.follower = Some(follower);
             return;
         }
+        if follower.closing {
+            // The `truncated` line is taken whole, and the stream ends.
+            return;
+        }
         let size = match self.sink.metadata() {
             Ok(metadata) => metadata.len(),
             Err(_) => {
@@ -489,12 +498,19 @@ impl Relay {
             }
         };
         if size < follower.position {
-            if !follower.mid_line {
-                follower.queue_line(TraceControl::Truncated { size });
-                let _ = follower.flush(self.timing.write);
-            }
             self.log
                 .record("truncated", Some(follower.uid), &format!("to {size} bytes"));
+            if follower.mid_line {
+                return;
+            }
+            // **The last line is written whole before the connection
+            // closes**: the follower stays, closing, while the reader takes
+            // it within the write wait, a full send buffer never cutting it.
+            follower.queue_line(TraceControl::Truncated { size });
+            follower.closing = true;
+            if follower.flush(self.timing.write) && !follower.pending.is_empty() {
+                self.follower = Some(follower);
+            }
             return;
         }
         if follower.position < size {
@@ -576,10 +592,19 @@ fn verify_position(sink: &std::fs::File, request: &TraceRequest) -> Result<(), &
         }
         start = from;
     }
-    let mut record = vec![0u8; (end - start) as usize];
-    sink.read_exact_at(&mut record, start)
-        .map_err(|_| "the sink cannot be read")?;
-    let found: String = sha2::Sha256::digest(&record)
+    // **Hashed a block at a time**, so a record of any length costs the relay
+    // one block of memory and never the record's own size.
+    let mut hasher = sha2::Sha256::new();
+    let mut at = start;
+    while at < end {
+        let len = ((end - at) as usize).min(block.len());
+        sink.read_exact_at(&mut block[..len], at)
+            .map_err(|_| "the sink cannot be read")?;
+        hasher.update(&block[..len]);
+        at += len as u64;
+    }
+    let found: String = hasher
+        .finalize()
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
@@ -621,4 +646,144 @@ fn birth_ns(fd: RawFd) -> Option<i128> {
         return None;
     }
     Some(buffer.stx_btime.tv_sec as i128 * 1_000_000_000 + buffer.stx_btime.tv_nsec as i128)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Scratch(std::path::PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            drop(std::fs::remove_dir_all(&self.0));
+        }
+    }
+
+    fn scratch(tag: &str) -> Scratch {
+        let path =
+            std::env::temp_dir().join(format!("weaver-relay-unit-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        Scratch(path)
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        use sha2::Digest;
+        sha2::Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    /// **A record longer than many blocks verifies, hashed whole**: the
+    /// position after a 300 KiB record resumes with that record's digest and
+    /// refuses another's. Perturbation: hash only the last block read and the
+    /// true digest refuses.
+    #[test]
+    fn a_record_longer_than_a_block_verifies_whole() {
+        let dir = scratch("long-record");
+        let path = dir.0.join("trace.ndjson");
+        let mut long = vec![b'x'; 300 * 1024];
+        long.push(b'\n');
+        let mut file = b"{\"a\":1}\n".to_vec();
+        file.extend_from_slice(&long);
+        std::fs::write(&path, &file).unwrap();
+        let sink = std::fs::File::open(&path).unwrap();
+        let at = |digest: String| TraceRequest {
+            offset: file.len() as u64,
+            prior_digest: Some(digest),
+        };
+        assert_eq!(verify_position(&sink, &at(hex(&long))), Ok(()));
+        assert_eq!(
+            verify_position(&sink, &at(hex(&long[long.len() - 4096..]))),
+            Err("the position does not verify")
+        );
+    }
+
+    /// **The `truncated` line reaches a reader whose send buffer is full**:
+    /// a truncation met while the socket takes nothing more keeps the
+    /// follower, closing, until the reader drains and takes the line whole,
+    /// and only then does the connection close. Perturbation: drop the
+    /// follower right after one flush, as the first form did, and the reader
+    /// reads end-of-file with no `truncated` line.
+    #[test]
+    fn the_truncated_line_reaches_a_reader_behind_a_full_buffer() {
+        use std::io::Read as _;
+        let dir = scratch("truncate-full");
+        let path = dir.0.join("trace.ndjson");
+        std::fs::write(&path, b"{\"a\":1}\n").unwrap();
+        let (ours, mut theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+        ours.set_nonblocking(true).unwrap();
+        // Fill the send buffer until it takes nothing more.
+        let filler = [b'.'; 4096];
+        let mut filled = 0usize;
+        loop {
+            match (&ours).write(&filler) {
+                Ok(n) => filled += n,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) => panic!("{e}"),
+            }
+        }
+        let mut relay = Relay {
+            reader: 0,
+            timing: Timing {
+                request: Duration::from_secs(5),
+                heartbeat: Duration::from_secs(5),
+                write: Duration::from_secs(5),
+            },
+            log: Log {
+                file: std::fs::File::create(dir.0.join("admin.log")).unwrap(),
+                agent: "alpha".into(),
+                boundary: "b0b0".into(),
+            },
+            sink: std::fs::File::open(&path).unwrap(),
+            follower: Some(Follower {
+                socket: ours,
+                uid: 0,
+                position: 8,
+                pending: Vec::new(),
+                pending_since: None,
+                last_write: Instant::now(),
+                mid_line: false,
+                closing: false,
+            }),
+            candidate: None,
+        };
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(3)
+            .unwrap();
+        relay.follow();
+        assert!(
+            relay.follower.as_ref().is_some_and(|f| f.closing),
+            "the follower is kept, closing, behind the full buffer"
+        );
+        // The reader drains, and the relay finishes the line and closes.
+        let reader = std::thread::spawn(move || {
+            let mut all = Vec::new();
+            theirs.read_to_end(&mut all).unwrap();
+            all
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while relay.follower.is_some() {
+            assert!(
+                Instant::now() < deadline,
+                "the relay never finished the line"
+            );
+            relay.follow();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let all = reader.join().unwrap();
+        assert_eq!(
+            all.len(),
+            filled + b"{\"trace_stream\":{\"truncated\":{\"size\":3}}}\n".len()
+        );
+        assert!(
+            all.ends_with(b"{\"trace_stream\":{\"truncated\":{\"size\":3}}}\n"),
+            "the stream ends with the truncated line"
+        );
+    }
 }
