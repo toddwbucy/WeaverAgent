@@ -2021,7 +2021,12 @@ dead-peer conversion every state ask takes, per the operator's rulings of 2026-1
 ask only after it has authored the `unload` event and the tee has sent that event's
 distillate where the election names it, and before it closes the state channel, so the
 ask, answered against the holdings the stream carried before it, holds every elected
-event of the run and the next load, replaying no tail, loses none. A save point is never
+event of the run and the next load, replaying no tail, loses none. **A leave whose save
+point is not answered is an open design item**, carried on #1 to the save-point code
+act: under the dead-peer conversion the unload would still finish clean and the next
+load would restore an older save point with no reset recorded, so whether a missed leave
+save point refuses the leave or keeps the run marked unclean is that act's to elect. A
+save point is never
 overwritten, so each answer names a new one, and this crate authors the event that
 records it, per `weaver-trace-PRD`. **A live restore is the loop's to trigger**: on the
 operator's demand this crate sends the `restore` ask naming a save point in the member's
