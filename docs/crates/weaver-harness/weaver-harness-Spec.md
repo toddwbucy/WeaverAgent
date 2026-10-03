@@ -2102,15 +2102,17 @@ and whether or not a save point stands, resolved by admin from its clean-unload 
 per `weaver-admin-Spec` section 4, this crate authors the reset event after the `load`
 event, naming the prior run, the reason, and the save point reset to or none where the
 store stands empty, so a rebuild from the record honours it, per `weaver-trace-PRD`.
-**Each ask the enter answers reaches the record as a `recall` before the open is built
-from it**, as of 2026-09-26 per `weaver-trace-Spec` section 3, a recall the recorder
-will not take being named in an `identity_prefix_unrecorded` fault rather than refusing
-the enter. **Under a diagnostic binding the enter records nothing**, its asks being
-setup the diagnostic record does not carry as it carries no load and no prefix: that
-record opens with `replay.opened`, and the ask that feeds the model is the replay
-port's. **A restoring run numbers its turns from one**, on the operator's ruling of
-2026-10-02 on #59: a restore from a save point is a new branch and so a new run, and a
-turn key counts within its run and restarts with the next, per
+**Each enter ask that returns events reaches the record as a `recall` before the open is
+built from it**, as of 2026-09-26 per `weaver-trace-Spec` section 3, a recall the
+recorder will not take being named in an `identity_prefix_unrecorded` fault rather than
+refusing the enter. **The `restored` ask is not one**: it returns a stamp or a refusal
+and no event, and it is answered before `load`, so it is recorded by the `load` event's
+lineage it confirms and never as a `recall`. **Under a diagnostic binding the enter
+records nothing**, its asks being setup the diagnostic record does not carry as it
+carries no load and no prefix: that record opens with `replay.opened`, and the ask that
+feeds the model is the replay port's. **A restoring run numbers its turns from one**, on
+the operator's ruling of 2026-10-02 on #59: a restore from a save point is a new branch
+and so a new run, and a turn key counts within its run and restarts with the next, per
 `weaver-gate-world-contract` section 2. The save point's last turn stays on the record
 as a fact of the lineage and numbers nothing. The derived seeds of `weaver-spu-Spec`
 section 8.5, which fix a generation's stream from the declared seed, the turn's
