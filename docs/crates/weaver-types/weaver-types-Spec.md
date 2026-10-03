@@ -1216,6 +1216,7 @@ pub struct EnterPayload {
     pub state_election: StateElection,
     pub state_store: StateStore,
     pub restore: Option<Lineage>,
+    pub reset: Option<Reset>,
     pub stack: BTreeMap<String, String>,
     pub declaration: String,
     pub identity_file: String,
@@ -1228,7 +1229,6 @@ pub struct Lineage {
     pub turn: u64,
     pub operator_supplied: bool,
     pub built_from: Option<Branch>,
-    pub reset: Option<Reset>,
 }
 
 pub struct Branch {
@@ -1287,8 +1287,10 @@ parties that need them read one resolution.
 resolved by admin from the save point the load restores, on the operator's ruling of
 2026-10-02 on #58: the save point's digest, the run, sequence and last turn it covers,
 whether the operator supplied it, and, where the offline builder made it from a record,
-that record's session and the run and turn of its cut. **`reset` is present where the
-agent's last run did not end in a clean unload**, on the operator's ruling of 2026-10-02
+that record's session and the run and turn of its cut. **`reset` rides beside it and
+apart from it, present where the agent's last run did not end in a clean unload**,
+whether or not any save point stands, because a run that stopped before its first save
+point still owes the record its reset, on the operator's ruling of 2026-10-02
 on #58 that an unclean stop resets to the latest known-good save point and records the
 reset: admin resolves it from its own clean-unload marker, per `weaver-admin-Spec`
 section 4, naming the prior run and the reason, `NoCleanUnload` where the marker says

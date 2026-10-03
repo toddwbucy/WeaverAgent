@@ -266,6 +266,7 @@ pub struct Elections {
     pub declaration: String,
     pub identity_file: String,
     pub lineage: Option<Lineage>,
+    pub reset: Option<Reset>,
     pub stack: BTreeMap<String, String>,
 }
 
@@ -276,7 +277,6 @@ pub struct Lineage {
     pub turn: u64,
     pub operator_supplied: bool,
     pub built_from: Option<Branch>,
-    pub reset: Option<Reset>,
 }
 
 pub struct Branch {
@@ -801,10 +801,11 @@ null: `save_point` is the save point's digest, `run` and `sequence` the position
 covers, `turn` the last turn that run holds in it, `operator_supplied` whether the
 operator supplied it, and `built_from`, present only where the offline builder made it
 from a record, carries that record's session as `parent`, the run the cut falls in as
-`run`, and the turn the holdings stop at as `through`, and `reset`, present only where
-the agent's last run did not end in a clean unload, carries that run as `prior_run` and
-the reason as admin resolved it, all copied from the enter's
-`Lineage` per `weaver-types-Spec` section 4 and never the save point's path, which the
+`run`, and the turn the holdings stop at as `through`. `reset` stands beside `lineage`
+and apart from it, present only where the agent's last run did not end in a clean
+unload, whether or not a save point stands, and carries that run as `prior_run` and the
+reason as admin resolved it. Both are copied from the enter per `weaver-types-Spec`
+section 4 and never the save point's path, which the
 harness does not hold. `stack` is the digests of the organ binaries admin started and of
 the agent's SPU and the gate it hands the worker to fork, keyed by the binary's name,
 sha256 hex, copied from the enter, so a record is sufficient for its own conditions

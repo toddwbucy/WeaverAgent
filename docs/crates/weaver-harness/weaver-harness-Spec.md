@@ -2080,40 +2080,41 @@ per `weaver-state-PRD` section 4. **Every serving enter where the member stands 
 the ruling of 2026-10-02 on #58's fourth review round: the answered stamp, the save
 point's digest, run, sequence and last turn, must equal the same four members of the
 enter's `Lineage`, or be absent where the enter names none, the other members,
-`operator_supplied`, `built_from` and `reset`, being admin's resolution and never the
-member's to answer, and a refusal, a miss, or a disagreement refuses the enter through
-the fan-out's after-load failure, so no `load` event names state the member did not
-restore. **The reset is authored from the enter**: where the enter's `Lineage` carries
-`reset`, resolved by admin from its clean-unload marker per `weaver-admin-Spec` section
-4, this crate authors the reset event after the `load` event, naming the prior run, the
-reason, and the save point reset to, so a rebuild from the record honours it, per
-`weaver-trace-PRD`. **Each ask the enter answers reaches the record as a `recall` before
-the open is built from it**, as of 2026-09-26 per `weaver-trace-Spec` section 3, a
-recall the recorder will not take being named in an `identity_prefix_unrecorded` fault
-rather than refusing the enter. **Under a diagnostic binding the enter records
-nothing**, its asks being setup the diagnostic record does not carry as it carries no
-load and no prefix: that record opens with `replay.opened`, and the ask that feeds the
-model is the replay port's. **The turn ordinal continues from the save point**: the
-first turn of a restoring run is numbered one past the last turn the save point's
-lineage names, within the run it names, never from its event sequence, a bare turn
-number recurring across a session's runs and naming nothing on its own, so the derived
-seeds of `weaver-spu-Spec` section 8.5, which fix a generation's stream from the
-declared seed, the turn's reference, and the generation ordinal, continue the streams of
-the run the save point was taken from. **Where the door stands the enter's identity ask
-waits on the driver's seal**, under the parked ask's bound rather than the two seconds a
-member answering from holdings at rest takes, per `weaver-harness-state-contract`
-section 2 and `weaver-state-Spec` section 4, and one typed line on standard error names
-what is waited on and for how long before the ask is written, so an operator who has not
-started the driver reads why the load stands still. The door stands only under a
-diagnostic binding, the preload being that binding's alone, and a short bound would
-refuse the enter unless the driver had sealed inside it, the identity ask's miss being
-the one the dead-peer clause does not convert. **A diagnostic enter therefore waits on
-the driver as its replay does and refuses without one after the bound**, and the answer
-it opens on is the record's own. **The instrument is perturbation, as of 2026-09-06, on
-the ordinal**: the first turn of a restoring run is numbered one past the cut, watched
-to fail when the ordinal starts at zero. The perturbation that watched the restored
-conversation retires with the record restore, and the code act that lands the save point
-removes its test and renumbers this one from the save point's last turn.
+`operator_supplied` and `built_from`, being admin's resolution and never the member's to
+answer, and a refusal, a miss, or a disagreement refuses the enter through the fan-out's
+after-load failure, so no `load` event names state the member did not restore. **The
+reset is authored from the enter**: where the enter carries `reset`, beside its lineage
+and whether or not a save point stands, resolved by admin from its clean-unload marker
+per `weaver-admin-Spec` section 4, this crate authors the reset event after the `load`
+event, naming the prior run, the reason, and the save point reset to or none where the
+store stands empty, so a rebuild from the record honours it, per `weaver-trace-PRD`.
+**Each ask the enter answers reaches the record as a `recall` before the open is built
+from it**, as of 2026-09-26 per `weaver-trace-Spec` section 3, a recall the recorder
+will not take being named in an `identity_prefix_unrecorded` fault rather than refusing
+the enter. **Under a diagnostic binding the enter records nothing**, its asks being
+setup the diagnostic record does not carry as it carries no load and no prefix: that
+record opens with `replay.opened`, and the ask that feeds the model is the replay
+port's. **The turn ordinal continues from the save point**: the first turn of a
+restoring run is numbered one past the last turn the save point's lineage names, within
+the run it names, never from its event sequence, a bare turn number recurring across a
+session's runs and naming nothing on its own, so the derived seeds of `weaver-spu-Spec`
+section 8.5, which fix a generation's stream from the declared seed, the turn's
+reference, and the generation ordinal, continue the streams of the run the save point
+was taken from. **Where the door stands the enter's identity ask waits on the driver's
+seal**, under the parked ask's bound rather than the two seconds a member answering from
+holdings at rest takes, per `weaver-harness-state-contract` section 2 and
+`weaver-state-Spec` section 4, and one typed line on standard error names what is waited
+on and for how long before the ask is written, so an operator who has not started the
+driver reads why the load stands still. The door stands only under a diagnostic binding,
+the preload being that binding's alone, and a short bound would refuse the enter unless
+the driver had sealed inside it, the identity ask's miss being the one the dead-peer
+clause does not convert. **A diagnostic enter therefore waits on the driver as its
+replay does and refuses without one after the bound**, and the answer it opens on is the
+record's own. **The instrument is perturbation, as of 2026-09-06, on the ordinal**: the
+first turn of a restoring run is numbered one past the cut, watched to fail when the
+ordinal starts at zero. The perturbation that watched the restored conversation retires
+with the record restore, and the code act that lands the save point removes its test and
+renumbers this one from the save point's last turn.
 
 ```graph
 node: harness-restoring-run-continues-the-ordinal

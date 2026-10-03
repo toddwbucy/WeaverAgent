@@ -660,7 +660,8 @@ answers on the enter's `restored` ask of `weaver-harness-state-contract` section
 **The clean-unload marker is this crate's**: at every load it writes, in the agent's
 config root under its own custody, a marker naming the run it mints as open, and a clean
 unload marks that run closed; a load that finds a marker naming a run still open
-resolves the lineage's `reset` to that run, `NoCleanUnload`, or `UnitFailed` where the
+resolves the enter's `reset`, which rides apart from the lineage and whether or not a
+save point stands, to that run, `NoCleanUnload`, or `UnitFailed` where the
 unit's result corroborates a failure, per `weaver-types-Spec` section 4. An agent's
 first load finds no marker and resolves no reset. The lineage that crosses the enter is
 resolved here from the save point's stamp: the run, the sequence and the last turn it

@@ -571,8 +571,9 @@ the lineage reshaped on the operator's rulings of 2026-10-02 on #58, which retir
 record restore of issue #432. Where the load restores a save point it names the save
 point by digest, the run, sequence and last turn it covers, whether the operator
 supplied it, where the offline builder made it from a record that record's session and
-the run and turn of its cut, and where the agent's last run did not end in a clean
-unload that run and the reason, so a resume and a branch each say what they came from;
+the run and turn of its cut, and, apart from the lineage and whether or not a save point
+stands, where the agent's last run did not end in a clean unload that run and the
+reason, so a resume and a branch each say what they came from;
 and every load names the digests of the organ binaries that ran it, keyed by name, so a
 record is sufficient for its own conditions and the experiment deposits stop being where
 the stack is remembered. The record is the canonical form and a save point is a cache of
