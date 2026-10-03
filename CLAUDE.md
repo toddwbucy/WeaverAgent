@@ -235,9 +235,8 @@ scripts' record of the install, which admin never reads), `<prefix>/bin` and
 `/var/log/weaver`. Each agent runs under its own OS user, today as a transient systemd
 unit `weaver-worker@<agent>.service`. The #50 code act replaces the unit with admin's
 start step and rewrites the scripts and runbooks to match. Run logs of redeploys are
-kept
-under `docs/project/redeploy-*.md`. The thinkpad runs a stack built from this tree at
-the split and completes turns through the gate (2026-09-30 15:33).
+kept under `docs/project/redeploy-*.md`. The thinkpad runs a stack built from this tree
+at the split and completes turns through the gate (2026-09-30 15:33).
 
 ### Reading command output
 
