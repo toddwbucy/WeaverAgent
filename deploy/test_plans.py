@@ -70,7 +70,7 @@ elif name == 'cargo':
             print('fixture build refusal', file=sys.stderr)
             sys.exit(42)
         target.joinpath('release').mkdir(parents=True)
-        for member in ('pyworker', 'worker', 'weaver-admin', 'weaver-gate', 'weaver-spu', 'weaver-state'):
+        for member in ('pyworker', 'worker', 'weaver-admin', 'weaver-trace-relay', 'weaver-gate', 'weaver-spu', 'weaver-state'):
             target.joinpath('release', member).write_text('fixture artifact ' + member)
     else: sys.exit(99)
 elif name == 'sudo':
@@ -872,7 +872,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertIn("--workspace", build)
         self.assertNotIn("--exclude", build)
         self.assertIn("weaver-spu/cuda", build[-1])
-        self.assertEqual(result.stdout.count("NEW"), 6)
+        self.assertEqual(result.stdout.count("NEW"), 7)
         self.assertIn("plan only. rerun with --install", result.stdout)
         self.assert_unprivileged()
         cargo_actions = [c[1] for c in self.calls() if c[0] == "cargo"]
