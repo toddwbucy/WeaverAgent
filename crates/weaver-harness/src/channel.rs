@@ -6,7 +6,7 @@
 //! conforms: harness-bind-never-unlinks
 //! conforms: harness-organ-ends-from-descriptor-three
 //! conforms: harness-child-flag-clear-unconditional
-//! conforms: harness-fork-to-exec-three-calls
+//! conforms: harness-fork-to-exec-bounded-calls
 //! conforms: harness-trace-fd-cloexec-at-receive
 //! conforms: harness-no-path-taken
 //! conforms: harness-os-surface-nix
@@ -70,6 +70,51 @@ pub fn undecodable_detail(channel: &str, error: &serde_json::Error) -> String {
 /// further channel takes the next number, so the gate's single end sits where
 /// the SPU's first does.
 pub const FIRST_ORGAN_DESCRIPTOR: RawFd = 3;
+
+/// Where the worker finds the run lock's open file description admin's start
+/// step took before its first fork, per `weaver-admin-Spec` section 3 and
+/// `weaver-harness-Spec` section 2.2: one fixed number for every constituent,
+/// the worker, the state member and the trace relay alike, elected by the act
+/// that lands the start step. High enough that no organ end placed from 3
+/// upward reaches it.
+pub const RUN_LOCK_DESCRIPTOR: RawFd = 9;
+
+/// Where the worker finds the write end of the trace relay's lifetime pipe,
+/// per `weaver-admin-Spec` section 6, present only where a file sink stood a
+/// relay.
+pub const RELAY_LIFETIME_DESCRIPTOR: RawFd = 8;
+
+/// **The worker's first act**, per `weaver-harness-Spec` section 2.2: the two
+/// descriptors the start step hands across its exec, the run lock's
+/// description and the relay's lifetime pipe, are marked close-on-exec before
+/// any thread starts or anything forks, so no organ inherits a writable
+/// descriptor to root's lock file or a write end that would keep the relay
+/// alive, and no window exists in which one could.
+///
+/// **Neither is ever closed.** The run lock is held for the worker's life and
+/// released by its death, and the relay reads end-of-file only when the last
+/// write end is gone. A number holding nothing, a worker started by hand or
+/// by a stack that predates the start step, is skipped: there is nothing to
+/// keep. Answers which of the two were held.
+pub fn keep_start_step_descriptors() -> (bool, bool) {
+    (
+        keep_close_on_exec(RUN_LOCK_DESCRIPTOR),
+        keep_close_on_exec(RELAY_LIFETIME_DESCRIPTOR),
+    )
+}
+
+/// Marks one inherited number close-on-exec and leaves it open, answering
+/// whether a descriptor stood there.
+pub fn keep_close_on_exec(fd: RawFd) -> bool {
+    // SAFETY: fcntl on a number this process may or may not hold; F_GETFD on
+    // an empty number fails with EBADF and touches nothing.
+    let flags = unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFD) };
+    if flags == -1 {
+        return false;
+    }
+    // SAFETY: as above, on a number that holds a descriptor.
+    unsafe { nix::libc::fcntl(fd, nix::libc::F_SETFD, flags | nix::libc::FD_CLOEXEC) != -1 }
+}
 
 /// One end of an organ channel: a `SOCK_SEQPACKET` socket carrying one
 /// `OrganEnvelope` per message, framing coming from the socket type rather
@@ -1190,5 +1235,37 @@ mod classify_bound_tests {
             "the ask waited its bound, took {took:?}"
         );
         peer.join().expect("the peer");
+    }
+}
+
+#[cfg(test)]
+mod start_step_descriptor_tests {
+    /// **An inherited number is marked close-on-exec and kept**, per
+    /// `weaver-harness-Spec` section 2.2, so no organ the worker forks
+    /// inherits the run lock or the relay's write end. The number is a fresh
+    /// one far above any the test harness uses. Perturbation: drop the
+    /// `F_SETFD` from `keep_close_on_exec` and the flag stays clear.
+    #[test]
+    fn an_inherited_number_is_kept_close_on_exec() {
+        let (read_end, write_end) = nix::unistd::pipe().expect("a pipe");
+        // SAFETY: F_DUPFD on a descriptor this test owns answers a fresh
+        // number without the flag, as an inherited one arrives.
+        let fd = unsafe {
+            nix::libc::fcntl(
+                std::os::fd::AsRawFd::as_raw_fd(&write_end),
+                nix::libc::F_DUPFD,
+                800,
+            )
+        };
+        assert!(fd >= 800);
+        assert!(super::keep_close_on_exec(fd), "a descriptor stood there");
+        // SAFETY: F_GETFD on the number, which must still be open.
+        let flags = unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFD) };
+        assert_ne!(flags, -1, "kept, never closed");
+        assert_ne!(flags & nix::libc::FD_CLOEXEC, 0, "marked close-on-exec");
+        // SAFETY: closing the test's own duplicate.
+        unsafe { nix::libc::close(fd) };
+        assert!(!super::keep_close_on_exec(fd), "an empty number is skipped");
+        drop((read_end, write_end));
     }
 }

@@ -148,7 +148,7 @@ mod writer;
 
 pub use canonical::{MonotonicNs, Sequence};
 pub use event::{
-    Candidate, ClassifyAsk, ClassifyScored, Elections, ElisionSpan, Envelope, Event, Finish,
+    Candidate, Cause, ClassifyAsk, ClassifyScored, Elections, ElisionSpan, Envelope, Event, Finish,
     FlushCounts, GrantSurface, Kind, Line, Lineage, LoopIdentity, ModelField, ModelOutput, Payload,
     RecallAccount, RecallAsk, RecallVerb, RecalledIdentity, RunRef, ScoreRatio, SessionRef,
     StopReason, StoreIdentity, Subsystem, TaskScore, TurnClose, TurnRef, UnloadClose, raw_payload,

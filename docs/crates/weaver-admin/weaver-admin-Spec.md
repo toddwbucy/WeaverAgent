@@ -415,13 +415,13 @@ worker of one agent.
   `run.lock`, root-owned and mode `0600`, for writing and takes an exclusive open file
   description lock on it, without waiting, before it forks anything. Each of the three
   children inherits that description at its fork and carries it across its exec at a
-  fixed descriptor number, so the lock is held from before the first fork until the
-  last of the three exits, and the kernel releases it then, however each one ended.
-  **Nothing waits for a child to take it**: a child exists only after the lock is
-  taken and holds it from its first instruction, so no interval leaves a constituent
-  alive with the lock free, and a `SIGKILL` of the invocation at any point leaves
-  whatever it has already started holding the lock, for a later `unload` to end, per
-  below. The invocation's own copy closes when it exits, which releases nothing
+  fixed descriptor number, 9 for all three, so the lock is held from before the first
+  fork until the last of the three exits, and the kernel releases it then, however each
+  one ended. **Nothing waits for a child to take it**: a child exists only after the
+  lock is taken and holds it from its first instruction, so no interval leaves a
+  constituent alive with the lock free, and a `SIGKILL` of the invocation at any point
+  leaves whatever it has already started holding the lock, for a later `unload` to end,
+  per below. The invocation's own copy closes when it exits, which releases nothing
   while a child holds the description. **Each constituent marks its descriptor
   close-on-exec as its first act** and never passes it on, so no organ the worker forks
   inherits it, the organs being bound to the worker by their death signal instead, per
@@ -1650,20 +1650,21 @@ or the position fails to verify, and the reader starts again from offset zero.
 **The relay's lifetime is bound to the worker's by a pipe, and the failure mode is
 stated.** The start step makes one pipe before it forks either process, and closes its
 own copies of both ends once both children hold theirs. The worker inherits the write
-end across its exec and marks it close-on-exec as its first act, before it starts any
-thread or forks anything, per `weaver-harness-Spec` section 2.2, so no organ ever holds
-it and no window exists in which one could. The relay holds the read end. The worker
-never writes it, so the relay's read blocks for the run's life and returns end-of-file
-only when the last holder of the write end is gone, which is the worker's death, clean
-or not, the kernel closing the descriptor whatever killed the process. The relay exits
-on that end-of-file after telling its follower why. **The one remaining failure mode
-runs the other way**: if the relay dies first, the worker serves on, the trace keeps
-landing in the sink, and the door is closed until the next load, which the reader sees
-as a refused connection and the operations log records. **The relay test watches the
-start step's copy and not an organ's**, because an organ that somehow held the write end
-would die with the worker by its death signal anyway, which masks that case, so the
-watch that can fail is the start step forgetting to close its own copy. Neither process
-waits on the other, and the start step's detach leaves both reparented to pid 1.
+end across its exec at descriptor 8 and marks it close-on-exec as its first act, before
+it starts any thread or forks anything, per `weaver-harness-Spec` section 2.2, so no
+organ ever holds it and no window exists in which one could. The relay holds the read
+end. The worker never writes it, so the relay's read blocks for the run's life and
+returns end-of-file only when the last holder of the write end is gone, which is the
+worker's death, clean or not, the kernel closing the descriptor whatever killed the
+process. The relay exits on that end-of-file after telling its follower why. **The one
+remaining failure mode runs the other way**: if the relay dies first, the worker serves
+on, the trace keeps landing in the sink, and the door is closed until the next load,
+which the reader sees as a refused connection and the operations log records. **The
+relay test watches the start step's copy and not an organ's**, because an organ that
+somehow held the write end would die with the worker by its death signal anyway, which
+masks that case, so the watch that can fail is the start step forgetting to close its
+own copy. Neither process waits on the other, and the start step's detach leaves both
+reparented to pid 1.
 
 **Worker death is observed, not reported.** The channel's closure is the observation,
 per `weaver-organ-channel` section 2, and the run lock's release is the fact `show` and

@@ -1272,7 +1272,7 @@ pub enum LifecycleAnswer {
     GateReady,
     GateStopped,
     Validated,
-    State { state: AgentState, load: Option<Box<LoadFacts>> },
+    State { state: AgentState, load: Option<Box<LoadFacts>>, constituents: Vec<u32> },
     InTransition,
 }
 ```
@@ -1490,6 +1490,13 @@ nothing, a load never ending an existing run. It does not say the run is serving
 healthy or ever entered, which `show` answers through the observation exchange, and
 ending it is `unload`'s, which the caller issues. A run that died leaves no lock behind,
 so no case for a dead one is needed and none is kept.
+
+**`State` carries the run's constituents where admin found any**, per
+toddwbucy/WeaverWeb#15: every pid holding the run lock's description, the worker, the
+state member and the relay, which `show` adds from the holder scan the escalation
+already runs, so a caller can check each sits in its own containment. It is admin's
+fact and never the harness's, absent from the observation the harness answers and
+wherever no run holds the lock, and empty is absent on the wire.
 
 **`InTransition` is an answer, not a state**, on the same ruling: `show` answers it
 where another invocation holds the agent's invocation lock, a load or an unload in

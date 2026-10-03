@@ -31,8 +31,8 @@
 //! fn directive_name(d: &LifecycleDirective) -> &'static str {
 //!     match d {
 //!         LifecycleDirective::Enter { .. } => "enter",
-//!         LifecycleDirective::Leave => "leave",
-//!         LifecycleDirective::Stop => "stop",
+//!         LifecycleDirective::Leave { .. } => "leave",
+//!         LifecycleDirective::Stop { .. } => "stop",
 //!         LifecycleDirective::Admit { .. } => "admit",
 //!         LifecycleDirective::Release => "release",
 //!         LifecycleDirective::Raise { .. } => "raise",
@@ -55,6 +55,7 @@
 //!         LifecycleAnswer::GateReady => "gate_ready",
 //!         LifecycleAnswer::GateStopped => "gate_stopped",
 //!         LifecycleAnswer::Validated => "validated",
+//!         LifecycleAnswer::InTransition => "in_transition",
 //!         LifecycleAnswer::State { .. } => "state",
 //!     }
 //! }
@@ -73,7 +74,11 @@
 //!         LifecycleRefusal::DeviceCannotAdmit => "device_cannot_admit",
 //!         LifecycleRefusal::NoResidency => "no_residency",
 //!         LifecycleRefusal::BindFailed => "bind_failed",
-//!         LifecycleRefusal::PriorUnitUnreaped => "prior_unit_unreaped",
+//!         LifecycleRefusal::AgentRunning => "agent_running",
+//!         LifecycleRefusal::InvocationInFlight => "invocation_in_flight",
+//!         LifecycleRefusal::LockHolderUnknown => "lock_holder_unknown",
+//!         LifecycleRefusal::WorkerWouldNotExit => "worker_would_not_exit",
+//!         LifecycleRefusal::Unanswered => "unanswered",
 //!         LifecycleRefusal::OrganRefused { .. } => "organ_refused",
 //!         LifecycleRefusal::ActivityNotAtRest => "activity_not_at_rest",
 //!     }
@@ -92,7 +97,10 @@ pub use config::{
     GateInstruction, ModelBinding, Restore, SpuInstruction, StateElection, StateStore, StoreEngine,
     ToolName, TraceSink,
 };
-pub use identity::{AccessRule, PeerIdentity, authorized};
+pub use identity::{
+    AccessRule, BoundaryFile, Cause, PeerIdentity, TraceControl, TraceHeader, TraceLine,
+    TraceRequest, authorized,
+};
 pub use wire::{
     AgentName, AgentState, Candidate, Composer, DECODE_MESSAGE_BOUND, EnterBinding, EnterPayload,
     ExchangeId, FaultCase, FaultReport, Finish, Generation, KillCause, LabelAnswer, LabelDirective,

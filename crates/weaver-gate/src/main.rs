@@ -571,8 +571,8 @@ fn dispatch(state: &mut HookState, envelope: &OrganEnvelope) -> Payload {
             LifecycleDirective::Raise { .. }
             | LifecycleDirective::Lower
             | LifecycleDirective::Enter { .. }
-            | LifecycleDirective::Leave
-            | LifecycleDirective::Stop
+            | LifecycleDirective::Leave { .. }
+            | LifecycleDirective::Stop { .. }
             | LifecycleDirective::Observe
             | LifecycleDirective::Admit { .. }
             | LifecycleDirective::Release
@@ -677,7 +677,9 @@ mod tests {
         for (position, payload) in [
             (
                 Position::Continue,
-                Payload::Directive(LifecycleDirective::Stop),
+                Payload::Directive(LifecycleDirective::Stop {
+                    cause: weaver_types::Cause { uid: 0 },
+                }),
             ),
             (Position::Open, Payload::ToolCancel),
         ] {
@@ -785,7 +787,9 @@ mod tests {
                 socket: terminal.to_path_buf(),
             },
             LifecycleDirective::Lower,
-            LifecycleDirective::Stop,
+            LifecycleDirective::Stop {
+                cause: weaver_types::Cause { uid: 0 },
+            },
         ] {
             assert_eq!(
                 dispatch(&mut state, &opened(case)),
@@ -880,8 +884,12 @@ mod tests {
     fn a_directive_outside_the_drawn_vocabulary_refuses() {
         let mut state = HookState::BeforeRaise;
         for case in [
-            LifecycleDirective::Leave,
-            LifecycleDirective::Stop,
+            LifecycleDirective::Leave {
+                cause: weaver_types::Cause { uid: 0 },
+            },
+            LifecycleDirective::Stop {
+                cause: weaver_types::Cause { uid: 0 },
+            },
             LifecycleDirective::Release,
             LifecycleDirective::Show {
                 agent: AgentName("alpha".into()),

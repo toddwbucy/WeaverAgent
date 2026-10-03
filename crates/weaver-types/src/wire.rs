@@ -212,8 +212,15 @@ pub enum LifecycleDirective {
     Enter {
         payload: Box<EnterPayload>,
     },
-    Leave,
-    Stop,
+    /// The cause rides each change, per `weaver-types-Spec` section 3.1, and
+    /// the harness records it on the unload event.
+    Leave {
+        cause: crate::Cause,
+    },
+    /// The harness records the cause on a stopped turn's close.
+    Stop {
+        cause: crate::Cause,
+    },
     /// **Observe the run**, per `weaver-admin-harness-contract` section 3 as
     /// of 2026-09-04: admin asks what stands and carries nothing, and the
     /// harness answers `State` from whichever position it holds, the load's
@@ -269,6 +276,11 @@ pub enum LifecycleAnswer {
     GateReady,
     GateStopped,
     Validated,
+    /// **An answer, not a state**, per `weaver-types-Spec` section 3.1:
+    /// `show` meets another invocation holding the agent's invocation lock,
+    /// a load or an unload in flight, and claims no `AgentState`, the
+    /// harness being busy with that very invocation.
+    InTransition,
     /// The agent's state and, where a run stands, the load's facts, per
     /// `weaver-types-Spec` section 4 as of 2026-09-04. `load` is present only
     /// where an observation of a standing run answered it: it is absent where
@@ -280,6 +292,15 @@ pub enum LifecycleAnswer {
         /// section and issue.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         load: Option<Box<LoadFacts>>,
+        /// **The run's constituent processes**, every pid holding the run
+        /// lock's description, the worker, the state member and the relay,
+        /// which `show` adds from the holder scan the escalation already runs,
+        /// per toddwbucy/WeaverWeb#15, so a caller can check that each sits
+        /// in its own containment. Admin's fact and never the harness's: the
+        /// harness answers the observation without it, and it is absent where
+        /// no run holds the lock.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        constituents: Vec<u32>,
     },
 }
 
@@ -344,18 +365,24 @@ pub enum LifecycleRefusal {
     DeviceCannotAdmit,
     NoResidency,
     BindFailed,
-    /// A prior process for this unit exited non-zero and its name is still
-    /// held by the manager, so a later start under that name refuses until it
-    /// is reaped.
-    ///
-    /// **It claims that and no more.** `failed` is the one state the init
-    /// boundary reports without ambiguity, per
-    /// `weaver-admin-systemd-contract` section 3, and it does not say whether
-    /// the worker bound or how long it served: a unit that bound its socket,
-    /// served, and exited non-zero later reads the same. What it says is what
-    /// refused the load, and that is a different fact from a socket that would
-    /// not bind, which is `BindFailed`.
-    PriorUnitUnreaped,
+    /// A run of this agent holds the run lock now, and the load touched
+    /// nothing, a load never ending an existing run, per `weaver-types-Spec`
+    /// section 3.1. It does not say the run is serving, healthy or ever
+    /// entered, which `show` answers, and ending it is `unload`'s.
+    AgentRunning,
+    /// Another invocation holds this agent's invocation lock, so this one
+    /// touched nothing.
+    InvocationInFlight,
+    /// The run lock was held and no process holding it could be found, so no
+    /// signal was sent.
+    LockHolderUnknown,
+    /// A constituent of the run still held the run lock after the unload's
+    /// escalation, so the agent was not reported unloaded.
+    WorkerWouldNotExit,
+    /// A stop's or an observation's answer did not arrive within its bound,
+    /// at `stop`, at `show`, or at a `load` meeting a silent run, which never
+    /// ends it: the run was left as it stands.
+    Unanswered,
     OrganRefused {
         organ: RefusingOrgan,
         reason: Box<LifecycleRefusal>,
@@ -400,6 +427,17 @@ pub struct EnterPayload {
     /// store's.
     #[serde(default)]
     pub stack: std::collections::BTreeMap<String, String>,
+    /// The sha256 hex of the agent's `roles.toml` as admin read it at the
+    /// inventory, per `weaver-types-Spec` section 4, which the harness copies
+    /// onto the load event as boundary and never constitution.
+    pub boundary: String,
+    /// Who asked for this load, section 3.1's `Cause`, recorded on the load
+    /// event.
+    pub cause: crate::Cause,
+    /// The engine libraries' directory where the agent's root names one,
+    /// judged by admin and recorded on the load event beside the stack.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library_path: Option<String>,
 }
 
 /// A restore's lineage as admin resolved it: the parent's session, the run

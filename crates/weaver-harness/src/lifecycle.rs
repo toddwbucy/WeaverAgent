@@ -1082,7 +1082,9 @@ impl Harness {
                 turn.as_ref(),
                 &crate::authorship::harness_report(case, &account),
             );
-            let _ = leave(&mut run);
+            // The worker unwinds itself, so no leave asked and the unload
+            // carries no cause.
+            let _ = leave(&mut run, None);
         }
     }
 
@@ -1130,7 +1132,7 @@ impl Harness {
                 }
                 Ok(None)
             }
-            (ChannelState::Entered(run), LifecycleDirective::Leave) => {
+            (ChannelState::Entered(run), LifecycleDirective::Leave { cause }) => {
                 if run.turn_in_flight.is_some() {
                     self.refuse(connection, &exchange, LifecycleRefusal::ActivityNotAtRest)?;
                     return Ok(None);
@@ -1143,7 +1145,7 @@ impl Harness {
                         return Err(ChannelFault::Undecodable);
                     }
                 };
-                match leave(&mut run) {
+                match leave(&mut run, Some(cause)) {
                     Ok(()) => {
                         self.answer(connection, &exchange, LifecycleAnswer::Left)?;
                     }
@@ -1168,6 +1170,7 @@ impl Harness {
                     LifecycleAnswer::State {
                         state: weaver_types::AgentState::Unloaded,
                         load: None,
+                        constituents: Vec::new(),
                     },
                 )?;
                 Ok(None)
@@ -1185,11 +1188,12 @@ impl Harness {
                     LifecycleAnswer::State {
                         state,
                         load: Some(Box::new(load)),
+                        constituents: Vec::new(),
                     },
                 )?;
                 Ok(None)
             }
-            (ChannelState::Entered(run), LifecycleDirective::Stop) => {
+            (ChannelState::Entered(run), LifecycleDirective::Stop { cause }) => {
                 // Announce after record: the turn's close event is placed with
                 // the stop reason, and only then does the answer carry
                 // TurnAborted.
@@ -1202,6 +1206,7 @@ impl Harness {
                             Some(&turn),
                             Some(Payload::TurnClosed(TurnClose::Stopped {
                                 reason: weaver_trace::StopReason::Directive,
+                                cause: Some(crate::engine::trace_cause(cause)),
                             })),
                         );
                         LifecycleAnswer::TurnAborted {
@@ -1380,6 +1385,12 @@ impl Harness {
                 })
             }),
             stack: payload.stack.clone(),
+            // **Boundary, cause and libraries are admin's facts**, per
+            // `weaver-trace-Spec` section 3 as of 2026-10-03, copied from the
+            // enter and read from no deployment.
+            boundary: payload.boundary.clone(),
+            cause: crate::engine::trace_cause(payload.cause),
+            library_path: payload.library_path.clone(),
             state_store: weaver_trace::StoreIdentity {
                 engine: match payload.state_store.engine {
                     weaver_types::StoreEngine::None => "none",
@@ -2025,7 +2036,7 @@ impl Harness {
 ///
 /// The match on the options is the checked unwind: a forgotten arm is a
 /// compile error rather than a leaked residency.
-fn leave(run: &mut Run) -> Result<(), LifecycleRefusal> {
+fn leave(run: &mut Run, cause: Option<weaver_types::Cause>) -> Result<(), LifecycleRefusal> {
     // The unwind runs whole whatever refuses along it, because stopping at
     // the first refusal leaks everything after it: a refused lower must not
     // leave a device held. The first refusal in sequence order is what the
@@ -2067,19 +2078,22 @@ fn leave(run: &mut Run) -> Result<(), LifecycleRefusal> {
         // inside the session being a boundary move the record carries and
         // never absorbs, and one unreadable at the close said to be so
         // rather than reported unchanged. Where no member stood there was
-        // no boundary to read and the event carries nothing.
-        let payload = run.state.as_mut().map(|seam| {
+        // no boundary to read and the surface is absent. The cause is the
+        // leave directive's, absent where the worker unwound itself.
+        let grant_surface = run.state.as_mut().map(|seam| {
             let at_leave = seam.ask_grants();
-            weaver_trace::Payload::Unload(weaver_trace::UnloadClose {
-                grant_surface: match (&run.grants_at_enter, at_leave) {
-                    (Some(entered), Some(left)) if *entered == left => {
-                        weaver_trace::GrantSurface::Unchanged
-                    }
-                    (Some(_), Some(_)) => weaver_trace::GrantSurface::Varied,
-                    _ => weaver_trace::GrantSurface::Unreadable,
-                },
-            })
+            match (&run.grants_at_enter, at_leave) {
+                (Some(entered), Some(left)) if *entered == left => {
+                    weaver_trace::GrantSurface::Unchanged
+                }
+                (Some(_), Some(_)) => weaver_trace::GrantSurface::Varied,
+                _ => weaver_trace::GrantSurface::Unreadable,
+            }
         });
+        let payload = Some(weaver_trace::Payload::Unload(weaver_trace::UnloadClose {
+            grant_surface,
+            cause: cause.map(crate::engine::trace_cause),
+        }));
         let _ = run.author.author(
             &mut run.recorder,
             Kind::Unload,
@@ -2640,6 +2654,9 @@ mod tests {
                     declaration: Default::default(),
                     lineage: None,
                     stack: Default::default(),
+                    boundary: String::new(),
+                    cause: weaver_trace::Cause { uid: 0 },
+                    library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
                 })),
@@ -2790,6 +2807,9 @@ mod tests {
             declaration: String::new(),
             restore: None,
             stack: Default::default(),
+            boundary: String::new(),
+            cause: weaver_types::Cause { uid: 0 },
+            library_path: None,
             state_election: weaver_types::StateElection {
                 all_kinds: false,
                 keys: vec![weaver_types::ElectedKindConfig {
@@ -2815,7 +2835,7 @@ mod tests {
                 panic!("failed before the load: {refusal:?}")
             }
         };
-        let _ = leave(&mut run);
+        let _ = leave(&mut run, None);
         drop(run);
         // The leave closed the bracket and the drop closed the tee's
         // channel, so the reader drains to end-of-stream and finishes.
@@ -2912,6 +2932,9 @@ mod tests {
             declaration: String::new(),
             restore: None,
             stack: Default::default(),
+            boundary: String::new(),
+            cause: weaver_types::Cause { uid: 0 },
+            library_path: None,
             state_election: weaver_types::StateElection {
                 all_kinds: false,
                 keys: Vec::new(),
@@ -2970,7 +2993,7 @@ mod tests {
             "a refused enter closes no turn"
         );
 
-        let _ = leave(&mut run);
+        let _ = leave(&mut run, None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3055,6 +3078,9 @@ mod tests {
                 declaration: String::new(),
                 restore: None,
                 stack: Default::default(),
+                boundary: String::new(),
+                cause: weaver_types::Cause { uid: 0 },
+                library_path: None,
                 state_election: weaver_types::StateElection {
                     all_kinds: false,
                     keys: Vec::new(),
@@ -3076,7 +3102,7 @@ mod tests {
                     panic!("failed before the load: {refusal:?}")
                 }
             };
-            let _ = leave(&mut run);
+            let _ = leave(&mut run, None);
             drop(run);
             let held = std::fs::read_to_string(&sink_path).expect("the sink reads back");
             let load: serde_json::Value =
@@ -3184,6 +3210,9 @@ mod tests {
             declaration: String::new(),
             restore,
             stack: Default::default(),
+            boundary: String::new(),
+            cause: weaver_types::Cause { uid: 0 },
+            library_path: None,
             state_election: weaver_types::StateElection {
                 all_kinds: false,
                 keys: Vec::new(),
@@ -3220,7 +3249,7 @@ mod tests {
                 panic!("failed before the load: {refusal:?}")
             }
         };
-        let _ = leave(&mut run);
+        let _ = leave(&mut run, None);
         drop(run);
         member
             .join()
@@ -3520,6 +3549,9 @@ mod tests {
             declaration: String::new(),
             restore: None,
             stack: Default::default(),
+            boundary: String::new(),
+            cause: weaver_types::Cause { uid: 0 },
+            library_path: None,
             state_election: weaver_types::StateElection {
                 all_kinds: false,
                 keys: Vec::new(),
@@ -3532,7 +3564,7 @@ mod tests {
                 panic!("failed before the load: {refusal:?}")
             }
         };
-        let _ = leave(&mut run);
+        let _ = leave(&mut run, None);
         drop(run);
 
         let held = std::fs::read_to_string(&sink_path).expect("the sink reads back");
@@ -3626,6 +3658,9 @@ mod tests {
                 declaration: String::new(),
                 restore: None,
                 stack: Default::default(),
+                boundary: String::new(),
+                cause: weaver_types::Cause { uid: 0 },
+                library_path: None,
                 state_election: weaver_types::StateElection {
                     all_kinds: false,
                     keys: vec![weaver_types::ElectedKindConfig {
@@ -3641,7 +3676,7 @@ mod tests {
                     panic!("failed before the load: {refusal:?}")
                 }
             };
-            let _ = leave(&mut run);
+            let _ = leave(&mut run, None);
             drop(run);
 
             let held = std::fs::read_to_string(&sink_path).expect("the sink reads back");
@@ -3763,6 +3798,9 @@ mod tests {
             declaration: String::new(),
             restore: None,
             stack: Default::default(),
+            boundary: String::new(),
+            cause: weaver_types::Cause { uid: 0 },
+            library_path: None,
             state_election: weaver_types::StateElection::default(),
         };
 
@@ -3777,7 +3815,7 @@ mod tests {
         assert!(run.gate.is_none(), "a diagnostic run stands no gate arm");
 
         // The leave lowers what stands, and the gate arm is not among it.
-        leave(&mut run).expect("the leave unwinds the diagnostic run");
+        leave(&mut run, None).expect("the leave unwinds the diagnostic run");
         drop(run);
         let _ = std::fs::remove_dir_all(&scratch);
     }
@@ -3885,6 +3923,9 @@ mod tests {
             declaration: String::new(),
             restore: None,
             stack: Default::default(),
+            boundary: String::new(),
+            cause: weaver_types::Cause { uid: 0 },
+            library_path: None,
             state_election: weaver_types::StateElection::default(),
         };
 
@@ -3965,7 +4006,7 @@ mod tests {
         if let Some(scripted) = run.gate.take() {
             drop(scripted.channel);
         }
-        leave(&mut run).expect("the leave unwinds");
+        leave(&mut run, None).expect("the leave unwinds");
 
         // The artifact, read back whole: the first record any human
         // inspects rides exactly this shape in act four.
@@ -4064,6 +4105,7 @@ mod tests {
         let unloaded = LifecycleAnswer::State {
             state: weaver_types::AgentState::Unloaded,
             load: None,
+            constituents: Vec::new(),
         };
         assert_eq!(
             observed(&mut harness_at(ChannelState::BeforeEnter).0),
@@ -4078,6 +4120,7 @@ mod tests {
             LifecycleAnswer::State {
                 state: weaver_types::AgentState::Active,
                 load: Some(load),
+                ..
             } => assert_eq!(load.run.0, "r-1", "the load's facts ride beside the state"),
             other => panic!("a turn in flight observes active with its load, got {other:?}"),
         }
@@ -4094,6 +4137,7 @@ mod tests {
             LifecycleAnswer::State {
                 state: weaver_types::AgentState::Idle,
                 load: Some(_),
+                ..
             } => {}
             other => panic!("at rest observes idle with its load, got {other:?}"),
         }
@@ -4119,7 +4163,9 @@ mod tests {
             .dispatch_on(
                 &harness_end,
                 test_exchange(),
-                LifecycleDirective::Stop,
+                LifecycleDirective::Stop {
+                    cause: weaver_types::Cause { uid: 0 },
+                },
                 None,
                 None,
             )
@@ -4391,7 +4437,9 @@ mod tests {
             .dispatch_on(
                 &harness_end,
                 test_exchange(),
-                LifecycleDirective::Stop,
+                LifecycleDirective::Stop {
+                    cause: weaver_types::Cause { uid: 0 },
+                },
                 None,
                 None,
             )
@@ -4547,6 +4595,7 @@ mod tests {
                     weaver_types::Payload::Answer(LifecycleAnswer::State {
                         state: weaver_types::AgentState::Idle,
                         load: Some(_),
+                        ..
                     })
                 ),
                 "the next observe answers Idle with the standing load"

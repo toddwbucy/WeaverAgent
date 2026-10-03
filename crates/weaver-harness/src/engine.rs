@@ -39,6 +39,17 @@ use crate::assembly::Prompt;
 use crate::authorship::Author;
 use crate::channel::{CoordinationListener, DecodeChannel, OrganChannel};
 
+/// The stop a turn heard, held until its answer: the dialer's exchange, owed
+/// a close, and the directive's cause, recorded on the turn's close per
+/// `weaver-trace-Spec` section 3 as of 2026-10-03.
+type StopSlot = Option<(weaver_types::ExchangeId, weaver_types::Cause)>;
+
+/// The floor's cause in the record's spelling: the two crates link downward
+/// only, so the harness converts at authorship.
+pub(crate) fn trace_cause(cause: weaver_types::Cause) -> weaver_trace::Cause {
+    weaver_trace::Cause { uid: cause.uid }
+}
+
 /// The granted surface handed to loop 1 at loaded-and-idle, borrowing the
 /// standing interior for the seat's lifetime. Its fields are private and its
 /// only constructor is crate-private, which is the blade.
@@ -819,7 +830,7 @@ impl<'a> Ports<'a> {
         // the dialer opened is owed a close on every path, and a turn that
         // died of a refusal keeps serving, so a dropped exchange would hold
         // that dialer forever.
-        let mut stop: Option<weaver_types::ExchangeId> = None;
+        let mut stop: StopSlot = None;
         let ran = self.run_turn(&turn, delta, &mut stop);
         let answered = match ran {
             Ok(outcome) => Ok(outcome),
@@ -868,7 +879,11 @@ impl<'a> Ports<'a> {
                     Kind::TurnClosed,
                     Subsystem::Harness,
                     Some(&turn),
-                    Some(Payload::TurnClosed(TurnClose::Stopped { reason })),
+                    Some(Payload::TurnClosed(TurnClose::Stopped {
+                        reason,
+                        // A fault or a refusal, which nobody asked for.
+                        cause: None,
+                    })),
                 ) {
                     Ok(_) => {
                         // The close landed, so no turn stands: cleared
@@ -883,7 +898,7 @@ impl<'a> Ports<'a> {
                         // purpose. Best-effort, because the fault may already
                         // be taking the service down, and closure then signals
                         // what the answer could not.
-                        if let Some(exchange) = stop.take()
+                        if let Some((exchange, _)) = stop.take()
                             && let Some(slot) = self.pending.as_deref_mut()
                             && let Some(connection) = slot.as_ref()
                         {
@@ -923,7 +938,7 @@ impl<'a> Ports<'a> {
         &mut self,
         turn: &TurnKey,
         delta: Vec<Message>,
-        stop: &mut Option<weaver_types::ExchangeId>,
+        stop: &mut StopSlot,
     ) -> Result<TurnOutcome, TurnError> {
         // **A tool-result message in loop 1's delta refuses before anything
         // is authored**, per `weaver-harness-Spec` section 6: the role's one
@@ -1015,7 +1030,7 @@ impl<'a> Ports<'a> {
         &mut self,
         turn: &TurnKey,
         call: &weaver_traits::ToolCall,
-        stop: &mut Option<weaver_types::ExchangeId>,
+        stop: &mut StopSlot,
     ) -> Result<crate::tools::ToolResult, TurnError> {
         let started = serde_json::json!({
             "name": call.name,
@@ -1118,7 +1133,7 @@ impl<'a> Ports<'a> {
         &mut self,
         wake: ExchangeWake,
         turn: &TurnKey,
-        stop: &mut Option<weaver_types::ExchangeId>,
+        stop: &mut StopSlot,
         execution: Option<&weaver_types::ExchangeId>,
     ) -> Result<(), TurnError> {
         match wake {
@@ -1146,7 +1161,7 @@ impl<'a> Ports<'a> {
                         let exchange = envelope.exchange.clone();
                         match envelope.payload {
                             weaver_types::Payload::Directive(
-                                weaver_types::LifecycleDirective::Stop,
+                                weaver_types::LifecycleDirective::Stop { cause },
                             ) if stop.is_none() => {
                                 // The cancel crosses at once, and the
                                 // stream is consumed to the close it
@@ -1170,7 +1185,7 @@ impl<'a> Ports<'a> {
                                         })
                                         .map_err(|_| TurnError::ChannelLost)?;
                                 }
-                                *stop = Some(exchange);
+                                *stop = Some((exchange, cause));
                             }
                             // **An observation is answered from inside
                             // the turn**, per `weaver-admin-harness-contract`
@@ -1188,6 +1203,7 @@ impl<'a> Ports<'a> {
                                         weaver_types::LifecycleAnswer::State {
                                             state: weaver_types::AgentState::Active,
                                             load: Some(Box::new(self.load.clone())),
+                                            constituents: Vec::new(),
                                         },
                                     ),
                                 });
@@ -1196,7 +1212,7 @@ impl<'a> Ports<'a> {
                             // else are out of order for a turn in
                             // flight, refused and not queued.
                             weaver_types::Payload::Directive(
-                                weaver_types::LifecycleDirective::Leave,
+                                weaver_types::LifecycleDirective::Leave { .. },
                             ) => {
                                 let _ = connection.send(&weaver_types::OrganEnvelope {
                                     exchange,
@@ -1237,7 +1253,7 @@ impl<'a> Ports<'a> {
         &mut self,
         turn: &TurnKey,
         delta: Vec<Message>,
-        stop: &mut Option<weaver_types::ExchangeId>,
+        stop: &mut StopSlot,
     ) -> Result<weaver_types::Generation, TurnError> {
         // Append and generate. The delta crosses, the SPU appends it at the
         // resident end, and the stream returns each token before the close.
@@ -1467,7 +1483,10 @@ impl<'a> Ports<'a> {
                 Kind::TurnClosed,
                 Subsystem::Harness,
                 Some(turn),
-                Some(Payload::TurnClosed(TurnClose::Stopped { reason })),
+                Some(Payload::TurnClosed(TurnClose::Stopped {
+                    reason,
+                    cause: None,
+                })),
             )
             .map_err(|_| TurnError::ChannelLost)?;
         *self.turn_in_flight = None;
@@ -1719,7 +1738,7 @@ impl<'a> Ports<'a> {
         &mut self,
         turn: &TurnKey,
         generation: &weaver_types::Generation,
-        stop: &mut Option<weaver_types::ExchangeId>,
+        stop: &mut StopSlot,
     ) -> Result<bool, TurnError> {
         let stopped = matches!(generation.finish, weaver_types::Finish::Stopped);
         // **The close names what ended the turn.** A model-side stop, the
@@ -1741,6 +1760,7 @@ impl<'a> Ports<'a> {
                 Some(Payload::TurnClosed(if aborted {
                     TurnClose::Stopped {
                         reason: weaver_trace::StopReason::Directive,
+                        cause: stop.as_ref().map(|(_, cause)| trace_cause(*cause)),
                     }
                 } else {
                     TurnClose::Clean
@@ -1753,7 +1773,7 @@ impl<'a> Ports<'a> {
         // **Announce after record**: the stop's answer follows the close it
         // reports, carrying the turn's fate, aborted or completed-at-rest,
         // both truthful at the moment of answering.
-        if let Some(exchange) = stop.take()
+        if let Some((exchange, _)) = stop.take()
             && let Some(slot) = self.pending.as_deref_mut()
             && let Some(connection) = slot.as_ref()
         {
@@ -2135,6 +2155,9 @@ mod tests {
                     declaration: Default::default(),
                     lineage: None,
                     stack: Default::default(),
+                    boundary: String::new(),
+                    cause: weaver_trace::Cause { uid: 0 },
+                    library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
                 })),
@@ -2265,6 +2288,9 @@ mod tests {
                     declaration: Default::default(),
                     lineage: None,
                     stack: Default::default(),
+                    boundary: String::new(),
+                    cause: weaver_trace::Cause { uid: 0 },
+                    library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
                 })),
@@ -2390,6 +2416,9 @@ mod tests {
                     declaration: Default::default(),
                     lineage: None,
                     stack: Default::default(),
+                    boundary: String::new(),
+                    cause: weaver_trace::Cause { uid: 0 },
+                    library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
                 })),
@@ -2541,6 +2570,9 @@ mod tests {
                     declaration: Default::default(),
                     lineage: None,
                     stack: Default::default(),
+                    boundary: String::new(),
+                    cause: weaver_trace::Cause { uid: 0 },
+                    library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
                 })),
@@ -2734,6 +2766,9 @@ mod tests {
                     declaration: Default::default(),
                     lineage: None,
                     stack: Default::default(),
+                    boundary: String::new(),
+                    cause: weaver_trace::Cause { uid: 0 },
+                    library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
                 })),
@@ -2944,6 +2979,9 @@ mod tests {
                     declaration: Default::default(),
                     lineage: None,
                     stack: Default::default(),
+                    boundary: String::new(),
+                    cause: weaver_trace::Cause { uid: 0 },
+                    library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
                 })),
@@ -3130,6 +3168,9 @@ mod tests {
                     declaration: Default::default(),
                     lineage: None,
                     stack: Default::default(),
+                    boundary: String::new(),
+                    cause: weaver_trace::Cause { uid: 0 },
+                    library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
                 })),
@@ -3374,6 +3415,9 @@ mod tests {
                     declaration: Default::default(),
                     lineage: None,
                     stack: Default::default(),
+                    boundary: String::new(),
+                    cause: weaver_trace::Cause { uid: 0 },
+                    library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
                 })),
@@ -3423,6 +3467,7 @@ mod tests {
             weaver_types::Payload::Answer(weaver_types::LifecycleAnswer::State {
                 state: weaver_types::AgentState::Active,
                 load: Some(load),
+                ..
             }) => assert_eq!(load.run.0, "r-1", "the load's facts ride beside the state"),
             other => {
                 panic!("an observation mid-stream answers active with its load, got {other:?}")
@@ -3652,6 +3697,9 @@ mod tests {
                     declaration: Default::default(),
                     lineage: None,
                     stack: Default::default(),
+                    boundary: String::new(),
+                    cause: weaver_trace::Cause { uid: 0 },
+                    library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
                 })),
@@ -3675,7 +3723,9 @@ mod tests {
             .send(&weaver_types::OrganEnvelope {
                 exchange: stop_exchange.clone(),
                 position: weaver_types::Position::Open,
-                payload: weaver_types::Payload::Directive(weaver_types::LifecycleDirective::Stop),
+                payload: weaver_types::Payload::Directive(weaver_types::LifecycleDirective::Stop {
+                    cause: weaver_types::Cause { uid: 0 },
+                }),
             })
             .unwrap();
         // Observe acknowledgment on its own thread, so an early send cannot
@@ -3794,7 +3844,9 @@ mod tests {
                     ordinal: 9,
                 },
                 position: weaver_types::Position::Open,
-                payload: weaver_types::Payload::Directive(weaver_types::LifecycleDirective::Stop),
+                payload: weaver_types::Payload::Directive(weaver_types::LifecycleDirective::Stop {
+                    cause: weaver_types::Cause { uid: 0 },
+                }),
             })
             .expect("the stop sends");
 
@@ -3865,6 +3917,9 @@ mod tests {
                     declaration: Default::default(),
                     lineage: None,
                     stack: Default::default(),
+                    boundary: String::new(),
+                    cause: weaver_trace::Cause { uid: 0 },
+                    library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
                 })),
@@ -4186,6 +4241,9 @@ mod tests {
                     declaration: Default::default(),
                     lineage: None,
                     stack: Default::default(),
+                    boundary: String::new(),
+                    cause: weaver_trace::Cause { uid: 0 },
+                    library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
                 })),

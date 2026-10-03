@@ -347,7 +347,7 @@ pub fn stop(template: &UnitTemplate, agent: &str) -> std::io::Result<std::proces
 /// **Admin clears what a failed load left**, on the operator's ruling of
 /// 2026-10-01, per `weaver-admin-Spec` section 3: a unit whose process exited
 /// non-zero holds its name, and a later load would be refused
-/// `PriorUnitUnreaped` until something asks for this. The caller asks the
+/// `AgentRunning` until something asks for this. The caller asks the
 /// state first and calls this only on `failed`, and the state ask after it is
 /// what says whether the name is free.
 pub fn reset_failed(

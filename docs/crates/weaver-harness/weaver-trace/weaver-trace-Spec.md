@@ -311,7 +311,7 @@ pub struct StoreIdentity {
 
 pub struct UnloadClose {
     pub grant_surface: Option<GrantSurface>,
-    pub cause: Cause,
+    pub cause: Option<Cause>,
 }
 
 pub enum GrantSurface {
@@ -598,7 +598,9 @@ to: trace-payload-untagged-kind-discriminant
 `payload` is `Option<Payload>` and those two kinds carry `None` with
 `skip_serializing_if`, emitting `{"kind":"turn.started"}`. `unload` was among them until
 2026-09-04 and always carries `UnloadClose` from 2026-10-03, on the operator's rulings
-on #50: its `cause` on every unload, and its grant surface, read back at the leave
+on #50: its `cause` on every unload a leave directive asked for, absent where the worker
+unwound itself after a fault, which nobody asked for, as a stopped turn's close carries
+none for a fault, and its grant surface, read back at the leave
 against the enter's reading as unchanged, varied, or unreadable, per `weaver-trace-PRD`
 section 3.1, only where a state member stood, absent where none did and there was no
 boundary to read. **The two are the whole of the payload-free set**, per the kind table
@@ -613,9 +615,9 @@ two stream shapes for one absence.
 
 **The same recorder test watches the absent payload member on a payload-free
 `turn.started`**, `unload` having left the payload-free set on 2026-10-03 when it began
-carrying its cause on every unload, and the code act that lands the cause moves the
-test's case. Removing `skip_serializing_if` from `Event.payload` emits a null member and
-fails the assertion that the line has no `payload` member.
+carrying `UnloadClose` on every unload, the case moving to `turn.started` in the act
+that landed the cause. Removing `skip_serializing_if` from `Event.payload` emits a null
+member and fails the assertion that the line has no `payload` member.
 
 ```graph
 node: trace-bracket-kind-omits-payload
@@ -656,7 +658,7 @@ to: trace-turn-close-internally-tagged
 the payload-free case counting as one of them. `refusal` carries `Refusal`, spliced, the
 organ's own account of what it turned away. `session.closed` and `turn.started` carry
 `None`, and `unload` carries `UnloadClose`, its grant surface present where a member
-stood. `load` carries `Elections`. The five
+stood and its cause where a leave directive asked. `load` carries `Elections`. The five
 message kinds carry `Message`. `turn.closed` carries `TurnClosed`. `fault` carries
 `Fault`. `flush` carries `FlushCounts`, the resident token counts before and after, both
 plain integers. **`elision` carries `ElisionSpan` and not those counts**: an elision
@@ -833,10 +835,11 @@ constitution**: it says who could read the run from outside, and it joins neithe
 declaration's digest nor the tuple, so granting a reader never makes the record another
 agent's. `cause` is who changed the agent, the uid sudo reports and nothing else, which
 person asked being WeaverWeb's record and never this one. It rides the `load` event, the
-`unload` event's `UnloadClose`, and a turn closed by the operator's stop, where
-`Stopped` carries it and every other stop reason carries none. The harness authors all
-three from what admin handed it, admin never writing this record. A read or a refusal
-changes nothing in the agent and is admin's operations log's, never the trace's.
+`unload` event's `UnloadClose` where a leave asked, the worker's own unwind after a
+fault carrying none, and a turn closed by the operator's stop, where `Stopped` carries
+it and every other stop reason carries none. The harness authors all three from what
+admin handed it, admin never writing this record. A read or a refusal changes nothing in
+the agent and is admin's operations log's, never the trace's.
 
 **The `load` event names its declaration and its prompt file by digest**, the first as
 of 2026-09-04 per issue #435 and the second as of 2026-10-02, per the charter's section

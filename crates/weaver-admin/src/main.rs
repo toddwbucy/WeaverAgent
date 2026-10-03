@@ -153,6 +153,17 @@ fn main() {
     }
 }
 
+/// Who asked for this invocation's change, per `weaver-types-Spec` section
+/// 3.1.
+///
+/// Owed to C2 of #50: the uid sudo reports, parsed strictly, or 0 at a root
+/// shell, per `weaver-admin-Spec` section 2. Until the start step's act lands
+/// every change carries uid 0, the root shell's cause, which is what the
+/// systemd path's every caller is.
+fn invocation_cause() -> weaver_types::Cause {
+    weaver_types::Cause { uid: 0 }
+}
+
 fn run() -> Result<LifecycleAnswer, LifecycleRefusal> {
     // **Authorization is the kernel's, and what this crate checks is the
     // name.** The invocation runs as root or performs nothing: no predicate,
@@ -689,6 +700,7 @@ fn load(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer, Li
             Ok(LifecycleAnswer::State {
                 state: weaver_types::AgentState::Idle,
                 load: None,
+                constituents: Vec::new(),
             })
         }
         Err(refusal) => {
@@ -704,11 +716,11 @@ fn load(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer, Li
 /// **The unit is cleared by admin, not left for the operator**, on the
 /// operator's ruling of 2026-10-01, per `weaver-admin-Spec` section 3. A worker
 /// that exited non-zero leaves its unit `failed`, holding the name, and the
-/// next load under it would be refused `PriorUnitUnreaped`. The state ask
+/// next load under it would be refused `AgentRunning`. The state ask
 /// decides, and only `failed` is cleared. The ask runs where this load
 /// started a unit, or where its start was refused over a failed one, which
 /// covers a unit that failed while serving: that load answers
-/// `PriorUnitUnreaped` and the one after it starts. **There is no automatic
+/// `AgentRunning` and the one after it starts. **There is no automatic
 /// reload.** The refusal is answered as it stood, and a retry is the
 /// operator's next load. The clear is a logged act of the rollback, so the
 /// log records that the unit was failed, and the worker's own output stays in
@@ -738,7 +750,7 @@ fn settle_refused_load(
         || unit::stop(&config.unit, &agent.0).is_ok(),
         || true,
     );
-    if (standing.unit_started || *refusal == LifecycleRefusal::PriorUnitUnreaped)
+    if (standing.unit_started || *refusal == LifecycleRefusal::AgentRunning)
         && unit::residency(&config.unit, &agent.0) == unit::Residency::Failed
     {
         // **Undone only on two answers**: the clear's own status, and the state
@@ -869,6 +881,13 @@ fn run_load(
                 // of 2026-09-04 and issue #432.
                 restore: inventory.lineage.clone(),
                 stack,
+                // Owed to C2 of #50: the boundary file's digest from the
+                // inventory's read of `roles.toml`, and the root's judged
+                // `library-path`. Neither is read yet, so the enter carries
+                // the empty digest and no path.
+                boundary: String::new(),
+                cause: invocation_cause(),
+                library_path: None,
             }),
         }),
     };
@@ -936,7 +955,10 @@ fn start_refusal_for_residency(
     from_status: LifecycleRefusal,
 ) -> LifecycleRefusal {
     match residency {
-        unit::Residency::Failed => LifecycleRefusal::PriorUnitUnreaped,
+        // Owed to C2 of #50, which retires the unit with `unit.rs`: until then
+        // a failed unit's held name refuses as `AgentRunning`, the case that
+        // replaced `PriorUnitUnreaped`.
+        unit::Residency::Failed => LifecycleRefusal::AgentRunning,
         _ => from_status,
     }
 }
@@ -978,7 +1000,7 @@ fn observe(
     }
     match coordination.recv() {
         Ok(answer) => match answer.payload {
-            weaver_types::Payload::Answer(LifecycleAnswer::State { state, load }) => {
+            weaver_types::Payload::Answer(LifecycleAnswer::State { state, load, .. }) => {
                 Ok((state, load))
             }
             weaver_types::Payload::Refusal(refusal) => Err(refusal),
@@ -991,7 +1013,13 @@ fn observe(
 fn show(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer, LifecycleRefusal> {
     admissible(config, agent)?;
     let (state, load) = observe(config, agent)?;
-    Ok(LifecycleAnswer::State { state, load })
+    // Owed to C2 of #50: the run lock's holders from the escalation's scan,
+    // per toddwbucy/WeaverWeb#15. The unit path has no run lock to scan.
+    Ok(LifecycleAnswer::State {
+        state,
+        load,
+        constituents: Vec::new(),
+    })
 }
 
 fn refusal_for_absent_worker(config: &ServiceConfig, agent: &str) -> LifecycleRefusal {
@@ -1007,7 +1035,10 @@ fn refusal_for_residency(residency: unit::Residency) -> LifecycleRefusal {
         // state says a process exited non-zero and says nothing about whether
         // it bound, so naming a socket here would assert what the boundary
         // did not, per `weaver-admin-systemd-contract` section 3.
-        unit::Residency::Failed => LifecycleRefusal::PriorUnitUnreaped,
+        // Owed to C2 of #50, which retires the unit with `unit.rs`: until then
+        // a failed unit's held name refuses as `AgentRunning`, the case that
+        // replaced `PriorUnitUnreaped`.
+        unit::Residency::Failed => LifecycleRefusal::AgentRunning,
         // The unit is running and its socket was not reachable, so what failed
         // is the bind rather than the residency. Reporting no residency here
         // would name the one thing the manager just said was present.
@@ -1035,7 +1066,12 @@ fn unload(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer, 
         channel::dial(&socket_path).map_err(|_| LifecycleRefusal::NoResidency)?;
     let ordinal = coordination.next_ordinal();
     coordination
-        .send_directive(ordinal, LifecycleDirective::Leave)
+        .send_directive(
+            ordinal,
+            LifecycleDirective::Leave {
+                cause: invocation_cause(),
+            },
+        )
         .map_err(|_| LifecycleRefusal::NoResidency)?;
     match coordination.recv() {
         Ok(answer) => match answer.payload {
@@ -1095,6 +1131,7 @@ fn unload_answer(residency: unit::Residency) -> Result<LifecycleAnswer, Lifecycl
         unit::Residency::Inactive | unit::Residency::Failed => Ok(LifecycleAnswer::State {
             state: weaver_types::AgentState::Unloaded,
             load: None,
+            constituents: Vec::new(),
         }),
     }
 }
@@ -1117,7 +1154,12 @@ fn direct_leave(config: &ServiceConfig, agent: &AgentName) -> Result<(), Lifecyc
         channel::dial(&socket_path).map_err(|_| LifecycleRefusal::NoResidency)?;
     let ordinal = coordination.next_ordinal();
     coordination
-        .send_directive(ordinal, LifecycleDirective::Leave)
+        .send_directive(
+            ordinal,
+            LifecycleDirective::Leave {
+                cause: invocation_cause(),
+            },
+        )
         .map_err(|_| LifecycleRefusal::NoResidency)?;
     match coordination.recv() {
         Ok(answer) => match answer.payload {
@@ -1142,7 +1184,12 @@ fn stop(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer, Li
         channel::dial(&socket_path).map_err(|_| LifecycleRefusal::NoResidency)?;
     let ordinal = coordination.next_ordinal();
     coordination
-        .send_directive(ordinal, LifecycleDirective::Stop)
+        .send_directive(
+            ordinal,
+            LifecycleDirective::Stop {
+                cause: invocation_cause(),
+            },
+        )
         .map_err(|_| LifecycleRefusal::NoResidency)?;
     match coordination.recv() {
         // The relay is a function rather than a bare return so that
@@ -1950,7 +1997,7 @@ mod tests {
     ///
     /// Perturbation: remove the clear from `settle_refused_load` and the
     /// state stays `failed`, which the next start reads as
-    /// `PriorUnitUnreaped`.
+    /// `AgentRunning`.
     #[test]
     fn a_failed_load_clears_its_unit_for_the_next() {
         let root = std::env::temp_dir().join(format!("weaver-admin-reap-{}", std::process::id()));
@@ -1973,7 +2020,7 @@ mod tests {
         assert_eq!(residency, unit::Residency::Inactive);
         assert_ne!(
             start_refusal_for_residency(residency, LifecycleRefusal::BindFailed),
-            LifecycleRefusal::PriorUnitUnreaped,
+            LifecycleRefusal::AgentRunning,
             "the next start is not refused unreaped"
         );
         let logged = std::fs::read_to_string(&log_path).unwrap();
@@ -2184,7 +2231,8 @@ mod tests {
             dispatch(&config, surface::Request::Show(AgentName("alpha".into()))),
             Ok(LifecycleAnswer::State {
                 state: weaver_types::AgentState::Unloaded,
-                load: None
+                load: None,
+                constituents: Vec::new(),
             }),
             "an admitted agent with no socket answers unloaded with no load"
         );
@@ -2468,6 +2516,7 @@ mod unload_answer_tests {
             Ok(LifecycleAnswer::State {
                 state: weaver_types::AgentState::Unloaded,
                 load: None,
+                ..
             })
         ));
     }
@@ -2504,7 +2553,7 @@ mod unload_answer_tests {
     fn a_failed_prior_unit_is_not_a_bind_failure() {
         assert_eq!(
             refusal_for_residency(unit::Residency::Failed),
-            LifecycleRefusal::PriorUnitUnreaped
+            LifecycleRefusal::AgentRunning
         );
         assert_eq!(
             refusal_for_residency(unit::Residency::Active),
@@ -2535,7 +2584,7 @@ mod unload_answer_tests {
         let from_status = LifecycleRefusal::BindFailed;
         assert_eq!(
             start_refusal_for_residency(unit::Residency::Failed, from_status.clone()),
-            LifecycleRefusal::PriorUnitUnreaped
+            LifecycleRefusal::AgentRunning
         );
         for other in [
             unit::Residency::Active,
@@ -2560,6 +2609,7 @@ mod unload_answer_tests {
             Ok(LifecycleAnswer::State {
                 state: weaver_types::AgentState::Unloaded,
                 load: None,
+                ..
             })
         ));
     }

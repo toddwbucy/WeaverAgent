@@ -259,13 +259,23 @@ fn leave_before_enter_is_refused() {
         return;
     }
     let (peer, handle) = Peer::stand_up();
-    peer.send(1, LifecycleDirective::Leave);
+    peer.send(
+        1,
+        LifecycleDirective::Leave {
+            cause: weaver_types::Cause { uid: 0 },
+        },
+    );
     match peer.read() {
         Payload::Refusal(LifecycleRefusal::OutOfOrder) => {}
         other => panic!("an early leave must answer OutOfOrder, got {other:?}"),
     }
     // Service continues: the refusal was not a fault and the channel stands.
-    peer.send(2, LifecycleDirective::Stop);
+    peer.send(
+        2,
+        LifecycleDirective::Stop {
+            cause: weaver_types::Cause { uid: 0 },
+        },
+    );
     assert!(matches!(
         peer.read(),
         Payload::Refusal(LifecycleRefusal::OutOfOrder)
@@ -294,7 +304,12 @@ fn stop_before_enter_is_out_of_order() {
     let (peer, handle) = Peer::stand_up();
     // A stop before any enter is out of order for the position, which is the
     // before-enter arm rather than the at-rest answer.
-    peer.send(1, LifecycleDirective::Stop);
+    peer.send(
+        1,
+        LifecycleDirective::Stop {
+            cause: weaver_types::Cause { uid: 0 },
+        },
+    );
     assert!(
         matches!(peer.read(), Payload::Refusal(LifecycleRefusal::OutOfOrder)),
         "a stop before enter is out of order, not an at-rest close"
@@ -359,6 +374,9 @@ fn refused_enter_leaves_the_state_at_before_enter() {
                 declaration: String::new(),
                 restore: None,
                 stack: Default::default(),
+                boundary: String::new(),
+                cause: weaver_types::Cause { uid: 0 },
+                library_path: None,
                 state_election: weaver_types::StateElection::default(),
             }),
         },
@@ -369,7 +387,12 @@ fn refused_enter_leaves_the_state_at_before_enter() {
     }
     // The position held: a leave is still out of order, which it would not be
     // had the refused enter left the state entered.
-    peer.send(2, LifecycleDirective::Leave);
+    peer.send(
+        2,
+        LifecycleDirective::Leave {
+            cause: weaver_types::Cause { uid: 0 },
+        },
+    );
     assert!(
         matches!(peer.read(), Payload::Refusal(LifecycleRefusal::OutOfOrder)),
         "the state stayed at before-enter"
@@ -400,7 +423,12 @@ fn a_closed_connection_does_not_end_service() {
     let (mut peer, handle) = Peer::stand_up();
     // A leave before an enter is refused deterministically, which is enough to
     // prove the worker answered on this connection.
-    peer.send(1, LifecycleDirective::Leave);
+    peer.send(
+        1,
+        LifecycleDirective::Leave {
+            cause: weaver_types::Cause { uid: 0 },
+        },
+    );
     assert!(matches!(
         peer.read(),
         Payload::Refusal(LifecycleRefusal::OutOfOrder)
@@ -410,7 +438,12 @@ fn a_closed_connection_does_not_end_service() {
     peer.hang_up_and_redial();
 
     // The worker is still serving, and still in the same state.
-    peer.send(2, LifecycleDirective::Leave);
+    peer.send(
+        2,
+        LifecycleDirective::Leave {
+            cause: weaver_types::Cause { uid: 0 },
+        },
+    );
     assert!(
         matches!(peer.read(), Payload::Refusal(LifecycleRefusal::OutOfOrder)),
         "the run survived the close and the state came with it"
@@ -594,6 +627,9 @@ fn serving_enter(session: &str) -> LifecycleDirective {
             declaration: String::new(),
             restore: None,
             stack: Default::default(),
+            boundary: String::new(),
+            cause: weaver_types::Cause { uid: 0 },
+            library_path: None,
             state_election: weaver_types::StateElection {
                 all_kinds: false,
                 keys: Vec::new(),

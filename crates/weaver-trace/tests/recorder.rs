@@ -103,6 +103,9 @@ fn elections() -> Payload {
         declaration: Default::default(),
         lineage: None,
         stack: Default::default(),
+        boundary: String::new(),
+        cause: weaver_trace::Cause { uid: 0 },
+        library_path: None,
         state_store: Default::default(),
         composer: weaver_trace::LoopIdentity::compiled("test"),
     })
@@ -237,6 +240,7 @@ fn structure_bytes_are_stream_bytes() {
         Some("t-1"),
         Some(Payload::TurnClosed(TurnClose::Stopped {
             reason: StopReason::Directive,
+            cause: Some(weaver_trace::Cause { uid: 1000 }),
         })),
     ))
     .unwrap();
@@ -278,11 +282,10 @@ fn sequence_is_gapless_over_admitted_events() {
 /// A payload-free kind emits no payload member at all, and the envelope
 /// flattens: the line is one flat object keyed on kind at the top level.
 ///
-/// **Read on `unload` rather than `load` as of 2026-08-21**, `load` having
-/// stopped being payload-free when it began carrying the diagnostic
-/// elections of its load. The property under test is the rendering's and
-/// not that kind's, so it moves to a kind that still holds it and the run
-/// bracket's other half is the nearest one.
+/// **Read on `turn.started` as of 2026-10-03**, `unload` having left the
+/// payload-free set when it began carrying its cause on every unload, as
+/// `load` left it on 2026-08-21. The property under test is the rendering's
+/// and not that kind's, so it moves to a kind that still holds it.
 ///
 /// Perturbations: remove Event.payload's skip_serializing_if and the payload
 /// absence assertion fails. Separately remove Event.envelope's serde(flatten)
@@ -292,10 +295,11 @@ fn bracket_kind_omits_payload_and_line_is_flat() {
     let (mut r, _path) = recorder();
     r.submit(event(Kind::Load, None, Some(elections())))
         .unwrap();
-    r.submit(event(Kind::Unload, None, None)).unwrap();
+    r.submit(event(Kind::TurnStarted, Some("t-1"), None))
+        .unwrap();
     let line = r
         .structure()
-        .by_kind(Kind::Unload)
+        .by_kind(Kind::TurnStarted)
         .next()
         .unwrap()
         .line
@@ -313,7 +317,7 @@ fn bracket_kind_omits_payload_and_line_is_flat() {
         "declaration order from the top: {line}"
     );
     assert!(
-        line.contains("\"kind\":\"unload\""),
+        line.contains("\"kind\":\"turn.started\""),
         "the dotted-name scheme's kind member: {line}"
     );
 }
@@ -537,23 +541,30 @@ fn pretty_printed_payload_refuses_at_render() {
     assert_eq!(r.structure().len(), 1, "the refused event landed nowhere");
 }
 
-/// **`unload` has two licensed pairings and no third**, per Spec section 3
-/// as of 2026-09-04: payload-free where no member stood, `UnloadClose` where
-/// one did, and the close's shape on any other kind refuses. Perturbation:
-/// drop the `(Unload, Some(Unload))` arm of the pairing and the second
-/// submit refuses; widen it to `(_, Some(Unload))` and the third passes.
+/// **`unload` always carries `UnloadClose`**, per Spec section 3 as of
+/// 2026-10-03: its cause, and the grant surface only where a member stood,
+/// and the close's shape on any other kind refuses. Perturbation: put
+/// `Unload` back in the payload-free arm of the pairing and the bare unload
+/// passes; widen the close's arm to `(_, Some(Unload))` and the session close
+/// carrying it passes.
 #[test]
-fn the_unload_carries_its_close_or_nothing() {
+fn the_unload_always_carries_its_close() {
     let (mut r, _path) = recorder();
     let close = || {
         Some(Payload::Unload(weaver_trace::UnloadClose {
-            grant_surface: weaver_trace::GrantSurface::Varied,
+            grant_surface: Some(weaver_trace::GrantSurface::Varied),
+            cause: Some(weaver_trace::Cause { uid: 1000 }),
         }))
     };
-    r.submit(event(Kind::Unload, None, None))
-        .expect("payload-free where no member stood");
+    let bare = r.submit(event(Kind::Unload, None, None)).unwrap_err();
+    assert!(matches!(
+        bare,
+        Failure::RefusedOnSubmit {
+            reason: SubmitRefusal::RequiredFieldAbsent { .. }
+        }
+    ));
     r.submit(event(Kind::Unload, None, close()))
-        .expect("the close where one did");
+        .expect("the close on every unload");
     let err = r
         .submit(event(Kind::SessionClosed, None, close()))
         .unwrap_err();
@@ -564,10 +575,21 @@ fn the_unload_carries_its_close_or_nothing() {
         }
     ));
     let rendered = serde_json::to_value(weaver_trace::UnloadClose {
-        grant_surface: weaver_trace::GrantSurface::Unreadable,
+        grant_surface: Some(weaver_trace::GrantSurface::Unreadable),
+        cause: Some(weaver_trace::Cause { uid: 1000 }),
     })
     .expect("renders");
-    assert_eq!(rendered, serde_json::json!({"grant_surface": "unreadable"}));
+    assert_eq!(
+        rendered,
+        serde_json::json!({"grant_surface": "unreadable", "cause": {"uid": 1000}})
+    );
+    // No member stood and the worker unwound itself: both absent, never null.
+    let bare = serde_json::to_value(weaver_trace::UnloadClose {
+        grant_surface: None,
+        cause: None,
+    })
+    .expect("renders");
+    assert_eq!(bare, serde_json::json!({}));
 }
 
 /// A run-level kind carrying a turn refuses: a join key the work never held
@@ -870,6 +892,9 @@ fn the_load_carries_the_tee_election() {
             declaration: Default::default(),
             lineage: None,
             stack: Default::default(),
+            boundary: String::new(),
+            cause: weaver_trace::Cause { uid: 0 },
+            library_path: None,
             state_store: Default::default(),
             composer: weaver_trace::LoopIdentity::compiled("test"),
         })),
@@ -917,6 +942,9 @@ fn a_declined_surprisal_election_is_written_down() {
             declaration: Default::default(),
             lineage: None,
             stack: Default::default(),
+            boundary: String::new(),
+            cause: weaver_trace::Cause { uid: 0 },
+            library_path: None,
             state_store: Default::default(),
             composer: weaver_trace::LoopIdentity::compiled("test"),
         })),
@@ -1329,6 +1357,9 @@ fn the_load_names_its_loop_and_its_member() {
         declaration: "ab".repeat(32),
         lineage: None,
         stack: Default::default(),
+        boundary: String::new(),
+        cause: weaver_trace::Cause { uid: 0 },
+        library_path: None,
         state_store: weaver_trace::StoreIdentity {
             engine: "postgres".into(),
             database: Some("weaver_karl".into()),
@@ -1386,6 +1417,9 @@ fn the_load_names_its_loop_and_its_member() {
         declaration: Default::default(),
         lineage: None,
         stack: Default::default(),
+        boundary: String::new(),
+        cause: weaver_trace::Cause { uid: 0 },
+        library_path: None,
         state_store: Default::default(),
         composer: weaver_trace::LoopIdentity::compiled("worker"),
     })

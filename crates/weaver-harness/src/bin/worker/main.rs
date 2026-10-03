@@ -20,6 +20,10 @@ use std::process::ExitCode;
 use weaver_harness::{Harness, OrganBinaries, OrganParameters, bind_coordination};
 
 fn main() -> ExitCode {
+    // **The first act, before any thread or fork**, per `weaver-harness-Spec`
+    // section 2.2: the run lock and the relay's lifetime pipe the start step
+    // handed across the exec are marked close-on-exec and kept for life.
+    weaver_harness::keep_start_step_descriptors();
     let mut args = std::env::args().skip(1);
     let (Some(socket), Some(spu), Some(gate)) = (args.next(), args.next(), args.next()) else {
         eprintln!(
