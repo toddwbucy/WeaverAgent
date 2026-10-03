@@ -377,8 +377,12 @@ worker of one agent.
   where they are absent, which they are at an agent's first invocation and after every
   reboot clears `/run`, and judges them where they stand, opened without following a
   link and set to root's ownership and `0755` as the start step sets the runtime
-  directory. Every verb but `show` then takes the invocation lock exclusively and holds
-  it until it exits, and an invocation that finds it held exclusively refuses
+  directory. **`coordination-root` and every directory above it are held closed first**,
+  by section 9's ancestor rule, or the verb refuses `BoundaryUnverified` naming the
+  directory, since a principal that could write the coordination root could rename
+  `weaver.run/` away and leave the next `load` a fresh `run.lock` while a run still
+  holds the old one. Every verb but `show` then takes the invocation lock exclusively
+  and holds it until it exits, and an invocation that finds it held exclusively refuses
   `InvocationInFlight` before touching anything. **`show` holds it shared for the length
   of its observation**, taking a shared lock without waiting: where an exclusive holder
   stands, the shared lock is refused and `show` answers `InTransition` at once, without
@@ -463,9 +467,17 @@ half of #60. An invocation that ended between taking the run lock and the enter,
 `SIGKILL` now that this crate ignores the catchable signals, leaves whatever it had
 started holding the run lock, the member alone, the member and the relay, or those and a
 worker whose observation answers `Unloaded`, no enter having reached it, and an
-invocation lock nobody holds. **A run is stranded only when all three hold**: the run
-lock held, the invocation lock free, and the observation `Unloaded` or silent inside the
-dial's bound and the observation's below, silent where no worker was forked. The
+invocation lock nobody holds. **A run is stranded only when all three hold, the third
+by positive evidence**: the run lock held, the invocation lock free, and either the
+observation answering `Unloaded` or no worker listening at all, the dial finding no
+name bound or its connection refused through the dial's whole bound, which is a run
+whose worker was never forked or never bound. **Silence is not evidence**: a worker
+that accepts the connection and answers nothing inside the observation's bound may be a
+healthy run finishing the token the harness contract lets delay `Observe`, so it is
+never reaped on silence. `load` meeting a silent run refuses `Unanswered` and touches
+nothing, and `unload` meeting one directs leave as it would for any run, the leave's own
+bound and escalation of the unload below being what ends a worker that is truly wedged,
+and a healthy one answering `ActivityNotAtRest`. The
 invocation lock is what tells a stranded run from a healthy start: a load in flight
 holds it for the whole verb, the enter's 900-second wait included, so a worker still
 admitting its weights is never mistaken for an abandoned one. The three facts make it
@@ -641,8 +653,8 @@ being no unload: the verb refuses `Unanswered`, exits, and releases the invocati
 lock with the run as it stands, so `show` and `unload` reach the agent next, and
 `unload`'s own bounds and escalation are the recovery. **An observation unanswered
 inside its bound** refuses `show` with `Unanswered` too, releasing the shared hold, and
-claims no state, and inside `load` or `unload` it is the silence section 3's
-stranded-run fact reads. **No verb holds the invocation lock past a bound it states**,
+claims no state, and inside `load` or `unload` it is silence, which section 3 never
+reads as a stranded run. **No verb holds the invocation lock past a bound it states**,
 since the invocation ignores the catchable signals and a wait without end would leave
 every later verb refusing `InvocationInFlight` and `show` answering `InTransition`.
 The interior verbs of section 2 take the same rule by the recipe.
@@ -2678,6 +2690,10 @@ perturbation-verified:
   members never standing. The perturbation takes the run lock in the worker's child
   instead of before the first fork, and the next load starts a second member beside
   the first.
+- **A silent run is never reaped**, watched by a stand-in worker that answers
+  `Observe` only after the observation's bound: a `load` refuses `Unanswered` and the
+  worker still runs. The perturbation reads silence as stranded, and the load kills a
+  live run.
 - **A run stranded before enter is reaped**, watched by a load killed between the
   start step and the enter: the next `load` ends the stranded worker, logs the reap and
   loads. The perturbation refuses `AgentRunning` on any held lock, and the agent stays

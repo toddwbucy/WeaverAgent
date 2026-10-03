@@ -1498,7 +1498,8 @@ process holding it could be found, the description having been carried where no
 descriptor table shows it, so no signal was sent. `WorkerWouldNotExit` says a
 constituent of the run still held the run lock after the unload's escalation, so the
 agent was not reported unloaded. `Unanswered` says a stop's or an observation's answer
-did not arrive within its bound, per `weaver-admin-Spec` section 3, so the run was left
+did not arrive within its bound, at `stop`, at `show`, or at a `load` meeting a silent
+run, per `weaver-admin-Spec` section 3, so the run was left
 as it stands and the invocation lock released. None claims more than its fact, and each
 tells the caller to read the agent's state with the next `show`.
 
