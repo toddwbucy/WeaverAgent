@@ -16,6 +16,14 @@
 # as unknown, never guessed, and the plan is the same reads the archive and the
 # purge make.
 #
+# **Its precondition, stated once** (deploy/REDEPLOY.md section 1): this is a
+# deliberate, destructive act on the whole box by the operator at a root shell.
+# (1) It first disables every agent's sudo rule, so no connector can start a
+# load. (2) It then checks again for any live run, by each root's `show` and by
+# any process under a `weaver-*` account, and refuses if it finds one. (3) A
+# load the operator starts from a root shell while it runs is outside what it
+# defends: the operator quiesces the box first.
+#
 # **A running agent refuses the archive and the purge.** An agent of the
 # per-agent layout runs while its run lock is held, which no unit shows, so
 # each root's own admin is asked with `show`, and an agent it names running,
@@ -320,6 +328,15 @@ fi
 
 [ "$MODE" = plan ] && { say "plan only. rerun with --archive [DIR], then --purge [DIR]"; exit 0; }
 
+# **free_name NAME: a name no archive in DEST holds yet**, NAME itself or the
+# first NAME-2, NAME-3 that is free, so no archive is ever written over another
+# while both sources stay on the purge list (Codex on #79).
+free_name() {
+  local name=$1 n=2
+  while [ -e "$DEST/$name.tar.zst" ]; do name="$1-$n"; n=$((n + 1)); done
+  printf '%s' "$name"
+}
+
 # --------------------------------------------------------------- 2. archive
 # **Root reads, the operator writes.** The bulk store is an NFS export that
 # squashes root to nobody, so root can neither create a directory the operator
@@ -414,15 +431,15 @@ if [ "$MODE" = archive ]; then
   plan "box-facts.txt"
 
   PURGE=()
-  # **archive_name PREFIX PATH: one archive per source path, never two named
-  # alike**: the whole path, its slashes made dashes, so two directories that
-  # share a last component (`/srv/weaver-agent` and `/var/lib/weaver-agent`)
-  # never write one tarball over the other while both stay on the purge list
-  # (Codex on #79).
+  # **archive_name PREFIX PATH: a readable name from the whole path**, its
+  # slashes made dashes, so two directories that share a last component
+  # (`/srv/weaver-agent` and `/var/lib/weaver-agent`) are told apart at a
+  # glance. Flattening is not injective (`/a/b-c` and `/a/b/c` meet), so the
+  # name is only a proposal and `free_name` makes it unique (Codex on #79).
   archive_name() { local flat=${2#/}; printf '%s-%s' "$1" "${flat//\//-}"; }
   archive_path() { # archive_path NAME PATH...
-    local name=$1; shift
-    local present=()
+    local name present=()
+    name=$(free_name "$1"); shift
     for pth in "$@"; do [ -e "$pth" ] && present+=("$pth"); done
     [ ${#present[@]} -gt 0 ] || return 0
     tarz "$DEST/$name.tar.zst" "${present[@]}"

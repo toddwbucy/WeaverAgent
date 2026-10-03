@@ -62,6 +62,16 @@ the load was invoked from.
 
 ## 1. Decommission and archive
 
+**Decommission's precondition**, stated once here and in `decommission.sh`'s header.
+Decommission is a deliberate, destructive act on the whole box, run by the operator at a
+root shell:
+
+1. It first disables every agent's sudo rule, so no connector can start a load.
+2. It then checks again for any live run, by each agent root's `show` and by any process
+   under a `weaver-*` account, and refuses if it finds one.
+3. A load the operator starts from a root shell while decommission runs is outside what
+   it defends. The operator quiesces the box first.
+
 ```sh
 sudo deploy/decommission.sh --archive              # -> /mnt/bulk-store/dev-archive-<date>-<host>
 ```
@@ -88,7 +98,8 @@ again without a purge. The archive holds:
   for each territory base, `var-lib-weaver`, `log-<path>` (a box from before #50),
   `agent-config-<path>` (the box-wide layout's declarations), `home-weaver-users`,
   `tmp-weaver`. A name built from a path carries the whole path, its slashes made dashes
-  (`territories-var-lib-weaver-agent`), so two sources never share an archive.
+  (`territories-var-lib-weaver-agent`), and a name an archive already holds takes the
+  first free `-2`, `-3`, so no archive is ever written over another.
 - `postgres/<db>.dump` (custom format), `roles.sql`, and copies of `pg_hba.conf` and
   `pg_ident.conf`.
 - `PURGE-LIST`: the exact paths, users, groups, databases and roles the purge may

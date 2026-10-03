@@ -1505,6 +1505,25 @@ class RoundOneOf79Tests(unittest.TestCase):
             self.assertIn(f'archive_path "$(archive_name {sink} ', script)
         self.assertNotIn('$(basename "$d")" "$d"', script)
 
+    def test_no_archive_is_written_over_another(self):
+        # Codex on #79: flattening is not injective, `/var/lib/weaver-agent` and
+        # `/var/lib/weaver/agent` meeting at one name, so each archive takes a
+        # name no archive in DEST holds yet. Perturbation: return the proposed
+        # name unchecked, and the second source overwrites the first.
+        script = (DEPLOY / "decommission.sh").read_text()
+        line = next(l.strip() for l in script.splitlines() if l.strip().startswith("archive_name() {"))
+        dest = self.dir / "dest"
+        dest.mkdir()
+        program = (line + "\n" + shell_function(script, "free_name")
+                   + 'for p in "$@"; do n=$(free_name "$(archive_name territories "$p")"); touch "$DEST/$n.tar.zst"; echo "$n"; done')
+        run = subprocess.run(["bash", "-c", program, "x", "/var/lib/weaver-agent", "/var/lib/weaver/agent",
+                              "/var/lib/weaver-agent"], env={**os.environ, "DEST": str(dest)},
+                             text=True, capture_output=True, timeout=20)
+        self.assertEqual(run.stdout.split(), ["territories-var-lib-weaver-agent",
+                                              "territories-var-lib-weaver-agent-2",
+                                              "territories-var-lib-weaver-agent-3"], run.stderr)
+        self.assertIn('name=$(free_name "$1"); shift', script)
+
     def test_query_runs_finds_a_run_by_its_accounts(self):
         # Codex on #79: a run whose root was lost is found by processes under
         # an agent's account. Perturbation: ask only the roots, and it is missed.
