@@ -1306,12 +1306,18 @@ where none is named, close-on-exec in the opening call, and places it at its fix
 number in the member's process at the spawn alone, the way it places the first door's
 end, per `weaver-state-Spec` section 2. No path rides the vector, and the agent, whose
 worker never holds the descriptor, never reaches the save point. No save point in the
-directory is an absent descriptor and no refusal, the member rebuilding from the trace.
+directory is an absent descriptor and no refusal, the member standing empty and a
+rebuild from the trace being the offline builder's, per `weaver-state-Spec` section 3.
 **At every load and unload, this crate publishes**: as root, at the opening of a load's
 validate step before the inventory selects what to restore, per section 3, and after the
-member has stopped at an unload, it moves each finished save point from
-the member's room into the declaration directory, under a new name stamped with the run
-and sequence it covers, and overwrites nothing; one an unclean stop left behind is
+member has stopped at an unload, it copies each finished save point from the member's
+room into the declaration directory and never moves one, because a move keeps the
+member's uid and the inventory's entry judgment would refuse the file as wrongly owned.
+The copy is written under a temporary name, owned by the uid the root's `operator` key
+names and mode `0600`, its owner and mode verified through the open file, then renamed
+to a new name stamped with the run and sequence it covers, overwriting nothing; only
+then is the member's copy removed, so a publication cut short leaves the member's copy
+standing and is retried at the next verb; one an unclean stop left behind is
 published at the next load. That directory stays `0700` to the operator, so a save
 point on demand lands with the operator at the next verb, and a live restore of one the
 member still holds reads the member's own room with no part of this crate. **This is
