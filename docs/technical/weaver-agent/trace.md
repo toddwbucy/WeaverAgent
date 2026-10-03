@@ -26,5 +26,5 @@ state management and memory are built from it and rebuild from it.
   reach it only through the trace group or admin's trace socket.
 - **Save-point events,** and how a rebuild honours a reset.
 - **Reproducibility:** what the deployment-tuple run proved (WeaverTools#9).
-- **What the trace does not record:** side effects beyond the agent's seams, such as what
-  a shell command did on the network (#22).
+- **What the trace does not record:** side effects beyond the agent's seams, such as
+  what a shell command did on the network (#22).

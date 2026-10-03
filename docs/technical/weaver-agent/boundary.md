@@ -22,8 +22,8 @@ prompt, the state-management settings, the elections and the save point it came 
 - **One agent, not a fungible instance.** A WeaverAgent is built as itself, with its own
   identity, state, trace and trust, even when several share a box (#63's rationale).
 - **The agent's OS identity:** its users, groups, territory and modes.
-- **The gate's allow-list:** today it sits in the declaration, where admitting a connector
-  moves the digest. It is proposed to move to the root as boundary (#61).
+- **The gate's allow-list:** today it sits in the declaration, where admitting a
+  connector moves the digest. It is proposed to move to the root as boundary (#61).
 - **Admin's two sockets,** lifecycle and trace, admitted by peer credential against the
   per-agent role list `roles.toml` (#50, #63).
 - **Trace custody:** the trace group, the trace socket, and opening without following
