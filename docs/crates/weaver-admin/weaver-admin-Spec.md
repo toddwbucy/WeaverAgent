@@ -398,13 +398,13 @@ agent.
   flight, and never refused or left to time out.
 - **The run lock**, on `run.lock`, says whether a worker runs. The start step's worker
   child opens it, root-owned and mode `0600`, for writing while it is still root, takes
-  it exclusively as its last act before the exec, and carries the descriptor across the
-  exec into the worker, a record lock surviving the exec. **A record lock is not
-  inherited by a fork**, so the invocation's own process never holds it, and only the
-  worker does, from its exec to the instant it dies. The worker marks the descriptor
-  close-on-exec at once, so no organ it forks inherits a writable descriptor to root's
-  file, and it never closes or reopens it, a record lock being dropped when its holder
-  closes any descriptor of the file.
+  it exclusively as its first act after the fork, per the handshake below, and carries
+  the descriptor across the exec into the worker, a record lock surviving the exec. **A
+  record lock is not inherited by a fork**, so the invocation's own process never holds
+  it, and only the worker child does, from just after the fork to the instant the worker
+  dies. The worker marks the descriptor close-on-exec at once, so no organ it forks
+  inherits a writable descriptor to root's file, and it never closes or reopens it, a
+  record lock being dropped when its holder closes any descriptor of the file.
 
 **The order within a load is stated, because the setup happens before the worker
 exists.** The invocation lock is taken first. The run lock is then read and must be
@@ -412,8 +412,18 @@ free, or the load refuses `AgentRunning` or reaps a stranded worker, per below.
 Everything the start step does next, repairing the runtime directory, clearing a dead
 worker's names, standing the member and the relay, happens under the invocation lock
 with the run lock found free, which is what makes clearing safe: no other invocation can
-start a worker while this one holds the invocation lock, and no worker runs. The worker
-child takes the run lock last, so from that instant the run lock speaks for the worker.
+start a worker while this one holds the invocation lock, and no worker runs. **The
+worker child takes the run lock before anything else, and the parent waits for it**, so
+no interval leaves a worker child alive with neither lock held. The child arms
+`PR_SET_PDEATHSIG` to `SIGKILL` and checks that its parent still stands, so a parent
+killed before the next step takes the child with it. It takes the run lock. It writes
+one byte on a close-on-exec handshake pipe. Only then does it clear the death signal,
+since the worker must outlive the invocation that starts it. The parent reads that byte
+before it proceeds, and a child that dies first closes the pipe and fails the load. So a
+`SIGKILL` of the invocation before the handshake ends the child too, with nothing left
+to strand, and one after it leaves a child holding the run lock, which the
+stranded-worker recovery below finds: from the handshake on, the run lock speaks for the
+worker.
 
 **A held lock says a worker runs and nothing about its lifecycle state.** A held lock
 may be a worker that has not yet answered enter, one serving a turn, or one unwinding
@@ -1033,10 +1043,10 @@ root, in the `load` verb, after section 4's inventory has passed and section 5 h
 opened the sink, and under the invocation lock with the run lock found free, per section
 3's order: it prepares the runtime directory, stands the trace relay, starts the state
 member, and starts the worker under the agent's own account, whose child takes the run
-lock last before its exec. Each is below, and `weaver-admin-systemd-contract` retired
-with the unit. The code sites the later act removes are
-`crates/weaver-admin/src/unit.rs` and the `weaver-worker@<agent>` naming in the deploy
-scripts.
+lock first, by the handshake of section 3, before the rest of its preparation. Each is
+below, and `weaver-admin-systemd-contract` retired with the unit. The code sites the
+later act removes are `crates/weaver-admin/src/unit.rs` and the `weaver-worker@<agent>`
+naming in the deploy scripts.
 
 **The runtime directory is made by the start step, with its owner and mode stated**:
 `<coordination-root>/weaver-<agent>/`, `/run/weaver-<agent>/` by default, owned by the
@@ -1133,7 +1143,8 @@ to: admin-runtime-directory-mode-is-stated
 ```
 
 **The worker is started bare, under its own account, detached, and owning its organs.**
-The start step forks, and the child does six things before it executes the worker with
+The start step forks, and once the child holds the run lock by section 3's handshake it
+does six more things before it executes the worker with
 the vector below. It takes a new session (`setsid`), so the worker belongs to no
 terminal and survives the invocation that started it. It points its standard input at
 `/dev/null` and its standard output and error at the agent's worker log, a file of its
@@ -2548,6 +2559,10 @@ perturbation-verified:
 - **A verb finishes when its caller disappears**, watched by a `load` whose caller is
   killed after the start step: the agent loads and `admin.log` records the outcome. The
   perturbation leaves `SIGHUP` at its default, and the load dies part way.
+- **No worker child outlives a load killed before the handshake**, watched by a load
+  sent `SIGKILL` after the fork and before the child's handshake byte: the child dies
+  with it and the next `load` finds both locks free. The perturbation clears the death
+  signal before the run lock is taken, and an unlocked worker child survives the load.
 - **A worker stranded before enter is reaped**, watched by a load killed between the
   start step and the enter: the next `load` ends the stranded worker, logs the reap and
   loads. The perturbation refuses `AgentRunning` on any held lock, and the agent stays

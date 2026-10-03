@@ -107,7 +107,8 @@ outlives every invocation. All three are on
 5. **Run the start step**, root's act since 2026-10-03 (#50): under the invocation
    lock, with the run lock found free, make the agent's runtime directory, stand the
    trace relay and the state member, and start the worker in its own session under the
-   agent's account, its child taking the run lock last. The worker
+   agent's account, its child taking the run lock first, by a handshake the parent waits
+   on. The worker
    starts bare of the sink, and its first act is to bind the coordination socket in
    its runtime directory.
 6. **Dial the channel, direct enter, receive the aggregate.** The directive
