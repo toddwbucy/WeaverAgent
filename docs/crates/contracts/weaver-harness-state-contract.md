@@ -367,7 +367,9 @@ ruling on #58's fourth review round, because the opener is one-way and a schema 
 member refuses would otherwise have no path to the enter. The harness sends it at every
 serving enter, after the opener and before it authors `load`. The ask carries no
 members. The answer carries either `lineage`, the stamp of the save point the member
-restored, its digest, run, sequence and last turn, or nothing where it stood empty with
+restored, its digest, run, sequence and last turn, which the harness compares with the
+same four members of the enter's lineage and never with the members admin alone
+resolves, or nothing where it stood empty with
 no save point handed to it, or `refused` with a reason, `schema-mismatch` where the save
 point's schema is not the opener's. The member judges the save point at the opener,
 holds the outcome, and answers it immediately, parking never. **A refusal or a miss

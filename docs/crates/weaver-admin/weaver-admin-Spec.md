@@ -331,7 +331,11 @@ inventory, verify the boundary in the same inventory, resolve the session and
 open the sink per section 5, start the unit per section 6, dial the worker's
 socket and direct enter per section 7, publish. Seven actions, the charter's
 own, the bind-and-listen act the earlier form interleaved here having moved to
-the worker with the inversion. Each step's failure returns a typed
+the worker with the inversion. **The save-point publication of section 6 opens the
+validate step**, before the inventory selects the save point to restore, so a save
+point an unclean stop left in the member's room is published and selectable by the
+load that follows it; it adds no step to the seven, being the inventory's first read
+of what the load restores. Each step's failure returns a typed
 `lifecycle-refusal` and enters the rollback below carrying the step's name.
 
 **`validate` is the load's front half, and the pin is one function.** The
@@ -369,8 +373,10 @@ to: admin-validate-starts-no-process
 
 **`unload` runs the charter's three steps, and the third waits on the second.**
 Direct leave and await the aggregate, stop the unit through section 6's
-interface, and answer provisioned-and-unloaded **only once the stop has been
-confirmed**. A refusal on leave, `ActivityNotAtRest` above all, returns to the
+interface, publishing the member's finished save points per section 6 once the stop
+is confirmed and the member has stopped, and answer provisioned-and-unloaded **only once
+the stop has been confirmed**; the publication adds no step to the three, being the
+second step's tail. A refusal on leave, `ActivityNotAtRest` above all, returns to the
 operator unchanged and answers nothing further.
 
 **A stop that is accepted is not a stop that has happened, and this verb waits
@@ -1301,8 +1307,9 @@ number in the member's process at the spawn alone, the way it places the first d
 end, per `weaver-state-Spec` section 2. No path rides the vector, and the agent, whose
 worker never holds the descriptor, never reaches the save point. No save point in the
 directory is an absent descriptor and no refusal, the member rebuilding from the trace.
-**At every load and unload, this crate publishes**: as root, before the spawn at a load
-and after the member has stopped at an unload, it moves each finished save point from
+**At every load and unload, this crate publishes**: as root, at the opening of a load's
+validate step before the inventory selects what to restore, per section 3, and after the
+member has stopped at an unload, it moves each finished save point from
 the member's room into the declaration directory, under a new name stamped with the run
 and sequence it covers, and overwrites nothing; one an unclean stop left behind is
 published at the next load. That directory stays `0700` to the operator, so a save
