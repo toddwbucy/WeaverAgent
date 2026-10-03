@@ -566,7 +566,9 @@ sentence rather than by a parser's guess. The resolved spelling of that default 
 here so two resolvers cannot disagree: `all_kinds` true and `keys` empty. The empty list
 is only the default's spelling, not a constraint on the pair: `keys` stays meaningful
 beside `all_kinds` true, each named kind adding payload paths on top of the envelope
-every kind already crosses with. `EnterPayload` carries the election resolved, admin
+every kind already crosses with. **Every kind means every kind but the save-point
+kinds**, which no election matches, per `weaver-harness-state-contract` section 3 on
+the rulings of 2026-10-02 on #58. `EnterPayload` carries the election resolved, admin
 filling that ruled default at inventory, so the worker never re-derives an absence. When
 the block is present, both its members are required, the required-field discipline
 resuming inside it. `loop_file` may be absent because `weaver-harness-PRD` section 2

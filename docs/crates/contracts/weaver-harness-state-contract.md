@@ -391,7 +391,11 @@ A further ask name is a change under section 7 and does not exist until it merge
 
 - **The election applied faithfully.** Every event matching the election
   crosses, whole per the election, in the order the record assigned. The
-  harness neither thins what was elected nor adds what was not.
+  harness neither thins what was elected nor adds what was not. **The save-point
+  kinds are outside every election**, on the operator's rulings of 2026-10-02 on #58:
+  taking, restoring and resetting a save point are provenance about the holdings,
+  authored after the holdings they name, so no election matches them, `all_kinds`
+  included, and the tee never sends them, per `weaver-trace-PRD` section 3.
 - **The envelope always.** Every distillate carries all five envelope fields
   as the canonical form spelled them. An unattributable distillate is a
   defect in the sender.

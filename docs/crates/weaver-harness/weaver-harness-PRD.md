@@ -181,24 +181,25 @@ gets trusted wrongly later.
 
 **Prompt assembly's deterministic floor, with the family render across the seam.** The
 harness composes the canonical conversation: the identity prefix, which is the system
-prompt together with the agent's fixed identity material, read from state where a member
-stands and from the declaration's seed where the store holds none or no member stands,
-per `weaver-state-PRD` section 4 as ruled 2026-09-04, then the session's message
-sequence read from the working structure, then the tool schemas, in that order, always.
-What moved on the framing ruling of 2026-08-02, ratified with the token workflow's act,
-is the per-model half: the family template's application, the phrasing layer that
-reliably elicits a tool call from one decoder and not another, seats in the SPU's family
-library per `weaver-spu-PRD` sections 13.4 and 14, because family knowledge lives in one
-home and the harness links nothing of any model's. The harness sends canonical messages,
-the family library renders, and the rendered reality returns on the report path,
-template identity, token identifiers, and block partition, so the harness authors what
-the model saw without having rendered it. No model is a build or run dependency of this
-crate, now stronger than a discipline: the per-model knowledge lives across a seam
-entirely. The deterministic assembly floor stands alone, always. Under a restoring load
-the store answers from a save point and the prefix is the identity alone, on the
-operator's rulings of 2026-10-02 on #58, which retire the record restore of issue #432:
-the restored state reaches the model the way any held state does, through the context
-the loop composes each turn.
+prompt together with the agent's fixed identity material, seated from the prompt file
+the declaration names at every serving load, a state member standing or not, on the
+operator's ruling of 2026-10-02 on #58's fifth question, and from the preloaded record
+under a diagnostic binding, per `weaver-harness-Spec` section 6.1, then the session's
+message sequence read from the working structure, then the tool schemas, in that order,
+always. What moved on the framing ruling of 2026-08-02, ratified with the token
+workflow's act, is the per-model half: the family template's application, the phrasing
+layer that reliably elicits a tool call from one decoder and not another, seats in the
+SPU's family library per `weaver-spu-PRD` sections 13.4 and 14, because family knowledge
+lives in one home and the harness links nothing of any model's. The harness sends
+canonical messages, the family library renders, and the rendered reality returns on the
+report path, template identity, token identifiers, and block partition, so the harness
+authors what the model saw without having rendered it. No model is a build or run
+dependency of this crate, now stronger than a discipline: the per-model knowledge lives
+across a seam entirely. The deterministic assembly floor stands alone, always. Under a
+restoring load the store answers from a save point and the prefix is the identity alone,
+on the operator's rulings of 2026-10-02 on #58, which retire the record restore of issue
+#432: the restored state reaches the model the way any held state does, through the
+context the loop composes each turn.
 
 **Decode against a resident session.** The harness issues decode requests over the
 decode socket against a resident KV session rather than resending the conversation
@@ -209,15 +210,15 @@ rather than a local policy. Permanence of the identity prefix is an invariant of
 that same seam, honored by the SPU, not a guarantee this crate can hold. The
 harness does not touch the cache and so cannot protect any region of it.
 
-The alternative this rules out is resending the full message history every turn.
-The previous tree ran production on that path and measured a single exploration
-turn climbing from 5,988 to 24,932 prompt tokens, with a concurrent request timing
-out because the accumulated context made every call slow. **Proto-stateful in
-this program means the agent begins each session with no accumulated experience,
-holding real state only within one, per apex section 2. It does not mean the
-decoder is driven statelessly.** The previous tree used the old word stateless
-for cold full-history resend, the opposite architecture, and the rename of
-2026-08-01 retires that collision along with the overstatement.
+The alternative this rules out is resending the full message history every turn. The
+previous tree ran production on that path and measured a single exploration turn
+climbing from 5,988 to 24,932 prompt tokens, with a concurrent request timing out
+because the accumulated context made every call slow. **Proto-stateful in this program
+means state management's holdings carry within and across sessions under custody,
+through save points, and no memory, per apex section 2 as ruled 2026-10-02. It does not
+mean the decoder is driven statelessly.** The previous tree used the old word stateless
+for cold full-history resend, the opposite architecture, and the rename of 2026-08-01
+retires that collision along with the overstatement.
 
 Assembly is also where the model's view of the trace is settled. The harness
 reasons over an in-RAM working structure that holds the whole trace, and it renders
