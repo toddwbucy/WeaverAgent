@@ -6,7 +6,9 @@
 # root under the admin base (`/etc/weaver/admin/<agent>/`, or
 # WEAVER_ADMIN_CONFIG), rather than written here, so the same script serves
 # either seat. The agents are the roots under the base: admin admits an agent
-# by its root existing, and this script serves the same set.
+# by its root existing, and this script serves the same set. Each agent's
+# declaration is read from the directory its root's `declaration-directory`
+# names, the operator's own, as the operator running this script.
 #
 #   ./deploy/update-stack.sh            plan only; refreshes refs, tests and builds, no install
 #   ./deploy/update-stack.sh --install  plan, then install what changed
@@ -128,11 +130,42 @@ for retired in allow-list agent-config-directory spu-implementations agent-spu; 
   [ ! -e "$ADMIN_BASE/$retired" ] || die "$ADMIN_BASE/$retired stands: this box is on the box-wide layout. \
 Migrate it to one root per agent first (deploy/REDEPLOY.md section 7), then rerun."
 done
+# **An agent still running under a unit of the layout before #50 refuses.**
+# The admin this script installs starts no unit and stops none: it ends a run
+# by its run lock, which a unit's worker never took. So a worker a unit still
+# serves would outlive the install, unreachable by the new `unload`. Unload
+# each agent with the admin that started it, then rerun (deploy/REDEPLOY.md
+# section 8).
+# A box without systemd has no such unit: no `systemctl`, or none running as
+# the system manager, which `/run/systemd/system` marks (sd_booted(3)), since
+# a client installed beside another init cannot reach a manager (Codex on
+# #79). One whose systemd cannot answer refuses, a failed look never read as
+# no unit.
+# **Every state in which a unit can hold a worker refuses**: active, and the
+# transitions into and out of it, `activating`, `reloading` and
+# `deactivating`, which systemctl lists apart from `active` (Codex on #79).
+# The look runs here, before anything is built, and again just before the
+# first binary is replaced, since the test and the build take minutes.
+refuse_legacy_units() {
+  local listing units
+  command -v systemctl >/dev/null && [ -d /run/systemd/system ] || return 0
+  listing=$(systemctl list-units 'weaver-worker@*' --state=active,activating,reloading,deactivating \
+      --no-legend --plain 2>&1) \
+    || die "cannot ask systemd whether units of the layout before #50 still serve: $listing"
+  units=$(printf '%s\n' "$listing" | awk 'NF {print $1}' | tr '\n' ' ')
+  [ -z "${units// /}" ] || die "units of the layout before #50 still serve: $units. Unload each agent with the installed admin first (deploy/REDEPLOY.md section 8), then rerun."
+}
+refuse_legacy_units
 
 # **The agents are the roots under the base**, named as admin's name check
 # admits them (ASCII letters, digits, `-` and `_`), so a staged root
-# `create-agent.sh` left under a dot-name is not one. A symlink is not a root,
-# and a root with no `agent.toml` is no agent, as admin refuses it for every verb.
+# `create-agent.sh` left under a dot-name is not one. A symlink is not a root.
+# A root naming a `declaration-directory` is an agent, and its declaration is
+# `agent.toml` there. **A root of the layout before #50 refuses by name**: one
+# holding `agent.toml` itself, or the retired `run-tool`, `control-tool`,
+# `unit-properties` or `log-path`, is migrated by hand first (deploy/REDEPLOY.md
+# section 8), since the admin this script installs reads none of them and would
+# refuse the agent at every verb.
 # **A root this user cannot read refuses, naming it, and is never left out.**
 # Every step below reads each root as this user, without privilege: the key
 # comparison, the store reconciliation, the plan. A root closed to this user
@@ -151,10 +184,29 @@ for root in "$ADMIN_BASE"/*/; do
   [[ "$agent" =~ ^[A-Za-z0-9_-]+$ ]] || continue
   [ -r "$root" ] && [ -x "$root" ] \
     || die "$root is closed to $OPERATOR_NAME, so whether it is an agent, and what it names, cannot be read. Open it to 0755 as create-agent.sh makes it, then rerun."
-  [ -f "$root/agent.toml" ] || continue
+  for retired in agent.toml run-tool control-tool unit-properties log-path; do
+    [ ! -e "$root/$retired" ] || die "$root holds $retired: it is on the layout before #50. Migrate it first (deploy/REDEPLOY.md section 8), then rerun."
+  done
+  [ -f "$root/declaration-directory" ] || continue
   AGENTS="$AGENTS $agent"
 done
 [ -n "$AGENTS" ] || die "no agent root under $ADMIN_BASE: make one with create-agent.sh first"
+
+# **Each agent's declaration, read as the operator.** The root names the
+# directory, which create-agent.sh made the operator's own and closed, so the
+# operator running this script reads it without privilege. One it cannot read
+# refuses by name and is never left out, on the ground the root's check gives.
+declaration_of() { # declaration_of AGENT: prints the path of its agent.toml
+  local dir
+  dir=$(cat "$ADMIN_BASE/$1/declaration-directory" 2>/dev/null) || die "$1: its root's declaration-directory does not read"
+  dir=${dir#"${dir%%[![:space:]]*}"}; dir=${dir%"${dir##*[![:space:]]}"}
+  [[ "$dir" == /* ]] || die "$1: its root's declaration-directory is not an absolute path"
+  printf '%s/agent.toml' "$dir"
+}
+for agent in $AGENTS; do
+  decl=$(declaration_of "$agent") || exit 1
+  [ -r "$decl" ] || die "$agent: its declaration $decl cannot be read by $OPERATOR_NAME. It is the operator's own: run this script as the operator who owns it."
+done
 
 # **Where cargo builds is asked rather than assumed.** This box sets
 # `CARGO_TARGET_DIR`, so `target/release` does not exist here, and every
@@ -301,7 +353,7 @@ fi
 # while something compares them, so this is that something: edit one and not
 # the other and the run refuses by name before it spends the build.
 for agent in $AGENTS; do
-  decl="$ADMIN_BASE/$agent/agent.toml"
+  decl=$(declaration_of "$agent") || exit 1
   [ -f "$decl" ] || continue
   # The engine at `state-store.engine`, read by `declared` as the string
   # admin decodes, and an absent election means the crate's own default
@@ -456,6 +508,14 @@ fi
 
 [ "$INSTALL" -eq 1 ] || { say "plan only. rerun with --install"; exit 0; }
 
+# **Credentials first, on every install path.** Reconcile and verify run admin
+# with `sudo -n` as the operator whether or not a binary changed, and no rule
+# grants the operator's account those lines without a password (the
+# connector's rule names its own user), so a repair run that installs nothing
+# needs the credential as much as one that installs everything (Codex on #79).
+sudo -v || die "--install needs sudo: reconcile and verify run admin as root"
+refuse_legacy_units
+
 # ------------------------------------------------------------------ 7. install
 PATCHED=()
 ADDED=()
@@ -498,13 +558,13 @@ restore() {
     printf '  unloading %s before the restore\n' "$LOADED_AGENT" >&2
     sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" \
       unload "$LOADED_AGENT" >/dev/null 2>&1 \
-      || { printf '  %s WOULD NOT UNLOAD. It is still serving, and the files below go back under it. Stop the unit by hand before loading anything.\n' "$LOADED_AGENT" >&2; failed=1; }
+      || { printf '  %s WOULD NOT UNLOAD. It is still serving, and the files below go back under it. Unload it by hand before loading anything.\n' "$LOADED_AGENT" >&2; failed=1; }
     LOADED_AGENT=""
   fi
   if [ ${#PATCHED[@]} -gt 0 ]; then
     for entry in "${PATCHED[@]}"; do
       printf '  restoring declaration %s\n' "${entry%%|*}" >&2
-      sudo cp -a "${entry##*|}" "${entry%%|*}" \
+      cp -a "${entry##*|}" "${entry%%|*}" \
         || { printf '  FAILED to restore %s\n' "${entry%%|*}" >&2; failed=1; }
     done
   fi
@@ -559,10 +619,6 @@ trap on_exit EXIT
 
 if [ ${#CHANGED[@]} -gt 0 ]; then
   say "install"
-  # Credentials are asked for where they are needed. Reconcile and verify
-  # reach admin through the NOPASSWD verbs, so a repair run that installs
-  # nothing prompts for nothing.
-  sudo -v
   # **Exclusive, not merely named.** A seconds-resolution name with
   # `mkdir -p` lets two runs in one second share a directory, and the
   # second run's copies would then be what the first run's rollback
@@ -619,7 +675,7 @@ validate() {
 # -------------------------------------------------------- 8. reconcile agents
 say "reconcile declarations"
 for agent in $AGENTS; do
-  decl="$ADMIN_BASE/$agent/agent.toml"
+  decl=$(declaration_of "$agent") || exit 1
   if [ ! -f "$decl" ]; then
     printf '  %-12s no declaration at %s\n' "$agent" "$decl"
     continue
@@ -635,13 +691,12 @@ for agent in $AGENTS; do
   declared "$decl" state-store table || rc=$?
   if [ ! -f "$STATE_BINARY" ] && [ "$rc" -eq 3 ]; then
     printf '  %-12s %s\n' "$agent" "$verdict"
-    # The root is root's, so the backup and the patch are made under sudo, and
-    # only once the root and its declaration are held closed: admin has just
-    # refused this root, so its judgment does not stand behind the write.
-    bad=$(held_closed "$decl") || die "$agent: the declaration $decl is not held closed by root at $bad, so it is not patched as root"
-    sudo cp -a "$decl" "$decl.pre-$AFTER-bak"
+    # **The declaration is the operator's, so the operator patches it**,
+    # without privilege, in the operator's own closed directory: no root step
+    # writes a file another principal could choose.
+    cp -a "$decl" "$decl.pre-$AFTER-bak"
     PATCHED+=("$decl|$decl.pre-$AFTER-bak")
-    printf '\n[state-store]\nengine = "none"\n' | sudo tee -a "$decl" >/dev/null
+    printf '\n[state-store]\nengine = "none"\n' >> "$decl"
     verdict=$(validate "$agent")
     if [ "$verdict" != '{"kind":"validated"}' ]; then
       rollback "$agent still refuses after the declaration: $verdict"
@@ -683,7 +738,7 @@ sink_lines() {
 say "verify"
 VERIFIED=0
 for AGENT in $AGENTS; do
-  decl="$ADMIN_BASE/$AGENT/agent.toml"
+  decl=$(declaration_of "$AGENT") || exit 1
   if [ ! -f "$decl" ]; then
     printf '  %-12s no declaration, not verified\n' "$AGENT"
     continue

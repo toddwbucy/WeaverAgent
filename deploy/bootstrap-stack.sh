@@ -17,12 +17,16 @@
 # one agent's root, `<admin base>/<agent>/`, and nothing shared. The record at
 # `/etc/weaver/stack/` holds the box-wide defaults, one file per key, which
 # `create-agent.sh` copies into each new agent's root: `worker-binary`,
-# `spu-binary`, `gate-binary`, `run-tool`, `control-tool`, `coordination-root`,
-# `unit-properties`, and for the scripts alone `prefix`, `log-directory` and
-# `agent-directory`. `headroom-bytes` and `state-store-socket` are optional;
-# this script writes neither, and an operator who writes one into the record
-# has it copied into every agent made after. The admin base is created empty
-# here, root-owned 0755, and gains one root per agent.
+# `spu-binary`, `gate-binary`, `coordination-root` and `library-path`, and for
+# the scripts alone `prefix` and `agent-directory`. `headroom-bytes`,
+# `load-bound-seconds` and `state-store-socket` are optional; this script
+# writes none of them, and an operator who writes one into the record has it
+# copied into every agent made after. The admin base is created empty here,
+# root-owned 0755, and gains one root per agent. **No init system is
+# involved**: admin's start step stands the agent itself, on the operator's
+# ruling of 2026-10-03 (#50), so no unit, run tool or control tool is
+# installed or recorded, and each agent's operations log lives in its
+# declaration directory rather than under a box log directory.
 #
 # Box facts are environment, defaulted, printed, and never discovered from a
 # directory listing (the install set is named, per update-stack.sh):
@@ -32,8 +36,7 @@
 #   WEAVER_STACK_RECORD  /etc/weaver/stack      the scripts' record of this install
 #   WEAVER_OPERATOR      $SUDO_USER or $USER    named in the plan; owns nothing this makes
 #   WEAVER_AGENT_DIR     /var/lib/weaver-agent
-#   WEAVER_LOG_DIR       /var/log/weaver
-#   CUDA_LIB_DIR         /opt/cuda/lib64        joins LD_LIBRARY_PATH in unit-properties
+#   CUDA_LIB_DIR         /opt/cuda/lib64        joins the ld.so.conf.d entry
 #   CARGO_TARGET_DIR     honoured; give the install its own, never a gate's
 #
 # The feature set and the member list are update-stack.sh's, stated again
@@ -65,7 +68,6 @@ ADMIN_BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
 STACK=${WEAVER_STACK_RECORD:-/etc/weaver/stack}
 OPERATOR=${WEAVER_OPERATOR:-${SUDO_USER:-$USER}}
 AGENT_DIR=${WEAVER_AGENT_DIR:-/var/lib/weaver-agent}
-LOG_DIR=${WEAVER_LOG_DIR:-/var/log/weaver}
 CUDA_LIB_DIR=${CUDA_LIB_DIR:-/opt/cuda/lib64}
 
 MEMBERS="pyworker worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state"
@@ -77,7 +79,8 @@ FEATURES="$SPU_FEATURES,$MEMBER_FEATURES"
 # the SONAME link and the bare link side by side; the copies at the target
 # root are bare links that dangle. The members carry no RUNPATH and name the
 # SONAMEs, so the install writes an `ld.so.conf.d` entry for the lib
-# directory and unit-properties sets LD_LIBRARY_PATH to it as well.
+# directory, and the record's `library-path` names it as well, which admin
+# judges and sets as the worker's LD_LIBRARY_PATH (weaver-admin-Spec section 6).
 LIB_GLOBS='libggml*.so* libllama*.so*'
 LDSO_CONF=/etc/ld.so.conf.d/weaver.conf
 
@@ -89,7 +92,6 @@ plan "prefix        $PREFIX"
 plan "admin base    $ADMIN_BASE"
 plan "stack record  $STACK"
 plan "agent dir     $AGENT_DIR"
-plan "log dir       $LOG_DIR"
 plan "toolchain     $(rustup show active-toolchain 2>/dev/null | cut -d' ' -f1)"
 plan "driver        $(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -1 || echo none)"
 plan "nvcc          $(nvcc --version 2>/dev/null | tail -1 | sed 's/^Build //' || echo none)"
@@ -227,9 +229,8 @@ plan "install -d $PREFIX/bin $PREFIX/lib  (root, 0755)"
 for b in $MEMBERS; do plan "install $b -> $PREFIX/bin/$b  $(sha256sum "$BUILT/$b" | cut -c1-12)"; done
 plan "cp -a ${#LIBS[@]} library files and links -> $PREFIX/lib"
 plan "write $LDSO_CONF = $PREFIX/lib and $CUDA_LIB_DIR, then ldconfig"
-plan "write $STACK/{worker-binary,spu-binary,gate-binary,run-tool,control-tool,coordination-root,unit-properties,prefix,log-directory,agent-directory}  (root, 0755 / 0644)"
+plan "write $STACK/{worker-binary,spu-binary,gate-binary,coordination-root,library-path,prefix,agent-directory}  (root, 0755 / 0644)"
 plan "install -d $ADMIN_BASE (root:root 0755): empty; create-agent.sh adds one root per agent"
-plan "install -d $LOG_DIR (root:root 0750): each agent's operations log goes under it, the agent excluded by owner, group and search bit"
 plan "install -d $AGENT_DIR (root:root 0755): territories, each root:weaver-<name>-state 0710, not setgid, its trace root:weaver-<name>-trace 0640"
 [ -d "$PREFIX/models" ] && plan "$PREFIX/models stands: $(ls "$PREFIX/models" | wc -l) entries" || plan "$PREFIX/models is absent: copy the artifacts before declaring an agent"
 [ "$INSTALL" -eq 1 ] || { say "plan only. rerun with --install"; exit 0; }
@@ -263,19 +264,12 @@ w() { printf '%s\n' "$2" | sudo tee "$STACK/$1" >/dev/null; sudo chmod 0644 "$ST
 w worker-binary "$PREFIX/bin/worker"
 w spu-binary "$PREFIX/bin/weaver-spu"
 w gate-binary "$PREFIX/bin/weaver-gate"
-w run-tool /usr/bin/systemd-run
-w control-tool /usr/bin/systemctl
 w coordination-root /run
+w library-path "$PREFIX/lib"
 w prefix "$PREFIX"
-w log-directory "$LOG_DIR"
 w agent-directory "$AGENT_DIR"
-printf 'UMask=0000\nEnvironment=LD_LIBRARY_PATH=%s:%s\nLogRateLimitIntervalSec=30s\nLogRateLimitBurst=1000000\n' \
-  "$PREFIX/lib" "$CUDA_LIB_DIR" | sudo tee "$STACK/unit-properties" >/dev/null
-sudo chmod 0644 "$STACK/unit-properties"
-plan "unit-properties = UMask, LD_LIBRARY_PATH, journal rate limit off"
 sudo install -d -o root -g root -m 0755 "$ADMIN_BASE"
 plan "admin base $ADMIN_BASE (empty)"
-sudo install -d -o root -g root -m 0750 "$LOG_DIR"
 # The territories' base is root's, so no other principal can make a name in it
 # and each territory is reached by group, never by an access entry (#28).
 sudo install -d -o root -g root -m 0755 "$AGENT_DIR"
@@ -283,4 +277,4 @@ sudo install -d -o root -g root -m 0755 "$AGENT_DIR"
 say "installed at $REV"
 plan "next: deploy/create-agent.sh <name> --engine <sqlite|postgres> --artifact <path> [--apply], one agent at a time"
 plan "then: sudo WEAVER_ADMIN_CONFIG=$ADMIN_BASE $PREFIX/bin/weaver-admin validate <name>"
-plan "then: deploy/verify-load.sh <name>"
+plan "then: sudo deploy/verify-load.sh <name>"

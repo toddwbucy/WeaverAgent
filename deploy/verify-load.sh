@@ -1,20 +1,29 @@
 #!/usr/bin/env bash
-# Load one agent, read its load event back out of its own sink, and unload it.
+# Load one agent, read its load event back out of its own sink, check its
+# constituents, and unload it.
 #
-#   sudo deploy/verify-load.sh <agent>            load, read, unload
-#   sudo deploy/verify-load.sh <agent> --keep     load, read, leave it serving
+#   sudo deploy/verify-load.sh <agent>            load, read, check, unload
+#   sudo deploy/verify-load.sh <agent> --keep     load, read, check, leave it serving
 #
 # The verify step of update-stack.sh, standing alone so a fresh install and a
 # single agent can be checked without a rebuild. Everything it reads is the
 # agent's own root, `<admin base>/<agent>/` (WEAVER_ADMIN_CONFIG names the
-# base, default /etc/weaver/admin), as admin reads it: the declaration
-# `agent.toml`. `weaver-admin` itself is taken from the stack record's `prefix`
-# (WEAVER_STACK_RECORD, default /etc/weaver/stack), never from a key of the
-# agent's root, which admin has not yet judged when this runs it as root.
-# It reads the sink path out of the declaration through tomllib, so what it
-# counts is the file admin opened, and it judges the load by events arriving
-# in that file rather than by admin's exit status: a load that answers
-# `loaded` and writes nothing is the failure this exists to catch.
+# base, default /etc/weaver/admin), and the declaration directory that root
+# names, as admin reads them: the declaration `agent.toml`. `weaver-admin`
+# itself is taken from the stack record's `prefix` (WEAVER_STACK_RECORD,
+# default /etc/weaver/stack), never from a key of the agent's root, which admin
+# has not yet judged when this runs it as root. It reads the sink path out of
+# the declaration through tomllib, so what it counts is the file admin opened,
+# and it judges the load by events arriving in that file rather than by
+# admin's exit status: a load that answers `loaded` and writes nothing is the
+# failure this exists to catch.
+#
+# **The constituents are checked as an invoker must check them** (the operator
+# contract section 2, toddwbucy/WeaverWeb#15): every pid `show` names after
+# the load runs as the agent's, its member's or its relay's account and sits
+# in this script's own cgroup, the containment the load was invoked from, a
+# relay stands among them for a file sink, and after the unload none of them
+# is left and `show` reads unloaded with no constituent.
 set -euo pipefail
 
 say()  { printf '\n== %s\n' "$*"; }
@@ -79,7 +88,10 @@ admin() { WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$ADMIN" "$@" 2>&1 || true; }
 # answers `validated`, and through admin's judgment rather than a copy of it.
 VERDICT=$(admin validate "$AGENT" | tail -1)
 [ "$VERDICT" = '{"kind":"validated"}' ] || die "admin does not validate $AGENT, so its root is not read: $VERDICT"
-DECL="$ROOT/agent.toml"; [ -f "$DECL" ] || die "no declaration at $DECL"
+# The declaration directory is the root's key, judged by the validate above.
+DECL_DIR=$(< "$ROOT/declaration-directory")
+DECL_DIR=${DECL_DIR#"${DECL_DIR%%[![:space:]]*}"}; DECL_DIR=${DECL_DIR%"${DECL_DIR##*[![:space:]]}"}
+DECL="$DECL_DIR/agent.toml"; [ -f "$DECL" ] || die "no declaration at $DECL"
 
 SINK=$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["trace-sink"]["path"])' "$DECL") \
   || die "the declaration names no trace-sink.path"
@@ -118,10 +130,69 @@ for k, n in kinds.most_common(): print(f"   {n:4d}  {k}")
 if load is None: sys.exit("   no load event among them")
 keep = {k: v for k, v in load.items() if k not in ("content",)}
 print("   load event:", json.dumps(keep)[:600])
-' || { [ "$KEEP" -eq 1 ] || admin unload "$AGENT" >/dev/null; die "$AGENT: the new events carry no load event"; }
+' || { admin unload "$AGENT" >/dev/null; die "$AGENT: the new events carry no load event, so the run is unloaded"; }
+# **The constituents, from `show`, judged where they run.** Each is recorded
+# by pid and start time, so a pid the kernel reuses after the unload is never
+# taken for a constituent that survived it.
+SHOWN=$(admin show "$AGENT" | tail -1)
+KIND=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("kind",""))' "$SHOWN" 2>/dev/null || true)
+[ "$KIND" = state ] || { admin unload "$AGENT" >/dev/null; die "$AGENT: show answers $SHOWN after the load"; }
+mapfile -t PIDS < <(python3 -c 'import json,sys; print("\n".join(str(p) for p in json.loads(sys.argv[1]).get("constituents", [])))' "$SHOWN")
+[ ${#PIDS[@]} -gt 0 ] && [ -n "${PIDS[0]}" ] || { admin unload "$AGENT" >/dev/null; die "$AGENT: show names no constituent of a loaded run: $SHOWN"; }
+# A process's start time, which with its pid names it uniquely. A zombie, dead
+# and awaiting its reaper, answers nothing: it holds no descriptor and no lock.
+start_time() {
+  local stat
+  stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  stat=${stat##*) }
+  set -- $stat
+  [ "$1" != Z ] || return 1
+  printf '%s' "${20}"
+}
+OWN_CGROUP=$(cat /proc/self/cgroup)
+SINK_KIND=$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["trace-sink"].get("kind",""))' "$DECL" 2>/dev/null || true)
+declare -A ACCOUNT=()
+for who in "weaver-$AGENT" "weaver-$AGENT-state" "weaver-$AGENT-relay"; do
+  uid=$(id -u "$who" 2>/dev/null) && ACCOUNT["$uid"]=$who
+done
+RECORDED=()
+RELAY_SEEN=0
+FAULT=""
+for pid in "${PIDS[@]}"; do
+  st=$(start_time "$pid") || { FAULT="constituent $pid is not running"; break; }
+  uid=$(awk '/^Uid:/ {print $2}' "/proc/$pid/status" 2>/dev/null)
+  who=${ACCOUNT[$uid]:-}
+  [ -n "$who" ] || { FAULT="constituent $pid runs as uid $uid, none of the agent's, its member's or its relay's accounts"; break; }
+  [ "$who" = "weaver-$AGENT-relay" ] && RELAY_SEEN=1
+  [ "$(cat "/proc/$pid/cgroup" 2>/dev/null)" = "$OWN_CGROUP" ] \
+    || { FAULT="constituent $pid ($who) sits in $(cat "/proc/$pid/cgroup" 2>/dev/null), not the invoker's $OWN_CGROUP"; break; }
+  plan "constituent $pid  $(cat "/proc/$pid/comm" 2>/dev/null)  $who  in the invoker's cgroup"
+  RECORDED+=("$pid:$st")
+done
+if [ -z "$FAULT" ] && [ "$SINK_KIND" = file ] && [ "$RELAY_SEEN" -eq 0 ]; then
+  FAULT="no relay stands among the constituents of a file sink"
+fi
+if [ -n "$FAULT" ]; then
+  # **A run that failed its verification never stays serving**, `--keep`
+  # included, which keeps only a run every check passed (Codex on #79).
+  admin unload "$AGENT" >/dev/null
+  die "$AGENT: $FAULT, so the run is unloaded"
+fi
 if [ "$KEEP" -eq 1 ]; then
   plan "left serving; unload with: sudo WEAVER_ADMIN_CONFIG=$ADMIN_BASE $ADMIN unload $AGENT"
 else
   plan "unload      $(admin unload "$AGENT" | tail -1)"
+  # **Nothing of the run is left**: no recorded constituent still stands under
+  # its own start time, and `show` reads unloaded with no constituent.
+  for entry in "${RECORDED[@]}"; do
+    pid=${entry%%:*}
+    if [ "$(start_time "$pid" || true)" = "${entry#*:}" ]; then
+      die "$AGENT: constituent $pid outlived the unload"
+    fi
+  done
+  AFTER_SHOW=$(admin show "$AGENT" | tail -1)
+  python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d.get("kind")=="state" and d.get("state")=="unloaded" and not d.get("constituents") else 1)' "$AFTER_SHOW" \
+    || die "$AGENT: show after the unload answers $AFTER_SHOW"
+  plan "after       every constituent gone, show unloaded"
 fi
 say "$AGENT verified"
