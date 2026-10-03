@@ -363,6 +363,60 @@ fn the_relay_dies_with_its_worker_behind_a_slow_reader() {
     drop(reader);
 }
 
+/// **The relay dies with its worker behind a withheld request**, per Spec
+/// section 6: a connection from the reader that sends its request without
+/// the newline is read inside the loop, so the lifetime pipe's end still ends
+/// the relay well inside the five-second request wait. Perturbation: read the
+/// request blocking, before returning to poll, and the relay outlives its
+/// worker until the wait runs out.
+#[test]
+fn the_relay_dies_with_its_worker_behind_a_withheld_request() {
+    let mut relay = start("withheld-lifetime", b"{\"a\":1}\n", me());
+    let mut withheld = UnixStream::connect(&relay.socket).unwrap();
+    withheld.write_all(b"{\"offset\":0}").unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    drop(relay.lifetime.take());
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while relay.child.try_wait().unwrap().is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the relay outlived its worker behind a withheld request"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    drop(withheld);
+}
+
+/// **A withheld request never stalls the follower**: while a second
+/// connection from the reader withholds its newline, a line appended to the
+/// sink still reaches the standing follower well inside the request wait.
+/// Perturbation: read the request blocking and the line waits out the five
+/// seconds.
+#[test]
+fn a_withheld_request_never_stalls_the_follower() {
+    let relay = start("withheld-follower", b"{\"a\":1}\n", me());
+    let mut follower = dial(&relay, "{\"offset\":0}\n");
+    let _header = line(&mut follower);
+    assert_eq!(line(&mut follower), "{\"a\":1}\n");
+    let mut withheld = UnixStream::connect(&relay.socket).unwrap();
+    withheld.write_all(b"{\"offset\":0}").unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let appended = std::time::Instant::now();
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&relay.sink)
+        .unwrap()
+        .write_all(b"{\"b\":2}\n")
+        .unwrap();
+    assert_eq!(line(&mut follower), "{\"b\":2}\n");
+    assert!(
+        appended.elapsed() < Duration::from_secs(2),
+        "the follower waited {:?} behind a withheld request",
+        appended.elapsed()
+    );
+    drop(withheld);
+}
+
 /// **A reader that does not take a queued write in time is dropped**: with
 /// the write wait shortened, a trickling reader misses it and is logged.
 /// Perturbation: reset the wait on every partial write and the trickler is

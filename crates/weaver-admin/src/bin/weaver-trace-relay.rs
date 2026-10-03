@@ -114,6 +114,7 @@ fn main() -> std::process::ExitCode {
         },
         sink: std::fs::File::from(sink),
         follower: None,
+        candidate: None,
     };
     relay.serve(&listener, &lifetime);
     std::process::ExitCode::SUCCESS
@@ -218,18 +219,74 @@ impl Follower {
     }
 }
 
+/// A connection from the declared reader whose request has not arrived
+/// whole. Its socket is non-blocking and read as bytes arrive, inside the
+/// loop, so a reader withholding its newline never holds the loop away from
+/// the lifetime pipe or the follower.
+struct Candidate {
+    socket: std::os::unix::net::UnixStream,
+    uid: u32,
+    line: Vec<u8>,
+    deadline: Instant,
+}
+
+/// What reading a candidate's request came to on one pass.
+enum Request {
+    Waiting,
+    Whole(TraceRequest),
+    Refused(&'static str),
+}
+
+impl Candidate {
+    /// **Reads what has arrived of the one request**, per `weaver-types-Spec`
+    /// section 3.1: a `TraceRequest` JSON object on one newline-terminated
+    /// line of at most 4096 bytes, within five seconds of the connection,
+    /// read a byte at a time so nothing after the newline is taken.
+    fn read(&mut self) -> Request {
+        use std::io::Read as _;
+        let mut byte = [0u8; 1];
+        loop {
+            match self.socket.read(&mut byte) {
+                Ok(0) => return Request::Refused("the request ended without a newline"),
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    return if Instant::now() >= self.deadline {
+                        Request::Refused("the request arrived late")
+                    } else {
+                        Request::Waiting
+                    };
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => return Request::Refused("the request could not be read"),
+            }
+            if byte[0] == b'\n' {
+                return serde_json::from_slice(&self.line).map_or(
+                    Request::Refused("the request does not parse"),
+                    Request::Whole,
+                );
+            }
+            self.line.push(byte[0]);
+            if self.line.len() >= REQUEST_BOUND {
+                return Request::Refused("the request is longer than its bound");
+            }
+        }
+    }
+}
+
 struct Relay {
     reader: u32,
     timing: Timing,
     log: Log,
     sink: std::fs::File,
     follower: Option<Follower>,
+    candidate: Option<Candidate>,
 }
 
 impl Relay {
-    /// The loop: accept on the door, follow the sink one chunk per tick at
-    /// most, and end on the lifetime pipe's end-of-file, which is the
-    /// worker's death, a slow reader never holding the loop away from it.
+    /// The loop: accept on the door, read a pending request as it arrives,
+    /// follow the sink one chunk per tick at most, and end on the lifetime
+    /// pipe's end-of-file, which is the worker's death, a slow reader or a
+    /// withheld request never holding the loop away from it.
     fn serve(&mut self, listener: &OwnedFd, lifetime: &OwnedFd) {
         loop {
             let (follower_fd, follower_events) = match &self.follower {
@@ -244,6 +301,10 @@ impl Relay {
                 ),
                 None => (-1, 0),
             };
+            let candidate_fd = self
+                .candidate
+                .as_ref()
+                .map_or(-1, |candidate| candidate.socket.as_raw_fd());
             let mut polls = [
                 nix::libc::pollfd {
                     fd: listener.as_raw_fd(),
@@ -260,9 +321,14 @@ impl Relay {
                     events: follower_events,
                     revents: 0,
                 },
+                nix::libc::pollfd {
+                    fd: candidate_fd,
+                    events: nix::libc::POLLIN,
+                    revents: 0,
+                },
             ];
-            // SAFETY: poll over three pollfds this frame owns.
-            let ready = unsafe { nix::libc::poll(polls.as_mut_ptr(), 3, TICK_MS) };
+            // SAFETY: poll over four pollfds this frame owns.
+            let ready = unsafe { nix::libc::poll(polls.as_mut_ptr(), 4, TICK_MS) };
             if ready < 0 {
                 if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
                     continue;
@@ -287,17 +353,19 @@ impl Relay {
                 self.log.record("disconnect", Some(follower.uid), "");
             }
             if polls[0].revents & nix::libc::POLLIN != 0 {
-                self.admit(listener);
+                self.accept(listener);
             }
+            self.admit();
             self.follow();
         }
     }
 
-    /// **Admits exactly one reader**: the peer's uid, from the kernel, before a
-    /// byte is read, then one request line under its bounds and a position that
-    /// verifies, else the connection is refused, logged and closed. The newest
-    /// admitted connection replaces the old.
-    fn admit(&mut self, listener: &OwnedFd) {
+    /// **Accepts one connection**: the peer's uid, from the kernel, before a
+    /// byte is read, and a connection from anyone but the declared reader is
+    /// refused, logged and closed. The reader's becomes the candidate, whose
+    /// request the loop reads as it arrives, a newer connection replacing a
+    /// candidate still waiting.
+    fn accept(&mut self, listener: &OwnedFd) {
         // SAFETY: accept4 on the listener this frame borrows, close-on-exec.
         let raw = unsafe {
             nix::libc::accept4(
@@ -323,18 +391,46 @@ impl Relay {
                 .record("refused", Some(uid), "not the declared trace reader");
             return;
         }
-        let request = match read_request(&socket, self.timing.request) {
-            Ok(request) => request,
-            Err(why) => {
-                self.log.record("refused", Some(uid), why);
-                return;
-            }
-        };
-        if let Err(why) = verify_position(&self.sink, &request) {
-            self.log.record("refused", Some(uid), why);
+        if socket.set_nonblocking(true).is_err() {
             return;
         }
-        if socket.set_nonblocking(true).is_err() {
+        if let Some(old) = self.candidate.take() {
+            self.log.record(
+                "refused",
+                Some(old.uid),
+                "a newer connection from the reader before the request",
+            );
+        }
+        self.candidate = Some(Candidate {
+            socket,
+            uid,
+            line: Vec::with_capacity(REQUEST_BOUND),
+            deadline: Instant::now() + self.timing.request,
+        });
+    }
+
+    /// **Admits exactly one reader**: the candidate's one request line under
+    /// its bounds and a position that verifies, else the connection is
+    /// refused, logged and closed. The newest admitted connection replaces
+    /// the old.
+    fn admit(&mut self) {
+        let Some(mut candidate) = self.candidate.take() else {
+            return;
+        };
+        let request = match candidate.read() {
+            Request::Waiting => {
+                self.candidate = Some(candidate);
+                return;
+            }
+            Request::Refused(why) => {
+                self.log.record("refused", Some(candidate.uid), why);
+                return;
+            }
+            Request::Whole(request) => request,
+        };
+        let Candidate { socket, uid, .. } = candidate;
+        if let Err(why) = verify_position(&self.sink, &request) {
+            self.log.record("refused", Some(uid), why);
             return;
         }
         if let Some(old) = self.follower.take() {
@@ -434,48 +530,6 @@ impl Relay {
         }
         self.follower = Some(follower);
     }
-}
-
-/// **Reads the one request**, per `weaver-types-Spec` section 3.1: a
-/// `TraceRequest` JSON object on one newline-terminated line of at most 4096
-/// bytes, within five seconds of the connection, and nothing after the newline.
-fn read_request(
-    socket: &std::os::unix::net::UnixStream,
-    wait: Duration,
-) -> Result<TraceRequest, &'static str> {
-    use std::io::Read as _;
-    let deadline = Instant::now() + wait;
-    let mut line = Vec::with_capacity(REQUEST_BOUND);
-    let mut byte = [0u8; 1];
-    loop {
-        let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            return Err("the request arrived late");
-        }
-        let _ = socket.set_read_timeout(Some(left));
-        let mut reader = socket;
-        match reader.read(&mut byte) {
-            Ok(0) => return Err("the request ended without a newline"),
-            Ok(_) => {}
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
-            {
-                return Err("the request arrived late");
-            }
-            Err(_) => return Err("the request could not be read"),
-        }
-        line.push(byte[0]);
-        if byte[0] == b'\n' {
-            break;
-        }
-        if line.len() >= REQUEST_BOUND {
-            return Err("the request is longer than its bound");
-        }
-    }
-    serde_json::from_slice(&line[..line.len() - 1]).map_err(|_| "the request does not parse")
 }
 
 /// **Verifies a position before a byte is sent**: offset zero carries no

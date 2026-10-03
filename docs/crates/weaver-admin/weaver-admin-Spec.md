@@ -1660,14 +1660,16 @@ line longer than one chunk closes the connection without its `truncated` line fo
 same reason. **It copies at most one chunk per pass of its loop**, so however large the
 backlog and however slow the reader, the loop returns to the lifetime pipe, the door and
 the reader's hangup every pass, and the relay never outlives its worker behind a reader.
-A heartbeat follows five seconds idle, and a queued write the reader has not taken whole
-within five seconds of its queuing drops the reader, logged. Its operations, connects,
-replacements, refusals and disconnects, go to the operations log through a descriptor
-the start step passes, never a line per streamed record. **Its descriptors stand at
-fixed numbers**: the listener at 3, the read-only sink at 4, the operations log at 5,
-the lifetime pipe's read end at 6 and the run lock's description at 9, and its vector is
-the declared reader's uid, the agent's name and the boundary file's digest, the last two
-for its log lines.
+**A request is read as it arrives, inside the same loop**, so a reader withholding its
+newline holds neither the lifetime pipe nor the standing follower for the request's five
+seconds. A heartbeat follows five seconds idle, and a queued write the reader has not
+taken whole within five seconds of its queuing drops the reader, logged. Its operations,
+connects, replacements, refusals and disconnects, go to the operations log through a
+descriptor the start step passes, never a line per streamed record. **Its descriptors
+stand at fixed numbers**: the listener at 3, the read-only sink at 4, the operations log
+at 5, the lifetime pipe's read end at 6 and the run lock's description at 9, and its
+vector is the declared reader's uid, the agent's name and the boundary file's digest,
+the last two for its log lines.
 
 **The trace stream across runs is stated, because a reader depends on it.** **A run's
 sink is not a new file**: the declaration names one sink per agent, which section 5
