@@ -976,6 +976,14 @@ before the relay's credential check runs being a door that cannot open.
 trace-reader = "weaver-<agent>-admincon"
 ```
 
+**The door's framing is lines on a stream socket.** The reader sends exactly one
+request: one `TraceRequest` as a JSON object on one line ending in a newline, at most
+4096 bytes with the newline, within five seconds of the connection. A request that is
+longer, ends without a newline, does not parse, or arrives late is refused and logged
+and the connection closed, and the relay reads nothing after the newline. Every line
+the relay writes ends in a newline: the header, the trace's own lines, which already
+end in one, and each control line.
+
 **`TraceRequest` names where the stream starts**: a byte offset that falls on a record
 boundary, and the sha256 hex of the record that ends at that offset, absent only at
 offset zero. The relay refuses a position whose prior record does not hash to the
@@ -1312,6 +1320,7 @@ pub enum LifecycleRefusal {
     InvocationInFlight,
     LockHolderUnknown,
     WorkerWouldNotExit,
+    Unanswered,
     OrganRefused { organ: RefusingOrgan, reason: Box<LifecycleRefusal> },
     ActivityNotAtRest,
 }
@@ -1482,13 +1491,15 @@ flight, per `weaver-admin-Spec` section 3. It claims no `AgentState`, apex secti
 four states being the harness's to know and the harness being busy with that very
 invocation, so the caller polls again.
 
-**Three more cases join it on the same ruling, each one fact.** `InvocationInFlight`
+**Four more cases join it on the same ruling, each one fact.** `InvocationInFlight`
 says another invocation holds this agent's invocation lock, so this one touched nothing,
 per `weaver-admin-Spec` section 3. `LockHolderUnknown` says the run lock was held and no
 process holding it could be found, the description having been carried where no
 descriptor table shows it, so no signal was sent. `WorkerWouldNotExit` says a
 constituent of the run still held the run lock after the unload's escalation, so the
-agent was not reported unloaded. None claims more than its fact, and each tells the
+agent was not reported unloaded. `Unanswered` says a stop's answer did not arrive
+within its bound, per `weaver-admin-Spec` section 3, so the run was left as it stands
+and the invocation lock released. None claims more than its fact, and each tells the
 caller to read the agent's state with the next `show`.
 
 **`FaultReport` is two members, and the custody rule of apex section 5.2 is

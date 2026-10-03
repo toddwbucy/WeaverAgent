@@ -631,6 +631,19 @@ deciding what a stop found are different acts, the second is the harness's,
 and a relay that translated the answer would be admin ruling on a run it does
 not conduct.
 
+**Every answer a verb waits for under its invocation lock has a bound, and the stop's
+is sixty seconds from the directive.** The enter's is section 2's 900 seconds, the
+leave's sixty above, and `show`'s observation the dial's bound under its shared hold.
+A worker that accepts stop and answers nothing inside its bound is not ended, a stop
+being no unload: the verb refuses `Unanswered`, exits, and releases the invocation
+lock with the run as it stands, so `show` and `unload` reach the agent next, and
+`unload`'s own bounds and escalation are the recovery. An observation that goes
+unanswered is `show`'s silence, read as section 3's stranded-run fact where the
+invocation lock is free. **No verb holds the invocation lock past a bound it states**,
+since the invocation ignores the catchable signals and a wait without end would leave
+every later verb refusing `InvocationInFlight` and `show` answering `InTransition`.
+The interior verbs of section 2 take the same rule by the recipe.
+
 **This record's edge moves to the integration invariant.** The labelling pass
 placed it at `axiom-organ-and-submodule`, that being the nearest thing the apex
 then held to a statement about domains, and apex section 5.4 settles what an
@@ -1569,7 +1582,9 @@ and the run lock it took, as it clears the worker's names, it binds `trace.sock`
 agent's run directory of section 3, `<coordination-root>/weaver.run/<agent>/`, root's
 and apart from the agent's runtime directory, the socket root-owned, mode `0660` and
 grouped to the agent's per-agent access group `weaver-<agent>-admin`, which the declared
-trace reader must hold, and passes the listening descriptor to the relay at its exec, so
+trace reader must hold, a stream socket (`SOCK_STREAM`) because the door carries one
+request in and a continuing byte stream out, framed as `weaver-types-Spec` section 3.1
+states, and passes the listening descriptor to the relay at its exec, so
 the relay never binds and never needs to write the directory. The relay also inherits
 the run lock's description, per section 3, and marks it close-on-exec as its first act
 and never closes it, as the worker and the member do. **The door stands only for a file
@@ -2607,6 +2622,10 @@ perturbation-verified:
   left and does not exit: the escalation signals the lock's holders and the answer
   waits on the release. The perturbation answers on the leave alone, and the worker
   still runs.
+- **A wedged stop is bounded**, watched by a stand-in worker that accepts stop and
+  never answers: the verb refuses `Unanswered` once the stop's bound expires and a
+  following `unload` takes the invocation lock. The perturbation drops the stop's
+  bound, the verb never returns, and every later verb refuses `InvocationInFlight`.
 - **A wedged leave is bounded**, watched by a stand-in worker that accepts leave and
   never answers: the `unload` escalates once the leave's bound expires and answers when
   the lock is free. The perturbation drops the leave's bound, the verb never returns,

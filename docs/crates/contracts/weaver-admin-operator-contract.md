@@ -201,7 +201,9 @@ arriving while another invocation holds this agent's invocation lock refuses
 second `load` of a running agent answers `AgentRunning`. A missing or malformed boundary
 file refuses `ConfigInvalid` naming `roles.toml`. An `unload` that cannot pin the run
 lock's holder refuses `LockHolderUnknown`, and one whose worker still holds the run lock
-after the escalation refuses `WorkerWouldNotExit` and answers no state. A line a
+after the escalation refuses `WorkerWouldNotExit` and answers no state. A `stop` whose
+answer does not arrive within its bound refuses `Unanswered`, leaving the run as it
+stands for `show` and `unload`. A line a
 caller's rule does not grant never reaches the program, sudo refusing it, so it has no
 refusal here. **At the trace door, refusals before a byte is sent**: a caller outside
 the agent's access group, refused by the box before the relay sees it and so logged by
