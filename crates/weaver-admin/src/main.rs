@@ -292,9 +292,11 @@ fn dispatch(
 }
 
 /// **The coordination root is held closed before the run directory is made in
-/// it**, per Spec section 3: the root and every directory above it owned by
-/// `owner`, uid 0 in production, and writable by no group or other unless its
-/// sticky bit is set, or the verb refuses `BoundaryUnverified`, since a
+/// it**, per Spec section 3: the root itself owned by `owner`, uid 0 in
+/// production, or by uid 0, and writable by no group or other, sticky or not,
+/// since a sticky world-writable root would let any local user pre-create
+/// `weaver.run` and squat the agent; every directory above it held closed by
+/// section 9's ancestor rule. Otherwise the verb refuses `BoundaryUnverified`, since a
 /// principal that could write the coordination root could rename `weaver.run/`
 /// away and leave the next `load` a fresh `run.lock` while a run still holds
 /// the old one. Then the run directory is made and judged, owned by `owner`.
@@ -308,8 +310,9 @@ fn prepare_run_directory(config: &ServiceConfig, owner: u32) -> Result<PathBuf, 
         );
         LifecycleRefusal::BoundaryUnverified
     })?;
-    let closed = metadata.mode() & 0o022 == 0 || metadata.mode() & 0o1000 != 0;
-    if !metadata.is_dir() || metadata.uid() != owner || !closed {
+    let closed = metadata.mode() & 0o022 == 0;
+    let held = metadata.uid() == owner || metadata.uid() == 0;
+    if !metadata.is_dir() || !held || !closed {
         diag!(
             "weaver-admin: the coordination root {} is not a directory {owner} holds closed",
             root.display()
@@ -2524,9 +2527,10 @@ mod tests {
     }
 
     /// **The coordination root and every directory above it are held closed
-    /// before the run directory is made**, per Spec section 3: an open root, or
-    /// an open directory above it, refuses `BoundaryUnverified` and makes
-    /// nothing, and a closed or sticky one admits and makes the run directory.
+    /// before the run directory is made**, per Spec section 3: an open root,
+    /// sticky or not, or an open directory above it, refuses
+    /// `BoundaryUnverified` and makes nothing, and a closed one admits and
+    /// makes the run directory.
     /// Judged against this test's uid, production's owner being uid 0.
     /// Perturbation: drop the judgment from `prepare_run_directory` and the
     /// open cases make the run directory.
@@ -2544,23 +2548,18 @@ mod tests {
         let mode = |path: &std::path::Path, bits| {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(bits)).unwrap()
         };
-        for open in [0o775, 0o757, 0o777] {
+        for open in [0o775, 0o757, 0o777, 0o1777] {
             mode(&root, open);
             assert_eq!(
                 prepare_run_directory(&config, me).err(),
                 Some(LifecycleRefusal::BoundaryUnverified),
-                "a coordination root of mode {open:o}"
+                "a coordination root of mode {open:o}, sticky or not"
             );
             assert!(
                 !root.join("weaver.run").exists(),
                 "and nothing is made in it"
             );
         }
-        mode(&root, 0o1777);
-        assert!(
-            prepare_run_directory(&config, me).is_ok(),
-            "a sticky root admits"
-        );
         mode(&root, 0o755);
         assert!(
             prepare_run_directory(&config, me).is_ok(),
