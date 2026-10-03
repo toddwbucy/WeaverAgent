@@ -64,6 +64,7 @@ elif name == 'getent':
         print(f"{user}:x:{uid}:{uid}::{root / 'home' / user}:/bin/bash")
         sys.exit(0)
     if os.environ.get('ACCOUNT_FAIL'): sys.exit(1)
+    if args[:1] == ['group'] and os.environ.get('COLLISION_GROUP') == args[-1]: sys.exit(0)
     sys.exit(0 if os.environ.get('COLLISION') == args[-1] else 2)
 elif name == 'id':
     if args == ['-un']: print(os.environ.get('USER', ''))
@@ -241,7 +242,8 @@ class PlanTests(unittest.TestCase):
                     "USER": "fixture-no-home", "PROBE": str(self.root / "probe"),
                     "FIXTURE_ROOT": str(self.root)}
         for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "ROLE_COLLISION", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
-                     "VISUDO_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID"):
+                     "VISUDO_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
+                     "COLLISION_GROUP", "KEEP_ALIVE"):
             self.env.pop(name, None)
         # Redirect even shell builtin /home probes into the fixture. The
         # production scripts have no test-only path switches and never read
@@ -733,7 +735,8 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         # excepted. Every script's copy is the same text and answers alike.
         # Perturbation: drop the mode test from one copy, and its answer differs.
         texts = set()
-        for script in ("verify-load.sh", "create-agent.sh", "bootstrap-stack.sh", "update-stack.sh"):
+        for script in ("verify-load.sh", "create-agent.sh", "bootstrap-stack.sh", "update-stack.sh",
+                       "decommission.sh"):
             text = (self.repo / "deploy" / script).read_text()
             start = text.index("held_closed() {")
             texts.add(text[start:text.index("\n}\n", start)])
@@ -1201,6 +1204,32 @@ esac
                 self.assertIn(said, result.stderr)
                 self.assertFalse(any(c[0] == "cargo" for c in self.calls()))
 
+    def test_a_stray_user_group_refuses_before_provisioning(self):
+        # useradd --user-group makes a group named for each of the agent, the
+        # member and the connector, so a stray one is a collision found before
+        # anything is made. Perturbation: check only the trace and access groups,
+        # and a stray connector group lets the plan run.
+        for group in ("weaver-m1", "weaver-m1-state", "weaver-m1-admincon"):
+            with self.subTest(group=group):
+                self.env["COLLISION_GROUP"] = group
+                result = self.create()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"the group {group} already exists", result.stderr)
+        self.assert_unprivileged()
+
+    def test_stack_refuses_every_state_a_unit_can_hold_a_worker_in_and_looks_again(self):
+        # Codex on #79: activating, reloading and deactivating are states apart
+        # from active, and the look repeats just before the first binary moves.
+        # Perturbations: narrow the states, or drop the second look, and this
+        # fails.
+        text = (self.repo / "deploy" / "update-stack.sh").read_text()
+        self.assertIn("--state=active,activating,reloading,deactivating", text)
+        calls = [i for i in range(len(text)) if text.startswith("\nrefuse_legacy_units\n", i)]
+        self.assertEqual(len(calls), 2)
+        self.assertLess(calls[0], text.index('cargo test --release --locked'))
+        self.assertLess(text.index('sudo -v || die "--install needs sudo'), calls[1])
+        self.assertLess(calls[1], text.index('if [ ${#CHANGED[@]} -gt 0 ]; then\n  say "install"'))
+
     def test_stack_plans_on_a_box_whose_systemd_is_not_running(self):
         # A systemctl client beside another init reaches no manager, so the box
         # has no unit of the old layout and the plan goes on. Perturbation: drop
@@ -1408,6 +1437,43 @@ class RoundOneOf79Tests(unittest.TestCase):
         self.assertLess(restore, refusal)
         self.assertLess(refusal, first_write)
         self.assertIn("-name '.weaver-*.decommissioning'", script)
+
+    def test_decommission_runs_only_an_admin_held_closed(self):
+        # Codex on #79: the admin run as root is resolved and held closed, never
+        # merely found executable. Perturbation: drop the judgment, and the
+        # open directory's admin is picked.
+        script = (DEPLOY / "decommission.sh").read_text()
+        open_dir = self.dir / "open"
+        closed_dir = self.dir / "closed"
+        for d in (open_dir, closed_dir):
+            d.mkdir()
+            (d / "weaver-admin").write_text("#!/bin/sh\n")
+            (d / "weaver-admin").chmod(0o755)
+        open_dir.chmod(0o777)
+        stat = self.dir / "stat"
+        stat.write_text(DOUBLE)
+        stat.chmod(0o755)
+        program = ("plan() { :; }\n" + shell_function(script, "held_closed") + shell_function(script, "pick_admin")
+                   + 'pick_admin "$@"')
+        env = {**os.environ, "PATH": f"{self.dir}{os.pathsep}{os.environ['PATH']}", "FIXTURE_ROOT": str(self.dir),
+               "CALLS": str(self.dir / "calls")}
+        env.pop("BASH_ENV", None)
+        try:
+            run = subprocess.run(["bash", "-c", program, "x", str(open_dir / "weaver-admin"),
+                                  str(closed_dir / "weaver-admin")], env=env, text=True, capture_output=True,
+                                 timeout=20)
+        finally:
+            open_dir.chmod(0o755)
+        self.assertEqual(run.stdout, str(closed_dir / "weaver-admin"), run.stderr)
+
+    def test_decommission_archives_and_purges_every_territory_base(self):
+        # Codex on #79: the per-agent layout's territories under the stack
+        # record's agent-directory are archived, so they reach the purge list.
+        # Perturbation: drop the loop, and they are left behind.
+        script = (DEPLOY / "decommission.sh").read_text()
+        archive = script[script.index('if [ "$MODE" = archive ]; then'):script.index(" 3. purge\n")]
+        self.assertIn('archive_path "territories-$(basename "$d")" "$d"', archive)
+        self.assertIn("read_key /etc/weaver/stack agent-directory", script)
 
     def test_query_runs_reads_each_agent_now(self):
         # Stopped, then running, then stopped again, each read as it is now.

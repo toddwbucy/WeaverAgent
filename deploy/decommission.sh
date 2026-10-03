@@ -209,8 +209,45 @@ else:
     print("unknown")
 ' "$1"
 }
-ADMIN_BIN=""
-for b in "${!BIN_DIRS[@]}"; do [ -x "$b/weaver-admin" ] && { ADMIN_BIN="$b/weaver-admin"; break; }; done
+# **held_closed PATH: admin's rule for what a root process may trust**, per
+# weaver-admin-Spec section 9 (`judge_ancestors`). PATH, resolved to its
+# canonical path, and every directory above it up to `/`, must be owned by uid
+# 0 and writable by no group or other, unless it is a sticky directory, which
+# keeps another principal from renaming an entry it does not own. Fails
+# printing the first component that is not so, or the path where it does not
+# resolve. Every deploy script carrying it carries this same text.
+held_closed() {
+  local at owner mode
+  at=$(realpath -e -- "$1" 2>/dev/null) || { printf '%s' "$1"; return 1; }
+  while :; do
+    read -r owner mode < <(stat -c '%u %a' -- "$at" 2>/dev/null) || { printf '%s' "$at"; return 1; }
+    if [ "$owner" != 0 ] || { (( 8#$mode & 8#022 )) && ! { [ -d "$at" ] && (( 8#$mode & 8#1000 )); }; }; then
+      printf '%s' "$at"; return 1
+    fi
+    [ "$at" = / ] && return 0
+    at=$(dirname -- "$at")
+  done
+}
+
+# **pick_admin CANDIDATE...: the first admin this script may run as root.** The
+# candidates come from roots and a record another principal might have written
+# (an old layout's or a drifted one), so each is resolved to its canonical path
+# and held closed by admin's rule before it runs, never merely found executable
+# (Codex on #79). Prints the chosen path, or nothing.
+pick_admin() {
+  local candidate real
+  for candidate in "$@"; do
+    real=$(realpath -e -- "$candidate" 2>/dev/null) || continue
+    [ -f "$real" ] && [ -x "$real" ] || continue
+    held_closed "$real" >/dev/null || { plan "$candidate is not held closed by root, so it is not run"; continue; }
+    printf '%s' "$real"
+    return 0
+  done
+}
+ADMIN_CANDIDATES=()
+v=$(read_key /etc/weaver/stack prefix); [ -n "$v" ] && ADMIN_CANDIDATES+=("$v/bin/weaver-admin")
+for b in "${!BIN_DIRS[@]}"; do ADMIN_CANDIDATES+=("$b/weaver-admin"); done
+ADMIN_BIN=$(pick_admin "${ADMIN_CANDIDATES[@]}" || true)
 # **query_runs: asks every root's agent now**, filling RUNNING afresh. It runs
 # at discovery for the plan, and again in the purge once the delegated door is
 # shut, so no destructive step trusts an answer older than the last way a
@@ -243,7 +280,11 @@ systemctl is-active --quiet "$SLICE" 2>/dev/null && plan "$SLICE active ($(syste
 say "territories, record, log"
 TERRITORY_PATHS=()
 for d in "${!AGENT_DIRS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"; done
-for d in /var/lib/weaver /var/lib/weaver-agent "${!LOG_PATHS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"; done
+# The territories' bases: the per-agent layout's default and the stack record's
+# own `agent-directory`, where create-agent.sh made every territory.
+declare -A TERRITORY_BASES=([/var/lib/weaver-agent]=1)
+v=$(read_key /etc/weaver/stack agent-directory); [ -n "$v" ] && TERRITORY_BASES["$v"]=1
+for d in /var/lib/weaver "${!TERRITORY_BASES[@]}" "${!LOG_PATHS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"; done
 HOMES=()
 for u in "${WEAVER_USERS[@]}"; do
   h=$(getent passwd "$u" | cut -d: -f6)
@@ -393,6 +434,10 @@ if [ "$MODE" = archive ]; then
     [ ${#parts[@]} -gt 0 ] && archive_path "opt-$n" "${parts[@]}"
   done
   [ -e /var/lib/weaver ] && archive_path var-lib-weaver /var/lib/weaver
+  # Every territory's trace and state room, under each base (Codex on #79).
+  for d in "${!TERRITORY_BASES[@]}"; do
+    [ -e "$d" ] && archive_path "territories-$(basename "$d")" "$d"
+  done
   for d in "${!LOG_PATHS[@]}"; do archive_path "log-$(basename "$d")" "$d"; done
   for d in "${!AGENT_DIRS[@]}"; do archive_path "agent-config-$(basename "$d" | tr -d .)" "$d"; done
   [ ${#HOMES[@]} -gt 0 ] && archive_path home-weaver-users "${HOMES[@]}"

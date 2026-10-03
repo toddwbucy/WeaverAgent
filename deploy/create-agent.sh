@@ -527,7 +527,10 @@ for u in "$AGENT_USER" "$MEMBER_USER" "$RELAY_USER" "$CONNECTOR_USER"; do
     [ "$account_status" -eq 2 ] || die "cannot read account $u"
   fi
 done
-for g in "$TRACE_GROUP" "$ACCESS_GROUP"; do
+# The groups this run makes, the trace and access groups and the same-named
+# group `useradd --user-group` makes for the agent, the member and the
+# connector, each checked before anything is provisioned (Codex on #79).
+for g in "$TRACE_GROUP" "$ACCESS_GROUP" "$AGENT_USER" "$MEMBER_USER" "$CONNECTOR_USER"; do
   if getent group "$g" >/dev/null; then
     die "the group $g already exists"
   else

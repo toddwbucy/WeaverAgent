@@ -141,12 +141,21 @@ done
 # a client installed beside another init cannot reach a manager (Codex on
 # #79). One whose systemd cannot answer refuses, a failed look never read as
 # no unit.
-if command -v systemctl >/dev/null && [ -d /run/systemd/system ]; then
-  listing=$(systemctl list-units 'weaver-worker@*' --state=active --no-legend --plain 2>&1) \
+# **Every state in which a unit can hold a worker refuses**: active, and the
+# transitions into and out of it, `activating`, `reloading` and
+# `deactivating`, which systemctl lists apart from `active` (Codex on #79).
+# The look runs here, before anything is built, and again just before the
+# first binary is replaced, since the test and the build take minutes.
+refuse_legacy_units() {
+  local listing units
+  command -v systemctl >/dev/null && [ -d /run/systemd/system ] || return 0
+  listing=$(systemctl list-units 'weaver-worker@*' --state=active,activating,reloading,deactivating \
+      --no-legend --plain 2>&1) \
     || die "cannot ask systemd whether units of the layout before #50 still serve: $listing"
   units=$(printf '%s\n' "$listing" | awk 'NF {print $1}' | tr '\n' ' ')
   [ -z "${units// /}" ] || die "units of the layout before #50 still serve: $units. Unload each agent with the installed admin first (deploy/REDEPLOY.md section 8), then rerun."
-fi
+}
+refuse_legacy_units
 
 # **The agents are the roots under the base**, named as admin's name check
 # admits them (ASCII letters, digits, `-` and `_`), so a staged root
@@ -505,6 +514,7 @@ fi
 # connector's rule names its own user), so a repair run that installs nothing
 # needs the credential as much as one that installs everything (Codex on #79).
 sudo -v || die "--install needs sudo: reconcile and verify run admin as root"
+refuse_legacy_units
 
 # ------------------------------------------------------------------ 7. install
 PATCHED=()
