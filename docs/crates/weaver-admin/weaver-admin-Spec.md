@@ -7,7 +7,7 @@ agent. Code is written against it under the gates of Working Process section 6.
 **Document ID:** `weaver-admin-Spec`
 **Parent:** `weaver-admin-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #734
+**Landing PR:** #65
 
 ---
 
@@ -1879,22 +1879,22 @@ directory is closed to everyone but its owner**: its owner must be exactly the u
 root's `operator` key names, and a directory any other uid owns, the agent's or the
 member's account among them, refuses. **The operator is one person in the operator
 role**, on the operator's ruling of 2026-10-02 on #59, named in three places that never
-disagree: on the box, the uid the root's `operator` key names, which owns the agent's
-data; under #50, the operator role on the agent's lifecycle socket; in WeaverWeb, that
-person's authenticated identity. WeaverWeb authenticates the person and never chooses
-the box's operator uid, which is the box's to name and never taken from a server ("the
-box decides", toddwbucy/WeaverTools#6). The directory
-grants no permission to group or other and carries no access-control entry beyond its
-mode, so neither of the agent's uids, whatever passage the territory's provisioning
-opened through the directories above, can list it, enter it or read a file in it. **The
-entries this crate reads are held closed**: `agent.toml` and the prompt file are each a
-regular file and never a link, owned by that uid or by uid 0, and writable by no
-group or other. Their read bits are not judged, the closed directory already denying
-every other principal the path, so a file an editor writes under an ordinary umask
-passes. Other entries are the operator's and are not read. **Every directory above it is
-held closed as the root's ancestors are**, each owned by uid 0 or by the operator and
-writable by no group or other unless its sticky bit is set, since a directory another
-principal could write would let it rename the judged directory away. Any failure refuses
+disagree. On the box it is the uid the root's `operator` key names, which owns the
+agent's data. Under #50 it is the operator role on the agent's lifecycle socket. In
+WeaverWeb it is that person's authenticated identity. WeaverWeb authenticates the person
+and never chooses the box's operator uid, which is the box's to name and never taken
+from a server ("the box decides", toddwbucy/WeaverTools#6). The directory grants no
+permission to group or other and carries no access-control entry beyond its mode, so
+neither of the agent's uids, whatever passage the territory's provisioning opened
+through the directories above, can list it, enter it or read a file in it. **The entries
+this crate reads are held closed**: `agent.toml` and the prompt file are each a regular
+file and never a link, owned by that uid or by uid 0, and writable by no group or other.
+Their read bits are not judged, the closed directory already denying every other
+principal the path, so a file an editor writes under an ordinary umask passes. Other
+entries are the operator's and are not read. **Every directory above it is held closed
+as the root's ancestors are**, each owned by uid 0 or by the operator and writable by no
+group or other unless its sticky bit is set, since a directory another principal could
+write would let it rename the judged directory away. Any failure refuses
 `BoundaryUnverified`, naming the path on stderr, before a value is read, and a
 declaration directory that does not exist or is not a directory refuses the same way,
 the operator's provisioning being incomplete rather than the agent absent. The deploy
@@ -2362,7 +2362,7 @@ Each names what settles it, and none is this Spec's to settle alone.
   same dialect the agent config elected, one syntax for everything the operator writes,
   per the common-syntax direction the composability batch recorded on the working list.
   - **`AgentState` and `LoadFacts` field lists.** The floor names the types in
-  `lifecycle-answer` and their fields are satellites there, consumed here as drawn;
+  `lifecycle-answer` and their fields are satellites there, consumed here as drawn.
   `AgentSummary` left with `list` on the operator's ruling of 2026-10-02. -
   **The two values the argument vector does not carry.** Section 6's vector carries the
   socket path, the two placed organ binaries, the SPU's the agent's own, the loop file
