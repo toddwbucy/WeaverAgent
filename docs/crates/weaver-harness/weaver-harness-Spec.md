@@ -570,20 +570,22 @@ otherwise leave a child the signal was armed too late to reach. **The signal fol
 thread that forked, not the process**, so the worker forks its organs from its main
 thread, which lives for the process, and never from a thread that may end while the
 worker serves. **The worker exits after it answers left**, the run being its only
-purpose, so the run lock admin's `unload` waits on is released by its exit, per
-`weaver-admin-Spec` section 3. **Two descriptors cross the start step's exec into the
-worker and are the worker's to keep**: the run lock, which it holds for its life and
-never closes or reopens, a record lock being dropped when its holder closes any
-descriptor of the file, and the write end of the trace relay's lifetime pipe. **The
-worker marks both close-on-exec as its first act, before it starts any thread or forks
-anything**, so no organ inherits a writable descriptor to root's lock file or a write
-end that would keep the relay alive, and no window exists in which one could. **The
-instruments are perturbation**: an organ stand-in still running after the worker is
-killed with `SIGKILL`, watched to fail when the death signal is not set, and the run
-lock held by the worker's own pid, read from outside with `F_GETLK` after the enter and
-again after a turn, watched to fail when the worker closes the inherited descriptor and
-the lock frees. The worker cannot open root's `0600` file anyway, so the watch is on the
-descriptor it inherited.
+purpose, so the run lock admin's `unload` waits on is released by its exit together with
+the member's and the relay's, per `weaver-admin-Spec` section 3. **Two descriptors cross
+the start step's exec into the worker and are the worker's to keep**: the run lock's
+open file description, which it holds for its life and never passes on, a description
+lock being released only when the last descriptor of that description closes, and the
+write end of the trace relay's lifetime pipe. **The worker marks both close-on-exec as
+its first act, before it starts any thread or forks anything**, so no organ inherits a
+writable descriptor to root's lock file or a write end that would keep the relay alive,
+and no window exists in which one could. The organs never hold the run lock, being bound
+to the worker by their death signal instead. **The instruments are perturbation**: an
+organ stand-in still running after the worker is killed with `SIGKILL`, watched to fail
+when the death signal is not set, and the run lock's description held in the worker's
+own descriptor table, read from outside after the enter and again after a turn, watched
+to fail when the worker closes the inherited descriptor and its table no longer shows
+it. The worker cannot open root's `0600` file anyway, so the watch is on the descriptor
+it inherited.
 
 ```graph
 node: harness-organs-die-with-the-worker
@@ -759,7 +761,7 @@ socket's pathname outlives the process that bound it, so a bind against a name a
 worker left would fail. The directory this socket lives in now outlives the worker, the
 init system that removed it having left the agent on 2026-10-03 (#50), so admin's start
 step clears a name a dead worker left before it starts the next, which is safe because
-it does so under its invocation lock with the run lock found free, so no worker runs and
+it does so holding its invocation lock and the run lock it took, so no worker runs and
 no other invocation can start one, per `weaver-admin-Spec` section 3. The worker
 therefore meets no inherited name and has nothing to clear. **A bind that finds its name
 occupied is a fault and never a thing to remove**, because the only ways a name is
@@ -1233,7 +1235,7 @@ program's rather than the operator's, and this crate is the party positioned to 
 the coordination socket it bound as its first act sits in the agent's runtime directory,
 so the gate's name is that directory and a fixed leaf. **What that buys is admin's start
 step rather than a rule this crate enforces.** The start step clears a dead worker's
-names under its invocation lock, with the run lock found free, before the next worker
+names holding its invocation lock and the run lock it took, before the next worker
 starts, per `weaver-admin-Spec` section 6, so the next bind meets no stale name. A
 derivation reaching anywhere else would need a cleanup this program has already refused
 to write, an unlink racing a live successor.

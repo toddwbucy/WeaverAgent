@@ -1484,12 +1484,12 @@ invocation, so the caller polls again.
 
 **Three more cases join it on the same ruling, each one fact.** `InvocationInFlight`
 says another invocation holds this agent's invocation lock, so this one touched nothing,
-per `weaver-admin-Spec` section 3. `LockHolderUnknown` says the run lock's holder could
-not be pinned, the kernel naming no pid this crate can signal safely, a holder in
-another pid namespace among them, so no signal was sent. `WorkerWouldNotExit` says a
-worker still held the run lock after the unload's escalation, so the agent was not
-reported unloaded. None claims more than its fact, and each tells the caller to read the
-agent's state with the next `show`.
+per `weaver-admin-Spec` section 3. `LockHolderUnknown` says the run lock was held and no
+process holding it could be found, the description having been carried where no
+descriptor table shows it, so no signal was sent. `WorkerWouldNotExit` says a
+constituent of the run still held the run lock after the unload's escalation, so the
+agent was not reported unloaded. None claims more than its fact, and each tells the
+caller to read the agent's state with the next `show`.
 
 **`FaultReport` is two members, and the custody rule of apex section 5.2 is
 the whole argument for the split.** The `case` is what the harness itself

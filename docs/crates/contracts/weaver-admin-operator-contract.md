@@ -67,12 +67,11 @@ WeaverWeb sends admin-con an abstract verb, admin-con maps it locally to one of 
 fixed command lines, and no command crosses a network. **The sink** is a real crossing:
 admin passes the sink handle across the boundary and the program writes through it,
 something of the operator's stands behind it, and neither side sees the other's
-interior. **The trace door** is the relay's socket, `trace.sock` in the agent's
-root-owned run directory `<coordination-root>/weaver.run/<agent>/`, standing only for a
-file sink, grouped to the agent's own access group `weaver-<agent>-admin`
-and admitting exactly one declared reader by the kernel's peer credential, per
-`weaver-admin-Spec` section 6. None is network ingress, and none breaches anything Gate
-holds, on the grounds `weaver-admin-PRD` section 3 states.
+interior. **The trace door** is the relay's door, standing only for a file sink,
+reachable by the agent's own access group alone and admitting exactly one declared
+reader, whose identity the box verifies and the caller never asserts. Where it stands
+and how it is reached are `weaver-admin-Spec` section 6's. None is network ingress, and
+none breaches anything Gate holds, on the grounds `weaver-admin-PRD` section 3 states.
 
 ## 2. What crosses in
 
@@ -149,11 +148,22 @@ by default, which a caller's bound must exceed. **An invocation finishes even wh
 caller disappears**, its outcome recorded in the agent's `admin.log`, so a caller that
 gives up reads the outcome from the next `show`.
 
+**The agent's lifetime is bound to its admin-con**, on the operator's ruling of
+2026-10-03 on #72, enforced by the containment the invoker runs in, and the program
+depends on no supervisor for it. Each agent has its own admin-con, and stopping that
+admin-con stops its agent and only its agent: the management plane going down may mean
+it was taken over, so the agent fails closed with it. A dropped invocation is not a
+stopped admin-con, and still runs to completion, per the bound above. Three consequences
+are the invoker's to build against: an orderly stop of admin-con unloads its agent
+first, a kill is an unclean stop whose next load resets to the latest save point, and
+the invoker's resource limits contain the agent. The cross-repository half is
+toddwbucy/WeaverWeb#15.
+
 **At the trace door, the record as a read-only stream**: the relay writes a header line
 naming the file's identity (device, inode, birth time), then the trace's own lines from
 the verified position exactly as written, following new lines with a heartbeat while
 idle, every added line a `TraceControl` of `weaver-types-Spec` section 3.1. It serves
-the loaded run's own file by descriptor, so a rotation of the sink's path changes
+the file the loaded run opened, so a rotation of the sink's path changes
 nothing it reads and reaches the reader as a new identity in the next run's header, ends
 the stream on a truncation rather than smoothing it over, and refuses a position that
 does not verify before a byte is sent. A reader of the record this way reads the file
@@ -194,8 +204,8 @@ after the escalation refuses `WorkerWouldNotExit` and answers no state. A line a
 caller's rule does not grant never reaches the program, sudo refusing it, so it has no
 refusal here. **At the trace door, refusals before a byte is sent**: any caller but the
 declared reader, and a position that does not verify, each logged in the agent's
-`admin.log`. Where the sink is a pipe or a socket no relay stands and no socket is
-bound, so the door is closed, and a relay that has died closes it until the next load,
+`admin.log`. Where the sink is a pipe or a socket no relay stands, so the door is
+closed, and a relay that has died closes it until the next load,
 both of which a reader sees as a refused connection.
 
 The ask-side cases this section enumerated until 2026-08-05 travelled with the socket to
@@ -298,4 +308,5 @@ gate rather than a defect in this clause.
   step, the run lock, the sudo rule and the trace relay. `weaver-types-Spec` section 3.1
   carries the trace door's shapes and the cause, and `weaver-harness-Spec` section 2
   the worker's ownership of its organs. WeaverWeb's admin-con maps its verbs to the
-  granted lines and reads the trace door, toddwbucy/WeaverWeb#12.
+  granted lines and reads the trace door, toddwbucy/WeaverWeb#12, and binds its agent's
+  lifetime to its own, toddwbucy/WeaverWeb#15.

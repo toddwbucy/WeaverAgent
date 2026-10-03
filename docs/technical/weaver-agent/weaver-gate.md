@@ -64,7 +64,7 @@ operator's.** The instruction declares the access rule - the operator's
 election - and the engine supplies the endpoint in the raise directive, this
 crate binding it: a path inside the agent's runtime directory, which admin's
 start step makes before the worker starts and clears of a dead worker's names before the
-next one, under its invocation lock with the run lock found free (since 2026-10-03,
+next one, holding its invocation lock and the run lock it took (since 2026-10-03,
 #50, when the agent left systemd). Each party names what only it can know. A socket
 pathname outlives the process that bound it, so a name chosen anywhere else survives its
 worker and refuses the next load with a stale file. Placing it where the start step

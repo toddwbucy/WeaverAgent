@@ -359,13 +359,16 @@ namespace**, which no agent name can produce: an agent's runtime directory is
 `weaver-<agent>/` and a name carries no `.`, so `weaver.run/` is never any agent's,
 where `weaver-run/` would be the runtime directory of an agent named `run`, and
 `weaver-<agent>-run/` that of an agent named `<agent>-run`, each owned by that agent.
-Each is a POSIX record lock, which the kernel releases when its holder dies, so neither
-can go stale the way a pidfile does, and `F_GETLK` names the holder's pid from the
-kernel rather than from a file a process wrote. **They stand in a root-owned directory
-and not the agent's runtime directory** because the agent owns that one: a process of
-the agent's could unlink a lock file there and leave the next `load` finding a free lock
-on a new file while the worker still held the old, starting a second worker of one
-agent.
+Each is a record lock the kernel holds and releases when its last holder is gone, so
+neither can go stale the way a pidfile does, and they are of two kinds because they
+answer for two kinds of holder: the invocation lock is a classic POSIX record lock,
+owned by one process, never inherited by a fork, and named by `F_GETLK` with its
+holder's pid, and the run lock is an open file description lock (`F_OFD_SETLK`), owned
+by one open file description that every process of the run shares. **They stand in a
+root-owned directory and not the agent's runtime directory** because the agent owns that
+one: a process of the agent's could unlink a lock file there and leave the next `load`
+finding a free lock on a new file while the worker still held the old, starting a second
+worker of one agent.
 
 - **The invocation lock**, on `admin.lock`, says whether an invocation is changing this
   agent now. **The run directory is made before either lock is taken**: every verb's
@@ -395,37 +398,44 @@ agent.
   the bound, and the verb then refuses `InvocationInFlight` with the cause named as
   readers holding the lock, the caller retrying after its poller pauses. A caller
   polling `show` during a long load is therefore answered that a transition is in
-  flight, and never refused or left to time out.
-- **The run lock**, on `run.lock`, says whether a worker runs. The start step's worker
-  child opens it, root-owned and mode `0600`, for writing while it is still root, takes
-  it exclusively as its first act after the fork, per the handshake below, and carries
-  the descriptor across the exec into the worker, a record lock surviving the exec. **A
-  record lock is not inherited by a fork**, so the invocation's own process never holds
-  it, and only the worker child does, from just after the fork to the instant the worker
-  dies. The worker marks the descriptor close-on-exec at once, so no organ it forks
-  inherits a writable descriptor to root's file, and it never closes or reopens it, a
-  record lock being dropped when its holder closes any descriptor of the file.
+  flight, and never refused or left to time out. **No child of the invocation holds
+  it**: its descriptor is opened close-on-exec and a classic lock is not inherited by a
+  fork, so it is released the instant the invocation exits, whatever its children do.
+- **The run lock**, on `run.lock`, says whether the run stands, and **the agent is
+  running while any of its constituent processes, the worker, the state member or the
+  trace relay, holds the run lock's open file description.** The start step opens
+  `run.lock`, root-owned and mode `0600`, for writing and takes an exclusive open file
+  description lock on it, without waiting, before it forks anything. Each of the three
+  children inherits that description at its fork and carries it across its exec at a
+  fixed descriptor number, so the lock is held from before the first fork until the
+  last of the three exits, and the kernel releases it then, however each one ended.
+  **Nothing waits for a child to take it**: a child exists only after the lock is
+  taken and holds it from its first instruction, so no interval leaves a constituent
+  alive with the lock free, and a `SIGKILL` of the invocation at any point leaves
+  whatever it has already started holding the lock, for the stranded-run recovery
+  below to find. The invocation's own copy closes when it exits, which releases nothing
+  while a child holds the description. **Each constituent marks its descriptor
+  close-on-exec as its first act** and never passes it on, so no organ the worker forks
+  inherits it, the organs being bound to the worker by their death signal instead, per
+  `weaver-harness-Spec` section 2.2, and no process outside the run holds a writable
+  descriptor to root's file. An organ outliving the worker by the instant its `SIGKILL`
+  takes is not a run. **A description lock is dropped only when the last descriptor
+  referring to that description closes**, so a constituent that opens `run.lock` again,
+  or closes a duplicate, releases nothing, where a classic lock is dropped by its
+  holder's close of any descriptor of the file.
 
 **The order within a load is stated, because the setup happens before the worker
-exists.** The invocation lock is taken first. The run lock is then read and must be
-free, or the load refuses `AgentRunning` or reaps a stranded worker, per below.
+exists.** The invocation lock is taken first. The run lock is then taken by the
+invocation itself, without waiting, and where it is held the load refuses `AgentRunning`
+or reaps a stranded run, per below, and takes it once the reap has released it.
 Everything the start step does next, repairing the runtime directory, clearing a dead
-worker's names and a dead relay's `trace.sock`, standing the member and the relay,
-happens under the invocation lock with the run lock found free, which is what makes
-clearing safe: no other invocation can start a worker while this one holds the
-invocation lock, and no worker runs. **The worker child takes the run lock before
-anything else, and the parent waits for it**, so no interval leaves a worker child alive
-with neither lock held. The child arms `PR_SET_PDEATHSIG` to `SIGKILL` and checks that
-its parent still stands, so a parent killed before the next step takes the child with
-it. It takes the run lock. It writes one byte on a close-on-exec handshake pipe. Only
-then does it clear the death signal, since the worker must outlive the invocation that
-starts it. The parent reads that byte before it proceeds, and a child that dies first
-closes the pipe and fails the load. So a `SIGKILL` of the invocation before the
-handshake ends the child too, with nothing left to strand, and one after it leaves a
-child holding the run lock, which the stranded-worker recovery below finds: from the
-handshake on, the run lock speaks for the worker.
+worker's names and a dead relay's `trace.sock`, standing the member and the relay, and
+forking the worker, happens holding both locks, which is what makes clearing safe: no
+other invocation can start a constituent while this one holds the invocation lock, and
+no constituent of an earlier run holds the run lock this one took. Taking the run lock,
+rather than reading it free, leaves no interval between the read and the first fork.
 
-**A held lock says a worker runs and nothing about its lifecycle state.** A held lock
+**A held lock says the run stands and nothing about its lifecycle state.** A held lock
 may be a worker that has not yet answered enter, one serving a turn, or one unwinding
 after leave, and apex section 6's states distinguish exactly those, so reading it as
 loaded-and-idle would be this crate inventing a fact, and would contradict the charter's
@@ -448,19 +458,20 @@ refuses `NoSuchAgent` as every verb does, and whether a declaration validates st
 one agent named, admin being one agent's organ on the operator's ruling of 2026-10-01,
 and managing several WeaverWeb's or a separate application's.
 
-**A worker stranded before enter is recovered by the next `unload` or `load`**, the
-second half of #60. An invocation that ended between the start step and the enter, by
-`SIGKILL` now that this crate ignores the catchable signals, leaves a worker holding the
-run lock whose observation answers `Unloaded`, no enter having reached it, and an
-invocation lock nobody holds. **A worker is stranded only when all three hold**: the run
+**A run stranded before enter is recovered by the next `unload` or `load`**, the second
+half of #60. An invocation that ended between taking the run lock and the enter, by
+`SIGKILL` now that this crate ignores the catchable signals, leaves whatever it had
+started holding the run lock, the member alone, the member and the relay, or those and a
+worker whose observation answers `Unloaded`, no enter having reached it, and an
+invocation lock nobody holds. **A run is stranded only when all three hold**: the run
 lock held, the invocation lock free, and the observation `Unloaded` or silent inside the
-dial's bound. The invocation lock is what tells a stranded worker from a healthy start:
-a load in flight holds it for the whole verb, the enter's 900-second wait included, so a
-worker still admitting its weights is never mistaken for an abandoned one. The three
-facts make it safe to end: `unload` meeting it ends
-it by the escalation below and answers provisioned-and-unloaded, and `load` meeting it
-ends it the same way, logs the reap, and proceeds, where a worker answering `Idle` or
-`Active` refuses the load `AgentRunning`.
+dial's bound, silent where no worker was forked. The invocation lock is what tells a
+stranded run from a healthy start: a load in flight holds it for the whole verb, the
+enter's 900-second wait included, so a worker still admitting its weights is never
+mistaken for an abandoned one. The three facts make it safe to end: `unload` meeting it
+ends every holder by the escalation below and answers provisioned-and-unloaded, and
+`load` meeting it ends it the same way, logs the reap, takes the released lock, and
+proceeds, where a worker answering `Idle` or `Active` refuses the load `AgentRunning`.
 
 **The record's instrument stays a test.** `show` on an admitted agent whose run lock is
 held by a worker that has not yet answered enter answers through the exchange and
@@ -555,23 +566,41 @@ to: admin-validate-starts-no-process
 ```
 
 **`unload` runs the charter's three steps, and the third waits on the second.** Direct
-leave and await the aggregate, then await the worker's exit, which the harness makes
-after it answers left, read as the run lock's release, publishing the member's finished
-save points per section 6 once the member has stopped, and answer
-provisioned-and-unloaded **only once the lock is free**. The publication adds no step to
-the three, being the second step's tail. A refusal on leave, `ActivityNotAtRest` above
-all, returns to the operator unchanged and answers nothing further.
+leave and await the aggregate, then await the run's exit, the worker's after it answers
+left and the member's and the relay's with it, read as the run lock's release,
+publishing the member's finished save points per section 6 once the member has stopped,
+and answer provisioned-and-unloaded **only once the lock is free**. The publication adds
+no step to the three, being the second step's tail. A refusal on leave,
+`ActivityNotAtRest` above all, returns to the operator unchanged and answers nothing
+further.
+
+**The leave has a bound of its own, sixty seconds from the directive.** A worker that
+accepts leave and answers nothing inside it is a worker that would not exit: the verb
+goes to the escalation below without the aggregate, answers provisioned-and-unloaded
+once the lock is free, the run having ended with no leave answered, which `admin.log`
+records and the next load's reset reads, and refuses `WorkerWouldNotExit` where the lock
+still stands after it. Without the bound a wedged worker would hold the verb, and with
+it the invocation lock, for ever, and since the invocation ignores the catchable
+signals no later verb could recover the agent.
 
 **The wait has a bound and an escalation, and the report never runs ahead of the lock.**
-A worker that answered left and still holds the run lock past the bound is sent
-`SIGTERM`, then `SIGKILL` after a second bound. **The target is pinned before it is
-signalled**: this crate reads the holder's pid with `F_GETLK`, refuses
-`LockHolderUnknown` where the pid is zero or negative, which a holder in another pid
-namespace reads as and which `kill` would take for this crate's own process group, opens
-a pidfd on it (`pidfd_open`), reads `F_GETLK` again and requires the same pid, and only
-then signals through the pidfd (`pidfd_send_signal`), so a holder that exited between
-the read and the signal, and a pid reused since, is never signalled. **An agent reported
-unloaded while its worker still runs is the one report this verb must never produce**:
+A run whose lock is still held past the bound after left, or past the leave's own
+bound, is ended by the escalation: every holder is sent `SIGTERM`, then every holder
+still standing `SIGKILL` after a second bound. **The holders are found from the kernel's
+descriptor tables, because a description lock names no pid**: `F_OFD_GETLK` reports a
+held lock with an `l_pid` of `-1`, so this crate stats `run.lock` for its device and
+inode and scans `/proc/<pid>/fd` of every process for a descriptor referring to that
+file, root reading every table, its own process excluded, since it holds a descriptor of
+its own to read the lock. **Each target is pinned before it is signalled**: for each
+holder found it opens a pidfd (`pidfd_open`), confirms through `/proc/<pid>/fd/<n>` that
+the descriptor it found still refers to the same device and inode, and only then
+signals through the pidfd (`pidfd_send_signal`), so a holder that exited between the
+scan and the signal, and a pid reused since, is never signalled, a reused pid holding no
+descriptor to root's file. **Where the lock is held and the scan finds no holder** the
+verb refuses `LockHolderUnknown` and signals nothing, the description having been
+carried where no table shows it, such as a descriptor in flight on a socket. **An agent
+reported unloaded while any constituent still runs is the one report this verb must
+never produce**:
 where the lock is still held after the escalation, the verb refuses `WorkerWouldNotExit`
 and answers no state, which the rollback of this section records as an act it could not
 undo, per charter section 5.
@@ -628,8 +657,10 @@ to: axiom-harness-integrates-by-the-loop
 
 **Rollback is the reap plus one directive, as data.** What a failed load can leave is a
 running worker, a connected sink, and a device the SPU took, per charter section 5, and
-the rollback walks what stands: direct leave where a run was entered, end the worker by
-the escalation above where the start step started one, close the sink where one opened.
+the rollback walks what stands: direct leave where a run was entered, end every
+constituent the start step started by the escalation above, which never signals this
+invocation, then close the invocation's own copy of the run lock's description, which
+frees the lock, and close the sink where one opened.
 Each act's failure is logged per section 8, the rollback reports what it could not undo,
 and no state is published on any partial outcome, which is the same rule as the partial
 load and not a second one.
@@ -637,7 +668,7 @@ load and not a second one.
 **No failed unit is left to clear.** The clear the rollback asked of the manager, on
 the operator's ruling of 2026-10-01, retired with the manager on 2026-10-03: a worker
 that died leaves no name held and no lock behind, so the next load proceeds, and a
-worker still holding the lock is ended by the escalation above.
+constituent still holding the lock is ended by the escalation above.
 
 ```graph
 node: admin-rollback-logs-its-account
@@ -1040,10 +1071,10 @@ on a crash or a reboot, sandbox hardening and log collection belong to whoever p
 and deploys the agent, with systemd, a container or anything else, and are not this
 framework's. What the transient unit did for the agent, the start step does itself, as
 root, in the `load` verb, after section 4's inventory has passed and section 5 has
-opened the sink, and under the invocation lock with the run lock found free, per section
+opened the sink, and holding the invocation lock and the run lock it took, per section
 3's order: it prepares the runtime directory, stands the trace relay, starts the state
-member, and starts the worker under the agent's own account, whose child takes the run
-lock first, by the handshake of section 3, before the rest of its preparation. Each is
+member, and starts the worker under the agent's own account, each child inheriting the
+run lock's description at its fork, per section 3. Each is
 below, and `weaver-admin-systemd-contract` retired with the unit. The code sites the
 later act removes are `crates/weaver-admin/src/unit.rs` and the `weaver-worker@<agent>`
 naming in the deploy scripts.
@@ -1059,9 +1090,9 @@ per `weaver-gate-Spec` section 3. **The directory outlives the worker now**, whe
 unit's cleanup removed it at every stop, so the start step finds one standing and
 repairs it rather than trusting it: it is opened without following a link, judged for
 its owner, group and mode, and set right, and a socket name left in it by a dead worker
-is removed, which is safe only because this happens under the invocation lock with the
-run lock found free, per section 3's order, so no worker of this agent runs and no other
-invocation can start one.
+is removed, which is safe only because this happens holding the invocation lock and
+the run lock this load took, per section 3's order, so no constituent of an earlier run
+stands and no other invocation can start one.
 
 **The group is named rather than inherited, and the mode rests on that.** The worker is
 dropped to the agent's uid and to `weaver-<agent>` as its group by name, never to
@@ -1143,43 +1174,57 @@ to: admin-runtime-directory-mode-is-stated
 ```
 
 **The worker is started bare, under its own account, detached, and owning its organs.**
-The start step forks, and once the child holds the run lock by section 3's handshake it
-does six more things before it executes the worker with the vector below. It takes a new
-session (`setsid`), so the worker belongs to no terminal and survives the invocation
-that started it. It points its standard input at `/dev/null` and its standard output and
-error at the agent's worker log, a file of its own beside the operations log and never
-that log, since an agent holding a writable handle to the boundary's record could write
-into it. It replaces its environment with a fixed one, `PATH=/usr/bin:/bin`, `HOME` the
-agent's home, `LANG=C.UTF-8`, and `LD_LIBRARY_PATH` where the root's optional
-`library-path` names the engine libraries, the value `unit-properties` carried before it
-retired, and nothing else, so no variable of the caller's or of sudo's reaches the
-worker or the organs that inherit its environment. **`library-path` is judged and
-recorded**: the directory it names is held to the root's own judgment, root-owned and
-writable by no group or other, its ancestors closed as the root's are, because whatever
-it holds is loaded into the worker and its organs, and its value rides the enter for the
-harness to record on the `load` event beside the stack, so the record names the
-libraries a run loaded, pinning their digests being #71's. **It resets `SIGPIPE`,
-`SIGHUP`, `SIGINT` and `SIGTERM` to their default dispositions and clears its signal
-mask**, because the invocation ignores those four, per section 2, and an ignored
-disposition survives a fork and an exec, so without the reset the worker, and through it
-every organ, would ignore the unload's `SIGTERM` and a packager's stop alike. **The
-relay's and the member's children take their own new session first and reset the same
-four the same way after it**, before their own execs, so neither belongs to the invoking
-terminal's process group: a caller's hangup or interrupt reaching that group then
-reaches only the invocation, which ignores both, and never a child whose dispositions
-are already back at their defaults. It sets `PR_SET_NO_NEW_PRIVS`. It narrows its
-supplementary groups to `weaver-<agent>`, then its gid, then its uid, in that order,
-because the narrowings need the privilege the last one gives away. Then it executes. It
-carries across the exec exactly two descriptors besides its standard streams: the run
-lock, which section 3 needs held from the start step's lock to the worker's death, and
-the write end of the relay's lifetime pipe, below. **The sink does not cross at the
-exec.** It crosses in the enter directive as ancillary data over the coordination
-channel, per section 5 and section 7, the route the harness contract already holds and
-tests, so nothing of the record rides the worker's start and the organs the worker forks
-inherit no handle to it. The worker binds its own coordination socket in the runtime
-directory, per `weaver-harness-Spec` section 2.3, and this crate dials it per section 7
-as before. The worker kills its organs when it dies, per `weaver-harness-Spec` section
-2, so an orphaned SPU never holds the device.
+The start step forks, the child inheriting the run lock's description, and the child
+does six things before it executes the worker with the vector below. It takes a new
+session (`setsid`), so the worker belongs to no terminal and outlives the invocation
+that started it, though never its invoker's containment, below. It points its standard
+input at `/dev/null` and its standard output and error at the agent's worker log, a file
+of its own beside the operations log and never that log, since an agent holding a
+writable handle to the boundary's record could write into it. It replaces its
+environment with a fixed one, `PATH=/usr/bin:/bin`, `HOME` the agent's home,
+`LANG=C.UTF-8`, and `LD_LIBRARY_PATH` where the root's optional `library-path` names the
+engine libraries, the value `unit-properties` carried before it retired, and nothing
+else, so no variable of the caller's or of sudo's reaches the worker or the organs that
+inherit its environment. **`library-path` is judged and recorded**: the directory it
+names is held to the root's own judgment, root-owned and writable by no group or other,
+its ancestors closed as the root's are, because whatever it holds is loaded into the
+worker and its organs, and its value rides the enter for the harness to record on the
+`load` event beside the stack, so the record names the libraries a run loaded, pinning
+their digests being #71's. **It resets `SIGPIPE`, `SIGHUP`, `SIGINT` and `SIGTERM` to
+their default dispositions and clears its signal mask**, because the invocation ignores
+those four, per section 2, and an ignored disposition survives a fork and an exec, so
+without the reset the worker, and through it every organ, would ignore the unload's
+`SIGTERM` and a packager's stop alike. **The relay's and the member's children take
+their own new session first and reset the same four the same way after it**, before
+their own execs, so neither belongs to the invoking terminal's process group: a caller's
+hangup or interrupt reaching that group then reaches only the invocation, which ignores
+both, and never a child whose dispositions are already back at their defaults. It sets
+`PR_SET_NO_NEW_PRIVS`. It narrows its supplementary groups to `weaver-<agent>`, then its
+gid, then its uid, in that order, because the narrowings need the privilege the last one
+gives away. Then it executes. It carries across the exec exactly two descriptors besides
+its standard streams: the run lock's description, which section 3 needs held by every
+constituent of the run, and the write end of the relay's lifetime pipe, below. **The
+sink does not cross at the exec.** It crosses in the enter directive as ancillary data
+over the coordination channel, per section 5 and section 7, the route the harness
+contract already holds and tests, so nothing of the record rides the worker's start and
+the organs the worker forks inherit no handle to it. The worker binds its own
+coordination socket in the runtime directory, per `weaver-harness-Spec` section 2.3, and
+this crate dials it per section 7 as before. The worker kills its organs when it dies,
+per `weaver-harness-Spec` section 2, so an orphaned SPU never holds the device.
+
+**The agent's lifetime is bound to its invoker's containment, and this crate depends on
+no supervisor**, on the operator's ruling of 2026-10-03 on #72. The new session leaves
+the terminal and nothing else: every process the start step starts stays in whatever
+containment the invocation ran in, so where admin-con runs as a service the worker, the
+member and the relay share its group, and stopping admin-con stops its agent and only
+its agent, each agent having its own. **That is the intended behaviour and not a leak**:
+the management plane going down may mean it was taken over, so the agent fails closed
+with it. This crate moves no process into a group of its own and asks no supervisor to,
+so the binding is the invoker's containment's and never this crate's code. The
+consequences are stated in `weaver-admin-operator-contract` section 3 and carried to
+toddwbucy/WeaverWeb#15: an orderly stop
+of admin-con unloads first, a kill is an unclean stop that resets the next load to the
+latest save point, and the invoker's resource limits contain the agent.
 
 **A failed dial is answered from the worker's own exit, which the start step can read.**
 The invocation is the worker's parent until it exits, so where the dial's bound expires
@@ -1480,10 +1525,12 @@ clean, and this crate holds no reason to touch a directory whose names it no lon
 watches, the pathname wait having retired. What made an unconditional removal safe still
 holds and now guards the member's own unlink: a second invocation refuses
 `InvocationInFlight` at the invocation lock of section 3, a load meeting a live worker
-refuses `AgentRunning` at the run lock, and the member is started only under the
-invocation lock with the run lock found free, so a name found standing belongs to a load
-that has ended, the one-member rule of `weaver-state-PRD` section 4 held by the guard
-rather than by a handshake at the name.
+refuses `AgentRunning` at the run lock, which the member itself holds while it lives,
+and the member is started only holding the invocation lock and the run lock this load
+took, so a name found standing belongs to a run that has ended, the one-member rule of
+`weaver-state-PRD` section 4 held by the guard rather than by a check at the name. A
+load killed after the member is forked leaves the member holding the run lock, so the
+next load finds the run stranded and ends the member before it starts another.
 
 **The member retires itself and pid 1 reaps it.** `weaver-state-PRD`
 section 4 has the process retiring with each unload while its holdings stand for
@@ -1515,8 +1562,8 @@ worker, under the relay account `weaver-<agent>-relay`, whose one group is the t
 group `weaver-<agent>-trace`, and never under the agent's account or the member's. **The
 start step binds its socket and hands it over**: as root, having first removed a
 `trace.sock` a previous run's relay left, which a relay cannot unlink from the root's
-directory and whose name outlives its listener, and doing so under the invocation lock
-with the run lock found free, as it clears the worker's names, it binds `trace.sock` in
+directory and whose name outlives its listener, and doing so holding the invocation
+lock and the run lock it took, as it clears the worker's names, it binds `trace.sock` in
 the agent's run directory of section 3, `<coordination-root>/weaver.run/<agent>/`,
 root's and apart from the agent's runtime directory, the socket root-owned, mode `0660`
 and grouped to the agent's per-agent access group `weaver-<agent>-admin`, which the
@@ -2320,7 +2367,7 @@ is that integrating is the loop's: the stop answer is relayed unchanged because 
 stop found is a fact about a run the harness conducts, the devices a binding assigns are
 unchecked because forming a view of them would be this crate reasoning about a domain it
 cannot see, the operations log stops at supervision because conduct is recorded in the
-trace the harness authors, and the run lock is read as a worker's presence and never as
+trace the harness authors, and the run lock is read as a run's presence and never as
 a state because telling a run at rest from a run serving is known to the party that
 conducts it and not to the one that started the worker. The ten owings below are the
 same rule at the document level.
@@ -2534,7 +2581,7 @@ perturbation-verified:
   reaps the healthy start as stranded.
 - **A load meeting a live worker refuses**, watched by a `load` of an agent whose worker
   answers `Idle`: it answers `AgentRunning` and starts nothing. The perturbation skips
-  the run lock's read, and a second worker starts.
+  the run lock's take, and a second worker starts.
 - **Each child's ignored signals are reset before its exec**, watched by the unload's
   escalation sending `SIGTERM` to a worker that does not exit after left: the worker
   ends. The perturbation drops the reset, the worker inherits the invocation's ignored
@@ -2548,9 +2595,22 @@ perturbation-verified:
 - **The lock stands where the agent cannot replace it**, watched by the agent's uid
   trying to unlink and recreate `run.lock`: refused by the root-owned run directory.
   The perturbation places it in the runtime directory, and a second worker starts.
-- **`unload` answers only once the lock is free**, watched by a worker that ignores
-  leave: the escalation signals the lock's holder and the answer waits on the release.
-  The perturbation answers on the leave alone, and the worker still runs.
+- **`unload` answers only once the lock is free**, watched by a worker that answers
+  left and does not exit: the escalation signals the lock's holders and the answer
+  waits on the release. The perturbation answers on the leave alone, and the worker
+  still runs.
+- **A wedged leave is bounded**, watched by a stand-in worker that accepts leave and
+  never answers: the `unload` escalates once the leave's bound expires and answers when
+  the lock is free. The perturbation drops the leave's bound, the verb never returns,
+  and every later verb refuses `InvocationInFlight`.
+- **The escalation ends every holder**, watched by a stranded run whose stand-in member
+  does not retire on the first door's end: the `unload` signals the worker and the
+  member and answers once the lock is free. The perturbation signals the first holder
+  the scan finds, and the verb refuses `WorkerWouldNotExit` with the member standing.
+- **A reused pid is never signalled**, watched by a holder that exits after the scan
+  and a stand-in process given its pid before the signal: the stand-in survives. The
+  perturbation drops the descriptor's re-check after `pidfd_open`, and the stand-in is
+  killed.
 - **The cause is the uid sudo reports**, watched by a `load` under sudo whose `load`
   event names `SUDO_UID`. The perturbation reads the uid from standard input, and a
   caller names any uid it likes.
@@ -2571,11 +2631,13 @@ perturbation-verified:
 - **A caller's hangup ends no child**, watched by a load whose terminal hangs up after
   the relay and the member are forked: both stand. The perturbation drops their
   `setsid`, and the hangup kills them.
-- **No worker child outlives a load killed before the handshake**, watched by a load
-  sent `SIGKILL` after the fork and before the child's handshake byte: the child dies
-  with it and the next `load` finds both locks free. The perturbation clears the death
-  signal before the run lock is taken, and an unlocked worker child survives the load.
-- **A worker stranded before enter is reaped**, watched by a load killed between the
+- **A load killed at any point leaves its run locked**, watched by a load sent
+  `SIGKILL` after the member is forked and before the worker is: the member holds the
+  run lock, and the next `load` finds the run stranded, ends the member and loads, two
+  members never standing. The perturbation takes the run lock in the worker's child
+  instead of before the first fork, and the next load starts a second member beside
+  the first.
+- **A run stranded before enter is reaped**, watched by a load killed between the
   start step and the enter: the next `load` ends the stranded worker, logs the reap and
   loads. The perturbation refuses `AgentRunning` on any held lock, and the agent stays
   stuck until a person intervenes.

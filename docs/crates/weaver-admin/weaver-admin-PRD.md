@@ -43,10 +43,11 @@ agent could not, are root's acts, so they belong to the one seat that holds root
 is the operator in the admin role, per section 7. The crate is an invocation rather than
 a resident: it runs when the operator runs a verb, exits when the verb answers, holds
 nothing between verbs, and what persists across invocations is what the filesystem and
-the kernel already hold: the run lock a running worker holds, released by the kernel at
-its death. No init system stands in the agent's lifetime, on the operator's ruling of
-2026-10-03 on #50: the agent starts like an appliance, when someone wants it, and
-supervision, restart and hardening belong to whoever packages and deploys it.
+the kernel already hold: the run lock the run's processes hold, released by the kernel
+when the last of them is gone. No init system stands in the agent's lifetime, on the
+operator's ruling of 2026-10-03 on #50: the agent starts like an appliance, when someone
+wants it, and supervision, restart and hardening belong to whoever packages and deploys
+it.
 
 ```graph
 node: weaver-admin
@@ -436,12 +437,12 @@ principal, which is what lets the worker write a stream its uid could not open.
 Close-on-exec is not admin's to confer on a passed descriptor and is the harness's
 obligation at the receive, per the contract. 5. **Run the start step, which starts the
 worker under the agent's own account.** Root does what the transient unit did, on the
-operator's ruling of 2026-10-03 on #50: under its invocation lock, with the run lock
-found free, it makes the agent's runtime directory with its owner and mode, stands the
-trace relay and the state member, and forks the worker, whose child takes the run lock
-first, by a handshake the parent waits on, which takes a new session, drops to the
-agent's uid and group, and executes with no new privileges. The worker starts bare of
-the sink, its first act being to bind the coordination socket of section 6 inside its
+operator's ruling of 2026-10-03 on #50: under its invocation lock, having taken the run
+lock before it forks anything, it makes the agent's runtime directory with its owner and
+mode, stands the trace relay and the state member, and forks the worker, each child
+holding the run lock it inherits, and the worker's child takes a new session, drops to
+the agent's uid and group, and executes with no new privileges. The worker starts bare
+of the sink, its first act being to bind the coordination socket of section 6 inside its
 runtime directory and listen, and the sink crosses at step 6 as before. **Bare states
 what no descriptor crosses and says nothing about arguments.** A worker cannot bind a
 name it was never told, and the organ binaries it forks at enter are a provisioning fact
@@ -477,7 +478,7 @@ so what admin receives is one answer aggregating the fan-out, ready or a refusal
 where it stopped. 7. **Publish loaded and idle.** Only now, and only on a ready
 aggregate. A partial load is never published as loaded, and the published state is idle
 rather than active. Publishing is the invocation's answer and the log's entry, and the
-standing fact behind both is the run lock: whether a worker runs between invocations is
+standing fact behind both is the run lock: whether the run stands between invocations is
 a question the kernel answers, held by no map of admin's.
 
 Step 6 is the one ask in the sequence, and a refusal at any point inside it enters
@@ -523,10 +524,11 @@ absent, has no counterpart on the way up.
    carries left, or a refusal naming where the sequence stopped. Admin holds no
    channel to Gate or the SPU, per section 6, so this directive is the whole of
    admin's part in their unwinding.
-2. **Await the worker's exit.** The worker exits after it answers left, its
-   descriptors close with it, and the kernel releases the run lock, which is what this
-   step waits on, with a bounded escalation to the lock's holder where the worker does
-   not exit, per the Spec's section 3.
+2. **Await the run's exit.** The worker exits after it answers left, the member and
+   the relay with it, and the kernel releases the run lock when the last of them is
+   gone, which is what this step waits on. The leave has a bound of its own, and where
+   it expires or the run does not exit a bounded escalation ends every holder of the
+   lock, per the Spec's section 3.
 3. **Publish provisioned and unloaded.** Which is a different state from absent, and
    absent is reached by an operator act rather than by a verb.
 
@@ -655,8 +657,8 @@ per `weaver-state-Spec` section 4. A sink opened at step 4 is closed, nothing ha
 been written through it.
 
 A `load` that fails at step 5, or at step 6 before the `load` event is authored,
-leaves a worker that never entered a run. Admin ends the worker by the run lock's
-escalation, and nothing entered the stream.
+leaves a worker that never entered a run. Admin ends what the start step started by
+the run lock's escalation, and nothing entered the stream.
 
 **A device conflict refused at model admission is a refusal inside step 6, and it
 arrives after the `load` event in the fan-out's own order,** stand up, author,
@@ -677,7 +679,7 @@ held for it, dissolved the same day for want of a validator to enforce them.
 plus one directive.** A refused fan-out is the harness's to unwind along the same seams
 it fanned out on, and what returns to admin is the refusal naming where it stopped.
 Admin's remaining obligations are its own: direct leave where a run was entered, and end
-the worker where the start step started one, the run lock's release being the proof, so
+what the start step started, the run lock's release being the proof, so
 the operator's next load finds the lock free (the clear of a failed unit, the operator's
 ruling of 2026-10-01, retiring with the unit on 2026-10-03). Nothing durable of the
 program's exists to remove. Each of those can itself fail, and a rollback that cannot
@@ -828,7 +830,8 @@ middle: the authority the delegation bounded is authority root already holds, an
 the bound that matters, what the agent can reach, is the kernel's and unchanged.
 What outlives the operator's login session is the worker itself, detached into its own
 session and reparented to pid 1 by the start step, so nothing of admin's needs to run
-for the coordination socket or the sink to survive a logout.
+for the coordination socket or the sink to survive a logout. It does not outlive its
+invoker's containment, which binds the agent's lifetime, per the Spec's section 6.
 
 **Reading and analysis stay outside the program, and the recut does not move
 them.** A trace carries whatever the agent handled, so the code that parses
@@ -849,7 +852,8 @@ agent identity is the opposite of that: it is the wall drawn around exactly one 
 built from OS primitives rather than from a supervisor's bookkeeping. **Keep-alive past
 a logout is the start step's detach, and keep-alive past a crash or a reboot is the
 packaging's**, on the operator's ruling of 2026-10-03 on #50: the worker takes its own
-session and outlives the shell that started it, and restarting it on a crash or a reboot
+session and outlives the shell that started it, though not its invoker's containment,
+and restarting it on a crash or a reboot
 is for whoever packages and deploys the agent, with systemd, a container or anything
 else, and not this framework's.
 
@@ -1039,9 +1043,10 @@ second executable separating nothing.
 **The cgroup is closed, and by neither of the two candidates.** It was posed as a
 provisioning artifact that load populates against a residency artifact created at load
 and torn down at unload. Under delegation the init system made one per unit, and since
-2026-10-03 this program makes none: a bound on what the agent consumes is the
-packaging's, and the worker's organs dying with it is the harness's, per
-`weaver-harness-Spec` section 2.
+2026-10-03 this program makes none: the agent stays in its invoker's containment,
+which binds its lifetime and bounds what it consumes, per the Spec's section 6, a bound
+of its own is the packaging's, and the worker's organs dying with it is the harness's,
+per `weaver-harness-Spec` section 2.
 
 **Drop-first is closed and its subject is gone.** The start step drops in its own child
 before the exec, so the worker starts as the agent uid and there is no privilege window

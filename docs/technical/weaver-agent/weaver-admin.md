@@ -85,11 +85,10 @@ search bit.
 
 **One internal seam, to the engine** - the coordination socket, which the
 engine binds inward inside its own sandbox and which admits root alone. **And
-two external contracts**: the operator surface, which is the invocation itself
-- a verb and an agent name in, a typed answer or a typed refusal out, the exit
-status agreeing - and the init-system contract, facing the one party that
-outlives every invocation. All three are on
-[the contracts page](../contracts.md).
+one external contract**, the operator surface: the invocation itself - a verb and
+an agent name in, a typed answer or a typed refusal out, the exit status
+agreeing - the sink, and the trace door. The init-system contract retired when the
+agent left systemd on 2026-10-03. Both are on [the contracts page](../contracts.md).
 
 ## How it works
 
@@ -105,10 +104,10 @@ outlives every invocation. All three are on
    admin's decision - the engine is structurally unable to make it, never
    learning a path - and the descriptor is obtained here, under root.
 5. **Run the start step**, root's act since 2026-10-03 (#50): under the invocation
-   lock, with the run lock found free, make the agent's runtime directory, stand the
-   trace relay and the state member, and start the worker in its own session under the
-   agent's account, its child taking the run lock first, by a handshake the parent waits
-   on. The worker
+   lock, take the run lock before forking anything, make the agent's runtime directory,
+   stand the trace relay and the state member, and start the worker in its own session
+   under the agent's account, every child inheriting the run lock, so the agent runs
+   while any of the three holds it. The worker
    starts bare of the sink, and its first act is to bind the coordination socket in
    its runtime directory.
 6. **Dial the channel, direct enter, receive the aggregate.** The directive
