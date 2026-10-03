@@ -772,14 +772,33 @@ say "made"
 # on the W4a run of 2026-09-25).
 printf '   %s joined groups %s, %s and %s: a session that predates this run needs a new\n' "$OPERATOR" "$AGENT_USER" "$MEMBER_USER" "$TRACE_GROUP"
 printf '   login before the groups apply (`newgrp` selects one group in one shell)\n'
-# **The connector reaches a line through its rule**, as the stand-in for
-# admin-con: the operator's sudo becomes the connector's user, and that user
-# runs `sudo -n`, which only the rule can satisfy.
+# **probe_connector VERB: the connector reaches a line through its rule**, as
+# the stand-in for admin-con: the operator's sudo becomes the connector's user,
+# and that user runs `sudo -n`, which only the rule can satisfy. It succeeds
+# only on the answer the verb owes, `validated` for validate and a state for
+# show, and prints what came back either way (Codex on #79).
+probe_connector() {
+  local said answer
+  said=$(sudo -n -u "$CONNECTOR_USER" sudo -n "$ADMIN_BINARY" "$1" "$NAME" 2>&1) || true
+  answer=$(printf '%s\n' "$said" | tail -n 1)
+  printf '%s' "$answer"
+  python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.argv[2])
+except ValueError:
+    sys.exit(1)
+sys.exit(0 if d.get("kind") == {"validate": "validated", "show": "state"}[sys.argv[1]] else 1)
+' "$1" "$answer"
+}
 if [ "$ADMIN_BASE" = /etc/weaver/admin ]; then
   check_verb=show
   [ "$CONNECTOR_ROLE" = operator ] && check_verb=validate
-  said=$(sudo -n -u "$CONNECTOR_USER" sudo -n "$ADMIN_BINARY" "$check_verb" "$NAME" 2>&1) || true
-  printf '   %s ran %s through its rule: %s\n' "$CONNECTOR_USER" "$check_verb" "$(printf '%s\n' "$said" | tail -n 1)"
+  if answer=$(probe_connector "$check_verb"); then
+    printf '   %s ran %s through its rule: %s\n' "$CONNECTOR_USER" "$check_verb" "$answer"
+  else
+    die "$NAME is admitted, but its connector $CONNECTOR_USER could not run $check_verb through $SUDO_RULE: $answer. Another sudo policy may override the rule (sudo -l -U $CONNECTOR_USER shows what it grants)"
+  fi
 fi
 printf '   validate it before loading:\n'
 printf '     sudo WEAVER_ADMIN_CONFIG=%s %s validate %s\n' "$ADMIN_BASE" "$ADMIN_BINARY" "$NAME"

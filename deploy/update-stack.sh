@@ -496,6 +496,13 @@ fi
 
 [ "$INSTALL" -eq 1 ] || { say "plan only. rerun with --install"; exit 0; }
 
+# **Credentials first, on every install path.** Reconcile and verify run admin
+# with `sudo -n` as the operator whether or not a binary changed, and no rule
+# grants the operator's account those lines without a password (the
+# connector's rule names its own user), so a repair run that installs nothing
+# needs the credential as much as one that installs everything (Codex on #79).
+sudo -v || die "--install needs sudo: reconcile and verify run admin as root"
+
 # ------------------------------------------------------------------ 7. install
 PATCHED=()
 ADDED=()
@@ -599,9 +606,6 @@ trap on_exit EXIT
 
 if [ ${#CHANGED[@]} -gt 0 ]; then
   say "install"
-  # Credentials are asked for where they are needed, and the install is the
-  # step that needs them.
-  sudo -v
   # **Exclusive, not merely named.** A seconds-resolution name with
   # `mkdir -p` lets two runs in one second share a directory, and the
   # second run's copies would then be what the first run's rollback

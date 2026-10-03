@@ -104,11 +104,12 @@ the operator's declarations, prompts and the agents' two logs.
 sudo deploy/decommission.sh --purge /mnt/bulk-store/dev-archive-<date>-<host>
 ```
 
-Refuses again if any agent runs. Stops any unit of a box from before #50, drops the
+Removes the sudo rules first, so no connector can start a run, then asks every agent
+again and refuses if any runs. Stops any unit of a box from before #50, drops the
 databases then the roles, removes the weaver lines from `pg_hba.conf` and
 `pg_ident.conf` (backups beside them) and reloads PostgreSQL, removes the `weaver-*`
-users with their homes and their groups, removes every path on the list (the sudo
-rules and the run directories among them), removes a prefix left empty, and prints what
+users with their homes and their groups, removes every path on the list (the sudo rules
+and the run directories among them), removes a prefix left empty, and prints what
 remains. After it, `getent passwd | grep weaver-` and `ls /opt/weaver` should show
 nothing but `models`.
 

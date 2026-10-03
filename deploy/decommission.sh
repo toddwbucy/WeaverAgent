@@ -210,20 +210,28 @@ else:
 }
 ADMIN_BIN=""
 for b in "${!BIN_DIRS[@]}"; do [ -x "$b/weaver-admin" ] && { ADMIN_BIN="$b/weaver-admin"; break; }; done
-RUNNING=()
-for root in "${AGENT_ROOTS[@]}"; do
-  agent=${root##*/}
-  base=$(dirname "$root")
-  if [ -z "$ADMIN_BIN" ]; then
-    plan "$agent  unknown: no weaver-admin found beside the roots' binaries"
-    RUNNING+=("$agent (unknown)")
-    continue
-  fi
-  said=$(WEAVER_ADMIN_CONFIG="$base" "$ADMIN_BIN" show "$agent" 2>/dev/null | tail -n 1 || true)
-  verdict=$(run_verdict "$said")
-  plan "$agent  $verdict  $said"
-  [ "$verdict" = stopped ] || RUNNING+=("$agent ($verdict)")
-done
+# **query_runs: asks every root's agent now**, filling RUNNING afresh. It runs
+# at discovery for the plan, and again in the purge once the delegated door is
+# shut, so no destructive step trusts an answer older than the last way a
+# connector could have started a run (Codex on #79).
+query_runs() {
+  RUNNING=()
+  local root agent base said verdict
+  for root in "${AGENT_ROOTS[@]}"; do
+    agent=${root##*/}
+    base=$(dirname "$root")
+    if [ -z "$ADMIN_BIN" ]; then
+      plan "$agent  unknown: no weaver-admin found beside the roots' binaries"
+      RUNNING+=("$agent (unknown)")
+      continue
+    fi
+    said=$(WEAVER_ADMIN_CONFIG="$base" "$ADMIN_BIN" show "$agent" 2>/dev/null | tail -n 1 || true)
+    verdict=$(run_verdict "$said")
+    plan "$agent  $verdict  $said"
+    [ "$verdict" = stopped ] || RUNNING+=("$agent ($verdict)")
+  done
+}
+query_runs
 [ ${#AGENT_ROOTS[@]} -gt 0 ] || plan "no agent roots"
 for c in "${!COORD_ROOTS[@]}"; do
   [ -d "$c/weaver.run" ] && plan "$c/weaver.run  (run directories)"
@@ -410,6 +418,17 @@ say "re-verify $DEST"
 [ ${#ACTIVE_UNITS[@]} -eq 0 ] || die "units still active: ${ACTIVE_UNITS[*]}"
 [ ${#RUNNING[@]} -eq 0 ] || die "agents still run or cannot be read: ${RUNNING[*]}"
 plan "verified"
+
+say "the delegated door, shut"
+# **No connector can start a run from here on**: the sudo rules, archived
+# above, are removed before anything else, and every agent is then asked again.
+# Only a root shell can still load one, which is the operator running this.
+# A run found now refuses the purge with the rules already gone, and the
+# archive holds them to put back.
+for f in "${SUDO_RULES[@]}"; do rm -f -- "$f" && plan "removed $f"; done
+say "runs, asked again"
+query_runs
+[ ${#RUNNING[@]} -eq 0 ] || die "agents run again or cannot be read: ${RUNNING[*]}. The sudo rules are removed and archived in $DEST (sudoers-weaver.tar.zst); unload each, then rerun the purge"
 
 say "units"
 for u in "${UNITS[@]}"; do systemctl stop "$u" 2>/dev/null || true; systemctl reset-failed "$u" 2>/dev/null || true; plan "stopped $u"; done

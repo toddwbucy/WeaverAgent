@@ -1326,6 +1326,89 @@ class DecommissionTests(unittest.TestCase):
         self.assertLess(purge, second)
 
 
+class RoundOneOf79Tests(unittest.TestCase):
+    """Codex's first pass on #79: the connector probe, the purge's fresh look,
+    and the credential before every install path, each run or read as the
+    scripts define them."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="weaver-79-")
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+
+    def test_the_connector_probe_succeeds_only_on_the_owed_answer(self):
+        # A denied nested sudo, a refusal, or a wrong kind fails the probe, and
+        # create-agent then refuses. Perturbation: restore `|| true` as the
+        # probe's verdict, and the denied case passes.
+        script = (DEPLOY / "create-agent.sh").read_text()
+        sudo = self.dir / "sudo"
+        sudo.write_text('#!/bin/sh\nprintf "%s\\n" "$PROBE_ANSWER"\n')
+        sudo.chmod(0o755)
+        program = shell_function(script, "probe_connector") + 'probe_connector "$1"'
+        env = {**os.environ, "PATH": f"{self.dir}{os.pathsep}{os.environ['PATH']}",
+               "CONNECTOR_USER": "weaver-m1-admincon", "ADMIN_BINARY": "/opt/weaver/bin/weaver-admin",
+               "NAME": "m1"}
+        env.pop("BASH_ENV", None)
+        for verb, answer, passes in (("validate", '{"kind":"validated"}', True),
+                                     ("show", '{"kind":"state","state":"unloaded"}', True),
+                                     ("validate", "sudo: a password is required", False),
+                                     ("validate", '{"kind":"boundary_unverified"}', False),
+                                     ("show", '{"kind":"validated"}', False)):
+            with self.subTest(verb=verb, answer=answer):
+                run = subprocess.run(["bash", "-c", program, "x", verb], env={**env, "PROBE_ANSWER": answer},
+                                     text=True, capture_output=True, timeout=20)
+                self.assertEqual(run.returncode == 0, passes, run.stdout + run.stderr)
+                self.assertEqual(run.stdout, answer)
+        self.assertIn("if answer=$(probe_connector", script)
+        self.assertNotIn('"$check_verb" "$NAME" 2>&1) || true', script)
+
+    def test_the_purge_shuts_the_delegated_door_and_asks_again(self):
+        # The purge removes the sudo rules and queries every agent afresh before
+        # its first destructive step, never trusting the discovery-time answer.
+        # Perturbations: drop the second query, or move it after the units
+        # step, and this fails.
+        script = (DEPLOY / "decommission.sh").read_text()
+        purge = script[script.index(" 3. purge\n"):]
+        door = purge.index('for f in "${SUDO_RULES[@]}"; do rm -f')
+        again = purge.index("\nquery_runs\n")
+        refusal = purge.index('die "agents run again or cannot be read')
+        first_destructive = purge.index('say "units"')
+        self.assertLess(door, again)
+        self.assertLess(again, refusal)
+        self.assertLess(refusal, first_destructive)
+
+    def test_query_runs_reads_each_agent_now(self):
+        # Stopped, then running, then stopped again, each read as it is now.
+        # Perturbation: keep the last query's entries, and the third reads one.
+        script = (DEPLOY / "decommission.sh").read_text()
+        admin = self.dir / "weaver-admin"
+        admin.write_text('#!/bin/sh\ncat "$STATE_FILE"\n')
+        admin.chmod(0o755)
+        state = self.dir / "state"
+        program = ("plan() { :; }\n" + shell_function(script, "run_verdict") + shell_function(script, "query_runs")
+                   + f'AGENT_ROOTS=({self.dir}/base/m1); ADMIN_BIN={admin}\n'
+                   + 'query_runs; echo "${#RUNNING[@]}"; cp "$STATE_FILE" "$STATE_FILE.first"; cp "$NEXT" "$STATE_FILE"; '
+                   + 'query_runs; echo "${#RUNNING[@]} ${RUNNING[*]}"; cp "$STATE_FILE.first" "$STATE_FILE"; '
+                   + 'query_runs; echo "${#RUNNING[@]}"')
+        state.write_text('{"kind":"state","state":"unloaded"}\n')
+        nxt = self.dir / "next"
+        nxt.write_text('{"kind":"state","state":"idle","constituents":[9]}\n')
+        env = {**os.environ, "STATE_FILE": str(state), "NEXT": str(nxt)}
+        env.pop("BASH_ENV", None)
+        run = subprocess.run(["bash", "-c", program], env=env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(run.stdout.split("\n")[:3], ["0", "1 m1 (running)", "0"], run.stderr)
+
+    def test_every_install_path_takes_the_credential_first(self):
+        # A repair install with nothing changed still runs admin with `sudo -n`,
+        # so the credential is taken before the install branch. Perturbation:
+        # move `sudo -v` back inside the changed branch, and this fails.
+        script = (DEPLOY / "update-stack.sh").read_text()
+        take = script.index('sudo -v || die "--install needs sudo')
+        self.assertLess(script.index('say "plan only. rerun with --install"; exit 0; }'), take)
+        self.assertLess(take, script.index('if [ ${#CHANGED[@]} -gt 0 ]; then\n  say "install"'))
+        self.assertEqual(script.count("sudo -v"), 1)
+
+
 class BootstrapStandingTests(unittest.TestCase):
     """bootstrap-stack.sh never reads what it cannot see as absent or empty: its checks
     for a standing stack record, admin base and install, run as the script runs them,
