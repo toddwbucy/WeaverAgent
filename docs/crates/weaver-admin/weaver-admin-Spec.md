@@ -191,8 +191,12 @@ system already draws around an executed program.
 
 **The verb and its agent arrive as arguments.** One verb per invocation, `load`,
 `unload`, `validate`, `stop`, or `show`, with the agent name as the one further
-argument, which every verb takes. **Two running-agent verbs are owed and not granted
-yet**: `save-point`, asking the running worker for a save point on demand, and
+argument, which every verb takes. **The verbs are the application layer's primitives,
+and their orchestration is interior**, on the operator's ruling of 2026-10-03 on #72:
+each verb keeps one promise and does inside the agent only what that promise needs, and
+a choice between outcomes that its caller should make is left to the caller, admin-con,
+which reads `show` and issues the next verb. **Two running-agent verbs are owed and not
+granted yet**: `save-point`, asking the running worker for a save point on demand, and
 `restore`, a live restore, over the coordination channel of section 7, on the operator's
 ruling of 2026-10-03 on #50. Neither has a directive or an exchange in this act, so both
 are owed to #58's code act (A3), which shapes the save points and their asks, and no
@@ -320,8 +324,8 @@ must exceed it, a caller giving up first reading the outcome from the next `show
 2026-10-03 on #50, which folds in #60. This crate ignores `SIGPIPE`, `SIGHUP`, `SIGINT`
 and `SIGTERM` from its first instruction, the last two because sudo relays a caller's
 interrupt and termination to the command it runs, so a caller cancelling or timing out
-cannot end the verb part way. Only `SIGKILL` can, and the stranded-worker recovery of
-section 3 covers what it leaves, so a caller that hangs up, closes the pipe or is killed
+cannot end the verb part way. Only `SIGKILL` can, and `unload` ends what it leaves,
+per section 3, so a caller that hangs up, closes the pipe or is killed
 does not end the verb. A write of the answer to a closed standard output fails and is
 ignored, and the verb runs to completion all the same. Its outcome is recorded in
 `admin.log` whatever became of the caller, and the next `show` reads the agent's state.
@@ -416,8 +420,8 @@ worker of one agent.
   **Nothing waits for a child to take it**: a child exists only after the lock is
   taken and holds it from its first instruction, so no interval leaves a constituent
   alive with the lock free, and a `SIGKILL` of the invocation at any point leaves
-  whatever it has already started holding the lock, for the stranded-run recovery
-  below to find. The invocation's own copy closes when it exits, which releases nothing
+  whatever it has already started holding the lock, for a later `unload` to end, per
+  below. The invocation's own copy closes when it exits, which releases nothing
   while a child holds the description. **Each constituent marks its descriptor
   close-on-exec as its first act** and never passes it on, so no organ the worker forks
   inherits it, the organs being bound to the worker by their death signal instead, per
@@ -430,14 +434,15 @@ worker of one agent.
 
 **The order within a load is stated, because the setup happens before the worker
 exists.** The invocation lock is taken first. The run lock is then taken by the
-invocation itself, without waiting, and where it is held the load refuses `AgentRunning`
-or reaps a stranded run, per below, and takes it once the reap has released it.
-Everything the start step does next, repairing the runtime directory, clearing a dead
-worker's names and a dead relay's `trace.sock`, standing the member and the relay, and
-forking the worker, happens holding both locks, which is what makes clearing safe: no
-other invocation can start a constituent while this one holds the invocation lock, and
-no constituent of an earlier run holds the run lock this one took. Taking the run lock,
-rather than reading it free, leaves no interval between the read and the first fork.
+invocation itself, without waiting, and where it is held the load refuses
+`AgentRunning`, or `Unanswered` where the worker is silent, and touches nothing: a load
+never ends an existing run. Everything the start step does next, repairing the runtime
+directory, clearing a dead worker's names and a dead relay's `trace.sock`, standing the
+member and the relay, and forking the worker, happens holding both locks, which is what
+makes clearing safe: no other invocation can start a constituent while this one holds
+the invocation lock, and no constituent of an earlier run holds the run lock this one
+took. Taking the run lock, rather than reading it free, leaves no interval between the
+read and the first fork.
 
 **A held lock says the run stands and nothing about its lifecycle state.** A held lock
 may be a worker that has not yet answered enter, one serving a turn, or one unwinding
@@ -462,29 +467,27 @@ refuses `NoSuchAgent` as every verb does, and whether a declaration validates st
 one agent named, admin being one agent's organ on the operator's ruling of 2026-10-01,
 and managing several WeaverWeb's or a separate application's.
 
-**A run stranded before enter is recovered by the next `unload` or `load`**, the second
-half of #60. An invocation that ended between taking the run lock and the enter, by
-`SIGKILL` now that this crate ignores the catchable signals, leaves whatever it had
-started holding the run lock, the member alone, the member and the relay, or those and a
-worker whose observation answers `Unloaded`, no enter having reached it, and an
-invocation lock nobody holds. **A run is stranded only when all three hold, the third
-by positive evidence**: the run lock held, the invocation lock free, and either the
-observation answering `Unloaded` or no worker listening at all, the dial finding no
-name bound or its connection refused through the dial's whole bound, which is a run
-whose worker was never forked or never bound. **Silence is not evidence**: a worker
-that accepts the connection and answers nothing inside the observation's bound may be a
-healthy run finishing the token the harness contract lets delay `Observe`, so it is
-never reaped on silence. `load` meeting a silent run refuses `Unanswered` and touches
-nothing, and `unload` meeting one directs leave as it would for any run, the leave's own
-bound and escalation of the unload below being what ends a worker that is truly wedged,
-and a healthy one answering `ActivityNotAtRest`. The
-invocation lock is what tells a stranded run from a healthy start: a load in flight
-holds it for the whole verb, the enter's 900-second wait included, so a worker still
-admitting its weights is never mistaken for an abandoned one. The three facts make it
-safe to end: `unload` meeting it ends every holder by the escalation below and answers
-provisioned-and-unloaded, and `load` meeting it ends it the same way, logs the reap,
-takes the released lock, and proceeds, where a worker answering `Idle` or `Active`
-refuses the load `AgentRunning`.
+**A load never ends an existing run, and recovery from a killed invocation is the
+caller's, through `show` and `unload`**, the second half of #60, on the operator's
+ruling of 2026-10-03 on #72. A load's promise is a run started by this load or a refusal
+with nothing changed, so a held run lock refuses it `AgentRunning`, or `Unanswered`
+where the worker accepts the observation and answers nothing inside its bound, and it
+touches nothing either way. An invocation that ended between taking the run lock and the
+enter, by `SIGKILL` now that this crate ignores the catchable signals, leaves whatever
+it had started holding the run lock, the member alone, the member and the relay, or
+those and a worker whose observation answers `Unloaded`, no enter having reached it.
+**`unload` ends it, because ending whatever holds the run lock is `unload`'s own
+promise**: it acts on the lock and not on a classification, and a held invocation lock
+refuses it `InvocationInFlight`, so it never meets a load still admitting its weights.
+Where the observation answers `Idle` it directs leave per below. Where it answers
+`Unloaded`, or no worker listens at all, the dial finding no name bound or its
+connection refused through the dial's whole bound, no run was entered and there is
+nothing to leave, so it goes straight to the escalation below. Where the worker is
+silent it directs leave all the same, the leave's own bound and the escalation ending a
+worker that is truly wedged and a healthy one answering `ActivityNotAtRest`. **The
+recovery path is admin-con's**: it reads `show`'s facts and issues `unload`, then
+`load`, the choice between leaving a run standing and ending it being the caller's and
+never a load's.
 
 **The record's instrument stays a test.** `show` on an admitted agent whose run lock is
 held by a worker that has not yet answered enter answers through the exchange and
@@ -513,7 +516,7 @@ with the map, and the unit-name uniqueness that replaced it went with the init s
 What holds now is the invocation lock: a second `load`, `unload` or `stop` arriving
 while one runs refuses `InvocationInFlight` before it touches anything, across the
 pre-enter window included, so two loads cannot both start a worker and an unload cannot
-reap a load that is still admitting its model. The run lock then answers what a later
+end a load that is still admitting its model. The run lock then answers what a later
 invocation finds: a worker present or not.
 
 ```graph
@@ -597,9 +600,12 @@ it the invocation lock, for ever, and since the invocation ignores the catchable
 signals no later verb could recover the agent.
 
 **The wait has a bound and an escalation, and the report never runs ahead of the lock.**
-A run whose lock is still held past the bound after left, or past the leave's own
+A run whose lock is still held thirty seconds after left, or past the leave's own
 bound, is ended by the escalation: every holder is sent `SIGTERM`, then every holder
-still standing `SIGKILL` after a second bound. **The holders are found from the kernel's
+still standing ten seconds later `SIGKILL`, and the lock is read a last time five
+seconds after that. **The three waits are fixed**, as the leave's and the stop's are,
+so `unload` holds the invocation lock at most the leave's sixty seconds and these
+forty-five past it. **The holders are found from the kernel's
 descriptor tables, because a description lock names no pid**: `F_OFD_GETLK` reports a
 held lock with an `l_pid` of `-1`, so this crate stats `run.lock` for its device and
 inode and scans `/proc/<pid>/fd` of every process for a descriptor referring to that
@@ -644,20 +650,20 @@ deciding what a stop found are different acts, the second is the harness's,
 and a relay that translated the answer would be admin ruling on a run it does
 not conduct.
 
-**Every answer a verb waits for under its invocation lock has a bound, and the stop's
-is sixty seconds from the directive.** The enter's is section 2's 900 seconds, the
-leave's sixty above, and the observation's five seconds from the `Observe`, after the
-dial's bound, which covers only the connect.
-A worker that accepts stop and answers nothing inside its bound is not ended, a stop
-being no unload: the verb refuses `Unanswered`, exits, and releases the invocation
-lock with the run as it stands, so `show` and `unload` reach the agent next, and
-`unload`'s own bounds and escalation are the recovery. **An observation unanswered
-inside its bound** refuses `show` with `Unanswered` too, releasing the shared hold, and
-claims no state, and inside `load` or `unload` it is silence, which section 3 never
-reads as a stranded run. **No verb holds the invocation lock past a bound it states**,
-since the invocation ignores the catchable signals and a wait without end would leave
-every later verb refusing `InvocationInFlight` and `show` answering `InTransition`.
-The interior verbs of section 2 take the same rule by the recipe.
+**Every answer a verb waits for under its invocation lock has a bound, and the stop's is
+sixty seconds from the directive.** The enter's is section 2's 900 seconds, the leave's
+sixty above, and the observation's five seconds from the `Observe`, after the dial's
+bound, which covers only the connect. A worker that accepts stop and answers nothing
+inside its bound is not ended, a stop being no unload: the verb refuses `Unanswered`,
+exits, and releases the invocation lock with the run as it stands, so `show` and
+`unload` reach the agent next, and `unload`'s own bounds and escalation are the
+recovery. **An observation unanswered inside its bound** refuses `show` with
+`Unanswered` too, releasing the shared hold, and claims no state, and inside `load` it
+refuses `Unanswered` and inside `unload` it is the silence section 3 meets with a
+bounded leave. **No verb holds the invocation lock past a bound it states**, since the
+invocation ignores the catchable signals and a wait without end would leave every later
+verb refusing `InvocationInFlight` and `show` answering `InTransition`. The interior
+verbs of section 2 take the same rule by the recipe.
 
 **This record's edge moves to the integration invariant.** The labelling pass
 placed it at `axiom-organ-and-submodule`, that being the nearest thing the apex
@@ -1560,7 +1566,7 @@ and the member is started only holding the invocation lock and the run lock this
 took, so a name found standing belongs to a run that has ended, the one-member rule of
 `weaver-state-PRD` section 4 held by the guard rather than by a check at the name. A
 load killed after the member is forked leaves the member holding the run lock, so the
-next load finds the run stranded and ends the member before it starts another.
+next load refuses `AgentRunning` until an `unload` has ended the member.
 
 **The member retires itself and pid 1 reaps it.** `weaver-state-PRD`
 section 4 has the process retiring with each unload while its holdings stand for
@@ -2619,7 +2625,7 @@ perturbation-verified:
 - **A concurrent invocation refuses while one is in flight**, watched by an `unload`
   issued while a `load` is still admitting its model: it answers `InvocationInFlight`
   and the load completes. The perturbation drops the invocation lock, and the unload
-  reaps the healthy start as stranded.
+  ends the healthy start.
 - **A load meeting a live worker refuses**, watched by a `load` of an agent whose worker
   answers `Idle`: it answers `AgentRunning` and starts nothing. The perturbation skips
   the run lock's take, and a second worker starts.
@@ -2653,7 +2659,8 @@ perturbation-verified:
   never answers: the `unload` escalates once the leave's bound expires and answers when
   the lock is free. The perturbation drops the leave's bound, the verb never returns,
   and every later verb refuses `InvocationInFlight`.
-- **The escalation ends every holder**, watched by a stranded run whose stand-in member
+- **The escalation ends every holder**, watched by a run left by a killed load whose
+  stand-in member
   does not retire on the first door's end: the `unload` signals the worker and the
   member and answers once the lock is free. The perturbation signals the first holder
   the scan finds, and the verb refuses `WorkerWouldNotExit` with the member standing.
@@ -2686,18 +2693,20 @@ perturbation-verified:
   `setsid`, and the hangup kills them.
 - **A load killed at any point leaves its run locked**, watched by a load sent
   `SIGKILL` after the member is forked and before the worker is: the member holds the
-  run lock, and the next `load` finds the run stranded, ends the member and loads, two
-  members never standing. The perturbation takes the run lock in the worker's child
-  instead of before the first fork, and the next load starts a second member beside
-  the first.
-- **A silent run is never reaped**, watched by a stand-in worker that answers
-  `Observe` only after the observation's bound: a `load` refuses `Unanswered` and the
-  worker still runs. The perturbation reads silence as stranded, and the load kills a
-  live run.
-- **A run stranded before enter is reaped**, watched by a load killed between the
-  start step and the enter: the next `load` ends the stranded worker, logs the reap and
-  loads. The perturbation refuses `AgentRunning` on any held lock, and the agent stays
-  stuck until a person intervenes.
+  run lock, the next `load` refuses `AgentRunning`, and an `unload` ends the member and
+  answers, two members never standing. The perturbation takes the run lock in the
+  worker's child instead of before the first fork, and the next load starts a second
+  member beside the first.
+- **A load never ends an existing run**, watched by a `load` meeting a worker that
+  answers `Unloaded` and by one meeting a worker that answers `Observe` only after the
+  observation's bound: the first refuses `AgentRunning`, the second `Unanswered`, and
+  each worker still runs. The perturbation lets the load end what holds the lock, and
+  a live run dies under a load.
+- **`unload` ends a run that never entered**, watched by a load killed between the
+  start step and the enter: an `unload` finds the worker answering `Unloaded`, goes
+  straight to the escalation, and answers once the lock is free, after which a `load`
+  starts. The perturbation directs leave at the unentered worker and refuses on its
+  answer, and the agent stays stuck until a person intervenes.
 - **The relay streams the loaded run's file**, watched by an edit to the declaration's
   sink while the run stands: the stream still reads the worker's file. The perturbation
   reopens the declared path, and the stream reads the new file.

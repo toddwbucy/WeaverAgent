@@ -163,7 +163,7 @@ toddwbucy/WeaverWeb#15.
 **At the trace door, the record as a read-only stream**: the relay writes a header line
 naming the file's identity (device, inode, birth time), then the trace's own lines from
 the verified position exactly as written, following new lines with a heartbeat while
-idle, every added line a `TraceControl` of `weaver-types-Spec` section 3.1. It serves
+idle, every added line a `TraceLine` of `weaver-types-Spec` section 3.1. It serves
 the file the loaded run opened, so a rotation of the sink's path changes
 nothing it reads and reaches the reader as a new identity in the next run's header, ends
 the stream on a truncation rather than smoothing it over, and refuses a position that
@@ -198,20 +198,23 @@ reader.
 **At a command line, the floor's refusals**, per `weaver-admin-Spec` section 3: a verb
 arriving while another invocation holds this agent's invocation lock refuses
 `InvocationInFlight` before touching anything, and `show` then answers `InTransition`. A
-second `load` of a running agent answers `AgentRunning`. A missing or malformed boundary
-file refuses `ConfigInvalid` naming `roles.toml`. An `unload` that cannot pin the run
-lock's holder refuses `LockHolderUnknown`, and one whose worker still holds the run lock
-after the escalation refuses `WorkerWouldNotExit` and answers no state. A `stop` or a
-`show` whose answer does not arrive within its bound refuses `Unanswered`, and so does a
-`load` meeting a run whose worker is silent, each leaving the run as it stands for
-`unload`: a silent worker is never reaped. A line a caller's rule does not grant never
-reaches the program, sudo refusing it, so it has no refusal here. **At the trace door,
-refusals before a byte is sent**: a caller outside the agent's access group, refused by
-the box before the relay sees it and so logged by no one here, and a member of the group
-that is not the declared reader, and a position that does not verify, each of the last
-two logged in the agent's `admin.log`. Where the sink is a pipe or a socket no relay
-stands, so the door is closed, and a relay that has died closes it until the next load,
-both of which a reader sees as a refused connection.
+second `load` of a running agent answers `AgentRunning` and touches nothing, a load
+never ending an existing run, whether or not that run ever entered. A missing or
+malformed boundary file refuses `ConfigInvalid` naming `roles.toml`. An `unload` that
+cannot pin the run lock's holder refuses `LockHolderUnknown`, and one whose worker still
+holds the run lock after the escalation refuses `WorkerWouldNotExit` and answers no
+state. A `stop` or a `show` whose answer does not arrive within its bound refuses
+`Unanswered`, and so does a `load` meeting a run whose worker is silent, each leaving
+the run as it stands for `unload`. **Recovery from a killed invocation is the
+caller's**: admin-con reads `show`'s facts and issues `unload`, which ends whatever
+holds the agent's run, then `load`, per `weaver-admin-Spec` section 3. A line a caller's
+rule does not grant never reaches the program, sudo refusing it, so it has no refusal
+here. **At the trace door, refusals before a byte is sent**: a caller outside the
+agent's access group, refused by the box before the relay sees it and so logged by no
+one here, and a member of the group that is not the declared reader, and a position that
+does not verify, each of the last two logged in the agent's `admin.log`. Where the sink
+is a pipe or a socket no relay stands, so the door is closed, and a relay that has died
+closes it until the next load, both of which a reader sees as a refused connection.
 
 The ask-side cases this section enumerated until 2026-08-05 travelled with the socket to
 `weaver-admin-PRD` section 8 and its Spec: the malformed request, the unknown agent, the
@@ -245,10 +248,10 @@ section 2.
 **Drawn from `weaver-types`:** `lifecycle-refusal` and `lifecycle-answer`, which a
 command line prints, and since 2026-10-03 (#50) `trace-stream`, the trace door's
 vocabulary, whose satellites are `weaver-types-Spec` section 3.1's `TraceRequest`,
-`TraceHeader` and `TraceControl`, with `peer-identity`, which the relay reads from the
-kernel. `authorization-predicate` stays
-undrawn: the relay judges one declared reader, not the allow-and-deny rule the gate's
-client boundary and the coordination seam share.
+`TraceHeader`, `TraceLine` and `TraceControl`, with `peer-identity`, which the relay
+reads from the kernel. `authorization-predicate` stays undrawn: the relay judges one
+declared reader, not the allow-and-deny rule the gate's client boundary and the
+coordination seam share.
 
 **Drawn from `weaver-trace`:** the durable event schema, as the content of the
 output stream. It is drawn as published format rather than as a linked type, which

@@ -943,6 +943,10 @@ pub struct TraceHeader {
     pub birth_ns: i128,
 }
 
+pub struct TraceLine {
+    pub trace_stream: TraceControl,
+}
+
 pub enum TraceControl {
     Header(TraceHeader),
     Heartbeat { wall_ms: u64 },
@@ -993,10 +997,10 @@ stream is a `TraceHeader` line and then the trace's own lines exactly as written
 the operator's ruling of 2026-10-03 on #63's fourth question: the header names the
 file's identity, its device, inode and birth time in nanoseconds since the epoch, so a
 reader holds what it is reading. At the end of the file the stream keeps following, with
-a heartbeat line while idle. **Every line the stream adds is a `TraceControl`**, so the
+a heartbeat line while idle. **Every line the stream adds is a `TraceLine`**, so the
 reader in another repository parses one fixed shape: a JSON object whose one member is
-`trace_stream`, externally tagged by case, which no trace event carries, the envelope
-having no such member. The three lines are
+`trace_stream`, holding a `TraceControl` externally tagged by case, which no trace event
+carries, the envelope having no such member. The three lines are
 `{"trace_stream":{"header":{"device":...,"inode":...,"birth_ns":...}}}` first,
 `{"trace_stream":{"heartbeat":{"wall_ms":...}}}` while idle, and
 `{"trace_stream":{"truncated":{"size":...}}}` when the run's file shrinks below the
@@ -1476,14 +1480,16 @@ from: weaver-types
 to: types-enter-binding-disagreement-unrepresentable
 ```
 
-**`AgentRunning` replaces `PriorUnitUnreaped`**, on the operator's ruling of
-2026-10-03 on #50 that the agent leaves systemd. `PriorUnitUnreaped` named a failed unit
-whose name the manager still held, and with no unit there is no name to hold. What a
-second `load` meets instead is the run lock of `weaver-admin-Spec` section 3, held by a
-running worker and released by the kernel at its death, so the refusal says one thing
-and no more: a worker of this agent holds the lock now. It does not say the worker is
-serving or healthy, which `show` answers through the observation exchange. A worker that
-died leaves no lock behind, so no case for a dead one is needed and none is kept.
+**`AgentRunning` replaces `PriorUnitUnreaped`**, on the operator's ruling of 2026-10-03
+on #50 that the agent leaves systemd. `PriorUnitUnreaped` named a failed unit whose name
+the manager still held, and with no unit there is no name to hold. What a second `load`
+meets instead is the run lock of `weaver-admin-Spec` section 3, held by the run's
+processes and released by the kernel when the last of them is gone, so the refusal says
+one thing and no more: a run of this agent holds the lock now, and the load touched
+nothing, a load never ending an existing run. It does not say the run is serving,
+healthy or ever entered, which `show` answers through the observation exchange, and
+ending it is `unload`'s, which the caller issues. A run that died leaves no lock behind,
+so no case for a dead one is needed and none is kept.
 
 **`InTransition` is an answer, not a state**, on the same ruling: `show` answers it
 where another invocation holds the agent's invocation lock, a load or an unload in
@@ -1499,7 +1505,7 @@ descriptor table shows it, so no signal was sent. `WorkerWouldNotExit` says a
 constituent of the run still held the run lock after the unload's escalation, so the
 agent was not reported unloaded. `Unanswered` says a stop's or an observation's answer
 did not arrive within its bound, at `stop`, at `show`, or at a `load` meeting a silent
-run, per `weaver-admin-Spec` section 3, so the run was left
+run, which never ends it, per `weaver-admin-Spec` section 3, so the run was left
 as it stands and the invocation lock released. None claims more than its fact, and each
 tells the caller to read the agent's state with the next `show`.
 
