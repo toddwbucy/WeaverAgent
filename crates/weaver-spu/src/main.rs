@@ -1627,8 +1627,8 @@ fn dispatch(
             LifecycleDirective::Admit { .. }
             | LifecycleDirective::Release
             | LifecycleDirective::Enter { .. }
-            | LifecycleDirective::Leave
-            | LifecycleDirective::Stop
+            | LifecycleDirective::Leave { .. }
+            | LifecycleDirective::Stop { .. }
             | LifecycleDirective::Observe
             | LifecycleDirective::Raise { .. }
             | LifecycleDirective::Lower
@@ -1792,7 +1792,9 @@ mod tests {
                 instruction: instruction(),
             },
             LifecycleDirective::Release,
-            LifecycleDirective::Stop,
+            LifecycleDirective::Stop {
+                cause: weaver_types::Cause { uid: 0 },
+            },
         ] {
             assert_eq!(
                 dispatch(
@@ -1856,8 +1858,12 @@ mod tests {
         let mut residency = Residency::new();
         let mut position = SeamPosition::BeforeAdmit;
         let outside = [
-            LifecycleDirective::Leave,
-            LifecycleDirective::Stop,
+            LifecycleDirective::Leave {
+                cause: weaver_types::Cause { uid: 0 },
+            },
+            LifecycleDirective::Stop {
+                cause: weaver_types::Cause { uid: 0 },
+            },
             LifecycleDirective::Lower,
             LifecycleDirective::Load {
                 agent: AgentName("alpha".into()),

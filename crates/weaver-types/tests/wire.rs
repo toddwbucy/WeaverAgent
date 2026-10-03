@@ -97,6 +97,9 @@ fn the_boxed_payloads_cross_as_the_payloads_do() {
             declaration: String::new(),
             restore: None,
             stack: Default::default(),
+            boundary: String::new(),
+            cause: weaver_types::Cause { uid: 0 },
+            library_path: None,
             state_election: weaver_types::StateElection {
                 all_kinds: false,
                 keys: Vec::new(),
@@ -130,6 +133,7 @@ fn the_boxed_payloads_cross_as_the_payloads_do() {
                 sha256: None,
             },
         })),
+        constituents: Vec::new(),
     };
     let json = serde_json::to_string(&state).expect("serializes");
     assert_eq!(
@@ -443,4 +447,53 @@ fn no_label_refusal_reads_as_an_answer() {
         let back: weaver_types::LabelRefusal = serde_json::from_str(&bytes).expect("returns");
         assert_eq!(back, refusal);
     }
+}
+
+/// **The cause rides the leave and the stop**, per `weaver-types-Spec`
+/// section 3.1, and the run's constituents ride `show`'s state only where
+/// admin found any. Perturbation: drop `skip_serializing_if` from
+/// `constituents` and the harness's own observation answer renders an empty
+/// list it never knew.
+#[test]
+fn the_cause_and_the_constituents_render_as_stated() {
+    let leave = LifecycleDirective::Leave {
+        cause: weaver_types::Cause { uid: 1000 },
+    };
+    assert_eq!(
+        serde_json::to_string(&leave).unwrap(),
+        r#"{"kind":"leave","cause":{"uid":1000}}"#
+    );
+    let stop = LifecycleDirective::Stop {
+        cause: weaver_types::Cause { uid: 0 },
+    };
+    assert_eq!(
+        serde_json::to_string(&stop).unwrap(),
+        r#"{"kind":"stop","cause":{"uid":0}}"#
+    );
+    let bare = LifecycleAnswer::State {
+        state: AgentState::Unloaded,
+        load: None,
+        constituents: Vec::new(),
+    };
+    assert_eq!(
+        serde_json::to_string(&bare).unwrap(),
+        r#"{"kind":"state","state":"unloaded"}"#
+    );
+    let held = LifecycleAnswer::State {
+        state: AgentState::Unloaded,
+        load: None,
+        constituents: vec![4100, 4101, 4102],
+    };
+    assert_eq!(
+        serde_json::to_string(&held).unwrap(),
+        r#"{"kind":"state","state":"unloaded","constituents":[4100,4101,4102]}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&LifecycleAnswer::InTransition).unwrap(),
+        r#"{"kind":"in_transition"}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&LifecycleRefusal::Unanswered).unwrap(),
+        r#"{"kind":"unanswered"}"#
+    );
 }

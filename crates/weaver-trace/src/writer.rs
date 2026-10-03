@@ -492,13 +492,13 @@ pub struct Pressure {
 /// the untagged payload leaves serde unable to. **`load` stopped being
 /// payload-free 2026-08-21**: it carries the diagnostic elections of its
 /// load, so a record declares the posture it was written in. **`unload`
-/// carries `UnloadClose` where a member stood, as of 2026-09-04**, the
-/// grant surface read back at the leave, and stays payload-free where no
-/// member stood and no boundary was there to read.
+/// always carries `UnloadClose` as of 2026-10-03**, its cause and, where a
+/// member stood, the grant surface read back at the leave, so it left the
+/// payload-free set.
 fn pairing_licensed(kind: Kind, payload: Option<&Payload>) -> bool {
     matches!(
         (kind, payload),
-        (Kind::Unload | Kind::SessionClosed | Kind::TurnStarted, None)
+        (Kind::SessionClosed | Kind::TurnStarted, None)
             | (Kind::Unload, Some(Payload::Unload(_)))
             | (Kind::Load, Some(Payload::Elections(_)))
             | (

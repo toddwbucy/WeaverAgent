@@ -113,7 +113,8 @@ pub use assembly::{Prompt, assemble};
 pub use authorship::{Author, licensed};
 pub use channel::{
     ChildEnd, CoordinationListener, DecodeChannel, FIRST_ORGAN_DESCRIPTOR, OrganChannel,
-    bind_coordination, place_child_ends,
+    RELAY_LIFETIME_DESCRIPTOR, RUN_LOCK_DESCRIPTOR, bind_coordination, keep_close_on_exec,
+    keep_start_step_descriptors, place_child_ends,
 };
 pub use engine::{Ports, TurnError, TurnOutcome};
 pub use failure::{AdoptionFault, ChannelFault, Outcome, UnlicensedMessage};

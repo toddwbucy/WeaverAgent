@@ -60,7 +60,7 @@ fn unlicensed_message_is_refused_before_submit() {
             Kind::Load,
             Subsystem::Harness,
             None,
-            Some(Payload::Elections(weaver_trace::Elections {
+            Some(Payload::Elections(Box::new(weaver_trace::Elections {
                 residual_readout: false,
                 field: None,
                 surprisal: false,
@@ -69,9 +69,12 @@ fn unlicensed_message_is_refused_before_submit() {
                 declaration: Default::default(),
                 lineage: None,
                 stack: Default::default(),
+                boundary: String::new(),
+                cause: weaver_trace::Cause { uid: 0 },
+                library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
-            })),
+            }))),
         )
         .expect("load");
     let turn = TurnKey("t-1".to_string());
@@ -206,7 +209,7 @@ fn timestamps_are_stamped_at_authoring() {
             Kind::Load,
             Subsystem::Harness,
             None,
-            Some(Payload::Elections(weaver_trace::Elections {
+            Some(Payload::Elections(Box::new(weaver_trace::Elections {
                 residual_readout: false,
                 field: None,
                 surprisal: false,
@@ -215,9 +218,12 @@ fn timestamps_are_stamped_at_authoring() {
                 declaration: Default::default(),
                 lineage: None,
                 stack: Default::default(),
+                boundary: String::new(),
+                cause: weaver_trace::Cause { uid: 0 },
+                library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
-            })),
+            }))),
         )
         .expect("load");
     author
@@ -272,7 +278,7 @@ fn assembly_sees_only_message_kinds() {
             Kind::Load,
             Subsystem::Harness,
             None,
-            Some(Payload::Elections(weaver_trace::Elections {
+            Some(Payload::Elections(Box::new(weaver_trace::Elections {
                 residual_readout: false,
                 field: None,
                 surprisal: false,
@@ -281,9 +287,12 @@ fn assembly_sees_only_message_kinds() {
                 declaration: Default::default(),
                 lineage: None,
                 stack: Default::default(),
+                boundary: String::new(),
+                cause: weaver_trace::Cause { uid: 0 },
+                library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
-            })),
+            }))),
         )
         .unwrap();
     author
@@ -387,7 +396,7 @@ fn assembly_is_deterministic() {
             Kind::Load,
             Subsystem::Harness,
             None,
-            Some(Payload::Elections(weaver_trace::Elections {
+            Some(Payload::Elections(Box::new(weaver_trace::Elections {
                 residual_readout: false,
                 field: None,
                 surprisal: false,
@@ -396,9 +405,12 @@ fn assembly_is_deterministic() {
                 declaration: Default::default(),
                 lineage: None,
                 stack: Default::default(),
+                boundary: String::new(),
+                cause: weaver_trace::Cause { uid: 0 },
+                library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
-            })),
+            }))),
         )
         .unwrap();
     author
@@ -465,7 +477,7 @@ fn prompt_part_order_is_fixed() {
             Kind::Load,
             Subsystem::Harness,
             None,
-            Some(Payload::Elections(weaver_trace::Elections {
+            Some(Payload::Elections(Box::new(weaver_trace::Elections {
                 residual_readout: false,
                 field: None,
                 surprisal: false,
@@ -474,9 +486,12 @@ fn prompt_part_order_is_fixed() {
                 declaration: Default::default(),
                 lineage: None,
                 stack: Default::default(),
+                boundary: String::new(),
+                cause: weaver_trace::Cause { uid: 0 },
+                library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
-            })),
+            }))),
         )
         .unwrap();
     author
@@ -528,7 +543,7 @@ fn fault_payload_is_carried_unchanged() {
             Kind::Load,
             Subsystem::Harness,
             None,
-            Some(Payload::Elections(weaver_trace::Elections {
+            Some(Payload::Elections(Box::new(weaver_trace::Elections {
                 residual_readout: false,
                 field: None,
                 surprisal: false,
@@ -537,9 +552,12 @@ fn fault_payload_is_carried_unchanged() {
                 declaration: Default::default(),
                 lineage: None,
                 stack: Default::default(),
+                boundary: String::new(),
+                cause: weaver_trace::Cause { uid: 0 },
+                library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
-            })),
+            }))),
         )
         .unwrap();
     let account = "{\"organ\":\"spu\",\"detail\":\"device unavailable\"}";
@@ -588,7 +606,7 @@ fn undecodable_message_records_are_counted() {
             Kind::Load,
             Subsystem::Harness,
             None,
-            Some(Payload::Elections(weaver_trace::Elections {
+            Some(Payload::Elections(Box::new(weaver_trace::Elections {
                 residual_readout: false,
                 field: None,
                 surprisal: false,
@@ -597,9 +615,12 @@ fn undecodable_message_records_are_counted() {
                 declaration: Default::default(),
                 lineage: None,
                 stack: Default::default(),
+                boundary: String::new(),
+                cause: weaver_trace::Cause { uid: 0 },
+                library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
-            })),
+            }))),
         )
         .unwrap();
     author
@@ -665,7 +686,7 @@ fn an_undecodable_record_refuses_the_seat_and_authors_a_fault() {
                 Kind::Load,
                 Subsystem::Harness,
                 None,
-                Some(Payload::Elections(weaver_trace::Elections {
+                Some(Payload::Elections(Box::new(weaver_trace::Elections {
                     residual_readout: false,
                     field: None,
                     surprisal: false,
@@ -674,9 +695,12 @@ fn an_undecodable_record_refuses_the_seat_and_authors_a_fault() {
                     declaration: Default::default(),
                     lineage: None,
                     stack: Default::default(),
+                    boundary: String::new(),
+                    cause: weaver_trace::Cause { uid: 0 },
+                    library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
-                })),
+                }))),
             )
             .unwrap();
         author

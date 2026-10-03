@@ -252,8 +252,10 @@ pub enum Payload {
     ModelField(ModelField),
     /// The diagnostic elections the load declared, carried by its `load`
     /// event so a record declares the posture it was written in, per
-    /// charter section 3.2.
-    Elections(Elections),
+    /// charter section 3.2. Boxed, as the lineage inside it is (#475): the
+    /// boundary, the cause and the library path of 2026-10-03 took the case
+    /// past the enum's size bound, and a box crosses as its contents do.
+    Elections(Box<Elections>),
     /// The flush's account: the resident token counts before and after the
     /// decode context returned to its prefix, per charter section 3.1's
     /// sixteenth kind. Both from the SPU's confirmation, the one authority
@@ -311,7 +313,13 @@ pub enum Payload {
 #[serde(tag = "close", rename_all = "snake_case")]
 pub enum TurnClose {
     Clean,
-    Stopped { reason: StopReason },
+    /// The cause is the stop directive's, and absent where a fault, which
+    /// nobody asked for, stopped the turn.
+    Stopped {
+        reason: StopReason,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cause: Option<Cause>,
+    },
 }
 
 /// Why a stopped turn stopped. A satellite election per `weaver-trace-Spec`
@@ -510,9 +518,17 @@ pub struct Candidate {
 /// The `unload` event's payload, per `weaver-trace-PRD` section 3.1 as of
 /// 2026-09-04: the grant surface read back at the leave against the reading
 /// taken at the enter.
+///
+/// The grant surface is absent where no member stood, and the cause rides
+/// every unload a leave directive asked for, per `weaver-trace-Spec` section 3
+/// as of 2026-10-03, absent where the worker unwound itself after a fault,
+/// which nobody asked for.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct UnloadClose {
-    pub grant_surface: GrantSurface,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grant_surface: Option<GrantSurface>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cause: Option<Cause>,
 }
 
 /// What the leave found, in the envelope the confirm drivers carry: the
@@ -644,6 +660,25 @@ pub struct Elections {
     /// The digests of the organ binaries admin started, keyed by name, per
     /// the same section, so a record is sufficient for its own conditions.
     pub stack: std::collections::BTreeMap<String, String>,
+    /// The sha256 hex of the agent's `roles.toml` as admin read it, per
+    /// `weaver-trace-Spec` section 3 as of 2026-10-03: a member marked
+    /// boundary and never constitution, so each run's record declares who
+    /// could read it without the boundary file joining the declaration.
+    pub boundary: String,
+    /// Who asked for this load.
+    pub cause: Cause,
+    /// The engine libraries' directory the run loaded, where the agent's
+    /// root names one. Absent otherwise, never null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library_path: Option<String>,
+}
+
+/// Who asked for a change, per `weaver-trace-Spec` section 3: the uid sudo
+/// reported to admin, or 0 at a root shell. This crate's spelling, the floor's
+/// own being `weaver-types`'s.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Cause {
+    pub uid: u32,
 }
 
 /// A restore's lineage as the load event names it, per `weaver-trace-Spec`
@@ -677,6 +712,9 @@ mod lineage_tests {
             tee: None,
             lineage,
             stack,
+            boundary: String::new(),
+            cause: Cause { uid: 0 },
+            library_path: None,
         }
     }
 

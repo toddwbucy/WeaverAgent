@@ -1,14 +1,23 @@
-//! conforms: harness-fork-to-exec-three-calls
+//! conforms: harness-fork-to-exec-bounded-calls
 //! conforms: harness-organ-argv-carries-construction-parameters
 //! conforms: harness-organ-ends-from-descriptor-three
 //! conforms: harness-child-flag-clear-unconditional
 //!
 //! The organ fork, per `weaver-harness-Spec` section 2.2. Between fork and
-//! exec the child performs three calls, `dup2`, `fcntl`, and `execve`, and
-//! nothing else: all three are async-signal-safe, and the bound is the safety
-//! argument rather than a style, because the worker holds the writer's thread
-//! at every fork and a child of a multithreaded process may safely run only
-//! async-signal-safe calls before its exec.
+//! exec the child performs six calls, `prctl`, `getppid`, `_exit` where the
+//! parent is gone, `dup2`, `fcntl`, and `execve`, and nothing else: all six
+//! are async-signal-safe, and the bound is the safety argument rather than a
+//! style, because the worker holds the writer's thread at every fork and a
+//! child of a multithreaded process may safely run only async-signal-safe
+//! calls before its exec.
+//!
+//! **The organs die with the worker**, on the operator's ruling of 2026-10-03
+//! on #50 that the agent leaves systemd, whose cgroup ended every process of
+//! the unit: the child arms `PR_SET_PDEATHSIG` to `SIGKILL` first, so the
+//! kernel kills the organ the instant the worker dies, and then compares
+//! `getppid` with the worker's pid read before the fork, because a worker
+//! that died between the fork and the arming would otherwise leave a child
+//! the signal was armed too late to reach.
 
 use std::ffi::CString;
 use std::path::Path;
@@ -23,9 +32,11 @@ use crate::channel::{ChildEnd, place_child_ends};
 /// # Safety
 ///
 /// The caller must be the serving thread, whose lifetime is the worker's: the
-/// gate's parent-death backing fires on the forking thread's termination
-/// rather than the process's, so a fork from a short-lived thread would kill
-/// the gate spuriously while the interior it guards is healthy.
+/// parent-death signal armed here, like the gate's own backing, fires on the
+/// forking thread's termination rather than the process's, so a fork from a
+/// short-lived thread would kill the organ spuriously while the worker is
+/// healthy. The worker forks from its main thread, which lives for the
+/// process.
 pub unsafe fn fork_organ(
     binary: &Path,
     ends: &[&ChildEnd],
@@ -34,7 +45,7 @@ pub unsafe fn fork_organ(
 ) -> Result<nix::unistd::Pid, nix::Error> {
     let program =
         CString::new(binary.as_os_str().as_encoded_bytes()).map_err(|_| nix::Error::EINVAL)?;
-    // **Built here, in the parent, before the fork.** The child's three calls
+    // **Built here, in the parent, before the fork.** The child's six calls
     // are the safety bound of the doc comment above, so a vector assembled
     // after the fork would not be expressible: allocation is not
     // async-signal-safe. The pointers below borrow these, so both outlive the
@@ -64,13 +75,38 @@ pub unsafe fn fork_organ(
     let mut envp: Vec<*const nix::libc::c_char> = Vec::with_capacity(environment.len() + 1);
     envp.extend(environment.iter().map(|pair| pair.as_ptr()));
     envp.push(std::ptr::null());
+    // Read before the fork, so the child compares against the worker and not
+    // against whatever adopted it.
+    let worker = nix::unistd::getpid().as_raw();
     // SAFETY: the caller's contract above, and the child body below runs only
     // async-signal-safe calls.
     match unsafe { nix::unistd::fork()? } {
         nix::unistd::ForkResult::Parent { child } => Ok(child),
         nix::unistd::ForkResult::Child => {
-            // Call one and two, per the enumeration: dup2 each end into place
-            // and clear the flag on each unconditionally.
+            // Calls one to three: arm the death signal, then confirm the
+            // worker still stands, so no window leaves an organ orphaned.
+            // SAFETY: prctl, getppid and _exit are async-signal-safe.
+            // **A refused arming refuses the organ**: an organ that runs
+            // without its death signal could outlive the worker, so a
+            // rejection, a seccomp policy's among them, ends the child before
+            // its exec rather than letting the invariant lapse silently.
+            unsafe {
+                if nix::libc::prctl(
+                    nix::libc::PR_SET_PDEATHSIG,
+                    nix::libc::SIGKILL as nix::libc::c_ulong,
+                    0,
+                    0,
+                    0,
+                ) == -1
+                {
+                    nix::libc::_exit(DEATH_SIGNAL_REFUSED);
+                }
+                if nix::libc::getppid() != worker {
+                    nix::libc::_exit(WORKER_GONE);
+                }
+            }
+            // Calls four and five, per the enumeration: dup2 each end into
+            // place and clear the flag on each unconditionally.
             // SAFETY: in the child, before exec, with ends this process made.
             //
             // **A failed placement does not reach the exec.** The child cannot
@@ -82,7 +118,7 @@ pub unsafe fn fork_organ(
             // **Descriptor 2 first, and by the same call kind.** The pipe's
             // write end lands where stderr lives, so the organ's last typed
             // line has somewhere to go that the parent holds - one more
-            // `dup2`, inside the three-kind bound the module doc states.
+            // `dup2`, inside the six-kind bound the module doc states.
             // Placed before the ends because 2 sits below their range and
             // an end landing on the pipe's original number afterwards only
             // closes a copy already duplicated home.
@@ -96,7 +132,7 @@ pub unsafe fn fork_organ(
                 // SAFETY: _exit is async-signal-safe and does not unwind.
                 unsafe { nix::libc::_exit(PLACEMENT_FAILED) };
             }
-            // Call three.
+            // Call six.
             // SAFETY: execve is async-signal-safe; on success it does not
             // return, and on failure the child exits without unwinding.
             unsafe {
@@ -281,6 +317,14 @@ pub const PLACEMENT_FAILED: i32 = 126;
 
 /// The child exited because the organ binary could not be exec'd.
 pub const EXEC_FAILED: i32 = 127;
+
+/// The child exited because the worker died between the fork and the arming
+/// of its death signal, so the organ never ran.
+pub const WORKER_GONE: i32 = 125;
+
+/// The child exited because the kernel refused its death signal, so the
+/// organ never ran rather than running unbound to the worker.
+pub const DEATH_SIGNAL_REFUSED: i32 = 124;
 
 #[cfg(test)]
 mod last_word_tests {
@@ -491,5 +535,98 @@ mod last_word_tests {
             (flags & nix::libc::FD_CLOEXEC) != 0,
             "the last word's pipe must close on exec, or it rides into every organ"
         );
+    }
+}
+
+#[cfg(test)]
+mod death_tests {
+    use super::*;
+
+    /// The variable that turns the helper below into a stand-in worker. Set
+    /// only by the test that runs this binary again as that stand-in.
+    const STAND_IN: &str = "WEAVER_HARNESS_ORGAN_PARENT_STAND_IN";
+
+    /// **The stand-in worker**: forks one organ through `fork_organ` from
+    /// this thread, which then lives until the process is killed, writes the
+    /// organ's pid to the file the variable names, and waits. Run on its own
+    /// only by the test below; any other run returns at once.
+    #[test]
+    fn organ_parent_stand_in() {
+        let Some(report) = std::env::var_os(STAND_IN) else {
+            return;
+        };
+        let pid = unsafe {
+            fork_organ(
+                std::path::Path::new("/bin/sleep"),
+                &[],
+                &["60".to_string()],
+                None,
+            )
+        }
+        .expect("the fork");
+        std::fs::write(&report, pid.to_string()).expect("the report");
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    }
+
+    /// **The organs die with the worker**, per `weaver-harness-Spec` section
+    /// 2.2: a stand-in worker forks an organ and is killed with `SIGKILL`,
+    /// and the organ is gone within the bound, the kernel's death signal
+    /// having ended it with nothing of the worker's left to run.
+    ///
+    /// Perturbation: drop the `prctl` call from the fork's child and the
+    /// organ, a `sleep 60`, outlives its worker.
+    #[test]
+    fn an_organ_dies_with_its_worker() {
+        let report = std::env::temp_dir().join(format!("weaver-organ-pid-{}", std::process::id()));
+        drop(std::fs::remove_file(&report));
+        let mut stand_in = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "spawn::death_tests::organ_parent_stand_in",
+                "--test-threads=1",
+            ])
+            .env(STAND_IN, &report)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("the stand-in worker starts");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let organ: i32 = loop {
+            if let Ok(text) = std::fs::read_to_string(&report)
+                && let Ok(pid) = text.trim().parse()
+            {
+                break pid;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no organ pid reported"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        drop(std::fs::remove_file(&report));
+        let alive = |pid: i32| {
+            // A zombie has died and waits only for its reaper.
+            std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .map(|stat| {
+                    let state = stat.rsplit(')').next().unwrap_or("").trim_start();
+                    !state.starts_with('Z')
+                })
+                .unwrap_or(false)
+        };
+        assert!(alive(organ), "the organ runs while its worker does");
+        stand_in.kill().unwrap();
+        stand_in.wait().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while alive(organ) {
+            if std::time::Instant::now() > deadline {
+                // Best effort: the organ is ended either way before the panic.
+                let _ = nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(organ),
+                    nix::sys::signal::Signal::SIGKILL,
+                );
+                panic!("the organ outlived its worker");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 }

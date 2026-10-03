@@ -70,3 +70,70 @@ pub fn authorized(peer: &PeerIdentity, against: &AccessRule) -> bool {
     }
     against.allowed_uids.contains(&peer.uid) || against.allowed_gids.contains(&peer.gid)
 }
+
+/// The agent's `roles.toml`, per `weaver-types-Spec` section 3.1: the one
+/// trace reader the trace relay admits, and nothing else. Boundary and never
+/// constitution, so it is held apart from the declaration and its digest.
+///
+/// The lifecycle half a draft carried, role groups mapped to verbs, does not
+/// return: who may issue which verb is the sudo rule's, per
+/// `weaver-admin-Spec` section 2. An unknown key refuses, as the
+/// declaration's do, so a misspelt reader never reads as no reader.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct BoundaryFile {
+    /// A user name, and only a user: a group would admit every member of it
+    /// to the agent's whole record.
+    pub trace_reader: String,
+}
+
+/// The trace door's one request, per `weaver-types-Spec` section 3.1: a byte
+/// offset on a record boundary and the sha256 hex of the record ending there,
+/// absent only at offset zero. Sent once, as one newline-terminated line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TraceRequest {
+    pub offset: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_digest: Option<String>,
+}
+
+/// The file the relay serves, by identity: device, inode, and birth time in
+/// nanoseconds since the epoch, so a reader holds what it is reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TraceHeader {
+    pub device: u64,
+    pub inode: u64,
+    pub birth_ns: i128,
+}
+
+/// Every line the trace stream adds, per `weaver-types-Spec` section 3.1: one
+/// JSON object whose one member is `trace_stream`, which no trace event
+/// carries, so a reader tells the stream's own lines from the record's by
+/// that member alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TraceLine {
+    pub trace_stream: TraceControl,
+}
+
+/// What a stream line says, externally tagged by case: the header first,
+/// a heartbeat while idle, and `truncated` when the run's file shrinks below
+/// the stream's position, after which the stream ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceControl {
+    Header(TraceHeader),
+    Heartbeat { wall_ms: u64 },
+    Truncated { size: u64 },
+}
+
+/// Who asked for a change, per `weaver-types-Spec` section 3.1: the uid sudo
+/// reports, or 0 at a root shell, read by admin and never from the caller.
+/// It rides the enter, the leave and the stop, and the harness records it on
+/// the event each one authors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Cause {
+    pub uid: u32,
+}
