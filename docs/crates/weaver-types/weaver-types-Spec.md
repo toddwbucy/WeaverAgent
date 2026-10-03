@@ -1504,15 +1504,18 @@ charters `Observe`, the harness answers `State` from whichever position it holds
 `LoadFacts` beside it where a run stands, and `show` answers rather than refuses. The case is deleted rather than kept, per the apex's rule that a case nothing
 produces is a reserved slot.
 
-**`LoadFacts` is what the observation carries beside the state, and it is the floor's
-shape of what the `load` event already names**: the session and run, the declaration's
-digest as admin read the file at the enter, the artifact, the readout, field, and
-surprisal elections, the tee's election, the store the member stands on and whether its
-end arrived, and the composing loop by binary and, where it is a file, path and digest.
-The prompt file's digest is the one member of the `load` event it does not carry, for
-the reason the enter payload's clause above gives. `Composer` is this crate's spelling
-of the loop's identity because the record's own is `weaver-trace`'s and the floor links
-downward only.
+**`LoadFacts` is what the observation carries beside the state, and it overlaps what the
+`load` event names without being its shape**: the session and run, which the event
+carries in its envelope rather than its payload, the declaration's digest as admin read
+the file at the enter, the artifact, which the event does not carry, the readout, field,
+and surprisal elections, the tee's election under the name `state_election`, where the
+event spells it `tee`, the store the member stands on and whether its end arrived, and
+the composing loop by binary and, where it is a file, path and digest. It lacks the
+event's stack, lineage, reset and prompt digest, the last for the reason the enter
+payload's clause above gives, so a consumer storing both stores two shapes, and the
+rework of `show` (#52 and the load confirmation) is where a shared core is weighed.
+`Composer` is this crate's spelling of the loop's identity because the record's own is
+`weaver-trace`'s and the floor links downward only.
 
 ### 4.3 The encoding
 

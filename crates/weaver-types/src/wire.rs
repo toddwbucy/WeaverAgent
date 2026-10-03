@@ -270,8 +270,10 @@ pub enum LifecycleAnswer {
     GateStopped,
     Validated,
     /// The agent's state and, where a run stands, the load's facts, per
-    /// `weaver-types-Spec` section 4 as of 2026-09-04. `load` is absent
-    /// exactly where the state is `Absent` or `Unloaded`.
+    /// `weaver-types-Spec` section 4 as of 2026-09-04. `load` is present only
+    /// where an observation of a standing run answered it: it is absent where
+    /// the state is `Absent` or `Unloaded`, and the `load` verb's own answer,
+    /// `Idle` from a ready aggregate, carries none.
     State {
         state: AgentState,
         /// Boxed on the same ground as the enter's payload, per the same

@@ -89,10 +89,10 @@ Outside the agent boundary, reaching an agent only across the external contracts
 The first thing to do so, and therefore the first real test of whether those
 contracts are enough to build against.
 
-- weaver-web - the channel, the lifecycle view, and the live trace view, and the
-  one reach the contracts turned out not to cover. Its page moved with the crate on
-  2026-09-26 to `docs/technical/weaver-web/weaver-web.md` in
-  `WeaverTools_Project/weaver-web/`, the operator's ruling of that date.
+- weaver-web - the channel, the lifecycle view, and the live trace view. It is its
+  own repository, toddwbucy/WeaverWeb, since 2026-09-26, and reaches an agent only
+  through its two connectors: gate-con at the gate, and admin-con at admin's lifecycle
+  and trace sockets, admitted by role (WeaverAgent#50). It holds no sudo path to admin.
 
 ## The diagnostic domain
 

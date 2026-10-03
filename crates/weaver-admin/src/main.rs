@@ -1182,9 +1182,10 @@ fn load_service_config(agent: &AgentName) -> Result<ServiceConfig, LifecycleRefu
 /// The admission and the read under a given base and owner, so a test can judge a
 /// root it made; every invocation passes the environment's base and root's uid.
 /// **A root with no declaration is no agent, for every verb**: `agent.toml` must be
-/// a regular file, a link followed to one, judged here with the root, so `show` and
-/// `stop`, which take no inventory, refuse a root without one as `load` and
-/// `validate` do. A directory or a dangling link at the name is no declaration.
+/// a regular file and never a link, `judge_entries` refusing any link in the root,
+/// judged here with the root, so `show` and `stop`, which take no inventory, refuse a
+/// root without one as `load` and `validate` do. A directory or a link at the name is
+/// no declaration.
 fn load_service_config_at(
     base: &std::path::Path,
     agent: &str,

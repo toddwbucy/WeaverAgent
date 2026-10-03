@@ -459,14 +459,15 @@ when the second had gone.
 
 **The agent keeps two doors and gains no others.** weaver-gate carries the data plane
 and weaver-admin the management plane, at `weaver-gate-world-contract` and
-`weaver-admin-operator-contract`. Each door gets a network connector outside it, a
-client of that door's socket rather than anything the agent listens to: `gate-con`
-outside the gate and `admin-con` outside admin, the names the 2026-10-02 ruling gives. They are separate clients, separately
-credentialed. Consumers talk to the connectors and never to the agent, so the agent's
-surface stays at two however many consumers and tools stand up. The connectors are
-WeaverWeb's, in its repository or their own and never in this one, and start under
-the operator's provisioning, never under admin (operator's ruling of 2026-10-02,
-WeaverTools#6).
+`weaver-admin-operator-contract`. Each door has a connector beside it, `gate-con` beside
+the gate and `admin-con` beside admin, the names the 2026-10-02 ruling gives
+(toddwbucy/WeaverTools#6). **Nothing dials a connector.** Each is a client of its door's
+socket on one side and a client of the WeaverWeb server on the other, dialing out to it
+over mutual TLS, so the agent listens to nothing new and the connectors listen to
+nothing at all. They are one agent's own, bound by certificate to that agent and one
+plane, run as their own unprivileged service users, and start under the operator's
+provisioning, never under admin. Their code is WeaverWeb's, in its repository or their
+own and never in this one, and an agent works with no connectors at all.
 
 **This repository stops at its two doors.** Each door's contract is its interface, and
 that interface is what the repository publishes. weaver-web is its own repository and
@@ -475,23 +476,29 @@ move at once from the day a contract merges, the frontend against a stub that an
 A change to a door's contract changes what an outside team builds against, and it moves
 with the care a contract takes.
 
-**Credentials are issued on the server and dropped into a client's configuration**, and
-without one a client cannot talk to a connector. There is one credential per client per
-connector, so weaver-analysis, its own repository since 2026-09-30, holds two as a
-client of both. The server keeps a record of
-what it issued and revokes one credential without touching another, and a credential
-file never enters a repository. **A connector authenticates and never authorizes.** It
-passes a verified principal across the door, and weaver-gate and weaver-admin decide
-what that principal may do, so authorization stays inside the agent where custody
-already lives and the door contracts carry the principal. HADES's per-principal identity
-work answers the same question, and one model across the suite is the aim.
+**Three gates stand between a person and a verb, and each is its own party's.**
+WeaverWeb authenticates the person and decides, in its own IAM, what that person may ask
+of which agent. admin-con holds a ceiling it never writes: it asks admin's `grants`
+which verbs its role permits and declares exactly that, so a request past the ceiling
+stops at the connector. weaver-admin checks the role of the connector's own service user
+by the kernel's peer credential against the agent's role list, which is the box's
+configuration and which WeaverWeb mirrors and never writes ("the box decides"). A
+compromised server or connector reaches no further than the roles the box granted. **The
+person reaches admin only as a claim**: admin-con may name the person it acts for, and
+admin logs that claim beside the verb and authorizes nothing on it (#51). gate-con
+carries no person at all, the gate admitting its service user by uid like any client.
+admin-con reads the trace through admin's trace socket under its role rather than
+through any grant into the territory (#50).
 
-Each consumer reaches the agent through a connector, and the shape costs the corpus one
-amendment: the principal both door contracts will carry. The connectors carry the two
-external contracts the ruling of 2026-08-01 wrote for exactly this party,
-`weaver-gate-world-contract` and `weaver-admin-operator-contract`, and a consumer builds
-against the connectors' Specs on its own compute per the live-view ruling.
-weaver-analysis reaches the same way, consuming a trace an operator holds and never
+**The door contracts carry no principal, and the amendment once predicted here is
+withdrawn.** An earlier form of this section had each connector pass a verified
+principal across its door and both door contracts amended to carry it. The three gates
+make that unnecessary: authorization at the door rests on the connector's own service
+user and its role, the person's identity stays WeaverWeb's, and the only trace of the
+person inside the agent is the logged claim. The connectors build against the two
+external contracts the ruling of 2026-08-01 wrote, `weaver-gate-world-contract` and
+`weaver-admin-operator-contract`, as #50 extends the second. weaver-analysis reaches the
+record the same way an operator does, consuming a trace an operator holds and never
 touching weights.
 
 **A post-training leg is a direction and not a consumer.** The clause that kept
