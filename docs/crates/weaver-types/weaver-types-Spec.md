@@ -576,7 +576,7 @@ rules what absence means, the worker's own default loop, the compiled body or th
 installed file, so a declaration written before the member existed still parses and
 still means what it meant. Present, it names the loop file the agent's worker runs, the
 loop being a member of that agent's harness and unique to it per the same section's
-ruling of 2026-08-20, and it reaches the worker in the unit's argument vector per
+ruling of 2026-08-20, and it reaches the worker in its argument vector per
 `weaver-admin-Spec` section 6 rather than in any exchange, because no exchange carries a
 path. `state_store` may be absent because `weaver-state-PRD` section 4 rules what
 absence means, the embedded engine, so a declaration written before the member existed
@@ -929,12 +929,7 @@ change's cause are the two other shapes the act adds.
 
 ```rust
 pub struct BoundaryFile {
-    pub trace_reader: Principal,
-}
-
-pub enum Principal {
-    User(String),
-    Group(String),
+    pub trace_reader: String,
 }
 
 pub struct TraceRequest {
@@ -966,18 +961,20 @@ half**, on the operator's rulings of 2026-10-03 on #50 and #63. The lifecycle ha
 the sudo rule's, the box's own boundary, and never a file admin reads. What stays is the
 one `trace_reader` the trace relay admits, in a root-owned file in the agent's root,
 `/etc/weaver/admin/<agent>/roles.toml`, required, an unknown key refused. It is boundary
-and never constitution, per `weaver-admin-Spec` section 9. **The trace reader names its
-kind**: `Principal` is a user or a group, written `{ user = "..." }` or
-`{ group = "..." }`, exactly one, because a bare name could resolve to both a user and a
-group of that name and so to two principals, and an implicit precedence would decide who
-receives the agent's whole record. A user admits that uid alone, and a group admits a
-peer whose groups include it. **The name resolves at `validate` and `load`**, and a
-trace reader that is the agent's or its state member's account, or a group either
-belongs to, refuses, per `weaver-admin-PRD` section 7's rule that no grant names the
-agent, so the agent never reaches its own record through the boundary.
+and never constitution, per `weaver-admin-Spec` section 9. **The trace reader is a
+user, and only a user**, the connector's own service user, on the operator's ruling of
+2026-10-03 on #50: a group would admit every member of it to the agent's whole record,
+and a bare name that could resolve to a user and a group of the same name is what an
+explicit kind once guarded against, so the kind is fixed instead. The relay admits that
+uid alone. **The name resolves at `validate` and `load`**: a reader that is the agent's
+or its state member's account refuses, per `weaver-admin-PRD` section 7's rule that no
+grant names the agent, so the agent never reaches its own record through the boundary,
+and a reader that does not hold the agent's access group `weaver-<agent>-admin`, which
+the trace socket is grouped to, refuses too, a reader the filesystem would turn away
+before the relay's credential check runs being a door that cannot open.
 
 ```toml
-trace-reader = { user = "weaver-<agent>-admincon" }
+trace-reader = "weaver-<agent>-admincon"
 ```
 
 **`TraceRequest` names where the stream starts**: a byte offset that falls on a record
@@ -998,9 +995,16 @@ having no such member. The four lines are
 `{"trace_stream":{"identity_changed":{...}}}` when the sink's path comes to name another
 file than the one the run writes, and `{"trace_stream":{"truncated":{"size":...}}}` when
 the run's file shrinks below the stream's position, which leaves its identity unchanged.
-After either of the last two the stream ends, and the reader resumes with a new request
-from offset zero, so no follower stays positioned past the end of a file that was
-rewritten. Every other line is the trace's own, byte for byte.
+**`identity_changed` is informational and the stream goes on**: the relay serves the
+run's own file by descriptor, so a path that now names another file changes nothing it
+reads, and the line tells the reader that the next run will append elsewhere. **After
+`truncated` the stream ends**, and the reader resumes with a new request from offset
+zero, so no follower stays positioned past the end of a file that was rewritten. The
+check is the file's size against the stream's position, so a file truncated and grown
+back past that position between two checks goes unseen until the reader's next request,
+whose digest check then refuses the stale position, and that regrowth is the check's
+blind spot, named rather than hidden. Every other line is the trace's own, byte for
+byte.
 
 **`Cause` is who changed the agent, and it is the uid sudo reports and nothing else**,
 on the operator's ruling of 2026-10-03 on #50: admin reads it from sudo's own
@@ -1306,6 +1310,9 @@ pub enum LifecycleRefusal {
     NoResidency,
     BindFailed,
     AgentRunning,
+    InvocationInFlight,
+    LockHolderUnknown,
+    WorkerWouldNotExit,
     OrganRefused { organ: RefusingOrgan, reason: Box<LifecycleRefusal> },
     ActivityNotAtRest,
 }
@@ -1468,6 +1475,15 @@ running worker and released by the kernel at its death, so the refusal says one 
 and no more: a worker of this agent holds the lock now. It does not say the worker is
 serving or healthy, which `show` answers through the observation exchange. A worker that
 died leaves no lock behind, so no case for a dead one is needed and none is kept.
+
+**Three more cases join it on the same ruling, each one fact.** `InvocationInFlight`
+says another invocation holds this agent's invocation lock, so this one touched nothing,
+per `weaver-admin-Spec` section 3. `LockHolderUnknown` says the run lock's holder could
+not be pinned, the kernel naming no pid this crate can signal safely, a holder in
+another pid namespace among them, so no signal was sent. `WorkerWouldNotExit` says a
+worker still held the run lock after the unload's escalation, so the agent was not
+reported unloaded. None claims more than its fact, and each tells the caller to read the
+agent's state with the next `show`.
 
 **`FaultReport` is two members, and the custody rule of apex section 5.2 is
 the whole argument for the split.** The `case` is what the harness itself

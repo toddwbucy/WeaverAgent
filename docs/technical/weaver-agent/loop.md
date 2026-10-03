@@ -75,8 +75,8 @@ this page's numbering is loop 1. **That collision is an apex question with no ru
 on it**, and this page states it rather than choosing.
 
 **Loop 0 is the running agent service.** It is not a document set, not a milestone,
-and not a loop anyone supplies. It is the object itself: the thing that boots under
-its unit, comes up as the provisioned agent identity, binds the coordination socket
+and not a loop anyone supplies. It is the object itself: the thing admin's start step
+boots, comes up as the provisioned agent identity, binds the coordination socket
 inside its own sandbox, creates the unnamed pairs its organs are reached over, and
 sits there being one sealed agent.
 

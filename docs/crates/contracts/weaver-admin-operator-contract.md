@@ -68,7 +68,8 @@ fixed command lines, and no command crosses a network. **The sink** is a real cr
 admin passes the sink handle across the boundary and the program writes through it,
 something of the operator's stands behind it, and neither side sees the other's
 interior. **The trace door** is the relay's socket, `trace.sock` in the agent's
-root-owned run directory, grouped to the agent's own access group `weaver-<agent>-admin`
+root-owned run directory `<coordination-root>/weaver-run/<agent>/`, standing only for a
+file sink, grouped to the agent's own access group `weaver-<agent>-admin`
 and admitting exactly one declared reader by the kernel's peer credential, per
 `weaver-admin-Spec` section 6. None is network ingress, and none breaches anything Gate
 holds, on the grounds `weaver-admin-PRD` section 3 states.
@@ -76,11 +77,13 @@ holds, on the grounds `weaver-admin-PRD` section 3 states.
 ## 2. What crosses in
 
 **A granted command line, and nothing else from the caller.** The verbs are `show`,
-`validate`, `load`, `unload`, `stop`, and against a running agent `save-point` and
-`restore`, each with the agent's name, on the operator's rulings of 2026-10-03 on #50.
+`validate`, `load`, `unload` and `stop`, each with the agent's name, on the operator's
+rulings of 2026-10-03 on #50. Two more, `save-point` and `restore` against a running
+agent, are owed to #58's code act (A3), which shapes their exchange, and no rule grants
+them until it lands.
 **Which lines a caller may run is the rule the operator installs**: an observer's rule
-grants `show`, and an operator's adds `validate`, `load`, `unload`, `stop`, `save-point`
-and `restore`, the role split of #50 mapped onto command lines. Nothing else crosses in:
+grants `show`, and an operator's adds `validate`, `load`, `unload` and `stop`, the role
+split of #50 mapped onto command lines. Nothing else crosses in:
 no argument the caller chooses, no standard input, which the program never reads, and no
 claim of who asked. **The cause the record carries is the uid sudo reports**, and which
 person asked is WeaverWeb's record and never the agent's. No prompt, turn, task, or run
@@ -150,8 +153,9 @@ gives up reads the outcome from the next `show`.
 naming the file's identity (device, inode, birth time), then the trace's own lines from
 the verified position exactly as written, following new lines with a heartbeat while
 idle, every added line a `TraceControl` of `weaver-types-Spec` section 3.1. It serves
-the loaded run's own file by descriptor, reports a change of the sink path's file or a
-truncation rather than smoothing it over, and refuses a position that does not verify
+the loaded run's own file by descriptor, tells the reader when the sink's path comes to
+name another file and goes on serving the run's own, ends the stream on a truncation
+rather than smoothing it over, and refuses a position that does not verify
 before a byte is sent. A reader of the record this way reads the file through no grant
 of its own, so the territory's layout gives it nothing.
 
@@ -182,13 +186,14 @@ reader.
 
 **At a command line, the floor's refusals**: a second `load` of a running agent answers
 `AgentRunning`, a missing or malformed boundary file refuses `ConfigInvalid` naming
-`roles.toml`, and an `unload` whose worker still holds the run lock after the
-escalation refuses with that carried and no state, per `weaver-admin-Spec` section 3. A
-line a caller's rule does not grant never reaches the program, sudo refusing it, so it
-has no refusal here. **At the trace door, refusals before a byte is sent**: any caller
-but the declared reader, a position that does not verify, and a sink that is not a file,
-each logged in the agent's `admin.log`. A relay that has died closes the door until the
-next load, which a reader sees as a refused connection.
+`roles.toml`, and an `unload` whose worker still holds the run lock after the escalation
+refuses with that carried and no state, per `weaver-admin-Spec` section 3. A line a
+caller's rule does not grant never reaches the program, sudo refusing it, so it has no
+refusal here. **At the trace door, refusals before a byte is sent**: any caller but the
+declared reader, and a position that does not verify, each logged in the agent's
+`admin.log`. Where the sink is a pipe or a socket no relay stands and no socket is
+bound, so the door is closed, and a relay that has died closes it until the next load,
+both of which a reader sees as a refused connection.
 
 The ask-side cases this section enumerated until 2026-08-05 travelled with the socket to
 `weaver-admin-PRD` section 8 and its Spec: the malformed request, the unknown agent, the

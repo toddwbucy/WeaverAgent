@@ -707,7 +707,7 @@ be a host service able to serve several, per `weaver-harness-Spec` section 2.2.
 
 **Admin is the coordinating center of the load, and the harness is the
 coordinating center of the turn.** Admin authorizes the intent, verifies the
-boundary the operator wrote, opens the sink, starts the worker unit, and directs
+boundary the operator wrote, opens the sink, starts the worker, and directs
 the transition across its one seam, rolling back its own acts where a directive
 refuses. The harness cannot drive the early steps of its own creation, because
 the worker spawn runs before the harness exists at all, and the acts a verb

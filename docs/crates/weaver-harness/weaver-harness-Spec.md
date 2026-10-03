@@ -85,7 +85,7 @@ leftovers.
 
     src/lib.rs         re-exports, and nothing else
     src/channel.rs     organ-channel I/O and descriptor custody, section 2
-    src/spawn.rs       the organ fork's five calls, section 2.2
+    src/spawn.rs       the organ fork's six calls, section 2.2
     src/lifecycle.rs   the harness type, the run state, the fan-out, section 3
     src/authorship.rs  trace authorship, section 4
     src/assembly.rs    prompt assembly's deterministic floor, section 5
@@ -536,8 +536,9 @@ from: weaver-harness
 to: harness-child-flag-clear-unconditional
 ```
 
-**Between fork and exec the child performs five calls, `prctl`, `getppid`, `dup2`,
-`fcntl`, and `execve`, and nothing else.** All five are async-signal-safe, and the bound
+**Between fork and exec the child performs six calls, `prctl`, `getppid`, `_exit` where
+the parent is gone, `dup2`, `fcntl`, and `execve`, and nothing else.** All six are
+async-signal-safe, and the bound
 is stated because the worker holds the writer's thread at every fork: a child
 of a multithreaded process may safely run only async-signal-safe calls before
 its exec, so the enumeration is the safety argument and not a style. An
@@ -563,8 +564,8 @@ operator's ruling of 2026-10-03 on #50 that the agent leaves systemd, whose cgro
 every process of the unit when the unit stopped. The worker owns its organs now: the
 child sets `PR_SET_PDEATHSIG` to `SIGKILL` as its first call, so the kernel kills the
 SPU, the classify arm or the gate the instant the worker dies, cleanly or not, and then
-compares `getppid` with the worker's pid read before the fork, exiting at once where
-they differ, because a worker that died between the fork and the first call would
+compares `getppid` with the worker's pid read before the fork, calling `_exit` at once
+where they differ, because a worker that died between the fork and the first call would
 otherwise leave a child the signal was armed too late to reach. **The signal follows the
 thread that forked, not the process**, so the worker forks its organs from its main
 thread, which lives for the process, and never from a thread that may end while the
@@ -572,11 +573,15 @@ worker serves. **The worker exits after it answers left**, the run being its onl
 purpose, so the run lock admin's `unload` waits on is released by its exit, per
 `weaver-admin-Spec` section 3. **Two descriptors cross the start step's exec into the
 worker and are the worker's to keep**: the run lock, which it holds for its life and
-never reopens, a record lock being dropped when its holder closes any descriptor of the
-file, and the write end of the trace relay's lifetime pipe, which it marks close-on-exec
-at once so no organ holds it, per `weaver-admin-Spec` section 6. **The instrument is
-perturbation**: an organ stand-in still running after the worker is killed with
-`SIGKILL`, watched to fail when the death signal is not set.
+never closes or reopens, a record lock being dropped when its holder closes any
+descriptor of the file, and the write end of the trace relay's lifetime pipe. **The
+worker marks both close-on-exec as its first act, before it starts any thread or forks
+anything**, so no organ inherits a writable descriptor to root's lock file or a write
+end that would keep the relay alive, and no window exists in which one could. **The
+instruments are perturbation**: an organ stand-in still running after the worker is
+killed with `SIGKILL`, watched to fail when the death signal is not set, and the run
+lock still held by the worker after it opened and closed another descriptor of
+`run.lock`, watched to fail when the worker's code is made to reopen the file.
 
 ```graph
 node: harness-organs-die-with-the-worker
@@ -615,14 +620,14 @@ root and a parameter on the wrong one is not visibly wrong from inside it.
 **The bound above is untouched by this and the reason is where the work happens.** Every
 argument and every pair of the environment is a `CString` built in the parent before the
 fork, the way the program name already is, so the vectors the child hands `execve` are
-finished before the child exists. The child performs the same five calls. A parameter
+finished before the child exists. The child performs the same six calls. A parameter
 that could only be assembled after the fork would not be expressible here, which is a
 constraint on what may travel this way rather than a cost.
 
 **Descriptor 2 is the worker's pipe, and the dying organ's last word
 reaches the record through it.** The parent opens a pipe before the fork
 and the child places the write end at descriptor 2 - one more `dup2`, the
-call kind the five-call bound already enumerates, so the bound holds as
+call kind the six-call bound already enumerates, so the bound holds as
 stated. The worker's end is a reader thread that tees every line to the
 worker's own stderr, so the journal loses nothing it carries today, and
 retains the last line that parses as JSON - the SPU already dies printing
@@ -649,7 +654,7 @@ clause. The corner is the pipe call's numbering rather than a race,
 because the lowest free numbers are what it answers and a parent that has
 closed its own stderr leaves 2 free. **The repair is the parent moving the
 end and not the child clearing the flag**, for two reasons pointing the
-same way: the child's five-call bound is left as it stands, and the same
+same way: the child's six-call bound is left as it stands, and the same
 corner would put the parent's own stderr on this pipe, where the tee
 writes its own input back. This is the equal-descriptor corner the
 placement above meets at descriptor 3, answered differently because the
@@ -752,14 +757,14 @@ socket's pathname outlives the process that bound it, so a bind against a name a
 worker left would fail. The directory this socket lives in now outlives the worker, the
 init system that removed it having left the agent on 2026-10-03 (#50), so admin's start
 step clears a name a dead worker left before it starts the next, which is safe because
-it holds the run lock first and the lock proves no worker runs, per `weaver-admin-Spec`
-section 6. The worker therefore meets no inherited name and has nothing to clear. **A
-bind that finds its name occupied is a fault and never a thing to remove**, because the
-only ways a name is occupied are that a live worker holds it, in which case unlinking
-would strand the running agent's supervisor, or that the start step did not clear it, in
-which case the program's assumption is wrong and it should say so rather than repair.
-The instrument is review, no test in this crate being able to produce a manager that
-misbehaves.
+it does so under its invocation lock with the run lock found free, so no worker runs and
+no other invocation can start one, per `weaver-admin-Spec` section 3. The worker
+therefore meets no inherited name and has nothing to clear. **A bind that finds its name
+occupied is a fault and never a thing to remove**, because the only ways a name is
+occupied are that a live worker holds it, in which case unlinking would strand the
+running agent's supervisor, or that the start step did not clear it, in which case the
+program's assumption is wrong and it should say so rather than repair. The instrument is
+review, no test in this crate being able to produce a manager that misbehaves.
 
 ```graph
 node: harness-bind-never-unlinks
@@ -1220,16 +1225,16 @@ from: weaver-harness
 to: harness-diagnostic-enter-forks-no-gate
 ```
 
-**The gate's socket is a sibling of the coordination socket, and the
-derivation is the whole of this crate's part in it.** Per `weaver-gate-PRD`
-section 2 the pathname is the program's rather than the operator's, and this
-crate is the party positioned to know it: the coordination socket it bound as
-its first act sits in the agent's runtime directory, so the gate's name is that
-directory and a fixed leaf. **What that buys is admin's start step rather than a rule
-this crate enforces.** The start step clears a dead worker's names under the run lock
-before the next worker starts, per `weaver-admin-Spec` section 6, so the next bind meets
-no stale name. A derivation reaching anywhere else would need a cleanup this program
-has already refused to write, an unlink racing a live successor.
+**The gate's socket is a sibling of the coordination socket, and the derivation is the
+whole of this crate's part in it.** Per `weaver-gate-PRD` section 2 the pathname is the
+program's rather than the operator's, and this crate is the party positioned to know it:
+the coordination socket it bound as its first act sits in the agent's runtime directory,
+so the gate's name is that directory and a fixed leaf. **What that buys is admin's start
+step rather than a rule this crate enforces.** The start step clears a dead worker's
+names under its invocation lock, with the run lock found free, before the next worker
+starts, per `weaver-admin-Spec` section 6, so the next bind meets no stale name. A
+derivation reaching anywhere else would need a cleanup this program has already refused
+to write, an unlink racing a live successor.
 
 The listener therefore retains the path it bound, which is the one thing this
 crate holds a path for beyond the organ binaries, and the exception is argued

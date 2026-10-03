@@ -72,7 +72,7 @@ which is why it is stated rather than assumed.
 
 **Loop 0 is the running agent service, per the operator's ruling of 2026-08-05.**
 It is not a document set, not a milestone to reach and pass, and not a loop a
-builder supplies. It is the object itself: the thing that boots under its unit,
+builder supplies. It is the object itself: the thing admin's start step boots,
 comes up as the statically provisioned agent identity, binds the coordination
 socket inside its own sandbox and listens on it, creates the unnamed pairs its
 organs are reached over, and sits there being one sealed agent. **It binds
@@ -116,7 +116,7 @@ section 9. The ruling of 2026-08-20 that follows now describes the Python-iterat
 worker, the bench and experiments lane, which stays untouched until its own resolution.
 Which loop an agent runs there is the agent's own declared fact, per that ruling: the
 loop is a member of that agent's harness and unique to it. A worker whose loop
-is compiled carries it in the binary its unit starts, and a worker that reads
+is compiled carries it in the binary the start step runs, and a worker that reads
 its loop from a file runs the one the agent's declaration names. A compiled
 worker handed a declared loop file refuses at its own argument parse and the
 load fails loudly, because a declaration the installation cannot honor is an
@@ -243,20 +243,22 @@ them unloads it. Activity is the only lifecycle layer the harness owns.
 ## 3. What the harness does not own
 
 **The lifecycle transition goes to `weaver-admin`, and the fan-out inside it comes
-back.** Authorizing a load or unload, opening the record, starting and stopping the
-worker unit, rolling back what its own acts built, and supervising worker and gate
-lifetimes are `weaver-admin`'s, which the operator runs with root, one invocation per
-verb, per that charter's section 1 as recut on 2026-08-05. Nothing of the program's is
-long-lived where the harness is mortal: the agent leaves systemd on 2026-10-03 (#50),
-the worker detaches into its own session, and restarting it is the packaging's. The
-harness is one of the things a load assembles, not the thing that assembles it, and it
-cannot drive the early steps of its own creation, because the worker spawn runs before
-the harness is running as the harness at all. What the harness does own is the interior
-of the enter and leave directives: admin holds one seam and no channel to the SPU or the
-gate, per `weaver-admin-PRD` section 6, so the harness fans admin's directive out along
-its own seams, collects each organ's confirmation, and returns one aggregate. Sequencing
-the organs is the harness's because the seams are, and the previous tree carried roughly
-four and a half thousand lines of multi-agent coordination inside the opposite reading.
+back.** Authorizing a load or unload, opening the record, starting the worker and ending
+it where it will not end itself, and rolling back what its own acts built are
+`weaver-admin`'s, while the lifetimes of the organs the worker forks are the worker's,
+which kills them at its death, per `weaver-harness-Spec` section 2.2. Admin runs as the
+operator's tool, with root, one invocation per verb, per that charter's section 1 as
+recut on 2026-08-05. Nothing of the program's is long-lived where the harness is mortal:
+the agent leaves systemd on 2026-10-03 (#50), the worker detaches into its own session,
+and restarting it is the packaging's. The harness is one of the things a load assembles,
+not the thing that assembles it, and it cannot drive the early steps of its own
+creation, because the worker spawn runs before the harness is running as the harness at
+all. What the harness does own is the interior of the enter and leave directives: admin
+holds one seam and no channel to the SPU or the gate, per `weaver-admin-PRD` section 6,
+so the harness fans admin's directive out along its own seams, collects each organ's
+confirmation, and returns one aggregate. Sequencing the organs is the harness's because
+the seams are, and the previous tree carried roughly four and a half thousand lines of
+multi-agent coordination inside the opposite reading.
 
 **Network ingress goes to `weaver-gate`.** The harness binds no socket the world
 can reach and has no first-contact surface. Work arrives already authenticated.

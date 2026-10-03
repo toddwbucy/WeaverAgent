@@ -39,7 +39,7 @@ could not open.
 
 ## What it owns
 
-**Loop 0, the running agent service.** The thing that boots under its unit,
+**Loop 0, the running agent service.** The thing admin's start step boots,
 comes up as the provisioned identity, binds the coordination socket inside its
 own sandbox, and sits there being one sealed agent. The organ pairs are
 created during the enter fan-out, in the order the binding declares - the

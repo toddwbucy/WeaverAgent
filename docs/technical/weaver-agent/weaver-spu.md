@@ -148,10 +148,10 @@ sink. The handles that would matter are closed to it at the moment its process
 is created, so the component that produces the measurements cannot touch the
 record they land in.
 
-**State across a residency.** No warm reload, no retained artifact between
-residencies, no allocation held past release in anticipation. The process dies
-with the unit and there is nowhere for the state to be kept - the cheap form of
-a guarantee that would otherwise need policing.
+**State across a residency.** No warm reload, no retained artifact between residencies,
+no allocation held past release in anticipation. The process dies with the worker that
+forked it and there is nowhere for the state to be kept - the cheap form of a guarantee
+that would otherwise need policing.
 
 **Fleet knowledge and device selection.** It knows what it was asked to admit
 and what it holds - not what other agents exist or which would rather have the
