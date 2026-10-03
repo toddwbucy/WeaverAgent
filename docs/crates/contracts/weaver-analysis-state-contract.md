@@ -6,6 +6,8 @@
 **Document ID:** `weaver-analysis-state-contract`
 **Editorial:** Per the Working Rules.
 **Landing PR:** #650
+**Copies:** this copy (WeaverAgent) edited by #58; WeaverAnalysis's copy follows under
+WeaverAnalysis#7.
 
 ---
 
@@ -27,21 +29,22 @@ No third party reaches this seam. The agent holds no end of it: the harness neve
 this door, the model has no path to it, and the door refuses the agent's own credential
 at the accept. The one ruled crossing into the agent that is not the two external
 contracts of 2026-08-01, per `weaver-agent-PRD` section 0 as amended 2026-08-24, and it
-exists only where the load declared the diagnostic kind or elected a restore, per
-section 1.
+exists only under a diagnostic binding or for the operator's offline save-point
+builder, per section 1.
 
 **This seam is a wire.** A named Unix socket on the state member, the member's one named
 door since the first lost its name to the operator's ruling of 2026-08-26, stood under a
-diagnostic binding or a serving load that elects a restore, per section 1, and
+diagnostic binding or for the offline save-point builder, per section 1, and
 authenticated by credential per the first invariant's rule for a channel with a name.
 Its name stands in the member's own territory on the operator's side, per
 the same ruling: the driver is an operator principal and traverses, the worker's
 identity holds nothing there, and the squat an agent-writable directory invited is
-unrepresentable rather than defended. The door's absence under a serving load that
-elects no restore is the charter's cheap refusal made structural: a driver pointed at
-such an agent finds nothing to dial, and a serving load that elects a restore is
-distinct from one by that election alone, admin having named the door on the vector for
-it.
+unrepresentable rather than defended. The door's absence under every serving load is
+the charter's cheap refusal made structural: a driver pointed at such an agent finds
+nothing to dial. A serving load restores a save point through a descriptor admin hands
+the member at spawn and never through this door, on the operator's rulings of
+2026-10-02 on WeaverAgent#58, which retire the serving restore from a record (issue
+#432) and its name on the vector.
 
 ```graph
 node: weaver-analysis-state-contract
@@ -104,12 +107,12 @@ to: canonical-event
 ## 1. What this contract governs
 
 The second door on the state member: the preload traffic that flows when a diagnostic
-binding stands or a serving load elects a restore, per `weaver-state-PRD` section 4,
-the condition under which the door exists being that admin named it on the member's
-vector under either, what each party owes, the cut and the session rewrite the driver
-may apply to what it projects, what each party owes, how the seam fails, and what
-neither party may do. It is read alongside `weaver-analysis-PRD` and `weaver-state-PRD`
-section 3, and none of the three is complete without the others.
+binding stands or the operator's offline save-point builder rebuilds state from a
+record, per `weaver-state-PRD` sections 3 and 4, the condition under which the door
+exists being that it was named for one of the two, what each party owes, the cut and the
+session rewrite the driver may apply to what it projects, what each party owes, how the
+seam fails, and what neither party may do. It is read alongside `weaver-analysis-PRD`
+and `weaver-state-PRD` section 3, and none of the three is complete without the others.
 
 ## 2. The traffic
 
@@ -123,6 +126,16 @@ while retaining the recorded rule. A cut requires a nonempty destination
 different from the source. The receiving load, opener, and
 projected envelopes name the same destination, because every answer on the other door is
 bounded to the session that load declared.
+
+**A rebuild honours every reset the record names**, on the operator's rulings of
+2026-10-02 on WeaverAgent#58: where the record carries a reset event, the state an
+unclean stop reset to a save point, the driver projects what the reset left standing and
+not the distillates the reset discarded, so a rebuild arrives where the live load did.
+**A tail opener is owed and not yet elected**: a preload that lands on top of a restored
+save point, keyed to the (run, sequence) position the save point is stamped with and
+retiring nothing, exists only if a ruling elects a tail over a save point, no tail
+replaying by default; until then every opener on this door retires the declared session
+first.
 
 **A selected record has one source session, and one standing carries one election.** The
 driver refuses ambiguous source identity before opening the preload. Ordinary
