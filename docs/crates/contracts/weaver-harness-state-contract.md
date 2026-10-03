@@ -354,7 +354,11 @@ is not a load, so the prompt file's authority at every load does not reach it. E
 distillate the stream carries after the ask lands on the restored holdings. The ask
 parks never, and a restore that fails is not answered, the asker's bound converting the
 silence into the missing answer of section 5: the harness then flushes nothing, records
-the miss, and serves on the holdings the member still holds. On its answer the harness
+the miss, and serves on the holdings the member still holds. An answer lost after the
+member swapped its holdings leaves the restore indeterminate, the holdings restored and
+the decode cache not flushed; what an indeterminate restore owes, a stopped run or a
+commit step that keeps the swap invisible until acknowledged, is a named design item
+of the save-point code act, carried on #1. On its answer the harness
 flushes the decode session to `keep = 0` through `weaver-harness-spu-decode-contract`'s
 existing cut, or, where the answered `identity` differs from the seated prefix, closes
 and reopens the decode session with it, per `weaver-harness-Spec` section 6, and this

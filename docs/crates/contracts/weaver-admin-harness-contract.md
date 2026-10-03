@@ -171,12 +171,13 @@ session identity, the run reference, the kind of the binding, the trace sink han
 state channel's end where the member stands, the SPU instruction, the gate instruction
 where the kind declares a Gate, the state election the tee applies, the store election
 the member stands on, resolved to the embedded engine where the declaration is silent,
-per `weaver-state-PRD` section 4, the lineage of the restore where
-the declaration elects one, the digests of the organ binaries admin started and of
-the two it hands the worker to fork, the agent's SPU and the gate, and the digests of
-the declaration and, as of 2026-10-02, of the prompt file it names. The
-state channel's end is the harness half of the socketpair admin created at the member's
-spawn, per the operator's ruling of 2026-08-26 carried at
+per `weaver-state-PRD` section 4, the lineage of the save point the load restores,
+whether the declaration's `restore` names it or the inventory selected the latest
+published by default, and none where no save point stands, the digests of the organ
+binaries admin started and of the two it hands the worker to fork, the agent's SPU and
+the gate, and the digests of the declaration and, as of 2026-10-02, of the prompt file
+it names. The state channel's end is the harness half of the socketpair admin created at
+the member's spawn, per the operator's ruling of 2026-08-26 carried at
 `weaver-harness-state-contract`: admin couriers it and speaks on it never. Its absence
 is the state leg not standing, never a refused load, and the two failure moments read
 differently on purpose: a member whose spawn failed puts no end on the enter, and one
