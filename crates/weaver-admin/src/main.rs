@@ -953,6 +953,19 @@ fn run_load(
     let worker_log = start::open_log(&config.worker_log(), Some(config.operator_owner()))
         .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
 
+    // **The trace door stands only for a file sink**, per Spec section 6: a
+    // stale door is cleared on every load, and for a file sink the relay is
+    // stood before the member and the worker, the lifetime pipe made before
+    // either fork.
+    start::clear_trace_door(&config.run_directory())?;
+    let relay_write = match &inventory.config.trace_sink {
+        weaver_types::TraceSink::File { .. } => {
+            let (_relay, write) = stand_relay(config, agent, &sink, &run_lock)?;
+            standing.forked = true;
+            Some(write)
+        }
+        _ => None,
+    };
     let state_end = stand_state_member(config, &inventory, &run_lock);
     standing.forked |= state_end.is_some();
     let classify = config
@@ -978,10 +991,14 @@ fn run_load(
         library_path: config.library_path.as_deref(),
         log: &worker_log,
         run_lock: &run_lock,
-        relay_write: None,
+        relay_write: relay_write.as_ref().map(std::os::fd::AsRawFd::as_raw_fd),
     })
     .map_err(|_| LifecycleRefusal::BindFailed)?;
     standing.forked = true;
+    // **The start step closes its own copy of the write end once both
+    // children hold theirs**, per Spec section 6, so the relay reads
+    // end-of-file at the worker's death and not at this invocation's.
+    drop(relay_write);
     standing.run_lock = Some(run_lock);
 
     let mut coordination = match channel::dial(&socket_path) {
@@ -1053,6 +1070,73 @@ fn run_load(
         },
         Err(_) => Err(LifecycleRefusal::NoResidency),
     }
+}
+
+/// **Stands the trace relay for a file sink**, per Spec section 6: the relay
+/// account, its trace group and the agent's access group resolved by name,
+/// each refusing `BoundaryUnverified` where the box does not carry it; the
+/// declared reader's uid; the binary beside the worker's, found as the member's
+/// is; the door bound; the sink reopened read-only and confirmed; the
+/// operations log opened for the relay's lines; and the lifetime pipe made.
+/// Answers the relay and the pipe's write end, which the worker inherits.
+fn stand_relay(
+    config: &ServiceConfig,
+    agent: &AgentName,
+    sink: &std::os::fd::OwnedFd,
+    run_lock: &start::RunLock,
+) -> Result<(std::process::Child, std::os::fd::OwnedFd), LifecycleRefusal> {
+    let base = inventory::identity_for(agent);
+    let missing = |what: &str| {
+        diag!("weaver-admin: {what} is not provisioned, so the trace relay cannot stand");
+        LifecycleRefusal::BoundaryUnverified
+    };
+    let relay_name = format!("{base}-relay");
+    let relay_user = nix::unistd::User::from_name(&relay_name)
+        .ok()
+        .flatten()
+        .ok_or_else(|| missing(&relay_name))?;
+    let trace_name = format!("{base}-trace");
+    let trace_group = nix::unistd::Group::from_name(&trace_name)
+        .ok()
+        .flatten()
+        .ok_or_else(|| missing(&trace_name))?;
+    let access_name = format!("{base}-admin");
+    let access_group = nix::unistd::Group::from_name(&access_name)
+        .ok()
+        .flatten()
+        .ok_or_else(|| missing(&access_name))?;
+    let boundary = config.require_boundary()?;
+    let reader = nix::unistd::User::from_name(&boundary.reader)
+        .ok()
+        .flatten()
+        .ok_or_else(|| missing(&boundary.reader))?;
+    let binary = config
+        .worker
+        .parent()
+        .map(|directory| directory.join("weaver-trace-relay"))
+        .filter(|binary| binary.is_file())
+        .ok_or_else(|| missing("weaver-trace-relay beside the worker binary"))?;
+    let listener = start::bind_trace_door(&config.run_directory(), access_group.gid.as_raw())?;
+    let read_only = start::reopen_read_only(sink)?;
+    let log = log::open_append(&config.admin_log(), Some(config.operator_owner()))
+        .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
+    let (lifetime_read, lifetime_write) = nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC)
+        .map_err(|_| LifecycleRefusal::DescriptorsUnusable)?;
+    let relay = start::spawn_relay(start::RelayStart {
+        binary: &binary,
+        reader_uid: reader.uid.as_raw(),
+        agent: &agent.0,
+        boundary_digest: &boundary.digest,
+        uid: relay_user.uid.as_raw(),
+        gid: trace_group.gid.as_raw(),
+        listener: &listener,
+        sink: &read_only,
+        log: &log,
+        lifetime_read: &lifetime_read,
+        run_lock,
+    })
+    .map_err(|_| LifecycleRefusal::BindFailed)?;
+    Ok((relay, lifetime_write))
 }
 
 /// **A failed dial is answered from the worker's own exit**, per Spec
@@ -3432,6 +3516,173 @@ mod tests {
         let _ = child.wait();
         drop(relay_read);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **The relay's spawn, as root inside a user namespace**, per Spec
+    /// sections 6 and 10's third walk: the relay runs as its account and its
+    /// one group, the trace group, holds no group root left it, leads its own
+    /// session with no signal ignored and no new privileges, and crosses the
+    /// exec with exactly its allowlist: its standard streams at `/dev/null`,
+    /// the listener at 3, the sink at 4, the log at 5, the lifetime pipe at 6
+    /// and the run lock at 9. Its environment is the fixed set, so the relay's
+    /// test-only wait knob, set in this process, never reaches it. The
+    /// stand-in is a script that becomes `sleep`. Run by the watch below.
+    /// Perturbations: drop the log's placement and 5 is absent from the list,
+    /// and pass the knob through and the environment carries it.
+    #[test]
+    #[ignore = "needs root; run inside a user namespace by the watch below"]
+    fn the_relay_spawn_lands_its_identity_and_allowlist_as_root() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("weaver-admin-relay-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let stand_in = base.join("weaver-trace-relay");
+        std::fs::write(&stand_in, "#!/bin/sh\nexec /bin/sleep 30\n").unwrap();
+        std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let run_directory = base.join("run");
+        std::fs::create_dir_all(&run_directory).unwrap();
+        let run_lock = start::take_run_lock(&run_directory).unwrap().unwrap();
+        let listener = start::bind_trace_door(&run_directory, 0).unwrap();
+        {
+            use std::os::unix::fs::MetadataExt;
+            let door = std::fs::symlink_metadata(run_directory.join("trace.sock")).unwrap();
+            assert_eq!(door.mode() & 0o777, 0o660, "the door is 0660");
+            assert_eq!((door.uid(), door.gid()), (0, 0), "root's, grouped as asked");
+        }
+        let sink_path = base.join("trace.ndjson");
+        std::fs::write(&sink_path, "").unwrap();
+        let sink: std::os::fd::OwnedFd = std::fs::File::open(&sink_path).unwrap().into();
+        let log = start::open_log(&base.join("admin.log"), None).unwrap();
+        let (lifetime_read, lifetime_write) =
+            nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC).unwrap();
+        // SAFETY: the watch runs this instrument alone, one thread.
+        unsafe { std::env::set_var("WEAVER_TRACE_RELAY_TEST_MS", "1") };
+        let mut child = start::spawn_relay(start::RelayStart {
+            binary: &stand_in,
+            reader_uid: 4246,
+            agent: "alpha",
+            boundary_digest: "b0b0",
+            uid: 4244,
+            gid: 4245,
+            listener: &listener,
+            sink: &sink,
+            log: &log,
+            lifetime_read: &lifetime_read,
+            run_lock: &run_lock,
+        })
+        .expect("the relay spawns");
+        let pid = child.id();
+        let proc = std::path::PathBuf::from(format!("/proc/{pid}"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::fs::read_to_string(proc.join("comm"))
+            .map(|c| c.trim() != "sleep")
+            .unwrap_or(true)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let status = std::fs::read_to_string(proc.join("status")).unwrap();
+        let line = |key: &str| {
+            status
+                .lines()
+                .find_map(|l| l.strip_prefix(key))
+                .map(|rest| rest.split_whitespace().collect::<Vec<_>>().join(" "))
+                .unwrap_or_default()
+        };
+        assert_eq!(
+            line("Uid:"),
+            "4244 4244 4244 4244",
+            "every uid the relay account's"
+        );
+        assert_eq!(
+            line("Gid:"),
+            "4245 4245 4245 4245",
+            "every gid the trace group's"
+        );
+        assert_eq!(line("Groups:"), "4245", "the trace group alone");
+        assert_eq!(line("SigIgn:"), "0000000000000000");
+        assert_eq!(line("NoNewPrivs:"), "1");
+        let environ = std::fs::read(proc.join("environ")).unwrap();
+        let names: Vec<String> = environ
+            .split(|b| *b == 0)
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| {
+                let name = entry.split(|b| *b == b'=').next().unwrap_or_default();
+                String::from_utf8_lossy(name).into_owned()
+            })
+            .collect();
+        assert!(
+            !names
+                .iter()
+                .any(|name| name == "WEAVER_TRACE_RELAY_TEST_MS"),
+            "the test-only knob never reaches a started relay: {names:?}"
+        );
+        assert!(names.iter().any(|name| name == "PATH"), "{names:?}");
+        let table = || {
+            let mut fds: Vec<u32> = std::fs::read_dir(proc.join("fd"))
+                .unwrap()
+                .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
+                .collect();
+            fds.sort_unstable();
+            fds
+        };
+        let settle = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut fds = table();
+        while fds != [0, 1, 2, 3, 4, 5, 6, 9] && std::time::Instant::now() < settle {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            fds = table();
+        }
+        assert_eq!(
+            fds,
+            vec![0, 1, 2, 3, 4, 5, 6, 9],
+            "exactly the relay's allowlist"
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+        drop(lifetime_write);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The watch for the relay spawn, the worker's pattern.
+    #[test]
+    fn the_relay_spawn_is_watched_inside_a_user_namespace() {
+        if nix::unistd::geteuid().is_root() {
+            return the_relay_spawn_lands_its_identity_and_allowlist_as_root();
+        }
+        let exe = std::env::current_exe().expect("the test binary names itself");
+        let ran = std::process::Command::new("unshare")
+            .args(["--map-auto", "--map-root-user"])
+            .arg(&exe)
+            .args([
+                "--exact",
+                "tests::the_relay_spawn_lands_its_identity_and_allowlist_as_root",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .stdin(std::process::Stdio::null())
+            .output();
+        let output = match ran {
+            Ok(output) => output,
+            Err(e) => {
+                eprintln!("SKIP relay spawn watch: unshare could not run: {e}");
+                return;
+            }
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.starts_with("unshare:") {
+            eprintln!(
+                "SKIP relay spawn watch: no user namespace here: {}",
+                stderr.trim()
+            );
+            return;
+        }
+        assert!(
+            output.status.success() && stdout.contains("test result: ok. 1 passed"),
+            "the relay spawn failed inside the namespace\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
     }
 
     /// The watch for the worker spawn, the member's pattern: re-executes this

@@ -107,7 +107,7 @@ fn no_runtime_no_bus_no_logging() {
 /// Perturb with an extra binary, lib, build script, example or bench. A
 /// manifest comment spelling [[bin]] changes no target and must pass.
 #[test]
-fn one_binary_and_no_library_surface() {
+fn two_binaries_and_no_library_surface() {
     let out = Command::new(env!("CARGO"))
         .args([
             "metadata",
@@ -140,10 +140,13 @@ fn one_binary_and_no_library_surface() {
             target["name"].as_str(),
             target["kind"].as_array().unwrap().as_slice(),
         ) {
-            (Some("weaver-admin"), [kind]) if kind == "bin" => bins += 1,
+            (Some("weaver-admin" | "weaver-trace-relay"), [kind]) if kind == "bin" => bins += 1,
             (_, [kind]) if kind == "test" => {}
             _ => panic!("unexpected admin target: {target}"),
         }
     }
-    assert_eq!(bins, 1, "exactly one admin binary: {targets:?}");
+    assert_eq!(
+        bins, 2,
+        "exactly the two binaries, weaver-admin and weaver-trace-relay: {targets:?}"
+    );
 }

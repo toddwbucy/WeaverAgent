@@ -217,7 +217,7 @@ BUILT="$BUILT/release"
 # repository on 2026-09-30. The build below is
 # the whole workspace, the frontend having left the repository on 2026-09-26.
 # A member joins the installed set by being written here.
-MEMBERS="pyworker worker weaver-admin weaver-gate weaver-spu weaver-state"
+MEMBERS="pyworker worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state"
 
 MEMBER_FEATURES=weaver-harness/pyworker,weaver-state/sqlite,weaver-state/postgres
 SPU_FEATURES=weaver-spu/cuda
@@ -386,7 +386,7 @@ cargo test --release --locked \
 
 # ------------------------------------------------------------------- 4. build
 # The frontend left the repository on 2026-09-26 and ships no member here, so
-# the build is the whole workspace: the six installed members and the tools
+# the build is the whole workspace: the seven installed members and the tools
 # beside them.
 say "build"
 NVCC_CCBIN=${NVCC_CCBIN:-/usr/bin/g++-15} \
