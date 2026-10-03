@@ -172,7 +172,8 @@ the invoker's resource limits contain the agent. The cross-repository half is
 toddwbucy/WeaverWeb#15.
 
 **At the trace door, the record as a read-only stream**: the relay writes a header line
-naming the file's identity (device, inode, birth time), then the trace's own lines from
+naming the file's identity (device, inode, and birth time where the filesystem reports
+it), then the trace's own lines from
 the verified position exactly as written, following new lines with a heartbeat while
 idle, every added line a `TraceLine` of `weaver-types-Spec` section 3.1. It serves
 the file the loaded run opened, so a rotation of the sink's path changes

@@ -940,7 +940,7 @@ pub struct TraceRequest {
 pub struct TraceHeader {
     pub device: u64,
     pub inode: u64,
-    pub birth_ns: i128,
+    pub birth_ns: Option<i128>,
 }
 
 pub struct TraceLine {
@@ -992,18 +992,22 @@ the relay writes ends in a newline: the header, the trace's own lines, which alr
 end in one, and each control line.
 
 **`TraceRequest` names where the stream starts**: a byte offset that falls on a record
-boundary, and the sha256 hex of the record that ends at that offset, absent only at
-offset zero. The relay refuses a position whose prior record does not hash to the
-digest, so a reader resuming after a rotation or a truncation learns that its position
-no longer names the record it read rather than receiving bytes from another file. **The
-stream is a `TraceHeader` line and then the trace's own lines exactly as written**, on
-the operator's ruling of 2026-10-03 on #63's fourth question: the header names the
-file's identity, its device, inode and birth time in nanoseconds since the epoch, so a
-reader holds what it is reading. At the end of the file the stream keeps following, with
-a heartbeat line while idle. **Every line the stream adds is a `TraceLine`**, so the
-reader in another repository parses one fixed shape: a JSON object whose one member is
-`trace_stream`, holding a `TraceControl` externally tagged by case, which no trace event
-carries, the envelope having no such member. The three lines are
+boundary, and the sha256 hex of the record that ends at that offset, the record's bytes
+from the start of its line through its terminating newline, absent only at offset zero.
+The relay refuses a position whose prior record does not hash to the digest, so a reader
+resuming after a rotation or a truncation learns that its position no longer names the
+record it read rather than receiving bytes from another file. **The stream is a
+`TraceHeader` line and then the trace's own lines exactly as written**, on the
+operator's ruling of 2026-10-03 on #63's fourth question: the header names the file's
+identity, its device, inode and birth time in nanoseconds since the epoch, so a reader
+holds what it is reading. **The birth time is absent where the filesystem reports
+none**, on #73's fourth item: never zero, which would let a reused device and inode read
+as the same file, and a reader holding no birth time to compare leans on the position's
+digest, which a different file fails. At the end of the file the stream keeps following,
+with a heartbeat line while idle. **Every line the stream adds is a `TraceLine`**, so
+the reader in another repository parses one fixed shape: a JSON object whose one member
+is `trace_stream`, holding a `TraceControl` externally tagged by case, which no trace
+event carries, the envelope having no such member. The three lines are
 `{"trace_stream":{"header":{"device":...,"inode":...,"birth_ns":...}}}` first,
 `{"trace_stream":{"heartbeat":{"wall_ms":...}}}` while idle, and
 `{"trace_stream":{"truncated":{"size":...}}}` when the run's file shrinks below the

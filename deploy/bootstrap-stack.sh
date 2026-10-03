@@ -68,7 +68,7 @@ AGENT_DIR=${WEAVER_AGENT_DIR:-/var/lib/weaver-agent}
 LOG_DIR=${WEAVER_LOG_DIR:-/var/log/weaver}
 CUDA_LIB_DIR=${CUDA_LIB_DIR:-/opt/cuda/lib64}
 
-MEMBERS="pyworker worker weaver-admin weaver-gate weaver-spu weaver-state"
+MEMBERS="pyworker worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state"
 MEMBER_FEATURES=weaver-harness/pyworker,weaver-state/sqlite,weaver-state/postgres
 SPU_FEATURES=weaver-spu/cuda
 FEATURES="$SPU_FEATURES,$MEMBER_FEATURES"

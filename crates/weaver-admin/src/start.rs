@@ -638,6 +638,150 @@ pub fn spawn_worker(start: WorkerStart<'_>) -> std::io::Result<std::process::Chi
     command.spawn()
 }
 
+/// The relay's descriptors at its fixed numbers, per section 6: the bound
+/// listener, a read-only descriptor of the loaded run's sink, the operations
+/// log, the lifetime pipe's read end, and the run lock's description.
+pub const RELAY_LISTENER_FD: RawFd = 3;
+pub const RELAY_SINK_FD: RawFd = 4;
+pub const RELAY_LOG_FD: RawFd = 5;
+pub const RELAY_LIFETIME_READ_FD: RawFd = 6;
+
+/// **Binds the trace door**, per section 6: as root, in the agent's run
+/// directory, a stale `trace.sock` a previous run's relay left removed first,
+/// a stream socket bound, owned by root and the agent's access group, mode
+/// `0660`, and listening. Called holding both locks.
+pub fn bind_trace_door(run_directory: &Path, access_gid: u32) -> Result<OwnedFd, LifecycleRefusal> {
+    let path = run_directory.join("trace.sock");
+    clear_trace_door(run_directory)?;
+    // **Bound at a mode no wider than root's own**: the socket file takes its
+    // mode from the umask at the bind, so the umask is tightened around it and
+    // restored, the invocation being single-threaded, and the file never
+    // stands open to another principal before its owner and mode are set.
+    // SAFETY: umask only changes this process's file-creation mask.
+    let previous = unsafe { nix::libc::umask(0o177) };
+    let bound = std::os::unix::net::UnixListener::bind(&path);
+    // SAFETY: as above, restoring the mask.
+    unsafe { nix::libc::umask(previous) };
+    let listener = bound.map_err(|_| refuse_path("cannot be bound", &path))?;
+    std::os::unix::fs::chown(&path, Some(0), Some(access_gid))
+        .map_err(|_| refuse_path("cannot be given to the access group", &path))?;
+    std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o660))
+        .map_err(|_| refuse_path("cannot be set to 0660", &path))?;
+    Ok(OwnedFd::from(listener))
+}
+
+/// Removes a `trace.sock` a previous run's relay left, which a relay cannot
+/// unlink from root's directory and whose name outlives its listener. Every
+/// load clears it, so a pipe or socket sink leaves no stale door standing.
+pub fn clear_trace_door(run_directory: &Path) -> Result<(), LifecycleRefusal> {
+    let path = run_directory.join("trace.sock");
+    if std::fs::symlink_metadata(&path).is_ok() && std::fs::remove_file(&path).is_err() {
+        return Err(refuse_path("cannot be cleared", &path));
+    }
+    Ok(())
+}
+
+/// **A read-only descriptor of the same open file the worker writes**, per
+/// section 6: reopened through `/proc/self/fd/N` of the write descriptor,
+/// never by the declaration's path, and confirmed by device and inode before
+/// it is handed on, so the relay serves the loaded run's own file.
+pub fn reopen_read_only(write: &OwnedFd) -> Result<OwnedFd, LifecycleRefusal> {
+    let path = format!("/proc/self/fd/{}", write.as_raw_fd());
+    let c_path = std::ffi::CString::new(path).map_err(|_| LifecycleRefusal::DescriptorsUnusable)?;
+    // SAFETY: open with a NUL-terminated path and no mode.
+    let fd =
+        unsafe { nix::libc::open(c_path.as_ptr(), nix::libc::O_RDONLY | nix::libc::O_CLOEXEC) };
+    if fd == -1 {
+        return Err(LifecycleRefusal::DescriptorsUnusable);
+    }
+    // SAFETY: the number was just opened and is owned by nothing else.
+    let read = unsafe { OwnedFd::from_raw_fd(fd) };
+    let same = |a: &OwnedFd| -> Option<(u64, u64)> {
+        let stat = nix::sys::stat::fstat(a).ok()?;
+        Some((stat.st_dev, stat.st_ino))
+    };
+    match (same(write), same(&read)) {
+        (Some(w), Some(r)) if w == r => Ok(read),
+        _ => Err(LifecycleRefusal::DescriptorsUnusable),
+    }
+}
+
+/// What the start step hands the relay it forks, per section 6.
+pub struct RelayStart<'a> {
+    pub binary: &'a Path,
+    pub reader_uid: u32,
+    pub agent: &'a str,
+    pub boundary_digest: &'a str,
+    pub uid: u32,
+    pub gid: u32,
+    pub listener: &'a OwnedFd,
+    pub sink: &'a OwnedFd,
+    pub log: &'a std::fs::File,
+    pub lifetime_read: &'a OwnedFd,
+    pub run_lock: &'a RunLock,
+}
+
+/// **Forks the trace relay**, per section 6: under the relay account and its
+/// one group, the trace group, never root, the agent or the member; a new
+/// session and the signals reset; `/` and umask `027`; no new privileges;
+/// exactly its handed descriptors at their fixed numbers and its standard
+/// streams at `/dev/null`, every other descriptor sealed.
+pub fn spawn_relay(start: RelayStart<'_>) -> std::io::Result<std::process::Child> {
+    use std::os::unix::process::CommandExt;
+    let listener = high(start.listener.as_raw_fd())?;
+    let sink = high(start.sink.as_raw_fd())?;
+    let log = high(start.log.as_raw_fd())?;
+    let lifetime = high(start.lifetime_read.as_raw_fd())?;
+    let lock = high(start.run_lock.raw())?;
+    let gifts = [
+        (listener.as_raw_fd(), RELAY_LISTENER_FD),
+        (sink.as_raw_fd(), RELAY_SINK_FD),
+        (log.as_raw_fd(), RELAY_LOG_FD),
+        (lifetime.as_raw_fd(), RELAY_LIFETIME_READ_FD),
+        (lock.as_raw_fd(), RUN_LOCK_FD),
+    ];
+    let (uid, gid) = (start.uid, start.gid);
+    let mut command = std::process::Command::new(start.binary);
+    command
+        .args([
+            start.reader_uid.to_string(),
+            start.agent.to_string(),
+            start.boundary_digest.to_string(),
+        ])
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("LANG", "C.UTF-8")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // SAFETY: every call below is async-signal-safe, run in the child
+    // between fork and exec.
+    unsafe {
+        command.pre_exec(move || {
+            for (source, target) in gifts {
+                place(source, target)?;
+            }
+            seal_except(&[
+                RELAY_LISTENER_FD,
+                RELAY_SINK_FD,
+                RELAY_LOG_FD,
+                RELAY_LIFETIME_READ_FD,
+                RUN_LOCK_FD,
+            ])?;
+            detach_and_reset()?;
+            if nix::libc::chdir(c"/".as_ptr()) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            nix::libc::umask(0o027);
+            if nix::libc::prctl(nix::libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            crate::inventory::drop_to(uid, &[gid as nix::libc::gid_t])
+        });
+    }
+    command.spawn()
+}
+
 /// The worker's argument vector, per section 6: the coordination socket,
 /// the SPU and gate binaries, and the named flags for the headroom, the
 /// loop file and the classify binary where each stands. Only the validated
@@ -1078,6 +1222,35 @@ mod tests {
         let held = take_run_lock(dir.0.as_path()).unwrap().unwrap();
         assert!(take_run_lock(dir.0.as_path()).unwrap().is_none());
         drop(held);
+    }
+
+    /// **The relay serves the run's own file, read-only**, per section 6: the
+    /// reopen through `/proc/self/fd` answers a read-only descriptor of the
+    /// same device and inode, never the path's. Perturbation: reopen by the
+    /// path after renaming another file over it and the identity differs.
+    #[test]
+    fn the_sink_is_reopened_read_only_and_the_same_file() {
+        let dir = scratch("reopen");
+        let path = dir.0.join("trace.ndjson");
+        let write: OwnedFd = std::fs::File::create(&path).unwrap().into();
+        // Another file now stands at the declaration's path.
+        std::fs::rename(&path, dir.0.join("rotated")).unwrap();
+        std::fs::write(&path, "another").unwrap();
+        let read = reopen_read_only(&write).unwrap();
+        // SAFETY: F_GETFL on the descriptor just reopened.
+        let flags = unsafe { nix::libc::fcntl(read.as_raw_fd(), nix::libc::F_GETFL) };
+        assert_eq!(
+            flags & nix::libc::O_ACCMODE,
+            nix::libc::O_RDONLY,
+            "read-only"
+        );
+        let a = nix::sys::stat::fstat(&write).unwrap();
+        let b = nix::sys::stat::fstat(&read).unwrap();
+        assert_eq!(
+            (a.st_dev, a.st_ino),
+            (b.st_dev, b.st_ino),
+            "the run's own file"
+        );
     }
 
     /// **The run directory is made root's and `0755`, and a link at its name

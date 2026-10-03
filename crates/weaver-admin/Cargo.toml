@@ -6,12 +6,19 @@ license.workspace = true
 publish.workspace = true
 description = "The supervisor: the operator surface, the lifecycle verbs, custody of the sink, and the coordination channel"
 
-# One binary and no library surface, per weaver-admin-Spec section 1: nothing
+# Two binaries and no library surface, per weaver-admin-Spec section 1: nothing
 # links admin, so a lib target would be an API for a consumer the topology
 # forbids.
 [[bin]]
 name = "weaver-admin"
 path = "src/main.rs"
+
+# The trace door's relay, per weaver-admin-Spec sections 1 and 6: admin's
+# second binary, sharing only the floor's types with the first, run under the
+# relay account and never as root.
+[[bin]]
+name = "weaver-trace-relay"
+path = "src/bin/weaver-trace-relay.rs"
 
 # The internal set is one floor link, weaver-types WITH its `config` feature,
 # because admin is the crate that parses the operator's file. weaver-traits is
