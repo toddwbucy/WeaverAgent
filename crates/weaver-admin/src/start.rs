@@ -247,8 +247,12 @@ pub fn take_run_lock(run_directory: &Path) -> Result<Option<RunLock>, LifecycleR
 /// run.
 pub fn run_lock_held(run_directory: &Path) -> Result<bool, LifecycleRefusal> {
     let path = run_directory.join("run.lock");
-    if std::fs::symlink_metadata(&path).is_err() {
-        return Ok(false);
+    // **Only an absent file is an absent run**: any other failure to look is
+    // a refusal, never a report that the lock is free.
+    match std::fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err(refuse_path("cannot be read", &path)),
+        Ok(_) => {}
     }
     let file = open_lock_file(&path)?;
     let mut probe = whole_file(nix::libc::F_WRLCK);
@@ -376,9 +380,10 @@ pub fn escalate_within(
     if !run_lock_held(run_directory)? {
         return Ok(());
     }
-    let Ok(lock) = std::fs::metadata(run_directory.join("run.lock")) else {
-        return Ok(());
-    };
+    // The lock reads held, so a file that cannot be looked at now is a fault,
+    // never an ended run.
+    let lock = std::fs::metadata(run_directory.join("run.lock"))
+        .map_err(|_| refuse_path("cannot be read", &run_directory.join("run.lock")))?;
     let target = (lock.dev(), lock.ino());
     for (grace, sig) in [
         (term_grace, nix::libc::SIGTERM),
@@ -977,6 +982,24 @@ mod tests {
         // SAFETY: kill on the child this test forked.
         unsafe { nix::libc::kill(long.as_raw(), nix::libc::SIGKILL) };
         let _ = nix::sys::wait::waitpid(long, None);
+    }
+
+    /// **Only an absent lock file is an absent run**: a run directory that
+    /// cannot be looked into refuses rather than reporting the lock free.
+    /// Perturbation: read every lookup failure as absent and the unreadable
+    /// case answers `false`.
+    #[test]
+    fn a_lock_that_cannot_be_looked_at_is_never_free() {
+        let dir = scratch("unreadable-lock");
+        assert_eq!(run_lock_held(dir.0.as_path()), Ok(false), "no file, no run");
+        // A path through a regular file cannot be looked into (ENOTDIR).
+        let file = dir.0.join("plain");
+        std::fs::write(&file, "").unwrap();
+        assert_eq!(
+            run_lock_held(&file),
+            Err(LifecycleRefusal::BoundaryUnverified),
+            "a lookup that fails for another reason refuses"
+        );
     }
 
     /// **The run directory is made root's and `0755`, and a link at its name

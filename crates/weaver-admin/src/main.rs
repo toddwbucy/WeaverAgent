@@ -622,6 +622,7 @@ fn member_vector(
 fn stack_digests(
     config: &ServiceConfig,
     member_started: bool,
+    classify: Option<&std::path::Path>,
 ) -> std::collections::BTreeMap<String, String> {
     let worker = config.worker.as_path();
     let member = worker
@@ -635,6 +636,11 @@ fn stack_digests(
     }
     binaries.push(spu);
     binaries.push(config.gate.as_path());
+    // The classify arm's binary where it is handed, so a run that classifies
+    // names the program that did.
+    if let Some(classify) = classify {
+        binaries.push(classify);
+    }
     let mut stack = std::collections::BTreeMap::new();
     for binary in binaries {
         let name = binary
@@ -924,12 +930,12 @@ fn run_load(
 
     let state_end = stand_state_member(config, &inventory, &run_lock);
     standing.forked |= state_end.is_some();
-    let stack = stack_digests(config, state_end.is_some());
     let classify = config
         .worker
         .parent()
         .map(|directory| directory.join("weaver-spu-classify"))
         .filter(|binary| binary.is_file());
+    let stack = stack_digests(config, state_end.is_some(), classify.as_deref());
     let socket_path = config.coordination_socket();
     let mut worker = start::spawn_worker(start::WorkerStart {
         binary: &config.worker,
@@ -1917,16 +1923,24 @@ mod tests {
     #[test]
     fn the_stack_names_what_was_started_and_handed() {
         let config = unread_config();
-        let without = stack_digests(&config, false);
+        let without = stack_digests(&config, false, None);
         let names: Vec<&str> = without.keys().map(String::as_str).collect();
         assert_eq!(names, ["python-spu.pyz", "weaver-gate", "worker"]);
-        let with = stack_digests(&config, true);
+        let with = stack_digests(&config, true, None);
         assert_eq!(
             with.len(),
             4,
             "the worker, the member, the SPU and the gate"
         );
         assert!(with.contains_key("weaver-state"));
+        // The classify arm's binary is named where it is handed.
+        // Perturbation: drop it from the set and the key is absent.
+        let classified = stack_digests(
+            &config,
+            false,
+            Some(std::path::Path::new("/nonexistent/bin/weaver-spu-classify")),
+        );
+        assert!(classified.contains_key("weaver-spu-classify"));
     }
 
     /// **The vector carries the root's values and the declaration's loop
