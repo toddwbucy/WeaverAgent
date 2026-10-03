@@ -8,7 +8,7 @@ workflow. Code is written against it under the gates of Working Process section 
 **Document ID:** `weaver-gate-Spec`
 **Parent:** `weaver-gate-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #44
+**Landing PR:** #72
 
 ---
 

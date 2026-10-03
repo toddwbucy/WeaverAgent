@@ -16,7 +16,7 @@ nothing yet existed to be consistent with, rather than a standing obligation.
 **Document ID:** `weaver-agent-PRD`, renamed from WeaverAgents / weaver-agents-PRD on
 2026-10-02 (operator's ruling, WeaverTools#6)
 **Editorial:** Per the Working Rules.
-**Landing PR:** #58
+**Landing PR:** #72
 
 ---
 

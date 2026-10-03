@@ -8,7 +8,7 @@ one's Spec pass. Code is written against it under the gates of Working Process s
 **Document ID:** `weaver-types-Spec`
 **Parent:** `weaver-types-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #65
+**Landing PR:** #72
 
 ---
 

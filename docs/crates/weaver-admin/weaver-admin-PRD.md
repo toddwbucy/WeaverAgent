@@ -12,7 +12,7 @@ reshaped this charter are recorded in it rather than pending against it, and sec
 **External boundary:** `weaver-admin-operator-contract`, for the granted command lines,
 the record's exit and the trace door, its party outside the program
 **Editorial:** Per the Working Rules.
-**Landing PR:** #57
+**Landing PR:** #72
 
 ---
 
