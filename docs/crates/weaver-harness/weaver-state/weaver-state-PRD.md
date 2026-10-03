@@ -213,8 +213,9 @@ replacement rather than a double - the recovery invariant stated before the loss
 leans on it. With that in place the loss clause below covers the new door without
 amendment, the preload being rebuildable from the record more directly than any holding
 the tee fed. **The door is also where the trace reaches a rebuild**, the member never
-reading the record itself: with no save point, the whole record's distillates land
-through this door, per section 4, honouring every reset the record names. No tail
+reading the record itself: the builder lands the whole record's distillates through
+this door, per section 4, honouring every reset the record names, and writes a save
+point a load restores. No tail
 replays on top of a save point by default; a tail landing on a stamped position is a
 door the contract does not yet say, and section 5 names that contract as owed.
 
@@ -343,9 +344,10 @@ default**, chosen through the declaration's existing `restore` member pointed at
 point, data in `agent.toml`, so admin's verbs and answers stay as they are. **After an
 unclean stop, the load resets to the latest known-good save point**, and the reset is
 recorded on the trace, so a full rebuild honours it; there is no tail replay by default.
-**With no save point, the next load rebuilds from the trace**, landing every distillate
-the record holds through the preload door of section 3, so deleting save points never
-yields an empty store while the record stands, and a fresh state is a new agent, per the
+**With no save point, state is rebuilt from the trace**, by the offline builder landing
+every distillate the record holds through the preload door of section 3 and writing a
+save point the next load restores, so deleting save points never loses state while the
+record stands, and a fresh state is a new agent, per the
 seventh question. **Taking, restoring and resetting each author a trace event**, which
 save point by digest and which position, per the fourth question, so the record says
 where state came from. A restore and a full rebuild to the same position arrive at the

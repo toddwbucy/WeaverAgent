@@ -783,18 +783,18 @@ to: trace-load-names-its-loop-and-its-member
 reshaped on the operator's rulings of 2026-10-02 on #58, per the charter's section 3.1.
 `lineage` is present where the load restores a save point and absent otherwise, never
 null: `save_point` is the save point's digest, `run` and `sequence` the position it
-covers, `operator_supplied` whether the operator supplied it, and `built_from`, present
-only where the offline builder made it from a record, carries that record's session as
-`parent`, the run the cut falls in as `run`, and the turn the holdings stop at as
-`through`, all copied from the enter's `Lineage` per `weaver-types-Spec` section 4 and
-never the save point's path, which the harness does not hold. `stack` is the digests of
-the organ binaries admin started and of the agent's SPU and the gate it hands the worker
-to fork, keyed by the binary's name, sha256 hex, copied from the enter, so a record is
-sufficient for its own conditions without a deposit beside it. Both ride the `Elections`
-payload on the drift reason above, and a record older than this act lacks the members,
-which reads as those facts being unrecoverable and never as a default. Neither is read
-from the deployment: the harness authors what the enter carried, as it authors the
-store's identity.
+covers, `turn` the last turn that run holds in it, `operator_supplied` whether the
+operator supplied it, and `built_from`, present only where the offline builder made it
+from a record, carries that record's session as `parent`, the run the cut falls in as
+`run`, and the turn the holdings stop at as `through`, all copied from the enter's
+`Lineage` per `weaver-types-Spec` section 4 and never the save point's path, which the
+harness does not hold. `stack` is the digests of the organ binaries admin started and of
+the agent's SPU and the gate it hands the worker to fork, keyed by the binary's name,
+sha256 hex, copied from the enter, so a record is sufficient for its own conditions
+without a deposit beside it. Both ride the `Elections` payload on the drift reason
+above, and a record older than this act lacks the members, which reads as those facts
+being unrecoverable and never as a default. Neither is read from the deployment: the
+harness authors what the enter carried, as it authors the store's identity.
 
 **The `load` event names its declaration and its prompt file by digest**, the first as
 of 2026-09-04 per issue #435 and the second as of 2026-10-02, per the charter's section
@@ -805,10 +805,11 @@ ride the `Elections` payload on the drift reason above. **The second exists beca
 first stopped covering the prompt**: while the prompt was a string inside the
 declaration one digest named both, and once it is its own file an edit to the prompt
 leaves the declaration's digest unchanged. The seated prefix the record already carries
-does not stand in for it, because under a standing state member every later load of a
-session seats the store's identity and not the file's, so the digest is the record's
-one account of what the operator's file held at that load, and a seat that diverged from
-the file is visible as the two disagreeing. **The member is additive**: a record older
+does not stand in for it: at every serving load the prompt file is authoritative, on
+the operator's ruling of 2026-10-02 on #58, and the store keeps earlier runs' prefixes
+without supplying one, so the digest is the record's account of the file's bytes as
+admin read them at that load, and a seat that diverged from the file is visible as the
+two disagreeing. **The member is additive**: a record older
 than this act lacks it, which reads as the prompt file's digest being unrecorded and
 never as a default, and every consumer of the `load` event sees one new member and no
 other change, WeaverWeb's ingest, `weaver-analysis`, and the deployment tuple's harness

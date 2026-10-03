@@ -184,11 +184,12 @@ member's store, per `weaver-state-PRD`, holds what the loop's schema admits of w
 tee carried, in memory while the agent serves and in save points between loads, each
 stamped with the trace position it covers and never overwritten. It is a derivative of
 the record and never a second account: a load restores a save point, the latest by
-default or the one the declaration's `restore` names, and with no save point it
-rebuilds from the trace. An unclean stop resets to the latest known-good save point,
-the reset recorded on the trace, so a rebuild from the record arrives where the reset
-did. A save point the operator edits is an input like a prompt file, recorded by
-digest, per `weaver-state-PRD` section 4.
+default or the one the declaration's `restore` names, and with no save point state is
+rebuilt from the trace by the offline builder, whose save point the next load restores.
+An unclean stop resets to the latest known-good save point, the reset recorded on the
+trace, so a rebuild from the record arrives where the reset did. A save point the
+operator edits is an input like a prompt file, recorded by digest, per
+`weaver-state-PRD` section 4.
 
 ## 3. One turn, end to end
 

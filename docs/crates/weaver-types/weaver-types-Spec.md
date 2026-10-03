@@ -618,14 +618,14 @@ record with no reductions in it. This is why `AgentConfig` derives no `Default` 
 `parse` returns no partial value. **`restore` names a save point**, on the operator's
 ruling of 2026-10-02 on #58, which retires the record restore of 2026-09-04 (issue
 #432) and its cut. It may be absent because `weaver-state-PRD` section 4 rules what
-absence means: the load restores the latest save point published, and with none
-rebuilds from the trace. Present, `save-point` is a bare file name in the declaration's
-own directory, judged as `identity-file` is, carrying no `/`, not `.` or `..`, not
-empty and with no control character, refusing `BadValue` naming `restore.save-point`
-otherwise; admin opens it under its own custody, per `weaver-admin-Spec` section 4, and
-the harness never sees it. A save point the operator built offline from a record names
-that record and cut inside itself, not here, so a branch from a record is the builder's
-act and this member keeps one meaning.
+absence means: the load restores the latest save point published, and with none state is
+rebuilt from the trace offline. Present, `save-point` is a bare file name in the
+declaration's own directory, judged as `identity-file` is, carrying no `/`, not `.` or
+`..`, not empty and with no control character, refusing `BadValue` naming
+`restore.save-point` otherwise; admin opens it under its own custody, per
+`weaver-admin-Spec` section 4, and the harness never sees it. A save point the operator
+built offline from a record names that record and cut inside itself, not here, so a
+branch from a record is the builder's act and this member keeps one meaning.
 
 ```graph
 node: types-required-field-refuses
@@ -1225,6 +1225,7 @@ pub struct Lineage {
     pub save_point: String,
     pub run: RunId,
     pub sequence: u64,
+    pub turn: u64,
     pub operator_supplied: bool,
     pub built_from: Option<Branch>,
 }
@@ -1273,7 +1274,8 @@ parties that need them read one resolution.
 
 **`restore` and `stack` ride the enter as of 2026-09-04.** `restore` rides as `Lineage`,
 resolved by admin from the save point the load restores, on the operator's ruling of
-2026-10-02 on #58: the save point's digest, the run and the sequence it covers, whether
+2026-10-02 on #58: the save point's digest, the run, sequence and last turn it covers,
+whether
 the operator supplied it, and, where the offline builder made it from a record, that
 record's session and the run and turn of its cut. It never carries the save point's
 path, which admin read under its own custody and the harness has no business holding, on

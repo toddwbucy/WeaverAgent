@@ -306,8 +306,8 @@ in the trace and in the neutral substrate and nowhere else. The store applies th
 schema mechanically and holds no opinion about it, so a schema is never this crate's
 to write, repair or extend. **A save point carries the schema it was taken under**, and
 a load whose opener carries a different schema is a save point that disagrees, so the
-fallback of the clause below runs and rebuilds the holdings under the new schema from
-the trace.
+load refuses by the clause below and the offline builder rebuilds the holdings under the
+new schema from the trace.
 
 **Durability is the save point's, and the charter is the license.** The derivative is
 rebuildable from the record and the session never depends on it, per the loss clause,
@@ -317,7 +317,8 @@ default replays. **A save point is the whole database serialized**, written as a
 file in the member's room when the harness asks for one with the contract's `snapshot`
 ask, at every leave and on the operator's demand, and never on the store's own
 initiative. **It is stamped with the trace position it covers**, the run and the
-sequence of the last distillate landed in it, and with a check over its own bytes, so a
+sequence of the last distillate landed in it and the last turn that run's holdings
+carry, and with a check over its own bytes, so a
 save point written in part or damaged since reads as corrupt rather than as holdings,
 and its finished name is given only once the write is whole, so a torn write leaves no
 file under a finished name.
@@ -326,14 +327,19 @@ file under a finished name.
 save point through the descriptor into its in-memory database and holds its stamp, per
 the operator's rulings of 2026-10-02 on #58. After an unclean stop that is the latest
 known-good save point, and the harness records the reset on the trace, so a rebuild
-honours it; nothing the record holds past the stamp lands by default. **A full rebuild
-from the trace is the fallback only**: where the descriptor is absent, where the save
-point's check fails, or where it disagrees with the opener's schema, the member discards
-what it read and stands empty, and the whole record lands through the preload door of
+honours it; nothing the record holds past the stamp lands by default. **A save point
+that fails its check or disagrees with the opener's schema refuses the load**: the
+member refuses to stand, with a named fault, so admin's load refuses and no `load` event
+claims a lineage the holdings did not come from, and the operator names another save
+point through `restore` or rebuilds one. **Where the descriptor is absent the member
+stands empty**, which is an agent's first load. **A rebuild from the trace is the
+offline save-point builder's**, per `weaver-state-PRD` section 3 and the operator's
+ruling of 2026-10-02 on #58: the builder lands the record through the preload door of
 section 4 by the same path as every other landing, honouring every reset the record
-names. A restore and a full rebuild to the same position arrive at the same holdings by
-construction, and section 5 names the instrument that holds them equal. Which party
-stands the door and drives that rebuild at a serving load is section 6's to elect.
+names, and writes a save point the next load restores. A restore and a rebuild to the
+same position arrive at the same holdings by construction, and section 5 names the
+instrument that holds them equal. Which party runs the builder before a serving load
+whose record holds events and no save point stands is section 6's to elect.
 
 ## 4. The ingest and the serve
 
@@ -473,8 +479,8 @@ driver's prefix needs no cleanup act, the next opener being the cleanup. The fir
 door's path performs no retirement and gains no branch: the delete hangs on the preload
 opener alone. **A tail, where one is ever elected over a save point, is the one preload
 that must not retire**, landing on top of the save point section 3 loaded, so its opener
-names the position it follows and retires nothing, where the fallback rebuild's opener
-retires everything the member read and honours every reset the record names.
+names the position it follows and retires nothing, where the builder's rebuild opener
+retires everything the member held and honours every reset the record names.
 `weaver-analysis-state-contract` carries neither the tail opener nor the reset event
 yet, and the charter's section 5 names both owed. What is new is the door's standing and
 its judgment, and both are conditioned facts: the member binds the preload name only
@@ -690,8 +696,8 @@ code act that lands it.
   cover, and a rebuild that ignores a reset the record names: each must fail the
   equality.
 - A save point that fails its check is not loaded, watched by one truncated part
-  way and by one with a byte flipped, each of which must stand the fallback rebuild
-  at a load and leave the holdings standing at a live restore. The perturbation
+  way and by one with a byte flipped, each of which must refuse the load and leave
+  the holdings standing at a live restore. The perturbation
   drops the check, and a torn save point is read as holdings.
 - A save point is never overwritten, watched by two `snapshot` asks on unchanged
   holdings answering two names with both files standing. The perturbation writes
@@ -776,11 +782,11 @@ operator's ruling of 2026-10-02 moves that landing toward the loop's schema.
   file never rewritten, and leaves to the code act how it is laid out, how its name
   is formed, what the check and the digest are, and how a whole write earns its
   finished name.
-- **The rebuild's driver.** Section 3 has a rebuild land through the preload door.
-  The door stands today only under a diagnostic binding, and the driver that dials
-  it is the operator's, so which party stands it and drives a rebuild at a serving
-  load with no save point, the offline save-point builder of `weaver-state-PRD`
-  section 3 being one answer, is an election owed with
+- **The builder's runner.** Section 3 has the offline save-point builder rebuild
+  through the preload door, which stands otherwise only under a diagnostic binding
+  and is dialed by the operator's driver, so which party runs the builder before a
+  serving load whose record holds events and no save point, and how such a load is
+  told from an agent's first load, is an election owed with
   `weaver-analysis-state-contract` and admin's vector, neither of which this act
   moves.
 - **The retirement of an agent's holdings.** A session's close no longer retires

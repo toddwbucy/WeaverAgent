@@ -2078,26 +2078,26 @@ section 3, a recall the recorder will not take being named in an
 binding the enter records nothing**, its asks being setup the diagnostic record does not
 carry as it carries no load and no prefix: that record opens with `replay.opened`, and
 the ask that feeds the model is the replay port's. **The turn ordinal continues from the
-save point**: the first turn of a restoring run is numbered one past the sequence the
-save point's lineage names, within the run it names, a bare turn number recurring across
-a session's runs and naming nothing on its own, so the derived seeds of
-`weaver-spu-Spec` section 8.5, which fix a generation's stream from the declared seed,
-the turn's reference, and the generation ordinal, continue the streams of the run the
-save point was taken from. **Where the door stands the enter's identity ask waits on the
-driver's seal**, under the parked ask's bound rather than the two seconds a member
-answering from holdings at rest takes, per `weaver-harness-state-contract` section 2 and
-`weaver-state-Spec` section 4, and one typed line on standard error names what is waited
-on and for how long before the ask is written, so an operator who has not started the
-driver reads why the load stands still. The door stands only under a diagnostic binding,
-the preload being that binding's alone, and a short bound would refuse the enter unless
-the driver had sealed inside it, the identity ask's miss being the one the dead-peer
-clause does not convert. **A diagnostic enter therefore waits on the driver as its
-replay does and refuses without one after the bound**, and the answer it opens on is the
-record's own. **The instrument is perturbation, as of 2026-09-06, on the ordinal**: the
-first turn of a restoring run is numbered one past the cut, watched to fail when the
-ordinal starts at zero. The perturbation that watched the restored conversation retires
-with the record restore, and the code act that lands the save point removes its test and
-renumbers this one from the save point's sequence.
+save point**: the first turn of a restoring run is numbered one past the last turn the
+save point's lineage names, within the run it names, never from its event sequence, a
+bare turn number recurring across a session's runs and naming nothing on its own, so the
+derived seeds of `weaver-spu-Spec` section 8.5, which fix a generation's stream from the
+declared seed, the turn's reference, and the generation ordinal, continue the streams of
+the run the save point was taken from. **Where the door stands the enter's identity ask
+waits on the driver's seal**, under the parked ask's bound rather than the two seconds a
+member answering from holdings at rest takes, per `weaver-harness-state-contract`
+section 2 and `weaver-state-Spec` section 4, and one typed line on standard error names
+what is waited on and for how long before the ask is written, so an operator who has not
+started the driver reads why the load stands still. The door stands only under a
+diagnostic binding, the preload being that binding's alone, and a short bound would
+refuse the enter unless the driver had sealed inside it, the identity ask's miss being
+the one the dead-peer clause does not convert. **A diagnostic enter therefore waits on
+the driver as its replay does and refuses without one after the bound**, and the answer
+it opens on is the record's own. **The instrument is perturbation, as of 2026-09-06, on
+the ordinal**: the first turn of a restoring run is numbered one past the cut, watched
+to fail when the ordinal starts at zero. The perturbation that watched the restored
+conversation retires with the record restore, and the code act that lands the save point
+removes its test and renumbers this one from the save point's last turn.
 
 ```graph
 node: harness-restoring-run-continues-the-ordinal

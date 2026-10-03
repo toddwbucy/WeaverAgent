@@ -323,7 +323,8 @@ fan-out admits, the gate instruction the fan-out starts where the kind declares 
 the state election the tee applies, resolved to the ruled default where the declaration
 is silent, the store election the member stands on with its database and role under the
 service engine, resolved to the embedded engine where the declaration is silent, the
-lineage of the save point the load restores, its digest, the run and sequence it covers,
+lineage of the save point the load restores, its digest, the run, sequence and last turn
+it covers,
 whether the operator supplied it, and, where the offline builder made it from a record,
 that record's session and the run and turn of its cut, resolved by admin and never the
 save point's path, on the operator's rulings of 2026-10-02 on #58, so the harness names

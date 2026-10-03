@@ -73,11 +73,11 @@ program-side is alive between two of them.
 
 **A session** is the identity the runs share, and the unit the agent's conversation
 belongs to. It is the boundary the proto-stateful definition of apex section 2 is
-drawn against: a new session begins with nothing. What continuity a later run of
-the same session holds is the enter cell `weaver-admin-PRD` section 10 names, the
-program promising none since the ruling of 2026-08-01, and the stream's account of
-the session accumulating on the operator's side rather than in anything the
-program keeps.
+drawn against, as revised on the operator's ruling of 2026-10-02: what carries across
+runs and sessions is state management's holdings, under custody and through save
+points, per `weaver-state-PRD` sections 3 and 4, never the working structure or the hot
+cache, which begin empty at every run. The stream's account of the session accumulates
+on the operator's side, and the holdings are rebuildable from it.
 
 ### 2.2 The session has two materializations
 
@@ -569,7 +569,8 @@ default. The record then says what the agent's prompts were built by and what it
 was built into, which the elections alone could not. **The `load` event names its
 lineage and its stack as of 2026-09-04**, the lineage reshaped on the operator's rulings
 of 2026-10-02 on #58, which retire the record restore of issue #432. Where the load
-restores a save point it names the save point by digest, the run and sequence it covers,
+restores a save point it names the save point by digest, the run, sequence and last turn
+it covers,
 whether the operator supplied it, and, where the offline builder made it from a record,
 that record's session and the run and turn of its cut, so a resume and a branch each say
 what they came from; and every load names the digests of the organ binaries that ran it,
@@ -584,9 +585,10 @@ than text inside it, so the declaration's digest the `load` event carries stoppe
 covering the prompt, and a record holding only that digest could not say which prompt
 the agent's operator had written. **From this act the `load` event names the prompt
 file's digest beside the declaration's**, as admin read both at the inventory, and never
-a path. The seated prefix the record carries is what the session ran under, and under a
-standing state member that is the store's and not the file's after the session's first
-load, so the two answer different questions and both are kept. Absence means a record
+a path. The seated prefix the record carries is what the session ran under, which at a
+serving load is the file's, seated at every load on the operator's ruling of 2026-10-02
+on #58; the digest is the file's bytes as admin read them, so the two answer different
+questions and both are kept. Absence means a record
 older than the act and is read as the digest being unrecoverable, never as a default.
 `weaver-trace-Spec` section 3 carries the member.
 

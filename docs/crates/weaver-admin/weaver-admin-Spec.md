@@ -644,17 +644,17 @@ is judged as `identity-file`'s is, a save point absent from the directory refuse
 it reads, a link, a wrong owner, or a group- or other-writable file, refuses
 `BoundaryUnverified`. A save point the operator edited is an input like a prompt file,
 admitted the same way. The lineage that crosses the enter is resolved here from the save
-point's stamp: the run and the sequence it covers, and, where the operator's offline
-builder made it from a record, the record and the cut it names. The save point is never
-handed to the agent and never named to the worker, on the same descriptor discipline
-as the sink: what the member receives is a descriptor this crate opened, per section
-6. Branching from a record is the builder's, outside the agent, and this crate never
-reads a record for a load. **The judgment is this crate's because the save point is**,
-per charter section 4.3's custody rule: a look at a thing admin holds, taken at the
-load's cheapest moment before any process exists, and an ask of nobody. **The
-instrument is perturbation**: a `restore` naming an absent save point refuses naming
-`restore`, watched to fail when the presence check is dropped, and a linked save point
-refuses `BoundaryUnverified`, watched to fail when the entry judgment is dropped.
+point's stamp: the run, the sequence and the last turn it covers, and, where the
+operator's offline builder made it from a record, the record and the cut it names. The
+save point is never handed to the agent and never named to the worker, on the same
+descriptor discipline as the sink: what the member receives is a descriptor this crate
+opened, per section 6. Branching from a record is the builder's, outside the agent, and
+this crate never reads a record for a load. **The judgment is this crate's because the
+save point is**, per charter section 4.3's custody rule: a look at a thing admin holds,
+taken at the load's cheapest moment before any process exists, and an ask of nobody.
+**The instrument is perturbation**: a `restore` naming an absent save point refuses
+naming `restore`, watched to fail when the presence check is dropped, and a linked save
+point refuses `BoundaryUnverified`, watched to fail when the entry judgment is dropped.
 
 ```graph
 node: admin-restore-save-point-judged-at-the-inventory
