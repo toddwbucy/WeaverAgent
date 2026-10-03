@@ -7,12 +7,26 @@
 #   sudo deploy/decommission.sh --purge [DIR]        remove what DIR's PURGE-LIST names;
 #                                                    refuses unless DIR verifies
 #
-# Box-agnostic, and discovered rather than written: the config roots are every
-# `/etc/weaver/admin*`, the install and territory paths are read out of them,
-# the agents are the union of every allow-list, every declaration and every
-# `weaver-*` account, and the store's roles are asked of PostgreSQL. A box
-# fact this script needs and cannot find is printed as unknown, never
-# guessed, and the plan is the same reads the archive and the purge make.
+# Box-agnostic, and discovered rather than written: the config bases are every
+# `/etc/weaver/admin*`, each agent's root is a directory under one, the install
+# and territory paths are read out of them, the agents are the union of every
+# root, every allow-list and declaration of the box-wide layout before
+# 2026-10-01, and every `weaver-*` account and group, and the store's roles are
+# asked of PostgreSQL. A box fact this script needs and cannot find is printed
+# as unknown, never guessed, and the plan is the same reads the archive and the
+# purge make.
+#
+# **A running agent refuses the archive and the purge.** An agent of the
+# per-agent layout runs while its run lock is held, which no unit shows, so
+# each root's own admin is asked with `show`, and an agent it names running,
+# in transition, or that it cannot answer for refuses by name. The units of the
+# layout before #50 are still checked as before.
+#
+# **The operator's declaration directories stay**, as the models do: each is
+# the operator's own data (`agent.toml`, the prompt, `admin.log`,
+# `worker.log`), archived and never purged. The sudo rules
+# `/etc/sudoers.d/weaver-*` and the run directories under each coordination
+# root go with the agent.
 #
 # **Three modes, because the archive is verified before anything is removed.**
 # `--archive` writes tarballs, dumps, a box-facts file and a SHA256SUMS, then
@@ -69,8 +83,26 @@ read_key() { cat "$1/$2" 2>/dev/null || true; }
 
 # Every path admin's configs name, so the install tree is the one the box
 # actually ran and not the one this script remembers.
-declare -A BIN_DIRS=() AGENT_DIRS=() LOG_PATHS=()
+declare -A BIN_DIRS=() AGENT_DIRS=() LOG_PATHS=() DECL_DIRS=() COORD_ROOTS=()
 ALLOWED=""
+# **The per-agent roots**: every directory under a base, named as admin's name
+# check admits it, a link never one. Each names its binaries, its declaration
+# directory and its coordination root.
+AGENT_ROOTS=()
+for base in "${CONFIG_ROOTS[@]}"; do
+  for root in "$base"/*/; do
+    root=${root%/}
+    [ -d "$root" ] && [ ! -L "$root" ] || continue
+    [[ "${root##*/}" =~ ^[A-Za-z0-9_-]+$ ]] || continue
+    AGENT_ROOTS+=("$root")
+    for k in worker-binary spu-binary gate-binary; do
+      v=$(read_key "$root" "$k"); [ -n "$v" ] && BIN_DIRS["$(dirname "$v")"]=1
+    done
+    v=$(read_key "$root" declaration-directory); [ -n "$v" ] && DECL_DIRS["$v"]=1
+    v=$(read_key "$root" coordination-root); [ -n "$v" ] && COORD_ROOTS["$v"]=1
+    ALLOWED="$ALLOWED ${root##*/}"
+  done
+done
 for root in "${CONFIG_ROOTS[@]}"; do
   for k in worker-binary spu-binary gate-binary; do
     v=$(read_key "$root" "$k"); [ -n "$v" ] && BIN_DIRS["$(dirname "$v")"]=1
@@ -96,13 +128,26 @@ for d in "${!AGENT_DIRS[@]}"; do
 done
 mapfile -t WEAVER_USERS < <(getent passwd | awk -F: '$1 ~ /^weaver-/ {print $1}')
 mapfile -t WEAVER_GROUPS < <(getent group | awk -F: '$1 ~ /^weaver-/ {print $1}')
-for u in "${WEAVER_USERS[@]}"; do
-  n=${u#weaver-}; n=${n%-state}; AGENTS["$n"]=1
-done
+# Every account and group the agent's provisioning makes carries one of the
+# reserved suffixes (weaver-admin-Spec section 4), stripped to the agent's name.
+strip_suffix() {
+  local n=${1#weaver-}
+  for suffix in -admincon -state -relay -trace -admin; do
+    [ "${n%"$suffix"}" != "$n" ] && { printf '%s' "${n%"$suffix"}"; return; }
+  done
+  printf '%s' "$n"
+}
+for u in "${WEAVER_USERS[@]}"; do AGENTS["$(strip_suffix "$u")"]=1; done
+for g in "${WEAVER_GROUPS[@]}"; do AGENTS["$(strip_suffix "$g")"]=1; done
+# The sudo rules create-agent.sh installs, root's to read.
+mapfile -t SUDO_RULES < <(find /etc/sudoers.d -maxdepth 1 -type f -name 'weaver-*' 2>/dev/null | sort)
 
 say "config roots"
 for r in "${CONFIG_ROOTS[@]}"; do plan "$r  (allow-list: $(read_key "$r" allow-list | tr '\n' ' '))"; done
 [ ${#CONFIG_ROOTS[@]} -gt 0 ] || plan "none under /etc/weaver"
+for r in "${AGENT_ROOTS[@]}"; do plan "$r  (declaration-directory: $(read_key "$r" declaration-directory))"; done
+for d in "${!DECL_DIRS[@]}"; do plan "$d  KEPT: the operator's declaration directory, archived and not purged"; done
+for f in "${SUDO_RULES[@]}"; do plan "$f  (sudo rule)"; done
 
 say "install prefixes (models excluded from every mode)"
 for p in "${!PREFIXES[@]}"; do
@@ -136,13 +181,60 @@ for u in "${UNITS[@]}"; do
   [ "$st" = active ] && ACTIVE_UNITS+=("$u")
 done
 [ ${#UNITS[@]} -gt 0 ] || plan "no weaver-worker@ units"
+
+say "runs"
+# **Each root's agent asked whether it runs**, through the admin the box
+# installed, by the root's own name: `show` answers the agent's state and the
+# run's constituents. Running, in transition, or no answer at all refuses the
+# archive and the purge below, never read as stopped.
+# **run_verdict ANSWER: what one `show` says of a run**: stopped only where the
+# state is absent or unloaded with no constituent, or the agent is no agent;
+# running where any other state or a transition answers; unknown for a
+# refusal or anything that does not parse.
+run_verdict() {
+  python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except ValueError:
+    print("unknown"); sys.exit()
+if d.get("kind") == "state" and d.get("state") in ("absent", "unloaded") and not d.get("constituents"):
+    print("stopped")
+elif d.get("kind") in ("state", "in_transition"):
+    print("running")
+elif d.get("kind") == "no_such_agent":
+    print("stopped")
+else:
+    print("unknown")
+' "$1"
+}
+ADMIN_BIN=""
+for b in "${!BIN_DIRS[@]}"; do [ -x "$b/weaver-admin" ] && { ADMIN_BIN="$b/weaver-admin"; break; }; done
+RUNNING=()
+for root in "${AGENT_ROOTS[@]}"; do
+  agent=${root##*/}
+  base=$(dirname "$root")
+  if [ -z "$ADMIN_BIN" ]; then
+    plan "$agent  unknown: no weaver-admin found beside the roots' binaries"
+    RUNNING+=("$agent (unknown)")
+    continue
+  fi
+  said=$(WEAVER_ADMIN_CONFIG="$base" "$ADMIN_BIN" show "$agent" 2>/dev/null | tail -n 1 || true)
+  verdict=$(run_verdict "$said")
+  plan "$agent  $verdict  $said"
+  [ "$verdict" = stopped ] || RUNNING+=("$agent ($verdict)")
+done
+[ ${#AGENT_ROOTS[@]} -gt 0 ] || plan "no agent roots"
+for c in "${!COORD_ROOTS[@]}"; do
+  [ -d "$c/weaver.run" ] && plan "$c/weaver.run  (run directories)"
+done
 SLICE='system-weaver\x2dworker.slice'
 systemctl is-active --quiet "$SLICE" 2>/dev/null && plan "$SLICE active ($(systemctl show "$SLICE" -p NCurrentlyActive 2>/dev/null || true))" || plan "$SLICE not active"
 
 say "territories, record, log"
 TERRITORY_PATHS=()
 for d in "${!AGENT_DIRS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"; done
-for d in /var/lib/weaver "${!LOG_PATHS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"; done
+for d in /var/lib/weaver /var/lib/weaver-agent "${!LOG_PATHS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"; done
 HOMES=()
 for u in "${WEAVER_USERS[@]}"; do
   h=$(getent passwd "$u" | cut -d: -f6)
@@ -186,6 +278,7 @@ sha_all() { find "$1" -maxdepth 1 -type f -exec sha256sum {} \; 2>/dev/null || t
 
 if [ "$MODE" = archive ]; then
   [ ${#ACTIVE_UNITS[@]} -eq 0 ] || die "units still active: ${ACTIVE_UNITS[*]}. Unload them (weaver-admin unload <agent>) or stop them, then rerun"
+  [ ${#RUNNING[@]} -eq 0 ] || die "agents still run or cannot be read: ${RUNNING[*]}. Unload each (weaver-admin unload <agent>), then rerun"
   [ -e "$DEST/SHA256SUMS" ] && die "$DEST already holds an archive; name another directory"
   as_op mkdir -p "$DEST" || die "the operator cannot create $DEST"
   as_op test -w "$DEST" || die "$DEST is not writable by $OPERATOR"
@@ -250,6 +343,14 @@ if [ "$MODE" = archive ]; then
   }
 
   [ -d /etc/weaver ] && archive_path etc-weaver /etc/weaver
+  [ ${#SUDO_RULES[@]} -gt 0 ] && archive_path sudoers-weaver "${SUDO_RULES[@]}"
+  # The operator's declaration directories are archived and then dropped
+  # from the purge list: they are the operator's to keep.
+  if [ ${#DECL_DIRS[@]} -gt 0 ]; then
+    kept=${#PURGE[@]}
+    archive_path declaration-directories "${!DECL_DIRS[@]}"
+    PURGE=("${PURGE[@]:0:$kept}")
+  fi
   [ ${#LDSO_CONFS[@]} -gt 0 ] && archive_path ld-so-conf "${LDSO_CONFS[@]}"
   for p in "${!PREFIXES[@]}"; do
     n=$(basename "$p")
@@ -279,6 +380,11 @@ if [ "$MODE" = archive ]; then
   # are listed by kind so the purge removes them by the right verb.
   {
     for pth in "${PURGE[@]}"; do echo "path $pth"; done
+    # The run directories are tmpfs state, purged without an archive.
+    for c in "${!COORD_ROOTS[@]}"; do
+      [ -d "$c/weaver.run" ] && echo "path $c/weaver.run"
+      for a in "${!AGENTS[@]}"; do [ -d "$c/weaver-$a" ] && echo "path $c/weaver-$a"; done
+    done
     for u in "${WEAVER_USERS[@]}";  do echo "user $u"; done
     for g in "${WEAVER_GROUPS[@]}"; do echo "group $g"; done
     for db in "${PG_DBS[@]}";       do echo "database $db"; done
@@ -302,6 +408,7 @@ fi
 say "re-verify $DEST"
 ( cd "$DEST" && sha256sum -c --quiet SHA256SUMS ) || die "the archive no longer verifies; purge refused"
 [ ${#ACTIVE_UNITS[@]} -eq 0 ] || die "units still active: ${ACTIVE_UNITS[*]}"
+[ ${#RUNNING[@]} -eq 0 ] || die "agents still run or cannot be read: ${RUNNING[*]}"
 plan "verified"
 
 say "units"

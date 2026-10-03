@@ -31,14 +31,20 @@ if name == 'stat':
     if args[:1] == ['-c'] and args[1] == '%u %a':
         path = pathlib.Path(args[-1])
         st = os.lstat(path)
-        owner = 0 if path.is_relative_to(root) else st.st_uid
+        # The operator's home is the operator's, as the declaration
+        # directory's judgment needs it to be.
+        operator_home = root / 'home' / os.environ.get('USER', '')
+        if path.is_relative_to(operator_home):
+            owner = int(os.environ.get('FIXTURE_UID', '12345'))
+        else:
+            owner = 0 if path.is_relative_to(root) else st.st_uid
         print(owner, format(st.st_mode & 0o7777, 'o'))
         sys.exit(0)
     os.execv('/usr/bin/stat', ['stat', *args])
 with open(os.environ['CALLS'], 'a') as log:
     log.write(json.dumps([name, *args]) + '\n')
 def mapped(value):
-    if value.startswith('/home/'):
+    if value.startswith('/home/') or value.startswith('/etc/sudoers'):
         return str(root / value.lstrip('/'))
     return value
 
@@ -52,9 +58,29 @@ def shell_read(arguments):
 
 if name == 'sh': shell_read(args)
 elif name == 'getent':
+    user = os.environ.get('USER', '')
+    if args == ['passwd', user]:
+        uid = os.environ.get('FIXTURE_UID', '12345')
+        print(f"{user}:x:{uid}:{uid}::{root / 'home' / user}:/bin/bash")
+        sys.exit(0)
     if os.environ.get('ACCOUNT_FAIL'): sys.exit(1)
     sys.exit(0 if os.environ.get('COLLISION') == args[-1] else 2)
-elif name == 'id': print(os.environ.get('FIXTURE_UID', '12345'))
+elif name == 'id':
+    if args == ['-un']: print(os.environ.get('USER', ''))
+    elif args[:1] == ['-Gn']:
+        who = args[1]
+        if who.endswith('-relay'): print(os.environ.get('RELAY_GROUPS', who.removesuffix('-relay') + '-trace'))
+        elif who.endswith('-admincon'): print(os.environ.get('CONNECTOR_GROUPS', who + ' ' + who.removesuffix('con')))
+        else: print(who)
+    elif args[:1] == ['-u'] and len(args) > 1 and 'FIXTURE_ACCOUNT_UID' in os.environ:
+        print(os.environ['FIXTURE_ACCOUNT_UID'])
+    else: print(os.environ.get('FIXTURE_UID', '12345'))
+elif name == 'systemctl':
+    if args[:1] == ['list-units']:
+        if os.environ.get('UNITS_FAIL'): sys.exit(1)
+        print(os.environ.get('UNITS', ''), end='')
+        sys.exit(0)
+    sys.exit(99)
 elif name == 'git':
     if args[0] == 'rev-parse': print('abcdef0')
     elif args[0] == 'branch': print('fixture-branch')
@@ -116,6 +142,22 @@ elif name == 'sudo':
         assert source.is_relative_to(root) and destination.is_relative_to(root)
         assert not destination.exists(), destination
         source.rename(destination)
+    elif op == 'mktemp':
+        template = rest[-1]
+        made = pathlib.Path(mapped(template.replace('XXXXXX', 'fixture')))
+        assert made.is_relative_to(root), made
+        if '-d' in rest: made.mkdir()
+        else: made.touch()
+        print(template.replace('XXXXXX', 'fixture'))
+    elif op == 'visudo': sys.exit(1 if os.environ.get('VISUDO_FAIL') else 0)
+    elif op == 'rm':
+        target = pathlib.Path(mapped(rest[-1]))
+        assert target.is_relative_to(root), target
+        target.unlink(missing_ok=True)
+    elif op == '-l':
+        print('User ' + rest[-1] + ' may run the following commands on fixture-box:')
+        for rule in sorted((root / 'etc' / 'sudoers.d').glob('weaver-*')):
+            print('    ' + rule.read_text().splitlines()[-1])
     elif op == 'test':
         # The probes of a sqlite agent's state room: the member passes, the
         # agent's own uid is refused, unless the fixture opens the wall.
@@ -148,7 +190,19 @@ class PlanTests(unittest.TestCase):
         existing = self.config / "existing"
         existing.mkdir()
         (existing / "worker-binary").write_text(str(self.root / "installed" / "pyworker"))
-        (existing / "agent.toml").write_text("[state-store]\nengine = \"none\"\n")
+        # The operator's home, holding each agent's declaration directory.
+        self.home = self.root / "home"
+        self.operator_home = self.home / "fixture-no-home"
+        self.operator_home.mkdir(parents=True)
+        existing_decl = self.operator_home / ".weaveragent" / "existing"
+        existing_decl.mkdir(parents=True)
+        (existing_decl / "agent.toml").write_text("[state-store]\nengine = \"none\"\n")
+        (existing / "declaration-directory").write_text(str(existing_decl) + "\n")
+        self.decl = self.operator_home / ".weaveragent" / "m1"
+        # The box's sudoers, which includes sudoers.d, mapped into the fixture.
+        (self.root / "etc" / "sudoers.d").mkdir(parents=True)
+        (self.root / "etc" / "sudoers").write_text("@includedir /etc/sudoers.d\n")
+        self.rule = self.root / "etc" / "sudoers.d" / "weaver-m1"
         self.stack = self.root / "stack"
         self.stack.mkdir()
         self.logs = self.root / "log"
@@ -157,17 +211,13 @@ class PlanTests(unittest.TestCase):
             "worker-binary": str(self.root / "installed" / "pyworker"),
             "spu-binary": str(self.root / "installed" / "weaver-spu"),
             "gate-binary": str(self.root / "installed" / "weaver-gate"),
-            "run-tool": "/usr/bin/systemd-run", "control-tool": "/usr/bin/systemctl",
             "coordination-root": "/run",
-            "unit-properties": "UMask=0000\nEnvironment=LD_LIBRARY_PATH=/fixture/lib\n",
-            "log-directory": str(self.logs),
+            "library-path": str(self.root / "installed" / "lib"),
             "agent-directory": str(self.root / "agents"),
             "prefix": str(self.root / "installed"),
         }
         for key, value in self.stack_keys.items():
             (self.stack / key).write_text(value + ("" if value.endswith("\n") else "\n"))
-        self.home = self.root / "home"
-        (self.home / "fixture-no-home").mkdir(parents=True)
         (self.root / "agents").mkdir()
         self.hba = self.root / "pg_hba.conf"
         self.hba.write_text("local all all peer\n")
@@ -188,7 +238,8 @@ class PlanTests(unittest.TestCase):
                     "CARGO_TARGET_DIR": str(self.root / 'target with "quotes"'),
                     "USER": "fixture-no-home", "PROBE": str(self.root / "probe"),
                     "FIXTURE_ROOT": str(self.root)}
-        for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "ROLE_COLLISION", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN"):
+        for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "ROLE_COLLISION", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
+                     "VISUDO_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID"):
             self.env.pop(name, None)
         # Redirect even shell builtin /home probes into the fixture. The
         # production scripts have no test-only path switches and never read
@@ -220,22 +271,39 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         engine = [] if "--engine" in args else ["--engine", "sqlite"]
         return self.create_naming(*engine, *args)
 
+    def install_stack(self):
+        # The installed admin the sudo rule names, and the relay admin starts
+        # from beside the worker, as bootstrap-stack.sh leaves them.
+        (self.root / "installed" / "bin").mkdir(parents=True, exist_ok=True)
+        for binary in (self.root / "installed" / "bin" / "weaver-admin",
+                       self.root / "installed" / "weaver-trace-relay"):
+            if not binary.exists():
+                binary.write_text("#!/bin/sh\nexit 0\n")
+                binary.chmod(0o755)
+
     def create_naming(self, *args):
+        self.install_stack()
         return self.run_script("create-agent.sh", "m1", "--artifact", str(self.artifact), *args)
 
     def assert_unprivileged(self):
+        # `systemctl list-units` is a look any user may take, and the only
+        # systemctl call a plan makes.
         forbidden = {"sudo", "systemctl", "psql", "mktemp", "setfacl"}
-        self.assertFalse([c for c in self.calls() if c[0] in forbidden], self.calls())
+        self.assertFalse([c for c in self.calls() if c[0] in forbidden
+                          and c[:2] != ["systemctl", "list-units"]], self.calls())
 
     def postgres(self, *args):
         return self.create("--engine", "postgres", *args)
 
     def test_agent_plan_defers_privilege_and_preserves_fixture_files(self):
+        self.install_stack()
         before = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
         result = self.create()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(str(self.config / "m1" / "agent.toml"), result.stdout)
-        self.assertIn(str(self.logs / "m1" / "admin.log"), result.stdout)
+        self.assertIn(str(self.decl / "agent.toml"), result.stdout)
+        self.assertIn("/etc/sudoers.d/weaver-m1", result.stdout)
+        self.assertIn("weaver-m1-admincon", result.stdout)
+        self.assertFalse(self.decl.exists(), "the plan writes no declaration")
         self.assertIn("PENDING --apply", result.stdout)
         self.assertNotIn("nothing of this agent exists", result.stdout)
         self.assert_unprivileged()
@@ -246,7 +314,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         # Every required key of the stack record refuses by name, absent or
         # empty, before anything privileged. Perturbation: drop the check and
         # an agent root is written without the key admin requires.
-        for key in ("worker-binary", "unit-properties", "log-directory", "agent-directory"):
+        for key in ("worker-binary", "coordination-root", "agent-directory", "prefix"):
             for value in (None, "  \n"):
                 with self.subTest(key=key, value=value):
                     if value is None: (self.stack / key).unlink()
@@ -268,18 +336,28 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
                 self.assertFalse(any(c[0] == "sudo" for c in self.calls()))
 
     def test_agent_plan_refuses_visible_collisions(self):
-        for collision in ("account", "agent root", "staged root", "log directory"):
+        for collision in ("account", "relay account", "connector account", "access group",
+                          "agent root", "staged root", "sudo rule", "declaration"):
             with self.subTest(collision=collision):
                 self.env.pop("COLLISION", None)
-                for path in (self.config / "m1", self.config / ".m1.partial", self.logs / "m1"):
+                for path in (self.config / "m1", self.config / ".m1.partial"):
                     if path.exists(): path.rmdir()
+                self.rule.unlink(missing_ok=True)
+                shutil.rmtree(self.decl, ignore_errors=True)
                 if collision == "account": self.env["COLLISION"] = "weaver-m1-state"
+                elif collision == "relay account": self.env["COLLISION"] = "weaver-m1-relay"
+                elif collision == "connector account": self.env["COLLISION"] = "weaver-m1-admincon"
+                elif collision == "access group": self.env["COLLISION"] = "weaver-m1-admin"
                 elif collision == "agent root": (self.config / "m1").mkdir()
                 elif collision == "staged root": (self.config / ".m1.partial").mkdir()
-                else: (self.logs / "m1").mkdir()
+                elif collision == "sudo rule": self.rule.write_text("")
+                else:
+                    self.decl.mkdir(parents=True)
+                    self.decl.chmod(0o700)
+                    (self.decl / "agent.toml").write_text("")
                 result = self.create()
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("already exists", result.stderr)
+                self.assertIn("already", result.stderr)
         self.assert_unprivileged()
 
     def test_apply_still_refuses_catalogue_collision_before_creation(self):
@@ -421,8 +499,8 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
     def test_unreadable_stack_key_refuses(self):
         # A directory where a key file should be: cat fails, as an unreadable
         # file does, and chmod alone is ineffective under root test runners.
-        (self.stack / "log-directory").unlink()
-        (self.stack / "log-directory").mkdir()
+        (self.stack / "coordination-root").unlink()
+        (self.stack / "coordination-root").mkdir()
         result = self.create()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("cannot read", result.stderr)
@@ -450,21 +528,36 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertTrue(root.is_dir())
         self.assertFalse((self.config / ".m1.partial").exists())
         for key, value in self.stack_keys.items():
-            if key in ("log-directory", "agent-directory", "prefix"):
+            if key in ("agent-directory", "prefix"):
                 self.assertFalse((root / key).exists(), key)
             elif key == "spu-binary" and spu:
                 self.assertEqual((root / key).read_text(), spu + "\n")
             else:
                 self.assertEqual((root / key).read_text(), (self.stack / key).read_text(), key)
-        self.assertEqual((root / "log-path").read_text(), str(self.logs / "m1" / "admin.log") + "\n")
-        self.assertTrue((self.logs / "m1").is_dir())
-        for retired in ("allow-list", "agent-config-directory", "spu-implementations", "agent-spu"):
-            self.assertFalse((root / retired).exists())
-            self.assertFalse((self.config / retired).exists())
+        # The agent's own keys (weaver-admin-Spec section 9).
+        self.assertEqual((root / "declaration-directory").read_text(), str(self.decl) + "\n")
+        self.assertEqual((root / "operator").read_text(), "12345\n")
+        self.assertEqual((root / "roles.toml").read_text(), 'trace-reader = "weaver-m1-admincon"\n')
+        for retired in ("allow-list", "agent-config-directory", "spu-implementations", "agent-spu",
+                        "agent.toml", "log-path", "run-tool", "control-tool", "unit-properties"):
+            self.assertFalse((root / retired).exists(), retired)
+            self.assertFalse((self.config / retired).exists(), retired)
+        # The declaration is the operator's, in a directory closed to all others.
+        self.assertEqual(self.decl.stat().st_mode & 0o777, 0o700)
+        self.assertEqual((self.decl / "agent.toml").stat().st_mode & 0o077, 0)
         import tomllib
-        store = tomllib.loads((root / "agent.toml").read_text())["state-store"]
+        store = tomllib.loads((self.decl / "agent.toml").read_text())["state-store"]
         self.assertEqual(store["engine"], engine)
         return store
+
+    def assert_rule(self, verbs):
+        admin = str((self.root / "installed" / "bin" / "weaver-admin").resolve())
+        lines = ", ".join(f"{admin} {verb} m1" for verb in verbs)
+        text = self.rule.read_text()
+        self.assertIn("Defaults:weaver-m1-admincon !pam_session\n", text)
+        self.assertIn(f"weaver-m1-admincon ALL=(root) NOPASSWD: {lines}\n", text)
+        self.assertNotIn("SETENV", text)
+        self.assertNotIn("env_keep", text)
 
     def test_apply_fixture_reaches_the_end_with_postgres(self):
         self.env["ALLOW_APPLY_CHECKS"] = "1"
@@ -481,6 +574,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertTrue(any("CREATE DATABASE" in c[-1] for c in sql))
         self.assertTrue(all("-X" in c for c in sql))
         self.assertFalse(any("/etc/weaver/agents" in c for c in calls))
+        self.assert_rule(["show", "validate", "load", "unload", "stop"])
 
     def test_an_unnamed_engine_refuses_naming_both(self):
         # Neither engine is the default, per the operator's ruling on #38.
@@ -505,6 +599,85 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         calls = self.calls()
         self.assertFalse(any("psql" in c or "systemctl" in c for c in calls), calls)
         self.assertTrue(any(c[:4] == ["sudo", "-u", "weaver-m1", "test"] for c in calls))
+        self.assert_rule(["show", "validate", "load", "unload", "stop"])
+
+    def test_the_connector_role_chooses_the_rules_lines(self):
+        # weaver-admin-Spec section 2: the observer's rule grants `show`, the
+        # operator's adds the four that change the agent, each a fixed line.
+        # Perturbation: ignore --connector-role and the observer gets all five.
+        self.env["ALLOW_APPLY_CHECKS"] = "1"
+        result = self.create("--connector-role", "observer", "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_rule(["show"])
+        self.assertNotIn(" load m1", self.rule.read_text())
+        result = self.create("--connector-role", "root")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("operator or observer", result.stderr)
+
+    def test_a_rule_visudo_refuses_is_never_installed_and_admits_nothing(self):
+        # The rule is checked before it is placed, and a refusal leaves no rule
+        # and no admitted root. Perturbation: install before the check, and the
+        # refused rule stands.
+        self.env.update(ALLOW_APPLY_CHECKS="1", VISUDO_FAIL="1")
+        result = self.create("--apply")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("visudo refuses the rendered rule", result.stderr)
+        self.assertFalse(self.rule.exists())
+        self.assertFalse(list((self.root / "etc" / "sudoers.d").iterdir()))
+        self.assertFalse((self.config / "m1").exists())
+
+    def test_a_sudoers_without_the_include_refuses_before_admission(self):
+        # A rule in sudoers.d that sudo never reads would leave the connector
+        # with no line at all. Perturbation: drop the include check, and the
+        # agent is admitted with a dead rule.
+        (self.root / "etc" / "sudoers").write_text("root ALL=(ALL) ALL\n")
+        self.env["ALLOW_APPLY_CHECKS"] = "1"
+        result = self.create("--apply")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not include /etc/sudoers.d", result.stderr)
+        self.assertFalse((self.config / "m1").exists())
+
+    def test_the_relay_and_connector_groups_are_checked_before_admission(self):
+        # The relay holds the trace group alone, and the connector the access
+        # group and nothing of the agent's. Perturbations: drop either check,
+        # and a mis-grouped account is admitted.
+        for env, said in ((dict(RELAY_GROUPS="weaver-m1-trace weaver-m1-state"), "not the trace group alone"),
+                          (dict(CONNECTOR_GROUPS="weaver-m1-admincon"), "does not hold weaver-m1-admin"),
+                          (dict(CONNECTOR_GROUPS="weaver-m1-admincon weaver-m1-admin weaver-m1-trace"),
+                           "holds weaver-m1-trace")):
+            with self.subTest(env=env):
+                shutil.rmtree(self.config / ".m1.partial", ignore_errors=True)
+                shutil.rmtree(self.root / "agents" / "weaver-m1", ignore_errors=True)
+                shutil.rmtree(self.decl, ignore_errors=True)
+                for name in ("RELAY_GROUPS", "CONNECTOR_GROUPS"): self.env.pop(name, None)
+                self.env.update(ALLOW_APPLY_CHECKS="1", **env)
+                result = self.create("--apply")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(said, result.stderr)
+                self.assertFalse((self.config / "m1").exists())
+                self.assertFalse(self.rule.exists())
+
+    def test_a_declaration_directory_another_principal_could_reach_refuses(self):
+        # weaver-admin-Spec section 9: the directory is the operator's and closed,
+        # and every directory above it the operator's or root's and closed.
+        # Perturbations: drop either judgment, and the plan runs on.
+        self.decl.mkdir(parents=True)
+        self.decl.chmod(0o750)
+        result = self.create()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("grants group or other access", result.stderr)
+        self.decl.chmod(0o700)
+        (self.operator_home / ".weaveragent").chmod(0o777)
+        try:
+            result = self.create()
+        finally:
+            (self.operator_home / ".weaveragent").chmod(0o755)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("which another principal could write", result.stderr)
+        result = self.create("--declaration-directory", "relative/dir")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("absolute path", result.stderr)
+        self.assert_unprivileged()
 
     def test_sqlite_wall_open_refuses_before_admission(self):
         self.env.update(ALLOW_APPLY_CHECKS="1", WALL_OPEN="1")
@@ -535,7 +708,8 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
             result = self.create("--spu", "/opt/elsewhere/" + name, "--apply")
             self.assertNotEqual(result.returncode, 0, name)
             self.assertIn("share the file name " + name, result.stderr)
-            self.assertEqual(self.calls(), [], name)
+            # Only the operator's own identity was looked up.
+            self.assertEqual([c for c in self.calls() if c[0] not in ("id", "getent")], [], name)
             self.assertFalse((self.config / ".m1.partial").exists(), name)
 
     def held_closed(self, path):
@@ -628,6 +802,88 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("is not held closed by root: " + str(installed), result.stderr)
 
+    def verify_fixture(self):
+        """An admitted agent whose admin is a stub: `load` starts a real
+        process standing in for the run's constituents and writes a load
+        event, `show` names it, `unload` ends it unless KEEP_ALIVE is set."""
+        self.env.update(FIXTURE_UID="0", FIXTURE_ACCOUNT_UID=str(os.getuid()))
+        root = self.config / "m1"
+        root.mkdir()
+        self.decl.mkdir(parents=True)
+        sink = self.root / "agents" / "trace.ndjson"
+        sink.write_text("")
+        (self.decl / "agent.toml").write_text(f'[trace-sink]\nkind = "file"\npath = "{sink}"\n')
+        (root / "declaration-directory").write_text(str(self.decl) + "\n")
+        state = self.root / "stub-state"
+        state.mkdir()
+        installed = self.root / "installed" / "bin"
+        installed.mkdir(parents=True)
+        stub = installed / "weaver-admin"
+        stub.write_text(f"""#!/bin/sh
+case "$1" in
+  validate) echo '{{"kind":"validated"}}' ;;
+  load) sleep 300 >/dev/null 2>&1 &
+        echo $! > {state}/pid
+        echo '{{"kind":"load"}}' >> {sink}
+        echo '{{"kind":"state","state":"idle"}}' ;;
+  show) if [ -f {state}/pid ]; then
+          echo "{{\\"kind\\":\\"state\\",\\"state\\":\\"idle\\",\\"constituents\\":[$(cat {state}/pid)]}}"
+        else echo '{{"kind":"state","state":"unloaded"}}'; fi ;;
+  unload) if [ -f {state}/pid ]; then
+            [ -n "$KEEP_ALIVE" ] || kill $(cat {state}/pid)
+            cp {state}/pid {state}/last; rm {state}/pid
+          fi
+          echo '{{"kind":"state","state":"unloaded"}}' ;;
+esac
+""")
+        stub.chmod(0o755)
+        return state
+
+    def end_stand_in(self, state):
+        for name in ("pid", "last"):
+            path = state / name
+            if path.exists():
+                try:
+                    os.kill(int(path.read_text()), 9)
+                except (ProcessLookupError, ValueError):
+                    pass
+
+    def test_verify_load_checks_each_constituent_and_that_none_is_left(self):
+        # The operator contract section 2: every constituent `show` names runs
+        # as one of the agent's accounts and sits in the invoker's cgroup, a
+        # relay among them for a file sink, and after the unload none is left.
+        state = self.verify_fixture()
+        try:
+            result = self.run_script("verify-load.sh", "m1")
+        finally:
+            self.end_stand_in(state)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("in the invoker's cgroup", result.stdout)
+        self.assertIn("every constituent gone, show unloaded", result.stdout)
+
+    def test_verify_load_refuses_a_constituent_of_another_account(self):
+        # Perturbation: drop the account check, and a stranger's process passes.
+        state = self.verify_fixture()
+        self.env["FIXTURE_ACCOUNT_UID"] = str(os.getuid() + 1)
+        try:
+            result = self.run_script("verify-load.sh", "m1")
+        finally:
+            self.end_stand_in(state)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("none of the agent's, its member's or its relay's accounts", result.stderr)
+
+    def test_verify_load_refuses_a_constituent_that_outlives_the_unload(self):
+        # Perturbation: drop the after-unload look, and the survivor passes.
+        state = self.verify_fixture()
+        self.env["KEEP_ALIVE"] = "1"
+        try:
+            result = self.run_script("verify-load.sh", "m1")
+        finally:
+            self.end_stand_in(state)
+            self.env.pop("KEEP_ALIVE", None)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("outlived the unload", result.stderr)
+
     def test_the_territory_is_passage_for_the_member_and_the_trace_is_not_its_to_read(self):
         # The operator's ruling of 2026-10-02 (#28) as refined on #56: the member
         # passes through a root:member 0710 territory (no setgid, no listing) to
@@ -648,6 +904,11 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertIn(["sudo", "install", "-d", "-o", "weaver-m1-state", "-g", "weaver-m1-state", "-m", "0700",
                        territory + "/state"], calls)
         self.assertIn(["sudo", "groupadd", "--system", "weaver-m1-trace"], calls)
+        self.assertIn(["sudo", "groupadd", "--system", "weaver-m1-admin"], calls)
+        self.assertIn(["sudo", "useradd", "--system", "--shell", "/usr/sbin/nologin", "--no-create-home",
+                       "--no-user-group", "--gid", "weaver-m1-trace", "weaver-m1-relay"], calls)
+        self.assertIn(["sudo", "useradd", "--system", "--shell", "/usr/sbin/nologin", "--no-create-home",
+                       "--user-group", "--groups", "weaver-m1-admin", "weaver-m1-admincon"], calls)
         self.assertIn(["sudo", "usermod", "-aG", "weaver-m1,weaver-m1-state,weaver-m1-trace", "fixture-no-home"], calls)
         self.assertIn(["sudo", "-u", "weaver-m1-state", "test", "-r", territory + "/trace.ndjson"], calls)
         self.assertFalse([c for c in calls if "setfacl" in c or c[0] == "mktemp"], calls)
@@ -661,7 +922,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
                 self.log.unlink(missing_ok=True)
                 shutil.rmtree(self.config / ".m1.partial", ignore_errors=True)
                 shutil.rmtree(self.root / "agents" / "weaver-m1", ignore_errors=True)
-                shutil.rmtree(self.logs / "m1", ignore_errors=True)
+                shutil.rmtree(self.decl, ignore_errors=True)
                 self.env.update(ALLOW_APPLY_CHECKS="1", TRACE_OPEN="1")
                 result = self.create("--engine", engine, "--apply")
                 self.assertNotEqual(result.returncode, 0)
@@ -694,7 +955,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         # paths the record names, so the record and each entry are held closed
         # first. A group-writable entry refuses both, naming it, before any
         # privileged step. Perturbation: drop the entry loop, and both go on.
-        entry = self.stack / "log-directory"
+        entry = self.stack / "coordination-root"
         entry.chmod(0o664)
         try:
             for result in (self.create(), self.run_script("update-stack.sh")):
@@ -717,15 +978,17 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
             for line in reads:
                 self.assertIn('sudo -n -u "weaver-$AGENT-state" tail', line, (script, line))
 
-    def test_update_stack_patches_only_a_declaration_held_closed(self):
-        # The walk of #45 round 11: the patch runs exactly when admin has refused
-        # the root, so its judgment does not stand behind the write; the
-        # declaration is held closed before the root copy and append.
-        # Perturbation: drop the judgment, and the patch is unguarded.
+    def test_update_stack_patches_a_declaration_as_its_owner(self):
+        # The declaration is the operator's, in the operator's closed directory
+        # (weaver-admin-Spec section 9), so the patch and its restore are the
+        # operator's own writes and no root step touches a file another
+        # principal could choose. Perturbation: restore a root copy or append,
+        # and this fails.
         text = (self.repo / "deploy" / "update-stack.sh").read_text()
-        guard = text.index('bad=$(held_closed "$decl")')
-        self.assertLess(guard, text.index('sudo cp -a "$decl"'))
-        self.assertLess(guard, text.index('sudo tee -a "$decl"'))
+        for root_write in ('sudo cp -a "$decl"', 'sudo tee -a "$decl"', 'sudo cp -a "${entry##*|}"'):
+            self.assertNotIn(root_write, text)
+        self.assertIn('cp -a "$decl" "$decl.pre-$AFTER-bak"', text)
+        self.assertIn('engine = "none"\\n\' >> "$decl"', text)
 
     def test_verify_load_execs_admin_by_its_judged_canonical_path(self):
         # The walk of #45 round 11: admin was judged by its resolved path and
@@ -903,10 +1166,58 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
                 self.assertFalse(any(c[0] == "cargo" for c in self.calls()))
                 (self.config / retired).unlink()
 
+    def test_stack_refuses_a_root_of_the_layout_before_50(self):
+        # A root holding its declaration or a retired key is migrated by hand
+        # first, since the admin this installs reads none of them. Refused by
+        # name before cargo runs. Perturbation: drop the check, and the run
+        # plans on.
+        for retired in ("agent.toml", "run-tool", "control-tool", "unit-properties", "log-path"):
+            with self.subTest(retired=retired):
+                self.log.unlink(missing_ok=True)
+                (self.config / "existing" / retired).write_text("x\n")
+                result = self.run_script("update-stack.sh")
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("layout before #50", result.stderr)
+                self.assertIn("REDEPLOY.md section 8", result.stderr)
+                self.assertFalse(any(c[0] == "cargo" for c in self.calls()))
+                (self.config / "existing" / retired).unlink()
+
+    def test_stack_refuses_while_a_unit_of_the_old_layout_serves(self):
+        # The admin this installs ends a run by its run lock, which a unit's
+        # worker never took, so a unit still serving refuses, and so does a
+        # systemctl that cannot answer. Perturbations: drop the check, or read
+        # a failed look as no unit, and the run plans on.
+        for env, said in ((dict(UNITS="weaver-worker@karl.service loaded active running x\n"),
+                           "weaver-worker@karl.service"),
+                          (dict(UNITS_FAIL="1"), "cannot ask systemd")):
+            with self.subTest(env=env):
+                self.log.unlink(missing_ok=True)
+                for name in ("UNITS", "UNITS_FAIL"): self.env.pop(name, None)
+                self.env.update(env)
+                result = self.run_script("update-stack.sh")
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(said, result.stderr)
+                self.assertFalse(any(c[0] == "cargo" for c in self.calls()))
+
+    def test_stack_reads_each_declaration_from_its_directory(self):
+        # The declaration lives in the directory the root names. One the
+        # operator cannot read refuses by name and is never left out.
+        # Perturbation: read `<root>/agent.toml` again, and the agent is skipped.
+        decl = self.operator_home / ".weaveragent" / "existing" / "agent.toml"
+        decl.chmod(0o000)
+        try:
+            if os.access(decl, os.R_OK):
+                self.skipTest("no mode closes a file to this user")
+            result = self.run_script("update-stack.sh")
+        finally:
+            decl.chmod(0o644)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(str(decl) + " cannot be read", result.stderr)
+
     def test_stack_agents_are_the_roots_under_the_base(self):
-        # A staged root under a dot-name, a plain file, and a root with no
-        # declaration are not agents, as admin refuses the last for every verb.
-        # Perturbation: drop the declaration check and `undeclared` is listed.
+        # A staged root under a dot-name, a plain file, and a root naming no
+        # declaration directory are not agents. Perturbation: drop the
+        # declaration-directory check and `undeclared` is listed.
         (self.config / ".m2.partial").mkdir()
         (self.config / "stray-file").write_text("x")
         (self.config / "undeclared").mkdir()
@@ -948,6 +1259,71 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertNotIn("== plan", result.stdout)
         self.assertNotIn("box is current", result.stdout)
         self.assert_unprivileged()
+
+
+def shell_function(script, name):
+    """One function exactly as a deploy script defines it, read out of the
+    script's own text so a test runs the code that ships."""
+    lines = script.splitlines()
+    start = lines.index(f"{name}() {{")
+    end = next(i for i in range(start, len(lines)) if lines[i] == "}")
+    return "\n".join(lines[start:end + 1]) + "\n"
+
+
+class DecommissionTests(unittest.TestCase):
+    """decommission.sh's reading of the per-agent layout, run as the script
+    defines it. It needs root to run whole, so its pieces are run alone."""
+
+    def setUp(self):
+        self.script = (DEPLOY / "decommission.sh").read_text()
+
+    def run_fn(self, name, *args):
+        run = subprocess.run(["bash", "-c", shell_function(self.script, name) + f'{name} "$@"', "x", *args],
+                             text=True, capture_output=True, timeout=20)
+        return run.stdout.strip()
+
+    def test_a_run_is_stopped_only_where_show_says_so(self):
+        # A running, transitioning or unreadable agent refuses the archive and
+        # the purge, never read as stopped. Perturbation: read a refusal, or an
+        # unloaded state with constituents, as stopped, and this fails.
+        for answer, verdict in (
+                ('{"kind":"state","state":"unloaded"}', "stopped"),
+                ('{"kind":"state","state":"absent"}', "stopped"),
+                ('{"kind":"no_such_agent"}', "stopped"),
+                ('{"kind":"state","state":"idle","constituents":[7]}', "running"),
+                ('{"kind":"state","state":"unloaded","constituents":[7]}', "running"),
+                ('{"kind":"state","state":"active"}', "running"),
+                ('{"kind":"in_transition"}', "running"),
+                ('{"kind":"boundary_unverified"}', "unknown"),
+                ("", "unknown"),
+                ("not json", "unknown")):
+            with self.subTest(answer=answer):
+                self.assertEqual(self.run_fn("run_verdict", answer), verdict)
+
+    def test_every_provisioned_name_strips_to_its_agent(self):
+        # Every account and group create-agent makes carries a reserved suffix,
+        # so each names its agent. Perturbation: drop a suffix, and its account
+        # is taken for an agent of its own.
+        for name in ("weaver-m1", "weaver-m1-state", "weaver-m1-relay", "weaver-m1-admincon",
+                     "weaver-m1-trace", "weaver-m1-admin"):
+            with self.subTest(name=name):
+                self.assertEqual(self.run_fn("strip_suffix", name), "m1")
+
+    def test_the_operators_declaration_directories_are_never_purged(self):
+        # They are archived and dropped from the purge list. Perturbation: drop
+        # the slice back, and the purge would remove the operator's files.
+        self.assertIn('archive_path declaration-directories "${!DECL_DIRS[@]}"', self.script)
+        self.assertIn('PURGE=("${PURGE[@]:0:$kept}")', self.script)
+        self.assertLess(self.script.index("kept=${#PURGE[@]}"),
+                        self.script.index('archive_path declaration-directories'))
+
+    def test_a_running_agent_refuses_the_archive_and_the_purge(self):
+        guard = '[ ${#RUNNING[@]} -eq 0 ] || die "agents still run or cannot be read'
+        self.assertEqual(self.script.count(guard), 2)
+        archive, purge = (self.script.index(m) for m in ('if [ "$MODE" = archive ]; then', " 3. purge\n"))
+        first, second = (i for i in range(len(self.script)) if self.script.startswith(guard, i))
+        self.assertLess(archive, first)
+        self.assertLess(purge, second)
 
 
 class BootstrapStandingTests(unittest.TestCase):

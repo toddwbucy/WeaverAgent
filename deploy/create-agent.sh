@@ -1,21 +1,57 @@
 #!/usr/bin/env bash
 # Create one agent on this box: its accounts, its territory, the state store
-# behind its member's seam, and its root of admin configuration.
+# behind its member's seam, its declaration directory, its root of admin
+# configuration, and the sudo rule its connector runs the verbs through.
 #
 #   ./deploy/create-agent.sh fred --engine sqlite --artifact /path/to.gguf            plan only
 #   ./deploy/create-agent.sh fred --engine sqlite --artifact /path/to.gguf --apply    act
 #
 # Options: --engine sqlite|postgres (required), --session <name>
 # (default <name>-001), --spu <path> (this agent's SPU, in place of the
-# stack record's `spu-binary`).
+# stack record's `spu-binary`), --declaration-directory <path> (default
+# `~/.weaveragent/<name>` in the operator's home), --connector-role
+# operator|observer (default operator: which command lines the connector's
+# sudo rule grants).
+#
+# Run it as the operator, never under sudo: the declaration directory is the
+# operator's own, made and written as the operator, and `--apply` asks for
+# sudo itself for every root step.
 #
 # **The agent's root is `<admin base>/<name>/` and it is the admission.**
 # Admin reads that directory and nothing shared, so this script writes every
 # key admin requires into it, copied from the stack record `bootstrap-stack.sh`
 # wrote at `/etc/weaver/stack/` (which admin never reads), plus the agent's own
-# `log-path` and its declaration as `agent.toml`. The root is staged under a
-# dot-name admin's name check refuses, and moved into place last, so a run that
-# stops part way leaves no root admin would admit.
+# `declaration-directory`, `operator` and `roles.toml`, per weaver-admin-Spec
+# section 9. The root is staged under a dot-name admin's name check refuses,
+# and moved into place last, so a run that stops part way leaves no root admin
+# would admit.
+#
+# **The declaration stands in the operator's directory and not in the root**
+# (operator's ruling of 2026-10-02): `agent.toml` is written there, as the
+# operator, in a directory only the operator can enter, and admin reads it as
+# root through the judgment of weaver-admin-Spec section 9. Admin's own
+# `admin.log` and `worker.log` land beside it at the first verb.
+#
+# **Three accounts and two groups beyond the agent's own**, per
+# weaver-admin-Spec sections 4, 6 and 9 (the operator's rulings of 2026-10-03
+# on #50): the state member `weaver-<name>-state`, the trace relay
+# `weaver-<name>-relay` whose one group is the trace group
+# `weaver-<name>-trace`, the access group `weaver-<name>-admin` the trace door
+# is grouped to, and the connector's service user `weaver-<name>-admincon`,
+# which holds the access group, is the boundary file's `trace-reader`, and is
+# the one user the sudo rule names.
+#
+# **The sudo rule is strict** (weaver-admin-Spec section 2, the operator
+# contract section 2): `/etc/sudoers.d/weaver-<name>` grants the connector's
+# user exactly this agent's fixed `weaver-admin <verb> <name>` command lines,
+# as root, without a password, with no caller-chosen argument, no SETENV and
+# no env_keep, and turns sudo's `pam_session` off for that user so a session
+# never moves the invocation, and the agent it starts, out of the invoker's
+# containment. The observer role grants `show`, and the operator role adds
+# `validate`, `load`, `unload` and `stop`. The rule is checked with `visudo
+# -cf` before it is installed. A delegated invocation reads admin's default
+# base, sudo stripping WEAVER_ADMIN_CONFIG, so the rule drives an agent only
+# under `/etc/weaver/admin`.
 #
 # **The program creates nothing and this is why the script exists.** Admin's
 # inventory refuses a missing home rather than building one, per
@@ -67,6 +103,8 @@ SESSION=""
 # refused below rather than read as either.
 ENGINE=
 SPU_OVERRIDE=""
+DECL_DIR=""
+CONNECTOR_ROLE=operator
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply)    APPLY=1 ;;
@@ -85,6 +123,8 @@ while [ $# -gt 0 ]; do
    (deploy/REDEPLOY.md, existing territories)." ;;
     --engine)   [ $# -ge 2 ] || die "--engine needs a name"; ENGINE=$2; shift ;;
     --spu)      [ $# -ge 2 ] || die "--spu needs a path"; SPU_OVERRIDE=$2; shift ;;
+    --declaration-directory) [ $# -ge 2 ] || die "--declaration-directory needs a path"; DECL_DIR=$2; shift ;;
+    --connector-role) [ $# -ge 2 ] || die "--connector-role needs operator or observer"; CONNECTOR_ROLE=$2; shift ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -120,6 +160,15 @@ if [ -n "$SPU_OVERRIDE" ]; then
   [[ "$SPU_OVERRIDE" == /* ]] || die "--spu takes an absolute path: '$SPU_OVERRIDE'"
   [[ "$SPU_OVERRIDE" =~ [[:cntrl:]] ]] && die "--spu carries a control character, which a key file cannot hold as one line"
 fi
+case "$CONNECTOR_ROLE" in
+  operator) VERBS="show validate load unload stop" ;;
+  observer) VERBS="show" ;;
+  *) die "--connector-role is operator or observer: '$CONNECTOR_ROLE'" ;;
+esac
+# **The operator is the account running this script**, never root: the
+# declaration directory is theirs, made and written as them, and the root's
+# `operator` key names their uid.
+[ "$(id -u)" -ne 0 ] || die "run as the operator, not under sudo: the declaration directory is the operator's own, and --apply asks for sudo itself"
 
 
 # **An engine this script cannot provision is refused here rather than written
@@ -138,17 +187,27 @@ case "$ENGINE" in
   *) die "no store engine named $ENGINE. weaver-types admits none, sqlite and postgres, and this script provisions sqlite and postgres." ;;
 esac
 
-OPERATOR=${SUDO_USER:-$USER}
+OPERATOR=$(id -un)
+OPERATOR_UID=$(id -u)
+OPERATOR_HOME=$(getent passwd "$OPERATOR" | cut -d: -f6)
+[ -n "$OPERATOR_HOME" ] || die "cannot read the operator $OPERATOR's home from the account database"
+DECL_DIR=${DECL_DIR:-$OPERATOR_HOME/.weaveragent/$NAME}
+[[ "$DECL_DIR" == /* ]] || die "--declaration-directory takes an absolute path: '$DECL_DIR'"
+[[ "$DECL_DIR" =~ [[:cntrl:]] ]] && die "the declaration directory carries a control character, which a key file cannot hold as one line"
 AGENT_USER="weaver-$NAME"          # the agent's own uid: the worker's identity
 MEMBER_USER="weaver-$NAME-state"   # the member's uid: holds the territory
-TRACE_GROUP="weaver-$NAME-trace"   # the trace's readers: the operator, never the member
+TRACE_GROUP="weaver-$NAME-trace"   # the trace's readers: the operator and the relay, never the member
+RELAY_USER="weaver-$NAME-relay"    # the trace relay's uid, its one group the trace group
+ACCESS_GROUP="weaver-$NAME-admin"  # the trace door's group, which the declared reader holds
+CONNECTOR_USER="weaver-$NAME-admincon"  # the connector's service user: the reader, and the sudo rule's one user
+SUDO_RULE="/etc/sudoers.d/weaver-$NAME"
 ROLE="weaver_$NAME"                # postgres spells with underscores
 DATABASE="weaver_$NAME"
 ADMIN_BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
 STACK=${WEAVER_STACK_RECORD:-/etc/weaver/stack}
 AGENT_ROOT="$ADMIN_BASE/$NAME"
 STAGE="$ADMIN_BASE/.$NAME.partial"
-DECLARATION="$AGENT_ROOT/agent.toml"
+DECLARATION="$DECL_DIR/agent.toml"
 
 # **held_closed PATH: admin's rule for what a root process may trust**, per
 # weaver-admin-Spec section 9 (`judge_ancestors`). PATH, resolved to its
@@ -183,6 +242,27 @@ creatable_in() {
   return 0
 }
 
+# **held_for_operator PATH: admin's rule for the declaration directory's
+# ancestors**, per weaver-admin-Spec section 9: from the nearest directory that
+# stands up to `/`, each owned by uid 0 or by the operator and writable by no
+# group or other unless sticky. Fails printing the first component that is
+# not so. The directory itself, where it stands, is judged apart: the
+# operator's, granting group and other nothing.
+held_for_operator() {
+  local at owner mode
+  at=$1
+  while [ ! -e "$at" ] && [ ! -L "$at" ]; do at=$(dirname -- "$at"); done
+  at=$(realpath -e -- "$at" 2>/dev/null) || { printf '%s' "$1"; return 1; }
+  while :; do
+    read -r owner mode < <(stat -c '%u %a' -- "$at" 2>/dev/null) || { printf '%s' "$at"; return 1; }
+    if { [ "$owner" != 0 ] && [ "$owner" != "$OPERATOR_UID" ]; } || { (( 8#$mode & 8#022 )) && ! { [ -d "$at" ] && (( 8#$mode & 8#1000 )); }; }; then
+      printf '%s' "$at"; return 1
+    fi
+    [ "$at" = / ] && return 0
+    at=$(dirname -- "$at")
+  done
+}
+
 trim() {
   local value=$1
   value=${value#"${value%%[![:space:]]*}"}
@@ -194,8 +274,8 @@ trim() {
 # value the declaration renders from it must be known before sudo is asked
 # for. A key that is absent, empty or unreadable refuses by name; only the
 # optional keys may be absent.
-REQUIRED_KEYS="worker-binary spu-binary gate-binary run-tool control-tool coordination-root unit-properties"
-OPTIONAL_KEYS="headroom-bytes state-store-socket"
+REQUIRED_KEYS="worker-binary spu-binary gate-binary coordination-root"
+OPTIONAL_KEYS="headroom-bytes library-path load-bound-seconds state-store-socket"
 stack_key() { # stack_key KEY required|optional
   local file="$STACK/$1" value
   [ -d "$STACK" ] || die "no stack record at $STACK: bootstrap-stack.sh writes it"
@@ -218,7 +298,6 @@ for entry in "$STACK"/*; do
 done
 for key in $REQUIRED_KEYS; do stack_key "$key" required >/dev/null || exit 1; done
 for key in $OPTIONAL_KEYS; do stack_key "$key" optional >/dev/null || exit 1; done
-LOG_DIR=$(stack_key log-directory required) || exit 1
 AGENT_DIR=$(stack_key agent-directory required) || exit 1
 # **The install prefix is a script-required key, read here and never copied
 # into the root.** It was read only in the closing message, inside a command
@@ -226,7 +305,15 @@ AGENT_DIR=$(stack_key agent-directory required) || exit 1
 # refused on stderr after everything was provisioned and the run still
 # succeeded (Codex on #45).
 PREFIX=$(stack_key prefix required) || exit 1
-LOG_PATH="$LOG_DIR/$NAME/admin.log"
+# **The rule names the program sudo runs as root, so it is judged first**: the
+# installed weaver-admin, by its canonical path, held closed by admin's rule.
+ADMIN_BINARY=$(realpath -e -- "$PREFIX/bin/weaver-admin" 2>/dev/null) || die "no weaver-admin at $PREFIX/bin/weaver-admin"
+bad=$(held_closed "$ADMIN_BINARY") || die "weaver-admin at $ADMIN_BINARY is not held closed by root at $bad, so no sudo rule names it"
+# **Admin starts the relay from beside the worker for a file sink**
+# (weaver-admin-Spec section 9), so a box without it is refused here rather
+# than at the first load.
+RELAY_BINARY="$(dirname -- "$(stack_key worker-binary required)")/weaver-trace-relay"
+[ -x "$RELAY_BINARY" ] || die "no weaver-trace-relay beside the worker at $RELAY_BINARY: update-stack.sh installs it"
 SPU_BINARY=${SPU_OVERRIDE:-$(stack_key spu-binary required)} || exit 1
 # **The stack's file names are judged as admin judges them, before anything is
 # provisioned.** Admin keys the load record's stack by file name, and
@@ -261,6 +348,21 @@ judge_names || exit 1
 bad=$(creatable_in "$AGENT_DIR") || die "the stack record's agent-directory $AGENT_DIR is not a root-held base no other principal can make a name in ($bad)"
 HOME_DIR="$AGENT_DIR/$AGENT_USER"
 STATE_DIR="$HOME_DIR/state"
+
+# **The declaration directory is judged as admin will judge it**, before
+# anything is provisioned (weaver-admin-Spec section 9): every directory above
+# it root's or the operator's and closed, and the directory itself, where it
+# stands, the operator's, no link, granting group and other nothing, and
+# holding no `agent.toml` yet. Where it does not stand it is made 0700 as the
+# operator at the apply.
+bad=$(held_for_operator "$(dirname -- "$DECL_DIR")") || die "the declaration directory $DECL_DIR stands under $bad, which another principal could write, so admin would refuse it"
+if [ -e "$DECL_DIR" ] || [ -L "$DECL_DIR" ]; then
+  { [ ! -L "$DECL_DIR" ] && [ -d "$DECL_DIR" ]; } || die "the declaration directory $DECL_DIR is a link or not a directory"
+  read -r d_owner d_mode < <(stat -c '%u %a' -- "$DECL_DIR")
+  [ "$d_owner" = "$OPERATOR_UID" ] || die "the declaration directory $DECL_DIR is not $OPERATOR's"
+  (( 8#$d_mode & 8#077 )) && die "the declaration directory $DECL_DIR grants group or other access (mode $d_mode), and admin requires it closed to everyone but its owner"
+  { [ ! -e "$DECLARATION" ] && [ ! -L "$DECLARATION" ]; } || die "a declaration already stands at $DECLARATION"
+fi
 
 # **The declaration is rendered once, here, and parse-checked before anything
 # is provisioned**, so a value that breaks it refuses before an account or a
@@ -375,7 +477,7 @@ bad=$(held_closed "$ADMIN_BASE") || die "the admin base $ADMIN_BASE is not held 
 # new name in the record's log-directory, so neither may let another principal
 # claim the name first.
 bad=$(creatable_in "$ADMIN_BASE") || die "the admin base $ADMIN_BASE lets another principal make names in it ($bad), so the stage could be claimed first"
-bad=$(creatable_in "$LOG_DIR") || die "the log directory $LOG_DIR lets another principal make names in it, or is not held closed ($bad)"
+[ "$ADMIN_BASE" = /etc/weaver/admin ] || printf '   WARNING: the admin base is %s, and a delegated invocation reads only /etc/weaver/admin, so the connector'"'"'s sudo rule cannot drive this agent\n' "$ADMIN_BASE"
 
 # **Whose identity the store admits is settled and derived.** The charter has
 # the member hold a uid of its own and dial the store under it, and as of
@@ -389,6 +491,9 @@ say "plan for agent '$NAME'"
 plan "agent account   $AGENT_USER      (system, nologin, the worker's uid)"
 plan "member account  $MEMBER_USER     (system, nologin, owns the state territory)"
 plan "trace group     $TRACE_GROUP     (system group: the trace's readers, never the member)"
+plan "relay account   $RELAY_USER      (system, nologin, no home, its one group $TRACE_GROUP)"
+plan "access group    $ACCESS_GROUP    (system group: the trace door's, which the reader holds)"
+plan "connector       $CONNECTOR_USER  (system, nologin, no home, holds $ACCESS_GROUP, the trace reader)"
 plan "operator        $OPERATOR joins groups $AGENT_USER, $MEMBER_USER and $TRACE_GROUP"
 plan "home            /home/$AGENT_USER        the agent's own, where its tools run"
 plan "directory       $HOME_DIR        root:$MEMBER_USER 0710, passage only, no listing"
@@ -404,14 +509,17 @@ else
 fi
 plan "agent root      $AGENT_ROOT      root 0755, keys 0644, copied from $STACK"
 plan "spu-binary      $SPU_BINARY$( [ -n "$SPU_OVERRIDE" ] && printf '  (--spu, in place of the stack record'"'"'s)' )"
-plan "log-path        $LOG_PATH        its directory root 0750"
+plan "operator key    $OPERATOR_UID ($OPERATOR)"
+plan "roles.toml      trace-reader = $CONNECTOR_USER"
+plan "declaration dir $DECL_DIR      $OPERATOR 0700, where admin.log and worker.log land"
 plan "declaration     $DECLARATION     session $SESSION, artifact $ARTIFACT"
+plan "sudo rule       $SUDO_RULE      $CONNECTOR_USER, $CONNECTOR_ROLE: $VERBS, !pam_session"
 plan "store engine    $ENGINE         which the deployed member must carry"
 
 # What must not already be there. Creation is refused rather than merged,
 # because a half-made agent that looks whole is worse than an absent one.
 say "checks"
-for u in "$AGENT_USER" "$MEMBER_USER"; do
+for u in "$AGENT_USER" "$MEMBER_USER" "$RELAY_USER" "$CONNECTOR_USER"; do
   if getent passwd "$u" >/dev/null; then
     die "the account $u already exists"
   else
@@ -419,23 +527,25 @@ for u in "$AGENT_USER" "$MEMBER_USER"; do
     [ "$account_status" -eq 2 ] || die "cannot read account $u"
   fi
 done
-if getent group "$TRACE_GROUP" >/dev/null; then
-  die "the group $TRACE_GROUP already exists"
-else
-  group_status=$?
-  [ "$group_status" -eq 2 ] || die "cannot read group $TRACE_GROUP"
-fi
+for g in "$TRACE_GROUP" "$ACCESS_GROUP"; do
+  if getent group "$g" >/dev/null; then
+    die "the group $g already exists"
+  else
+    group_status=$?
+    [ "$group_status" -eq 2 ] || die "cannot read group $g"
+  fi
+done
 refuse_existing "/home/$AGENT_USER" "agent home"
 refuse_existing "$HOME_DIR" "territory"
 refuse_existing "$AGENT_ROOT" "agent root"
 refuse_existing "$STAGE" "a partial agent root from an earlier run (remove it by hand)"
-refuse_existing "$LOG_DIR/$NAME" "operations log directory"
+refuse_existing "$SUDO_RULE" "sudo rule"
 [ -r "$ARTIFACT" ] || printf '   WARNING: the artifact is not readable from this shell: %s\n' "$ARTIFACT"
 [ -z "$SPU_OVERRIDE" ] || [ -x "$SPU_OVERRIDE" ] || printf '   WARNING: the --spu path is not executable from this shell: %s\n' "$SPU_OVERRIDE"
 if [ "$APPLY" -eq 0 ]; then
   printf '   no collision found in accounts and paths visible to this uid\n'
   printf '   PENDING --apply: privileged collision checks, service and store catalogs\n'
-  printf '   PENDING --apply: authentication paths\n'
+  printf '   PENDING --apply: authentication paths, the sudoers include, visudo\n'
   say "plan only"
   printf '   no provisioning performed; rerun with --apply to check and make it\n'
   exit 0
@@ -491,10 +601,18 @@ say "accounts"
 sudo useradd --system --shell /usr/sbin/nologin --create-home --user-group "$AGENT_USER"
 sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$MEMBER_USER"
 sudo groupadd --system "$TRACE_GROUP"
+sudo groupadd --system "$ACCESS_GROUP"
+# **The relay's one group is the trace group**, primary and alone, which is
+# what admin's start step sets at its spawn (weaver-admin-Spec section 6).
+sudo useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group --gid "$TRACE_GROUP" "$RELAY_USER"
+# **The connector holds the access group and nothing of the agent's**: it
+# reaches the trace through the door alone, never by the trace group.
+sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group --groups "$ACCESS_GROUP" "$CONNECTOR_USER"
 sudo usermod -aG "$AGENT_USER,$MEMBER_USER,$TRACE_GROUP" "$OPERATOR"
 sudo chmod 2750 "/home/$AGENT_USER"
-printf '   %s uid %s, %s uid %s\n' \
-  "$AGENT_USER" "$(id -u "$AGENT_USER")" "$MEMBER_USER" "$(id -u "$MEMBER_USER")"
+printf '   %s uid %s, %s uid %s, %s uid %s, %s uid %s\n' \
+  "$AGENT_USER" "$(id -u "$AGENT_USER")" "$MEMBER_USER" "$(id -u "$MEMBER_USER")" \
+  "$RELAY_USER" "$(id -u "$RELAY_USER")" "$CONNECTOR_USER" "$(id -u "$CONNECTOR_USER")"
 
 say "territory"
 # **The member passes through; the trace is not its to read** (operator's ruling
@@ -529,11 +647,20 @@ printf 'weaver          %s                    %s\n' "$MEMBER_USER" "$ROLE" | sud
 sudo systemctl reload postgresql
 fi
 
+say "declaration"
+# **Made and written as the operator**, never as root: the directory is the
+# operator's own, 0700, and the declaration in it the operator's, so every
+# later edit is the operator's without a privileged write.
+( umask 077; mkdir -p -- "$DECL_DIR" )
+chmod 0700 -- "$DECL_DIR"
+( umask 077; printf '%s\n' "$DECLARATION_TEXT" > "$DECLARATION" )
+printf '   %s written, %s 0700\n' "$DECLARATION" "$DECL_DIR"
+
 say "agent root, staged"
 # **Root-owned and not group- or world-writable, or admin refuses it**, so it
 # is made by root at 0755 with its files 0644. Every key the stack record
-# holds is copied as written; `spu-binary` is this agent's `--spu` where given,
-# and `log-path` is the agent's own.
+# holds is copied as written. `spu-binary` is this agent's `--spu` where given,
+# and `declaration-directory`, `operator` and `roles.toml` are the agent's own.
 sudo install -d -o root -g root -m 0755 "$STAGE"
 for key in $REQUIRED_KEYS $OPTIONAL_KEYS; do
   [ -e "$STACK/$key" ] || continue
@@ -543,16 +670,13 @@ for key in $REQUIRED_KEYS $OPTIONAL_KEYS; do
     sudo cp -- "$STACK/$key" "$STAGE/$key"
   fi
 done
-printf '%s\n' "$LOG_PATH" | sudo tee "$STAGE/log-path" >/dev/null
-# **The sink is inside this agent's own territory and the script will not
-# write it anywhere else.** A declaration of 2026-08-23 pointed one agent's
-# sink at another's directory, so two agents were configured to write one
-# record, and it survived three weeks because nothing checked. The path is
-# derived here rather than accepted.
-printf '%s\n' "$DECLARATION_TEXT" | sudo tee "$STAGE/agent.toml" >/dev/null
+printf '%s\n' "$DECL_DIR" | sudo tee "$STAGE/declaration-directory" >/dev/null
+printf '%s\n' "$OPERATOR_UID" | sudo tee "$STAGE/operator" >/dev/null
+# **The boundary file names the trace door's one reader**, the connector's
+# user, in the shape of weaver-types-Spec section 3.1 and nothing else.
+printf 'trace-reader = "%s"\n' "$CONNECTOR_USER" | sudo tee "$STAGE/roles.toml" >/dev/null
 sudo chmod 0644 "$STAGE"/*
-sudo install -d -o root -g root -m 0750 "$LOG_DIR/$NAME"
-printf '   staged at %s; operations log directory %s\n' "$STAGE" "$LOG_DIR/$NAME"
+printf '   staged at %s\n' "$STAGE"
 
 say "both gates, verified rather than assumed"
 # **Each probe names the role.** Without `-U` psql defaults the role to the
@@ -594,6 +718,47 @@ else
   printf "   the member cannot read the trace, which is the boundary the state charter asks for\n"
 fi
 
+# **The relay and the connector hold exactly their groups**: the relay the
+# trace group alone, the connector its own and the access group, and neither
+# any group of the agent's or the member's.
+relay_groups=$(id -Gn "$RELAY_USER")
+[ "$relay_groups" = "$TRACE_GROUP" ] || die "the relay account $RELAY_USER holds '$relay_groups', not the trace group alone"
+connector_groups=" $(id -Gn "$CONNECTOR_USER") "
+[[ "$connector_groups" == *" $ACCESS_GROUP "* ]] || die "the connector $CONNECTOR_USER does not hold $ACCESS_GROUP, so the trace door would turn it away"
+for g in "$AGENT_USER" "$MEMBER_USER" "$TRACE_GROUP"; do
+  [[ "$connector_groups" != *" $g "* ]] || die "the connector $CONNECTOR_USER holds $g, which reaches the agent's territory or trace by group"
+done
+printf '   %s holds %s alone, %s holds%s\n' "$RELAY_USER" "$TRACE_GROUP" "$CONNECTOR_USER" "${connector_groups% }"
+
+say "sudo rule"
+# **Rendered, checked by visudo, then installed root 0440.** Each grant is one
+# fixed command line with its arguments, so sudo matches it exactly and the
+# connector can pass none of its own.
+sudo -n grep -qE '^[#@]includedir[[:space:]]+/etc/sudoers\.d([[:space:]]|$)' /etc/sudoers \
+  || die "/etc/sudoers does not include /etc/sudoers.d, so a rule there would never be read"
+lines=""
+for verb in $VERBS; do
+  lines="$lines${lines:+, }$ADMIN_BINARY $verb $NAME"
+done
+RULE_TEXT=$(cat <<SUDOERS
+# weaver-$NAME: the connector's fixed command lines, per weaver-admin-Spec
+# section 2. Written by deploy/create-agent.sh, $CONNECTOR_ROLE role.
+Defaults:$CONNECTOR_USER !pam_session
+$CONNECTOR_USER ALL=(root) NOPASSWD: $lines
+SUDOERS
+)
+# Staged under a dot-name sudo skips, checked, then moved into place.
+rule_stage=$(sudo mktemp "/etc/sudoers.d/.weaver-$NAME.XXXXXX")
+printf '%s\n' "$RULE_TEXT" | sudo tee "$rule_stage" >/dev/null
+sudo chmod 0440 "$rule_stage"
+if ! sudo visudo -cqf "$rule_stage"; then
+  sudo rm -f -- "$rule_stage"
+  die "visudo refuses the rendered rule, so it was not installed"
+fi
+sudo mv -T -- "$rule_stage" "$SUDO_RULE"
+printf '   %s installed: %s\n' "$SUDO_RULE" "$VERBS"
+sudo -n -l -U "$CONNECTOR_USER" | sed -n '/may run the following/,$p' | sed 's/^/   /'
+
 say "admission"
 # **Moving the root into place is the admission**: before it every admin verb
 # answers no_such_agent for this name, and after it the agent is admitted.
@@ -607,5 +772,15 @@ say "made"
 # on the W4a run of 2026-09-25).
 printf '   %s joined groups %s, %s and %s: a session that predates this run needs a new\n' "$OPERATOR" "$AGENT_USER" "$MEMBER_USER" "$TRACE_GROUP"
 printf '   login before the groups apply (`newgrp` selects one group in one shell)\n'
+# **The connector reaches a line through its rule**, as the stand-in for
+# admin-con: the operator's sudo becomes the connector's user, and that user
+# runs `sudo -n`, which only the rule can satisfy.
+if [ "$ADMIN_BASE" = /etc/weaver/admin ]; then
+  check_verb=show
+  [ "$CONNECTOR_ROLE" = operator ] && check_verb=validate
+  said=$(sudo -n -u "$CONNECTOR_USER" sudo -n "$ADMIN_BINARY" "$check_verb" "$NAME" 2>&1) || true
+  printf '   %s ran %s through its rule: %s\n' "$CONNECTOR_USER" "$check_verb" "$(printf '%s\n' "$said" | tail -n 1)"
+fi
 printf '   validate it before loading:\n'
-printf '     sudo WEAVER_ADMIN_CONFIG=%s %s validate %s\n' "$ADMIN_BASE" "$PREFIX/bin/weaver-admin" "$NAME"
+printf '     sudo WEAVER_ADMIN_CONFIG=%s %s validate %s\n' "$ADMIN_BASE" "$ADMIN_BINARY" "$NAME"
+printf '   then: sudo deploy/verify-load.sh %s\n' "$NAME"

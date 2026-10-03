@@ -1127,10 +1127,11 @@ root, in the `load` verb, after section 4's inventory has passed and section 5 h
 opened the sink, and holding the invocation lock and the run lock it took, per section
 3's order: it prepares the runtime directory, stands the trace relay, starts the state
 member, and starts the worker under the agent's own account, each child inheriting the
-run lock's description at its fork, per section 3. Each is
-below, and `weaver-admin-systemd-contract` retired with the unit. The code act of #50
-removed `crates/weaver-admin/src/unit.rs`, and its deploy act removes the
-`weaver-worker@<agent>` naming from the deploy scripts.
+run lock's description at its fork, per section 3. Each is below, and
+`weaver-admin-systemd-contract` retired with the unit. The code act of #50 removed
+`crates/weaver-admin/src/unit.rs`, and its deploy act removes the units from the deploy
+scripts, which name `weaver-worker@<agent>` only to refuse a box whose agents still run
+under one, `update-stack.sh` before an install and `decommission.sh` before an archive.
 
 **The runtime directory is made by the start step, with its owner and mode stated**:
 `<coordination-root>/weaver-<agent>/`, `/run/weaver-<agent>/` by default, owned by the
