@@ -620,7 +620,9 @@ record with no reductions in it. This is why `AgentConfig` derives no `Default` 
 `parse` returns no partial value. **`restore` names a save point**, on the operator's
 ruling of 2026-10-02 on #58, which retires the record restore of 2026-09-04 (issue
 #432) and its cut. It may be absent because `weaver-state-PRD` section 4 rules what
-absence means: the load restores the latest save point published, and with none state is
+absence means: the load restores the latest save point published, the order that
+makes one latest being a durable publication ordinal the save-point code act elects and
+not a run reference, a name or a file time, carried on #1, and with none state is
 rebuilt from the trace offline. **Restoring needs a member to restore into**: where the
 declaration's store engine is `none`, no save point is selected, by name or by default,
 and a `restore` member present beside that engine refuses `ConfigInvalid` naming
