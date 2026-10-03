@@ -269,15 +269,15 @@ harness's own word: `Unloaded` before any enter or after a leave, `Idle` or `Act
 with the load's facts beside it where a run stands, read from the run and never from the
 record. **Those facts are `LoadFacts`, which overlaps the `load` event and is not its
 shape**, per `weaver-types-Spec` section 4.2: it carries the session, run and artifact
-the event carries in its envelope or not at all, and lacks the event's stack, lineage
-and prompt digest, so a consumer that stores both stores two shapes. Where the socket
-does not exist or nothing answers the dial, there is no exchange to open, and this crate
-reports `Unloaded` from that absence, which is the one place residency is read and it is
-read as the absence of a worker and not as a state. A name with no root refuses
-`NoSuchAgent` as every verb does, and whether a declaration validates stays `validate`'s
-own answer, since no verb chains another. No verb answers for more than the one agent
-named, admin being one agent's organ on the operator's ruling of 2026-10-01, and
-managing several WeaverWeb's or a separate application's.
+the event carries in its envelope or not at all, and lacks the event's stack, lineage,
+reset and prompt digest, so a consumer that stores both stores two shapes. Where the
+socket does not exist or nothing answers the dial, there is no exchange to open, and
+this crate reports `Unloaded` from that absence, which is the one place residency is
+read and it is read as the absence of a worker and not as a state. A name with no root
+refuses `NoSuchAgent` as every verb does, and whether a declaration validates stays
+`validate`'s own answer, since no verb chains another. No verb answers for more than the
+one agent named, admin being one agent's organ on the operator's ruling of 2026-10-01,
+and managing several WeaverWeb's or a separate application's.
 
 **The manager's three values stay the manager's and reach no answer.** `active`,
 `failed`, and `inactive` are residency and not lifecycle state, per the paragraph above,
