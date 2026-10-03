@@ -70,7 +70,7 @@ command lines with no caller-chosen argument, and is not resident while the agen
 serves. No supervisor is part of the agent. By the Spec
 merged in #72 (2026-10-03), the agent leaves systemd: admin's start step does custody
 itself, and restart or hardening belongs to whoever packages the agent. The code
-follows since #77 and #78. The deploy scripts still assume systemd units until #79, so
+follows since #77, with the relay in #80. The deploy scripts still assume systemd units until #79, so
 no box is redeployed from main before #79 lands. The verbs
 are the application layer's primitives, and their orchestration is interior to the
 agent. Every organ is one agent's own: a second agent gets its
