@@ -444,10 +444,11 @@ part way is what the load's check exists to catch. **The `restore` ask replaces 
 holdings from a save point in the room**, per the contract's seventh ask of 2026-10-02:
 the member opens the named file relative to its room's descriptor, refusing a name that
 is not a plain entry of the room, checks it and its schema as a load does, and only then
-swaps it in for the live database whole, answering
-`{"answer":{"restore":{"save-point":...,"run":...,"sequence":...,"digest":...}}}`, or
-drops the ask unanswered with the holdings as they stood. The distillates the stream
-carries after the ask land on the restored holdings.
+swaps it in for the live database whole, answering `{"answer":{"restore":{...}}}`
+carrying the `snapshot` answer's four members and `identity`, the prefix read from the
+restored holdings as the `identity` ask reads it, or drops the ask unanswered with the
+holdings as they stood. The distillates the stream carries after the ask land on the
+restored holdings.
 
 **Three protocol bounds are this crate's elections, each named with what its
 breach means, per the audit of 2026-08-26.** The answer ceiling is one

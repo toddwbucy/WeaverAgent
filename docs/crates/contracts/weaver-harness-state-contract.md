@@ -343,17 +343,24 @@ added 2026-10-02 on the operator's ruling on #58 that a live restore swaps state
 unloading and that the harness triggers it. The ask carries one member, `save-point`, a
 name the member's room holds, and the custodian reads only its own room for it, never a
 path the name could lead out of. The custodian replaces its holdings whole with the save
-point's, or leaves them as they stood, and the answer carries the same four members the
+point's, or leaves them as they stood. The answer carries the four members the
 `snapshot` answer carries, read from the save point, so the harness records which save
-point and which position on the trace before it acts. Every distillate the stream
-carries after the ask lands on the restored holdings. The ask parks never, and a restore
-that fails is not answered, the asker's bound converting the silence into the missing
-answer of section 5: the harness then flushes nothing, records the miss, and serves on
-the holdings the member still holds. On its answer the harness flushes the decode
-session to `keep = 0` through `weaver-harness-spu-decode-contract`'s existing cut, per
-`weaver-harness-Spec` section 6, and this seam carries nothing of the flush. A save
-point only in the operator's directory restores at a load, through the descriptor admin
-hands the member at spawn, and never through this ask.
+point and which position on the trace before it acts, and a fifth, `identity`, the
+prefix the save point holds: the turnless `message.system` events of its newest run that
+holds any, in landing order, served as the `identity` ask serves them, an empty list
+where it holds none. The live restore is the one serving path that reads a prefix from
+the store, because the save point's state was built under its prefix and a live restore
+is not a load, so the prompt file's authority at every load does not reach it. Every
+distillate the stream carries after the ask lands on the restored holdings. The ask
+parks never, and a restore that fails is not answered, the asker's bound converting the
+silence into the missing answer of section 5: the harness then flushes nothing, records
+the miss, and serves on the holdings the member still holds. On its answer the harness
+flushes the decode session to `keep = 0` through `weaver-harness-spu-decode-contract`'s
+existing cut, or, where the answered `identity` differs from the seated prefix, closes
+and reopens the decode session with it, per `weaver-harness-Spec` section 6, and this
+seam carries nothing of the flush. A save point only in the operator's directory
+restores at a load, through the descriptor admin hands the member at spawn, and never
+through this ask.
 
 A further ask name is a change under section 7 and does not exist until it merges there.
 

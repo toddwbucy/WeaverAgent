@@ -270,6 +270,15 @@ pub struct Elections {
 }
 
 pub struct Lineage {
+    pub save_point: String,
+    pub run: String,
+    pub sequence: u64,
+    pub turn: u64,
+    pub operator_supplied: bool,
+    pub built_from: Option<Branch>,
+}
+
+pub struct Branch {
     pub parent: String,
     pub run: String,
     pub through: u64,
@@ -955,9 +964,9 @@ to as well.
 kind**, on the operator's ruling of 2026-09-26 under epic #690 item C2.7. No load
 authors it since the operator's rulings of 2026-10-02 on #58, which retire the record
 restore, and it stays in the vocabulary so the records that carry it stay readable; the
-clause below records why it was shaped as it was. A restoring
-load seats the parent's conversation at the open beside the identity, per
-`weaver-harness-Spec` section 6.1. Until this kind the harness authored each restored
+clause below is the history of why it was shaped as it was and binds no new load. A
+restoring load under the retired record restore seated the parent's conversation at the
+open beside the identity. Until this kind the harness authored each restored
 message turnless under its turned kind, which the writer refused as it refuses any
 turnless user message, so a branch's record did not hold the conversation its model
 was opened with. **One kind serves every role, and the message carries the role and
@@ -1816,8 +1825,8 @@ the fact exists.
 - A restored message is recorded turnless under `message.restored` with the message
   whole, per section 3: the recorder refuses one carrying a turn or another kind's
   payload, watched to fail when the kind leaves `turn_forbidden` or the message
-  pairing row, and a restoring enter lands the restored exchange with no fault,
-  watched to fail when the harness authors it under the turned kinds again.
+  pairing row. The watch that a restoring enter lands the restored exchange with no
+  fault retires with the record restore, and the save-point code act removes it.
 - A score is recorded turnless with the verdict and the ratio's two terms, per section
   3: the recorder refuses one carrying a turn or another kind's payload, watched to fail
   when the kind leaves `turn_forbidden` or its pairing row, and the port records one per
