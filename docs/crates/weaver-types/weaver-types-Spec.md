@@ -300,7 +300,7 @@ opening, per `weaver-state-PRD` section 4, deciding none of them.
 
 **`[state-management]` is the declaration's table for the compiled loop's settings**,
 and its grammar is this crate's, on the operator's ruling of 2026-10-02 on #58's sixth
-question; its meaning is `weaver-harness-Spec`'s, with the loop. It is an optional
+question, and its meaning is `weaver-harness-Spec`'s, with the loop. It is an optional
 top-level table: absent, every setting stands at its compiled default. Its members
 arrive with the act that compiles the loop, each a typed key this section then names,
 and until then the table carries no key, so any member refuses `UnknownField` under the
@@ -629,7 +629,7 @@ and a `restore` member present beside that engine refuses `ConfigInvalid` naming
 `restore`, so no load names holdings that no member restored. Present, `save-point` is a
 bare file name in the declaration's own directory, judged as `identity-file` is,
 carrying no `/`, not `.` or `..`, not empty and with no control character, refusing
-`BadValue` naming `restore.save-point` otherwise; admin opens it under its own custody,
+`BadValue` naming `restore.save-point` otherwise. Admin opens it under its own custody,
 per `weaver-admin-Spec` section 4, and the harness never sees it. A save point the
 operator built offline from a record names that record and cut inside itself, not here,
 so a branch from a record is the builder's act and this member keeps one meaning.

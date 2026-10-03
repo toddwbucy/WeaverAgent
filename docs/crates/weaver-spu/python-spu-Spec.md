@@ -6,7 +6,7 @@
 **Document ID:** `python-spu-Spec`
 **Parent:** `weaver-spu-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** toddwbucy/WeaverTools-old2#756
+**Landing PR:** #45
 
 ---
 
@@ -245,7 +245,7 @@ seam.
 | --- | --- | --- | --- |
 | resolve | artifact.rs `resolve`: nothing at the path or a path through a file, a directory with no container or containers that are not one split, anything but a directory or a regular file | `resolve_directory`, `containers` | `artifact_unresolvable` |
 | | the same: any other failed look, a lookup the kernel refuses among them | | `artifact_unreadable` |
-| pin | artifact.rs `pin`: a reference in the split pattern pins its whole set, first shard first; a shard absent; any other failure to open, or a non-regular file | `split_members`, `containers`, `pin` | `artifact_unresolvable`; `artifact_unreadable` |
+| pin | artifact.rs `pin`: a reference in the split pattern pins its whole set, first shard first. A shard absent or not a regular file is one refusal, and any other failure to open or read its metadata is the other | `split_members`, `containers`, `pin` | `artifact_unresolvable` for an absent or non-regular shard, `artifact_unreadable` for any other failure |
 | header | artifact.rs `read_header`, step two: GGUF's walk with its caps, or safetensors' length-prefixed JSON, and the sidecars `config.json` and `tokenizer_config.json` where present beside the pinned container (`sidecar_dir_of`), all read by `serde_json` | `read_header`, `sidecar_dir_of`, `strict_json` | `artifact_unreadable` |
 | select | family `select`: `UnknownFamily`, `TemplateAbsent` | `select` over `REGISTRY` | `artifact_unreadable` |
 | width | family `judge_width`: `WidthNotDeclared` | the selected entries' widths | `device_cannot_admit` |
@@ -255,15 +255,15 @@ seam.
 | room | `judge_room_and_reach`, gpu/mod.rs `room_and_reach`: every assigned ordinal present (`Unreachable`), every device's room (`NoRoom`), every ordered pair's peer reach (`NoPeerAccess`) | the CPU experiment's ordinal, `room_and_reach` over torch's device layer | `device_cannot_admit` |
 | hash | artifact.rs `weights_hash`, before any device is taken (`weaver-spu-Spec` section 3) | `weights_digest` for a directory, `file_digest` for a file, by the resolution's kind | `artifact_unreadable` |
 | load | `load`: `BackendNotBuilt` for a GGUF container or a file reference this build does not serve | the same | `device_cannot_admit` |
-| | native `load`: more devices than it serves; `read_declaration` of `config.json` in `sidecar_dir`, the pinned container's directory, every sidecar of the load read there | one device; `strict_json` of `config.json` in `load_dir`, as are `AutoConfig` and `tokenizer.json` | `device_cannot_admit` |
+| | native `load`, two separate checks, either refusing on its own: more devices than it serves, or `read_declaration` of `config.json` in `sidecar_dir`, the pinned container's directory, every sidecar of the load read there | two separate checks: one device, or `strict_json` of `config.json` in `load_dir`, as are `AutoConfig` and `tokenizer.json` | `device_cannot_admit` |
 | | native `judge_family` on the declaration's `model_type`: `BackendDoesNotServe` | `same_key` against `qwen2` | `artifact_unreadable` |
 | | native `read_config`, `read_eos`, the tokenizer, the weights (`VarBuilder`, `ModelForCausalLM::new`, a tensor missing among them) | `AutoConfig` and a quantized config (the config's parse is python-spu's own, transformers' `AutoConfig`, per the operator's ruling of 2026-10-01), `read_eos`, `Tokenizer.from_file`, the model with its missing keys refused, placement, out of memory | `device_cannot_admit` |
 
 Three judgments are this build's own and sit at the load:
 - the family the header selected is the one it renders, qwen2, refused
-  `artifact_unreadable` otherwise, per the registry row of section 3.1;
+  `artifact_unreadable` otherwise, per the registry row of section 3.1,
 - its renderer's markers each promote to one token, refused `artifact_unreadable`
-  (the Rust SPU meets an unpromoted turn close at the open, as a fault);
+  (the Rust SPU meets an unpromoted turn close at the open, as a fault),
 - it serves one device where the native backend serves two, refused
   `device_cannot_admit` as the native's own width refusal is.
 

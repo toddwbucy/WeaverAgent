@@ -6,7 +6,7 @@
 **Document ID:** `weaver-state-Spec`
 **Parent:** `weaver-state-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #740
+**Landing PR:** #58
 
 ---
 
@@ -327,14 +327,14 @@ under a finished name.
 save point through the descriptor into its in-memory database and holds its stamp, per
 the operator's rulings of 2026-10-02 on #58. After an unclean stop that is the latest
 known-good save point, and the harness records the reset on the trace, so a rebuild
-honours it; nothing the record holds past the stamp lands by default. **A save point
+honours it, and nothing the record holds past the stamp lands by default. **A save point
 whose bytes fail never reaches the member**: admin judges its check and stamp at the
 inventory, per `weaver-admin-Spec` section 4, and refuses the load. **A save point that
 disagrees with the opener's schema is refused on the `restored` ask**: the member holds
 the restore's outcome from the opener on, and answers the enter's `restored` ask of the
 contract's section 2 with the restored lineage or with a refusal naming the schema
 mismatch, so the harness refuses the enter before it authors `load` and no `load` event
-claims a lineage the holdings did not come from; the operator names another save point
+claims a lineage the holdings did not come from. The operator names another save point
 through `restore` or rebuilds one. **Where the descriptor is absent the member
 stands empty**, which is an agent's first load. **A rebuild from the trace is the
 offline save-point builder's**, per `weaver-state-PRD` section 3 and the operator's
@@ -701,14 +701,14 @@ code act that lands it.
   the rest, then stands a second store from the save point and a third from the
   record rebuilt through the save point's stamp with no save point, and requires the
   second and third to answer every ask alike and to hold the same rows, table by
-  table, the loop's schema included; a live restore of the same save point on the
+  table, the loop's schema included, and a live restore of the same save point on the
   first store must hold the same. The perturbations are the stamp written one
   position late and one position early, each naming a position the holdings do not
   cover, and a rebuild that ignores a reset the record names: each must fail the
   equality.
 - A save point that fails its check is not loaded, watched at a live restore by one
   truncated part way and by one with a byte flipped, each of which must leave the
-  holdings standing; at a load the same two are admin's to refuse, per
+  holdings standing. At a load the same two are admin's to refuse, per
   `weaver-admin-Spec` section 4. The perturbation drops the check, and a torn save
   point is read as holdings.
 - A save point under another schema is refused on the `restored` ask, watched by a
@@ -810,7 +810,7 @@ operator's ruling of 2026-10-02 moves that landing toward the loop's schema.
   remains is what an operator does to retire an agent's state: the save points are
   files in the operator's own directory and the member's room, and deleting them
   makes the next load a full rebuild rather than an empty store, the trace still
-  holding everything; a fresh state is a new agent, on the operator's ruling of
+  holding everything. A fresh state is a new agent, on the operator's ruling of
   2026-10-02 on #58.
 - **The member's account name and the territory's exact key.** Deployment
   facts, elected where the spawn path lands, the way every path in the

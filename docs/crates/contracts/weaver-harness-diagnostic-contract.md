@@ -5,7 +5,7 @@
 **Date filed:** 2026-08-27
 **Document ID:** `weaver-harness-diagnostic-contract`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #366
+**Landing PR:** #53
 
 ---
 

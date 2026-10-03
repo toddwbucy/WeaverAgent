@@ -9,7 +9,7 @@ duplicate a record that already has a home.
 **Document ID:** `basic-inference-loop`
 **Parent:** `weaver-harness-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #317
+**Landing PR:** #58
 
 ## Rulings of 2026-07-31, landed by the batch of this date
 

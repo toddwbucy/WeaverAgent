@@ -337,7 +337,7 @@ own, the bind-and-listen act the earlier form interleaved here having moved to
 the worker with the inversion. **The save-point publication of section 6 opens the
 validate step**, before the inventory selects the save point to restore, so a save
 point an unclean stop left in the member's room is published and selectable by the
-load that follows it; it adds no step to the seven, being the inventory's first read
+load that follows it. It adds no step to the seven, being the inventory's first read
 of what the load restores. Each step's failure returns a typed
 `lifecycle-refusal` and enters the rollback below carrying the step's name.
 
@@ -378,7 +378,7 @@ to: admin-validate-starts-no-process
 Direct leave and await the aggregate, stop the unit through section 6's
 interface, publishing the member's finished save points per section 6 once the stop
 is confirmed and the member has stopped, and answer provisioned-and-unloaded **only once
-the stop has been confirmed**; the publication adds no step to the three, being the
+the stop has been confirmed**. The publication adds no step to the three, being the
 second step's tail. A refusal on leave, `ActivityNotAtRest` above all, returns to the
 operator unchanged and answers nothing further.
 
@@ -665,7 +665,7 @@ another. What the member alone can judge, the save point's schema against the lo
 answers on the enter's `restored` ask of `weaver-harness-state-contract` section 2.
 **The clean-unload marker is this crate's**: at every load it writes, in the agent's
 config root under its own custody, a marker naming the run it mints as open, and a clean
-unload marks that run closed; a load that finds a marker naming a run still open
+unload marks that run closed. A load that finds a marker naming a run still open
 resolves the enter's `reset`, which rides apart from the lineage and whether or not a
 save point stands, to that run, `NoCleanUnload`, or `UnitFailed` where the
 unit's result corroborates a failure, per `weaver-types-Spec` section 4. An agent's
@@ -1329,9 +1329,9 @@ judged, so a link or a planted file in the room cannot make a root step read a p
 member chose.
 The copy is written under a temporary name, owned by the uid the root's `operator` key
 names and mode `0600`, its owner and mode verified through the open file, then renamed
-to a new name stamped with the run and sequence it covers, overwriting nothing; only
+to a new name stamped with the run and sequence it covers, overwriting nothing. Only
 then is the member's copy removed, so a publication cut short leaves the member's copy
-standing and is retried at the next verb; one an unclean stop left behind is
+standing and is retried at the next verb. One an unclean stop left behind is
 published at the next load. That directory stays `0700` to the operator, so a save
 point on demand lands with the operator at the next verb, and a live restore of one the
 member still holds reads the member's own room with no part of this crate. **This is
@@ -1837,7 +1837,7 @@ operator's to place, and that none of them is discovered at runtime by searching
 the tools, the coordination root and the headroom, are copied into each root by the
 deployment scripts from a stack record of their own that this crate never reads, so an
 agent's configuration is that agent's even where two roots carry the same values. The
-installed program files may stand once on disk and be named by every root; the
+installed program files may stand once on disk and be named by every root, while the
 configuration and the processes are each agent's own. **The operations log is one per
 agent**, at the path the agent's `log-path` names. Managing several agents, listing
 them or holding a map across them, is not this crate's and belongs to WeaverWeb or a

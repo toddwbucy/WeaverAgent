@@ -31,8 +31,8 @@ name, every agent with its accounts and declaration, the transient
 territories, record and log directories, and the store's roles and databases.
 Discovery is by rule, not by one layout: a key root is any directory under
 `/etc/weaver` holding a `worker-binary` or an `allow-list` (an agent's root, the stack
-record, or the box-wide configuration of the layout before 2026-10-01); the agents are
-the agent roots' names, the old allow-lists' names and the old declarations; the
+record, or the box-wide configuration of the layout before 2026-10-01). The agents are
+the agent roots' names, the old allow-lists' names and the old declarations, and the
 databases and roles are `weaver_<agent>` for those agents and whatever their
 declarations name. A `weaver-*` account or database no agent found claims is printed
 as left alone and never touched. If it lists something this runbook does not mention,
@@ -43,7 +43,7 @@ the runbook is what gets amended.
 | Piece | Where | Made by |
 |---|---|---|
 | Stack record: the box-wide defaults, one file per key, read by the scripts and never by admin | `/etc/weaver/stack/` | bootstrap |
-| Admin base, empty until an agent is made | `/etc/weaver/admin/` (root 0755; `WEAVER_ADMIN_CONFIG` names another) | bootstrap |
+| Admin base, empty until an agent is made | `/etc/weaver/admin/` (root 0755, another if `WEAVER_ADMIN_CONFIG` names one) | bootstrap |
 | Agent root: the agent's admin configuration, one file per key, copied from the stack record, plus its own `log-path` and its declaration `agent.toml` | `/etc/weaver/admin/<name>/` (root 0755, files 0644) | create-agent |
 | Members: `worker pyworker weaver-admin weaver-gate weaver-spu weaver-state` | `<prefix>/bin/` | bootstrap, update-stack |
 | Engine libraries `libggml*`, `libllama*` | `<prefix>/lib/`, reached by `/etc/ld.so.conf.d/weaver.conf` and by `LD_LIBRARY_PATH` in `unit-properties` | bootstrap |
@@ -60,7 +60,7 @@ the runbook is what gets amended.
 > **`decommission.sh` does not yet understand the per-agent layout.** It was written for
 > the box-wide layout before 2026-10-01 (one `/etc/weaver/admin` with an `allow-list`).
 > **Do not run it on a box migrated to `/etc/weaver/admin/<agent>/` roots** until
-> toddwbucy/WeaverAgent#35 lands; until then take agents down by hand, per
+> toddwbucy/WeaverAgent#35 lands. Until then take agents down by hand, per
 > `HowToDeployANewAgent.md` section 7. On a box still on the box-wide layout it runs as
 > described below.
 
@@ -80,7 +80,7 @@ stop the unit if admin will not. The archive holds:
   library and model, the store's roles and the two authentication files' weaver
   lines, and the mode of everything archived.
 - One `.tar.zst` per piece, owners, ACLs and xattrs preserved: `etc-weaver`,
-  `ld-so-conf`, `opt-<prefix>` (bin, lib, python-spu, the backup-* directories;
+  `ld-so-conf`, `opt-<prefix>` (bin, lib, python-spu, the backup-* directories,
   never models),
   `var-lib-weaver`, `log-weaver`, `agent-config-<dir>` (declarations and traces),
   `home-weaver-users`, `tmp-weaver`.
@@ -180,8 +180,8 @@ stack record's `agent-directory`, passage by group with no access entries) and i
 the role, database and two authentication lines, and the agent root staged under a
 dot-name: every key copied from the stack record, `log-path`, and the declaration as
 `agent.toml`. It then proves the boundary (for either engine, the member cannot read the
-trace; for sqlite, the member can write its state
-room and the agent's own uid cannot enter it; for postgres, the member reaches the
+trace, for sqlite the member can write its state
+room and the agent's own uid cannot enter it, and for postgres the member reaches the
 database and the agent's own uid does not), and only then moves the root into place,
 which is the admission. The operator's three new group memberships need a fresh login
 before they apply (`newgrp` selects one group in one shell).
@@ -314,7 +314,7 @@ installed. `<prefix>` is the install prefix, `/opt/weaver` by default.
    `agent-directory` is where `create-agent.sh` makes new territories, and it must stand
    root-owned and writable by no group or other, so it is a new root-held base and never
    the old operator-owned declaration directory. Existing territories stay where they
-   are, their sink paths unchanged in their declarations; lay each out per step 4a.
+   are, their sink paths unchanged in their declarations. Lay each out per step 4a.
 
 4a. **An existing territory with a state member** (made before 2026-10-02) may be
    grouped to its member and setgid, which lets the member read the trace, its ingress
@@ -340,6 +340,6 @@ installed. `<prefix>` is the install prefix, `/opt/weaver` by default.
 5. Install the new admin (`deploy/update-stack.sh --install`), which validates and
    loads every agent root before it reports the box current. The old box-wide log
    `/var/log/weaver/admin-operations.ndjson` stays where it is as the record of what
-   came before; each agent's acts from here on are in its own `admin.log`. When the
+   came before, and each agent's acts from here on are in its own `admin.log`. When the
    box has been verified, `/etc/weaver/admin.before-migration` can be archived and
    removed.

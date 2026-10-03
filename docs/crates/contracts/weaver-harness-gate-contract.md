@@ -10,7 +10,7 @@ the lower. The exchanges that carry work arrive with the token workflow.
 **Document ID:** `weaver-harness-gate-contract`
 **Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
-**Landing PR:** #647
+**Landing PR:** #53
 
 ---
 

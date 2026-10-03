@@ -7,7 +7,7 @@ build order. Code is written against it under the gates of Working Process secti
 **Document ID:** `weaver-trace-Spec`
 **Parent:** `weaver-trace-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #734
+**Landing PR:** #58
 
 ---
 
@@ -972,7 +972,7 @@ to as well.
 **A restored conversation is recorded under `message.restored`, the twenty-third
 kind**, on the operator's ruling of 2026-09-26 under epic #690 item C2.7. No load
 authors it since the operator's rulings of 2026-10-02 on #58, which retire the record
-restore, and it stays in the vocabulary so the records that carry it stay readable; the
+restore, and it stays in the vocabulary so the records that carry it stay readable. The
 clause below is the history of why it was shaped as it was and binds no new load. A
 restoring load under the retired record restore seated the parent's conversation at the
 open beside the identity. Until this kind the harness authored each restored

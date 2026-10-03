@@ -8,7 +8,7 @@ separately.
 **Document ID:** `weaver-harness-trace-contract`
 **Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
-**Landing PR:** #713
+**Landing PR:** #58
 
 **This is a contract, not a Spec.** It states the protocol two parties agree to. It
 names no Rust type, no module, and no function, because how either party implements

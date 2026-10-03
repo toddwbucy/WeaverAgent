@@ -12,7 +12,7 @@ the three restates another.
 **Document ID:** `weaver-harness-spu-classify-contract`
 **Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
-**Landing PR:** #300
+**Landing PR:** #53
 
 ---
 

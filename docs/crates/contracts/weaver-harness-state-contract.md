@@ -5,7 +5,7 @@
 **Date filed:** 2026-08-18
 **Document ID:** `weaver-harness-state-contract`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #740
+**Landing PR:** #58
 
 ---
 
@@ -321,7 +321,7 @@ of the two asks the dead-peer clause of section 5 does not convert**, `restored`
 the other: a missed answer refuses the enter, because a replay whose bounding cannot be
 read is not a replay with no bounding. **Where the preload door stands the ask parks on
 the seal**, per the clause on the parked replay ask above, so it never answers from a
-store the driver has not yet sealed; where no door stands it answers immediately,
+store the driver has not yet sealed. Where no door stands it answers immediately,
 parking never, like `shape`.
 
 **The `snapshot` ask writes a save point and answers where it stands**, added 2026-10-02
@@ -332,8 +332,8 @@ serving leave and on the operator's demand, and never under a diagnostic binding
 whole of its holdings with the schema they stand under as a new file in its own room,
 the territory's `state/`, never overwriting one that stands, per `weaver-state-PRD`
 section 4, and admin publishes each finished one into the operator's directory at the
-next load or unload. The answer carries four members: `save-point`, the name it wrote;
-`run` and `sequence`, the trace position of the last distillate it holds; and `digest`,
+next load or unload. The answer carries four members: `save-point`, the name it wrote,
+`run` and `sequence`, the trace position of the last distillate it holds, and `digest`,
 the digest of its bytes, which the harness records on the trace. It answers against the
 holdings the stream carried before it, like `shape`, and parks never. A write that fails
 is not answered and leaves no file under a finished name, the asker's bound converting
@@ -359,7 +359,7 @@ parks never, and a restore that fails is not answered, the asker's bound convert
 silence into the missing answer of section 5: the harness then flushes nothing, records
 the miss, and serves on the holdings the member still holds. An answer lost after the
 member swapped its holdings leaves the restore indeterminate, the holdings restored and
-the decode cache not flushed; what an indeterminate restore owes, a stopped run or a
+the decode cache not flushed. What an indeterminate restore owes, a stopped run or a
 commit step that keeps the swap invisible until acknowledged, is a named design item
 of the save-point code act, carried on #1. On its answer the harness
 flushes the decode session to `keep = 0` through `weaver-harness-spu-decode-contract`'s
@@ -529,8 +529,8 @@ bound. All three land with the loop act that shapes the surface.
 
 The snapshot and restore asks are testable against the living pair: a real load, real
 events landed, the snapshot ask answered with the position of the last distillate it
-carried before the ask and a name no earlier save point holds; a live restore of that
+carried before the ask and a name no earlier save point holds, a live restore of that
 save point after further landings answering the same position and holding what the
-first held at the ask; a second load restoring it through the spawn descriptor holding
-the same; and a rebuild from the record through the stamped position holding the same,
+first held at the ask, a second load restoring it through the spawn descriptor holding
+the same, and a rebuild from the record through the stamped position holding the same,
 ask for ask. They land with the code act that stands the store primitive.

@@ -12,7 +12,7 @@ conforms to.
 **Document ID:** `weaver-traits-PRD`
 **Parent:** `weaver-agent-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #298
+**Landing PR:** #53
 
 ---
 
