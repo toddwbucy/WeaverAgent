@@ -203,6 +203,8 @@ class PlanTests(unittest.TestCase):
         (self.root / "etc" / "sudoers.d").mkdir(parents=True)
         (self.root / "etc" / "sudoers").write_text("@includedir /etc/sudoers.d\n")
         self.rule = self.root / "etc" / "sudoers.d" / "weaver-m1"
+        # The box runs systemd as its manager, unless a test removes the mark.
+        (self.root / "run" / "systemd" / "system").mkdir(parents=True)
         self.stack = self.root / "stack"
         self.stack.mkdir()
         self.logs = self.root / "log"
@@ -249,7 +251,7 @@ class PlanTests(unittest.TestCase):
   local arg
   fixture_mapped=()
   for arg in "$@"; do
-    case "$arg" in /home/*) arg="$FIXTURE_ROOT$arg";; esac
+    case "$arg" in /home/*|/run/systemd/system) arg="$FIXTURE_ROOT$arg";; esac
     fixture_mapped+=("$arg")
   done
 }
@@ -1199,6 +1201,17 @@ esac
                 self.assertIn(said, result.stderr)
                 self.assertFalse(any(c[0] == "cargo" for c in self.calls()))
 
+    def test_stack_plans_on_a_box_whose_systemd_is_not_running(self):
+        # A systemctl client beside another init reaches no manager, so the box
+        # has no unit of the old layout and the plan goes on. Perturbation: drop
+        # the sd_booted mark's check, and the failed look refuses the run.
+        (self.root / "run" / "systemd" / "system").rmdir()
+        self.env["UNITS_FAIL"] = "1"
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("cannot ask systemd", result.stderr)
+        self.assertFalse(any(c[:2] == ["systemctl", "list-units"] for c in self.calls()))
+
     def test_stack_reads_each_declaration_from_its_directory(self):
         # The declaration lives in the directory the root names. One the
         # operator cannot read refuses by name and is never left out.
@@ -1376,6 +1389,25 @@ class RoundOneOf79Tests(unittest.TestCase):
         self.assertLess(door, again)
         self.assertLess(again, refusal)
         self.assertLess(refusal, first_destructive)
+
+    def test_the_archive_shuts_the_delegated_door_and_asks_again(self):
+        # The snapshot is taken with every rule disabled and every agent asked
+        # afresh, and a run found puts the rules back and refuses before the
+        # archive directory is touched. A disabled rule is found again by the
+        # purge. Perturbations: drop the archive's query, or archive before it,
+        # and this fails.
+        script = (DEPLOY / "decommission.sh").read_text()
+        archive = script[script.index('if [ "$MODE" = archive ]; then'):script.index(" 3. purge\n")]
+        door = archive.index('held="$(dirname "$f")/.${f##*/}.decommissioning"')
+        again = archive.index("\n  query_runs\n")
+        restore = archive.index('mv -T -- "${entry%%|*}" "${entry##*|}"')
+        refusal = archive.index('die "agents run or cannot be read')
+        first_write = archive.index('as_op mkdir -p "$DEST"')
+        self.assertLess(door, again)
+        self.assertLess(again, restore)
+        self.assertLess(restore, refusal)
+        self.assertLess(refusal, first_write)
+        self.assertIn("-name '.weaver-*.decommissioning'", script)
 
     def test_query_runs_reads_each_agent_now(self):
         # Stopped, then running, then stopped again, each read as it is now.

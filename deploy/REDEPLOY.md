@@ -73,7 +73,11 @@ operator, through `sudo -u`. Pass a directory the operator can create or already
 Refuses while any agent runs: unload each with `sudo <prefix>/bin/weaver-admin unload
 <name>` first. An agent `show` cannot answer for refuses too, never read as stopped. On
 a box from before #50 it also refuses while any `weaver-worker@` unit is active: unload
-those with the admin that started them. The archive holds:
+those with the admin that started them. **The snapshot is taken behind a shut door**:
+each sudo rule is first moved to `.weaver-<agent>.decommissioning`, a name sudo never
+reads, and every agent is asked again, a run found restoring the rules and refusing. The
+rules stay disabled until the purge removes them, and moving one back serves its agent
+again without a purge. The archive holds:
 
 - `box-facts.txt`: accounts, groups, units, sha256 of every installed binary,
   library and model, the store's roles and the two authentication files' weaver

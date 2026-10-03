@@ -139,8 +139,9 @@ strip_suffix() {
 }
 for u in "${WEAVER_USERS[@]}"; do AGENTS["$(strip_suffix "$u")"]=1; done
 for g in "${WEAVER_GROUPS[@]}"; do AGENTS["$(strip_suffix "$g")"]=1; done
-# The sudo rules create-agent.sh installs, root's to read.
-mapfile -t SUDO_RULES < <(find /etc/sudoers.d -maxdepth 1 -type f -name 'weaver-*' 2>/dev/null | sort)
+# The sudo rules create-agent.sh installs, root's to read, and any an archive of
+# this script disabled for its snapshot (a dot-name sudo never reads).
+mapfile -t SUDO_RULES < <(find /etc/sudoers.d -maxdepth 1 -type f \( -name 'weaver-*' -o -name '.weaver-*.decommissioning' \) 2>/dev/null | sort)
 
 say "config roots"
 for r in "${CONFIG_ROOTS[@]}"; do plan "$r  (allow-list: $(read_key "$r" allow-list | tr '\n' ' '))"; done
@@ -288,6 +289,30 @@ if [ "$MODE" = archive ]; then
   [ ${#ACTIVE_UNITS[@]} -eq 0 ] || die "units still active: ${ACTIVE_UNITS[*]}. Unload them (weaver-admin unload <agent>) or stop them, then rerun"
   [ ${#RUNNING[@]} -eq 0 ] || die "agents still run or cannot be read: ${RUNNING[*]}. Unload each (weaver-admin unload <agent>), then rerun"
   [ -e "$DEST/SHA256SUMS" ] && die "$DEST already holds an archive; name another directory"
+  # **The delegated door shuts for the snapshot** (Codex on #79): each rule is
+  # moved to a dot-name sudo never reads, so no connector can start a run
+  # while tar and pg_dump copy, then every agent is asked again. A run found
+  # puts the rules back and refuses. Otherwise they stay disabled, archived
+  # under their disabled names, until the purge removes them. To serve again
+  # without purging, move each `.weaver-<agent>.decommissioning` back to
+  # `weaver-<agent>`.
+  say "the delegated door, shut for the snapshot"
+  MOVED=()
+  HELD=()
+  for f in "${SUDO_RULES[@]}"; do
+    case "${f##*/}" in .*) HELD+=("$f"); continue ;; esac
+    held="$(dirname "$f")/.${f##*/}.decommissioning"
+    mv -T -- "$f" "$held" || die "cannot disable $f"
+    MOVED+=("$held|$f"); HELD+=("$held")
+    plan "disabled $f"
+  done
+  SUDO_RULES=("${HELD[@]}")
+  say "runs, asked again"
+  query_runs
+  if [ ${#RUNNING[@]} -gt 0 ]; then
+    for entry in "${MOVED[@]}"; do mv -T -- "${entry%%|*}" "${entry##*|}" && plan "restored ${entry##*|}"; done
+    die "agents run or cannot be read: ${RUNNING[*]}. The sudo rules are restored; unload each, then rerun"
+  fi
   as_op mkdir -p "$DEST" || die "the operator cannot create $DEST"
   as_op test -w "$DEST" || die "$DEST is not writable by $OPERATOR"
   # A run that died part way leaves files here the operator may not own;

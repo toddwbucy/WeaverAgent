@@ -136,9 +136,12 @@ done
 # serves would outlive the install, unreachable by the new `unload`. Unload
 # each agent with the admin that started it, then rerun (deploy/REDEPLOY.md
 # section 8).
-# A box without systemd has no such unit. One whose systemctl cannot answer
-# refuses, a failed look never read as no unit.
-if command -v systemctl >/dev/null; then
+# A box without systemd has no such unit: no `systemctl`, or none running as
+# the system manager, which `/run/systemd/system` marks (sd_booted(3)), since
+# a client installed beside another init cannot reach a manager (Codex on
+# #79). One whose systemd cannot answer refuses, a failed look never read as
+# no unit.
+if command -v systemctl >/dev/null && [ -d /run/systemd/system ]; then
   listing=$(systemctl list-units 'weaver-worker@*' --state=active --no-legend --plain 2>&1) \
     || die "cannot ask systemd whether units of the layout before #50 still serve: $listing"
   units=$(printf '%s\n' "$listing" | awk 'NF {print $1}' | tr '\n' ' ')
