@@ -13,7 +13,7 @@ conforms to.
 **Parent:** `weaver-agent-PRD`
 **Depends on:** `weaver-traits`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #57
+**Landing PR:** #63
 
 ---
 
@@ -563,7 +563,7 @@ the enumeration open rather than naming a consumer whose contract does not exist
 **Admin's two sockets read `peer-identity` again from 2026-10-02**, on the operator's
 rulings on #50, and judge it against the agent's role list, a group granted a set of
 verbs, rather than by the shared allow-and-deny rule, so they draw the identity type and
-not the predicate; `weaver-types-Spec` section 3.1 carries their request shapes.
+not the predicate, and `weaver-types-Spec` section 3.1 carries their request shapes.
 
 **Alongside the identity type, this crate carries the authorization predicate, and
 that is a deliberate exception to holding only data.** The rule that decides whether a

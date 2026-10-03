@@ -7,7 +7,7 @@ build order. Code is written against it under the gates of Working Process secti
 **Document ID:** `weaver-trace-Spec`
 **Parent:** `weaver-trace-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #58
+**Landing PR:** #63
 
 ---
 
@@ -268,6 +268,14 @@ pub struct Elections {
     pub lineage: Option<Lineage>,
     pub reset: Option<Reset>,
     pub stack: BTreeMap<String, String>,
+    pub boundary: String,
+    pub cause: Cause,
+}
+
+pub struct Cause {
+    pub uid: u32,
+    pub groups: Vec<u32>,
+    pub principal: Option<String>,
 }
 
 pub struct Lineage {
@@ -304,6 +312,7 @@ pub struct StoreIdentity {
 
 pub struct UnloadClose {
     pub grant_surface: GrantSurface,
+    pub cause: Cause,
 }
 
 pub enum GrantSurface {
@@ -345,7 +354,7 @@ pub struct ClassifyScored {
 #[serde(tag = "close", rename_all = "snake_case")]
 pub enum TurnClose {
     Clean,
-    Stopped { reason: StopReason },
+    Stopped { reason: StopReason, cause: Option<Cause> },
 }
 ```
 
@@ -813,6 +822,21 @@ without a deposit beside it. Both ride the `Elections` payload on the drift reas
 above, and a record older than this act lacks the members, which reads as those facts
 being unrecoverable and never as a default. Neither is read from the deployment: the
 harness authors what the enter carried, as it authors the store's identity.
+
+**The `load` event declares its boundary and the cause of every change to the agent**,
+as of 2026-10-03, on the operator's rulings on #63's third and sixth questions, per the
+charter's section 3.1. `boundary` is sha256 hex of the agent's `roles.toml` as admin
+read it at the inventory, copied from the enter. It is **marked boundary and never
+constitution**: it says who could reach the run from outside, and it joins neither the
+declaration's digest nor the tuple, so granting access never makes the record another
+agent's. `cause` is who changed the agent: the caller's uid and groups as the kernel's
+peer credential gave admin, and the principal the caller claimed, verbatim, capped at
+256 bytes, a claim and never an authorization input. It rides the `load` event, the
+`unload` event's `UnloadClose`, and a turn closed by the operator's stop, where
+`Stopped` carries it and every other stop reason carries none. The harness authors all
+three from what admin handed it, admin never writing this record. A read or a refusal at
+admin's sockets changes nothing in the agent and is admin's operations log's, never the
+trace's.
 
 **The `load` event names its declaration and its prompt file by digest**, the first as
 of 2026-09-04 per issue #435 and the second as of 2026-10-02, per the charter's section

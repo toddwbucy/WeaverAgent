@@ -12,7 +12,7 @@ reshaped this charter are recorded in it rather than pending against it, and sec
 **External boundaries:** `weaver-admin-operator-contract` for the record's exit and
 `weaver-admin-systemd-contract` for the unit, both parties outside the program
 **Editorial:** Per the Working Rules.
-**Landing PR:** #57
+**Landing PR:** #63
 
 ---
 
@@ -957,25 +957,26 @@ on the operator's rulings of 2026-10-02 on #50. At the shell the role of section
 the crate with root: a verb and an agent name in, a typed answer or a typed
 `lifecycle-refusal` out, the exit status agreeing with the answer. At the agent's
 lifecycle socket a caller holding a granted role sends one request line, a verb and an
-optional claim of the person it acts for, and receives the same answer object; at the
-agent's trace socket a caller holding observer or wider reads the record as a read-only
-stream from a position it names. Both sockets are held by the init system and start the
-crate as root per connection, so no standing process of admin's is added, and the
-caller's admission is the kernel's peer credential against the agent's role list. It
-reports the agent's state, drives the three verbs, and conveys the operator's intent to
-stop across the contract's stop exchange. It answers for the one agent it is invoked for
-and lists no others, since there are no others in its domain. It carries no work, per
-section 3. The socket, the group, and the peer-credential check the earlier form of this
-section carried retired with the recut of 2026-08-05, because a surface that
-authenticated the operator to a service has no subject when the operator is root running
-the tool. A remote console brings the subject back, which is #50's measurement: a
-connector acting for a person cannot hold root without putting the box's root one parser
-from the network, so the sockets return with a role as their subject and root never
-handed to the caller. What state an agent is in between invocations is the init system's
-answer, which `show` consults rather than shadows. The trace's exit remains the
-contracted external boundary, governed by `weaver-admin-operator-contract`, which the
-recut narrows to that boundary: the stream that crosses out, its sink shapes, and the
-custody either side may rely on.
+optional claim of the person it acts for, and receives the same answer object. At the
+agent's trace socket exactly one declared reader, the agent's own admin-con, reads the
+record as a read-only stream from a position it names, fan-out to further readers being
+WeaverWeb's and never the box's (the operator's rulings of 2026-10-03 on #63). Both
+sockets are held by the init system and start the crate as root per connection, so no
+standing process of admin's is added, and the caller's admission is the kernel's peer
+credential against the agent's role list. It reports the agent's state, drives the three
+verbs, and conveys the operator's intent to stop across the contract's stop exchange. It
+answers for the one agent it is invoked for and lists no others, since there are no
+others in its domain. It carries no work, per section 3. The socket, the group, and the
+peer-credential check the earlier form of this section carried retired with the recut of
+2026-08-05, because a surface that authenticated the operator to a service has no
+subject when the operator is root running the tool. A remote console brings the subject
+back, which is #50's measurement: a connector acting for a person cannot hold root
+without putting the box's root one parser from the network, so the sockets return with a
+role as their subject and root never handed to the caller. What state an agent is in
+between invocations is the init system's answer, which `show` consults rather than
+shadows. The trace's exit remains the contracted external boundary, governed by
+`weaver-admin-operator-contract`, which the recut narrows to that boundary: the stream
+that crosses out, its sink shapes, and the custody either side may rely on.
 
 **Reading and analysis of finished records is not this crate's, and not this
 repository's.** An earlier reading named `weaver-admin-tools` a member of this domain,

@@ -7,7 +7,7 @@ agent. Code is written against it under the gates of Working Process section 6.
 **Document ID:** `weaver-admin-Spec`
 **Parent:** `weaver-admin-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #65
+**Landing PR:** #63
 
 ---
 
@@ -186,7 +186,7 @@ caller holding a role rather than root: a lifecycle socket carrying the verbs an
 trace socket carrying a read-only stream of the record, each held by the init system per
 agent and starting this binary as root for each connection, per
 `weaver-admin-systemd-contract` section 2. The socket this section carried until
-2026-08-05 retired with the service account; these are not it returning, because no
+2026-08-05 retired with the service account, and these are not it returning, because no
 standing service of admin's exists and none is added.
 
 **At the command line the verb and its agent arrive as arguments.** One verb per
@@ -222,49 +222,77 @@ from: admin-runs-as-root-or-performs-nothing
 to: axiom-floor-is-vocabulary-behavior-is-socket
 ```
 
-**At the lifecycle socket, authorization is a role, judged by the peer credential
-before the request is read.** On the operator's ruling of 2026-10-02 on #50 the agent's
-root-owned configuration root carries a role list mapping a group to the verbs it
-permits, per `weaver-types-Spec` section 3.1, with two roles to start: observer, `show`
-and `grants`; operator, adding `validate`, `load`, `unload` and `stop`. On each
-connection this binary, started as root in socket mode with the accepted connection,
-reads the peer's uid and groups from the kernel (`SO_PEERCRED`, and `SO_PEERGROUPS` for
-the supplementary groups), never from the request and never by a lookup a caller could
-influence, and admits the peer only if one of its groups holds a role on this agent. It
-then reads one request line, `LifecycleRequest` of `weaver-types-Spec` section 3.1, and
-**a verb outside the peer's roles refuses `Unauthorized` before anything is touched**,
-written to the operations log of section 8 with the peer's uid, the verb, and the
-principal the request claimed. An admitted verb runs the same verb code the command line
-runs, against the agent the socket's unit instance names, and writes one answer line,
-the same `lifecycle-answer` or `lifecycle-refusal` object the command line writes, so a
-caller parses one form whichever door it used. The principal claim of #51 is logged with
-the verb and read by nothing that decides. **`grants`** answers the verbs the peer's
-roles permit on this agent and the time of the observation, per #52, and is the one verb
-the command line does not need, root holding them all.
+**The sockets stand per agent and their group is that agent's alone**, on the operator's
+ruling of 2026-10-03 on #63's first question: `/run/weaver-<agent>/admin.sock` and
+`/run/weaver-<agent>/trace.sock`, root-owned, mode `0660`, grouped to a per-agent access
+group `weaver-<agent>-admin` that only that agent's own connector joins. The socket's
+group decides who may connect at all, and the role list decides what a connected
+caller's groups may do. **No group is ever shared across agents**, because a shared
+group would let one agent's connector reach another agent's sockets, against
+individuation and the ruling that a connector is one agent's own appendage
+(toddwbucy/WeaverTools#6). **Before serving a byte, this binary checks the socket it was
+handed**, on the ruling of the same date on the fifth question: one `fstat` of the
+descriptor the init system passed, which must be owned by root, grouped to
+`weaver-<agent>-admin` and of mode `0660`. Anything else refuses, is logged with what
+was found, and serves nothing, so a misconfigured unit never fails silently by serving
+callers it should not.
+
+**At the lifecycle socket, authorization is a role, judged by the peer credential before
+the request is read.** The agent's role list, `roles.toml` in its root, per section 4
+and `weaver-types-Spec` section 3.1, maps that agent's own role groups to the verbs each
+permits, explicitly and with no wildcard. On each connection this binary, started as
+root in socket mode with the accepted connection, reads the peer's uid and groups from
+the kernel (`SO_PEERCRED`, and `SO_PEERGROUPS` for the supplementary groups), never from
+the request and never by a lookup a caller could influence, and admits the peer only if
+one of its groups holds a role on this agent. It then reads one request line,
+`LifecycleRequest` of `weaver-types-Spec` section 3.1, and **a verb outside the peer's
+roles refuses `Unauthorized` before anything is touched**, written to the operations log
+of section 8. An admitted verb runs the same verb code the command line runs, against
+the agent the socket's unit instance names, and writes one answer line, the same
+`lifecycle-answer` or `lifecycle-refusal` object the command line writes, so a caller
+parses one form whichever door it used. **A verb that changes the agent carries its
+cause to the harness**, on the ruling of 2026-10-03 on the sixth question: for `load`,
+`unload` and `stop` this binary hands the harness the caller's kernel uid and groups and
+its principal claim, capped at 256 bytes, in the enter, leave or stop directive it
+already sends, and the harness records them on the trace, per
+`weaver-admin-harness-contract` section 3. This crate never writes the trace. The claim
+of #51 is read by nothing that decides. **`grants`** answers the verbs the peer's roles
+permit on this agent and the time of the observation, per #52, and is the one verb the
+command line does not need, root holding them all.
 
 **A dropped connection does not cancel a verb.** The verb runs to completion in the
 service the connection started, and its outcome is readable afterwards through `show`
-and the trace; an answer with no reader is discarded. The service runs under
+and the trace. An answer with no reader is discarded. The service runs under
 `KillMode=process`, per `weaver-admin-systemd-contract`, so the end of an invocation
 never kills a state member or a worker the verb stood. Two connections for one agent
 are ordered as two shells are, by the parties section 3 names, and the socket adds no
 lock of this crate's.
 
-**At the trace socket, root reads the record and does nothing else.** A peer holding
-observer or a wider role is admitted as at the lifecycle socket. This binary, started
-for the connection, reads one `TraceRequest`, opens the agent's trace file read-only
-with `O_NOFOLLOW` beneath the sink's directory, verifies that the requested offset falls
-on a record boundary and that the record ending there hashes to the request's digest,
-and streams the file from that offset, following new lines as they land. **A change of
-the file's identity, its device, inode, or birth time, is reported in the stream** and
-never smoothed over, so a rotation or a truncation reaches the caller as what it is. A
-position that does not verify refuses before a byte is streamed. Only a file sink is
-streamable, a pipe or a socket sink having no file to read, and a request against one
-refuses `ConfigInvalid` naming the sink. The stream parses no event: it hashes one
-record's bytes to verify a position and copies bytes, which keeps section 8 of the
-charter true that no lifecycle act parses events. Nothing else is done with root on this
-door, and the agent and its state member still reach neither the file nor the socket,
-the custody of section 5 being widened only to role-holders, read-only.
+**The trace socket admits exactly one reader, and root reads the record and does nothing
+else**, on the operator's ruling of 2026-10-03 on #63's fourth question. The one reader
+is the `trace-reader` the agent's `roles.toml` names, the agent's own admin-con, and the
+declaration is required. Every other caller, an observer or an operator role included,
+is refused, typed and logged: those roles reach `show` and `grants` on the lifecycle
+socket and never the record. **The newest connection from that reader replaces the
+old**: the replaced follower ends with a reason, the replacement is logged, and never
+more than one root follower stands per agent. Fan-out to further readers is WeaverWeb's,
+never more readers or sockets on the box, because each extra reader on the box is
+another principal holding the agent's whole record. This binary, started for the
+connection, reads one `TraceRequest`, opens the agent's trace file read-only with
+`O_NOFOLLOW` beneath the sink's directory, verifies that the requested offset falls on a
+record boundary and that the record ending there hashes to the request's digest, and
+writes a `TraceHeader` line naming the file's identity, its device, inode and birth
+time, then the file's own lines from that offset exactly as written, following new
+lines as they land, with a heartbeat while idle. **A change of the file's identity is
+reported in the stream** and never smoothed over, so a rotation or a truncation reaches
+the reader as what it is. A position that does not verify refuses before a byte is
+streamed. Only a file sink is streamable, a pipe or a socket sink having no file to
+read, and a request against one refuses `ConfigInvalid` naming the sink. The stream
+parses no event: it hashes one record's bytes to verify a position and copies bytes,
+which keeps section 8 of the charter true that no lifecycle act parses events. Nothing
+else is done with root on this door, and the agent and its state member still reach
+neither the file nor the socket, the custody of section 5 being widened to the one
+declared reader, read-only.
 
 **The answer is one JSON object on standard output and the exit status agrees
 with it.** One `lifecycle-answer` or one `lifecycle-refusal` in the floor's
@@ -934,16 +962,17 @@ from: weaver-admin
 to: admin-sink-path-dies-at-open-site
 ```
 
-**The trace socket reads what this section opened, and widens custody to role-holders
-alone**, on the operator's ruling of 2026-10-02 on #50. A role-holder reads the record
-through the trace socket of section 2 and never through the file: no group grant into
-the territory is made for it, so the state room and the trace keep the layout the
-deployment gives them, with no extra readers, and a trace recreated `root:root` stays
-streamable. The agent's uid and its state member's reach neither the file nor the
-socket, which the role list never names, so the custody this section holds is unchanged
-for them and narrowed for everyone else to a read-only stream behind a role. The sink's
-file is the only shape the stream serves; a pipe or a socket sink's reader is the
-operator's, as before.
+**The trace socket reads what this section opened, and widens custody to one declared
+reader alone**, on the operator's rulings of 2026-10-02 on #50 and 2026-10-03 on #63.
+The `trace-reader` the agent's `roles.toml` names reads the record through the trace
+socket of section 2 and never through the file: no group grant into the territory is
+made for it, so the state room and the trace keep the layout the deployment gives them,
+with no extra readers, and a trace recreated `root:root` stays streamable. The agent's
+uid and its state member's reach neither the file nor the socket, which the role list
+never names, so the custody this section holds is unchanged for them and narrowed for
+everyone else to one read-only stream for one declared reader. The sink's file is the
+only shape the stream serves, and a pipe or a socket sink's reader is the operator's, as
+before.
 
 ## 6. The unit
 
@@ -1773,9 +1802,15 @@ structural rather than disciplined.
 ## 8. The operations log
 
 **The format is NDJSON, one act per line, and it shares no schema with the
-trace.** The charter fixes the custody, 0640 in a 0750 directory, both owned
-by root, one per agent at the path its root names, and never inside an agent home. What this Spec adds is
-the rendering: one JSON object per line, the same reading tools the stream's
+trace.** **It is one per agent, at `admin.log` in the agent's declaration directory**,
+`~/.weaveragent/<agent>/admin.log` by default, beside `agent.toml`, the prompt file and
+the save points, on the operator's ruling of 2026-10-03 on #63's sixth question, which
+moves it from the root's `log-path` of #45. The agent's uids never reach it, that
+directory being closed to them by section 9's judgment, and the operator can read it.
+This crate appends to it as root, opening it with `O_NOFOLLOW` so a link planted at the
+name is refused rather than followed, and section 9's judgment of the directory's
+entries admits it as the one file there this crate writes. What this Spec adds is the
+rendering: one JSON object per line, the same reading tools the stream's
 consumers already hold, and a
 field set that is this crate's own and deliberately not the event envelope,
 because a shared schema is how a second author drifts into the first's
@@ -1800,6 +1835,17 @@ conduct rather than supervision it is a second record of the agent, and the revi
 finds one has found a defect. The instrument is named in that sentence and is the only
 one available, no mechanism being able to tell a line about supervision from a line
 about conduct.
+
+**`admin.log` is the boundary's record, and the trace is the constitution's and the
+agent's own**, on the same ruling. A verb that changes the agent, a load, an unload or a
+stop, goes on the trace with its cause, through the harness, per section 2. Boundary
+activity that changes nothing in the agent goes here. A refused attempt at either socket
+goes here, whether unauthorized, from the wrong group, against a socket of the wrong
+mode or against an undeclared boundary. So does a read-only verb, `show` or `grants`,
+and so do the trace socket's connects, replacements and disconnects, never a line per
+streamed record. Each such line carries the wall time, the socket, the caller's uid and
+groups, the principal claim capped at 256 bytes, what was asked, the digest of the role
+list in force, and the outcome.
 
 **The line between supervision and conduct is a domain line, and that is what
 this record grounds in.** What an agent did is a fact about the working the
@@ -1872,28 +1918,30 @@ value below is read from the root before any verb, and a value that fails to rea
 the invocation as `ConfigInvalid` with no field.
 
 **The root holds one file per key.** Required: `worker-binary`, `spu-binary`,
-`gate-binary`, `run-tool`, `control-tool`, `coordination-root`, `log-path`,
-`declaration-directory` and `operator`. Optional: `unit-properties`, `headroom-bytes` and
-`state-store-socket`, the last read under a service election alone, the service engine's
-conventional directory standing where the file is silent. **The agent's declaration
-stands in the operator's directory and not in the root**, on the operator's ruling of
-2026-10-02: `declaration-directory` names it, absolute, `~/.weaveragent/<agent>/` by
-convention, and it holds `agent.toml`, which this crate parses per `weaver-types-Spec`
-section 2, beside the prompt file the declaration's `identity-file` names. A declaration
-directory holding no `agent.toml` answers `NoSuchAgent`, as a root holding none did.
-**`operator` names the operator's uid**, on the operator's ruling of 2026-10-02 on this
-act's first question: a root-owned key `create-agent.sh` writes once, the box's own fact,
-set by root, about whose data defines the agent, and independent of who invokes a verb. The
-coordination name changed hands with the operator socket on 2026-08-05: the operator
-places it, the harness binds it, and admin dials it, so one value reaches two crates and
-the root is where they agree. These values are not the agent config and no seam carries
-them, which is why the root takes no contract of its own. **The file and its values part
-company at the start ask, and the distinction is worth holding.** This crate is the only
-one that reads the root. Three of the values do not stay in it: the coordination
-socket's name and the two organ binary paths reach the worker in section 6's argument
-vector, over the external boundary `weaver-admin-systemd-contract` holds rather than
-over any seam. What is fixed here is that these values exist, that they are the
-operator's to place, and that none of them is discovered at runtime by searching.
+`gate-binary`, `run-tool`, `control-tool`, `coordination-root`, `declaration-directory`,
+`operator` and `roles.toml`, the role list, `log-path` retiring with the operations
+log's move to the declaration directory, per section 8. Optional: `unit-properties`,
+`headroom-bytes` and `state-store-socket`, the last read under a service election alone,
+the service engine's conventional directory standing where the file is silent. **The
+agent's declaration stands in the operator's directory and not in the root**, on the
+operator's ruling of 2026-10-02: `declaration-directory` names it, absolute,
+`~/.weaveragent/<agent>/` by convention, and it holds `agent.toml`, which this crate
+parses per `weaver-types-Spec` section 2, beside the prompt file the declaration's
+`identity-file` names. A declaration directory holding no `agent.toml` answers
+`NoSuchAgent`, as a root holding none did. **`operator` names the operator's uid**, on
+the operator's ruling of 2026-10-02 on this act's first question: a root-owned key
+`create-agent.sh` writes once, the box's own fact, set by root, about whose data defines
+the agent, and independent of who invokes a verb. The coordination name changed hands
+with the operator socket on 2026-08-05: the operator places it, the harness binds it,
+and admin dials it, so one value reaches two crates and the root is where they agree.
+These values are not the agent config and no seam carries them, which is why the root
+takes no contract of its own. **The file and its values part company at the start ask,
+and the distinction is worth holding.** This crate is the only one that reads the root.
+Three of the values do not stay in it: the coordination socket's name and the two organ
+binary paths reach the worker in section 6's argument vector, over the external boundary
+`weaver-admin-systemd-contract` holds rather than over any seam. What is fixed here is
+that these values exist, that they are the operator's to place, and that none of them is
+discovered at runtime by searching.
 
 **Nothing in one agent's root is read for another.** The box-wide values, the binaries,
 the tools, the coordination root and the headroom, are copied into each root by the
@@ -1901,9 +1949,10 @@ deployment scripts from a stack record of their own that this crate never reads,
 agent's configuration is that agent's even where two roots carry the same values. The
 installed program files may stand once on disk and be named by every root, while the
 configuration and the processes are each agent's own. **The operations log is one per
-agent**, at the path the agent's `log-path` names. Managing several agents, listing
-them or holding a map across them, is not this crate's and belongs to WeaverWeb or a
-separate application, which drives each agent through its own admin.
+agent**, at `admin.log` in the agent's declaration directory, per section 8. Managing
+several agents, listing them or holding a map across them, is not this crate's and
+belongs to WeaverWeb or a separate application, which drives each agent through its own
+admin.
 
 **The organ binaries are in the root and not in the agent's declaration, and the
 placement is the ruling rather than a convenience.** Which program runs under an agent's
@@ -1953,14 +2002,15 @@ this crate reads are held closed**: `agent.toml` and the prompt file are each a 
 file and never a link, owned by that uid or by uid 0, and writable by no group or other.
 Their read bits are not judged, the closed directory already denying every other
 principal the path, so a file an editor writes under an ordinary umask passes. Other
-entries are the operator's and are not read. **Every directory above it is held closed
-as the root's ancestors are**, each owned by uid 0 or by the operator and writable by no
-group or other unless its sticky bit is set, since a directory another principal could
-write would let it rename the judged directory away. Any failure refuses
-`BoundaryUnverified`, naming the path on stderr, before a value is read, and a
-declaration directory that does not exist or is not a directory refuses the same way,
-the operator's provisioning being incomplete rather than the agent absent. The deploy
-scripts are bound by this judgment as by the root's, per the line above.
+entries are the operator's and are not read, save `admin.log`, the one entry this crate
+writes, appended as root without following a link, per section 8. **Every directory
+above it is held closed as the root's ancestors are**, each owned by uid 0 or by the
+operator and writable by no group or other unless its sticky bit is set, since a
+directory another principal could write would let it rename the judged directory away.
+Any failure refuses `BoundaryUnverified`, naming the path on stderr, before a value is
+read, and a declaration directory that does not exist or is not a directory refuses the
+same way, the operator's provisioning being incomplete rather than the agent absent. The
+deploy scripts are bound by this judgment as by the root's, per the line above.
 
 **Admin reads both files as root and the agent never reads either.** What crosses to the
 agent's processes is what the parse yields and the enter carries, the prompt's text
@@ -2043,6 +2093,48 @@ validated name and the operator's file. The correction matters beyond
 tidiness, because a worker reading this file would take a dependency on a shape
 section 11 holds open and would put a second reader on values only one party
 places.
+
+**The role list is the agent's boundary, and it must be declared**, on the operator's
+rulings of 2026-10-03 on #63's second and third questions. `roles.toml` stands in the
+agent's root under the root's judgments, root-owned, writable by no group or other, and
+never a link, and it is **required**: a file missing or malformed refuses by name at
+`validate` and at `load`, `ConfigInvalid` naming `roles.toml`, and nothing is ever
+admitted because a file was absent. Granting nothing is written as empty lists. Its
+shape is `RoleList` of `weaver-types-Spec` section 3.1: that agent's own role groups,
+each mapped explicitly to its verbs with no wildcard and an unknown key refused, and the
+one `trace-reader`. **It is boundary and never constitution.** The constitution, what
+shapes what happens inside the agent, is the declaration and the facts the `load` event
+names, and it is the tuple. The role list says who may reach the agent from outside, as
+its OS identity does, so it stays out of the declaration's digest, and granting access
+never makes the agent another agent. It is declared all the same: its digest is written
+on every socket request's line in `admin.log`, `show` carries it in the `show` rework,
+and the enter hands it to the harness for the `load` event's member marked boundary.
+
+**Why one role list per agent, and not one file for every agent on the box**, a
+question a reader will ask, since the verbs never change between agents. The answer is
+the operator's, on the same date:
+
+1. **A WeaverAgent is one agent, not a fungible instance.** Shared configuration suits
+   instances that are interchangeable copies of a template. A WeaverAgent is built as
+   itself, with its own identity, state, trace and trust, and even agents sharing a box
+   are each set up as themselves. Its focus is a single agent, never a fleet.
+2. **The list maps who may issue the verbs, not the verbs.** The verbs are the same
+   everywhere, the groups are per agent, so the map is per agent. A shared file would
+   name every agent's groups, a fleet roster of the kind #45 removed from admin, or name
+   shared groups, letting one agent's connector act on another.
+3. **Agents differ in trust.** The same verbs carry different grants: an agent WeaverWeb
+   operates beside one it only observes, or a second person who observes and never
+   loads.
+4. **The blast radius is one agent.** An edit, a mistake or a compromised write to a
+   per-agent file reaches only the agent it names.
+5. **It is the agent's boundary.** This crate is one agent's organ and reads only that
+   agent's root, and who may reach its management plane is that agent's admission,
+   judged with its other root-owned facts.
+
+**A default is a convenience and never an assumption.** One agent per box is the common
+case and not a rule, and a box can run several, each its own. The deployment tooling may
+offer a template to copy into a new agent's `roles.toml`, but it assumes none, and the
+authority is always the agent's own file.
 
 ## 10. What is enforced, and by which instrument
 
@@ -2419,6 +2511,23 @@ the request, and the tests the code act owes are each perturbation-verified:
   socket followed by the service's exit: the state member and the worker stand. The
   perturbation drops `KillMode=process` from the unit, and the member dies with the
   invocation.
+- **A socket of the wrong mode or group serves nothing**, watched by a socket handed to
+  the binary at `0666` and by one grouped to another agent's `weaver-<agent>-admin`:
+  each refuses before a byte is read, and the log names what the `fstat` found. The
+  perturbation drops the check, and the misconfigured socket serves.
+- **A missing role list refuses by name**, watched by a root with no `roles.toml` and
+  by one whose file carries a wildcard or an unknown key: `validate` and `load` refuse
+  `ConfigInvalid` naming `roles.toml`. The perturbation treats absence as no grants,
+  and the load proceeds with a boundary nobody declared.
+- **The trace socket admits only its declared reader**, watched by an observer and by
+  an operator connecting to it: each is refused and logged. The perturbation admits
+  any role group, and the observer receives the record.
+- **The newest reader connection replaces the old**, watched by the declared reader
+  connecting twice: the first follower ends with a reason, and one root follower
+  stands. The perturbation keeps both.
+- **A change to the agent carries its cause to the record**, watched by a `load` through
+  the socket: the `load` event names the caller's uid, groups and claim. The
+  perturbation drops the cause from the enter, and the event names no cause.
 - **The trace socket refuses a position that does not verify**, watched by an offset
   inside a record and by a digest of a different record. The perturbation drops the
   digest check, and bytes from the wrong position stream.
@@ -2451,23 +2560,17 @@ to: admin-trace-socket-verifies-and-follows-no-link
 
 Each names what settles it, and none is this Spec's to settle alone.
 
-- **The admin sockets, opened 2026-10-02 on #50**, each settled by the code act that
-  stands the sockets unless a ruling takes it first:
-  - **socket paths and modes**: where the two sockets stand per agent, their owner,
-    group and mode, and how the mode admits every role group of one agent when a socket
-    takes one group;
-  - **the role list's file**: its name in the agent's root, its format, and how a group
-    is named in it, by name or by gid;
-  - **whether the role list belongs in the declaration digest** the load event records,
-    a grant being a fact about the agent's conditions or about its operators;
-  - **the trace stream's framing and its end of file**: raw lines or framed records,
-    how a change of identity is spelled and whether the stream ends there, how long a
-    follower stands with no new lines, and what bounds the number of followers;
-  - **socket mode's handover**: whether the connection arrives as the standard streams
-    or as a passed descriptor, and how the binary knows it was started for a socket and
-    which one;
-  - **the operations log's lines for a socket verb**: the peer's uid, the principal
-    claim and the verb, in section 8's field set.
+- **The admin sockets, opened 2026-10-02 on #50 and ruled 2026-10-03 on #63.** All six
+  questions are settled by the operator and folded into sections 2, 5, 8 and 9: the
+  paths, owner, group and mode, with one per-agent group never shared. The role list's
+  file is `roles.toml`, explicit and required. The role list is boundary, outside the
+  declaration's digest and declared on the load event. The trace socket has one declared
+  reader, the newest connection replacing the old, framed as a header and raw lines with
+  a heartbeat. The handed socket is checked by `fstat` before a byte is served. The log
+  is split, a change to the agent on the trace with its cause and boundary activity in
+  `admin.log`. What stays the code act's is spelling and mechanism: whether the
+  connection arrives as the standard streams or a passed descriptor, the heartbeat's
+  interval and line, and `admin.log`'s mode and group within what section 8 fixes.
 
 - **How an agent's lifecycle state is observed. Settled 2026-09-04** by the observation
   exchange of `weaver-admin-harness-contract` section 3, per issue #435: the harness

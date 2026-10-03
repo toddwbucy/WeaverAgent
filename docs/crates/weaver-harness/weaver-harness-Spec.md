@@ -7,7 +7,7 @@ floor. Code is written against it under the gates of Working Process section 6.
 **Document ID:** `weaver-harness-Spec`
 **Parent:** `weaver-harness-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #58
+**Landing PR:** #63
 
 ---
 
@@ -1284,16 +1284,15 @@ from: weaver-harness
 to: harness-scoped-refusal-account
 ```
 
-**Leave runs the reverse order and drains before it answers.** Lower the gate
-first where one stands, the run state's arm answering whether it does,
-refuse `ActivityNotAtRest` while a turn is in flight, author the
-`unload` event, drain the writer's queue, and release the SPU. Left is
-answered only after the drain returns, which is what makes the answer mean
-what `weaver-admin-harness-contract` section 4 says it means, that everything
-admitted reached the stream. **The ordering is review's by election,** a double
-sink that drains slowly reaching it, which is the shape the gate's
-ready-follows-bind test takes for its own ordering, and this suite not buying
-one.
+**Leave runs the reverse order and drains before it answers.** Lower the gate first
+where one stands, the run state's arm answering whether it does, refuse
+`ActivityNotAtRest` while a turn is in flight, author the `unload` event with the leave
+directive's cause, drain the writer's queue, and release the SPU. Left is answered only
+after the drain returns, which is what makes the answer mean what
+`weaver-admin-harness-contract` section 4 says it means, that everything admitted
+reached the stream. **The ordering is review's by election,** a double sink that drains
+slowly reaching it, which is the shape the gate's ready-follows-bind test takes for its
+own ordering, and this suite not buying one.
 
 ```graph
 node: harness-left-follows-drain
@@ -1305,14 +1304,13 @@ from: weaver-harness
 to: harness-left-follows-drain
 ```
 
-**Stop answers after the record holds the close.** The stop directive aborts
-the turn in flight, the turn's close event is placed with the stop reason, and
-only then does the answer carry `TurnAborted`, the announce-after-record
-discipline of `weaver-admin-harness-contract` section 3. A stop at rest
-answers `AtRest`, a clean close and not a refusal. How the abort lands at the
-decoder is deferred with the decode seam, per section 8, and the trace
-semantics are settled either way, which is what `basic-inference-loop` section
-7 already records.
+**Stop answers after the record holds the close.** The stop directive aborts the turn in
+flight, the turn's close event is placed with the stop reason and the stop directive's
+cause, and only then does the answer carry `TurnAborted`, the announce-after-record
+discipline of `weaver-admin-harness-contract` section 3. A stop at rest answers
+`AtRest`, a clean close and not a refusal. How the abort lands at the decoder is
+deferred with the decode seam, per section 8, and the trace semantics are settled either
+way, which is what `basic-inference-loop` section 7 already records.
 
 **Observe answers from any position and authors nothing**, per
 `weaver-admin-harness-contract` section 3 as of 2026-09-04. Before an enter the answer
@@ -2222,7 +2220,9 @@ with what ran. A third member that is not an election joins on 2026-09-04: the
 declaration's digest, which admin computed at the inventory and the enter carries, so
 the record names what the run was built from without this crate reading a file, per
 issue #435. A fourth joins on 2026-10-02 by the same route: the digest of the prompt
-file the declaration names, `identity_file` on the enter and on the load event, per
+file the declaration names, `identity_file` on the enter and on the load event, with the
+boundary's digest and the load's cause beside it as of 2026-10-03 (#63), each copied
+from the enter and the boundary's marked boundary and never constitution, per
 `weaver-trace-Spec` section 3, which this crate copies and does not compute, the file
 being admin's to read and never this crate's.
 

@@ -13,7 +13,7 @@ conforms to.
 **Parent:** `weaver-harness-PRD`
 **Companion contract:** `weaver-harness-trace-contract`, written with this document
 **Editorial:** Per the Working Rules.
-**Landing PR:** #58
+**Landing PR:** #63
 
 ---
 
@@ -583,6 +583,18 @@ record is sufficient for its own conditions and the experiment deposits stop bei
 the stack is remembered. The record is the canonical form and a save point is a cache of
 what its replay produces, so the load event is where the conditions and the lineage of a
 session's state are read.
+
+**The record declares the boundary apart from the constitution, and says who changed
+the agent**, on the operator's rulings of 2026-10-03 on #63. The constitution, what
+shapes what happens inside the agent, is the declaration and the facts above, and it is
+the tuple. The boundary, who may reach the agent from outside, is the agent's role list,
+and the `load` event carries its digest as a separate member marked boundary, so every
+run declares its boundary without the role list joining the tuple. A verb that changes
+the agent, a load, an unload or a stop, is recorded with its cause, the caller's kernel
+identity and the person it claimed to act for, the claim never an authorization input.
+The harness writes all of it from facts admin hands over, and boundary activity that
+changes nothing in the agent stays in admin's operations log. `weaver-trace-Spec`
+section 3 carries the members.
 
 **The prompt file the load was given is one more such fact, as of 2026-10-02.** On the
 operator's ruling of that date the system prompt is a file the declaration names rather

@@ -12,7 +12,7 @@ logout is the init system, and what the program relies on from it was stated now
 **Document ID:** `weaver-admin-systemd-contract`
 **Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
-**Landing PR:** #53
+**Landing PR:** #63
 
 ---
 
@@ -76,8 +76,10 @@ that asked for it and outlives the operator's login session, which is the proper
 `weaver-admin-PRD` section 7 names as the honest answer to keep-alive.
 
 **The agent's two admin sockets, lifecycle and trace, as of 2026-10-02 (#50).** Each is
-a socket unit per agent the init system holds open, root-owned and connectable by the
-groups the agent's role list names, with a service unit it starts as root for each
+a socket unit per agent the init system holds open, `/run/weaver-<agent>/admin.sock` and
+`/run/weaver-<agent>/trace.sock`, root-owned, mode `0660`, grouped to the agent's own
+access group `weaver-<agent>-admin` and never to a group another agent shares (the
+operator's rulings of 2026-10-03 on #63), with a service unit it starts as root for each
 accepted connection, running admin in socket mode for that one connection. No standing
 process of admin's results: the manager holds the listening socket, and admin lives
 for one connection, as it lives for one verb at the shell.
@@ -150,7 +152,7 @@ over that socket rather than through the manager.
 **The admin socket units are installed, not asked for.** The two socket units and
 their service templates are written by the operator's provisioning beside the agent's
 configuration root, never by admin, which writes no unit file, per section 7. Admin asks
-nothing of the manager for them; the manager starts admin on a connection, per section
+nothing of the manager for them. The manager starts admin on a connection, per section
 3.
 
 **No agent work of any kind crosses**, in either direction and under any framing. The
@@ -257,7 +259,10 @@ and that a stopped unit stays stopped without the program watching it. **For the
 sockets** it guarantees that the listening socket exists with the owner, group and mode
 the socket unit declares before any caller can connect, that each accepted connection
 starts its own service instance as root, and that a service instance under
-`KillMode=process` takes down only its main process when it ends.
+`KillMode=process` takes down only its main process when it ends. Admin does not lean
+on the first of these alone: it checks the handed socket's owner, group and mode by one
+`fstat` before serving a byte, per `weaver-admin-Spec` section 2, so a unit that
+declared them wrongly serves nothing.
 
 **The runtime directory's removal is the load-bearing half of that list**, because
 it is what makes the coordination socket's pathname unable to outlive its worker.

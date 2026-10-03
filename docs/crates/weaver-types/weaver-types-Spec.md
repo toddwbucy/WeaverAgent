@@ -8,7 +8,7 @@ one's Spec pass. Code is written against it under the gates of Working Process s
 **Document ID:** `weaver-types-Spec`
 **Parent:** `weaver-types-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #65
+**Landing PR:** #63
 
 ---
 
@@ -950,6 +950,23 @@ pub struct Grants {
     pub verbs: Vec<AdminVerb>,
     pub observed_wall_ms: u64,
 }
+
+pub struct RoleList {
+    pub roles: BTreeMap<String, BTreeSet<AdminVerb>>,
+    pub trace_reader: String,
+}
+
+pub struct TraceHeader {
+    pub device: u64,
+    pub inode: u64,
+    pub birth_ns: i128,
+}
+
+pub struct Cause {
+    pub uid: u32,
+    pub groups: Vec<u32>,
+    pub principal: Option<String>,
+}
 ```
 
 **The agent is never named in a request.** Each socket belongs to one agent, its unit
@@ -959,11 +976,14 @@ rule out. The command line keeps its agent argument because one binary serves ev
 agent there.
 
 **`principal` is a claim and never an input to authorization**, per #51: the caller
-may name the person it acts for, admin writes the claim beside the verb in its
-operations log, and no admission, role or refusal reads it. A request that omits it is
-whole. Its contents are the caller's and admin judges only that it is a bounded
-printable string, refusing `Malformed` otherwise, because a log line carrying a
-caller's bytes is a log the caller can forge.
+may name the person it acts for, and no admission, role or refusal reads it. A request
+that omits it is whole. Its contents are the caller's, so admin judges only that it is
+printable and at most 256 bytes, refusing `Malformed` otherwise, because a record
+carrying a caller's bytes is a record the caller could otherwise forge. **Where it is
+recorded follows what the verb did**, on the operator's ruling of 2026-10-03 on #63's
+sixth question: a verb that changes the agent, `load`, `unload` or `stop`, carries its
+`Cause` to the harness, which records it on the trace, and every other request, a read
+or a refusal, is written to admin's operations log, per `weaver-admin-Spec` section 8.
 
 **`Grants` is the answer to the `grants` verb**: the verb names the peer's roles
 permit on this agent, in `AdminVerb`'s order, and the wall-clock time in milliseconds
@@ -975,14 +995,40 @@ its ceiling, so the answer is what admin would admit and nothing it would refuse
 boundary, and the sha256 hex of the record that ends at that offset, absent only at
 offset zero. Admin refuses a position whose prior record does not hash to the digest,
 so a caller resuming after a rotation or a truncation learns that its position no
-longer names the record it read rather than receiving bytes from another file.
+longer names the record it read rather than receiving bytes from another file. **The
+stream is a `TraceHeader` line and then the trace's own lines exactly as written**, on
+the operator's ruling of 2026-10-03 on #63's fourth question: the header names the
+file's identity, its device, inode and birth time in nanoseconds since the epoch, so a
+reader holds what it is reading. At the end of the file the stream keeps following, with
+a heartbeat line while idle, and a change of the file's identity is reported, never
+smoothed over. The heartbeat's and the change report's spelling is the code act's, per
+section 6.
 
-**The role list maps a group to the verbs it permits**, per agent, in the agent's
-root-owned configuration root. Two roles start it, observer with `show` and `grants`,
-and operator adding `validate`, `load`, `unload` and `stop`, the trace socket admitting
-observer and up. Its file format and field names are open, per section 6; what this
-section fixes is that a role is a group and its grant is a set of `AdminVerb`, so the
-role list never names a verb this enum does not.
+**`RoleList` is the agent's `roles.toml`**, on the operator's rulings of 2026-10-03 on
+#63's second and fourth questions: a root-owned file in the agent's root,
+`/etc/weaver/admin/<agent>/roles.toml`, mapping each of that agent's own role groups to
+the verbs it permits, named explicitly with no wildcard and an unknown key refused, and
+naming the one `trace_reader`, the user or group of the agent's own admin-con, that the
+trace socket admits. Both members are required, so granting nothing is written as an
+empty list and never as an absent file, and the file is boundary and never constitution,
+per `weaver-admin-Spec` section 4. A verb no group lists is refused at the sockets for
+every caller, and the role list never names a verb `AdminVerb` does not.
+
+```toml
+trace-reader = "weaver-<agent>-admincon"
+
+[roles]
+weaver-<agent>-observer = ["show", "grants"]
+weaver-<agent>-operator = ["show", "grants", "validate", "load", "unload", "stop"]
+```
+
+**`Cause` is what admin hands the harness with a verb that changes the agent**: the
+caller's uid and groups as the kernel's peer credential gave them, and the principal it
+claimed, capped as above and marked a claim. At the command line the cause is the
+invoking uid, root, with no claim. It rides the enter payload as `cause`, and the
+`Leave` and `Stop` directives as theirs, per section 4.2, and the harness records it on
+the `load`, `unload` or stop event, per `weaver-trace-Spec` section 3, admin never
+writing the trace.
 
 ## 4. The organ wire vocabulary
 
@@ -1208,8 +1254,8 @@ ruling.
 ```rust
 pub enum LifecycleDirective {
     Enter { payload: Box<EnterPayload> },
-    Leave,
-    Stop,
+    Leave { cause: Cause },
+    Stop { cause: Cause },
     Observe,
     Admit { instruction: SpuInstruction },
     Release,
@@ -1297,6 +1343,8 @@ pub struct EnterPayload {
     pub stack: BTreeMap<String, String>,
     pub declaration: String,
     pub identity_file: String,
+    pub boundary: String,
+    pub cause: Cause,
 }
 
 pub struct Lineage {
@@ -1385,7 +1433,14 @@ beside it, per `weaver-trace-PRD` section 3.1. Both are admin's facts and the ha
 authors them as it authors the store's. **`declaration` rides beside them as of
 2026-09-04**, the digest of the declaration file as admin read it at the inventory, so
 the harness names it on the load event and answers it to an observation without holding
-the file, per issue #435. **`identity_file` rides beside it as of 2026-10-02**, the
+the file, per issue #435. **`boundary` and `cause` ride beside them as of 2026-10-03**,
+on the operator's rulings on #63's third and sixth questions: `boundary` is the sha256
+hex of the agent's `roles.toml` as admin read it at the inventory, which the harness
+copies onto the load event as a member marked boundary and never constitution, so each
+run's record declares who could reach it without the role list joining the tuple or the
+declaration's digest. `cause` is section 3.1's `Cause`, which the harness records on the
+load event, as the `Leave` and `Stop` directives' own causes are recorded on the unload
+and stop events. **`identity_file` rides beside them as of 2026-10-02**, the
 digest of the prompt file the declaration names, sha256 hex of the bytes admin read at
 the inventory and seated, per section 2: the declaration's digest covered the prompt
 while the prompt was a string inside it, and stopped covering it the day the prompt
@@ -2401,14 +2456,12 @@ the claim divides are both open and section 6 carries them together.
 
 ## 6. Open elections
 
-- **The admin sockets' wire, opened 2026-10-02 on #50.** Section 3.1 fixes the request
-  shapes and the role list's meaning and leaves to the code act, with
-  `weaver-admin-Spec` section 11: the role list's file format and field names; the
-  trace stream's framing, whether the raw NDJSON lines or each wrapped with its offset
-  and digest, and how it signals a change of file identity and the file's end; the
-  bound on `principal`'s length and alphabet; and the spelling of `observed_wall_ms` on
-  the wire. `AdminVerb`'s membership grows by ruling, the on-demand save-point verb of
-  #58 being the next named.
+- **The admin sockets' wire, opened 2026-10-02 on #50 and ruled 2026-10-03 on #63.**
+  The role list's file, the trace stream's framing and the claim's bound are ruled and
+  fixed in section 3.1. What stays the code act's is spelling: the heartbeat line and
+  the identity-change report, `observed_wall_ms` on the wire, and the claim's alphabet
+  within its 256 bytes. `AdminVerb`'s membership grows by ruling, the on-demand
+  save-point verb of #58 being the next named.
 - **`Generation`'s shape settled at section 4.4 and this bullet retires with it.**
   The emission, the canonical content, and the finish are shaped in the floor
   because the harness consumes them, and the measurement splices because nothing

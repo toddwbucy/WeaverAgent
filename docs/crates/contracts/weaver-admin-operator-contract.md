@@ -11,15 +11,15 @@ same ruling.
 **Document ID:** `weaver-admin-operator-contract`
 **Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
-**Landing PR:** #53
+**Landing PR:** #63
 
 ---
 
 ## 0. What this document is
 
 The agreement over the trace's exit and, since the operator's rulings of 2026-10-02
-on #50, over the two sockets a role-holder reaches the agent's admin by: how the
-program's one output leaves it, where it lands, what a role-holder may send and
+on #50, over the two sockets a caller holding a role reaches the agent's admin by: how
+the program's one output leaves it, where it lands, what such a caller may send and
 receive, and what either side may rely on at that boundary. It is read alongside
 `weaver-admin-PRD`, whose section 8 names both doors: the operator's shell, which runs
 the crate and crosses no channel this document governs, and the sockets, which do.
@@ -55,17 +55,18 @@ than improvised.
 ## 1. The boundary
 
 **This contract binds three crossings: the stream's sink and the agent's two admin
-sockets.** At
-the shell the operator's asks reach the program by an invocation the operating system
-already governs, per `weaver-admin-PRD` section 8, and an executed program is no seam by
-the Working Process test. **The two sockets of 2026-10-02 are real crossings** and this
-contract governs them: per agent, held by the init system, root-owned and connectable by
-the groups the agent's role list names, each admitting by the kernel's peer credential
-against that list before a request is read. The sink is the third: **admin passes the
-sink handle across the boundary and the program writes through it**, something of the
-operator's stands behind it, and neither side sees the other's interior. It is not
-network ingress and breaches nothing Gate holds, on the grounds `weaver-admin-PRD`
-section 3 states.
+sockets.** At the shell the operator's asks reach the program by an invocation the
+operating system already governs, per `weaver-admin-PRD` section 8, and an executed
+program is no seam by the Working Process test. **The two sockets of 2026-10-02 are real
+crossings** and this contract governs them: per agent, at
+`/run/weaver-<agent>/admin.sock` and `/run/weaver-<agent>/trace.sock`, held by the init
+system, root-owned, mode `0660` and grouped to the agent's own access group
+`weaver-<agent>-admin`, never shared across agents, each admitting by the kernel's peer
+credential against the agent's `roles.toml` before a request is read (the operator's
+rulings of 2026-10-03 on #63). The sink is the third: **admin passes the sink handle
+across the boundary and the program writes through it**, something of the operator's
+stands behind it, and neither side sees the other's interior. It is not network ingress
+and breaches nothing Gate holds, on the grounds `weaver-admin-PRD` section 3 states.
 
 ## 2. What crosses in
 
@@ -79,8 +80,10 @@ and never an authorization input**, per #51: admin logs it beside the verb and n
 that decides reads it.
 
 **At the trace socket, one request line**: a byte offset on a record boundary and the
-digest of the record before it, the shape `TraceRequest` of the same section, from a
-peer holding observer or wider.
+digest of the record before it, the shape `TraceRequest` of the same section, from the
+one `trace-reader` the agent's `roles.toml` declares, the agent's own admin-con. Every
+other caller is refused and logged, and the newest connection from the reader replaces
+the old.
 
 At the shell nothing crosses here: the verbs arrive as an invocation's arguments. No
 prompt, turn, task, or run crosses either door, per apex section 6, and the record is
@@ -135,11 +138,12 @@ and the record.
 
 **At the trace socket, the record as a read-only stream**: admin, started for the
 connection, opens the trace file read-only without following links, verifies the
-requested position, streams from it and follows new lines, and reports a change of the
-file's identity (device, inode, birth time) rather than smoothing a rotation or a
-truncation over. A position that does not verify refuses before a byte is sent. A caller
-reading the record this way reads the file through no grant of its own, so the
-territory's layout gives it nothing.
+requested position, and writes a header line naming the file's identity (device, inode,
+birth time), then the trace's own lines exactly as written, following new lines with a
+heartbeat while idle, and it reports a change of the file's identity rather than
+smoothing a rotation or a truncation over. A position that does not verify refuses
+before a byte is sent. A caller reading the record this way reads the file through no
+grant of its own, so the territory's layout gives it nothing.
 
 **The stream is also the program's one fault carrier,** per the fault-carrier
 ruling of 2026-08-01. A fault the worker survives rides it as the `fault` event of
@@ -177,10 +181,10 @@ the operator inside the aggregate.
 
 ## 6. Prohibitions
 
-**On admin.** It carries no work inward, however an invocation frames it. It emits
-the stream to the declared sink, and serves the sink's file read-only through the trace
-socket to a role-holder, and to no other reader, and it repairs, reconciles, and
-adjudicates nothing on the way through, per `weaver-admin-PRD` section 2. At either
+**On admin.** It carries no work inward, however an invocation frames it. It emits the
+stream to the declared sink, and serves the sink's file read-only through the trace
+socket to its one declared reader, and to no other reader, and it repairs, reconciles,
+and adjudicates nothing on the way through, per `weaver-admin-PRD` section 2. At either
 socket it reads no request before the peer is admitted, authorizes nothing on the
 claimed person, and does nothing with root on the trace socket but read the file.
 
@@ -189,9 +193,10 @@ one-way, and tooling that wants to act on what it reads comes back by running a 
 at the shell or at the lifecycle socket under a granted role. The monitoring is the
 outside's job and the verb is admin's, per the basic loop's section 2.
 
-**On a role-holder.** It acts within the verbs `grants` answers, asserts no identity the
-kernel did not supply, and reads the record through the trace socket rather than
-through any grant into the territory.
+**On a caller at the sockets.** It acts within the verbs `grants` answers and asserts no
+identity the kernel did not supply. The declared trace reader reads the record through
+the trace socket rather than through any grant into the territory, and fans it out, if
+at all, on WeaverWeb's side and never the box's.
 
 ## 7. Vocabulary
 

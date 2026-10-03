@@ -8,7 +8,7 @@ human's ruling of 2026-07-31.
 **Document ID:** `weaver-admin-harness-contract`
 **Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
-**Landing PR:** #58
+**Landing PR:** #63
 
 ---
 
@@ -175,28 +175,30 @@ per `weaver-state-PRD` section 4, the lineage of the save point the load restore
 whether the declaration's `restore` names it or the inventory selected the latest
 published by default, and none where no save point stands, beside it and apart from it
 the reset, where the agent's last run did not end in a clean unload, that run and the
-reason, whether or not a save point stands, the digests of the organ
-binaries admin started and of the two it hands the worker to fork, the agent's SPU and
-the gate, and the digests of the declaration and, as of 2026-10-02, of the prompt file
-it names. The state channel's end is the harness half of the socketpair admin created at
-the member's spawn, per the operator's ruling of 2026-08-26 carried at
-`weaver-harness-state-contract`: admin couriers it and speaks on it never. Its absence
-is the state leg not standing, never a refused load, and the two failure moments read
-differently on purpose: a member whose spawn failed puts no end on the enter, and one
-that died after the spawn is delivered and discovered as the closed pair the state
-contract's dead-peer clause already covers. The instructions and the election are in the
-directive because the ruling of `weaver-admin-PRD` section 6 gives admin no channel to
-the SPU, the gate, or the state member, so if admin's intent for any of them does not
-cross this seam it crosses nowhere. The kind is in the directive on the same argument
-one step earlier: it decides which components the fan-out stands up, the fan-out is the
-harness's, and a kind that does not cross here reaches no party that acts on it. On a
-diagnostic enter the gate instruction is absent as a matter of shape rather than
-omission, because the instruction names what the fan-out is to start and a diagnostic
-fan-out starts no Gate. Which refusal catches a directive whose members disagree with
-its kind is the Spec round's to place. The harness stands up an empty working structure,
-authors its opening event, `load` on a serving binding and whatever the diagnostic
-mechanism's own vocabulary names, which `weaver-harness-Spec` section 9 and
-`weaver-diagnostic-PRD` section 6 hold open, asks the SPU to admit against the
+reason, whether or not a save point stands, the digests of the organ binaries admin
+started and of the two it hands the worker to fork, the agent's SPU and the gate, the
+digests of the declaration and, as of 2026-10-02, of the prompt file it names, and as of
+2026-10-03 the digest of the agent's `roles.toml`, marked boundary and never
+constitution, and the cause, the caller's kernel uid and groups and its principal claim,
+on the operator's rulings on #63. The state channel's end is the harness half of the
+socketpair admin created at the member's spawn, per the operator's ruling of 2026-08-26
+carried at `weaver-harness-state-contract`: admin couriers it and speaks on it never.
+Its absence is the state leg not standing, never a refused load, and the two failure
+moments read differently on purpose: a member whose spawn failed puts no end on the
+enter, and one that died after the spawn is delivered and discovered as the closed pair
+the state contract's dead-peer clause already covers. The instructions and the election
+are in the directive because the ruling of `weaver-admin-PRD` section 6 gives admin no
+channel to the SPU, the gate, or the state member, so if admin's intent for any of them
+does not cross this seam it crosses nowhere. The kind is in the directive on the same
+argument one step earlier: it decides which components the fan-out stands up, the
+fan-out is the harness's, and a kind that does not cross here reaches no party that acts
+on it. On a diagnostic enter the gate instruction is absent as a matter of shape rather
+than omission, because the instruction names what the fan-out is to start and a
+diagnostic fan-out starts no Gate. Which refusal catches a directive whose members
+disagree with its kind is the Spec round's to place. The harness stands up an empty
+working structure, authors its opening event, `load` on a serving binding and whatever
+the diagnostic mechanism's own vocabulary names, which `weaver-harness-Spec` section 9
+and `weaver-diagnostic-PRD` section 6 hold open, asks the SPU to admit against the
 instruction it was handed, and starts Gate last where the kind declares one. It answers
 ready only when every step of the fan-out its kind declares has confirmed, or it
 refuses, and a refusal names where the fan-out stopped, so that admin rolls back what
@@ -204,7 +206,8 @@ was built without asking a second question. The answer, either way, closes the e
 and is the aggregate: one directive out, one answer back, and the organs appear in the
 answer's content rather than as parties to this seam.
 
-**Leave the run.** Opened by admin. Admin directs the harness to leave. The harness
+**Leave the run.** Opened by admin. Admin directs the harness to leave, supplying the
+cause as the enter does, which the harness records on its closing event. The harness
 stops Gate first where one stands, refuses while a turn is in flight, authors
 its closing event, `unload` on a serving binding and the diagnostic
 mechanism's counterpart where that vocabulary is elected,
@@ -214,21 +217,20 @@ the run did, finalized by nothing, per the ruling of 2026-08-01. As with enter, 
 answer is the aggregate and the organs appear in its content rather than as parties
 to this seam.
 
-**Stop the turn.** Opened by admin. Admin conveys the operator's intent to stop, one
-bit and no work. The harness aborts the turn in flight, the turn closes with the stop
-reason marked in place of a response, and the run stays open. The harness answers
-with the turn's fate, aborted naming the turn it closed, or at rest because nothing
-was in flight, and both are clean closes of the exchange rather than refusals,
-because the operator's intent is satisfied by the state either way. The answer is
-given only after the close event is placed, which is the announce-after-record
-discipline. Stop touches no run bracket. It is the channel
-the operator interrupt of `weaver-harness-PRD` section 2 arrives on, and it exists on
-this seam because the operator holds no other crossing. How the abort lands at the
-decoder is the harness's interior and crosses nowhere on this seam, and since
-2026-09-22 the same holds of a tool running when the stop arrives: the harness
-cancels the execution through `weaver-harness-gate-contract` section 2 and
-answers here after the turn's close is placed, the promise above carrying no
-invocation exception.
+**Stop the turn.** Opened by admin. Admin conveys the operator's intent to stop, one bit
+and no work beside its cause, which the harness records on the stop. The harness aborts
+the turn in flight, the turn closes with the stop reason marked in place of a response,
+and the run stays open. The harness answers with the turn's fate, aborted naming the
+turn it closed, or at rest because nothing was in flight, and both are clean closes of
+the exchange rather than refusals, because the operator's intent is satisfied by the
+state either way. The answer is given only after the close event is placed, which is the
+announce-after-record discipline. Stop touches no run bracket. It is the channel the
+operator interrupt of `weaver-harness-PRD` section 2 arrives on, and it exists on this
+seam because the operator holds no other crossing. How the abort lands at the decoder is
+the harness's interior and crosses nowhere on this seam, and since 2026-09-22 the same
+holds of a tool running when the stop arrives: the harness cancels the execution through
+`weaver-harness-gate-contract` section 2 and answers here after the turn's close is
+placed, the promise above carrying no invocation exception.
 
 **Observe the run.** Opened by admin, added 2026-09-04 per issue #435 as the observation
 exchange this contract's parties named as owed on 2026-08-06. Admin asks what stands and
@@ -337,8 +339,12 @@ started and of the agent's SPU and the gate it hands the worker, keyed by name, 
 declaration's digest as this crate read the file at the inventory, so the run and the
 record can both name what they were built from, the prompt file's digest as this crate
 read the file the declaration names, as of 2026-10-02, so the record can say which
-prompt the agent was given now that the declaration's digest no longer covers it, and
-the intent to stop.
+prompt the agent was given now that the declaration's digest no longer covers it, the
+boundary's digest as this crate read `roles.toml`, so the record declares who could
+reach the run without that list joining the tuple, the cause of every load, unload and
+stop, so the record says who changed the agent and on whose claim, and the intent to
+stop. Admin never writes the trace: it hands these facts to the harness, the single
+writer, as it hands the declaration's digest.
 
 **Admin guarantees** that the trace sink handle it passes refers to the sink the
 session's configuration declares, that the run reference distinguishes this run
