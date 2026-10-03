@@ -2118,7 +2118,7 @@ and one typed line on standard error names what is waited on and for how long be
 ask is written, so an operator who has not started the driver reads why the load stands
 still. The door stands only under a diagnostic binding, the preload being that binding's
 alone, and a short bound would refuse the enter unless the driver had sealed inside it,
-the identity ask's miss being the one the dead-peer clause does not convert. **A
+the identity ask's miss being one of the two the dead-peer clause does not convert. **A
 diagnostic enter therefore waits on the driver as its replay does and refuses without
 one after the bound**, and the answer it opens on is the record's own. **The instrument
 is perturbation, on the ordinal**: the first turn of a restoring run is numbered one,
