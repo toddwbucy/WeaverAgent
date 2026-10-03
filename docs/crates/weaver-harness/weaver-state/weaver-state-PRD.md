@@ -189,34 +189,34 @@ could reach is the one place a name can be replaced before it is dialed, so
 the channel that needs no name carries none. How the ends travel is the
 contract's mechanics, deliberately absent here.
 
-**A second door stands on this member as of 2026-08-24, under a diagnostic binding
-and, since 2026-09-04, under a serving load that elects a restore, per section 4 and
-issue #432.** `weaver-analysis-state-contract` names it, initiator first: the driver,
-an operator principal, preloads the holdings from a finished record it parsed outside
-the agent, whole under a diagnostic binding and whole or cut under a restore, and this
-member receives on a second socket what a live tee would have fed on the first, the
-same distillate shapes drawn from the first door's contract rather than redefined. The
-door's judgment is a credential's, this member's one such judgment since the first
-door authenticates by possession: it admits the operator principal and refuses every
-other peer, the agent's among them. Its name stands in this member's own territory,
-per the operator's ruling of 2026-08-26, where the agent's identity holds nothing. The
-door itself does not exist under a serving load that elects no restore, so the serving
-membrane of `weaver-agent-PRD` section 0 is untouched for every agent that stands
-from nothing, and a restoring load opens it to the one operator principal the
-diagnostic binding already admits and to nobody else. No ask crosses it, ever: the
-driver is a sender and never an asker, so section 5's who-else-may-ask cell keeps its
-answer, the serve direction having exactly the two ends it had. The door's opener
-retires the declared session's prior holdings in the same transaction, per the
-contract's section 2, so a preload lands against empty whatever stood, and a retry
-after a dead driver is a replacement rather than a double - the recovery invariant
-stated before the loss clause leans on it. With that in place the loss clause below
-covers the new door without amendment, the preload being rebuildable from the record
-more directly than any holding the tee fed. **The door is also where the trace reaches
-a rebuild**, the member never reading the record itself: with no save point, the whole
-record's distillates land through this door, per section 4, honouring every reset the
-record names. No tail replays on top of a save point by default; a tail landing on a
-stamped position is a door the contract does not yet say, and section 5 names that
-contract as owed.
+**A second door stands on this member as of 2026-08-24, under a diagnostic binding,
+and for the operator's offline save-point builder**, on the operator's ruling of
+2026-10-02 on #58, which retires the serving load that elected a record restore (issue
+#432). `weaver-analysis-state-contract` names it, initiator first: the driver, an
+operator principal, preloads the holdings from a finished record it parsed outside the
+agent, whole under a diagnostic binding and whole or cut for the builder, which writes
+the result as a save point, and this member receives on a second socket what a live tee
+would have fed on the first, the same distillate shapes drawn from the first door's
+contract rather than redefined. The door's judgment is a credential's, this member's one
+such judgment since the first door authenticates by possession: it admits the operator
+principal and refuses every other peer, the agent's among them. Its name stands in this
+member's own territory, per the operator's ruling of 2026-08-26, where the agent's
+identity holds nothing. The door itself never stands under a serving load, so the
+serving membrane of `weaver-agent-PRD` section 0 is untouched for every agent that
+serves, and the builder opens it to the one operator principal the diagnostic binding
+already admits and to nobody else. No ask crosses it, ever: the driver is a sender and
+never an asker, so section 5's who-else-may-ask cell keeps its answer, the serve
+direction having exactly the two ends it had. The door's opener retires the declared
+session's prior holdings in the same transaction, per the contract's section 2, so a
+preload lands against empty whatever stood, and a retry after a dead driver is a
+replacement rather than a double - the recovery invariant stated before the loss clause
+leans on it. With that in place the loss clause below covers the new door without
+amendment, the preload being rebuildable from the record more directly than any holding
+the tee fed. **The door is also where the trace reaches a rebuild**, the member never
+reading the record itself: with no save point, the whole record's distillates land
+through this door, per section 4, honouring every reset the record names. No tail
+replays on top of a save point by default; a tail landing on a stamped position is a
+door the contract does not yet say, and section 5 names that contract as owed.
 
 The nesting under `weaver-harness` carries domain membership and nothing else,
 per apex section 5.4: nesting is never process topology, and this member
@@ -294,27 +294,18 @@ effect at the next load, or at an SPU session reopened with the new prefix as a 
 restore that needs one does, per section 4. An identity rewritten by consolidation is
 the memory leg's and stays out, per apex section 9.
 
-**A session may stand on another record's holdings, per the operator's ruling of
-2026-09-04 on issue #432.** Under a load that elects a restore the door of section 3
-stands as it does under a diagnostic binding, admin having named it on the vector, and
-the driver of `weaver-analysis-state-contract` preloads the declared record through it,
-whole or through a named turn, the harness's asks at the open parking until the seal per
-`weaver-harness-state-contract` section 2, and the session's holdings are the record's
-up to that point: the identity as the first of them, the conversation after it, and the
-shape the asks answer from. The session name decides which, and every combination is
-ruled. The declaration's own session name with the record whole is a resume, the
-holdings retired and re-landed as every preload does. A new session name is a branch,
-standing on a prefix another session produced, at the cut where one is named and at the
-record's end where none is, and every distillate lands under the new name with its run
-and sequence as recorded, because custody bounds its answers to the session the opener
-declared. A cut under the record's own session name is refused before the preload, per
-`weaver-admin-Spec` section 4, because a session cannot rewind under its own name while
-its record carries what the cut would drop. Custody is indifferent to which: it holds
-what it was handed and answers what it is asked, and the record that stood the session
-is named on the new record's load, per `weaver-trace-PRD` section 3.1. The ground is the
-same as the identity's and the vectors': the record is the source, the prefix it
-conditions is computed from it on demand under the conditions the load declares, and
-nothing derived from it is kept.
+**A session branches from a record offline, through a save point**, on the operator's
+ruling of 2026-10-02 on #58, which retires the record restore of 2026-09-04 (issue
+#432). The declaration's `restore` names a save point and nothing else. Branching from a
+record, a prefix another session produced, is an operator-side step outside the agent:
+the builder rebuilds the holdings to a cut through the preload door, whole or through a
+named turn, and writes them as a save point, which a load then restores like any other.
+The save point names the record and the cut it was built from, so the record that stood
+the session is still named on the new record's load, per `weaver-trace-PRD` section 3.1.
+Custody is indifferent to how a save point was made: it holds what it was handed and
+answers what it is asked, and the ground stays the identity's and the vectors': the
+record is the source, and what it conditions is computed from it under the conditions
+the load declares.
 
 One member instance serves one run of one agent: it stands with each run, ingests a
 stream whose events already carry their session, run, and turn identity, and its
@@ -373,7 +364,10 @@ save point and the live context share is the loop's choice through the same two 
 later. A save point that needs a different system prompt cannot be served by a flush:
 it needs the SPU session closed and reopened with the new prefix, one prefix recompute
 with the weights resident, never a model reload. The trace records the restore, by
-digest, and the flush. Who triggers a live restore is later work.
+digest, and the flush. **The harness triggers a live restore**, on the operator's ruling
+of 2026-10-02 on #58, through the `restore` ask of `weaver-harness-state-contract`
+section 2, and flushes on its answer; the channel that carries the operator's demand to
+the loop is later work.
 
 **An edited save point is an input, not derived state.** A save point the operator edits
 offline holds what the trace never recorded, so loading one records its digest, marked
@@ -404,31 +398,37 @@ the ranking and the classifying are the loop's through the SPU rather than the s
 its own act, with its own custody clause, and section 5 names that cell without laying
 one in.
 
-**Custody is the operator's directory and the member's process.** The wall of section 2
-is one requirement: the agent's uid reaches no store, because a store the model's uid
-could read would hand the model its own state through an ordinary tool call. **The
-live store is in the member's memory**, in a process running under the member's own
-account, which the agent's uid cannot read or signal. **The snapshot is a file in the
+**Custody is the member's room, the operator's directory, and the member's process.**
+The wall of section 2 is one requirement: the agent's uid reaches no store, because a
+store the model's uid could read would hand the model its own state through an ordinary
+tool call. **The live store is in the member's memory**, in a process running under the
+member's own account, which the agent's uid cannot read or signal. **The member writes
+each save point into its own room**, the territory's `state/`, which it owns `0700` and
+which the agent's uid cannot enter, on the operator's ruling of 2026-10-02 on #58: a
+new file per save point, never one rewritten, so the write needs no handle from admin
+and no admin resident. **Admin, as root, publishes each finished save point into the
 operator's declaration directory**, `~/.weaveragent/<agent>/` by default, beside the
-declaration and the system prompt, per the operator's ruling of 2026-10-02. That
-directory stays `0700` to the operator, so the member cannot open it by path and does
-not try: **admin, as root, opens the snapshot file and hands the member the open
-descriptor**, for reading at the load and for writing at the snapshot, exactly as it
-opens the trace sink and hands it down, and for the same reasons, per
-`weaver-admin-Spec` section 6. The member sees a handle and never a path, and the
-agent never reaches it. The custody that once diverged from the trace's, an embedded
-file opened by path in a territory the member owned, converges on it: both are held by
-descriptor, opened by admin and handed down. The member's territory keeps the preload
-door's name and nothing of the store.
+declaration and the system prompt, at the next load or unload, per `weaver-admin-Spec`
+section 6, so a save point taken on demand lands with the operator at the next verb, and
+one that survived an unclean stop is published at the next load. That directory stays
+`0700` to the operator, so the member cannot open it by path and does not try. **A load
+restores through a descriptor**: admin, as root, opens the chosen save point in the
+operator's directory, the latest by default or the one `restore` names, an edited one
+included, and hands the member the open descriptor at spawn, exactly as it opens the
+trace sink and hands it down, and for the same reasons. **A live restore reads the
+member's own room**, the save point the member itself wrote and still holds, with no
+admin; a save point that is only in the operator's directory restores at a load. The
+member sees its own room and a descriptor and never the operator's path, and the agent
+never reaches either.
 
 **The store is reached through the seam, never as a file and never as a
-connection.** A snapshot opened from two processes would be a seam crossing a process
+connection.** A save point opened from two processes would be a seam crossing a process
 line without a socket, which the first invariant forbids however convenient the driver
-makes it: the member is the one holder of the engine and of the snapshot's handle, and
-the harness asks the member. The harness's speed rides the seam's standing channel,
-which this workshop has measured well below any control loop's cadence, and a caller
-that someday needs faster than the seam is a ruling for that day rather than a shared
-file today.
+makes it: the member is the one holder of the engine and of its save points, and the
+harness asks the member. The harness's speed rides the seam's standing channel, which
+this workshop has measured well below any control loop's cadence, and a caller that
+someday needs faster than the seam is a ruling for that day rather than a shared file
+today.
 
 ## 5. Open cells
 

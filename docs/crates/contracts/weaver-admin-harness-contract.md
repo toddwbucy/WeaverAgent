@@ -323,9 +323,11 @@ fan-out admits, the gate instruction the fan-out starts where the kind declares 
 the state election the tee applies, resolved to the ruled default where the declaration
 is silent, the store election the member stands on with its database and role under the
 service engine, resolved to the embedded engine where the declaration is silent, the
-lineage of the restore where the declaration elects one, the parent's session, the run
-the cut falls in, and the turn the holdings stop at, resolved by admin and never the
-record's path, so the harness names its parent without opening anything, the digests of
+lineage of the save point the load restores, its digest, the run and sequence it covers,
+whether the operator supplied it, and, where the offline builder made it from a record,
+that record's session and the run and turn of its cut, resolved by admin and never the
+save point's path, on the operator's rulings of 2026-10-02 on #58, so the harness names
+where its state came from without opening anything, the digests of
 the organ binaries admin started and of the agent's SPU and the gate it hands the
 worker, keyed by name, the declaration's digest as this crate
 read the file at the inventory, so the run and the record can both name what they were

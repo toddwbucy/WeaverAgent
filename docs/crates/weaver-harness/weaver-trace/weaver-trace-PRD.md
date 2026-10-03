@@ -331,15 +331,17 @@ is what the election exists to buy: the volume is an order of magnitude
 past everything else the record carries, so a kind always present would
 make the record unaffordable rather than complete.
 
-**`elision` is the twentieth and `refusal` the twenty-first**, both of
-2026-08-22 and both argued at their own clauses below - the table and the
-count word above caught up to them on 2026-08-26. **`recall` is the twenty-second**, on
-the operator's ruling of 2026-09-26 under epic #690: the M1 run's post-flush input was
-drawn from a state-seam ask the record did not hold, and `weaver-trace-Spec` section 3
-argues the shape. **`message.restored` is the twenty-third**, on the operator's ruling
-of 2026-09-26 under the same epic: a branch's record did not hold the conversation its
-model was opened with, each restored message refused turnless under its turned kind, and
-the same section argues the shape. **`score` is the twenty-fourth**, on the operator's
+**`elision` is the twentieth and `refusal` the twenty-first**, both of 2026-08-22 and
+both argued at their own clauses below - the table and the count word above caught up to
+them on 2026-08-26. **`recall` is the twenty-second**, on the operator's ruling of
+2026-09-26 under epic #690: the M1 run's post-flush input was drawn from a state-seam
+ask the record did not hold, and `weaver-trace-Spec` section 3 argues the shape.
+**`message.restored` is the twenty-third**, on the operator's ruling of 2026-09-26 under
+the same epic: a branch's record did not hold the conversation its model was opened
+with, each restored message refused turnless under its turned kind, and the same section
+argues the shape. No load authors it since the operator's rulings of 2026-10-02 on #58,
+which retire the record restore it recorded, and it stays in the vocabulary so the
+records that carry it stay readable. **`score` is the twenty-fourth**, on the operator's
 rulings of 2026-09-09 and 2026-09-26 on issue #523: a task's verdict on a run is a fact
 about that run, so the record carries it, and the same section argues the shape.
 
@@ -565,14 +567,16 @@ unreadable at the close is said to be so rather than reported unchanged. Absence
 record older than the act and is read as those facts being unrecoverable, never as a
 default. The record then says what the agent's prompts were built by and what its state
 was built into, which the elections alone could not. **The `load` event names its
-lineage and its stack as of 2026-09-04**, per issue #432. Where the session stands from
-a record it names the parent's session and run and the turn the holdings stop at, so a
-resume and a branch each say what they came from, and every load names the digests of
-the organ binaries that ran it, keyed by name, so a record is sufficient for its own
-conditions and the experiment deposits stop being where the stack is remembered. The
-record is the cache's canonical form and nothing derived from it is kept: a session that
-stands from a record recomputes its prefix from the record under whatever conditions the
-load declares, and the load event is where those conditions and that lineage are read.
+lineage and its stack as of 2026-09-04**, the lineage reshaped on the operator's rulings
+of 2026-10-02 on #58, which retire the record restore of issue #432. Where the load
+restores a save point it names the save point by digest, the run and sequence it covers,
+whether the operator supplied it, and, where the offline builder made it from a record,
+that record's session and the run and turn of its cut, so a resume and a branch each say
+what they came from; and every load names the digests of the organ binaries that ran it,
+keyed by name, so a record is sufficient for its own conditions and the experiment
+deposits stop being where the stack is remembered. The record is the canonical form and
+a save point is a cache of what its replay produces, so the load event is where the
+conditions and the lineage of a session's state are read.
 
 **The prompt file the load was given is one more such fact, as of 2026-10-02.** On the
 operator's ruling of that date the system prompt is a file the declaration names rather

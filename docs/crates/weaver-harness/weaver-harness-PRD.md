@@ -194,11 +194,11 @@ the family library renders, and the rendered reality returns on the report path,
 template identity, token identifiers, and block partition, so the harness authors what
 the model saw without having rendered it. No model is a build or run dependency of this
 crate, now stronger than a discipline: the per-model knowledge lives across a seam
-entirely. The deterministic assembly floor stands alone, always. Under a restoring load,
-per the ruling of 2026-09-04 on issue #432, the recorded conversation through the cut is
-prefix material beside the identity, seated once and permanent for the residency,
-because a session standing from a record is conditioned by that record the way every
-session is conditioned by its system prompt.
+entirely. The deterministic assembly floor stands alone, always. Under a restoring load
+the store answers from a save point and the prefix is the identity alone, on the
+operator's rulings of 2026-10-02 on #58, which retire the record restore of issue #432:
+the restored state reaches the model the way any held state does, through the context
+the loop composes each turn.
 
 **Decode against a resident session.** The harness issues decode requests over the
 decode socket against a resident KV session rather than resending the conversation

@@ -635,39 +635,35 @@ from: weaver-admin
 to: admin-store-gate-asks-as-the-member
 ```
 
-**A restore is judged here too, as of 2026-09-04, per issue #432.** A declaration
-electing one names a record, and the walk reads it under this crate's own custody: a
-record that cannot be read refuses `BoundaryUnverified`, and a cut naming a run the
-record does not hold, or a turn that run does not hold, refuses `ConfigInvalid` naming
-`restore.through`, the record being the one fact that can say whether the cut exists.
-**The session name decides what the restore is, and every combination is ruled.** The
-declaration's own session name with the record whole is a resume. A new session name is
-a branch, at the cut where one is named and at the record's end where none is. A cut
-under the record's own session name refuses `ConfigInvalid` naming `restore.through`,
-because a session cannot rewind under its own name while its record carries the turns
-the cut would drop. The lineage that crosses the enter is resolved here: the parent's
-session and run and the turn the holdings stop at, a whole record resolved to its last
-run's last turn. The record is never handed to the agent and never named to the worker,
-on the same descriptor discipline as the sink: what the harness receives is the enter's
-copy of the election, and what the member receives is the record's holdings through the
-door of section 6. **The judgment is this crate's because the record is**, per charter
-section 4.3's custody rule: a look at a thing admin holds, taken at the load's
-cheapest moment before any process exists, and an ask of nobody, which is the same
-rule that leaves the artifact to the organ answering the opposite way here. **The
-instrument is perturbation, as of 2026-09-06**: a cut naming
-a run the record does not hold refuses naming `restore.through`, watched to fail when
-the run check is dropped, and a cut under the record's own session name refuses the
-same way, watched to fail when the session rule is dropped and a rewind under its own
-name resolves to a lineage.
+**A restore is judged here too, and it names a save point**, on the operator's ruling of
+2026-10-02 on #58, which retires the record restore of 2026-09-04 (issue #432). A
+declaration electing one names a save point by its bare file name in the declaration
+directory of section 9, and the walk reads it under this crate's own custody: the name
+is judged as `identity-file`'s is, a save point absent from the directory refuses
+`ConfigInvalid` naming `restore`, and one that fails section 9's judgment of the entries
+it reads, a link, a wrong owner, or a group- or other-writable file, refuses
+`BoundaryUnverified`. A save point the operator edited is an input like a prompt file,
+admitted the same way. The lineage that crosses the enter is resolved here from the save
+point's stamp: the run and the sequence it covers, and, where the operator's offline
+builder made it from a record, the record and the cut it names. The save point is never
+handed to the agent and never named to the worker, on the same descriptor discipline
+as the sink: what the member receives is a descriptor this crate opened, per section
+6. Branching from a record is the builder's, outside the agent, and this crate never
+reads a record for a load. **The judgment is this crate's because the save point is**,
+per charter section 4.3's custody rule: a look at a thing admin holds, taken at the
+load's cheapest moment before any process exists, and an ask of nobody. **The
+instrument is perturbation**: a `restore` naming an absent save point refuses naming
+`restore`, watched to fail when the presence check is dropped, and a linked save point
+refuses `BoundaryUnverified`, watched to fail when the entry judgment is dropped.
 
 ```graph
-node: admin-restore-cut-judged-at-the-inventory
+node: admin-restore-save-point-judged-at-the-inventory
 kind: assertion
 tag: perturbation
 
 edge: asserts
 from: weaver-admin
-to: admin-restore-cut-judged-at-the-inventory
+to: admin-restore-save-point-judged-at-the-inventory
 ```
 
 **A reachable organ's boundary is judged here when one exists, per charter section 4.3
@@ -1217,47 +1213,35 @@ from: weaver-admin
 to: admin-member-territory-is-the-members-own
 ```
 
-**Its vector is the territory and, under a diagnostic binding or a restoring load, the
-preload socket path, with the first door's end inherited beside it rather than named on
-it.** Per the operator's ruling of 2026-08-26 the first door is a socketpair this crate
-creates at the spawn: the member's end crosses by inheritance, its number the code act's
-one remaining election, and the harness's end crosses inside the enter directive, so no
-socket path for that door rides the vector and no name exists to ride it. The agent's
-uid retires from the vector with both of its uses, the first door judging no credential
-under possession and the preload door admitting the operator principal and refusing the
-rest without knowing the agent by number. The territory is what the member needs to open
-the embedded store, and under the service engine the vector carries the store's socket,
-the database, and the role beside it, per `weaver-state-Spec` section 2, the engine
-itself first so the member knows which port to stand. The spelling is four flags ahead
-of the positionals, `--engine`, `--store-socket`, `--database`, and `--role`, each
-followed by its value, the first on every vector and the other three under the service
-engine alone, so the territory and the preload path keep their places behind them. **The
-preload path is present where the resolved kind is diagnostic, and since 2026-09-04
-where a serving declaration elects a restore**, per `weaver-agent-PRD` section 6 as
-ruled 2026-08-24 and issue #432, and its absence is a serving load standing from nothing
-rather than a defect: the member binds the preload name only where this vector carries
-one, so a serving binding electing no restore stands no named door by the value not
-being there. The kind is section 4's inventory's, resolved once and read here, which is
-the same single-resolution rule the enter payload's `EnterBinding` follows in section 7
-- the verb and the load cannot resolve differently because only one site resolves.
-
-**Under a restoring load this crate names the door and dials it never**, per issue #432
-as corrected on review: the member stands with the door because the vector carries its
-name, as under a diagnostic binding, and the preload is the driver's, `weaver-analysis
-preload` under the operator principal, with the cut and the session rewrite of that
-Spec's section 4 where a branch needs them, per `weaver-analysis-state-contract`. This
-crate sends the enter as it always has, and the harness's asks at the open park until
-the driver's seal lands, per `weaver-harness-state-contract` section 2, so the load's
-answer arrives when the holdings stand. One party dials the door under every binding,
-the seam keeps its one via, and this crate reads the record for judgment alone. The
-parent's name survives on the load event's lineage alone.
+**Its vector is the territory and, under a diagnostic binding, the preload socket path,
+with the first door's end inherited beside it rather than named on it.** Per the
+operator's ruling of 2026-08-26 the first door is a socketpair this crate creates at the
+spawn: the member's end crosses by inheritance, its number the code act's one remaining
+election, and the harness's end crosses inside the enter directive, so no socket path
+for that door rides the vector and no name exists to ride it. The agent's uid retires
+from the vector with both of its uses, the first door judging no credential under
+possession and the preload door admitting the operator principal and refusing the rest
+without knowing the agent by number. The territory is what the member needs to open the
+embedded store, and under the service engine the vector carries the store's socket, the
+database, and the role beside it, per `weaver-state-Spec` section 2, the engine itself
+first so the member knows which port to stand. The spelling is four flags ahead of the
+positionals, `--engine`, `--store-socket`, `--database`, and `--role`, each followed by
+its value, the first on every vector and the other three under the service engine alone,
+so the territory and the preload path keep their places behind them. **The preload path
+is present where the resolved kind is diagnostic and nowhere else**, per
+`weaver-agent-PRD` section 6 as ruled 2026-08-24, the serving load that elected a record
+restore having retired on 2026-10-02 (#58), and its absence is a serving load rather
+than a defect: the member binds the preload name only where this vector carries one, so
+a serving binding stands no named door by the value not being there. The kind is section
+4's inventory's, resolved once and read here, which is the same single-resolution rule
+the enter payload's `EnterBinding` follows in section 7, so the verb and the load cannot
+resolve differently because only one site resolves.
 
 **The instrument is perturbation, and the claim is this site's half of a two-sided
 one.** **What is watched is the vector this crate composes, in both directions, and each
-names its removal.** A serving inventory electing no restore puts one value on it,
-watched to fail when the arm that appends the preload name is made unconditional and
-such a load carries two. A diagnostic inventory, or a serving one whose declaration
-elects a restore, puts two, watched to fail when that same arm is removed and a
+names its removal.** A serving inventory puts one value on it, watched to fail when the
+arm that appends the preload name is made unconditional and such a load carries two. A
+diagnostic inventory puts two, watched to fail when that same arm is removed and a
 diagnostic load carries one. **Two watches rather than one, because one would not fail
 on both directions**, and the pair is what apex section 11 asks of a perturbation
 record.
@@ -1290,22 +1274,28 @@ from: weaver-admin
 to: admin-preload-name-follows-the-kind
 ```
 
-**The snapshot is handed to the member as a descriptor, never as a path**, on the
-operator's ruling of 2026-10-02 on issue #1, exactly as section 5 hands the trace sink
-down and for the same reasons. The member's state lives in its memory and crosses loads
-by a snapshot file in the operator's declaration directory, section 9's
-`declaration-directory`, `~/.weaveragent/<agent>/` by default, beside the declaration
-and the system prompt. That directory stays `0700` to the operator, so the member could
-not open it by path and is never asked to: this crate, as root, opens the latest
-snapshot for reading and the snapshot file for writing, each close-on-exec in the
-opening call, and places both at their fixed numbers in the member's process at the
-spawn alone, the way it places the first door's end, per `weaver-state-Spec` section 2.
-No path for either rides the vector, the member sees a handle and never a name, and the
-agent, whose worker never holds either descriptor, never reaches the snapshot. A
-snapshot absent from the directory is an absent reading descriptor and no refusal, the
-member falling back to a rebuild from the trace. **This is interior to this crate**: the
-verbs, their arguments and their answers are unchanged, and the operator contract
-carries nothing new.
+**A save point is restored through a descriptor and published at the verb, never
+reached by path**, on the operator's rulings of 2026-10-02 on issues #1 and #58,
+exactly as section 5 hands the trace sink down and for the same reasons. The member's
+state lives in its memory and crosses loads by save points: the member writes each into
+its own room, the territory's `state/`, a new file per save point and never one
+rewritten, per `weaver-state-PRD` section 4. **At the load, this crate restores**: as
+root it opens the chosen save point in section 9's `declaration-directory`,
+`~/.weaveragent/<agent>/` by default, the one `restore` names or the latest published
+where none is named, close-on-exec in the opening call, and places it at its fixed
+number in the member's process at the spawn alone, the way it places the first door's
+end, per `weaver-state-Spec` section 2. No path rides the vector, and the agent, whose
+worker never holds the descriptor, never reaches the save point. No save point in the
+directory is an absent descriptor and no refusal, the member rebuilding from the trace.
+**At every load and unload, this crate publishes**: as root, before the spawn at a load
+and after the member has stopped at an unload, it moves each finished save point from
+the member's room into the declaration directory, under a new name stamped with the run
+and sequence it covers, and overwrites nothing; one an unclean stop left behind is
+published at the next load. That directory stays `0700` to the operator, so a save
+point on demand lands with the operator at the next verb, and a live restore of one the
+member still holds reads the member's own room with no part of this crate. **This is
+interior to this crate**: the verbs, their arguments and their answers are unchanged,
+and the operator contract carries nothing new.
 
 **The one name left stands under the member's territory, and it is derived
 rather than told.** Per the operator's ruling of 2026-08-26 the preload name

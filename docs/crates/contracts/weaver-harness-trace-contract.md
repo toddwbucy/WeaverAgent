@@ -354,7 +354,7 @@ permitted when they name the committed source range they represent and do not cl
 completeness beyond it. A derived view is never a durable home. The divergence
 artifact an earlier version excepted here left with the leave-time comparison on
 2026-08-01, there being no program-owned record for the working structure to
-diverge from. **The state member's snapshot is a derived view of the kind this rule
+diverge from. **The state member's save point is a derived view of the kind this rule
 permits and stands outside this seam**: it names the trace position it covers, claims
 nothing past it, and yields to the record wherever the two disagree, per
 `weaver-state-PRD` section 4. It is durable as a cache is and never a home, every

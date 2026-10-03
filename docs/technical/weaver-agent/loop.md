@@ -175,8 +175,9 @@ The springs are where wires land. They are not everywhere.
   reach the record because the harness authored them, never because the loop wrote.
 - **No tool result is fabricated.** A result has exactly one construction site.
 - **No raw state reaches the agent.** State management carries across sessions under
-  custody, in a snapshot in the operator's directory that the agent never reaches, and
-  neither the snapshot nor the agent's own raw trace is ever handed to it. The agent
+  custody, in save points in the member's room and the operator's directory that the
+  agent never reaches, and neither a save point nor the agent's own raw trace is ever
+  handed to it. The agent
   gets what the loop serves it as composed context and nothing else.
 - **No handle to the hot cache.** The loop elects the flush and never touches what
   the flush clears.

@@ -12,8 +12,8 @@
 
 ## 0. What this document is
 
-How the store primitive is represented: its process, its store and the snapshot
-that carries it across loads, its territory, the slot for the loop's schema, and
+How the store primitive is represented: its process, its store and the save points
+that carry it across loads, its territory, the slot for the loop's schema, and
 the shapes both halves of the seam take. Written from the merged corpus
 alone. The charter carries every why, and where reasoning appears here it
 restates a charter clause and cites it. The serve half stood deliberately
@@ -23,8 +23,8 @@ with the context-injection loop's act of 2026-08-19 at section 4.
 ## 1. The crate
 
 A binary crate, one process per run of one agent, spawned at load and retired at
-unload while its holdings stand in the latest snapshot, per `weaver-state-PRD`
-section 3. The charter's one sentence is asserted at the crate: custody without
+unload while its holdings stand in the latest save point, per `weaver-state-PRD`
+sections 3 and 4. The charter's one sentence is asserted at the crate: custody without
 policy. **The store initiates nothing and holds only its schema's shape**, and the
 judging and the ranking are the loop's, made through the SPU and recorded on the
 trace before they reach this crate as distillates, per the charter's section 2.
@@ -57,31 +57,36 @@ They build the opener and distillate through `weaver_trace::opener` and
 and the dependency cell is closed by the operator's ruling of 2026-09-22,
 recorded in charter section 5 under Working Process section 6.
 
-**Dependencies, external.** One engine, behind the feature named for it: `rusqlite`
-with its bundled engine, so the store's version is the build's fact rather than the
-host's, its serialization interface carrying the snapshot, pinned by the lock file
-like every dependency. **The `postgres` client and its feature retire** with the
-service engine, on the operator's ruling of 2026-10-02 reversing #38, in the code act
-that removes the engine. `serde_json` for the canonical event JSON the ingest reads.
-`nix` for the preload door's credential check and for the descriptor handling both
-doors and the snapshot handles require. Nothing else: no async runtime, no logging
-crate, no HTTP, per the corpus's standing refusals.
+**Dependencies, external.** One engine, behind the feature named for it: `rusqlite` with
+its bundled engine, so the store's version is the build's fact rather than the host's,
+its serialization interface carrying the save point, pinned by the lock file like every
+dependency. **The `postgres` client and its feature retire** with the service engine, on
+the operator's ruling of 2026-10-02 reversing #38, in the code act that removes the
+engine. `serde_json` for the canonical event JSON the ingest reads. `nix` for the
+preload door's credential check and for the descriptor handling both doors and the save
+point's descriptor require. Nothing else: no async runtime, no logging crate, no HTTP,
+per the corpus's standing refusals.
 
 ## 2. The process and its territory
 
 The member runs under its own account, owning one subdirectory in the
 operator-side territory where the session record lives, per the charter's
-custody ruling. **The store is not in that subdirectory**: it lives in the member's
-memory, and the subdirectory holds the preload door's name and nothing of the store.
-**The snapshot arrives as two handles and never as a path**, per the operator's
-ruling of 2026-10-02 and `weaver-admin-Spec` section 6: admin, as root, opens the
-latest snapshot in the operator's declaration directory for reading and the snapshot
-file for writing, and the member inherits both at its spawn the way it inherits the
-first door's end. Where no snapshot exists the reading handle is absent, which is an
-agent's first load or a snapshot lost, and the reload of section 3 falls back. The
-handles' numbers are a fixed convention between this crate and admin, the code act's
-to elect beside the first door's, and each is probed before it is adopted, by the
-rule below, a regular file and the access mode its use needs. The engine flag and the
+custody ruling. **The live store is not in that subdirectory**: it lives in the
+member's memory. The subdirectory, the territory's `state/`, is the member's room: it
+holds the preload door's name where one stands and **the save points the member
+writes**, a new file each and never one rewritten, per the operator's ruling of
+2026-10-02 on #58 and `weaver-state-PRD` section 4, and admin, as root, publishes each
+finished one into the operator's declaration directory at the next load or unload.
+**The save point a load restores arrives as a descriptor and never as a path**, per
+`weaver-admin-Spec` section 6: admin opens the chosen save point in the operator's
+directory for reading, the latest by default or the one `restore` names, and the member
+inherits it at its spawn the way it inherits the first door's end. Where no save point
+exists the descriptor is absent, which is an agent's first load or every save point
+deleted, and the load of section 3 rebuilds. The descriptor's number is a fixed
+convention between this crate and admin, the code act's to elect beside the first
+door's, and it is probed before it is adopted, by the rule below, a regular file open
+for reading. A live restore reads a save point from the member's own room by name, per
+section 4, and needs no descriptor. The engine flag and the
 service engine's three flags leave the vector with that engine, in the code act that
 removes it, `weaver-admin-Spec` section 6 moving in the same act.
 
@@ -99,20 +104,21 @@ traffic and close it on exit. The probe borrows and owns nothing, so the refusal
 nothing that is not this process's own. The choreography election below is narrowed once
 already by section 4 and now again by the ruling: what remains that act's is the number
 and the probe's mechanics. The preload door's name arrives on the vector under a
-diagnostic binding or a serving load that elects a restore, per issue #432, this member
-binding whatever name it is given and none it is not, and binds under this member's own
-territory, the credential judgment of section 4 unchanged on it.
+diagnostic binding alone, the record restore of issue #432 retiring on the operator's
+rulings of 2026-10-02 on #58, this member binding whatever name it is given and none it
+is not, and binds under this member's own territory, the credential judgment of section
+4 unchanged on it.
 
 ## 3. The store
 
 **The store is a port and one engine stands behind it, per the operator's ruling of
 2026-10-02 on issue #1.** `src/store.rs` declares `Store`, the port: open with the
-loop's schema, load a snapshot, land a distillate whole, build the elected indexes,
-answer the asks, and write a snapshot. The ingest and serve of section 4 speak to the
+loop's schema, load a save point, land a distillate whole, build the elected indexes,
+answer the asks, and write a save point. The ingest and serve of section 4 speak to the
 port and never to an engine, so the seam's traffic is the same whatever answers it.
 **One engine stands**, `Sqlite`, an embedded database opened in memory in this process,
 one database and never more, with no file of its own, no server, no network and no
-pool. Its holdings reach the disk only as a snapshot, per the clause below. **The
+pool. Its holdings reach the disk only as a save point, per the clause below. **The
 service engine, `Postgres`, retires** with its module, its feature and its suites, in
 the code act that removes it, the ruling of 2026-09-04 that elected it being reversed
 because a shared database server breaks individuation, per the charter's section 4.
@@ -298,34 +304,36 @@ schema does not admit has nowhere to land**: a distillate whose landing the sche
 constraints refuse rolls back whole, by the transaction rule of section 4, and stands
 in the trace and in the neutral substrate and nowhere else. The store applies the
 schema mechanically and holds no opinion about it, so a schema is never this crate's
-to write, repair or extend. **A snapshot carries the schema it was taken under**, and a
-reload whose opener carries a different schema is a snapshot that disagrees, so the
+to write, repair or extend. **A save point carries the schema it was taken under**, and
+a load whose opener carries a different schema is a save point that disagrees, so the
 fallback of the clause below runs and rebuilds the holdings under the new schema from
 the trace.
 
-**Durability is the snapshot's, and the charter is the license.** The derivative is
+**Durability is the save point's, and the charter is the license.** The derivative is
 rebuildable from the record and the session never depends on it, per the loss clause,
 so the live store pays no disk write per landing: it holds its rows in memory, and the
-crash cost is what landed since the latest snapshot, which the next reload replays
-from the trace. **A snapshot is the whole database serialized**, written through the
-writing handle when the harness asks for one with the contract's `snapshot` ask, at
-the interval the loop's settings name and at the leave, and never on the store's own
+crash cost is what landed since the latest save point, which the record keeps and no
+default replays. **A save point is the whole database serialized**, written as a new
+file in the member's room when the harness asks for one with the contract's `snapshot`
+ask, at every leave and on the operator's demand, and never on the store's own
 initiative. **It is stamped with the trace position it covers**, the run and the
 sequence of the last distillate landed in it, and with a check over its own bytes, so a
-snapshot written in part or damaged since reads as corrupt rather than as holdings.
+save point written in part or damaged since reads as corrupt rather than as holdings,
+and its finished name is given only once the write is whole, so a torn write leaves no
+file under a finished name.
 
-**The reload is the latest snapshot plus the trace's tail.** At the spawn the member
-reads the snapshot through the reading handle into its in-memory database and holds its
-stamp. The tail, every distillate the record holds past that position, lands through the
-preload door of section 4 by the same path as every other landing, and the asks park on
-the door's seal as they do under a restoring load, so nothing is served from a snapshot
-the tail has not yet caught up. **A full rebuild from the trace is the fallback only**:
-where the reading handle is absent, where the snapshot's check fails, or where the
-snapshot disagrees with the trace, its stamp naming a position the record does not hold
-or the schema it carries differing from the opener's, the member discards what it read
-and stands empty, and the whole record lands through the same door. A reload and a full
-rebuild arrive at the same holdings by construction, and section 5 names the instrument
-that holds them equal.
+**A load restores a save point and replays no tail.** At the spawn the member reads the
+save point through the descriptor into its in-memory database and holds its stamp, per
+the operator's rulings of 2026-10-02 on #58. After an unclean stop that is the latest
+known-good save point, and the harness records the reset on the trace, so a rebuild
+honours it; nothing the record holds past the stamp lands by default. **A full rebuild
+from the trace is the fallback only**: where the descriptor is absent, where the save
+point's check fails, or where it disagrees with the opener's schema, the member discards
+what it read and stands empty, and the whole record lands through the preload door of
+section 4 by the same path as every other landing, honouring every reset the record
+names. A restore and a full rebuild to the same position arrive at the same holdings by
+construction, and section 5 names the instrument that holds them equal. Which party
+stands the door and drives that rebuild at a serving load is section 6's to elect.
 
 ## 4. The ingest and the serve
 
@@ -398,33 +406,42 @@ run groups are ordered by the least `id` each holds, each carrying its kinds and
 counts as the envelope spelled them, rendered as the contract's answer frame and written
 back on the channel as one answer frame, the frame's byte shape riding the encoding
 election of section 6. The `recall` ask reads the event rows of the four message kinds
-and of `message.restored`, a branch's inherited conversation (#697), with their pairs,
-ordered by the `id` column like every landing-order answer, and where `last-turns`
-bounds it the bound resolves as the distinct session, run, and turn triples of the most
-recent turns by id, the rows outside them left unread, a turn label recurring across
-runs naming two different turns. The answer serves each event as the distillate's own
-shape, envelope and pairs, each pair the value that crossed: read back from `field`, or
-rendered from section 3's typed rows through the renderer the landing checked it
-against. One reader serves every answer, so the recall, the replay and the identity
-cannot spell one event two ways. The `grants` ask reads no event row: it reads the
-store's own boundary, which with the store in memory is the snapshot's, the owner, group
-and mode of the file the writing handle names, read through the handle and never by
-path, and answers them in a fixed order as `{"answer":{"grants":{"surface":[...]}}}`,
-each line a string, per the contract's fourth ask of 2026-09-04. The `identity` ask
-reads the event rows of kind `message.system` whose turn is absent and whose run is the
-run of the newest such row, ordered by the `id` column, with their pairs, and answers
-them as `{"answer":{"identity":{"messages":[...]}}}`, each the distillate's own shape,
-an empty list where the session holds none, per the contract's fifth ask of 2026-09-04.
-A malformed ask is dropped whole the way a malformed distillate is, and the resulting
+and of `message.restored`, which records written before 2026-10-02 carry, with their
+pairs, ordered by the `id` column like every landing-order answer, and where
+`last-turns` bounds it the bound resolves as the distinct session, run, and turn triples
+of the most recent turns by id, the rows outside them left unread, a turn label
+recurring across runs naming two different turns. The answer serves each event as the
+distillate's own shape, envelope and pairs, each pair the value that crossed: read back
+from `field`, or rendered from section 3's typed rows through the renderer the landing
+checked it against. One reader serves every answer, so the recall, the replay and the
+identity cannot spell one event two ways. The `grants` ask reads no event row: it reads
+the store's own boundary, which with the store in memory is the member's room, the
+owner, group and mode of the territory's `state/`, read through the descriptor the
+member holds for the room and never by path, and answers them in a fixed order as
+`{"answer":{"grants":{"surface":[...]}}}`, each line a string, per the contract's fourth
+ask of 2026-09-04. The `identity` ask reads the event rows of kind `message.system`
+whose turn is absent and whose run is the run of the newest such row, ordered by the
+`id` column, with their pairs, and answers them as
+`{"answer":{"identity":{"messages":[...]}}}`, each the distillate's own shape, an empty
+list where the session holds none, per the contract's fifth ask of 2026-09-04. A
+malformed ask is dropped whole the way a malformed distillate is, and the resulting
 silence is the harness's bound to convert into a missing answer. **The `snapshot` ask
-writes the store and answers the stamp**, per the contract's sixth ask of 2026-10-02:
-the member serializes the whole database with its schema and its stamp, writes it
-through the writing handle, and answers
-`{"answer":{"snapshot":{"run":...,"sequence":...}}}` naming the position the snapshot
-covers, or drops the ask unanswered where the write failed, the silence converting at
-the harness into a missing answer like every other. It runs in stream order like every
-ask, so the snapshot covers exactly the distillates the stream carried before it, and a
-write that failed part way is what the reload's check exists to catch.
+writes a save point and answers its stamp**, per the contract's sixth ask of 2026-10-02:
+the member serializes the whole database with its schema and its stamp, writes it as a
+new file in its room, never over one that stands, and answers
+`{"answer":{"snapshot":{"save-point":...,"run":...,"sequence":...,"digest":...}}}`
+naming the file, the position it covers and the digest of its bytes, or drops the ask
+unanswered where the write failed, the silence converting at the harness into a missing
+answer like every other. It runs in stream order like every ask, so the save point
+covers exactly the distillates the stream carried before it, and a write that failed
+part way is what the load's check exists to catch. **The `restore` ask replaces the
+holdings from a save point in the room**, per the contract's seventh ask of 2026-10-02:
+the member opens the named file relative to its room's descriptor, refusing a name that
+is not a plain entry of the room, checks it and its schema as a load does, and only then
+swaps it in for the live database whole, answering
+`{"answer":{"restore":{"save-point":...,"run":...,"sequence":...,"digest":...}}}`, or
+drops the ask unanswered with the holdings as they stood. The distillates the stream
+carries after the ask land on the restored holdings.
 
 **Three protocol bounds are this crate's elections, each named with what its
 breach means, per the audit of 2026-08-26.** The answer ceiling is one
@@ -454,24 +471,25 @@ the contract's section 2. The path is thereby idempotent at the preload grain -
 re-running it replaces the session's holdings rather than appending to them - and a dead
 driver's prefix needs no cleanup act, the next opener being the cleanup. The first
 door's path performs no retirement and gains no branch: the delete hangs on the preload
-opener alone. **The reload's tail is the one preload that must not retire**, landing on
-top of the snapshot section 3 loaded, so the tail's opener names the position it follows
-and retires nothing, where the fallback rebuild's opener retires everything the member
-read. `weaver-analysis-state-contract` carries neither opener yet, and the charter's
-section 5 names it owed. What is new is the door's standing and its judgment, and both
-are conditioned facts: the member binds the preload name only where the party that
-stands it names one, and that party names it under a diagnostic binding or a serving
-load that elects a restore, per issue #432, holding the resolved kind from the inventory
-per `weaver-admin-Spec` section 4. **That party is `weaver-admin` and the name rides the
-vector**, per that Spec's section 6 as amended 2026-08-25, no exchange this member holds
-carrying a path. **Section 2's election is narrowed rather than closed**: the descriptor
-choreography it leaves to the code act is still that act's, and what is settled here is
-only that a name arrives on the vector and not on a descriptor. The credential judgment
-is this member's one, the first door authenticating by possession per the operator's
-ruling of 2026-08-26: the accept on the preload name admits the operator principal and
-refuses every other peer before any byte is read, the agent's among them and no longer
-knowable by number, the vector having dropped the agent's uid with the first door's
-judgment.
+opener alone. **A tail, where one is ever elected over a save point, is the one preload
+that must not retire**, landing on top of the save point section 3 loaded, so its opener
+names the position it follows and retires nothing, where the fallback rebuild's opener
+retires everything the member read and honours every reset the record names.
+`weaver-analysis-state-contract` carries neither the tail opener nor the reset event
+yet, and the charter's section 5 names both owed. What is new is the door's standing and
+its judgment, and both are conditioned facts: the member binds the preload name only
+where the party that stands it names one, and that party names it under a diagnostic
+binding alone, the record restore of issue #432 retiring on the operator's rulings of
+2026-10-02 on #58, holding the resolved kind from the inventory per `weaver-admin-Spec`
+section 4. **That party is `weaver-admin` and the name rides the vector**, per that
+Spec's section 6 as amended 2026-08-25, no exchange this member holds carrying a path.
+**Section 2's election is narrowed rather than closed**: the descriptor choreography it
+leaves to the code act is still that act's, and what is settled here is only that a name
+arrives on the vector and not on a descriptor. The credential judgment is this member's
+one, the first door authenticating by possession per the operator's ruling of
+2026-08-26: the accept on the preload name admits the operator principal and refuses
+every other peer before any byte is read, the agent's among them and no longer knowable
+by number, the vector having dropped the agent's uid with the first door's judgment.
 
 **The seal is a per-standing fact, held apart from the transport, and the
 replay ask reads it alone.** The member holds, for its own standing's life,
@@ -481,17 +499,16 @@ mid-stream, false after a sealless close, and true from the seal frame on.
 Where the member stands with the preload door, a `replay` ask parks until
 the fact is true, surviving the preload channel's close, answered at the
 seal against the sealed holdings in one frame stream like any answer. **The
-`identity` and `recall` asks park on the same fact**, as of 2026-09-06 per
-the contract's section 2 on issue #432: a session
-standing from a preloaded record asks for its prefix and its conversation at
-the enter, before the driver has sealed, so the two park where the door
-stands and no seal has landed and answer at the seal in arrival order,
-against the sealed holdings, the replay ask's replacement rule reaching the
-replay ask alone. Where no door stands they answer immediately as before.
-The member cannot tell a restoring load from a diagnostic one and need not:
-the door's standing is the fact, and a diagnostic load's `identity` ask
-answered at the seal is the record's own prefix, which is what
-`weaver-analysis-Spec` section 3 says the preloaded store answers. **The
+`identity` ask parks on the same fact**, per the contract's section 2: a
+diagnostic load asks for its prefix at the enter, before the driver has
+sealed, so the ask parks where the door stands and no seal has landed and
+answers at the seal against the sealed holdings, the replay ask's
+replacement rule reaching the replay ask alone. Where no door stands it
+answers immediately. The door's standing is the fact the member reads, and
+a diagnostic load's `identity` ask answered at the seal is the record's own
+prefix, which is what `weaver-analysis-Spec` section 3 says the preloaded
+store answers. The parked `recall` of the record restore retires with issue
+#432's restore on the operator's rulings of 2026-10-02 on #58. **The
 door itself survives the channel too**: on any close of the preload
 channel the member unlinks and rebinds the name and the per-channel opener
 state resets, per the contract's retry mechanism, while the seal fact
@@ -556,13 +573,12 @@ to: state-preload-door-states-its-mode
 claim.** This crate's half is that the member binds no name it is not given. The other
 half is `weaver-admin`'s, `admin-preload-name-follows-the-kind` at `weaver-admin-Spec`
 section 6, which holds the vector in **both** directions: a serving inventory carries no
-name, and a diagnostic one, or a serving one whose declaration elects a restore, carries
-one, per issue #432. **The two records do not divide the fact evenly.** This crate's
-covers what the member does with what it is given, and the vector is entirely the other
-side's, because a member given a name binds it and a member given none binds none, which
-is this record holding rather than failing whichever way the name was wrong. The claim
-is recorded twice because the two crates' behaviours are two facts, and the seam between
-them is the other record's alone.
+name, restoring or not, and a diagnostic one carries one. **The two records do not
+divide the fact evenly.** This crate's covers what the member does with what it is
+given, and the vector is entirely the other side's, because a member given a name binds
+it and a member given none binds none, which is this record holding rather than failing
+whichever way the name was wrong. The claim is recorded twice because the two crates'
+behaviours are two facts, and the seam between them is the other record's alone.
 
 **The identifier below still names the pair's claim and this half is narrower
 than its name.** `state-preload-door-stands-only-diagnostic` reads as the whole
@@ -663,18 +679,23 @@ code act that lands it.
   byte from a `field` row with no part typed. The perturbation drops the holdable
   check from `typed::split`, and the embedded engine holds the part typed.
 - **A reloaded store equals a full replay, and this is the store primitive's
-  instrument**, per the operator's ruling of 2026-10-02 on issue #1. The test lands
-  a recorded session's distillates, snapshots part way, lands the rest, then
-  stands a second store from the snapshot plus the tail past its stamp and a third
-  from the whole record with no snapshot, and requires the second and third to
-  answer every ask alike and to hold the same rows, table by table, the loop's
-  schema included. The perturbations are the stamp written one position late,
-  which lands a distillate twice, and one position early, which loses one, and the
-  tail replayed from the record's start: each must fail the equality.
-- A snapshot that fails its check is not loaded, watched by a snapshot truncated
-  part way and by one with a byte flipped, each of which must stand the fallback
-  rebuild rather than serve. The perturbation drops the check, and a torn snapshot
-  is read as holdings.
+  instrument**, per the operator's rulings of 2026-10-02 on issue #1 and #58. The
+  test lands a recorded session's distillates, takes a save point part way, lands
+  the rest, then stands a second store from the save point and a third from the
+  record rebuilt through the save point's stamp with no save point, and requires the
+  second and third to answer every ask alike and to hold the same rows, table by
+  table, the loop's schema included; a live restore of the same save point on the
+  first store must hold the same. The perturbations are the stamp written one
+  position late and one position early, each naming a position the holdings do not
+  cover, and a rebuild that ignores a reset the record names: each must fail the
+  equality.
+- A save point that fails its check is not loaded, watched by one truncated part
+  way and by one with a byte flipped, each of which must stand the fallback rebuild
+  at a load and leave the holdings standing at a live restore. The perturbation
+  drops the check, and a torn save point is read as holdings.
+- A save point is never overwritten, watched by two `snapshot` asks on unchanged
+  holdings answering two names with both files standing. The perturbation writes
+  to a fixed name, and the first file is lost.
 - What the schema does not admit lands nowhere, watched by a distillate whose
   landing the loop schema's constraint refuses: the landing rolls back whole and
   the neutral substrate holds the event. The perturbation drops the constraint from
@@ -690,7 +711,7 @@ means the instrument was not bought and never that none exists, per Document
 Format section 5.
 
 - **Custody without policy** is read off the crate's surface for any door a
-  judgment could enter by, a snapshot taken unasked among them. The claim is an
+  judgment could enter by, a save point taken unasked among them. The claim is an
   absence spread across a surface rather than a shape, so no single compile-fail
   pin names it and a test can only watch the doors that exist. What would buy it
   is a check over the crate's exported items refusing any that ranks, judges or
@@ -702,27 +723,27 @@ Format section 5.
   stands. Nothing holds that signature in place, so a later act widening one of
   them to a concrete engine compiles and this claim goes quiet. What would buy
   it is a compile-fail pin over an ingest path that names an engine.
-- **The member sees a handle and never a path** is read off the vector and the
-  spawn: no positional or flag names the snapshot, and the member opens no file
-  by name. What would buy it is a test over the vector admin composes refusing any
-  member naming the declaration directory, which is admin's side and its Spec's.
+- **The member sees a descriptor and never the operator's path** is read off the vector
+  and the spawn: no positional or flag names a save point in the operator's directory,
+  and the member opens files by name only inside its own room. What would buy it is a
+  test over the vector admin composes refusing any member naming the declaration
+  directory, which is admin's side and its Spec's.
 
-**The walks the seam's conformance asks for are not in this tree.** The
-contract's section 8 names them and says both directions land with the acts
-that open the seam and shape the surface, which have landed: the election round
-trip and real events to attributable rows against the living producer, the
-dead-peer clause watched by killing the member mid-run and by asking with the
-member gone, the replay ask observed waiting in all three unsealed states and
-its retry sequence, and the answered-against clause read in time with asks
-interleaved among distillates. The suites here reach most of those properties
-through the port or through the unit that holds them rather than across the
-seam, which is the cheaper instrument and not the one the contract names, and
-**the dead-peer clause is reached by nothing here in either direction**. The
-snapshot's custody is owed the same kind of walk, the agent's uid asked to open
-the snapshot in the operator's directory and refused, and the member's own process
-asked to open it by path and refused. The `grants` ask reports the snapshot's
-owner and mode and asserts nothing about either, so it is a surface for that walk
-rather than the walk.
+**The walks the seam's conformance asks for are not in this tree.** The contract's
+section 8 names them and says both directions land with the acts that open the seam and
+shape the surface, which have landed: the election round trip and real events to
+attributable rows against the living producer, the dead-peer clause watched by killing
+the member mid-run and by asking with the member gone, the replay ask observed waiting
+in all three unsealed states and its retry sequence, and the answered-against clause
+read in time with asks interleaved among distillates. The suites here reach most of
+those properties through the port or through the unit that holds them rather than across
+the seam, which is the cheaper instrument and not the one the contract names, and **the
+dead-peer clause is reached by nothing here in either direction**. The save points'
+custody is owed the same kind of walk, the agent's uid asked to open one in the member's
+room and in the operator's directory and refused, and the member's own process asked to
+open the operator's copy by path and refused. The `grants` ask reports the room's owner
+and mode and asserts nothing about either, so it is a surface for that walk rather than
+the walk.
 
 **Where the records sit.** The assertion records are at the clauses that argue
 the claims, across sections 1 through 4 rather than gathered here, per Document
@@ -750,27 +771,25 @@ operator's ruling of 2026-10-02 moves that landing toward the loop's schema.
   aggregate landed with the serve act, and which further derivations
   custody performs stays elected ask by ask, because a derivation is named
   by what reads it.
-- **The snapshot's format and its write.** Section 3 fixes what a snapshot holds,
-  the whole database with its schema, its stamp and a check, and leaves how it is
-  laid out and how it is written to the code act: whether the writing handle is
-  rewritten in place or names a fresh file admin rotates, what the check is, and
-  what the member does with a write the kernel refuses part way.
-- **The tail's driver and the agreement check.** Section 3 has the tail land
-  through the preload door and the snapshot judged against the trace. The door
-  stands today only under a diagnostic binding or a restoring load, and the
-  driver that dials it is the operator's, so which party stands it and drives the
-  tail at an ordinary load, and which party reads the record's position the stamp
-  is compared with, are elections owed with `weaver-analysis-state-contract` and
-  admin's vector, neither of which this act moves. A snapshot taken at the leave
-  covers the whole record, so the tail is empty after every clean unload and the
-  question bites after a crash.
+- **The save point's format and its write.** Section 3 fixes what a save point holds,
+  the whole database with its schema, its stamp and a check, and that it is a new
+  file never rewritten, and leaves to the code act how it is laid out, how its name
+  is formed, what the check and the digest are, and how a whole write earns its
+  finished name.
+- **The rebuild's driver.** Section 3 has a rebuild land through the preload door.
+  The door stands today only under a diagnostic binding, and the driver that dials
+  it is the operator's, so which party stands it and drives a rebuild at a serving
+  load with no save point, the offline save-point builder of `weaver-state-PRD`
+  section 3 being one answer, is an election owed with
+  `weaver-analysis-state-contract` and admin's vector, neither of which this act
+  moves.
 - **The retirement of an agent's holdings.** A session's close no longer retires
   anything, state carrying across sessions per the charter's section 3, so what
-  remains is what an operator does to retire an agent's state: the snapshot is a
-  file in the operator's own directory, and deleting it makes the next load a full
-  rebuild rather than an empty store, the trace still holding everything. Whether
-  an operator may stand an agent on an empty store while its record stands is the
-  operator's ruling to make.
+  remains is what an operator does to retire an agent's state: the save points are
+  files in the operator's own directory and the member's room, and deleting them
+  makes the next load a full rebuild rather than an empty store, the trace still
+  holding everything; a fresh state is a new agent, on the operator's ruling of
+  2026-10-02 on #58.
 - **The member's account name and the territory's exact key.** Deployment
   facts, elected where the spawn path lands, the way every path in the
   admin configuration is.

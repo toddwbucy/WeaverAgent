@@ -11,18 +11,16 @@
 
 ## Parties
 
-- **`weaver-harness`, the feeder and the asker.** Applies the tee of
-  `weaver-trace-PRD` section 11 and sends what it elects across this seam. The
-  only party that will ever ask, its loop asking through it. Decides
-  everything: what is elected, the schema the holdings take, what any held fact
-  is worth, when a snapshot is taken, and what to do with an answer. The loop is
-  state management, per `weaver-agent-PRD` section 5.5, and its schema and its
-  judgments are the harness's to carry and never this seam's to hold an opinion
-  about.
-- **`weaver-state`, the custodian.** Receives the distillate, holds it
-  organized in the shape the loop's schema admits, answers asks, and writes a
-  snapshot when asked. Transforms as part of organizing, per its charter, and
-  decides nothing.
+- **`weaver-harness`, the feeder and the asker.** Applies the tee of `weaver-trace-PRD`
+  section 11 and sends what it elects across this seam. The only party that will ever
+  ask, its loop asking through it. Decides everything: what is elected, the schema the
+  holdings take, what any held fact is worth, when a save point is taken or restored,
+  and what to do with an answer. The loop is state management, per `weaver-agent-PRD`
+  section 5.5, and its schema and its judgments are the harness's to carry and never
+  this seam's to hold an opinion about.
+- **`weaver-state`, the custodian.** Receives the distillate, holds it organized in the
+  shape the loop's schema admits, answers asks, and writes or restores a save point when
+  asked. Transforms as part of organizing, per its charter, and decides nothing.
 
 No third party reaches this seam. The model has no path to it, per
 `weaver-state-PRD` section 2, and no other crate holds an end.
@@ -168,8 +166,8 @@ to: loop-schema
 ## 1. What this contract governs
 
 The one seam between the harness and its state member: the channel's standing, the
-ingest traffic, the serve direction, the snapshot the harness asks for, what each party
-owes, how the seam fails, and what neither party may do. It is read alongside
+ingest traffic, the serve direction, the save points the harness asks for, what each
+party owes, how the seam fails, and what neither party may do. It is read alongside
 `weaver-state-PRD` and neither is complete without the other.
 
 ## 2. The traffic
@@ -207,17 +205,17 @@ shape and recall asks keep the pre-ask view without exception.
 **State carries across sessions, and each ask's definition says which sessions its
 answer reaches**, per the operator's ruling of 2026-10-02 on issue #1, which revises the
 session bound of 2026-08-20. The custodian holds one database for the agent across its
-runs and its sessions, carried between loads by snapshot, per `weaver-state-PRD` section
-3, and holds no boundary of its own between sessions. **The asks standing on that date
-that read held events, `shape`, `recall`, `replay` and `identity`, answer within the
-session the opener declared**, because each was elected to, so holdings of an earlier
-session stay outside their view: that bound is each ask's own definition and never the
-store's wall. An ask that reaches across sessions enters under section 7 like any
-further ask, with the loop act that writes the schema it reads.
+runs and its sessions, carried between loads by save point, per `weaver-state-PRD`
+section 3, and holds no boundary of its own between sessions. **The asks standing on
+that date that read held events, `shape`, `recall`, `replay` and `identity`, answer
+within the session the opener declared**, because each was elected to, so holdings of an
+earlier session stay outside their view: that bound is each ask's own definition and
+never the store's wall. An ask that reaches across sessions enters under section 7 like
+any further ask, with the loop act that writes the schema it reads.
 
-**The ask vocabulary is closed and enumerated here, and it holds six names: `shape`,
-`recall`, `replay`, `grants`, `identity`, and `snapshot`.** The shape ask carries no
-members, the session being the opener's, and asks for the session's shape -
+**The ask vocabulary is closed and enumerated here, and it holds seven names: `shape`,
+`recall`, `replay`, `grants`, `identity`, `snapshot`, and `restore`.** The shape ask
+carries no members, the session being the opener's, and asks for the session's shape -
 what happened, in what order, in which run, which is the phrase the charter uses for
 what the default election holds. Its answer carries the session's runs in the order
 custody first saw them, each with its run reference and its held event counts by kind,
@@ -231,7 +229,8 @@ decode context is empty and the session's knowledge is not, so the loop
 asks for the material and composes its own re-entry. The ask carries one
 optional member, `last-turns`: a count bounding the answer to the most
 recent turns, absent meaning the session whole. The answer carries the
-events of the four message kinds and of `message.restored` in landing order,
+events of the four message kinds, and of `message.restored` where a record written
+before 2026-10-02 carries it, in landing order,
 each with its envelope whole and its elected pairs beside it - the distillate's
 own shape served back - so what returns is exactly what the election kept, no
 more recallable than it was distillable. Ordering is custody's organizing licence and
@@ -258,20 +257,21 @@ holdings at rest, and a retry's opener may yet retire that prefix and seal a who
 preload the parked ask should answer against. So the seal is the only fact that answers,
 transport openness answers nothing, and an ask on a standing that never seals is
 converted by the asker's bound into the missing answer it always was, per section 3's
-bounded-wait rule. **Under a restoring load the `identity` and `recall` asks the harness
-sends at the enter park the same way**, per `weaver-state-PRD` section 4: the session
-stands from holdings the driver has yet to seal, so the enter waits on the seal rather
-than seeding from a store that is empty for a moment, and the
-identity ask's refusal of the dead-peer conversion is unchanged, a channel closed
-unsealed converting to the missed answer that refuses the enter. On a serving load
-electing no restore they answer immediately as before. The replay ask was the one ask
-whose answer may wait, and these two join it under that binding alone, the waiting is
-not the custodian initiating, and one answer still follows one ask. **The parked ask
+bounded-wait rule. **Under a diagnostic load the `identity` ask the harness sends at
+the enter parks the same way**, per `weaver-state-PRD` section 3: the replay stands from
+holdings the driver has yet to seal, so the enter waits on the seal rather than reading
+a store that is empty for a moment, and the identity ask's refusal of the dead-peer
+conversion is unchanged, a channel closed unsealed converting to the missed answer that
+refuses the enter. A serving load stands no preload door and sends no identity ask,
+restoring or not, on the operator's rulings of 2026-10-02 on #58, which retire the
+record restore of issue #432 and the parked `recall` it sent. The replay ask was the one
+ask whose answer may wait, and this one joins it under that binding alone, the waiting
+is not the custodian initiating, and one answer still follows one ask. **The parked ask
 steps out of the arrival order, and that is this clause's stated exception to section
 4's ordering rule**: a shape or recall ask arriving while a replay ask parks is answered
 in its own arrival order, against the holdings the stream carried before it, except the
-enter's `identity` and `recall` asks under a restoring load, which park on the seal
-themselves per the clause below and step out of the order the same way, and the replay's
+enter's `identity` ask under a diagnostic load, which parks on the seal itself per the
+clause above and steps out of the order the same way, and the replay's
 answer follows the seal whenever that is, its view the seal's position, every distillate
 received through the seal in it. What keeps the pairing unambiguous without a
 correlation member is that every answer names the ask it answers, per the answer's own
@@ -294,8 +294,9 @@ state was built into, and the harness reads the store's grant surface at the ent
 again at the leave so the `unload` event can say whether the boundary moved inside the
 session. The ask carries no members. The answer carries one member, `surface`, an
 ordered list of strings the custodian renders from its boundary, which with the store in
-memory is the snapshot's: the owner, group and mode of the file its snapshot handle
-names, read through the handle and never by path. The lines are spelled so two readings
+memory is the member's room: the owner, group and mode of the territory's `state/`,
+where it writes its save points, read through the descriptor it holds for the room and
+never by path. The lines are spelled so two readings
 compare as equal or not and for nothing else: the harness compares and the record
 carries the comparison, and custody states the surface and never judges it, per section
 4. The ask answers immediately against the store, holding no event and parking never,
@@ -321,17 +322,38 @@ the enter, because a replay whose bounding cannot be read is not a replay with n
 bounding. The
 ask answers immediately, holding no event and parking never, like `shape`.
 
-**The `snapshot` ask writes the holdings and answers the position they cover**, added
-2026-10-02 on the operator's ruling on issue #1: the store initiates nothing, so a
-snapshot is taken when the harness asks, at the interval the loop's settings name and
-at the leave. The ask carries no members. The custodian writes the whole of its holdings
-with the schema they stand under through the snapshot handle admin handed it, per
-`weaver-state-PRD` section 4, and the answer carries two members, `run` and `sequence`,
-the trace position of the last distillate the snapshot holds. It answers against the
-holdings the stream carried before it, like `shape`, and parks never. A write that
-fails is not answered, the asker's bound converting the silence into the missing answer
-of section 5, and the harness holds no stamp for that snapshot. The
-answer is a stamp and never the holdings: no byte of the snapshot crosses this seam.
+**The `snapshot` ask writes a save point and answers where it stands**, added 2026-10-02
+on the operator's ruling on issue #1 and shaped by the rulings of the same day on #58:
+the store initiates nothing, so a save point is taken when the harness asks, at every
+leave and on the operator's demand. The ask carries no members. The custodian writes the
+whole of its holdings with the schema they stand under as a new file in its own room,
+the territory's `state/`, never overwriting one that stands, per `weaver-state-PRD`
+section 4, and admin publishes each finished one into the operator's directory at the
+next load or unload. The answer carries four members: `save-point`, the name it wrote;
+`run` and `sequence`, the trace position of the last distillate it holds; and `digest`,
+the digest of its bytes, which the harness records on the trace. It answers against the
+holdings the stream carried before it, like `shape`, and parks never. A write that fails
+is not answered and leaves no file under a finished name, the asker's bound converting
+the silence into the missing answer of section 5, and the harness records no save point
+for it. The answer is a stamp and never the holdings: no byte of a save point crosses
+this seam.
+
+**The `restore` ask replaces the holdings from a save point in the member's room**,
+added 2026-10-02 on the operator's ruling on #58 that a live restore swaps state without
+unloading and that the harness triggers it. The ask carries one member, `save-point`, a
+name the member's room holds, and the custodian reads only its own room for it, never a
+path the name could lead out of. The custodian replaces its holdings whole with the save
+point's, or leaves them as they stood, and the answer carries the same four members the
+`snapshot` answer carries, read from the save point, so the harness records which save
+point and which position on the trace before it acts. Every distillate the stream
+carries after the ask lands on the restored holdings. The ask parks never, and a restore
+that fails is not answered, the asker's bound converting the silence into the missing
+answer of section 5: the harness then flushes nothing, records the miss, and serves on
+the holdings the member still holds. On its answer the harness flushes the decode
+session to `keep = 0` through `weaver-harness-spu-decode-contract`'s existing cut, per
+`weaver-harness-Spec` section 6, and this seam carries nothing of the flush. A save
+point only in the operator's directory restores at a load, through the descriptor admin
+hands the member at spawn, and never through this ask.
 
 A further ask name is a change under section 7 and does not exist until it merges there.
 
@@ -362,10 +384,11 @@ A further ask name is a change under section 7 and does not exist until it merge
   policy of the custodian's own. Retention is total across runs and sessions in the
   neutral substrate, and the loop's tables hold what its schema admits, a
   distillate the schema refuses landing there alone.
-- **The snapshot and the reload faithful.** A snapshot holds exactly the holdings
-  the stream carried before its ask, stamped with the position they cover, and a
-  reload from it plus the trace's tail holds exactly what a full rebuild from the
-  trace holds.
+- **The save point and the restore faithful.** A save point holds exactly the
+  holdings the stream carried before its ask, stamped with the position they cover, and
+  is never overwritten. A load or a live restore from it holds exactly what it holds,
+  and a rebuild from the trace through that position, honouring every reset the record
+  names, holds the same.
 - **Transformation without judgment.** Derived shapes, aggregates, and
   indexes are custody's work and carry no opinion about what a turn should
   do, per the three-way division of `weaver-state-PRD` section 2.
@@ -385,9 +408,10 @@ A further ask name is a change under section 7 and does not exist until it merge
 **A dead peer costs the distillate and never the turn.** If state is gone,
 the harness observes closure, drops what it would have sent, and serves turns
 exactly as it did before the leg existed, per the loss clause of
-`weaver-state-PRD` section 3. The holdings meanwhile stand in the latest snapshot and
-the record, and the next load reloads them, the distillates landed since the snapshot
-returning with the trace's tail. There is no buffering, no
+`weaver-state-PRD` section 3. The holdings meanwhile stand in the latest save point and
+the record, and the next load resets to the latest known-good save point and records
+the reset on the trace, the distillates landed since it kept by the record and replayed
+by no default, per `weaver-state-PRD` section 4. There is no buffering, no
 retry, and no backpressure onto the turn path: the derivative is rebuildable
 from the record, so the cheapest honest answer to a broken seam is to stop
 distilling until the next load.
@@ -416,9 +440,10 @@ turn of the replay.
 - Neither party exposes this seam to the model. There is no tool, no verb,
   and no path from the loop's interior to either end.
 - Neither party carries state across sessions through this seam. The holdings
-  cross by snapshot, written through a handle admin opened, per `weaver-state-PRD`
-  section 4, and no byte of a snapshot crosses here in either direction.
-- Neither party hands the agent a snapshot or its own raw trace. What the agent
+  cross by save point, written into the member's room and published by admin, per
+  `weaver-state-PRD` section 4, and no byte of a save point crosses here in either
+  direction.
+- Neither party hands the agent a save point or its own raw trace. What the agent
   receives is what the loop serves it as composed context, per the operator's
   ruling of 2026-10-02.
 
@@ -466,8 +491,10 @@ after it. The serve half of the dead-peer clause is testable by asking with
 the member gone and watching the turn complete without the fact inside the
 bound. All three land with the loop act that shapes the surface.
 
-The snapshot ask is testable against the living pair: a real load, real events
-landed, the ask answered with the position of the last distillate it carried before
-the ask, and a second load reloading from that snapshot and the record's tail holding
-exactly what a third load rebuilding from the whole record holds, ask for ask. It lands
-with the code act that stands the store primitive.
+The snapshot and restore asks are testable against the living pair: a real load, real
+events landed, the snapshot ask answered with the position of the last distillate it
+carried before the ask and a name no earlier save point holds; a live restore of that
+save point after further landings answering the same position and holding what the
+first held at the ask; a second load restoring it through the spawn descriptor holding
+the same; and a rebuild from the record through the stamped position holding the same,
+ask for ask. They land with the code act that stands the store primitive.

@@ -779,19 +779,22 @@ from: weaver-trace
 to: trace-load-names-its-loop-and-its-member
 ```
 
-**The `load` event names its lineage and its stack**, as of 2026-09-06, per the
-charter's section 3.1 on issue #432. `lineage` is present where the session stands from
-a record and absent otherwise, never null: `parent` is the record's session, `run` the
-run the cut falls in, and `through` the turn the holdings stop at, a whole record
-resolved to its last run's last turn, copied from the enter's `Lineage` per
-`weaver-types-Spec` section 4 and never the record's path, which the harness does not
-hold. `stack` is the digests of the organ binaries admin started and of the agent's SPU
-and the gate it hands the worker to fork, keyed by the binary's name, sha256 hex, copied
-from the enter, so a record is sufficient for its own conditions without a deposit
-beside it. Both ride the `Elections` payload on the drift reason above, and a record
-older than this act lacks the members, which reads as those facts being unrecoverable
-and never as a default. Neither is read from the deployment: the harness authors what
-the enter carried, as it authors the store's identity.
+**The `load` event names its lineage and its stack**, as of 2026-09-06, the lineage
+reshaped on the operator's rulings of 2026-10-02 on #58, per the charter's section 3.1.
+`lineage` is present where the load restores a save point and absent otherwise, never
+null: `save_point` is the save point's digest, `run` and `sequence` the position it
+covers, `operator_supplied` whether the operator supplied it, and `built_from`, present
+only where the offline builder made it from a record, carries that record's session as
+`parent`, the run the cut falls in as `run`, and the turn the holdings stop at as
+`through`, all copied from the enter's `Lineage` per `weaver-types-Spec` section 4 and
+never the save point's path, which the harness does not hold. `stack` is the digests of
+the organ binaries admin started and of the agent's SPU and the gate it hands the worker
+to fork, keyed by the binary's name, sha256 hex, copied from the enter, so a record is
+sufficient for its own conditions without a deposit beside it. Both ride the `Elections`
+payload on the drift reason above, and a record older than this act lacks the members,
+which reads as those facts being unrecoverable and never as a default. Neither is read
+from the deployment: the harness authors what the enter carried, as it authors the
+store's identity.
 
 **The `load` event names its declaration and its prompt file by digest**, the first as
 of 2026-09-04 per issue #435 and the second as of 2026-10-02, per the charter's section
@@ -847,8 +850,9 @@ a reader grouping by turn reads the turn from the account without a second looku
 
 **The harness authors one for every answered ask that returns events, before the
 answer reaches its consumer**, per `weaver-harness-Spec` section 6: the seat's recall
-port, the seat's replay port, the enter's identity ask, and the enter's recall under a
-restoring load, one kind and the verb naming which. The replay's ask is recorded by the
+port, the seat's replay port, and the enter's identity ask, one kind and the verb naming
+which, the enter's recall under a restoring load retiring with the record restore on the
+operator's rulings of 2026-10-02 on #58. The replay's ask is recorded by the
 seat that made it and not inferred from `replay.identity`, which is the loop's finding
 about the holdings rather than the seam's answer. **Under a diagnostic binding the enter
 records nothing**, as it records no load and no prefix there: that record opens with
@@ -947,7 +951,10 @@ property an elected diagnostic is held to and the one this act holds itself
 to as well.
 
 **A restored conversation is recorded under `message.restored`, the twenty-third
-kind**, on the operator's ruling of 2026-09-26 under epic #690 item C2.7. A restoring
+kind**, on the operator's ruling of 2026-09-26 under epic #690 item C2.7. No load
+authors it since the operator's rulings of 2026-10-02 on #58, which retire the record
+restore, and it stays in the vocabulary so the records that carry it stay readable; the
+clause below records why it was shaped as it was. A restoring
 load seats the parent's conversation at the open beside the identity, per
 `weaver-harness-Spec` section 6.1. Until this kind the harness authored each restored
 message turnless under its turned kind, which the writer refused as it refuses any
