@@ -273,8 +273,8 @@ pub fn run_lock_held(run_directory: &Path) -> Result<bool, LifecycleRefusal> {
     Ok(probe.l_type as i32 != nix::libc::F_UNLCK)
 }
 
-/// One process holding a descriptor to the run lock's file: its pid and the
-/// number the descriptor stands at in its table.
+/// One process holding the run lock's description: its pid and the number
+/// the descriptor stands at in its table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Holder {
     pub pid: i32,
@@ -284,7 +284,8 @@ pub struct Holder {
 /// **The run lock's holders, from the kernel's descriptor tables**, per
 /// section 3: a description lock names no pid, so every process's
 /// `/proc/<pid>/fd` is scanned for a descriptor referring to the lock file's
-/// device and inode, this process excluded. Root reads every table.
+/// device and inode whose description holds the lock, this process
+/// excluded. Root reads every table.
 pub fn holders(run_directory: &Path) -> Vec<Holder> {
     let Ok(lock) = std::fs::metadata(run_directory.join("run.lock")) else {
         return Vec::new();
@@ -317,7 +318,7 @@ pub fn holders(run_directory: &Path) -> Vec<Holder> {
             else {
                 continue;
             };
-            if std::fs::metadata(descriptor.path()).is_ok_and(|m| (m.dev(), m.ino()) == target) {
+            if holds(pid, fd, target) {
                 found.push(Holder { pid, fd });
             }
         }
@@ -325,7 +326,21 @@ pub fn holders(run_directory: &Path) -> Vec<Holder> {
     found
 }
 
-/// A pidfd on one holder, confirmed after opening to hold the same file, so
+/// **Whether a descriptor holds the run lock**: it refers to the lock file,
+/// and its description carries the lock. A descriptor merely open on the same
+/// file, as `show`'s own read of the lock is while a concurrent `show` scans,
+/// is a fresh description the kernel lists no lock on, so it is no holder.
+/// `/proc/<pid>/fdinfo/<n>` lists a description lock only on the descriptors
+/// sharing the description that took it.
+fn holds(pid: i32, fd: i32, target: (u64, u64)) -> bool {
+    std::fs::metadata(format!("/proc/{pid}/fd/{fd}")).is_ok_and(|m| (m.dev(), m.ino()) == target)
+        && std::fs::read_to_string(format!("/proc/{pid}/fdinfo/{fd}")).is_ok_and(|info| {
+            info.lines()
+                .any(|line| line.starts_with("lock:") && line.contains("OFDLCK"))
+        })
+}
+
+/// A pidfd on one holder, confirmed after opening to hold the lock still, so
 /// a pid that exited, or was reused, since the scan is never signalled.
 struct Pinned {
     pidfd: OwnedFd,
@@ -339,11 +354,7 @@ fn pin(holder: Holder, target: (u64, u64)) -> Option<Pinned> {
     }
     // SAFETY: the number was just opened and is owned by nothing else.
     let pidfd = unsafe { OwnedFd::from_raw_fd(raw as RawFd) };
-    let path = format!("/proc/{}/fd/{}", holder.pid, holder.fd);
-    std::fs::metadata(path)
-        .ok()
-        .filter(|m| (m.dev(), m.ino()) == target)
-        .map(|_| Pinned { pidfd })
+    holds(holder.pid, holder.fd, target).then_some(Pinned { pidfd })
 }
 
 fn signal(pinned: &Pinned, signal: i32) {
@@ -842,6 +853,41 @@ mod tests {
         assert!(pin(Holder { pid, fd: 0 }, target).is_none());
         let _ = child.kill();
         let _ = child.wait();
+    }
+
+    /// **A process with the lock file merely open is no holder**, per Spec
+    /// section 3: beside a constituent holding the description, a process
+    /// holding a fresh descriptor of the same file, as a concurrent `show`
+    /// does while it reads the lock, is neither named by the scan nor pinned.
+    /// Perturbation: match on the device and inode alone and the opener is
+    /// named at its standard input.
+    #[test]
+    fn a_process_with_the_lock_file_merely_open_is_no_holder() {
+        let dir = scratch("merely-open");
+        let lock = take_run_lock(dir.0.as_path()).unwrap().unwrap();
+        let mut holder = holding_child(&lock);
+        drop(lock);
+        let mut opener = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(std::fs::File::open(dir.0.join("run.lock")).unwrap())
+            .spawn()
+            .unwrap();
+        let found: Vec<i32> = holders(dir.0.as_path()).iter().map(|h| h.pid).collect();
+        assert!(found.contains(&(holder.id() as i32)), "{found:?}");
+        assert!(
+            !found.contains(&(opener.id() as i32)),
+            "the opener is no holder: {found:?}"
+        );
+        let meta = std::fs::metadata(dir.0.join("run.lock")).unwrap();
+        let opened = Holder {
+            pid: opener.id() as i32,
+            fd: 0,
+        };
+        assert!(pin(opened, (meta.dev(), meta.ino())).is_none());
+        for child in [&mut holder, &mut opener] {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 
     /// **A child takes its own session and comes back to the default

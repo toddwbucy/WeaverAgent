@@ -615,29 +615,32 @@ worker would hold the verb, and with it the invocation lock, for ever, and since
 invocation ignores the catchable signals no later verb could recover the agent.
 
 **The wait has a bound and an escalation, and the report never runs ahead of the lock.**
-A run whose lock is still held thirty seconds after left, or past the leave's own
-bound, is ended by the escalation: every holder is sent `SIGTERM`, then every holder
-still standing ten seconds later `SIGKILL`, and the lock is read a last time five
-seconds after that. **The three waits are fixed**, as the leave's and the stop's are,
-so `unload` holds the invocation lock at most the leave's sixty seconds and these
-forty-five past it. **The holders are found from the kernel's
-descriptor tables, because a description lock names no pid**: `F_OFD_GETLK` reports a
-held lock with an `l_pid` of `-1`, so this crate stats `run.lock` for its device and
-inode and scans `/proc/<pid>/fd` of every process for a descriptor referring to that
-file, root reading every table, its own process excluded, since it holds a descriptor of
-its own to read the lock. **Each target is pinned before it is signalled**: for each
-holder found it opens a pidfd (`pidfd_open`), confirms through `/proc/<pid>/fd/<n>` that
-the descriptor it found still refers to the same device and inode, and only then
-signals through the pidfd (`pidfd_send_signal`), so a holder that exited between the
-scan and the signal, and a pid reused since, is never signalled, a reused pid holding no
-descriptor to root's file. **Where the lock is held and the scan finds no holder** the
-verb refuses `LockHolderUnknown` and signals nothing, the description having been
-carried where no table shows it, such as a descriptor in flight on a socket. **An agent
-reported unloaded while any constituent still runs is the one report this verb must
-never produce**:
-where the lock is still held after the escalation, the verb refuses `WorkerWouldNotExit`
-and answers no state, which the rollback of this section records as an act it could not
-undo, per charter section 5.
+A run whose lock is still held thirty seconds after left, or past the leave's own bound,
+is ended by the escalation: every holder is sent `SIGTERM`, then every holder still
+standing ten seconds later `SIGKILL`, and the lock is read a last time five seconds
+after that. **The three waits are fixed**, as the leave's and the stop's are, so
+`unload` holds the invocation lock at most the leave's sixty seconds and these
+forty-five past it. **The holders are found from the kernel's descriptor tables, because
+a description lock names no pid**: `F_OFD_GETLK` reports a held lock with an `l_pid` of
+`-1`, so this crate stats `run.lock` for its device and inode and scans `/proc/<pid>/fd`
+of every process for a descriptor referring to that file, root reading every table, its
+own process excluded, since it holds a descriptor of its own to read the lock. **A
+descriptor is a holder only where its description holds the lock**:
+`/proc/<pid>/fdinfo/<n>` lists a description lock (`OFDLCK`) only on the descriptors
+sharing the description that took it, so a process with the file merely open, such as a
+concurrent `show` reading the lock, is never named a constituent. **Each target is
+pinned before it is signalled**: for each holder found it opens a pidfd (`pidfd_open`),
+confirms through `/proc/<pid>/fd/<n>` and `/proc/<pid>/fdinfo/<n>` that the descriptor
+it found still refers to the same device and inode and still holds the lock, and only
+then signals through the pidfd (`pidfd_send_signal`), so a holder that exited between
+the scan and the signal, and a pid reused since, is never signalled, a reused pid
+holding no descriptor to root's file. **Where the lock is held and the scan finds no
+holder** the verb refuses `LockHolderUnknown` and signals nothing, the description
+having been carried where no table shows it, such as a descriptor in flight on a socket.
+**An agent reported unloaded while any constituent still runs is the one report this
+verb must never produce**: where the lock is still held after the escalation, the verb
+refuses `WorkerWouldNotExit` and answers no state, which the rollback of this section
+records as an act it could not undo, per charter section 5.
 
 **A held lock after a clean leave is the case this clause exists for, and a free lock is
 the ordinary end.** The leave the previous step confirmed causes the worker to exit, the
