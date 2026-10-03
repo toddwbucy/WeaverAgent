@@ -1996,34 +1996,38 @@ already names, and no declaration elects another: the Python-iterating worker st
 section 1 states it, untouched, the bench and experiments lane a loop is iterated on.
 The ports above are the loop's whole reach into the store and the classifier, so state
 management composes against the same granted surface as every loop and mints nothing.
-**Its opinions are settings in the declaration's `[state-management]` table**, each
-with a compiled default, wherever an operator could reasonably want a different answer,
-and the `load` event this crate authors records every value in effect, per
+**Its opinions are settings in the declaration's `[state-management]` table**, each with
+a compiled default, wherever an operator could reasonably want a different answer, and
+the `load` event this crate authors records every value in effect, per
 `weaver-trace-PRD` section 3.1. **This Spec gives the table its meaning and
 `weaver-types-Spec` gives it its grammar**, with the declaration's other keys, on the
-operator's ruling of 2026-10-02 on #58's sixth question. The table's members are a
-later act's, and this clause states only the rule:
-custody, the rebuild from the trace, and every state write passing through the tee are
-never settings. **Every judgment the loop makes reaches the record before the loop acts
-on it**, the classify pair and the score above being the precedents: a ranking the loop
-makes over held facts is authored as its own kind by the act that makes it, per
-`weaver-trace-Spec` section 3, so the state the store rebuilds holds the judgment as the
-record holds it and never asks a model again. **The save point is the loop's to time**:
-the store initiates nothing, so this crate sends the `snapshot` ask of
-`weaver-harness-state-contract` section 2 once at the leave, so that every unload takes
-one, and on the operator's demand, under the dead-peer conversion every state ask takes,
-per the operator's rulings of 2026-10-02 on #58. A save point is never overwritten, so
-each answer names a new one, and this crate authors the event that records it, per
-`weaver-trace-PRD`. **A live restore is the loop's to trigger**: on the operator's
-demand this crate sends the `restore` ask naming a save point in the member's room, and
-on its answer flushes the decode session to `keep = 0` through the decode contract's
-existing cut before the next turn feeds the model, so no cached context outlives the
-state it was built from. **A save point whose identity differs from the one seated
-reopens the decode session** rather than reloading the model, per `weaver-spu-PRD`: the
-`restore` answer carries the save point's prefix, this crate compares it with the
-prefix seated, and where they differ it closes the session and opens it on the answered
-prefix, authoring that prefix through the identity door as an open does, so the record
-names the prefix the model runs under from that point. The
+operator's ruling of 2026-10-02 on #58's sixth question. The table's members are a later
+act's, and this clause states only the rule: custody, the rebuild from the trace, and
+every state write passing through the tee are never settings. **Every judgment the loop
+makes reaches the record before the loop acts on it**, the classify pair and the score
+above being the precedents: a ranking the loop makes over held facts is authored as its
+own kind by the act that makes it, per `weaver-trace-Spec` section 3, so the state the
+store rebuilds holds the judgment as the record holds it and never asks a model again.
+**The save point is the loop's to time**: the store initiates nothing, so this crate
+sends the `snapshot` ask of `weaver-harness-state-contract` section 2 once at the leave,
+so that every unload takes one, and on the operator's demand, under the dead-peer
+conversion every state ask takes, per the operator's rulings of 2026-10-02 on #58. **The
+leave's save point is taken last**: this crate sends the leave's `snapshot` ask only
+after it has authored the `unload` event and the tee has sent that event's distillate
+where the election names it, and before it closes the state channel, so the ask,
+answered against the holdings the stream carried before it, holds every elected event of
+the run and the next load, replaying no tail, loses none. A save point is never
+overwritten, so each answer names a new one, and this crate authors the event that
+records it, per `weaver-trace-PRD`. **A live restore is the loop's to trigger**: on the
+operator's demand this crate sends the `restore` ask naming a save point in the member's
+room, and on its answer flushes the decode session to `keep = 0` through the decode
+contract's existing cut before the next turn feeds the model, so no cached context
+outlives the state it was built from. **A save point whose identity differs from the one
+seated reopens the decode session** rather than reloading the model, per
+`weaver-spu-PRD`: the `restore` answer carries the save point's prefix, this crate
+compares it with the prefix seated, and where they differ it closes the session and
+opens it on the answered prefix, authoring that prefix through the identity door as an
+open does, so the record names the prefix the model runs under from that point. The
 channel that carries the operator's demand to the loop is the loop act's to name.
 
 ### 6.1 The decode surface, chartered
