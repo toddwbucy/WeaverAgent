@@ -45,7 +45,7 @@ rule: without both halves the traits act either redeclares an edge already
 declared here, which is the duplicate the format forbids, or drops part of its
 crate's assertion set with nothing recording where it went. The charter
 stays the source of the crate node, the `agent-config` artifact, its eight
-`holds` edges, and the twenty-six vocabulary definitions. What this document
+`holds` edges, and the twenty-seven vocabulary definitions. What this document
 sources is the claims code must conform to, declared at the clauses that argue
 them rather than gathered in one place, per that format's section 6, and
 `asserts` runs from the crate rather than from this document, which is why the

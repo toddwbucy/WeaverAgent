@@ -91,8 +91,9 @@ crosses, per apex section 6.
 **At the trace door, one request line**: a byte offset on a record boundary and the
 digest of the record before it, the shape `TraceRequest` of `weaver-types-Spec` section
 3.1, from the one `trace-reader` the agent's boundary file declares, the agent's own
-admin-con. Every other caller is refused and logged, and the newest connection from the
-reader replaces the old.
+admin-con. Every other caller is refused: one outside the agent's access group by the
+box before the relay sees it, and one inside the group but not the reader by the relay,
+which logs it. The newest connection from the reader replaces the old.
 
 The record is one-way by construction, so what an operator decides after reading it
 re-enters by a command line rather than by answering on this boundary.
@@ -202,11 +203,12 @@ file refuses `ConfigInvalid` naming `roles.toml`. An `unload` that cannot pin th
 lock's holder refuses `LockHolderUnknown`, and one whose worker still holds the run lock
 after the escalation refuses `WorkerWouldNotExit` and answers no state. A line a
 caller's rule does not grant never reaches the program, sudo refusing it, so it has no
-refusal here. **At the trace door, refusals before a byte is sent**: any caller but the
-declared reader, and a position that does not verify, each logged in the agent's
-`admin.log`. Where the sink is a pipe or a socket no relay stands, so the door is
-closed, and a relay that has died closes it until the next load,
-both of which a reader sees as a refused connection.
+refusal here. **At the trace door, refusals before a byte is sent**: a caller outside
+the agent's access group, refused by the box before the relay sees it and so logged by
+no one here, and a member of the group that is not the declared reader, and a position
+that does not verify, each of the last two logged in the agent's `admin.log`. Where the
+sink is a pipe or a socket no relay stands, so the door is closed, and a relay that has
+died closes it until the next load, both of which a reader sees as a refused connection.
 
 The ask-side cases this section enumerated until 2026-08-05 travelled with the socket to
 `weaver-admin-PRD` section 8 and its Spec: the malformed request, the unknown agent, the
@@ -238,9 +240,10 @@ section 2.
 ## 7. Vocabulary
 
 **Drawn from `weaver-types`:** `lifecycle-refusal` and `lifecycle-answer`, which a
-command line prints, and since 2026-10-03 (#50) the trace door's shapes of
-`weaver-types-Spec` section 3.1, `TraceRequest`, `TraceHeader` and `TraceControl`, with
-`peer-identity`, which the relay reads from the kernel. `authorization-predicate` stays
+command line prints, and since 2026-10-03 (#50) `trace-stream`, the trace door's
+vocabulary, whose satellites are `weaver-types-Spec` section 3.1's `TraceRequest`,
+`TraceHeader` and `TraceControl`, with `peer-identity`, which the relay reads from the
+kernel. `authorization-predicate` stays
 undrawn: the relay judges one declared reader, not the allow-and-deny rule the gate's
 client boundary and the coordination seam share.
 
@@ -272,6 +275,10 @@ to: lifecycle-answer
 edge: draws
 from: weaver-admin-operator-contract
 to: peer-identity
+
+edge: draws
+from: weaver-admin-operator-contract
+to: trace-stream
 ```
 
 **The draw from `weaver-trace` takes no edge and the reason is stated rather than

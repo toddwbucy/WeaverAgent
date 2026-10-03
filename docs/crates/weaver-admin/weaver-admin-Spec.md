@@ -1564,31 +1564,35 @@ worker, under the relay account `weaver-<agent>-relay`, whose one group is the t
 group `weaver-<agent>-trace`, and never under the agent's account or the member's. **The
 start step binds its socket and hands it over**: as root, having first removed a
 `trace.sock` a previous run's relay left, which a relay cannot unlink from the root's
-directory and whose name outlives its listener, and doing so holding the invocation
-lock and the run lock it took, as it clears the worker's names, it binds `trace.sock` in
-the agent's run directory of section 3, `<coordination-root>/weaver.run/<agent>/`,
-root's and apart from the agent's runtime directory, the socket root-owned, mode `0660`
-and grouped to the agent's per-agent access group `weaver-<agent>-admin`, which the
-declared trace reader must hold, and passes the listening descriptor to the relay at its
-exec, so the relay never binds and never needs to write the directory. The relay also
-inherits the run lock's description, per section 3, and marks it close-on-exec as its
-first act and never closes it, as the worker and the member do. **The door stands
-only for a file sink.** A pipe's reader is the operator's, and a second reader would
-steal its bytes, and a socket sink cannot be opened for reading at all, so where the
-declaration's sink is a pipe or a socket the start step starts no relay, binds no
-`trace.sock`, and the door stays closed. For a file sink it passes the relay a read-only
-descriptor of the same open file section 5 opened for the worker, reopened through
-`/proc/self/fd/N` of the write descriptor and never by the declaration's path, and
-confirmed by comparing the two descriptors' device and inode before it is passed, so
-**the relay serves the loaded run's own file by descriptor and records its identity**,
-and an operator's edit to the declaration's sink while the run stands changes nothing
-the relay reads (the item carried on #50, issuecomment-5969507004). **It admits exactly
-one reader**, the `trace-reader` of the agent's `roles.toml`, judged by the kernel's
-peer credential before a byte of the request is read, and refuses and logs every other
-caller. **The newest connection from that reader replaces the old**, the relay holding
-one follower at a time inside its one process, so the replaced follower ends with a
-reason, the replacement is logged, and never more than one follower stands (the item
-carried on #50, issuecomment-5969438713). The stream is `weaver-types-Spec` section
+directory and whose name outlives its listener, and doing so holding the invocation lock
+and the run lock it took, as it clears the worker's names, it binds `trace.sock` in the
+agent's run directory of section 3, `<coordination-root>/weaver.run/<agent>/`, root's
+and apart from the agent's runtime directory, the socket root-owned, mode `0660` and
+grouped to the agent's per-agent access group `weaver-<agent>-admin`, which the declared
+trace reader must hold, and passes the listening descriptor to the relay at its exec, so
+the relay never binds and never needs to write the directory. The relay also inherits
+the run lock's description, per section 3, and marks it close-on-exec as its first act
+and never closes it, as the worker and the member do. **The door stands only for a file
+sink.** A pipe's reader is the operator's, and a second reader would steal its bytes,
+and a socket sink cannot be opened for reading at all, so where the declaration's sink
+is a pipe or a socket the start step starts no relay, binds no `trace.sock`, and the
+door stays closed. For a file sink it passes the relay a read-only descriptor of the
+same open file section 5 opened for the worker, reopened through `/proc/self/fd/N` of
+the write descriptor and never by the declaration's path, and confirmed by comparing the
+two descriptors' device and inode before it is passed, so **the relay serves the loaded
+run's own file by descriptor and records its identity**, and an operator's edit to the
+declaration's sink while the run stands changes nothing the relay reads (the item
+carried on #50, issuecomment-5969507004). **It admits exactly one reader**, the
+`trace-reader` of the agent's `roles.toml`, judged by the kernel's peer credential
+before a byte of the request is read, and refuses and logs every other caller that
+reaches it. **Only a member of the socket's group reaches it**: a process outside
+`weaver-<agent>-admin`, the agent's own among them, is refused by the socket's mode at
+`connect` and never reaches the peer check, so the relay logs refusals of group members
+that are not the reader, and the kernel's refusal of everyone else leaves no record of
+this crate's. **The newest connection from that reader replaces the old**, the relay
+holding one follower at a time inside its one process, so the replaced follower ends
+with a reason, the replacement is logged, and never more than one follower stands (the
+item carried on #50, issuecomment-5969438713). The stream is `weaver-types-Spec` section
 3.1's: a `TraceHeader` line, then the file's own lines from the verified position
 exactly as written, then following with a heartbeat while idle. **The relay parses no
 event**: it hashes one record's bytes to verify a position and copies bytes. Its
@@ -2618,9 +2622,12 @@ perturbation-verified:
 - **The cause is the uid sudo reports**, watched by a `load` under sudo whose `load`
   event names `SUDO_UID`. The perturbation reads the uid from standard input, and a
   caller names any uid it likes.
-- **The trace relay admits only its declared reader**, watched by any other caller and
-  by the agent's uid connecting: each refused and logged. The perturbation admits any
-  member of the socket's group, and a stranger receives the record.
+- **The trace relay admits only its declared reader**, watched by a member of the
+  socket's group that is not the reader: refused and logged. The perturbation admits
+  any member of the socket's group, and that member receives the record.
+- **The agent cannot reach the trace door**, watched by the agent's uid connecting:
+  refused at `connect` by the socket's mode. The perturbation binds the socket `0666`,
+  and the agent's connection reaches the relay.
 - **The newest reader connection replaces the old**, watched by the declared reader
   connecting twice: the first follower ends with a reason. The perturbation keeps both.
 - **The relay dies with the worker**, watched by killing the worker with `SIGKILL`: the

@@ -565,6 +565,13 @@ on #50, and judges it against the one reader the agent's boundary file declares 
 than by the shared allow-and-deny rule, so it draws the identity type and not the
 predicate, and `weaver-types-Spec` section 3.1 carries its request shape.
 
+**The trace door's stream is one vocabulary record, `trace-stream`**, defined here on
+the same rulings: the request a reader sends, the header the relay answers with, and the
+control lines it interleaves with the record's own lines, `TraceRequest`, `TraceHeader`
+and `TraceControl` of `weaver-types-Spec` section 3.1, are its satellites rather than
+three records, the way the token trio is carried, because no party draws one without the
+others. `weaver-admin-operator-contract` draws it.
+
 **Alongside the identity type, this crate carries the authorization predicate, and
 that is a deliberate exception to holding only data.** The rule that decides whether a
 given peer may reach a given agent is enforced independently by more than one process,
@@ -589,6 +596,13 @@ kind: vocabulary
 edge: defines
 from: weaver-types
 to: peer-identity
+
+node: trace-stream
+kind: vocabulary
+
+edge: defines
+from: weaver-types
+to: trace-stream
 
 edge: defines
 from: weaver-types
