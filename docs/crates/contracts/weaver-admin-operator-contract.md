@@ -85,7 +85,14 @@ grants `show`, and an operator's adds `validate`, `load`, `unload` and `stop`, t
 split of #50 mapped onto command lines. Nothing else crosses in:
 no argument the caller chooses, no standard input, which the program never reads, and no
 claim of who asked. **The cause the record carries is the uid sudo reports**, and which
-person asked is WeaverWeb's record and never the agent's. No prompt, turn, task, or run
+person asked is WeaverWeb's record and never the agent's. **The rule opens no login
+session for these lines**, on the operator's confirmation of 2026-10-03 on
+toddwbucy/WeaverWeb#15: sudo's `pam_session` is off for the connector's user
+(`Defaults:<admin-con user> !pam_session`), because a session can move the invocation,
+and with it the agent it starts, into a containment other than the invoker's, which
+would silently break the lifetime binding of section 3. A requirement on the boundary is
+declared and checked: the invoker verifies after a load that every constituent `show`
+names sits in its own containment. No prompt, turn, task, or run
 crosses, per apex section 6.
 
 **At the trace door, one request line**: a byte offset on a record boundary and the
@@ -143,7 +150,11 @@ per `weaver-admin-Spec` section 2. That pair, the granted lines and the object e
 prints, is this repository's interface to a connector, and nothing else is. **Its bounds
 are named.** The object is at most 64 KiB. Exit 0 is an answer and 1 a refusal, and any
 other status, or a status with no object, is a fault the caller answers by reading the
-next `show`. Standard error carries human-readable diagnostics no caller parses. A
+next `show`. **`show` names the run's constituents** where a run holds the agent's run
+lock, on toddwbucy/WeaverWeb#15: the process id of every one of them, the worker, the
+state member and the trace relay, so a caller can check that each sits in its own
+containment at every load. They are absent where no run stands. Standard error carries
+human-readable diagnostics no caller parses. A
 `load` answers once the agent is up or refused, within admin's own bound of 900 seconds
 by default, which a caller's bound must exceed. **An invocation finishes even when its
 caller disappears**, its outcome recorded in the agent's `admin.log`, so a caller that

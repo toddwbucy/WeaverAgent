@@ -321,10 +321,16 @@ root naming another as `load-bound-seconds` where a model needs it, and a caller
 must exceed it, a caller giving up first reading the outcome from the next `show`.
 
 **An invocation finishes even when its caller disappears**, on the operator's ruling of
-2026-10-03 on #50, which folds in #60. This crate ignores `SIGPIPE`, `SIGHUP`, `SIGINT`
-and `SIGTERM` from its first instruction, the last two because sudo relays a caller's
-interrupt and termination to the command it runs, so a caller cancelling or timing out
-cannot end the verb part way. Only `SIGKILL` can, and `unload` ends what it leaves,
+2026-10-03 on #50, which folds in #60. **This crate ignores every catchable signal
+whose default ends a process and which carries no fault** from its first instruction:
+`SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGPIPE`, `SIGTERM`, `SIGUSR1`, `SIGUSR2`, `SIGALRM`,
+`SIGVTALRM`, `SIGPROF`, `SIGIO`, `SIGPWR`, `SIGSTKFLT`, `SIGXCPU`, `SIGXFSZ` and
+`SIGABRT`, on #73's third item. Sudo relays a caller's interrupt and termination to the
+command it runs, and a terminal sends `SIGQUIT`, so a caller cancelling, timing out or
+quitting cannot end the verb part way. The synchronous faults, `SIGSEGV`, `SIGBUS`,
+`SIGFPE`, `SIGILL`, `SIGTRAP` and `SIGSYS`, stay at their defaults, an ignored fault
+being a loop, and `SIGKILL` and `SIGSTOP` cannot be caught. Only `SIGKILL` can end a
+verb, and `unload` ends what it leaves,
 per section 3, so a caller that hangs up, closes the pipe or is killed
 does not end the verb. A write of the answer to a closed standard output fails and is
 ignored, and the verb runs to completion all the same. Its outcome is recorded in
@@ -461,7 +467,13 @@ the event carries in its envelope or not at all, and lacks the event's stack, li
 reset and prompt digest, so a consumer that stores both stores two shapes. Where the run
 lock is free there is no worker and no exchange to open, and this crate reports
 `Unloaded` from that absence without dialing, which is the one place the lock is read
-and it is read as the absence of a worker and not as a state. A name with no root
+and it is read as the absence of a worker and not as a state. **Where the lock is
+held, `show` names the run's constituents beside the harness's word**, on
+toddwbucy/WeaverWeb#15: the pid of every process holding the run lock's description, the
+worker, the member and the relay, from the holder scan the escalation runs, sorted and
+each named once, so a caller can check that every one sits in its own containment. A
+held lock with no worker listening answers `Unloaded` with its constituents, a run that
+never entered, for the caller to end with `unload`. A name with no root
 refuses `NoSuchAgent` as every verb does, and whether a declaration validates stays
 `validate`'s own answer, since no verb chains another. No verb answers for more than the
 one agent named, admin being one agent's organ on the operator's ruling of 2026-10-01,
@@ -1224,27 +1236,27 @@ names is held to the root's own judgment, root-owned and writable by no group or
 its ancestors closed as the root's are, because whatever it holds is loaded into the
 worker and its organs, and its value rides the enter for the harness to record on the
 `load` event beside the stack, so the record names the libraries a run loaded, pinning
-their digests being #71's. **It resets `SIGPIPE`, `SIGHUP`, `SIGINT` and `SIGTERM` to
-their default dispositions and clears its signal mask**, because the invocation ignores
-those four, per section 2, and an ignored disposition survives a fork and an exec, so
-without the reset the worker, and through it every organ, would ignore the unload's
-`SIGTERM` and a packager's stop alike. **The relay's and the member's children take
-their own new session first and reset the same four the same way after it**, before
-their own execs, so neither belongs to the invoking terminal's process group: a caller's
-hangup or interrupt reaching that group then reaches only the invocation, which ignores
-both, and never a child whose dispositions are already back at their defaults. It sets
-`PR_SET_NO_NEW_PRIVS`. It narrows its supplementary groups to `weaver-<agent>`, then its
-gid, then its uid, in that order, because the narrowings need the privilege the last one
-gives away. Then it executes. It carries across the exec exactly two descriptors besides
-its standard streams: the run lock's description, which section 3 needs held by every
-constituent of the run, and the write end of the relay's lifetime pipe, below. **The
-sink does not cross at the exec.** It crosses in the enter directive as ancillary data
-over the coordination channel, per section 5 and section 7, the route the harness
-contract already holds and tests, so nothing of the record rides the worker's start and
-the organs the worker forks inherit no handle to it. The worker binds its own
-coordination socket in the runtime directory, per `weaver-harness-Spec` section 2.3, and
-this crate dials it per section 7 as before. The worker kills its organs when it dies,
-per `weaver-harness-Spec` section 2, so an orphaned SPU never holds the device.
+their digests being #71's. **It resets every signal the invocation ignores to its
+default disposition and clears its signal mask**, the set of section 2, and an ignored
+disposition survives a fork and an exec, so without the reset the worker, and through it
+every organ, would ignore the unload's `SIGTERM` and a packager's stop alike. **The
+relay's and the member's children take their own new session first and reset the same
+set the same way after it**, before their own execs, so neither belongs to the invoking
+terminal's process group: a caller's hangup or interrupt reaching that group then
+reaches only the invocation, which ignores both, and never a child whose dispositions
+are already back at their defaults. It sets `PR_SET_NO_NEW_PRIVS`. It narrows its
+supplementary groups to `weaver-<agent>`, then its gid, then its uid, in that order,
+because the narrowings need the privilege the last one gives away. Then it executes. It
+carries across the exec exactly two descriptors besides its standard streams: the run
+lock's description, which section 3 needs held by every constituent of the run, and the
+write end of the relay's lifetime pipe, below. **The sink does not cross at the exec.**
+It crosses in the enter directive as ancillary data over the coordination channel, per
+section 5 and section 7, the route the harness contract already holds and tests, so
+nothing of the record rides the worker's start and the organs the worker forks inherit
+no handle to it. The worker binds its own coordination socket in the runtime directory,
+per `weaver-harness-Spec` section 2.3, and this crate dials it per section 7 as before.
+The worker kills its organs when it dies, per `weaver-harness-Spec` section 2, so an
+orphaned SPU never holds the device.
 
 **The agent's lifetime is bound to its invoker's containment, and this crate depends on
 no supervisor**, on the operator's ruling of 2026-10-03 on #72. The new session leaves
@@ -2290,13 +2302,27 @@ The test reaches this one check of section 4's list and none of the others,
 which is why that list carries two records rather than one.
 
 **The third walk: admin's own subprocess inherits a descriptor.** The
-adversary is whatever the run tool execs becoming an unintended holder of
+adversary is whatever the start step execs becoming an unintended holder of
 the sink, a connection, or the log. The mechanism is atomic close-on-exec at
 every creating call in this crate, no descriptor existing between creation
-and flag. The test: spawn the subprocess, enumerate its descriptors, confirm
-none of admin's crossed but the one the member's spawn deliberately arms,
-the member's own end per section 6's vector clause, watched to fail when any
-single atomic flag is downgraded to a later `fcntl`.
+and flag, and every deliberate gift placed at its child's fixed number from a
+copy above every number a child places. **Each child has its own allowlist**,
+on #73's first item, the deliberate gifts of section 6 and nothing else:
+- **the worker**: its standard streams, input at `/dev/null` and output and
+  error at `worker.log`, the run lock's description at 9 and, where a file
+  sink stood a relay, the relay's lifetime pipe's write end at 8.
+- **the state member**: its standard streams, its own end of the first door
+  at 3, the run lock's description at 9 and, under a restore, the save point
+  at the number its act elects.
+- **the trace relay**: its standard streams, the listener, the sink's read-only
+  descriptor, the operations log, the lifetime pipe's read end and the run
+  lock's description, at the numbers its act elects.
+
+The test spawns each child on its real path, enumerates its descriptors and
+requires exactly its allowlist, watched to fail when a gift's placement is
+dropped or any single atomic flag is downgraded to a later `fcntl`. The
+worker's and the member's run inside a user namespace, as root over the
+invoking user's subordinate ids, the relay's landing with its own act.
 
 **The fourth walk: a stranger speaks on the coordination channel.** The
 adversary is a process running as the agent's uid, or as any uid on the host

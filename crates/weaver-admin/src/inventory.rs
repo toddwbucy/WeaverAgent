@@ -63,8 +63,8 @@ pub struct MemberAccount {
 /// The constructed identity is `weaver-<name>` **from the validated name,
 /// never from a caller-supplied string**, which is the argless-grant
 /// discipline landing at the one site that constructs. It is the one site
-/// because the same validated name is what the unit template interpolates, so
-/// the delegated authority has one origin.
+/// because the same validated name is what the start step drops the worker to,
+/// so the delegated authority has one origin.
 pub fn identity_for(name: &AgentName) -> String {
     format!("weaver-{}", name.0)
 }
@@ -375,13 +375,12 @@ fn take_inventory_against(
     //
     // **The two locks may narrow the same set and may not contradict.** So a
     // rule the mode would silently defeat refuses here, named, before any
-    // unit starts, rather than at a `connect` no layer reports.
+    // worker starts, rather than at a `connect` no layer reports.
     //
     // **The rule half is the serving binding's and the group half is every
-    // binding's.** `start_arguments` emits `--property=Group={identity}` for
-    // every unit, so a box carrying the agent user and not its group fails
-    // `systemd-run` with the opaque credential error whatever the binding is,
-    // and gating the whole check on `Serving` let a diagnostic declaration
+    // binding's.** The start step drops every worker to the group named
+    // `{identity}`, so a box carrying the agent user and not its group fails
+    // the start whatever the binding is, and gating the whole check on `Serving` let a diagnostic declaration
     // pass validate clean and fail at load. A diagnostic binding is asked
     // with an empty rule, which reaches the group arm and names no peer.
     let empty_rule = weaver_types::AccessRule {
@@ -1295,9 +1294,9 @@ mod tests {
     /// **The group half of the check covers every binding, not the serving
     /// one.**
     ///
-    /// `start_arguments` emits `--property=Group={identity}` for every unit,
-    /// so a box carrying the agent user and not its group fails
-    /// `systemd-run` with an opaque credential error whatever the binding is.
+    /// The start step drops every worker to the group named `{identity}`, so
+    /// a box carrying the agent user and not its group fails the start
+    /// whatever the binding is.
     /// Gating the whole check on `EnterBinding::Serving` let a diagnostic
     /// declaration pass validate clean and fail at load, which is exactly the
     /// failure the `GroupMissing` arm exists to preempt.
