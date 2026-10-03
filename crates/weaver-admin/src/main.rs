@@ -740,11 +740,11 @@ fn load(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer, Li
 /// **The unit is cleared by admin, not left for the operator**, on the
 /// operator's ruling of 2026-10-01, per `weaver-admin-Spec` section 3. A worker
 /// that exited non-zero leaves its unit `failed`, holding the name, and the
-/// next load under it would be refused `AgentRunning`. The state ask
+/// next load under it would be refused `NoResidency`. The state ask
 /// decides, and only `failed` is cleared. The ask runs where this load
 /// started a unit, or where its start was refused over a failed one, which
 /// covers a unit that failed while serving: that load answers
-/// `AgentRunning` and the one after it starts. **There is no automatic
+/// `NoResidency` and the one after it starts. **There is no automatic
 /// reload.** The refusal is answered as it stood, and a retry is the
 /// operator's next load. The clear is a logged act of the rollback, so the
 /// log records that the unit was failed, and the worker's own output stays in
@@ -774,7 +774,7 @@ fn settle_refused_load(
         || unit::stop(&config.unit, &agent.0).is_ok(),
         || true,
     );
-    if (standing.unit_started || *refusal == LifecycleRefusal::AgentRunning)
+    if (standing.unit_started || *refusal == LifecycleRefusal::NoResidency)
         && unit::residency(&config.unit, &agent.0) == unit::Residency::Failed
     {
         // **Undone only on two answers**: the clear's own status, and the state
@@ -979,10 +979,11 @@ fn start_refusal_for_residency(
     from_status: LifecycleRefusal,
 ) -> LifecycleRefusal {
     match residency {
-        // Owed to C2 of #50, which retires the unit with `unit.rs`: until then
-        // a failed unit's held name refuses as `AgentRunning`, the case that
-        // replaced `PriorUnitUnreaped`.
-        unit::Residency::Failed => LifecycleRefusal::AgentRunning,
+        // Owed to C2 of #50, which retires the unit with `unit.rs`. Until then
+        // a failed unit, a worker that exited non-zero and runs no more,
+        // refuses as `NoResidency`: never `AgentRunning`, which says a live
+        // run holds the lock, and the rollback clears the failed name.
+        unit::Residency::Failed => LifecycleRefusal::NoResidency,
         _ => from_status,
     }
 }
@@ -1059,10 +1060,11 @@ fn refusal_for_residency(residency: unit::Residency) -> LifecycleRefusal {
         // state says a process exited non-zero and says nothing about whether
         // it bound, so naming a socket here would assert what the boundary
         // did not, per `weaver-admin-systemd-contract` section 3.
-        // Owed to C2 of #50, which retires the unit with `unit.rs`: until then
-        // a failed unit's held name refuses as `AgentRunning`, the case that
-        // replaced `PriorUnitUnreaped`.
-        unit::Residency::Failed => LifecycleRefusal::AgentRunning,
+        // Owed to C2 of #50, which retires the unit with `unit.rs`. Until then
+        // a failed unit, a worker that exited non-zero and runs no more,
+        // refuses as `NoResidency`: never `AgentRunning`, which says a live
+        // run holds the lock, and the rollback clears the failed name.
+        unit::Residency::Failed => LifecycleRefusal::NoResidency,
         // The unit is running and its socket was not reachable, so what failed
         // is the bind rather than the residency. Reporting no residency here
         // would name the one thing the manager just said was present.
@@ -2057,7 +2059,7 @@ mod tests {
     ///
     /// Perturbation: remove the clear from `settle_refused_load` and the
     /// state stays `failed`, which the next start reads as
-    /// `AgentRunning`.
+    /// `NoResidency`.
     #[test]
     fn a_failed_load_clears_its_unit_for_the_next() {
         let root = std::env::temp_dir().join(format!("weaver-admin-reap-{}", std::process::id()));
@@ -2080,8 +2082,8 @@ mod tests {
         assert_eq!(residency, unit::Residency::Inactive);
         assert_ne!(
             start_refusal_for_residency(residency, LifecycleRefusal::BindFailed),
-            LifecycleRefusal::AgentRunning,
-            "the next start is not refused unreaped"
+            LifecycleRefusal::NoResidency,
+            "the next start is not refused over the failed unit"
         );
         let logged = std::fs::read_to_string(&log_path).unwrap();
         assert!(logged.contains("unit-reset-failed:undone"), "{logged}");
@@ -2613,7 +2615,8 @@ mod unload_answer_tests {
     fn a_failed_prior_unit_is_not_a_bind_failure() {
         assert_eq!(
             refusal_for_residency(unit::Residency::Failed),
-            LifecycleRefusal::AgentRunning
+            LifecycleRefusal::NoResidency,
+            "a failed unit runs nothing, so it never reads as a running agent"
         );
         assert_eq!(
             refusal_for_residency(unit::Residency::Active),
@@ -2644,7 +2647,7 @@ mod unload_answer_tests {
         let from_status = LifecycleRefusal::BindFailed;
         assert_eq!(
             start_refusal_for_residency(unit::Residency::Failed, from_status.clone()),
-            LifecycleRefusal::AgentRunning
+            LifecycleRefusal::NoResidency
         );
         for other in [
             unit::Residency::Active,
