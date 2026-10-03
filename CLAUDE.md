@@ -23,8 +23,8 @@ process or a network boundary, never linked:
   admin-con) run beside each agent as their own service users, one of each per agent.
   They are WeaverWeb's and never this repository's, and they start under the operator's
   provisioning, never under admin. Gate-con reaches the gate's socket. Admin-con issues
-  admin's fixed command lines through the box's strict sudo rule and reads the trace
-  door. The agent's lifetime is bound to its admin-con, so the agent fails closed when
+  admin's fixed command lines through the box's strict sudo rule and, where the trace
+  sink is a file, reads the trace door. The agent's lifetime is bound to its admin-con, so the agent fails closed when
   admin-con stops (#72, toddwbucy/WeaverWeb#15). The role map that bounds them is the
   box's (toddwbucy/WeaverTools#6).
 
@@ -63,9 +63,10 @@ behind a boundary the kernel enforces.
 ## Architecture
 
 A deployed agent is four processes on one machine, and its own `weaver-admin`, the
-agent's lifecycle driver and management plane. Admin runs per verb as root, through a
-strict sudo rule that grants fixed command lines with no caller-chosen argument, and is
-not resident while the agent serves. No supervisor is part of the agent. By the Spec
+agent's lifecycle driver and management plane. Admin runs per verb as root, from the
+operator's root shell or, for admin-con, through a strict sudo rule that grants fixed
+command lines with no caller-chosen argument, and is not resident while the agent
+serves. No supervisor is part of the agent. By the Spec
 merged in #72 (2026-10-03), the agent leaves systemd: admin's start step does custody
 itself, and restart or hardening belongs to whoever packages the agent. Until the #50
 code act lands, the code and the scripts still stand a transient systemd unit. The verbs
