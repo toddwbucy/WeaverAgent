@@ -953,7 +953,12 @@ pub struct Grants {
 
 pub struct RoleList {
     pub roles: BTreeMap<String, BTreeSet<AdminVerb>>,
-    pub trace_reader: String,
+    pub trace_reader: Principal,
+}
+
+pub enum Principal {
+    User(String),
+    Group(String),
 }
 
 pub struct TraceHeader {
@@ -1008,14 +1013,18 @@ section 6.
 #63's second and fourth questions: a root-owned file in the agent's root,
 `/etc/weaver/admin/<agent>/roles.toml`, mapping each of that agent's own role groups to
 the verbs it permits, named explicitly with no wildcard and an unknown key refused, and
-naming the one `trace_reader`, the user or group of the agent's own admin-con, that the
-trace socket admits. Both members are required, so granting nothing is written as an
-empty list and never as an absent file, and the file is boundary and never constitution,
-per `weaver-admin-Spec` section 4. A verb no group lists is refused at the sockets for
-every caller, and the role list never names a verb `AdminVerb` does not.
+naming the one `trace_reader` that the trace socket admits. Both members are required,
+so granting nothing is written as an empty list and never as an absent file, and the
+file is boundary and never constitution, per `weaver-admin-Spec` section 4. A verb no
+group lists is refused at the sockets for every caller, and the role list never names a
+verb `AdminVerb` does not. **The trace reader names its kind**: `Principal` is a user or
+a group, written `{ user = "..." }` or `{ group = "..." }`, exactly one, because a bare
+name could resolve to both a user and a group of that name and so to two principals, and
+an implicit precedence would decide who receives the agent's whole record. A user admits
+that uid alone, and a group admits a peer whose groups include it.
 
 ```toml
-trace-reader = "weaver-<agent>-admincon"
+trace-reader = { user = "weaver-<agent>-admincon" }
 
 [roles]
 weaver-<agent>-observer = ["show", "grants"]

@@ -281,24 +281,27 @@ declaration is required. Every other caller, an observer or an operator role inc
 is refused, typed and logged: those roles reach `show` and `grants` on the lifecycle
 socket and never the record. **The newest connection from that reader replaces the
 old**: the replaced follower ends with a reason, the replacement is logged, and never
-more than one root follower stands per agent. Fan-out to further readers is WeaverWeb's,
-never more readers or sockets on the box, because each extra reader on the box is
-another principal holding the agent's whole record. This binary, started for the
-connection, reads one `TraceRequest`, opens the agent's trace file read-only with
-`O_NOFOLLOW` beneath the sink's directory, verifies that the requested offset falls on a
-record boundary and that the record ending there hashes to the request's digest, and
-writes a `TraceHeader` line naming the file's identity, its device, inode and birth
-time, then the file's own lines from that offset exactly as written, following new
-lines as they land, with a heartbeat while idle. **A change of the file's identity is
-reported in the stream** and never smoothed over, so a rotation or a truncation reaches
-the reader as what it is. A position that does not verify refuses before a byte is
-streamed. Only a file sink is streamable, a pipe or a socket sink having no file to
-read, and a request against one refuses `ConfigInvalid` naming the sink. The stream
-parses no event: it hashes one record's bytes to verify a position and copies bytes,
-which keeps section 8 of the charter true that no lifecycle act parses events. Nothing
-else is done with root on this door, and the agent and its state member still reach
-neither the file nor the socket, the custody of section 5 being widened to the one
-declared reader, read-only.
+more than one root follower stands per agent. Each connection starts its own process and
+no standing state of this crate's joins them, so how the newest follower finds the old
+one and ends it is a mechanism the code act elects, carried on #50, a lock and the
+follower's identity held in the root-owned `/run/weaver-<agent>/` being one way. Fan-out
+to further readers is WeaverWeb's, never more readers or sockets on the box, because
+each extra reader on the box is another principal holding the agent's whole record. This
+binary, started for the connection, reads one `TraceRequest`, opens the agent's trace
+file read-only with `O_NOFOLLOW` beneath the sink's directory, verifies that the
+requested offset falls on a record boundary and that the record ending there hashes to
+the request's digest, and writes a `TraceHeader` line naming the file's identity, its
+device, inode and birth time, then the file's own lines from that offset exactly as
+written, following new lines as they land, with a heartbeat while idle. **A change of
+the file's identity is reported in the stream** and never smoothed over, so a rotation
+or a truncation reaches the reader as what it is. A position that does not verify
+refuses before a byte is streamed. Only a file sink is streamable, a pipe or a socket
+sink having no file to read, and a request against one refuses `ConfigInvalid` naming
+the sink. The stream parses no event: it hashes one record's bytes to verify a position
+and copies bytes, which keeps section 8 of the charter true that no lifecycle act parses
+events. Nothing else is done with root on this door, and the agent and its state member
+still reach neither the file nor the socket, the custody of section 5 being widened to
+the one declared reader, read-only.
 
 **The answer is one JSON object on standard output and the exit status agrees
 with it.** One `lifecycle-answer` or one `lifecycle-refusal` in the floor's
@@ -1848,7 +1851,8 @@ stop, goes on the trace with its cause, through the harness, per section 2. Boun
 activity that changes nothing in the agent goes here. A refused attempt at either socket
 goes here, whether unauthorized, from the wrong group, against a socket of the wrong
 mode or against an undeclared boundary. So does a read-only verb, `show` or `grants`,
-and so do the trace socket's connects, replacements and disconnects, never a line per
+a `stop` answered at rest, which closed no turn and so changed nothing, and so do the
+trace socket's connects, replacements and disconnects, never a line per
 streamed record. Each such line carries the wall time, the socket, the caller's uid and
 groups, the principal claim capped at 256 bytes, what was asked, the digest of the role
 list in force, and the outcome.

@@ -165,19 +165,29 @@ comes back by running a verb, per section 6.
 
 ## 5. Failure
 
-**This boundary has one failure and it is the sink's.** A sink that cannot be opened
-refuses the load, per `weaver-admin-PRD` section 4.1 step 4, and a sink that fails
-mid-run is the tee's bounded loss of section 3 rather than a refusal, because a run
-does not stop for its reader.
+**At the sink, one failure.** A sink that cannot be opened refuses the load, per
+`weaver-admin-PRD` section 4.1 step 4, and a sink that fails mid-run is the tee's
+bounded loss of section 3 rather than a refusal, because a run does not stop for its
+reader.
 
-The ask-side cases this section enumerated until 2026-08-05 travelled with the socket
-to `weaver-admin-PRD` section 8 and its Spec: the malformed request, the unknown
-agent, the request carrying work, and the config's registered-field failure are all
-still refusals, typed as `lifecycle-refusal` and returned by the invocation. The peer
-predicate is not among them anywhere, having retired with the surface that applied
-it. An organ refusing a field it registered is still not on any of these lists: that
-refusal is the organ's, travels back through the harness on its own seam, and reaches
-the operator inside the aggregate.
+**At the sockets, the boundary's own failures, each refused before anything is touched
+and logged in `admin.log`**, per the operator's rulings of 2026-10-02 on #50 and
+2026-10-03 on #63. A listening socket whose owner, group or mode is wrong serves
+nothing. A peer none of whose groups holds a role on the agent is refused before its
+request is read, and so is any caller but the declared trace reader at the trace socket.
+A missing or malformed `roles.toml` refuses as `ConfigInvalid` naming it. A verb outside
+the peer's roles is answered `Unauthorized`, the floor's `lifecycle-refusal`. A trace
+position that does not verify refuses before a byte is streamed, and a request against a
+sink that is not a file refuses `ConfigInvalid` naming the sink.
+
+The ask-side cases this section enumerated until 2026-08-05 travelled with the socket to
+`weaver-admin-PRD` section 8 and its Spec: the malformed request, the unknown agent, the
+request carrying work, and the config's registered-field failure are all still refusals,
+typed as `lifecycle-refusal` and returned by the invocation or the lifecycle socket
+alike. The shared allow-and-deny predicate is not among them, the sockets judging a role
+list rather than that rule. An organ refusing a field it registered is still not on any
+of these lists: that refusal is the organ's, travels back through the harness on its own
+seam, and reaches the operator inside the aggregate.
 
 ## 6. Prohibitions
 

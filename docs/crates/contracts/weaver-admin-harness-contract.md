@@ -218,17 +218,20 @@ answer is the aggregate and the organs appear in its content rather than as part
 to this seam.
 
 **Stop the turn.** Opened by admin. Admin conveys the operator's intent to stop, one bit
-and no work beside its cause, which the harness records on the stop. The harness aborts
-the turn in flight, the turn closes with the stop reason marked in place of a response,
-and the run stays open. The harness answers with the turn's fate, aborted naming the
-turn it closed, or at rest because nothing was in flight, and both are clean closes of
-the exchange rather than refusals, because the operator's intent is satisfied by the
-state either way. The answer is given only after the close event is placed, which is the
-announce-after-record discipline. Stop touches no run bracket. It is the channel the
-operator interrupt of `weaver-harness-PRD` section 2 arrives on, and it exists on this
-seam because the operator holds no other crossing. How the abort lands at the decoder is
-the harness's interior and crosses nowhere on this seam, and since 2026-09-22 the same
-holds of a tool running when the stop arrives: the harness cancels the execution through
+and no work beside its cause, which the harness records on the stop's turn close. A stop
+that finds no turn in flight answers at rest and closes no turn, so it changes nothing
+in the agent and admin writes it, with its cause, to `admin.log` instead, per
+`weaver-admin-Spec` section 8. The harness aborts the turn in flight, the turn closes
+with the stop reason marked in place of a response, and the run stays open. The harness
+answers with the turn's fate, aborted naming the turn it closed, or at rest because
+nothing was in flight, and both are clean closes of the exchange rather than refusals,
+because the operator's intent is satisfied by the state either way. The answer is given
+only after the close event is placed, which is the announce-after-record discipline.
+Stop touches no run bracket. It is the channel the operator interrupt of
+`weaver-harness-PRD` section 2 arrives on, and it exists on this seam because the
+operator holds no other crossing. How the abort lands at the decoder is the harness's
+interior and crosses nowhere on this seam, and since 2026-09-22 the same holds of a tool
+running when the stop arrives: the harness cancels the execution through
 `weaver-harness-gate-contract` section 2 and answers here after the turn's close is
 placed, the promise above carrying no invocation exception.
 
