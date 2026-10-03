@@ -2094,36 +2094,38 @@ will not take being named in an `identity_prefix_unrecorded` fault rather than r
 the enter. **Under a diagnostic binding the enter records nothing**, its asks being
 setup the diagnostic record does not carry as it carries no load and no prefix: that
 record opens with `replay.opened`, and the ask that feeds the model is the replay
-port's. **The turn ordinal continues from the save point**: the first turn of a
-restoring run is numbered one past the last turn the save point's lineage names, within
-the run it names, never from its event sequence, a bare turn number recurring across a
-session's runs and naming nothing on its own, so the derived seeds of `weaver-spu-Spec`
+port's. **A restoring run numbers its turns from one**, on the operator's ruling of
+2026-10-02 on #59: a restore from a save point is a new branch and so a new run, and a
+turn key counts within its run and restarts with the next, per
+`weaver-gate-world-contract` section 2. The save point's last turn stays on the record
+as a fact of the lineage and numbers nothing. The derived seeds of `weaver-spu-Spec`
 section 8.5, which fix a generation's stream from the declared seed, the turn's
-reference, and the generation ordinal, continue the streams of the run the save point
-was taken from. **Where the door stands the enter's identity ask waits on the driver's
-seal**, under the parked ask's bound rather than the two seconds a member answering from
-holdings at rest takes, per `weaver-harness-state-contract` section 2 and
-`weaver-state-Spec` section 4, and one typed line on standard error names what is waited
-on and for how long before the ask is written, so an operator who has not started the
-driver reads why the load stands still. The door stands only under a diagnostic binding,
-the preload being that binding's alone, and a short bound would refuse the enter unless
-the driver had sealed inside it, the identity ask's miss being the one the dead-peer
-clause does not convert. **A diagnostic enter therefore waits on the driver as its
-replay does and refuses without one after the bound**, and the answer it opens on is the
-record's own. **The instrument is perturbation, as of 2026-09-06, on the ordinal**: the
-first turn of a restoring run is numbered one past the cut, watched to fail when the
-ordinal starts at zero. The perturbation that watched the restored conversation retires
-with the record restore, and the code act that lands the save point removes its test and
-renumbers this one from the save point's last turn.
+reference, and the generation ordinal, therefore draw the new run's own streams, its run
+reference distinguishing them from those of the run the save point was taken from.
+**Where the door stands the enter's identity ask waits on the driver's seal**, under the
+parked ask's bound rather than the two seconds a member answering from holdings at rest
+takes, per `weaver-harness-state-contract` section 2 and `weaver-state-Spec` section 4,
+and one typed line on standard error names what is waited on and for how long before the
+ask is written, so an operator who has not started the driver reads why the load stands
+still. The door stands only under a diagnostic binding, the preload being that binding's
+alone, and a short bound would refuse the enter unless the driver had sealed inside it,
+the identity ask's miss being the one the dead-peer clause does not convert. **A
+diagnostic enter therefore waits on the driver as its replay does and refuses without
+one after the bound**, and the answer it opens on is the record's own. **The instrument
+is perturbation, on the ordinal**: the first turn of a restoring run is numbered one,
+watched to fail when the ordinal is taken from the lineage's last turn. The perturbation
+that watched the restored conversation retires with the record restore, and the code act
+that lands the save point removes its test and rewrites the one-past-the-cut test of
+2026-09-06 to this rule.
 
 ```graph
-node: harness-restoring-run-continues-the-ordinal
+node: harness-restoring-run-numbers-turns-from-one
 kind: assertion
 tag: perturbation
 
 edge: asserts
 from: weaver-harness
-to: harness-restoring-run-continues-the-ordinal
+to: harness-restoring-run-numbers-turns-from-one
 ```
 
 **The column ask is written where and only where the binding is diagnostic
