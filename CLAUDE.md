@@ -69,8 +69,9 @@ operator's root shell or, for admin-con, through a strict sudo rule that grants 
 command lines with no caller-chosen argument, and is not resident while the agent
 serves. No supervisor is part of the agent. By the Spec
 merged in #72 (2026-10-03), the agent leaves systemd: admin's start step does custody
-itself, and restart or hardening belongs to whoever packages the agent. Until the #50
-code act lands, the code and the scripts still stand a transient systemd unit. The verbs
+itself, and restart or hardening belongs to whoever packages the agent. The code
+follows since #77 and #78. The deploy scripts still assume systemd units until #79, so
+no box is redeployed from main before #79 lands. The verbs
 are the application layer's primitives, and their orchestration is interior to the
 agent. Every organ is one agent's own: a second agent gets its
 own set, and managing several agents belongs to WeaverWeb or a separate application, not
@@ -78,7 +79,7 @@ to admin (operator's ruling of 2026-10-01). Every seam that crosses a process
 line is a Unix domain socket, and there is no listening network socket anywhere.
 
 ```text
-                weaver-admin  (the agent's management plane: per verb, root, via sudo)
+                weaver-admin  (the agent's management plane: per verb, as root)
                       |
    world --> weaver-gate --> [ worker: weaver-harness + weaver-trace + weaver-diagnostic ]
                                    |                 |
@@ -235,9 +236,9 @@ with the trace in its own group (#56); small fixes are #39. The scripts are
 loaded agent's gate as the operator's uid with no sudo. The installed stack lives under
 `/etc/weaver/admin/<agent>/` (each agent's config root), `/etc/weaver/stack/` (the
 scripts' record of the install, which admin never reads), `<prefix>/bin` and
-`/var/log/weaver`. Each agent runs under its own OS user, today as a transient systemd
-unit `weaver-worker@<agent>.service`. The #50 code act replaces the unit with admin's
-start step and rewrites the scripts and runbooks to match. Run logs of redeploys are
+`/var/log/weaver`. Each agent runs under its own OS user, started by admin's start step
+(#77). Until #79 lands, the scripts and runbooks still describe a transient systemd unit
+`weaver-worker@<agent>.service`, and #79 rewrites them. Run logs of redeploys are
 kept under `docs/project/redeploy-*.md`. The thinkpad runs a stack built from this tree
 at the split and completes turns through the gate (2026-09-30 15:33).
 
