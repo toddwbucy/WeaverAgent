@@ -2209,9 +2209,13 @@ fn classify_organ_death(pid: nix::unistd::Pid) -> Option<LifecycleRefusal> {
             // is a descriptor fault and not a residency one.
             Some(LifecycleRefusal::DescriptorsUnusable)
         }
-        Ok(nix::sys::wait::WaitStatus::Exited(_, crate::spawn::EXEC_FAILED)) => {
-            // The organ binary never ran, so nothing it was asked to stand up
-            // could have stood up.
+        Ok(nix::sys::wait::WaitStatus::Exited(
+            _,
+            crate::spawn::EXEC_FAILED | crate::spawn::DEATH_SIGNAL_REFUSED,
+        )) => {
+            // The organ binary never ran, its exec failing or the kernel
+            // refusing the death signal that binds it to the worker, so
+            // nothing it was asked to stand up could have stood up.
             Some(LifecycleRefusal::BindFailed)
         }
         _ => None,

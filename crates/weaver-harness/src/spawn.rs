@@ -86,14 +86,21 @@ pub unsafe fn fork_organ(
             // Calls one to three: arm the death signal, then confirm the
             // worker still stands, so no window leaves an organ orphaned.
             // SAFETY: prctl, getppid and _exit are async-signal-safe.
+            // **A refused arming refuses the organ**: an organ that runs
+            // without its death signal could outlive the worker, so a
+            // rejection, a seccomp policy's among them, ends the child before
+            // its exec rather than letting the invariant lapse silently.
             unsafe {
-                nix::libc::prctl(
+                if nix::libc::prctl(
                     nix::libc::PR_SET_PDEATHSIG,
                     nix::libc::SIGKILL as nix::libc::c_ulong,
                     0,
                     0,
                     0,
-                );
+                ) == -1
+                {
+                    nix::libc::_exit(DEATH_SIGNAL_REFUSED);
+                }
                 if nix::libc::getppid() != worker {
                     nix::libc::_exit(WORKER_GONE);
                 }
@@ -314,6 +321,10 @@ pub const EXEC_FAILED: i32 = 127;
 /// The child exited because the worker died between the fork and the arming
 /// of its death signal, so the organ never ran.
 pub const WORKER_GONE: i32 = 125;
+
+/// The child exited because the kernel refused its death signal, so the
+/// organ never ran rather than running unbound to the worker.
+pub const DEATH_SIGNAL_REFUSED: i32 = 124;
 
 #[cfg(test)]
 mod last_word_tests {
