@@ -183,7 +183,22 @@ fn keeps_both(binary: &str, tag: &str) {
             Ok(())
         });
     }
-    let worker = Child(command.spawn().expect("the worker starts"));
+    // **A box with no unprivileged user namespace has no watch here**: the
+    // spawn's `unshare` or the uid map is refused, and the test says so and
+    // passes, as the member's namespaced watch does. Any other failure fails.
+    let worker = match command.spawn() {
+        Ok(child) => Child(child),
+        Err(e)
+            if matches!(
+                e.raw_os_error(),
+                Some(nix::libc::EPERM | nix::libc::EINVAL | nix::libc::ENOSPC | nix::libc::EUSERS)
+            ) =>
+        {
+            eprintln!("SKIP {tag} start-step watch: no user namespace here: {e}");
+            return;
+        }
+        Err(e) => panic!("the worker starts: {e}"),
+    };
     let pid = worker.0.id();
     // The worker is now the only holder of the description and the write end.
     drop(lock_file);
