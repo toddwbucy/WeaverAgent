@@ -580,8 +580,10 @@ anything**, so no organ inherits a writable descriptor to root's lock file or a 
 end that would keep the relay alive, and no window exists in which one could. **The
 instruments are perturbation**: an organ stand-in still running after the worker is
 killed with `SIGKILL`, watched to fail when the death signal is not set, and the run
-lock still held by the worker after it opened and closed another descriptor of
-`run.lock`, watched to fail when the worker's code is made to reopen the file.
+lock held by the worker's own pid, read from outside with `F_GETLK` after the enter and
+again after a turn, watched to fail when the worker closes the inherited descriptor and
+the lock frees. The worker cannot open root's `0600` file anyway, so the watch is on the
+descriptor it inherited.
 
 ```graph
 node: harness-organs-die-with-the-worker

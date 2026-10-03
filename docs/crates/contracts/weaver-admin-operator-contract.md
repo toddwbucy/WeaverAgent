@@ -68,7 +68,7 @@ fixed command lines, and no command crosses a network. **The sink** is a real cr
 admin passes the sink handle across the boundary and the program writes through it,
 something of the operator's stands behind it, and neither side sees the other's
 interior. **The trace door** is the relay's socket, `trace.sock` in the agent's
-root-owned run directory `<coordination-root>/weaver-run/<agent>/`, standing only for a
+root-owned run directory `<coordination-root>/weaver.run/<agent>/`, standing only for a
 file sink, grouped to the agent's own access group `weaver-<agent>-admin`
 and admitting exactly one declared reader by the kernel's peer credential, per
 `weaver-admin-Spec` section 6. None is network ingress, and none breaches anything Gate
@@ -184,10 +184,13 @@ comes back by running a verb, per section 6.
 bounded loss of section 3 rather than a refusal, because a run does not stop for its
 reader.
 
-**At a command line, the floor's refusals**: a second `load` of a running agent answers
-`AgentRunning`, a missing or malformed boundary file refuses `ConfigInvalid` naming
-`roles.toml`, and an `unload` whose worker still holds the run lock after the escalation
-refuses with that carried and no state, per `weaver-admin-Spec` section 3. A line a
+**At a command line, the floor's refusals**, per `weaver-admin-Spec` section 3: a verb
+arriving while another invocation holds this agent's invocation lock refuses
+`InvocationInFlight` before touching anything, and `show` then answers `InTransition`. A
+second `load` of a running agent answers `AgentRunning`. A missing or malformed boundary
+file refuses `ConfigInvalid` naming `roles.toml`. An `unload` that cannot pin the run
+lock's holder refuses `LockHolderUnknown`, and one whose worker still holds the run lock
+after the escalation refuses `WorkerWouldNotExit` and answers no state. A line a
 caller's rule does not grant never reaches the program, sudo refusing it, so it has no
 refusal here. **At the trace door, refusals before a byte is sent**: any caller but the
 declared reader, and a position that does not verify, each logged in the agent's

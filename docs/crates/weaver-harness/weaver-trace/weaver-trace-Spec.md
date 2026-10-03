@@ -270,6 +270,7 @@ pub struct Elections {
     pub stack: BTreeMap<String, String>,
     pub boundary: String,
     pub cause: Cause,
+    pub library_path: Option<String>,
 }
 
 pub struct Cause {

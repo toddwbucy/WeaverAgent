@@ -104,9 +104,10 @@ outlives every invocation. All three are on
 4. **Resolve the session and open the sink.** Which session is being loaded is
    admin's decision - the engine is structurally unable to make it, never
    learning a path - and the descriptor is obtained here, under root.
-5. **Run the start step**, root's act since 2026-10-03 (#50): make the agent's
-   runtime directory, take the run lock, stand the trace relay and the state member,
-   and start the worker in its own session under the agent's account. The worker
+5. **Run the start step**, root's act since 2026-10-03 (#50): under the invocation
+   lock, with the run lock found free, make the agent's runtime directory, stand the
+   trace relay and the state member, and start the worker in its own session under the
+   agent's account, its child taking the run lock last. The worker
    starts bare of the sink, and its first act is to bind the coordination socket in
    its runtime directory.
 6. **Dial the channel, direct enter, receive the aggregate.** The directive

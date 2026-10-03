@@ -1263,6 +1263,7 @@ pub enum LifecycleAnswer {
     GateStopped,
     Validated,
     State { state: AgentState, load: Option<Box<LoadFacts>> },
+    InTransition,
 }
 ```
 
@@ -1331,6 +1332,7 @@ pub struct EnterPayload {
     pub identity_file: String,
     pub boundary: String,
     pub cause: Cause,
+    pub library_path: Option<String>,
 }
 
 pub struct Lineage {
@@ -1475,6 +1477,12 @@ running worker and released by the kernel at its death, so the refusal says one 
 and no more: a worker of this agent holds the lock now. It does not say the worker is
 serving or healthy, which `show` answers through the observation exchange. A worker that
 died leaves no lock behind, so no case for a dead one is needed and none is kept.
+
+**`InTransition` is an answer, not a state**, on the same ruling: `show` answers it
+where another invocation holds the agent's invocation lock, a load or an unload in
+flight, per `weaver-admin-Spec` section 3. It claims no `AgentState`, apex section 6's
+four states being the harness's to know and the harness being busy with that very
+invocation, so the caller polls again.
 
 **Three more cases join it on the same ruling, each one fact.** `InvocationInFlight`
 says another invocation holds this agent's invocation lock, so this one touched nothing,

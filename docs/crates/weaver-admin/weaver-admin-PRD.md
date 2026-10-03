@@ -436,48 +436,49 @@ principal, which is what lets the worker write a stream its uid could not open.
 Close-on-exec is not admin's to confer on a passed descriptor and is the harness's
 obligation at the receive, per the contract. 5. **Run the start step, which starts the
 worker under the agent's own account.** Root does what the transient unit did, on the
-operator's ruling of 2026-10-03 on #50: it makes the agent's runtime directory with its
-owner and mode, takes the run lock a running worker holds, stands the trace relay and
-the state member, and forks the worker, which takes a new session, drops to the agent's
-uid and group, and executes with no new privileges. The worker starts bare of the sink,
-its first act being to bind the coordination socket of section 6 inside its runtime
-directory and listen, and the sink crosses at step 6 as before. **Bare states what no
-descriptor crosses and says nothing about arguments.** A worker cannot bind a name it
-was never told, and the organ binaries it forks at enter are a provisioning fact its
-composition root is handed rather than one it discovers, the same standing
-`weaver-harness-PRD` section 2 gives to which binary an agent's start step runs. The
-vector carries them because it is the only path from the operator's installed values
-into a process that does not yet exist. **An arm only some declarations elect is
-provisioned the same way and installed differently**, as of 2026-09-07: its binary is
-found beside the worker's rather than placed by name, so an installation owes a path for
-what every agent needs and owes nothing for what one agent might, and the vector carries
-the derived path where the file stands. **Where a declaration elects an arm the
-installation never provided, the organ refuses the load and this crate does not**, per
-the custody division of section 2. The classify arm is the first of that shape and the
-Spec's sections 6 and 9 hold it. What crosses stays a deployment fact and widens
-nothing: the socket's name derives from the validated agent name, and the binary paths
-are the operator's installed values rather than anything the invocation composed. 6.
-**Dial the channel, direct enter, and receive the aggregate.** The invocation connects
-to the socket the worker bound, retrying within a stated bound because the bind is the
-worker's first act and the dial may arrive first, the bound being the Spec's to state.
-The directive carries the session identity, the run ordinal, the kind of the binding,
-the trace descriptor, the state channel's end where the member stands, the model
-binding, and, where the kind declares a Gate, the gate instruction, per the contract.
-The descriptors ride inside the directive over the coordination channel as `SCM_RIGHTS`
-ancillary payload, per `weaver-harness-PRD` section 5, one for the sink and a second for
-the state end where the leg stands, its absence the leg not standing and never a refused
-load, so the worker receives handles and never a path and accepts them close-on-exec at
-its one receive site. Everything after the directive and before the answer is the
-harness's: it stands up an empty working structure, authors its `load` event, which is
-the record of admin's contact and the origin of the run's monotonic clock, asks the SPU
-to admit the model, and starts Gate last where the kind declares one, so no work arrives
-before the interior can serve it. Admin holds no channel to either organ, per section 6,
-so what admin receives is one answer aggregating the fan-out, ready or a refusal naming
-where it stopped. 7. **Publish loaded and idle.** Only now, and only on a ready
-aggregate. A partial load is never published as loaded, and the published state is idle
-rather than active. Publishing is the invocation's answer and the log's entry, and the
-standing fact behind both is the run lock: whether a worker runs between invocations is
-a question the kernel answers, held by no map of admin's.
+operator's ruling of 2026-10-03 on #50: under its invocation lock, with the run lock
+found free, it makes the agent's runtime directory with its owner and mode, stands the
+trace relay and the state member, and forks the worker, whose child takes the run lock
+last, which takes a new session, drops to the agent's uid and group, and executes with
+no new privileges. The worker starts bare of the sink, its first act being to bind the
+coordination socket of section 6 inside its runtime directory and listen, and the sink
+crosses at step 6 as before. **Bare states what no descriptor crosses and says nothing
+about arguments.** A worker cannot bind a name it was never told, and the organ binaries
+it forks at enter are a provisioning fact its composition root is handed rather than one
+it discovers, the same standing `weaver-harness-PRD` section 2 gives to which binary an
+agent's start step runs. The vector carries them because it is the only path from the
+operator's installed values into a process that does not yet exist. **An arm only some
+declarations elect is provisioned the same way and installed differently**, as of
+2026-09-07: its binary is found beside the worker's rather than placed by name, so an
+installation owes a path for what every agent needs and owes nothing for what one agent
+might, and the vector carries the derived path where the file stands. **Where a
+declaration elects an arm the installation never provided, the organ refuses the load
+and this crate does not**, per the custody division of section 2. The classify arm is
+the first of that shape and the Spec's sections 6 and 9 hold it. What crosses stays a
+deployment fact and widens nothing: the socket's name derives from the validated agent
+name, and the binary paths are the operator's installed values rather than anything the
+invocation composed. 6. **Dial the channel, direct enter, and receive the aggregate.**
+The invocation connects to the socket the worker bound, retrying within a stated bound
+because the bind is the worker's first act and the dial may arrive first, the bound
+being the Spec's to state. The directive carries the session identity, the run ordinal,
+the kind of the binding, the trace descriptor, the state channel's end where the member
+stands, the model binding, and, where the kind declares a Gate, the gate instruction,
+per the contract. The descriptors ride inside the directive over the coordination
+channel as `SCM_RIGHTS` ancillary payload, per `weaver-harness-PRD` section 5, one for
+the sink and a second for the state end where the leg stands, its absence the leg not
+standing and never a refused load, so the worker receives handles and never a path and
+accepts them close-on-exec at its one receive site. Everything after the directive and
+before the answer is the harness's: it stands up an empty working structure, authors its
+`load` event, which is the record of admin's contact and the origin of the run's
+monotonic clock, asks the SPU to admit the model, and starts Gate last where the kind
+declares one, so no work arrives before the interior can serve it. Admin holds no
+channel to either organ, per section 6, so what admin receives is one answer aggregating
+the fan-out, ready or a refusal naming where it stopped. 7. **Publish loaded and idle.**
+Only now, and only on a ready aggregate. A partial load is never published as loaded,
+and the published state is idle rather than active. Publishing is the invocation's
+answer and the log's entry, and the standing fact behind both is the run lock: whether a
+worker runs between invocations is a question the kernel answers, held by no map of
+admin's.
 
 Step 6 is the one ask in the sequence, and a refusal at any point inside it enters
 the rollback of section 5 carrying the name of the step that refused. A device
