@@ -110,13 +110,22 @@ struct ServiceConfig {
     operator: u32,
     /// The declaration directory's group, the group the operator's logs take.
     operator_gid: u32,
-    /// The sha256 hex of the boundary file, `roles.toml`, and its one trace
-    /// reader, judged at `validate` and `load`, per section 9.
-    boundary_digest: String,
-    trace_reader: String,
+    /// The boundary file, `roles.toml`, as read: its sha256 hex and its one
+    /// trace reader, or why it did not read. **Required at `validate` and
+    /// `load` alone**, per section 9: a damaged file never takes `unload`,
+    /// `stop` or `show` from a running agent, whose log lines then carry no
+    /// digest.
+    boundary: Result<BoundaryRead, String>,
     /// The directory the store's unix socket stands in, per Spec section 9
     /// as of 2026-09-04: read under a service election and otherwise idle.
     state_store_socket: PathBuf,
+}
+
+/// A boundary file that read and parsed.
+#[derive(Debug, Clone)]
+struct BoundaryRead {
+    digest: String,
+    reader: String,
 }
 
 /// The enter's bound where the root names none, per Spec section 2.
@@ -134,6 +143,22 @@ impl ServiceConfig {
     /// The agent's root-owned run directory of section 3.
     fn run_directory(&self) -> PathBuf {
         start::run_directory(&self.coordination_root, &self.agent)
+    }
+
+    /// The boundary file's digest where it read, for the operations log.
+    fn boundary_digest(&self) -> Option<&str> {
+        self.boundary.as_ref().ok().map(|read| read.digest.as_str())
+    }
+
+    /// **The boundary file, required**, at `validate` and `load`: missing or
+    /// malformed refuses `ConfigInvalid` naming `roles.toml`, per section 9.
+    fn require_boundary(&self) -> Result<&BoundaryRead, LifecycleRefusal> {
+        self.boundary.as_ref().map_err(|why| {
+            diag!("weaver-admin: {why}");
+            LifecycleRefusal::ConfigInvalid {
+                field: Some(weaver_types::FieldName(BOUNDARY_FILE.to_string())),
+            }
+        })
     }
 
     /// The operations log, per section 8.
@@ -657,7 +682,7 @@ fn take_inventory(
     agent: &AgentName,
 ) -> Result<inventory::Inventory, LifecycleRefusal> {
     admissible(config, agent)?;
-    judge_reader(&config.trace_reader, agent)?;
+    judge_reader(&config.require_boundary()?.reader, agent)?;
     let identity = inventory::identity_for(agent);
     let source_path = config.declaration_directory.join("agent.toml");
     let source =
@@ -1002,7 +1027,7 @@ fn run_load(
                 // The boundary file's digest, the cause and the judged
                 // libraries, per `weaver-types-Spec` section 4 as of
                 // 2026-10-03, which the harness records on the load event.
-                boundary: config.boundary_digest.clone(),
+                boundary: config.require_boundary()?.digest.clone(),
                 cause: invocation_cause(),
                 library_path: config
                     .library_path
@@ -1178,6 +1203,10 @@ fn unload_within(
 ) -> Result<LifecycleAnswer, LifecycleRefusal> {
     let run_directory = config.run_directory();
     let _invocation = start::take_invocation_lock(&run_directory)?;
+    // **The leave's budget runs from here**, per Spec section 3: the
+    // observation and both dials spend it, so the verb holds the invocation
+    // lock at most the leave's sixty seconds and the escalation's forty-five.
+    let leave_deadline = std::time::Instant::now() + bounds.leave;
     let unloaded = Ok(LifecycleAnswer::State {
         state: weaver_types::AgentState::Unloaded,
         load: None,
@@ -1195,7 +1224,7 @@ fn unload_within(
         Observation::State(..) | Observation::Silent => true,
     };
     if entered {
-        match direct_leave_within(config, bounds.leave) {
+        match direct_leave_within(config, leave_deadline) {
             Ok(()) => {
                 if start::wait_free(&run_directory, bounds.after_left) {
                     return unloaded;
@@ -1221,12 +1250,14 @@ enum LeaveFault {
 
 /// **Directs leave under the leave's own bound**, per Spec section 3.
 fn direct_leave(config: &ServiceConfig) -> Result<(), LeaveFault> {
-    direct_leave_within(config, LEAVE_BOUND)
+    direct_leave_within(config, std::time::Instant::now() + LEAVE_BOUND)
 }
 
+/// Directs leave and waits for its answer until `deadline`, the dial spending
+/// the same budget.
 fn direct_leave_within(
     config: &ServiceConfig,
-    bound: std::time::Duration,
+    deadline: std::time::Instant,
 ) -> Result<(), LeaveFault> {
     let Ok(mut coordination) = channel::dial(&config.coordination_socket()) else {
         return Err(LeaveFault::Unanswered);
@@ -1240,7 +1271,7 @@ fn direct_leave_within(
             },
         )
         .map_err(|_| LeaveFault::Unanswered)?;
-    match coordination.recv_within(bound) {
+    match coordination.recv_within(deadline.saturating_duration_since(std::time::Instant::now())) {
         Ok(answer) => match answer.payload {
             weaver_types::Payload::Answer(LifecycleAnswer::Left) => Ok(()),
             weaver_types::Payload::Refusal(refusal) => Err(LeaveFault::Refused(refusal)),
@@ -1293,7 +1324,7 @@ fn record(config: &ServiceConfig, verb: &'static str, outcome: &str) {
         agent: config.agent.clone(),
         command: format!("weaver-admin {verb} {}", config.agent),
         uid: invocation_cause().uid,
-        boundary: Some(config.boundary_digest.clone()),
+        boundary: config.boundary_digest().map(str::to_string),
         outcome: outcome.to_string(),
         spu: (verb == "load").then(|| config.spu.display().to_string()),
     });
@@ -1335,12 +1366,9 @@ fn load_service_config_at(
     judge_entries(&root, owner)?;
     let mut config = load_service_config_from(&root, agent).map_err(|failure| {
         diag!("weaver-admin: {failure}");
-        // The boundary file is named, per Spec section 9, and every other
-        // value's failure names none.
-        let field = failure
-            .starts_with(BOUNDARY_FILE)
-            .then(|| weaver_types::FieldName(BOUNDARY_FILE.to_string()));
-        LifecycleRefusal::ConfigInvalid { field }
+        // A value of the root's failing names no field; the boundary file is
+        // named where it is required, at `validate` and `load`.
+        LifecycleRefusal::ConfigInvalid { field: None }
     })?;
     config.declaration_directory =
         judge_declaration_directory(&config.declaration_directory, config.operator)?;
@@ -1583,6 +1611,26 @@ fn judge_library_path(
     judge_ancestors(libraries, &[owner, 0])
 }
 
+/// Reads the boundary file, answering why where it does not read or parse.
+fn read_boundary(root: &std::path::Path) -> Result<BoundaryRead, String> {
+    let bytes = std::fs::read(root.join(BOUNDARY_FILE))
+        .map_err(|e| format!("{BOUNDARY_FILE}: the boundary file does not read: {e}"))?;
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| format!("{BOUNDARY_FILE}: the boundary file is not UTF-8"))?;
+    let parsed = weaver_types::parse_boundary(text).map_err(|e| format!("{BOUNDARY_FILE}: {e}"))?;
+    let digest = {
+        use sha2::Digest;
+        sha2::Sha256::digest(&bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    };
+    Ok(BoundaryRead {
+        digest,
+        reader: parsed.trace_reader,
+    })
+}
+
 /// Reads the root's values, per Spec section 9. Required: `worker-binary`,
 /// `spu-binary`, `gate-binary`, `coordination-root`, `declaration-directory`,
 /// `operator` and `roles.toml`. Optional: `headroom-bytes`, `library-path`,
@@ -1637,19 +1685,7 @@ fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<Servi
             ),
         },
     };
-    let boundary_bytes = std::fs::read(root.join(BOUNDARY_FILE))
-        .map_err(|e| format!("{BOUNDARY_FILE}: the boundary file does not read: {e}"))?;
-    let boundary_text = std::str::from_utf8(&boundary_bytes)
-        .map_err(|_| format!("{BOUNDARY_FILE}: the boundary file is not UTF-8"))?;
-    let boundary =
-        weaver_types::parse_boundary(boundary_text).map_err(|e| format!("{BOUNDARY_FILE}: {e}"))?;
-    let boundary_digest = {
-        use sha2::Digest;
-        sha2::Sha256::digest(&boundary_bytes)
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect()
-    };
+    let boundary = read_boundary(root);
     Ok(ServiceConfig {
         agent: agent.to_string(),
         coordination_root: PathBuf::from(read("coordination-root")?),
@@ -1664,8 +1700,7 @@ fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<Servi
         declaration_directory: PathBuf::from(read("declaration-directory")?),
         operator,
         operator_gid: 0,
-        boundary_digest,
-        trace_reader: boundary.trace_reader,
+        boundary,
         state_store_socket: optional("state-store-socket")?
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
@@ -2026,7 +2061,7 @@ mod tests {
         let config = load_service_config_from(&root, "alpha").expect("a sound root reads");
         assert_eq!(config.agent, "alpha");
         assert_eq!(
-            config.boundary_digest.len(),
+            config.boundary.as_ref().unwrap().digest.len(),
             64,
             "the boundary file's sha256 hex"
         );
@@ -2231,12 +2266,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// **A missing or malformed boundary file refuses naming it**, per Spec
-    /// section 9, and every other value's failure names nothing.
-    /// Perturbation: map the boundary file's failure to no field and the
-    /// first two cases lose the name.
+    /// **A missing or malformed boundary file refuses naming it, at the verbs
+    /// that require it and no others**, per Spec section 9: the root still
+    /// reads, so `unload`, `stop` and `show` keep a running agent's recovery
+    /// path with no digest in their log lines, and `require_boundary`, which
+    /// `validate` and `load` call, refuses naming `roles.toml`. Every other
+    /// value's failure names nothing. Perturbation: refuse the read itself on
+    /// a damaged boundary file and the first assertion fails.
     #[test]
-    fn the_boundary_file_is_required_and_named() {
+    fn the_boundary_file_is_required_only_where_named() {
         use std::os::unix::fs::PermissionsExt;
         let me = nix::unistd::getuid().as_raw();
         let base = std::env::temp_dir().join(format!("weaver-admin-roles-{}", std::process::id()));
@@ -2244,21 +2282,22 @@ mod tests {
         let root = base.join("alpha");
         write_root(&root);
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let named = Some(LifecycleRefusal::ConfigInvalid {
+        let named = Err(LifecycleRefusal::ConfigInvalid {
             field: Some(weaver_types::FieldName("roles.toml".into())),
         });
-        std::fs::remove_file(root.join("roles.toml")).unwrap();
-        assert_eq!(
-            load_service_config_at(&base, "alpha", me).err(),
-            named,
-            "missing"
-        );
-        std::fs::write(root.join("roles.toml"), "trace-reader = \"x\"\nroles = 1\n").unwrap();
-        assert_eq!(
-            load_service_config_at(&base, "alpha", me).err(),
-            named,
-            "an unknown key"
-        );
+        for (damage, why) in [
+            (None, "missing"),
+            (Some("trace-reader = \"x\"\nroles = 1\n"), "an unknown key"),
+        ] {
+            match damage {
+                None => std::fs::remove_file(root.join("roles.toml")).unwrap(),
+                Some(text) => std::fs::write(root.join("roles.toml"), text).unwrap(),
+            }
+            let config = load_service_config_at(&base, "alpha", me)
+                .unwrap_or_else(|e| panic!("{why}: the root still reads, got {e:?}"));
+            assert_eq!(config.boundary_digest(), None, "{why}: no digest to log");
+            assert_eq!(config.require_boundary().map(|_| ()), named, "{why}");
+        }
         std::fs::write(root.join("roles.toml"), "trace-reader = \"x\"\n").unwrap();
         std::fs::remove_file(root.join("spu-binary")).unwrap();
         assert_eq!(
@@ -2403,8 +2442,10 @@ mod tests {
             declaration_directory: PathBuf::from("/nonexistent/declarations"),
             operator: 1000,
             operator_gid: 1000,
-            boundary_digest: "0".repeat(64),
-            trace_reader: "weaver-alpha-admincon".into(),
+            boundary: Ok(BoundaryRead {
+                digest: "0".repeat(64),
+                reader: "weaver-alpha-admincon".into(),
+            }),
             state_store_socket: PathBuf::from(inventory::STORE_SOCKET_DIRECTORY),
         }
     }

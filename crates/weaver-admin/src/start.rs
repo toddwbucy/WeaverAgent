@@ -178,6 +178,7 @@ pub fn take_invocation_lock(run_directory: &Path) -> Result<InvocationLock, Life
         if unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_SETLK, &request) } == 0 {
             return Ok(InvocationLock { _file: file });
         }
+        contended(&run_directory.join("admin.lock"))?;
         let mut probe = whole_file(nix::libc::F_WRLCK);
         // SAFETY: as above.
         if unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_GETLK, &mut probe) } != 0 {
@@ -207,10 +208,9 @@ pub fn take_shared_invocation_lock(run_directory: &Path) -> Result<Shared, Lifec
     let request = whole_file(nix::libc::F_RDLCK);
     // SAFETY: fcntl on a descriptor this frame owns, with a lock it built.
     if unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_SETLK, &request) } == 0 {
-        Ok(Shared::Held(InvocationLock { _file: file }))
-    } else {
-        Ok(Shared::InTransition)
+        return Ok(Shared::Held(InvocationLock { _file: file }));
     }
+    contended(&run_directory.join("admin.lock")).map(|()| Shared::InTransition)
 }
 
 /// The run lock this invocation took: an open file description lock, which
@@ -236,9 +236,19 @@ pub fn take_run_lock(run_directory: &Path) -> Result<Option<RunLock>, LifecycleR
     let request = whole_file(nix::libc::F_WRLCK);
     // SAFETY: fcntl on a descriptor this frame owns, with a lock it built.
     if unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_OFD_SETLK, &request) } == 0 {
-        Ok(Some(RunLock { file }))
-    } else {
-        Ok(None)
+        return Ok(Some(RunLock { file }));
+    }
+    contended(&run_directory.join("run.lock")).map(|()| None)
+}
+
+/// **Only contention is a holder**: a lock take that failed with `EACCES` or
+/// `EAGAIN` met another holder, and any other failure, a filesystem that
+/// refuses the lock among them, is a refusal and never evidence of a run or a
+/// transition. Read from `errno` right after the failed take.
+fn contended(path: &Path) -> Result<(), LifecycleRefusal> {
+    match std::io::Error::last_os_error().raw_os_error() {
+        Some(nix::libc::EACCES | nix::libc::EAGAIN) => Ok(()),
+        _ => Err(refuse_path("cannot be locked", path)),
     }
 }
 
@@ -1000,6 +1010,28 @@ mod tests {
             Err(LifecycleRefusal::BoundaryUnverified),
             "a lookup that fails for another reason refuses"
         );
+    }
+
+    /// **Only contention is a holder**: a lock take refused for another reason,
+    /// here a write lock asked on a descriptor open for reading, refuses rather
+    /// than reading as a run or a transition. Perturbation: read every failed
+    /// take as contention and the bad take answers `Ok`.
+    #[test]
+    fn a_lock_failure_that_is_not_contention_refuses() {
+        let dir = scratch("not-contention");
+        let path = dir.0.join("run.lock");
+        std::fs::write(&path, "").unwrap();
+        let read_only = std::fs::File::open(&path).unwrap();
+        let request = whole_file(nix::libc::F_WRLCK);
+        // SAFETY: fcntl on a descriptor this test owns; EBADF is the point.
+        let rc =
+            unsafe { nix::libc::fcntl(read_only.as_raw_fd(), nix::libc::F_OFD_SETLK, &request) };
+        assert_eq!(rc, -1);
+        assert_eq!(contended(&path), Err(LifecycleRefusal::BoundaryUnverified));
+        // Real contention reads as a holder.
+        let held = take_run_lock(dir.0.as_path()).unwrap().unwrap();
+        assert!(take_run_lock(dir.0.as_path()).unwrap().is_none());
+        drop(held);
     }
 
     /// **The run directory is made root's and `0755`, and a link at its name

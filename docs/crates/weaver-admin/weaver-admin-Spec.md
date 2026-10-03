@@ -602,14 +602,17 @@ no step to the three, being the second step's tail. A refusal on leave,
 `ActivityNotAtRest` above all, returns to the operator unchanged and answers nothing
 further.
 
-**The leave has a bound of its own, sixty seconds from the directive.** A worker that
-accepts leave and answers nothing inside it is a worker that would not exit: the verb
-goes to the escalation below without the aggregate, answers provisioned-and-unloaded
-once the lock is free, the run having ended with no leave answered, which `admin.log`
-records and the next load's reset reads, and refuses `WorkerWouldNotExit` where the lock
-still stands after it. Without the bound a wedged worker would hold the verb, and with
-it the invocation lock, for ever, and since the invocation ignores the catchable
-signals no later verb could recover the agent.
+**The leave has a bound of its own, sixty seconds from the verb's start**, once the
+invocation lock is held: the observation and both dials spend it, so `unload` holds the
+invocation lock at most those sixty seconds and the escalation's forty-five, 105 in all,
+the number a caller builds against beside `show`'s short wait for the lock. A worker
+that accepts leave and answers nothing inside it is a worker that would not exit: the
+verb goes to the escalation below without the aggregate, answers
+provisioned-and-unloaded once the lock is free, the run having ended with no leave
+answered, which `admin.log` records and the next load's reset reads, and refuses
+`WorkerWouldNotExit` where the lock still stands after it. Without the bound a wedged
+worker would hold the verb, and with it the invocation lock, for ever, and since the
+invocation ignores the catchable signals no later verb could recover the agent.
 
 **The wait has a bound and an escalation, and the report never runs ahead of the lock.**
 A run whose lock is still held thirty seconds after left, or past the leave's own
@@ -2252,23 +2255,26 @@ operator's rulings of 2026-10-03 on #63 and #50. `roles.toml` stands in the agen
 under the root's judgments, root-owned, writable by no group or other, and never a link,
 and it is **required**: a file missing or malformed refuses by name at `validate` and at
 `load`, `ConfigInvalid` naming `roles.toml`, and no reader is ever admitted because a
-file was absent. Its shape is `BoundaryFile` of `weaver-types-Spec` section 3.1, the one
-`trace-reader` and nothing else: **the lifecycle half #63 drafted, groups mapped to
-verbs, does not return**, who may issue which verb being the sudo rule's of section 2,
-which this crate does not read. The reader is a user, the connector's service user, and
-a reader that is the agent's account or its state member's, or that does not hold the
-agent's access group `weaver-<agent>-admin`, refuses at the same judgment, so the agent
-never reaches its own record through the boundary and the declared reader can always
-reach the door. **It is boundary and never constitution.** The
-constitution, what shapes what happens inside the agent, is the declaration and the
-facts the `load` event names, and it is the tuple. The boundary file says who may read
-the agent from outside, as its OS identity does, so it stays out of the declaration's
-digest, and granting a reader never makes the agent another agent. It is declared all
-the same: its digest is written on every line of `admin.log`, `show` carries it in the
-`show` rework, and the enter hands it to the harness for the `load` event's member
-marked boundary. **It is one file per agent** because it names that agent's reader, its
-connector being one agent's own appendage (toddwbucy/WeaverTools#6), and a shared file
-would be a roster of every agent's readers, the fleet view #45 removed from admin.
+file was absent. **It is required there and nowhere else**: a damaged boundary file
+takes neither `unload`, `stop` nor `show` from a running agent, whose operations-log
+lines then carry no digest, per section 8. Its shape is `BoundaryFile` of
+`weaver-types-Spec` section 3.1, the one `trace-reader` and nothing else: **the
+lifecycle half #63 drafted, groups mapped to verbs, does not return**, who may issue
+which verb being the sudo rule's of section 2, which this crate does not read. The
+reader is a user, the connector's service user, and a reader that is the agent's account
+or its state member's, or that does not hold the agent's access group
+`weaver-<agent>-admin`, refuses at the same judgment, so the agent never reaches its own
+record through the boundary and the declared reader can always reach the door. **It is
+boundary and never constitution.** The constitution, what shapes what happens inside the
+agent, is the declaration and the facts the `load` event names, and it is the tuple. The
+boundary file says who may read the agent from outside, as its OS identity does, so it
+stays out of the declaration's digest, and granting a reader never makes the agent
+another agent. It is declared all the same: its digest is written on every line of
+`admin.log`, `show` carries it in the `show` rework, and the enter hands it to the
+harness for the `load` event's member marked boundary. **It is one file per agent**
+because it names that agent's reader, its connector being one agent's own appendage
+(toddwbucy/WeaverTools#6), and a shared file would be a roster of every agent's readers,
+the fleet view #45 removed from admin.
 
 **The trace relay's account and the agent's access group are provisioned, and the walk
 requires them.** `weaver-<agent>-relay`, whose one group is the trace group
