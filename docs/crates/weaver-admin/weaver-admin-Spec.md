@@ -643,18 +643,32 @@ is judged as `identity-file`'s is, a save point absent from the directory refuse
 `ConfigInvalid` naming `restore`, and one that fails section 9's judgment of the entries
 it reads, a link, a wrong owner, or a group- or other-writable file, refuses
 `BoundaryUnverified`. A save point the operator edited is an input like a prompt file,
-admitted the same way. The lineage that crosses the enter is resolved here from the save
-point's stamp: the run, the sequence and the last turn it covers, and, where the
-operator's offline builder made it from a record, the record and the cut it names. The
-save point is never handed to the agent and never named to the worker, on the same
-descriptor discipline as the sink: what the member receives is a descriptor this crate
-opened, per section 6. Branching from a record is the builder's, outside the agent, and
-this crate never reads a record for a load. **The judgment is this crate's because the
-save point is**, per charter section 4.3's custody rule: a look at a thing admin holds,
-taken at the load's cheapest moment before any process exists, and an ask of nobody.
-**The instrument is perturbation**: a `restore` naming an absent save point refuses
-naming `restore`, watched to fail when the presence check is dropped, and a linked save
-point refuses `BoundaryUnverified`, watched to fail when the entry judgment is dropped.
+admitted the same way. **The save point's bytes are judged here too**, before any
+process exists, on the Planner's ruling of 2026-10-02 on #58's fourth review round: the
+save point this load restores, the one `restore` names or the latest published, is read
+under this crate's custody, and a torn file, a check over its bytes that fails, or a
+stamp that disagrees with the name it was published under refuses `ConfigInvalid` naming
+the save point, so a damaged save point never reaches the member and the operator names
+another. What the member alone can judge, the save point's schema against the loop's, it
+answers on the enter's `restored` ask of `weaver-harness-state-contract` section 2.
+**The clean-unload marker is this crate's**: at every load it writes, in the agent's
+config root under its own custody, a marker naming the run it mints as open, and a clean
+unload marks that run closed; a load that finds a marker naming a run still open
+resolves the lineage's `reset` to that run, `NoCleanUnload`, or `UnitFailed` where the
+unit's result corroborates a failure, per `weaver-types-Spec` section 4. An agent's
+first load finds no marker and resolves no reset. The lineage that crosses the enter is
+resolved here from the save point's stamp: the run, the sequence and the last turn it
+covers, and, where the operator's offline builder made it from a record, the record and
+the cut it names. The save point is never handed to the agent and never named to the
+worker, on the same descriptor discipline as the sink: what the member receives is a
+descriptor this crate opened, per section 6. Branching from a record is the builder's,
+outside the agent, and this crate never reads a record for a load. **The judgment is
+this crate's because the save point is**, per charter section 4.3's custody rule: a look
+at a thing admin holds, taken at the load's cheapest moment before any process exists,
+and an ask of nobody. **The instrument is perturbation**: a `restore` naming an absent
+save point refuses naming `restore`, watched to fail when the presence check is dropped,
+and a linked save point refuses `BoundaryUnverified`, watched to fail when the entry
+judgment is dropped.
 
 ```graph
 node: admin-restore-save-point-judged-at-the-inventory

@@ -328,10 +328,14 @@ save point through the descriptor into its in-memory database and holds its stam
 the operator's rulings of 2026-10-02 on #58. After an unclean stop that is the latest
 known-good save point, and the harness records the reset on the trace, so a rebuild
 honours it; nothing the record holds past the stamp lands by default. **A save point
-that fails its check or disagrees with the opener's schema refuses the load**: the
-member refuses to stand, with a named fault, so admin's load refuses and no `load` event
-claims a lineage the holdings did not come from, and the operator names another save
-point through `restore` or rebuilds one. **Where the descriptor is absent the member
+whose bytes fail never reaches the member**: admin judges its check and stamp at the
+inventory, per `weaver-admin-Spec` section 4, and refuses the load. **A save point that
+disagrees with the opener's schema is refused on the `restored` ask**: the member holds
+the restore's outcome from the opener on, and answers the enter's `restored` ask of the
+contract's section 2 with the restored lineage or with a refusal naming the schema
+mismatch, so the harness refuses the enter before it authors `load` and no `load` event
+claims a lineage the holdings did not come from; the operator names another save point
+through `restore` or rebuilds one. **Where the descriptor is absent the member
 stands empty**, which is an agent's first load. **A rebuild from the trace is the
 offline save-point builder's**, per `weaver-state-PRD` section 3 and the operator's
 ruling of 2026-10-02 on #58: the builder lands the record through the preload door of
@@ -431,7 +435,13 @@ whose turn is absent and whose run is the run of the newest such row, ordered by
 `{"answer":{"identity":{"messages":[...]}}}`, each the distillate's own shape, an empty
 list where the session holds none, per the contract's fifth ask of 2026-09-04. A
 malformed ask is dropped whole the way a malformed distillate is, and the resulting
-silence is the harness's bound to convert into a missing answer. **The `snapshot` ask
+silence is the harness's bound to convert into a missing answer. **The `restored` ask
+answers the load's outcome**, per the contract's eighth ask of 2026-10-02: the member
+judges the descriptor's save point against the opener's schema when the opener lands,
+holds the outcome, and answers `{"answer":{"restored":{"lineage":{...}}}}` with the
+stamp it restored, `{"answer":{"restored":{}}}` where it stood empty, or
+`{"answer":{"restored":{"refused":"schema-mismatch"}}}`, immediately and parking never.
+**The `snapshot` ask
 writes a save point and answers its stamp**, per the contract's sixth ask of 2026-10-02:
 the member serializes the whole database with its schema and its stamp, writes it as a
 new file in its room, never over one that stands, and answers
@@ -696,10 +706,15 @@ code act that lands it.
   position late and one position early, each naming a position the holdings do not
   cover, and a rebuild that ignores a reset the record names: each must fail the
   equality.
-- A save point that fails its check is not loaded, watched by one truncated part
-  way and by one with a byte flipped, each of which must refuse the load and leave
-  the holdings standing at a live restore. The perturbation
-  drops the check, and a torn save point is read as holdings.
+- A save point that fails its check is not loaded, watched at a live restore by one
+  truncated part way and by one with a byte flipped, each of which must leave the
+  holdings standing; at a load the same two are admin's to refuse, per
+  `weaver-admin-Spec` section 4. The perturbation drops the check, and a torn save
+  point is read as holdings.
+- A save point under another schema is refused on the `restored` ask, watched by a
+  load whose opener carries a schema the save point does not: the answer must name the
+  mismatch. The perturbation answers the restored lineage regardless, and the enter
+  stands on holdings the schema does not admit.
 - A save point is never overwritten, watched by two `snapshot` asks on unchanged
   holdings answering two names with both files standing. The perturbation writes
   to a fixed name, and the first file is lost.

@@ -324,17 +324,17 @@ the state election the tee applies, resolved to the ruled default where the decl
 is silent, the store election the member stands on with its database and role under the
 service engine, resolved to the embedded engine where the declaration is silent, the
 lineage of the save point the load restores, its digest, the run, sequence and last turn
-it covers,
-whether the operator supplied it, and, where the offline builder made it from a record,
-that record's session and the run and turn of its cut, resolved by admin and never the
-save point's path, on the operator's rulings of 2026-10-02 on #58, so the harness names
-where its state came from without opening anything, the digests of
-the organ binaries admin started and of the agent's SPU and the gate it hands the
-worker, keyed by name, the declaration's digest as this crate
-read the file at the inventory, so the run and the record can both name what they were
-built from, the prompt file's digest as this crate read the file the declaration names,
-as of 2026-10-02, so the record can say which prompt the agent was given now that the
-declaration's digest no longer covers it, and the intent to stop.
+it covers, whether the operator supplied it, where the offline builder made it from a
+record that record's session and the run and turn of its cut, and where the agent's last
+run did not end in a clean unload that run and the reason, resolved by admin and never
+the save point's path, on the operator's rulings of 2026-10-02 on #58, so the harness
+names where its state came from without opening anything, the digests of the organ
+binaries admin started and of the agent's SPU and the gate it hands the worker, keyed by
+name, the declaration's digest as this crate read the file at the inventory, so the run
+and the record can both name what they were built from, the prompt file's digest as this
+crate read the file the declaration names, as of 2026-10-02, so the record can say which
+prompt the agent was given now that the declaration's digest no longer covers it, and
+the intent to stop.
 
 **Admin guarantees** that the trace sink handle it passes refers to the sink the
 session's configuration declares, that the run reference distinguishes this run

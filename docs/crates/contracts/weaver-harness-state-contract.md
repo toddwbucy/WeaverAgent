@@ -213,11 +213,11 @@ earlier session stay outside their view: that bound is each ask's own definition
 never the store's wall. An ask that reaches across sessions enters under section 7 like
 any further ask, with the loop act that writes the schema it reads.
 
-**The ask vocabulary is closed and enumerated here, and it holds seven names: `shape`,
-`recall`, `replay`, `grants`, `identity`, `snapshot`, and `restore`.** The shape ask
-carries no members, the session being the opener's, and asks for the session's shape -
-what happened, in what order, in which run, which is the phrase the charter uses for
-what the default election holds. Its answer carries the session's runs in the order
+**The ask vocabulary is closed and enumerated here, and it holds eight names: `shape`,
+`recall`, `replay`, `grants`, `identity`, `snapshot`, `restore`, and `restored`.** The
+shape ask carries no members, the session being the opener's, and asks for the session's
+shape - what happened, in what order, in which run, which is the phrase the charter uses
+for what the default election holds. Its answer carries the session's runs in the order
 custody first saw them, each with its run reference and its held event counts by kind,
 every name spelled as the envelope spelled it. The counts are organized envelope fact
 and carry no judgment: what a kind's count means to a turn is the asking loop's
@@ -362,6 +362,20 @@ seam carries nothing of the flush. A save point only in the operator's directory
 restores at a load, through the descriptor admin hands the member at spawn, and never
 through this ask.
 
+**The `restored` ask answers what the load restored**, added 2026-10-02 on the Planner's
+ruling on #58's fourth review round, because the opener is one-way and a schema the
+member refuses would otherwise have no path to the enter. The harness sends it at every
+serving enter, after the opener and before it authors `load`. The ask carries no
+members. The answer carries either `lineage`, the stamp of the save point the member
+restored, its digest, run, sequence and last turn, or nothing where it stood empty with
+no save point handed to it, or `refused` with a reason, `schema-mismatch` where the save
+point's schema is not the opener's. The member judges the save point at the opener,
+holds the outcome, and answers it immediately, parking never. **A refusal or a miss
+refuses the enter**, on the identity ask's rule that the dead-peer clause of section 5
+does not convert it: an enter that cannot say what its state was restored from must not
+author a `load` event that says it. The opener stays one-way, and the save point's bytes
+never reach this ask, admin having judged them at the inventory.
+
 A further ask name is a change under section 7 and does not exist until it merges there.
 
 ## 3. What the harness owes
@@ -438,7 +452,9 @@ to the same effect. In every one of these the record remains whole and the next 
 channel asks again against holdings that never moved. The `identity` ask of section 2 at
 a diagnostic load is the stated exception, ruled 2026-09-04 and narrowed 2026-10-02: its
 miss refuses the enter rather than costing an answer, the turn it would cost being every
-turn of the replay.
+turn of the replay. The `restored` ask at a serving enter is the second, ruled
+2026-10-02 on #58: its miss or refusal refuses the enter, a `load` event naming state
+the member never restored being an untrue record.
 
 ## 6. What neither party may do
 

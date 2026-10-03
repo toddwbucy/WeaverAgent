@@ -553,31 +553,31 @@ the declared value or the compiled default it fell back to, and the act that lan
 table shapes the member.
 
 **The store the member stands on is a third such fact, as of 2026-09-04.** Per
-`weaver-state-PRD` section 4 the engine is the deployment's
-election and, under the service engine, the database and the role are the object gate's
-own members, changing only across the load boundary. What a record was built into
-decides what can be asked of it later, so the `load` event names the engine and, where
-the service engine stands, its database and role, resolved as the enter carried them.
-**The leave reads the boundary back**: the harness reads the role's grant surface from
-the store's catalog at the enter through the member and again at the leave, and the
-`unload` event carries the reading as unchanged, varied, or unreadable, the envelope the
-confirm drivers already carry for the engine libraries. A grant surface that varied
-inside a session is a boundary move the record carries and never absorbs, and one
-unreadable at the close is said to be so rather than reported unchanged. Absence means a
-record older than the act and is read as those facts being unrecoverable, never as a
-default. The record then says what the agent's prompts were built by and what its state
-was built into, which the elections alone could not. **The `load` event names its
-lineage and its stack as of 2026-09-04**, the lineage reshaped on the operator's rulings
-of 2026-10-02 on #58, which retire the record restore of issue #432. Where the load
-restores a save point it names the save point by digest, the run, sequence and last turn
-it covers,
-whether the operator supplied it, and, where the offline builder made it from a record,
-that record's session and the run and turn of its cut, so a resume and a branch each say
-what they came from; and every load names the digests of the organ binaries that ran it,
-keyed by name, so a record is sufficient for its own conditions and the experiment
-deposits stop being where the stack is remembered. The record is the canonical form and
-a save point is a cache of what its replay produces, so the load event is where the
-conditions and the lineage of a session's state are read.
+`weaver-state-PRD` section 4 the engine is the deployment's election and, under the
+service engine, the database and the role are the object gate's own members, changing
+only across the load boundary. What a record was built into decides what can be asked of
+it later, so the `load` event names the engine and, where the service engine stands, its
+database and role, resolved as the enter carried them. **The leave reads the boundary
+back**: the harness reads the role's grant surface from the store's catalog at the enter
+through the member and again at the leave, and the `unload` event carries the reading as
+unchanged, varied, or unreadable, the envelope the confirm drivers already carry for the
+engine libraries. A grant surface that varied inside a session is a boundary move the
+record carries and never absorbs, and one unreadable at the close is said to be so
+rather than reported unchanged. Absence means a record older than the act and is read as
+those facts being unrecoverable, never as a default. The record then says what the
+agent's prompts were built by and what its state was built into, which the elections
+alone could not. **The `load` event names its lineage and its stack as of 2026-09-04**,
+the lineage reshaped on the operator's rulings of 2026-10-02 on #58, which retire the
+record restore of issue #432. Where the load restores a save point it names the save
+point by digest, the run, sequence and last turn it covers, whether the operator
+supplied it, where the offline builder made it from a record that record's session and
+the run and turn of its cut, and where the agent's last run did not end in a clean
+unload that run and the reason, so a resume and a branch each say what they came from;
+and every load names the digests of the organ binaries that ran it, keyed by name, so a
+record is sufficient for its own conditions and the experiment deposits stop being where
+the stack is remembered. The record is the canonical form and a save point is a cache of
+what its replay produces, so the load event is where the conditions and the lineage of a
+session's state are read.
 
 **The prompt file the load was given is one more such fact, as of 2026-10-02.** On the
 operator's ruling of that date the system prompt is a file the declaration names rather

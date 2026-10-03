@@ -276,12 +276,18 @@ pub struct Lineage {
     pub turn: u64,
     pub operator_supplied: bool,
     pub built_from: Option<Branch>,
+    pub reset: Option<Reset>,
 }
 
 pub struct Branch {
     pub parent: String,
     pub run: String,
     pub through: u64,
+}
+
+pub struct Reset {
+    pub prior_run: String,
+    pub reason: String,
 }
 
 pub struct LoopIdentity {
@@ -795,7 +801,9 @@ null: `save_point` is the save point's digest, `run` and `sequence` the position
 covers, `turn` the last turn that run holds in it, `operator_supplied` whether the
 operator supplied it, and `built_from`, present only where the offline builder made it
 from a record, carries that record's session as `parent`, the run the cut falls in as
-`run`, and the turn the holdings stop at as `through`, all copied from the enter's
+`run`, and the turn the holdings stop at as `through`, and `reset`, present only where
+the agent's last run did not end in a clean unload, carries that run as `prior_run` and
+the reason as admin resolved it, all copied from the enter's
 `Lineage` per `weaver-types-Spec` section 4 and never the save point's path, which the
 harness does not hold. `stack` is the digests of the organ binaries admin started and of
 the agent's SPU and the gate it hands the worker to fork, keyed by the binary's name,

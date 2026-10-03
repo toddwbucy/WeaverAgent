@@ -1228,12 +1228,23 @@ pub struct Lineage {
     pub turn: u64,
     pub operator_supplied: bool,
     pub built_from: Option<Branch>,
+    pub reset: Option<Reset>,
 }
 
 pub struct Branch {
     pub parent: SessionId,
     pub run: RunId,
     pub through: u64,
+}
+
+pub struct Reset {
+    pub prior_run: RunId,
+    pub reason: ResetReason,
+}
+
+pub enum ResetReason {
+    NoCleanUnload,
+    UnitFailed,
 }
 
 pub enum EnterBinding {
@@ -1275,28 +1286,33 @@ parties that need them read one resolution.
 **`restore` and `stack` ride the enter as of 2026-09-04.** `restore` rides as `Lineage`,
 resolved by admin from the save point the load restores, on the operator's ruling of
 2026-10-02 on #58: the save point's digest, the run, sequence and last turn it covers,
-whether
-the operator supplied it, and, where the offline builder made it from a record, that
-record's session and the run and turn of its cut. It never carries the save point's
-path, which admin read under its own custody and the harness has no business holding, on
-the same discipline as the sink. The harness names the save point on the load event and
-starts its turn ordinal from the position it covers without opening anything, the save
-point having reached the member by descriptor at the spawn per `weaver-admin-Spec`
-section 6. `stack` is the digests of the organ binaries admin started and of the agent's
-SPU and the gate it hands the worker to fork, keyed by the binary's name, so the load
-event names the stack that ran it and a record is sufficient for its own conditions
-without a deposit beside it, per `weaver-trace-PRD` section 3.1. Both are admin's facts
-and the harness authors them as it authors the store's. **`declaration` rides beside
-them as of 2026-09-04**, the digest of the declaration file as admin read it at the
-inventory, so the harness names it on the load event and answers it to an observation
-without holding the file, per issue #435. **`identity_file` rides beside it as of
-2026-10-02**, the digest of the prompt file the declaration names, sha256 hex of the
-bytes admin read at the inventory and seated, per section 2: the declaration's digest
-covered the prompt while the prompt was a string inside it, and stopped covering it the
-day the prompt became its own file, so the second digest is what keeps the load event
-able to say which prompt the operator's files held. It is additive, a member the harness
-copies onto the load event and reads nowhere else. **`LoadFacts` does not take it**:
-`LoadFacts` is the shape `show` answers the operator with under
+whether the operator supplied it, and, where the offline builder made it from a record,
+that record's session and the run and turn of its cut. **`reset` is present where the
+agent's last run did not end in a clean unload**, on the operator's ruling of 2026-10-02
+on #58 that an unclean stop resets to the latest known-good save point and records the
+reset: admin resolves it from its own clean-unload marker, per `weaver-admin-Spec`
+section 4, naming the prior run and the reason, `NoCleanUnload` where the marker says
+the run never unloaded cleanly and `UnitFailed` where the unit's result also says it
+failed, and the harness authors the reset event from it. It never carries the save
+point's path, which admin read under its own custody and the harness has no business
+holding, on the same discipline as the sink. The harness names the save point on the
+load event and starts its turn ordinal from the position it covers without opening
+anything, the save point having reached the member by descriptor at the spawn per
+`weaver-admin-Spec` section 6. `stack` is the digests of the organ binaries admin
+started and of the agent's SPU and the gate it hands the worker to fork, keyed by the
+binary's name, so the load event names the stack that ran it and a record is sufficient
+for its own conditions without a deposit beside it, per `weaver-trace-PRD` section 3.1.
+Both are admin's facts and the harness authors them as it authors the store's.
+**`declaration` rides beside them as of 2026-09-04**, the digest of the declaration file
+as admin read it at the inventory, so the harness names it on the load event and answers
+it to an observation without holding the file, per issue #435. **`identity_file` rides
+beside it as of 2026-10-02**, the digest of the prompt file the declaration names,
+sha256 hex of the bytes admin read at the inventory and seated, per section 2: the
+declaration's digest covered the prompt while the prompt was a string inside it, and
+stopped covering it the day the prompt became its own file, so the second digest is what
+keeps the load event able to say which prompt the operator's files held. It is additive,
+a member the harness copies onto the load event and reads nowhere else. **`LoadFacts`
+does not take it**: `LoadFacts` is the shape `show` answers the operator with under
 `weaver-admin-operator-contract`, which this act does not move, so the record carries
 the prompt's digest and the observation does not, and the observation's answer is
 widened only in an act that moves that contract. **The digest joins `show` in the later
