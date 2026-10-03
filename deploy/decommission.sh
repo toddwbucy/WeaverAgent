@@ -268,6 +268,16 @@ query_runs() {
     plan "$agent  $verdict  $said"
     [ "$verdict" = stopped ] || RUNNING+=("$agent ($verdict)")
   done
+  # **A process under any agent's account is a run**, whatever its root says:
+  # a run whose root was removed or lost is found by its accounts, every
+  # constituent running as one of them (Codex on #79).
+  local u
+  for u in "${WEAVER_USERS[@]}"; do
+    if pgrep -u "$u" >/dev/null 2>&1; then
+      plan "$u  running: processes under the account"
+      RUNNING+=("$u (processes)")
+    fi
+  done
 }
 query_runs
 [ ${#AGENT_ROOTS[@]} -gt 0 ] || plan "no agent roots"
@@ -404,6 +414,12 @@ if [ "$MODE" = archive ]; then
   plan "box-facts.txt"
 
   PURGE=()
+  # **archive_name PREFIX PATH: one archive per source path, never two named
+  # alike**: the whole path, its slashes made dashes, so two directories that
+  # share a last component (`/srv/weaver-agent` and `/var/lib/weaver-agent`)
+  # never write one tarball over the other while both stay on the purge list
+  # (Codex on #79).
+  archive_name() { local flat=${2#/}; printf '%s-%s' "$1" "${flat//\//-}"; }
   archive_path() { # archive_path NAME PATH...
     local name=$1; shift
     local present=()
@@ -427,19 +443,18 @@ if [ "$MODE" = archive ]; then
   fi
   [ ${#LDSO_CONFS[@]} -gt 0 ] && archive_path ld-so-conf "${LDSO_CONFS[@]}"
   for p in "${!PREFIXES[@]}"; do
-    n=$(basename "$p")
     parts=()
     for sub in bin lib python-spu; do [ -d "$p/$sub" ] && parts+=("$p/$sub"); done
     for sub in "$p"/backup-* "$p"/lib.backup-*; do [ -d "$sub" ] && parts+=("$sub"); done
-    [ ${#parts[@]} -gt 0 ] && archive_path "opt-$n" "${parts[@]}"
+    [ ${#parts[@]} -gt 0 ] && archive_path "$(archive_name opt "$p")" "${parts[@]}"
   done
   [ -e /var/lib/weaver ] && archive_path var-lib-weaver /var/lib/weaver
   # Every territory's trace and state room, under each base (Codex on #79).
   for d in "${!TERRITORY_BASES[@]}"; do
-    [ -e "$d" ] && archive_path "territories-$(basename "$d")" "$d"
+    [ -e "$d" ] && archive_path "$(archive_name territories "$d")" "$d"
   done
-  for d in "${!LOG_PATHS[@]}"; do archive_path "log-$(basename "$d")" "$d"; done
-  for d in "${!AGENT_DIRS[@]}"; do archive_path "agent-config-$(basename "$d" | tr -d .)" "$d"; done
+  for d in "${!LOG_PATHS[@]}"; do archive_path "$(archive_name log "$d")" "$d"; done
+  for d in "${!AGENT_DIRS[@]}"; do archive_path "$(archive_name agent-config "$d")" "$d"; done
   [ ${#HOMES[@]} -gt 0 ] && archive_path home-weaver-users "${HOMES[@]}"
   [ ${#TMP_PATHS[@]} -gt 0 ] && archive_path tmp-weaver "${TMP_PATHS[@]}"
 

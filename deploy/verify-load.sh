@@ -130,7 +130,7 @@ for k, n in kinds.most_common(): print(f"   {n:4d}  {k}")
 if load is None: sys.exit("   no load event among them")
 keep = {k: v for k, v in load.items() if k not in ("content",)}
 print("   load event:", json.dumps(keep)[:600])
-' || { [ "$KEEP" -eq 1 ] || admin unload "$AGENT" >/dev/null; die "$AGENT: the new events carry no load event"; }
+' || { admin unload "$AGENT" >/dev/null; die "$AGENT: the new events carry no load event, so the run is unloaded"; }
 # **The constituents, from `show`, judged where they run.** Each is recorded
 # by pid and start time, so a pid the kernel reuses after the unload is never
 # taken for a constituent that survived it.
@@ -173,8 +173,10 @@ if [ -z "$FAULT" ] && [ "$SINK_KIND" = file ] && [ "$RELAY_SEEN" -eq 0 ]; then
   FAULT="no relay stands among the constituents of a file sink"
 fi
 if [ -n "$FAULT" ]; then
-  [ "$KEEP" -eq 1 ] || admin unload "$AGENT" >/dev/null
-  die "$AGENT: $FAULT"
+  # **A run that failed its verification never stays serving**, `--keep`
+  # included, which keeps only a run every check passed (Codex on #79).
+  admin unload "$AGENT" >/dev/null
+  die "$AGENT: $FAULT, so the run is unloaded"
 fi
 if [ "$KEEP" -eq 1 ]; then
   plan "left serving; unload with: sudo WEAVER_ADMIN_CONFIG=$ADMIN_BASE $ADMIN unload $AGENT"

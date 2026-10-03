@@ -83,10 +83,12 @@ again without a purge. The archive holds:
   library and model, the store's roles and the two authentication files' weaver
   lines, and the mode of everything archived.
 - One `.tar.zst` per piece, owners, ACLs and xattrs preserved: `etc-weaver`,
-  `sudoers-weaver`, `declaration-directories`, `ld-so-conf`, `opt-<prefix>` (bin, lib,
-  python-spu, the backup-* directories, never models), `var-lib-weaver-agent` and
-  `var-lib-weaver`, `log-weaver` (a box from before #50), `agent-config-<dir>` (the
-  box-wide layout's declarations), `home-weaver-users`, `tmp-weaver`.
+  `sudoers-weaver`, `declaration-directories`, `ld-so-conf`, `opt-<prefix path>` (bin,
+  lib, python-spu, the backup-* directories, never models), `territories-<base path>`
+  for each territory base, `var-lib-weaver`, `log-<path>` (a box from before #50),
+  `agent-config-<path>` (the box-wide layout's declarations), `home-weaver-users`,
+  `tmp-weaver`. A name built from a path carries the whole path, its slashes made dashes
+  (`territories-var-lib-weaver-agent`), so two sources never share an archive.
 - `postgres/<db>.dump` (custom format), `roles.sql`, and copies of `pg_hba.conf` and
   `pg_ident.conf`.
 - `PURGE-LIST`: the exact paths, users, groups, databases and roles the purge may

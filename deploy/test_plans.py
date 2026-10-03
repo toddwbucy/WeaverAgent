@@ -877,6 +877,21 @@ esac
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("none of the agent's, its member's or its relay's accounts", result.stderr)
 
+    def test_a_failed_keep_verification_unloads_the_run(self):
+        # Codex on #79: --keep keeps only a run every check passed. A stranger's
+        # constituent under --keep still unloads. Perturbation: skip the unload
+        # under --keep, and the run is left serving.
+        state = self.verify_fixture()
+        self.env["FIXTURE_ACCOUNT_UID"] = str(os.getuid() + 1)
+        try:
+            result = self.run_script("verify-load.sh", "m1", "--keep")
+        finally:
+            self.end_stand_in(state)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("so the run is unloaded", result.stderr)
+        self.assertTrue((state / "last").exists(), "the stub admin was asked to unload")
+        self.assertFalse((state / "pid").exists(), "and no run is left")
+
     def test_verify_load_refuses_a_constituent_that_outlives_the_unload(self):
         # Perturbation: drop the after-unload look, and the survivor passes.
         state = self.verify_fixture()
@@ -1472,8 +1487,38 @@ class RoundOneOf79Tests(unittest.TestCase):
         # Perturbation: drop the loop, and they are left behind.
         script = (DEPLOY / "decommission.sh").read_text()
         archive = script[script.index('if [ "$MODE" = archive ]; then'):script.index(" 3. purge\n")]
-        self.assertIn('archive_path "territories-$(basename "$d")" "$d"', archive)
+        self.assertIn('archive_path "$(archive_name territories "$d")" "$d"', archive)
         self.assertIn("read_key /etc/weaver/stack agent-directory", script)
+
+    def test_archive_names_never_collide(self):
+        # Codex on #79: two sources sharing a last component name two archives.
+        # Perturbation: name by the basename again, and the two collide.
+        script = (DEPLOY / "decommission.sh").read_text()
+        line = next(l.strip() for l in script.splitlines() if l.strip().startswith("archive_name() {"))
+        names = []
+        for path in ("/srv/weaver-agent", "/var/lib/weaver-agent"):
+            run = subprocess.run(["bash", "-c", line + '\narchive_name territories "$1"', "x", path],
+                                 text=True, capture_output=True, timeout=20)
+            names.append(run.stdout)
+        self.assertEqual(names, ["territories-srv-weaver-agent", "territories-var-lib-weaver-agent"])
+        for sink in ("opt", "territories", "log", "agent-config"):
+            self.assertIn(f'archive_path "$(archive_name {sink} ', script)
+        self.assertNotIn('$(basename "$d")" "$d"', script)
+
+    def test_query_runs_finds_a_run_by_its_accounts(self):
+        # Codex on #79: a run whose root was lost is found by processes under
+        # an agent's account. Perturbation: ask only the roots, and it is missed.
+        script = (DEPLOY / "decommission.sh").read_text()
+        pgrep = self.dir / "pgrep"
+        pgrep.write_text('#!/bin/sh\n[ "$2" = "$LIVE_USER" ]\n')
+        pgrep.chmod(0o755)
+        program = ("plan() { :; }\n" + shell_function(script, "run_verdict") + shell_function(script, "query_runs")
+                   + 'AGENT_ROOTS=(); ADMIN_BIN=""; WEAVER_USERS=(weaver-gone weaver-gone-state)\n'
+                   + 'query_runs; echo "${#RUNNING[@]} ${RUNNING[*]}"')
+        env = {**os.environ, "PATH": f"{self.dir}{os.pathsep}{os.environ['PATH']}", "LIVE_USER": "weaver-gone-state"}
+        env.pop("BASH_ENV", None)
+        run = subprocess.run(["bash", "-c", program], env=env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(run.stdout.strip(), "1 weaver-gone-state (processes)", run.stderr)
 
     def test_query_runs_reads_each_agent_now(self):
         # Stopped, then running, then stopped again, each read as it is now.
@@ -1484,7 +1529,7 @@ class RoundOneOf79Tests(unittest.TestCase):
         admin.chmod(0o755)
         state = self.dir / "state"
         program = ("plan() { :; }\n" + shell_function(script, "run_verdict") + shell_function(script, "query_runs")
-                   + f'AGENT_ROOTS=({self.dir}/base/m1); ADMIN_BIN={admin}\n'
+                   + f'AGENT_ROOTS=({self.dir}/base/m1); ADMIN_BIN={admin}; WEAVER_USERS=()\n'
                    + 'query_runs; echo "${#RUNNING[@]}"; cp "$STATE_FILE" "$STATE_FILE.first"; cp "$NEXT" "$STATE_FILE"; '
                    + 'query_runs; echo "${#RUNNING[@]} ${RUNNING[*]}"; cp "$STATE_FILE.first" "$STATE_FILE"; '
                    + 'query_runs; echo "${#RUNNING[@]}"')
