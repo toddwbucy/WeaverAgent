@@ -104,7 +104,7 @@ fn the_trace_stream_lines_are_the_published_shape() {
         line(TraceControl::Header(TraceHeader {
             device: 2049,
             inode: 77,
-            birth_ns: 1_759_500_000_123_456_789,
+            birth_ns: Some(1_759_500_000_123_456_789),
         })),
         r#"{"trace_stream":{"header":{"device":2049,"inode":77,"birth_ns":1759500000123456789}}}"#
     );
@@ -115,6 +115,15 @@ fn the_trace_stream_lines_are_the_published_shape() {
     assert_eq!(
         line(TraceControl::Truncated { size: 9 }),
         r#"{"trace_stream":{"truncated":{"size":9}}}"#
+    );
+    assert_eq!(
+        line(TraceControl::Header(TraceHeader {
+            device: 2049,
+            inode: 77,
+            birth_ns: None,
+        })),
+        r#"{"trace_stream":{"header":{"device":2049,"inode":77}}}"#,
+        "an unreported birth time is absent, never zero"
     );
     let back: TraceLine =
         serde_json::from_str(r#"{"trace_stream":{"heartbeat":{"wall_ms":5}}}"#).unwrap();

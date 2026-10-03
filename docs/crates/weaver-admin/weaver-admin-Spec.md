@@ -1628,35 +1628,41 @@ and apart from the agent's runtime directory, the socket root-owned, mode `0660`
 grouped to the agent's per-agent access group `weaver-<agent>-admin`, which the declared
 trace reader must hold, a stream socket (`SOCK_STREAM`) because the door carries one
 request in and a continuing byte stream out, framed as `weaver-types-Spec` section 3.1
-states, and passes the listening descriptor to the relay at its exec, so
-the relay never binds and never needs to write the directory. The relay also inherits
-the run lock's description, per section 3, and marks it close-on-exec as its first act
-and never closes it, as the worker and the member do. **The door stands only for a file
-sink.** A pipe's reader is the operator's, and a second reader would steal its bytes,
-and a socket sink cannot be opened for reading at all, so where the declaration's sink
-is a pipe or a socket the start step starts no relay, binds no `trace.sock`, and the
-door stays closed. For a file sink it passes the relay a read-only descriptor of the
-same open file section 5 opened for the worker, reopened through `/proc/self/fd/N` of
-the write descriptor and never by the declaration's path, and confirmed by comparing the
-two descriptors' device and inode before it is passed, so **the relay serves the loaded
-run's own file by descriptor and records its identity**, and an operator's edit to the
-declaration's sink while the run stands changes nothing the relay reads (the item
-carried on #50, issuecomment-5969507004). **It admits exactly one reader**, the
-`trace-reader` of the agent's `roles.toml`, judged by the kernel's peer credential
-before a byte of the request is read, and refuses and logs every other caller that
-reaches it. **Only a member of the socket's group reaches it**: a process outside
-`weaver-<agent>-admin`, the agent's own among them, is refused by the socket's mode at
-`connect` and never reaches the peer check, so the relay logs refusals of group members
-that are not the reader, and the kernel's refusal of everyone else leaves no record of
-this crate's. **The newest connection from that reader replaces the old**, the relay
-holding one follower at a time inside its one process, so the replaced follower ends
-with a reason, the replacement is logged, and never more than one follower stands (the
-item carried on #50, issuecomment-5969438713). The stream is `weaver-types-Spec` section
-3.1's: a `TraceHeader` line, then the file's own lines from the verified position
-exactly as written, then following with a heartbeat while idle. **The relay parses no
-event**: it hashes one record's bytes to verify a position and copies bytes. Its
-operations, connects, replacements, refusals and disconnects, go to the operations log
-through a descriptor the start step passes, never a line per streamed record.
+states, and passes the listening descriptor to the relay at its exec, so the relay never
+binds and never needs to write the directory. The relay also inherits the run lock's
+description, per section 3, and marks it close-on-exec as its first act and never closes
+it, as the worker and the member do. **The door stands only for a file sink.** A pipe's
+reader is the operator's, and a second reader would steal its bytes, and a socket sink
+cannot be opened for reading at all, so where the declaration's sink is a pipe or a
+socket the start step starts no relay, binds no `trace.sock`, and the door stays closed.
+For a file sink it passes the relay a read-only descriptor of the same open file section
+5 opened for the worker, reopened through `/proc/self/fd/N` of the write descriptor and
+never by the declaration's path, and confirmed by comparing the two descriptors' device
+and inode before it is passed, so **the relay serves the loaded run's own file by
+descriptor and records its identity**, and an operator's edit to the declaration's sink
+while the run stands changes nothing the relay reads (the item carried on #50,
+issuecomment-5969507004). **It admits exactly one reader**, the `trace-reader` of the
+agent's `roles.toml`, judged by the kernel's peer credential before a byte of the
+request is read, and refuses and logs every other caller that reaches it. **Only a
+member of the socket's group reaches it**: a process outside `weaver-<agent>-admin`, the
+agent's own among them, is refused by the socket's mode at `connect` and never reaches
+the peer check, so the relay logs refusals of group members that are not the reader, and
+the kernel's refusal of everyone else leaves no record of this crate's. **The newest
+connection from that reader replaces the old**, the relay holding one follower at a time
+inside its one process, so the replaced follower ends with a reason, the replacement is
+logged, and never more than one follower stands (the item carried on #50,
+issuecomment-5969438713). The stream is `weaver-types-Spec` section 3.1's: a
+`TraceHeader` line, then the file's own lines from the verified position exactly as
+written, then following with a heartbeat while idle. **The relay parses no event**: it
+hashes one record's bytes to verify a position and copies bytes, whole lines where it
+can, so no line of its own lands inside a record. A heartbeat follows five seconds idle,
+and a reader that takes nothing for five seconds is dropped and logged. Its operations,
+connects, replacements, refusals and disconnects, go to the operations log through a
+descriptor the start step passes, never a line per streamed record. **Its descriptors
+stand at fixed numbers**: the listener at 3, the read-only sink at 4, the operations log
+at 5, the lifetime pipe's read end at 6 and the run lock's description at 9, and its
+vector is the declared reader's uid, the agent's name and the boundary file's digest,
+the last two for its log lines.
 
 **The trace stream across runs is stated, because a reader depends on it.** **A run's
 sink is not a new file**: the declaration names one sink per agent, which section 5
@@ -1679,7 +1685,8 @@ organ ever holds it and no window exists in which one could. The relay holds the
 end. The worker never writes it, so the relay's read blocks for the run's life and
 returns end-of-file only when the last holder of the write end is gone, which is the
 worker's death, clean or not, the kernel closing the descriptor whatever killed the
-process. The relay exits on that end-of-file after telling its follower why. **The one
+process. The relay exits on that end-of-file, closing its follower's connection and
+logging why, since no stream line carries a reason. **The one
 remaining failure mode runs the other way**: if the relay dies first, the worker serves
 on, the trace keeps landing in the sink, and the door is closed until the next load,
 which the reader sees as a refused connection and the operations log records. **The
@@ -1990,7 +1997,13 @@ where no boundary file was read**, a missing or malformed `roles.toml` among the
 the line says so rather than inventing a value. **A refusal before the agent's root is
 admitted has no `admin.log` to reach**: a malformed name or `NoSuchAgent` names no agent
 whose declaration directory this crate may write, so that refusal goes to standard
-error alone, beside the answer object, and to no log.
+error alone, beside the answer object, and to no log. **The relay's lines carry a schema
+of their own**, on #73's second item: the wall time, `actor` naming the relay, the
+agent, the event (`connect`, `replaced`, `refused`, `disconnect`, `truncated`, `ended`),
+the peer's uid where a peer stood, the boundary digest and a detail, and none of an
+invocation's fields, no command line and no sudo cause existing in a process that
+outlived its load. **Every line of either writer is one `write` on a descriptor opened
+for appending**, so an invocation's line and the relay's never interleave.
 
 **What is logged is the charter's set.** Transitions directed and their outcomes,
 refusals issued, rollbacks with what each act undid or could not, and workers started
@@ -2288,13 +2301,15 @@ the fleet view #45 removed from admin.
 requires them.** `weaver-<agent>-relay`, whose one group is the trace group
 `weaver-<agent>-trace`, is the account section 6 starts the relay under, and
 `weaver-<agent>-admin` is the group the trace socket is grouped to, which the declared
-trace reader must hold. Section 4's walk resolves both and refuses by name where either
-is missing, on the same ground the member's account is required: a process this crate
-starts under an account the box does not carry is a start that fails opaquely, and a
-reader outside the socket's group is a reader the filesystem turns away before the
-relay's credential check runs. The relay's binary, `weaver-trace-relay`, is this crate's
-second binary, per section 1, installed beside the worker binary and found as the state
-member's is, never a value of its own.
+trace reader must hold. The start step resolves the relay account, its trace group and
+the access group wherever a file sink stands a relay, and refuses `BoundaryUnverified`
+by name where any is missing, while the reader's judgment of this section runs at
+`validate` and `load` for every sink, on the same ground the member's account is
+required: a process this crate starts under an account the box does not carry is a start
+that fails opaquely, and a reader outside the socket's group is a reader the filesystem
+turns away before the relay's credential check runs. The relay's binary,
+`weaver-trace-relay`, is this crate's second binary, per section 1, installed beside the
+worker binary and found as the state member's is, never a value of its own.
 
 ## 10. What is enforced, and by which instrument
 
@@ -2337,15 +2352,15 @@ on #73's first item, the deliberate gifts of section 6 and nothing else:
 - **the state member**: its standard streams, its own end of the first door
   at 3, the run lock's description at 9 and, under a restore, the save point
   at the number its act elects.
-- **the trace relay**: its standard streams, the listener, the sink's read-only
-  descriptor, the operations log, the lifetime pipe's read end and the run
-  lock's description, at the numbers its act elects.
+- **the trace relay**: its standard streams at `/dev/null`, the listener at 3,
+  the sink's read-only descriptor at 4, the operations log at 5, the lifetime
+  pipe's read end at 6 and the run lock's description at 9.
 
 The test spawns each child on its real path, enumerates its descriptors and
 requires exactly its allowlist, watched to fail when a gift's placement is
 dropped or any single atomic flag is downgraded to a later `fcntl`. The
 worker's and the member's run inside a user namespace, as root over the
-invoking user's subordinate ids, the relay's landing with its own act.
+invoking user's subordinate ids, and so does the relay's.
 
 **The fourth walk: a stranger speaks on the coordination channel.** The
 adversary is a process running as the agent's uid, or as any uid on the host

@@ -99,12 +99,16 @@ pub struct TraceRequest {
 }
 
 /// The file the relay serves, by identity: device, inode, and birth time in
-/// nanoseconds since the epoch, so a reader holds what it is reading.
+/// nanoseconds since the epoch, so a reader holds what it is reading. **The
+/// birth time is absent where the filesystem reports none**, on #73's fourth
+/// item, never zero, which would make a reused device and inode read as the
+/// same file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TraceHeader {
     pub device: u64,
     pub inode: u64,
-    pub birth_ns: i128,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub birth_ns: Option<i128>,
 }
 
 /// Every line the trace stream adds, per `weaver-types-Spec` section 3.1: one
