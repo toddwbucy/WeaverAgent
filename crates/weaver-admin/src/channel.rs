@@ -489,7 +489,7 @@ mod tests {
             )
         };
         if written < 0 {
-            eprintln!(
+            diag!(
                 "SKIP truncation_is_a_channel_fault: the kernel refused the oversized \
                  datagram (errno {}), so the MSG_TRUNC branch was not exercised here",
                 std::io::Error::last_os_error()

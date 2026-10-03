@@ -1121,9 +1121,9 @@ opened the sink, and holding the invocation lock and the run lock it took, per s
 3's order: it prepares the runtime directory, stands the trace relay, starts the state
 member, and starts the worker under the agent's own account, each child inheriting the
 run lock's description at its fork, per section 3. Each is
-below, and `weaver-admin-systemd-contract` retired with the unit. The code sites the
-later act removes are `crates/weaver-admin/src/unit.rs` and the `weaver-worker@<agent>`
-naming in the deploy scripts.
+below, and `weaver-admin-systemd-contract` retired with the unit. The code act of #50
+removed `crates/weaver-admin/src/unit.rs`, and its deploy act removes the
+`weaver-worker@<agent>` naming from the deploy scripts.
 
 **The runtime directory is made by the start step, with its owner and mode stated**:
 `<coordination-root>/weaver-<agent>/`, `/run/weaver-<agent>/` by default, owned by the
@@ -1244,13 +1244,17 @@ relay's and the member's children take their own new session first and reset the
 set the same way after it**, before their own execs, so neither belongs to the invoking
 terminal's process group: a caller's hangup or interrupt reaching that group then
 reaches only the invocation, which ignores both, and never a child whose dispositions
-are already back at their defaults. It sets `PR_SET_NO_NEW_PRIVS`. It narrows its
-supplementary groups to `weaver-<agent>`, then its gid, then its uid, in that order,
-because the narrowings need the privilege the last one gives away. Then it executes. It
-carries across the exec exactly two descriptors besides its standard streams: the run
-lock's description, which section 3 needs held by every constituent of the run, and the
-write end of the relay's lifetime pipe, below. **The sink does not cross at the exec.**
-It crosses in the enter directive as ancillary data over the coordination channel, per
+are already back at their defaults. **It moves to `/` and sets its file-creation mask to
+`027`**, since the caller's working directory and umask are not the agent's. **It marks
+every descriptor above its standard streams but its gifts close-on-exec**, so whatever
+the caller left open, a root shell's descriptors among them, never crosses the exec, per
+section 10's allowlist. It sets `PR_SET_NO_NEW_PRIVS`. It narrows its supplementary
+groups to `weaver-<agent>`, then its gid, then its uid, in that order, because the
+narrowings need the privilege the last one gives away. Then it executes. It carries
+across the exec exactly two descriptors besides its standard streams: the run lock's
+description, which section 3 needs held by every constituent of the run, and the write
+end of the relay's lifetime pipe, below. **The sink does not cross at the exec.** It
+crosses in the enter directive as ancillary data over the coordination channel, per
 section 5 and section 7, the route the harness contract already holds and tests, so
 nothing of the record rides the worker's start and the organs the worker forks inherit
 no handle to it. The worker binds its own coordination socket in the runtime directory,
@@ -1942,8 +1946,13 @@ is one per agent, at `admin.log` in the agent's declaration directory**,
 the save points, on the operator's ruling of 2026-10-03 on #63's sixth question, carried
 forward on #50, which moves it from the root's `log-path` of #45. The agent's uids never
 reach it, that directory being closed to them by section 9's judgment, and the operator
-can read it. This crate appends to it as root, opening it with `O_NOFOLLOW` so a link
-planted at the name is refused rather than followed. **The worker's own output is not
+can read it: it is owned by the operator's uid and the declaration directory's group,
+mode `0640`, set through the open descriptor. This crate appends to it as root, opening
+it with `O_NOFOLLOW` so a link planted at the name is refused rather than followed, and
+non-blocking and judged a regular file before a line is written, so a FIFO planted at
+the name neither holds the verb nor takes a line. `worker.log` is opened and owned the
+same way, and the member's `state.log` in its own room is opened without following a
+link and judged a regular file. **The worker's own output is not
 this log**: the start step points the worker's standard output and error at `worker.log`
 beside it, per section 6, because the worker holds that descriptor and an agent holding
 a writable handle to the boundary's record could write into it. What this Spec adds is

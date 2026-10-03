@@ -57,11 +57,12 @@ pub fn runtime_directory(coordination_root: &Path, agent: &str) -> PathBuf {
 pub fn prepare_run_directory(
     coordination_root: &Path,
     agent: &str,
+    owner: u32,
 ) -> Result<PathBuf, LifecycleRefusal> {
     let parent = coordination_root.join("weaver.run");
-    hold_directory(&parent, 0, 0, 0o755)?;
+    hold_directory(&parent, owner, owner, 0o755)?;
     let directory = parent.join(agent);
-    hold_directory(&directory, 0, 0, 0o755)?;
+    hold_directory(&directory, owner, owner, 0o755)?;
     Ok(directory)
 }
 
@@ -108,7 +109,7 @@ fn open_directory(path: &Path) -> Result<OwnedFd, LifecycleRefusal> {
 }
 
 fn refuse_path(what: &str, path: &Path) -> LifecycleRefusal {
-    eprintln!("weaver-admin: {} {what}", path.display());
+    diag!("weaver-admin: {} {what}", path.display());
     LifecycleRefusal::BoundaryUnverified
 }
 
@@ -178,7 +179,7 @@ pub fn take_invocation_lock(run_directory: &Path) -> Result<InvocationLock, Life
             nix::libc::F_WRLCK => return Err(LifecycleRefusal::InvocationInFlight),
             nix::libc::F_RDLCK if Instant::now() < deadline => std::thread::sleep(POLL),
             nix::libc::F_RDLCK => {
-                eprintln!(
+                diag!(
                     "weaver-admin: readers held the invocation lock past show's bound; \
                      retry once the poller pauses"
                 );
@@ -380,11 +381,9 @@ pub fn escalate_within(
             if !run_lock_held(run_directory)? {
                 return Ok(());
             }
-            eprintln!("weaver-admin: the run lock is held and no process holding it can be found");
+            diag!("weaver-admin: the run lock is held and no process holding it can be found");
             return Err(LifecycleRefusal::LockHolderUnknown);
         }
-        let mut pids: Vec<i32> = found.iter().map(|h| h.pid).collect();
-        pids.dedup();
         for holder in found {
             if let Some(pinned) = pin(holder, target) {
                 signal(&pinned, sig);
@@ -460,6 +459,41 @@ pub(crate) fn detach_and_reset() -> std::io::Result<()> {
 pub(crate) fn place(source: RawFd, target: RawFd) -> std::io::Result<()> {
     // SAFETY: dup2 is async-signal-safe; onto a new number it clears the flag.
     if unsafe { nix::libc::dup2(source, target) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// **Every descriptor above the standard streams but the kept numbers is
+/// marked close-on-exec**, per Spec section 10's allowlist, so whatever the
+/// caller left open, a root shell's descriptors among them, never crosses the
+/// child's exec. Marked rather than closed, so the spawn's own close-on-exec
+/// error pipe keeps working until the exec. `keep` is sorted, each at 3 or
+/// above. Async-signal-safe, for a pre-exec.
+pub(crate) fn seal_except(keep: &[RawFd]) -> std::io::Result<()> {
+    let mut low: u32 = 3;
+    for &kept in keep {
+        let kept = kept as u32;
+        if kept > low {
+            close_on_exec_range(low, kept - 1)?;
+        }
+        low = kept + 1;
+    }
+    close_on_exec_range(low, u32::MAX)
+}
+
+fn close_on_exec_range(first: u32, last: u32) -> std::io::Result<()> {
+    // SAFETY: close_range with CLOSE_RANGE_CLOEXEC marks a range of this
+    // process's descriptors and is async-signal-safe.
+    let rc = unsafe {
+        nix::libc::syscall(
+            nix::libc::SYS_close_range,
+            first,
+            last,
+            nix::libc::CLOSE_RANGE_CLOEXEC,
+        )
+    };
+    if rc == -1 {
         return Err(std::io::Error::last_os_error());
     }
     Ok(())
@@ -549,8 +583,18 @@ pub fn spawn_worker(start: WorkerStart<'_>) -> std::io::Result<std::process::Chi
             place(lock_raw, RUN_LOCK_FD)?;
             if let Some(raw) = relay_raw {
                 place(raw, RELAY_LIFETIME_FD)?;
+                seal_except(&[RELAY_LIFETIME_FD, RUN_LOCK_FD])?;
+            } else {
+                seal_except(&[RUN_LOCK_FD])?;
             }
             detach_and_reset()?;
+            // **A fixed working directory and file-creation mask**, per Spec
+            // section 6: the caller's directory and umask are not the
+            // agent's, so the worker starts at `/` with `027`.
+            if nix::libc::chdir(c"/".as_ptr()) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            nix::libc::umask(0o027);
             if nix::libc::prctl(nix::libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == -1 {
                 return Err(std::io::Error::last_os_error());
             }
@@ -592,24 +636,10 @@ pub fn worker_arguments(
     args
 }
 
-/// Opens a log the start step appends to, `admin.log` or `worker.log` in the
-/// declaration directory: created `0640` if absent, never through a link,
-/// appended, close-on-exec at creation.
-pub fn open_log(path: &Path) -> std::io::Result<std::fs::File> {
-    let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
-        .map_err(std::io::Error::other)?;
-    let flags = nix::libc::O_WRONLY
-        | nix::libc::O_APPEND
-        | nix::libc::O_CREAT
-        | nix::libc::O_NOFOLLOW
-        | nix::libc::O_CLOEXEC;
-    // SAFETY: open with a NUL-terminated path and a mode for O_CREAT.
-    let fd = unsafe { nix::libc::open(c_path.as_ptr(), flags, 0o640 as nix::libc::c_uint) };
-    if fd == -1 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: the number was just opened and is owned by nothing else.
-    Ok(std::fs::File::from(unsafe { OwnedFd::from_raw_fd(fd) }))
+/// Opens a log the start step appends to, `worker.log` in the declaration
+/// directory, owned by `owner`, through `log::open_append`.
+pub fn open_log(path: &Path, owner: Option<(u32, u32)>) -> std::io::Result<std::fs::File> {
+    crate::log::open_append(path, owner)
 }
 
 #[cfg(test)]
@@ -824,22 +854,25 @@ mod tests {
         let _ = child.wait();
     }
 
-    /// **The invocation lock orders transitions and lets `show` read**, per
-    /// section 3: a held exclusive lock refuses a second exclusive take and
-    /// a shared take answers `InTransition`, and a held shared lock lets a
-    /// second shared take in. A child process takes each, since a classic
-    /// lock does not conflict within one process. Perturbation: take the
-    /// exclusive lock as `F_RDLCK` and the second exclusive take succeeds.
+    /// **A held exclusive invocation lock refuses every other take**, per
+    /// section 3: from another process, both an exclusive take and a shared
+    /// one are refused, the shared one being `show`'s `InTransition`. A child
+    /// process asks, since a classic lock does not conflict within one
+    /// process. The shared holder's side is the test below. Perturbation:
+    /// take the exclusive lock as `F_RDLCK` and the child's shared take
+    /// succeeds.
     #[test]
-    fn the_invocation_lock_orders_transitions_and_admits_readers() {
+    fn an_exclusive_invocation_lock_refuses_every_other_take() {
         let dir = scratch("invocation");
         let path = dir.0.as_path().join("admin.lock");
         let held = take_invocation_lock(dir.0.as_path()).expect("the first take");
+        // Built before the fork, so the child only calls what a fork of a
+        // threaded process may.
+        let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
         // A forked child asks, a second process being what the lock orders.
         // SAFETY: the child only calls async-signal-safe functions.
         match unsafe { nix::unistd::fork() }.unwrap() {
             nix::unistd::ForkResult::Child => {
-                let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
                 // SAFETY: open and fcntl are async-signal-safe.
                 let code = unsafe {
                     let fd = nix::libc::open(c_path.as_ptr(), nix::libc::O_RDWR);
@@ -862,6 +895,68 @@ mod tests {
             }
         }
         drop(held);
+    }
+
+    /// A forked child holding the invocation lock shared for `hold`, as a
+    /// `show` does for its observation, answering its pid once it holds it.
+    fn shared_holder(path: &Path, hold: Duration) -> nix::unistd::Pid {
+        let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        let (ready_read, ready_write) = nix::unistd::pipe().unwrap();
+        let pause = nix::libc::timespec {
+            tv_sec: hold.as_secs() as nix::libc::time_t,
+            tv_nsec: hold.subsec_nanos() as nix::libc::c_long,
+        };
+        // SAFETY: the child calls only async-signal-safe functions.
+        match unsafe { nix::unistd::fork() }.unwrap() {
+            nix::unistd::ForkResult::Child => {
+                // SAFETY: open, fcntl, write, nanosleep and _exit are
+                // async-signal-safe.
+                unsafe {
+                    let fd = nix::libc::open(c_path.as_ptr(), nix::libc::O_RDWR);
+                    let read = whole_file(nix::libc::F_RDLCK);
+                    nix::libc::fcntl(fd, nix::libc::F_SETLK, &read);
+                    nix::libc::write(ready_write.as_raw_fd(), [1u8].as_ptr().cast(), 1);
+                    nix::libc::nanosleep(&pause, std::ptr::null_mut());
+                    nix::libc::_exit(0);
+                }
+            }
+            nix::unistd::ForkResult::Parent { child } => {
+                drop(ready_write);
+                let mut byte = [0u8; 1];
+                nix::unistd::read(&ready_read, &mut byte).unwrap();
+                child
+            }
+        }
+    }
+
+    /// **An exclusive taker behind `show`'s shared hold waits within `show`'s
+    /// bound, and is starved past it with readers named**, per section 3: a
+    /// shared hold released inside the bound lets the take through on a
+    /// retry, and one held past it refuses `InvocationInFlight` at about the
+    /// bound. Perturbation: refuse on any holder without reading its kind and
+    /// the first case refuses; retry without the bound and the second never
+    /// returns.
+    #[test]
+    fn an_exclusive_take_waits_out_a_brief_reader_and_is_starved_by_a_long_one() {
+        let dir = scratch("readers");
+        let path = dir.0.join("admin.lock");
+        drop(open_lock_file(&path).unwrap());
+        let brief = shared_holder(&path, Duration::from_millis(300));
+        let taken = take_invocation_lock(dir.0.as_path());
+        assert!(taken.is_ok(), "a brief reader is waited out: {taken:?}");
+        drop(taken);
+        let _ = nix::sys::wait::waitpid(brief, None);
+        let long = shared_holder(&path, Duration::from_secs(5));
+        let started = Instant::now();
+        assert_eq!(
+            take_invocation_lock(dir.0.as_path()).err(),
+            Some(LifecycleRefusal::InvocationInFlight),
+            "a reader held past the bound starves the taker"
+        );
+        assert!(started.elapsed() < SHARED_HOLD_WAIT + Duration::from_secs(1));
+        // SAFETY: kill on the child this test forked.
+        unsafe { nix::libc::kill(long.as_raw(), nix::libc::SIGKILL) };
+        let _ = nix::sys::wait::waitpid(long, None);
     }
 
     /// **The run directory is made root's and `0755`, and a link at its name

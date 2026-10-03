@@ -45,27 +45,62 @@ pub struct OperationsLog {
     file: std::fs::File,
 }
 
-impl OperationsLog {
-    /// Opens the agent's `admin.log` for appending, created `0640` where
-    /// absent, **never through a link at its name**, per section 8, and
-    /// close-on-exec at creation like every descriptor this crate holds.
-    pub fn open(path: &Path) -> std::io::Result<Self> {
-        let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
-            .map_err(std::io::Error::other)?;
-        let flags = nix::libc::O_WRONLY
-            | nix::libc::O_APPEND
-            | nix::libc::O_CREAT
-            | nix::libc::O_NOFOLLOW
-            | nix::libc::O_CLOEXEC;
-        // SAFETY: open with a NUL-terminated path and a mode for O_CREAT.
-        let fd = unsafe { nix::libc::open(c_path.as_ptr(), flags, 0o640 as nix::libc::c_uint) };
-        if fd == -1 {
+/// **Opens a log this crate appends to as root**, `admin.log`, `worker.log`
+/// or the member's `state.log`, per Spec sections 6 and 8: created `0640`
+/// where absent, **never through a link at its name**, opened non-blocking so
+/// a FIFO planted at the name cannot hold the verb, and refused unless it is a
+/// regular file, close-on-exec at creation like every descriptor this crate
+/// holds. Where `owner` is given the file is set to that uid and gid and
+/// `0640` through the open descriptor, the operator's logs being the
+/// operator's to read.
+pub fn open_append(path: &Path, owner: Option<(u32, u32)>) -> std::io::Result<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
+        .map_err(std::io::Error::other)?;
+    let flags = nix::libc::O_WRONLY
+        | nix::libc::O_APPEND
+        | nix::libc::O_CREAT
+        | nix::libc::O_NOFOLLOW
+        | nix::libc::O_NONBLOCK
+        | nix::libc::O_CLOEXEC;
+    // SAFETY: open with a NUL-terminated path and a mode for O_CREAT.
+    let fd = unsafe { nix::libc::open(c_path.as_ptr(), flags, 0o640 as nix::libc::c_uint) };
+    if fd == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: the number was just opened and is owned by nothing else.
+    let file = std::fs::File::from(unsafe { OwnedFd::from_raw_fd(fd) });
+    if !file.metadata()?.file_type().is_file() {
+        return Err(std::io::Error::other("a log is a regular file"));
+    }
+    let raw = file.as_raw_fd();
+    if let Some((uid, gid)) = owner {
+        // SAFETY: fchown and fchmod on the descriptor just opened.
+        let set =
+            unsafe { nix::libc::fchown(raw, uid, gid) == 0 && nix::libc::fchmod(raw, 0o640) == 0 };
+        if !set {
             return Err(std::io::Error::last_os_error());
         }
-        // SAFETY: the number was just opened and is owned by nothing else.
-        let owned = unsafe { OwnedFd::from_raw_fd(fd) };
+    }
+    // SAFETY: fcntl on the descriptor just opened, clearing O_NONBLOCK now
+    // that it is known to be a regular file.
+    unsafe {
+        let status = nix::libc::fcntl(raw, nix::libc::F_GETFL);
+        if status == -1
+            || nix::libc::fcntl(raw, nix::libc::F_SETFL, status & !nix::libc::O_NONBLOCK) == -1
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(file)
+}
+
+impl OperationsLog {
+    /// Opens the agent's `admin.log` for appending, owned by `owner`, per
+    /// section 8, through `open_append`.
+    pub fn open(path: &Path, owner: Option<(u32, u32)>) -> std::io::Result<Self> {
         Ok(OperationsLog {
-            file: std::fs::File::from(owned),
+            file: open_append(path, owner)?,
         })
     }
 
@@ -127,7 +162,7 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("weaver-admin-log-{}.ndjson", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        let mut log = OperationsLog::open(&path).unwrap();
+        let mut log = OperationsLog::open(&path, None).unwrap();
         log.record(&act("load", "ready", Some("/opt/weaver/bin/weaver-spu")))
             .unwrap();
         log.record(&act("show", "unloaded", None)).unwrap();
@@ -157,8 +192,36 @@ mod tests {
         let target = dir.join("elsewhere");
         std::fs::write(&target, "").unwrap();
         std::os::unix::fs::symlink(&target, dir.join("admin.log")).unwrap();
-        assert!(OperationsLog::open(&dir.join("admin.log")).is_err());
+        assert!(OperationsLog::open(&dir.join("admin.log"), None).is_err());
+        // A FIFO planted at the name neither holds the open nor takes a line.
+        std::fs::remove_file(dir.join("admin.log")).unwrap();
+        nix::unistd::mkfifo(&dir.join("admin.log"), nix::sys::stat::Mode::S_IRWXU).unwrap();
+        assert!(OperationsLog::open(&dir.join("admin.log"), None).is_err());
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **The operator's logs are the operator's to read**, per Spec section 8:
+    /// a log opened with an owner is set to that uid and gid and `0640`
+    /// through the descriptor, whatever mode it stood at. Run as the test's own
+    /// uid, the one chown an unprivileged suite may make. Perturbation: drop
+    /// the `fchmod` and the world-readable file stays `0666`.
+    #[test]
+    fn a_log_is_set_to_its_owner_and_0640() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let path =
+            std::env::temp_dir().join(format!("weaver-admin-log-owner-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, "").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+        let (uid, gid) = (
+            nix::unistd::getuid().as_raw(),
+            nix::unistd::getgid().as_raw(),
+        );
+        drop(OperationsLog::open(&path, Some((uid, gid))).unwrap());
+        let meta = std::fs::metadata(&path).unwrap();
+        assert_eq!(meta.mode() & 0o7777, 0o640);
+        assert_eq!((meta.uid(), meta.gid()), (uid, gid));
+        let _ = std::fs::remove_file(&path);
     }
 }
