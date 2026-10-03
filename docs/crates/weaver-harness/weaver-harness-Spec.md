@@ -2026,19 +2026,20 @@ point is not answered is an open design item**, carried on #1 to the save-point 
 act: under the dead-peer conversion the unload would still finish clean and the next
 load would restore an older save point with no reset recorded, so whether a missed leave
 save point refuses the leave or keeps the run marked unclean is that act's to elect. A
-save point is never
-overwritten, so each answer names a new one, and this crate authors the event that
-records it, per `weaver-trace-PRD`. **A live restore is the loop's to trigger**: on the
-operator's demand this crate sends the `restore` ask naming a save point in the member's
-room, and on its answer flushes the decode session to `keep = 0` through the decode
-contract's existing cut before the next turn feeds the model, so no cached context
-outlives the state it was built from. **A save point whose identity differs from the one
-seated reopens the decode session** rather than reloading the model, per
-`weaver-spu-PRD`: the `restore` answer carries the save point's prefix, this crate
-compares it with the prefix seated, and where they differ it closes the session and
-opens it on the answered prefix, authoring that prefix through the identity door as an
-open does, so the record names the prefix the model runs under from that point. The
-channel that carries the operator's demand to the loop is the loop act's to name.
+save point is never overwritten, so each answer names a new one, and this crate authors
+the event that records it, per `weaver-trace-PRD`, an event the tee never sends to state
+under any election, so the save point and a rebuild to its position hold the same. **A
+live restore is the loop's to trigger**: on the operator's demand this crate sends the
+`restore` ask naming a save point in the member's room, and on its answer flushes the
+decode session to `keep = 0` through the decode contract's existing cut before the next
+turn feeds the model, so no cached context outlives the state it was built from. **A
+save point whose identity differs from the one seated reopens the decode session**
+rather than reloading the model, per `weaver-spu-PRD`: the `restore` answer carries the
+save point's prefix, this crate compares it with the prefix seated, and where they
+differ it closes the session and opens it on the answered prefix, authoring that prefix
+through the identity door as an open does, so the record names the prefix the model runs
+under from that point. The channel that carries the operator's demand to the loop is the
+loop act's to name.
 
 ### 6.1 The decode surface, chartered
 
