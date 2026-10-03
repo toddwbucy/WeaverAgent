@@ -1248,11 +1248,13 @@ to: admin-failed-dial-reads-the-worker-exit
 
 **The subprocess inherits nothing it was not deliberately given, because every
 descriptor this crate holds is close-on-exec atomically at creation,** no descriptor
-existing for an instant between its creating call and its flag. The one deliberate gift
-is the member's own end of the first door's pair, per the operator's ruling of
-2026-08-26: created atomically flagged like everything else and re-armed onto the
-member's fixed number in the spawn path itself, so the inheritance is an act at one site
-and never a default anywhere. This is the behavioural half of the custody section 1
+existing for an instant between its creating call and its flag. The deliberate gifts
+are the member's own end of the first door's pair, per the operator's ruling of
+2026-08-26, the save point the member restores, per section 6, and the run lock's
+description to each of the worker, the member and the relay, per section 3: each is
+created atomically flagged like everything else and re-armed onto its child's fixed
+number in the spawn path itself, so each inheritance is an act at one site and never a
+default anywhere. This is the behavioural half of the custody section 1
 opens, and section 10's third walk makes it a test, where section 1's half is the
 ownership the compiler holds. The two halves carry separate records because a test
 cannot demonstrate ownership and the borrow checker cannot see a flag. **The behavioural
@@ -1568,7 +1570,9 @@ the agent's run directory of section 3, `<coordination-root>/weaver.run/<agent>/
 root's and apart from the agent's runtime directory, the socket root-owned, mode `0660`
 and grouped to the agent's per-agent access group `weaver-<agent>-admin`, which the
 declared trace reader must hold, and passes the listening descriptor to the relay at its
-exec, so the relay never binds and never needs to write the directory. **The door stands
+exec, so the relay never binds and never needs to write the directory. The relay also
+inherits the run lock's description, per section 3, and marks it close-on-exec as its
+first act and never closes it, as the worker and the member do. **The door stands
 only for a file sink.** A pipe's reader is the operator's, and a second reader would
 steal its bytes, and a socket sink cannot be opened for reading at all, so where the
 declaration's sink is a pipe or a socket the start step starts no relay, binds no

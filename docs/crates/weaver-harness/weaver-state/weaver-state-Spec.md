@@ -6,7 +6,7 @@
 **Document ID:** `weaver-state-Spec`
 **Parent:** `weaver-state-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #58
+**Landing PR:** #72
 
 ---
 
@@ -108,6 +108,19 @@ diagnostic binding alone, the record restore of issue #432 retiring on the opera
 rulings of 2026-10-02 on #58, this member binding whatever name it is given and none it
 is not, and binds under this member's own territory, the credential judgment of section
 4 unchanged on it.
+
+**The run lock's description arrives with the process too, and the member keeps it for
+its life**, per `weaver-admin-Spec` section 3 on the Planner's ruling of 2026-10-03 on
+#72: admin takes the run lock before it forks anything, and the member, like the worker
+and the trace relay, inherits that open file description at a fixed number, the code
+act's to elect beside the first door's and the save point's, so the agent counts as
+running while the member lives, and a load killed before its worker starts leaves the
+member findable by the next. **The member marks that descriptor close-on-exec as its
+first act and never closes it or passes it on**: it reads nothing through it and writes
+nothing, holding it being the whole of its use, and it closes no descriptor it was not
+told about, so no sweep of unknown numbers can drop it. Where the number holds no
+descriptor, a hand-run member's case, there is nothing to keep and the member serves
+as it would.
 
 ## 3. The store
 
@@ -641,8 +654,13 @@ header but one, the line inside `stand_preload_name`, which is a function the
 binary runs, so none of the nine is a sighting under that rule.
 
 **Requiring a perturbation-verified test.** Eleven claims stand today, each watched
-where the behaviour sits, and three join them with the store primitive, owed by the
-code act that lands it.
+where the behaviour sits, three join them with the store primitive, owed by the
+code act that lands it, and one with the run lock, owed by the start step's code act.
+
+- The member holds the run lock for its life, watched by a member started under a
+  stand-in run lock and read from outside after it serves: its descriptor table still
+  shows the lock's description. The perturbation closes the inherited descriptor, and
+  a load killed before its worker starts leaves a member the next load cannot find.
 
 - The standing asks restrict to the opener's session, watched by dropping any of the
   three `WHERE session` predicates the reads carry, which returns an earlier
