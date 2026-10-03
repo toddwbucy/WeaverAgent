@@ -154,14 +154,35 @@ fn main() {
 }
 
 /// Who asked for this invocation's change, per `weaver-types-Spec` section
-/// 3.1.
-///
-/// Owed to C2 of #50: the uid sudo reports, parsed strictly, or 0 at a root
-/// shell, per `weaver-admin-Spec` section 2. Until the start step's act lands
-/// every change carries uid 0, the root shell's cause, which is what the
-/// systemd path's every caller is.
+/// 3.1 and `weaver-admin-Spec` section 2: the uid sudo reports and nothing
+/// else. `run` has already refused a malformed `SUDO_UID` before any verb, so
+/// the read here cannot fail on the same environment.
 fn invocation_cause() -> weaver_types::Cause {
-    weaver_types::Cause { uid: 0 }
+    cause_from(std::env::var_os("SUDO_UID").as_deref())
+        .expect("run refuses a malformed SUDO_UID before any verb")
+}
+
+/// **`SUDO_UID` parsed strictly as a decimal uid**, per `weaver-admin-Spec`
+/// section 2: ASCII digits only, no sign, no space and no leading zero, within
+/// `u32`. Absent, it is a root shell and the cause is uid 0. Malformed, it
+/// refuses `Malformed` and never falls back, because a fallback would record
+/// a cause nobody gave.
+fn cause_from(sudo_uid: Option<&std::ffi::OsStr>) -> Result<weaver_types::Cause, LifecycleRefusal> {
+    let Some(value) = sudo_uid else {
+        return Ok(weaver_types::Cause { uid: 0 });
+    };
+    let bytes = value.as_encoded_bytes();
+    let canonical = !bytes.is_empty()
+        && bytes.iter().all(u8::is_ascii_digit)
+        && (bytes == b"0" || bytes[0] != b'0');
+    if !canonical {
+        return Err(LifecycleRefusal::Malformed);
+    }
+    std::str::from_utf8(bytes)
+        .ok()
+        .and_then(|digits| digits.parse::<u32>().ok())
+        .map(|uid| weaver_types::Cause { uid })
+        .ok_or(LifecycleRefusal::Malformed)
 }
 
 fn run() -> Result<LifecycleAnswer, LifecycleRefusal> {
@@ -173,6 +194,9 @@ fn run() -> Result<LifecycleAnswer, LifecycleRefusal> {
     if !surface::running_as_root() {
         return Err(LifecycleRefusal::Unauthorized);
     }
+    // The cause is judged before any verb, so a malformed one refuses having
+    // touched nothing.
+    cause_from(std::env::var_os("SUDO_UID").as_deref())?;
     let request = surface::parse_arguments(std::env::args().skip(1))?;
     let config = load_service_config(request.agent())?;
     dispatch(&config, request)
@@ -1415,6 +1439,42 @@ fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<Servi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The cause is the uid sudo reports, parsed strictly**, per
+    /// `weaver-admin-Spec` section 2: absent is a root shell and uid 0, a
+    /// decimal uid is that uid, and anything else refuses `Malformed` rather
+    /// than falling back. Perturbation: answer uid 0 for a value that does
+    /// not parse and the malformed cases record a cause nobody gave.
+    #[test]
+    fn the_cause_is_sudo_uid_parsed_strictly() {
+        use std::ffi::OsStr;
+        assert_eq!(cause_from(None), Ok(weaver_types::Cause { uid: 0 }));
+        assert_eq!(
+            cause_from(Some(OsStr::new("1000"))),
+            Ok(weaver_types::Cause { uid: 1000 })
+        );
+        assert_eq!(
+            cause_from(Some(OsStr::new("0"))),
+            Ok(weaver_types::Cause { uid: 0 })
+        );
+        for malformed in [
+            "",
+            "-1",
+            "+5",
+            " 1000",
+            "1000 ",
+            "01000",
+            "1e3",
+            "4294967296",
+            "x",
+        ] {
+            assert_eq!(
+                cause_from(Some(OsStr::new(malformed))),
+                Err(LifecycleRefusal::Malformed),
+                "{malformed:?} refuses"
+            );
+        }
+    }
 
     /// Spawn `readlink` over the named child descriptors with the given
     /// pre-exec arming, and return what each resolved to - the socket's

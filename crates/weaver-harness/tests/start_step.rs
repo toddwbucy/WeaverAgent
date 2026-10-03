@@ -66,6 +66,17 @@ fn held_elsewhere(path: &std::path::Path) -> bool {
     lock.l_type != nix::libc::F_UNLCK as i16
 }
 
+/// A close-on-exec copy of `fd` at 100 or above, owned by the caller. The
+/// source is left to its own owner.
+fn high_copy(fd: RawFd) -> std::os::fd::OwnedFd {
+    // SAFETY: F_DUPFD_CLOEXEC on a descriptor this test owns answers a fresh
+    // number this test then owns.
+    let raw = unsafe { nix::libc::fcntl(fd, nix::libc::F_DUPFD_CLOEXEC, 100) };
+    assert!(raw >= 100, "a high copy");
+    // SAFETY: the number was just made and is owned by nothing else.
+    unsafe { std::os::fd::FromRawFd::from_raw_fd(raw) }
+}
+
 /// The descriptor's open flags as the kernel reports them for another
 /// process, from `/proc/<pid>/fdinfo/<fd>`.
 fn fdinfo_flags(pid: u32, fd: RawFd) -> u32 {
@@ -97,7 +108,20 @@ fn fdinfo_flags(pid: u32, fd: RawFd) -> u32 {
 /// number and the lock reads free while the worker serves.
 #[test]
 fn the_worker_keeps_the_run_lock_and_the_relay_write_end() {
-    let dir = std::env::temp_dir().join(format!("weaver-start-step-{}", std::process::id()));
+    keeps_both(env!("CARGO_BIN_EXE_worker"), "worker");
+}
+
+/// The same first act in the Python-loop worker, built only with its feature.
+/// Perturbation: drop `keep_start_step_descriptors` from the pyworker's main
+/// and the flags assertion fails.
+#[cfg(feature = "pyworker")]
+#[test]
+fn the_pyworker_keeps_the_run_lock_and_the_relay_write_end() {
+    keeps_both(env!("CARGO_BIN_EXE_pyworker"), "pyworker");
+}
+
+fn keeps_both(binary: &str, tag: &str) {
+    let dir = std::env::temp_dir().join(format!("weaver-start-step-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let scratch = Scratch(dir.clone());
     let lock_path = scratch.0.join("run.lock");
@@ -106,9 +130,25 @@ fn the_worker_keeps_the_run_lock_and_the_relay_write_end() {
     let (read_end, write_end) = nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC).unwrap();
 
     let socket = scratch.0.join("coordination.sock");
+    // **Moved above every number the child places**, so neither source can
+    // be 8 or 9 itself: a `dup2` onto its own number is a no-op that leaves
+    // the close-on-exec flag standing, and a concurrent test's descriptors
+    // make the low numbers likely.
+    // The low originals close at the end of each block, the copies sharing
+    // their open file descriptions.
+    let lock_file = {
+        let low = lock_file;
+        high_copy(low.as_raw_fd())
+    };
+    let write_end = {
+        let low = write_end;
+        high_copy(low.as_raw_fd())
+    };
     let lock_raw = lock_file.as_raw_fd();
     let write_raw = write_end.as_raw_fd();
-    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_worker"));
+    // Built before the fork, so the child only writes it.
+    let uid_map = format!("0 {} 1", nix::unistd::getuid().as_raw());
+    let mut command = std::process::Command::new(binary);
     command
         .arg(&socket)
         .arg("/bin/false")
@@ -125,6 +165,21 @@ fn the_worker_keeps_the_run_lock_and_the_relay_write_end() {
             {
                 return Err(std::io::Error::last_os_error());
             }
+            // **A user namespace this test owns**, its root mapped to the
+            // test's own uid, so a non-dumpable worker's descriptor table is
+            // the test's to read, without root. The worker's credentials are
+            // unchanged, so it binds in the scratch directory as before.
+            if nix::libc::unshare(nix::libc::CLONE_NEWUSER) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let map = nix::libc::open(c"/proc/self/uid_map".as_ptr(), nix::libc::O_WRONLY);
+            if map == -1
+                || nix::libc::write(map, uid_map.as_ptr().cast(), uid_map.len())
+                    != uid_map.len() as isize
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            nix::libc::close(map);
             Ok(())
         });
     }
@@ -143,18 +198,23 @@ fn the_worker_keeps_the_run_lock_and_the_relay_write_end() {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
 
-    // The worker clears its dumpable flag, so its descriptor table is root's
-    // to read. Under root the table and the flags are read as well; the lock
-    // and the pipe below are what any reader sees.
-    if nix::unistd::Uid::effective().is_root() {
-        let held = std::fs::metadata(format!("/proc/{pid}/fd/{RUN_LOCK_DESCRIPTOR}"))
-            .expect("the run lock is in the worker's table");
-        let file = std::fs::metadata(&lock_path).unwrap();
-        assert_eq!((held.dev(), held.ino()), (file.dev(), file.ino()));
-        let cloexec = nix::libc::O_CLOEXEC as u32;
-        assert_ne!(fdinfo_flags(pid, RUN_LOCK_DESCRIPTOR) & cloexec, 0);
-        assert_ne!(fdinfo_flags(pid, RELAY_LIFETIME_DESCRIPTOR) & cloexec, 0);
-    }
+    // The worker clears its dumpable flag, and the test owns the worker's
+    // user namespace, so it reads the table and the flags as any owner may.
+    let held = std::fs::metadata(format!("/proc/{pid}/fd/{RUN_LOCK_DESCRIPTOR}"))
+        .expect("the run lock is in the worker's table");
+    let file = std::fs::metadata(&lock_path).unwrap();
+    assert_eq!((held.dev(), held.ino()), (file.dev(), file.ino()));
+    let cloexec = nix::libc::O_CLOEXEC as u32;
+    assert_ne!(
+        fdinfo_flags(pid, RUN_LOCK_DESCRIPTOR) & cloexec,
+        0,
+        "the run lock is close-on-exec, the worker's first act"
+    );
+    assert_ne!(
+        fdinfo_flags(pid, RELAY_LIFETIME_DESCRIPTOR) & cloexec,
+        0,
+        "and so is the relay's write end"
+    );
     assert!(held_elsewhere(&lock_path), "the worker holds the lock");
     nix::fcntl::fcntl(
         &read_end,

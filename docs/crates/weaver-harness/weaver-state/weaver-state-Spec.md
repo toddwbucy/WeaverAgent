@@ -112,15 +112,15 @@ is not, and binds under this member's own territory, the credential judgment of 
 **The run lock's description arrives with the process too, and the member keeps it for
 its life**, per `weaver-admin-Spec` section 3 on the Planner's ruling of 2026-10-03 on
 #72: admin takes the run lock before it forks anything, and the member, like the worker
-and the trace relay, inherits that open file description at a fixed number, the code
-act's to elect beside the first door's and the save point's, so the agent counts as
+and the trace relay, inherits that open file description at descriptor 9, the number
+`weaver-admin-Spec` section 3 fixes for every constituent, so the agent counts as
 running while the member lives, and a load killed before its worker starts leaves the
 member findable by the next. **The member marks that descriptor close-on-exec as its
 first act and never closes it or passes it on**: it reads nothing through it and writes
 nothing, holding it being the whole of its use, and it closes no descriptor it was not
 told about, so no sweep of unknown numbers can drop it. Where the number holds no
 descriptor, a hand-run member's case, there is nothing to keep and the member serves
-as it would.
+as it would, naming the absence on its standard error so it is never silent.
 
 ## 3. The store
 
@@ -657,10 +657,12 @@ binary runs, so none of the nine is a sighting under that rule.
 where the behaviour sits, three join them with the store primitive, owed by the
 code act that lands it, and one with the run lock, owed by the start step's code act.
 
-- The member holds the run lock for its life, watched by a member started under a
-  stand-in run lock and read from outside after it serves: its descriptor table still
-  shows the lock's description. The perturbation closes the inherited descriptor, and
-  a load killed before its worker starts leaves a member the next load cannot find.
+- The member holds the run lock for its life, watched by the member binary started as
+  admin starts it, a stream socket at 3 and a stand-in lock at 9, and read from outside
+  while it serves: its descriptor table shows 9 close-on-exec and still open. The
+  perturbations drop the first act, and the flag never appears, and close the inherited
+  descriptor, and a load killed before its worker starts leaves a member the next load
+  cannot find.
 
 - The standing asks restrict to the opener's session, watched by dropping any of the
   three `WHERE session` predicates the reads carry, which returns an earlier

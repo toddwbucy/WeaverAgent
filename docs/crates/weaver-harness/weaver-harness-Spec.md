@@ -566,26 +566,35 @@ child sets `PR_SET_PDEATHSIG` to `SIGKILL` as its first call, so the kernel kill
 SPU, the classify arm or the gate the instant the worker dies, cleanly or not, and then
 compares `getppid` with the worker's pid read before the fork, calling `_exit` at once
 where they differ, because a worker that died between the fork and the first call would
-otherwise leave a child the signal was armed too late to reach. **The signal follows the
-thread that forked, not the process**, so the worker forks its organs from its main
-thread, which lives for the process, and never from a thread that may end while the
-worker serves. **The worker exits after it answers left**, the run being its only
-purpose, so the run lock admin's `unload` waits on is released by its exit together with
-the member's and the relay's, per `weaver-admin-Spec` section 3. **Two descriptors cross
-the start step's exec into the worker and are the worker's to keep**: the run lock's
-open file description, which it holds for its life and never passes on, a description
-lock being released only when the last descriptor of that description closes, and the
-write end of the trace relay's lifetime pipe. **The worker marks both close-on-exec as
-its first act, before it starts any thread or forks anything**, so no organ inherits a
-writable descriptor to root's lock file or a write end that would keep the relay alive,
-and no window exists in which one could. The organs never hold the run lock, being bound
-to the worker by their death signal instead. **The instruments are perturbation**: an
-organ stand-in still running after the worker is killed with `SIGKILL`, watched to fail
-when the death signal is not set, and the run lock's description held in the worker's
-own descriptor table, read from outside after the enter and again after a turn, watched
-to fail when the worker closes the inherited descriptor and its table no longer shows
-it. The worker cannot open root's `0600` file anyway, so the watch is on the descriptor
-it inherited.
+otherwise leave a child the signal was armed too late to reach. The gate re-arms its own
+`SIGTERM` death signal after its exec, per `weaver-gate-Spec`, and the worker's death
+still ends it. **The signal follows the thread that forked, not the process**, so the
+worker forks its organs from its main thread, which lives for the process, and never
+from a thread that may end while the worker serves. **The worker exits after it answers
+left**, the run being its only purpose, so the run lock admin's `unload` waits on is
+released by its exit together with the member's and the relay's, per `weaver-admin-Spec`
+section 3. **Two descriptors cross the start step's exec into the worker and are the
+worker's to keep**, at the fixed numbers of `weaver-admin-Spec` sections 3 and 6: the
+run lock's open file description at descriptor 9, which it holds for its life and never
+passes on, a description lock being released only when the last descriptor of that
+description closes, and the write end of the trace relay's lifetime pipe at descriptor
+8. **The worker marks both close-on-exec as its first act, before it starts any thread
+or forks anything**, so no organ inherits a writable descriptor to root's lock file or a
+write end that would keep the relay alive, and no window exists in which one could. The
+organs never hold the run lock, being bound to the worker by their death signal instead.
+**An empty number is skipped and said**: a worker started by hand, or by a stack from
+before the start step, holds nothing at 9 and serves, and it names the absence on its
+standard error, as it names a 9 holding something other than a regular file, so a start
+step that failed to hand the lock across never serves silently. **The instruments are
+perturbation**: an organ stand-in still running after the worker is killed with
+`SIGKILL`, watched to fail when the death signal is not set, and the worker binary
+started with a stand-in lock's description at 9 and a pipe's write end at 8, its
+descriptor table read once it binds, from a user namespace the test owns so the
+non-dumpable worker's table needs no root: the lock is held by the worker alone, both
+numbers carry the close-on-exec flag, and both are released at its death. It is watched
+to fail when the worker closes 9, and the lock frees, and when the first act is dropped,
+and the flags are clear. The worker cannot open root's `0600` file anyway, so the watch
+is on the descriptor it inherited.
 
 ```graph
 node: harness-organs-die-with-the-worker

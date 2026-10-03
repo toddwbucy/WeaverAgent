@@ -75,8 +75,10 @@ pub const FIRST_ORGAN_DESCRIPTOR: RawFd = 3;
 /// step took before its first fork, per `weaver-admin-Spec` section 3 and
 /// `weaver-harness-Spec` section 2.2: one fixed number for every constituent,
 /// the worker, the state member and the trace relay alike, elected by the act
-/// that lands the start step. High enough that no organ end placed from 3
-/// upward reaches it.
+/// that lands the start step. An organ child may place its ends over 8 and 9,
+/// since `MAX_PLACED_ENDS` reaches 3 to 10, which is harmless: the worker's
+/// own 8 and 9 are close-on-exec, and a placement only replaces the child's
+/// copy of a number the exec would have closed anyway.
 pub const RUN_LOCK_DESCRIPTOR: RawFd = 9;
 
 /// Where the worker finds the write end of the trace relay's lifetime pipe,
@@ -97,10 +99,30 @@ pub const RELAY_LIFETIME_DESCRIPTOR: RawFd = 8;
 /// by a stack that predates the start step, is skipped: there is nothing to
 /// keep. Answers which of the two were held.
 pub fn keep_start_step_descriptors() -> (bool, bool) {
-    (
+    let held = (
         keep_close_on_exec(RUN_LOCK_DESCRIPTOR),
         keep_close_on_exec(RELAY_LIFETIME_DESCRIPTOR),
-    )
+    );
+    // **Said, never silent**: a worker serving without a run lock is one a
+    // later load cannot see, so its absence, or a number holding something
+    // other than a lock file, is named on stderr, the worker's log.
+    if !held.0 {
+        eprintln!(
+            "worker: no run lock at descriptor {RUN_LOCK_DESCRIPTOR}; not started by admin's \
+             start step, so no later load can see this worker"
+        );
+    } else if !is_regular_file(RUN_LOCK_DESCRIPTOR) {
+        eprintln!("worker: descriptor {RUN_LOCK_DESCRIPTOR} is not a regular file, not a run lock");
+    }
+    held
+}
+
+/// Whether the number holds a regular file, read by `fstat`.
+fn is_regular_file(fd: RawFd) -> bool {
+    // SAFETY: the borrow is used for one fstat and adopts nothing.
+    let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+    nix::sys::stat::fstat(borrowed)
+        .is_ok_and(|stat| stat.st_mode & nix::libc::S_IFMT == nix::libc::S_IFREG)
 }
 
 /// Marks one inherited number close-on-exec and leaves it open, answering

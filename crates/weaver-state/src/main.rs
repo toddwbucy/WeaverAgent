@@ -53,8 +53,17 @@ const RESPOND_WAIT_MS: u16 = 2_000;
 
 fn main() -> std::process::ExitCode {
     // **The first act**, per `weaver-state-Spec` section 2: the run lock's
-    // descriptor is marked close-on-exec and kept for the member's life.
-    keep_run_lock(RUN_LOCK_FD);
+    // descriptor is marked close-on-exec and kept for the member's life. Its
+    // absence is said, never silent: a member without it is one a later load
+    // cannot see.
+    if !keep_run_lock(RUN_LOCK_FD) {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "state_notice": "no run lock at descriptor 9: not started by admin's start step"
+            })
+        );
+    }
     member_entry(std::env::args().skip(1), FIRST_DOOR_FD)
 }
 

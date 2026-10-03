@@ -3658,9 +3658,9 @@ mod tests {
                 declaration: String::new(),
                 restore: None,
                 stack: Default::default(),
-                boundary: String::new(),
-                cause: weaver_types::Cause { uid: 0 },
-                library_path: None,
+                boundary: "b0b0".to_string(),
+                cause: weaver_types::Cause { uid: 1000 },
+                library_path: Some("/opt/weaver/lib".to_string()),
                 state_election: weaver_types::StateElection {
                     all_kinds: false,
                     keys: vec![weaver_types::ElectedKindConfig {
@@ -3676,7 +3676,7 @@ mod tests {
                     panic!("failed before the load: {refusal:?}")
                 }
             };
-            let _ = leave(&mut run, None);
+            let _ = leave(&mut run, Some(weaver_types::Cause { uid: 1001 }));
             drop(run);
 
             let held = std::fs::read_to_string(&sink_path).expect("the sink reads back");
@@ -3684,6 +3684,21 @@ mod tests {
                 serde_json::from_str(held.lines().next().expect("the load opens the run"))
                     .expect("the load parses");
             assert_eq!(load["kind"], "load");
+            // **Admin's three facts of 2026-10-03 land as the enter carried
+            // them**, per `weaver-trace-Spec` section 3, with a uid no
+            // fixture's stub could produce, and the leave's own cause lands
+            // on the unload. Perturbation: author the load's cause as uid 0
+            // or the unload's as absent and the matching assertion fails.
+            assert_eq!(load["payload"]["boundary"], "b0b0");
+            assert_eq!(load["payload"]["cause"], serde_json::json!({"uid": 1000}));
+            assert_eq!(load["payload"]["library_path"], "/opt/weaver/lib");
+            let unload: serde_json::Value = serde_json::from_str(
+                held.lines()
+                    .find(|line| line.contains("\"kind\":\"unload\""))
+                    .expect("the leave closes the bracket"),
+            )
+            .expect("the unload parses");
+            assert_eq!(unload["payload"]["cause"], serde_json::json!({"uid": 1001}));
             assert_eq!(
                 load["payload"]["residual_readout"],
                 serde_json::json!(elected),
@@ -4164,24 +4179,29 @@ mod tests {
                 &harness_end,
                 test_exchange(),
                 LifecycleDirective::Stop {
-                    cause: weaver_types::Cause { uid: 0 },
+                    cause: weaver_types::Cause { uid: 1000 },
                 },
                 None,
                 None,
             )
             .expect("stop dispatches");
 
-        // The close is in the record.
-        let closes = match &harness.state {
+        // The close is in the record, carrying the stop's own cause.
+        // Perturbation: author the directive's close with `cause: None` and
+        // the cause assertion fails.
+        let closes: Vec<String> = match &harness.state {
             ChannelState::Entered(run) => run
                 .recorder
                 .structure()
                 .expect("the serving record")
                 .by_kind(Kind::TurnClosed)
-                .count(),
+                .map(|record| record.line.to_string())
+                .collect(),
             _ => panic!("the position stays entered after a stop"),
         };
-        assert_eq!(closes, 1, "the turn's close event was placed");
+        assert_eq!(closes.len(), 1, "the turn's close event was placed");
+        let close: serde_json::Value = serde_json::from_str(&closes[0]).expect("parses");
+        assert_eq!(close["payload"]["cause"], serde_json::json!({"uid": 1000}));
 
         // ...and only then does the answer carry TurnAborted.
         let peer = peer_end.into_channel();
@@ -4231,6 +4251,15 @@ mod tests {
             stream.contains("\"kind\":\"unload\""),
             "the unwind closes the bracket with an unload: {stream}"
         );
+        // Nobody asked for this unload, so it names no cause.
+        let unload: serde_json::Value = serde_json::from_str(
+            stream
+                .lines()
+                .find(|line| line.contains("\"kind\":\"unload\""))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(unload["payload"].get("cause").is_none(), "{unload}");
         assert!(
             stream.contains("\"kind\":\"load\""),
             "and the run it closes is the one that opened: {stream}"
