@@ -13,7 +13,7 @@ conforms to.
 **Parent:** `weaver-harness-PRD`
 **Companion contract:** `weaver-harness-trace-contract`, written with this document
 **Editorial:** Per the Working Rules.
-**Landing PR:** #613
+**Landing PR:** #58
 
 ---
 
@@ -577,7 +577,7 @@ point by digest, the run, sequence and last turn it covers, whether the operator
 supplied it, where the offline builder made it from a record that record's session and
 the run and turn of its cut, and, apart from the lineage and whether or not a save point
 stands, where the agent's last run did not end in a clean unload that run and the
-reason, so a resume and a branch each say what they came from;
+reason, so a resume and a branch each say what they came from,
 and every load names the digests of the organ binaries that ran it, keyed by name, so a
 record is sufficient for its own conditions and the experiment deposits stop being where
 the stack is remembered. The record is the canonical form and a save point is a cache of
@@ -592,10 +592,10 @@ the agent's operator had written. **From this act the `load` event names the pro
 file's digest beside the declaration's**, as admin read both at the inventory, and never
 a path. The seated prefix the record carries is what the session ran under, which at a
 serving load is the file's, seated at every load on the operator's ruling of 2026-10-02
-on #58; the digest is the file's bytes as admin read them, so the two answer different
-questions and both are kept. Absence means a record
-older than the act and is read as the digest being unrecoverable, never as a default.
-`weaver-trace-Spec` section 3 carries the member.
+on #58, and the digest is the file's bytes as admin read them, so the two answer
+different questions and both are kept. Absence means a record older than the act and is
+read as the digest being unrecoverable, never as a default. `weaver-trace-Spec` section
+3 carries the member.
 
 **A replay under the wrong projection does not fail.** It lands, the loop asks,
 an answer comes back, and what the run produces is a plausible replay of a

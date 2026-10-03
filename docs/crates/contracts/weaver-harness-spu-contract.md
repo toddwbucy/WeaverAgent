@@ -9,7 +9,7 @@ exchanges that carry work arrive with the token workflow.
 **Document ID:** `weaver-harness-spu-contract`
 **Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
-**Landing PR:** #300
+**Landing PR:** #53
 
 ---
 

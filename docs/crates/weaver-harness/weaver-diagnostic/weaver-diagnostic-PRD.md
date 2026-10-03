@@ -8,7 +8,7 @@ terms under the per-charter rule of 2026-08-23, conforming to the pattern the
 **Document ID:** `weaver-diagnostic-PRD`
 **Parent:** `weaver-harness-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #586
+**Landing PR:** #53
 
 ---
 

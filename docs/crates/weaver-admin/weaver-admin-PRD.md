@@ -12,7 +12,7 @@ reshaped this charter are recorded in it rather than pending against it, and sec
 **External boundaries:** `weaver-admin-operator-contract` for the record's exit and
 `weaver-admin-systemd-contract` for the unit, both parties outside the program
 **Editorial:** Per the Working Rules.
-**Landing PR:** #505
+**Landing PR:** #57
 
 ---
 
@@ -674,16 +674,16 @@ a broken bracket is that consumer's reading over the operator's storage. The
 run-bracket fix an earlier version of this section carried, and the cell section 10
 held for it, dissolved the same day for want of a validator to enforce them.
 
-**Rollback is admin's own reap plus one directive, because admin built with its own
-acts plus one directive.** A refused fan-out is the harness's to unwind along the
-same seams it fanned out on, and what returns to admin is the refusal naming where it
-stopped. Admin's remaining obligations are its own: direct leave where a run was
-entered, stop the unit, and clear the unit where the manager reports it failed, so the
-operator's next load is not refused for a name the failed one still holds (the
-operator's ruling of 2026-10-01; no reload follows). Nothing durable of the program's exists to remove. Each
-of those can itself fail, and a rollback that cannot complete reports what it could
-not undo and does not publish any state, which is the same rule as a partial load
-and not a second one.
+**Rollback is admin's own reap plus one directive, because admin built with its own acts
+plus one directive.** A refused fan-out is the harness's to unwind along the same seams
+it fanned out on, and what returns to admin is the refusal naming where it stopped.
+Admin's remaining obligations are its own: direct leave where a run was entered, stop
+the unit, and clear the unit where the manager reports it failed, so the operator's next
+load is not refused for a name the failed one still holds (the operator's ruling of
+2026-10-01, and no reload follows). Nothing durable of the program's exists to remove.
+Each of those can itself fail, and a rollback that cannot complete reports what it could
+not undo and does not publish any state, which is the same rule as a partial load and
+not a second one.
 
 ## 6. The seams
 

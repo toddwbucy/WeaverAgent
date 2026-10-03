@@ -7,7 +7,7 @@ redeploy, where m1 and karl were made this way and proven to load; the log of th
 
 Every command runs from the WeaverAgent tree. `<name>` is the agent's name: a unix
 user, a database role, a database and a directory, so `create-agent.sh` takes
-lowercase letters and digits, 2 to 16 characters. Paths below are the defaults; a
+lowercase letters and digits, 2 to 16 characters. Paths below are the defaults, and a
 box's real values are in the stack record `/etc/weaver/stack/`, one file per key,
 which `bootstrap-stack.sh` wrote and the scripts read, and in each agent's own root
 `/etc/weaver/admin/<name>/`, which is all admin reads (`WEAVER_ADMIN_CONFIG` names
@@ -25,10 +25,10 @@ load where any piece is missing, so the pieces are made first and admin is asked
 | Territory | `<agent-directory>/weaver-<name>/`, the stack record's `agent-directory` (default `/var/lib/weaver-agent`, root 0755) | root:weaver-<name>-state 0710, not setgid: the member passes to its room, lists nothing, and no access entry is set |
 | State room (agents with a store) | `<territory>/state/`, where a sqlite store keeps its file | member 0700, unreachable by the agent's uid |
 | Trace group (agents with a store) | `weaver-<name>-trace`, the trace's readers: the operator, never the member | system group |
-| Trace sink | `<territory>/trace.ndjson` | made by create-agent before the first load, root:weaver-<name>-trace 0640, so the member cannot read it; admin opens it append-only at load and leaves its owner and mode alone |
-| Agent root, which is the admission | `/etc/weaver/admin/<name>/`: `worker-binary`, `spu-binary`, `gate-binary`, `run-tool`, `control-tool`, `coordination-root`, `unit-properties` (and `headroom-bytes`, `state-store-socket` where the stack record has them), copied from the stack record, plus `log-path` | root, directory 0755, files 0644; admin refuses a root that is not root-owned or is group- or world-writable |
+| Trace sink | `<territory>/trace.ndjson` | made by create-agent before the first load, root:weaver-<name>-trace 0640, so the member cannot read it, and admin opens it append-only at load and leaves its owner and mode alone |
+| Agent root, which is the admission | `/etc/weaver/admin/<name>/`: `worker-binary`, `spu-binary`, `gate-binary`, `run-tool`, `control-tool`, `coordination-root`, `unit-properties` (and `headroom-bytes`, `state-store-socket` where the stack record has them), copied from the stack record, plus `log-path` | root, directory 0755, files 0644, and admin refuses a root that is not root-owned or is group- or world-writable |
 | Declaration | `/etc/weaver/admin/<name>/agent.toml` | root, 0644 |
-| Operations log | `/var/log/weaver/<name>/admin.log`, named by `log-path` | directory root 0750; admin writes the file |
+| Operations log | `/var/log/weaver/<name>/admin.log`, named by `log-path` | directory root 0750, and admin writes the file |
 | Store (postgres election only) | role and database `weaver_<name>`, one `peer map=weaver` line in `pg_hba.conf`, one `weaver` map line in `pg_ident.conf` | postgres |
 
 The operator joins three groups: `weaver-<name>` for the gate's socket,
@@ -57,7 +57,7 @@ group in one shell.
 ## 2. An agent with a store
 
 `create-agent.sh` does the whole of section 0 and then proves the boundary. Plan
-first; the plan needs no sudo and prints exactly what apply will make.
+first. The plan needs no sudo and prints exactly what apply will make.
 
 ```sh
 deploy/create-agent.sh <name> --engine <sqlite|postgres> --artifact /opt/weaver/models/<artifact>
@@ -69,7 +69,7 @@ or `postgres`, either one the installed member carries. `none` is refused, and s
 makes that agent by hand.
 `--session` names the session the declaration opens, default `<name>-001`. `--spu
 <path>` gives this agent its own SPU, written as its root's `spu-binary` in place of
-the stack record's (the python SPU's zipapp, for instance); without it the agent
+the stack record's (the python SPU's zipapp, for instance), and without it the agent
 serves from the stack's.
 
 Apply stages the agent root under the dot-name `/etc/weaver/admin/.<name>.partial`,
@@ -84,7 +84,7 @@ The declaration the script writes is a working default: the artifact, `devices =
 a plain system identity, `permission-mode = "deny"`, an empty tool set, surprisal on,
 the sink in the territory, and the store's engine (with its database and role for
 postgres). Edit `/etc/weaver/admin/<name>/agent.toml` under sudo before validating if
-the agent wants another prompt, a wider context, or `ask`; the fields are in
+the agent wants another prompt, a wider context, or `ask`. The fields are in
 `docs/technical/weaver-agent/agent-declaration.md`, and nothing defaults, so an
 absent or misspelled key refuses the parse by name.
 
@@ -209,14 +209,15 @@ first.
 ## 7. Taking an agent down
 
 `deploy/decommission.sh` does not yet understand the per-agent layout and must not be
-run on a box on it until toddwbucy/WeaverAgent#35 lands. Take an agent down by hand: the pieces of section 0 are removed in reverse: unload; remove its root
-`/etc/weaver/admin/<name>/`, which ends its admission; for postgres, drop the database,
-then the role, and remove its two authentication lines; `userdel -r` both accounts, then
+run on a box on it until toddwbucy/WeaverAgent#35 lands. Take an agent down by hand,
+removing the pieces of section 0 in reverse. Unload. Remove its root
+`/etc/weaver/admin/<name>/`, which ends its admission. For postgres, drop the database,
+then the role, and remove its two authentication lines. `userdel -r` both accounts, then
 delete the three groups the operator was added to, which `userdel` leaves while a member
-remains and which a later `useradd --user-group` of the same name would refuse on;
-remove the territory and the log directory `/var/log/weaver/<name>/`. Archive the
-territory, the root and the log before removing them, since the trace is the one
-record of what the agent did and the log the one record of what was done to it.
+remains and which a later `useradd --user-group` of the same name would refuse on.
+Remove the territory and the log directory `/var/log/weaver/<name>/`. Archive the
+territory, the root and the log before removing them, since the trace is the one record
+of what the agent did and the log the one record of what was done to it.
 
 The groups, once both accounts are gone:
 

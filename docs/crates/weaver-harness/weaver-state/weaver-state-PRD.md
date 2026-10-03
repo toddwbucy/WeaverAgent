@@ -8,7 +8,7 @@
 **Companion contract:** `weaver-harness-state-contract`, owed by the act that opens
 the seam and named here so the seam cannot open without it.
 **Editorial:** Per the Working Rules.
-**Landing PR:** #740
+**Landing PR:** #58
 
 ---
 
@@ -216,7 +216,7 @@ the tee fed. **The door is also where the trace reaches a rebuild**, the member 
 reading the record itself: the builder lands the whole record's distillates through
 this door, per section 4, honouring every reset the record names, and writes a save
 point a load restores. No tail
-replays on top of a save point by default; a tail landing on a stamped position is a
+replays on top of a save point by default. A tail landing on a stamped position is a
 door the contract does not yet say, and section 5 names that contract as owed.
 
 The nesting under `weaver-harness` carries domain membership and nothing else,
@@ -338,22 +338,22 @@ is a file of the whole store, stamped with the trace position it covers, the run
 sequence of the last distillate in it, and **never overwritten**: each is its own file,
 and the operator keeps, deletes or archives them. One is taken at every serving unload,
 and one on demand, a diagnostic binding taking none because its holdings are a replay
-and not the agent's state, when the harness asks; who triggers an on-demand save point,
+and not the agent's state, when the harness asks. Who triggers an on-demand save point,
 the loop on a setting, a later admin verb or WeaverWeb through admin-con under a role,
 is later work, and the primitive supports the ask. **A load restores a chosen save
 point, the latest by default**, chosen through the declaration's existing `restore`
 member pointed at a save point, data in `agent.toml`, so admin's verbs and answers stay
 as they are. **After an unclean stop, the load resets to the latest known-good save
-point**, and the reset is recorded on the trace, so a full rebuild honours it; there is
-no tail replay by default. **With no save point, state is rebuilt from the trace**, by
-the offline builder landing every distillate the record holds through the preload door
-of section 3 and writing a save point the next load restores, so deleting save points
-never loses state while the record stands, and a fresh state is a new agent, per the
-seventh question. **Taking, restoring and resetting each author a trace event**, which
-save point by digest and which position, per the fourth question, so the record says
-where state came from. A restore and a full rebuild to the same position arrive at the
-same holdings by construction, the save point being a cache of what the replay produces,
-and `weaver-state-Spec` section 5 names the instrument that holds them equal.
+point**, and the reset is recorded on the trace, so a full rebuild honours it, and there
+is no tail replay by default. **With no save point, state is rebuilt from the trace**,
+by the offline builder landing every distillate the record holds through the preload
+door of section 3 and writing a save point the next load restores, so deleting save
+points never loses state while the record stands, and a fresh state is a new agent, per
+the seventh question. **Taking, restoring and resetting each author a trace event**,
+which save point by digest and which position, per the fourth question, so the record
+says where state came from. A restore and a full rebuild to the same position arrive at
+the same holdings by construction, the save point being a cache of what the replay
+produces, and `weaver-state-Spec` section 5 names the instrument that holds them equal.
 
 **A live restore swaps state without unloading**, on the operator's ruling of
 2026-10-02.
@@ -361,7 +361,7 @@ State lives in this member's process, apart from the models, so a save point res
 while the agent stays loaded: the member's in-memory store is replaced from it, the SPU
 stays resident with its decoder and classifier untouched, and the hot KV cache is
 flushed with `keep = 0` through `weaver-harness-spu-decode-contract`'s existing cut,
-which clears everything but the identity prefix, permanent from open to release; the
+which clears everything but the identity prefix, permanent from open to release, and the
 next turn's context comes from the restored state. A larger cut that keeps a prefix the
 save point and the live context share is the loop's choice through the same two calls,
 later. A save point that needs a different system prompt cannot be served by a flush:
@@ -369,7 +369,7 @@ it needs the SPU session closed and reopened with the new prefix, one prefix rec
 with the weights resident, never a model reload. The trace records the restore, by
 digest, and the flush. **The harness triggers a live restore**, on the operator's ruling
 of 2026-10-02 on #58, through the `restore` ask of `weaver-harness-state-contract`
-section 2, and flushes on its answer; the channel that carries the operator's demand to
+section 2, and flushes on its answer. The channel that carries the operator's demand to
 the loop is later work.
 
 **An edited save point is an input, not derived state.** A save point the operator edits
@@ -420,7 +420,7 @@ operator's directory, the latest by default or the one `restore` names, an edite
 included, and hands the member the open descriptor at spawn, exactly as it opens the
 trace sink and hands it down, and for the same reasons. **A live restore reads the
 member's own room**, the save point the member itself wrote and still holds, with no
-admin; a save point that is only in the operator's directory restores at a load. The
+admin. A save point that is only in the operator's directory restores at a load. The
 member sees its own room and a descriptor and never the operator's path, and the agent
 never reaches either.
 

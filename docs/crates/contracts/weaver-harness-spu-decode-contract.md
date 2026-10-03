@@ -11,7 +11,7 @@ and neither document restates the other.
 **Document ID:** `weaver-harness-spu-decode-contract`
 **Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
-**Landing PR:** #393
+**Landing PR:** #53
 
 ---
 

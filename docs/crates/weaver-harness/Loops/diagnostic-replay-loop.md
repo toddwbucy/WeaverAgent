@@ -8,7 +8,7 @@ charters, and a graph block here would duplicate a record that already has a hom
 **Document ID:** `diagnostic-replay-loop`
 **Parent:** `weaver-harness-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #650
+**Landing PR:** #58
 
 ---
 
