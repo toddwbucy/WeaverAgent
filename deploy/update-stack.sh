@@ -20,6 +20,7 @@
 # this diffs deployed against built and installs only what differs.
 set -euo pipefail
 
+ORIGINAL_ARGS=("$@")
 INSTALL=0
 [ "${1:-}" = "--install" ] && INSTALL=1
 
@@ -391,7 +392,11 @@ for agent in $AGENTS; do
   [ "$rc" -eq 0 ] && [ "$kind" = file ] || continue
   sink=$(declared "$decl" trace-sink.path string) || die "$agent: the declaration's trace-sink.path does not read"
   [ -e "$sink" ] || [ -L "$sink" ] || continue
-  read -r t_owner t_group t_mode t_type < <(stat -c '%u %G %a %F' -- "$sink" 2>/dev/null) \
+  # The type by predicate, never by `%F`'s words, which call a zero-byte file
+  # "regular empty file" (Codex on #82).
+  t_type="regular file"
+  { [ -f "$sink" ] && [ ! -L "$sink" ]; } || t_type="not a regular file"
+  read -r t_owner t_group t_mode < <(stat -c '%u %G %a' -- "$sink" 2>/dev/null) \
     || die "$agent: cannot read its trace $sink as $OPERATOR_NAME, so whether it stands as #62 requires is unknown"
   if [ "$t_type" != "regular file" ] || [ "$t_owner" != 0 ] || [ "$t_group" != "weaver-$agent-trace" ] || [ "$t_mode" != 640 ]; then
     die "$agent: its trace $sink stands as uid $t_owner, group $t_group, mode $t_mode ($t_type), and the admin this installs refuses a trace not root's, grouped weaver-$agent-trace and 0640 (#62). Re-lay it first: sudo chgrp weaver-$agent-trace $sink && sudo chmod 0640 $sink (deploy/REDEPLOY.md section 8)"
@@ -415,6 +420,15 @@ else
 fi
 AFTER=$(git rev-parse --short HEAD)
 printf '  %s -> %s\n' "$BEFORE" "$AFTER"
+# **The run checks with the code it installs** (Codex on #82): a fast-forward
+# that moved HEAD has changed this very script, and the checks above ran from
+# the copy that started, so the fetched copy runs the whole plan again, once.
+# The very first upgrade to a script carrying this re-execution runs the old
+# copy; REDEPLOY.md section 8 has the operator pull main first for that reason.
+if [ "$BEFORE" != "$AFTER" ] && [ -z "${WEAVER_UPDATE_REEXECUTED:-}" ]; then
+  printf '  the tree moved, so the fetched update-stack.sh runs the plan again\n'
+  exec env WEAVER_UPDATE_REEXECUTED=1 bash "$REPO/deploy/update-stack.sh" "${ORIGINAL_ARGS[@]}"
+fi
 # **A commit names what is installed only if the tree matches it.** Any
 # uncommitted edit, a hand-changed source or a lock cargo repaired on its way
 # past, installs under this commit's name and the closing line says the box

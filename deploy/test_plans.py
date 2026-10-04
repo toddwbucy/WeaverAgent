@@ -28,14 +28,13 @@ if name == 'stat':
     # tester's, so the ownership `held_closed` judges is answered as uid 0
     # for anything under the fixture and read from the file itself elsewhere;
     # the mode is always the file's own. Not logged: it is a look, not a call.
-    if args[:1] == ['-c'] and args[1] == '%u %G %a %F':
+    if args[:1] == ['-c'] and args[1] == '%u %G %a':
         # The trace's look: root under the fixture, its group what the test
-        # names, its mode and type the file's own.
+        # names, its mode the file's own.
         path = pathlib.Path(args[-1])
         st = os.lstat(path)
-        kind = 'regular file' if path.is_file() and not path.is_symlink() else 'other'
         print(0 if path.is_relative_to(root) else st.st_uid, os.environ.get('TRACE_GROUP_AS', 'nobody-group'),
-              format(st.st_mode & 0o7777, 'o'), kind)
+              format(st.st_mode & 0o7777, 'o'))
         sys.exit(0)
     if args[:1] == ['-c'] and args[1] == '%u %a':
         path = pathlib.Path(args[-1])
@@ -1284,6 +1283,20 @@ esac
         result = self.run_script("update-stack.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("every file sink stands as the territory lays it out", result.stdout)
+        # The trace is empty, as a freshly provisioned one is, and still passes:
+        # its type is asked by predicate, never by stat's words for it.
+        self.assertEqual(trace.stat().st_size, 0)
+
+    def test_stack_runs_the_fetched_copy_after_its_fast_forward(self):
+        # Codex on #82: the checks run from the copy that started, so a
+        # fast-forward that moved HEAD re-executes the fetched script once.
+        # Perturbation: drop the re-execution, or its guard, and this fails.
+        text = (self.repo / "deploy" / "update-stack.sh").read_text()
+        after = text.index('AFTER=$(git rev-parse --short HEAD)')
+        reexec = text.index('exec env WEAVER_UPDATE_REEXECUTED=1 bash "$REPO/deploy/update-stack.sh" "${ORIGINAL_ARGS[@]}"')
+        self.assertLess(after, reexec)
+        self.assertIn('[ "$BEFORE" != "$AFTER" ] && [ -z "${WEAVER_UPDATE_REEXECUTED:-}" ]', text)
+        self.assertLess(text.index('ORIGINAL_ARGS=("$@")'), text.index('INSTALL=0'))
 
     def test_stack_reads_each_declaration_from_its_directory(self):
         # The declaration lives in the directory the root names. One the

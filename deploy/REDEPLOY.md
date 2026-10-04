@@ -351,7 +351,10 @@ install prefix, `/opt/weaver` by default.
    write `library-path` with the install's library directory (`<prefix>/lib`), root
    0644.
 
-6. **Install** with `deploy/update-stack.sh --install`, which now installs
+6. **Pull main first** (`git pull --ff-only` on `main`), so the `update-stack.sh` that runs
+   carries the checks of the stack it installs, the trace preflight of step 3 among
+   them. A script from before that re-executes itself after its fast-forward would run
+   its old checks. Then **install** with `deploy/update-stack.sh --install`, which now installs
    `weaver-trace-relay`, then validates, loads and reads back every agent before it
    reports the box current. Run `sudo deploy/verify-load.sh <a>` for each agent to
    check its constituents. The old per-agent logs `/var/log/weaver/<a>/admin.log` stay
