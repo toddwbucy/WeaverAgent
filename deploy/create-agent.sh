@@ -625,11 +625,12 @@ say "territory"
 # directory. The territory is root's, grouped to the member, 0710 and not
 # setgid: the member may pass to its room but not list, and nothing written
 # here takes the member's group. The trace is made here, before the first load,
-# root:$TRACE_GROUP 0640: admin opens an existing sink append-only and leaves
-# its owner and mode alone, so the member, outside that group, cannot read it,
-# and the operator reads it through the group. Were the file ever removed,
-# admin recreates it root:root 0640, which fails closed. The agent's uid, in no
-# group of either, cannot enter. The state subdirectory is the member's own.
+# root:$TRACE_GROUP 0640, the layout admin checks at every load (#62): admin
+# opens it append-only, never through a link, and refuses a trace that stands
+# otherwise, so the member, outside that group, cannot read it, and the
+# operator reads it through the group. Were the file ever removed, admin
+# recreates it at this same layout where the declaration elects creation. The
+# agent's uid, in no group of either, cannot enter. The state subdirectory is the member's own.
 sudo install -d -o root -g "$MEMBER_USER" -m 0710 "$HOME_DIR"
 sudo install -o root -g "$TRACE_GROUP" -m 0640 /dev/null "$HOME_DIR/trace.ndjson"
 sudo install -d -o "$MEMBER_USER" -g "$MEMBER_USER" -m 0700 "$STATE_DIR"

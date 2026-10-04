@@ -941,7 +941,11 @@ fn run_load(
         });
     };
     let inventory = take_inventory(config, agent)?;
-    let sink = sink::open(&inventory.config.trace_sink)?;
+    let custody = sink::FileCustody {
+        owners: vec![0, nix::unistd::geteuid().as_raw()],
+        trace_group: format!("{}-trace", inventory::identity_for(agent)),
+    };
+    let sink = sink::open(&inventory.config.trace_sink, &custody)?;
     standing.sink_opened = true;
     let account = AgentAccount::resolve(&inventory.identity)?;
     start::prepare_runtime_directory(

@@ -1052,14 +1052,28 @@ branches. An act earlier that date scoped this section to a serving binding on
 a reading the same day's ruling replaced, and the scoping is withdrawn rather
 than narrowed: a diagnostic sink is a sink.
 
-**`File { path, create }`.** Opened write-only with `O_APPEND`, `O_CLOEXEC`,
-and, when the flag is set, `O_CREAT` at mode 0640, owned by root, which is the
-custody of charter section 7.
-Append-only rides the open file description, verified: a duplicate of the
-descriptor carries the flag, so the worker's copy appends wherever it
-writes, which is what `weaver-trace-Spec` section 7 relies on from the far
-side. The instrument is review, the verification being a fact about the
-kernel read once rather than a property this crate's own suite can perturb.
+**`File { path, create }`.** Judged before it is opened and after, on #62: a trace the
+member could replace, or a link root would follow, would hand the worker a file other
+than the record, and since #80 the relay would read that file back out to the trace
+reader. **The trace's directory is judged first**: resolved once, owned by root or the
+admin principal and writable by no group or other, the territory's 0710 pass-through for
+the member's group being no write, and every directory above it held by section 9's
+rule. **The open goes through that directory** write-only with `O_APPEND`, `O_CLOEXEC`,
+`O_NOFOLLOW` and `O_NONBLOCK`, so a link at the trace's name refuses and a FIFO there
+never blocks, and the descriptor must be a regular file. **An existing trace stands as
+the territory lays it out** (#56): owned by root or the admin principal, grouped to
+`weaver-<agent>-trace`, mode 0640, and any other is a trace replaced or never
+provisioned, which refuses rather than being appended to. Where the flag is set and no
+trace stands, admin creates it exclusively (`O_CREAT|O_EXCL`) and gives it that layout,
+so the next load finds it as provisioning would have. Every refusal here is
+`BoundaryUnverified`, naming the path on stderr, and an absent trace without the flag
+stays `DescriptorsUnusable`. This is the custody of charter section 7. The relay's
+read-only reopen goes through `/proc/self/fd` of this judged descriptor, per section 6,
+and never through the path. Append-only rides the open file description, verified: a
+duplicate of the descriptor carries the flag, so the worker's copy appends wherever it
+writes, which is what `weaver-trace-Spec` section 7 relies on from the far side. The
+instrument is review, the verification being a fact about the kernel read once rather
+than a property this crate's own suite can perturb.
 
 ```graph
 node: admin-sink-file-append-only
@@ -2067,40 +2081,40 @@ it names and nothing shared with any other agent. `WEAVER_ADMIN_CONFIG` names th
 sudo the variable never arrives, sudo's environment reset stripping it and the rule
 keeping nothing, so a delegated invocation always reads the default base, and a box that
 installs elsewhere is one the sudo rule cannot drive until the rule names the binary's
-own default. The
-name is judged before the path is built, per section 4, so `.`, `..` and any name
-carrying `/` never reach the base. **The root existing is the admission**: no root, or a
-root that is not a directory, answers `NoSuchAgent`, and the look does not follow a link
-at the root itself. **The root must be root's and closed to every other writer**, owned
-by uid 0 and neither group- nor world-writable, or the invocation refuses
-`BoundaryUnverified` before a value is read, since what the root names runs under the
-agent's identity and a root another principal could write would hand that principal the
-agent. **Every entry of the root is held closed the same way**: a regular file, never a
-link, owned by uid 0 and writable by no group or other, or the invocation refuses
-`BoundaryUnverified`, since the values name programs this invocation runs as root and a
-directory's own mode stops neither a writable file inside it nor a link leading out.
-**Every directory above the root is held closed too**, as sshd's StrictModes judges a
-path. The root is resolved once to its canonical path. Each directory from its parent up
-to `/` must be owned by uid 0 and writable by no group or other, unless its sticky bit is
-set, which keeps another principal from renaming an entry it does not own. Otherwise the
-invocation refuses `BoundaryUnverified`, naming the directory on stderr. A directory
-another principal could write would let it rename the judged root away and stand its own
-in its place between the judgment and the reads. Every read then goes through that
-canonical root, never a pathname re-resolved after the judgment. **The deploy scripts
-are bound by the same judgments before they commit**: `create-agent.sh`,
-`bootstrap-stack.sh` and `verify-load.sh` apply this rule (`held_closed`), and any
-judgment admin gains here is one they must apply before they provision, publish or run
-a root, so that no script leaves a root admin then refuses or runs a program admin
-would not. **The line those judgments hold is another principal's choice.** The
-operator runs every script and holds root, so a value the operator supplies (the
-environment, the arguments, the build, a directory under the operator's own home) is
-the operator's own choice and not an escalation. A defect is a root step acting on a
-value another principal can choose: an agent's account, its state member's account,
-any other local user, or a root-owned path re-pointed through a directory such a
-principal can write. Every such value is judged before the step, by this section's
-rule, by admin's own answer, or by reading it as the principal that owns it. Every
-value below is read from the root before any verb, and a value that fails to read fails
-the invocation as `ConfigInvalid` with no field.
+own default. The name is judged before the path is built, per section 4, so `.`, `..`
+and any name carrying `/` never reach the base. **The root existing is the admission**:
+no root, or a root that is not a directory, answers `NoSuchAgent`, and the look does not
+follow a link at the root itself. **The root must be root's and closed to every other
+writer**, owned by uid 0 and neither group- nor world-writable, or the invocation
+refuses `BoundaryUnverified` before a value is read, since what the root names runs
+under the agent's identity and a root another principal could write would hand that
+principal the agent. **Every entry of the root is held closed the same way**: a regular
+file, never a link, owned by uid 0 and writable by no group or other, or the invocation
+refuses `BoundaryUnverified`, and a stray entry, a subdirectory among them, refuses
+every verb, `show` included, rather than being reported and passed over (#62), since the
+values name programs this invocation runs as root and a directory's own mode stops
+neither a writable file inside it nor a link leading out. **Every directory above the
+root is held closed too**, as sshd's StrictModes judges a path. The root is resolved
+once to its canonical path. Each directory from its parent up to `/` must be owned by
+uid 0 and writable by no group or other, unless its sticky bit is set, which keeps
+another principal from renaming an entry it does not own. Otherwise the invocation
+refuses `BoundaryUnverified`, naming the directory on stderr. A directory another
+principal could write would let it rename the judged root away and stand its own in its
+place between the judgment and the reads. Every read then goes through that canonical
+root, never a pathname re-resolved after the judgment. **The deploy scripts are bound by
+the same judgments before they commit**: `create-agent.sh`, `bootstrap-stack.sh` and
+`verify-load.sh` apply this rule (`held_closed`), and any judgment admin gains here is
+one they must apply before they provision, publish or run a root, so that no script
+leaves a root admin then refuses or runs a program admin would not. **The line those
+judgments hold is another principal's choice.** The operator runs every script and holds
+root, so a value the operator supplies (the environment, the arguments, the build, a
+directory under the operator's own home) is the operator's own choice and not an
+escalation. A defect is a root step acting on a value another principal can choose: an
+agent's account, its state member's account, any other local user, or a root-owned path
+re-pointed through a directory such a principal can write. Every such value is judged
+before the step, by this section's rule, by admin's own answer, or by reading it as the
+principal that owns it. Every value below is read from the root before any verb, and a
+value that fails to read fails the invocation as `ConfigInvalid` with no field.
 
 **The root holds one file per key.** Required: `worker-binary`, `spu-binary`,
 `gate-binary`, `coordination-root`, `declaration-directory`, `operator` and
