@@ -18,11 +18,16 @@ process or a network boundary, never linked:
 - `toddwbucy/WeaverAnalysis`, the analytical tools over the trace, driver and reader of
   the diagnostic record. Out of this tree's boundary; its Spec forbids any `weaver-*`
   dependency.
-- `toddwbucy/WeaverWeb`, the fleet: it connects to many agents and manages them. Its
-  connectors (gate-con and admin-con) run beside each agent as their own service users,
-  are WeaverWeb's and never this repository's, start under the operator's provisioning
-  and never under admin, and reach the agent only through its two doors. The role map
-  that bounds them is the box's (toddwbucy/WeaverTools#6).
+- `toddwbucy/WeaverWeb`, the fleet: it connects to many agents and manages them,
+  orchestrating the primitives this repository exposes. Its connectors (gate-con and
+  admin-con) run beside each agent as their own service users, one of each per agent.
+  They are WeaverWeb's and never this repository's, and they start under the operator's
+  provisioning, never under admin. Gate-con reaches the gate's socket. Admin-con issues
+  admin's fixed command lines through the box's strict sudo rule and, where the trace
+  sink is a file, reads the trace door. The agent's lifetime is bound to its
+  admin-con, so the agent fails closed when admin-con stops (#72,
+  toddwbucy/WeaverWeb#15). The role map that bounds them is the box's
+  (toddwbucy/WeaverTools#6).
 
 The rule that drew the line: a crate a consumer meets across a network boundary gets its
 own repository; the agent keeps everything interior. The suite-level documentation
@@ -58,15 +63,27 @@ behind a boundary the kernel enforces.
 
 ## Architecture
 
-A deployed agent is four processes on one machine, and its own `weaver-admin`, the
-agent's lifecycle driver and management plane, which runs per verb as root and is not
-resident while the agent serves. Every organ is one agent's own: a second agent gets its
+A deployed agent is a set of processes on one machine, with the declaration electing
+which ones stand. Admin's start step stands the worker, and the state member and the
+trace relay where the declaration elects them. The worker forks the SPU, the gate and
+any further organs the declaration names. `weaver-admin-Spec` section 6 and
+`weaver-harness-Spec` section 2 are the authority on the exact set, and this file
+does not count it. Beside them stands its own `weaver-admin`, the
+agent's lifecycle driver and management plane. Admin runs per verb as root, from the
+operator's root shell or, for admin-con, through a strict sudo rule that grants fixed
+command lines with no caller-chosen argument, and is not resident while the agent
+serves. No supervisor is part of the agent. By the Spec
+merged in #72 (2026-10-03), the agent leaves systemd: admin's start step does custody
+itself, and restart or hardening belongs to whoever packages the agent. The code
+landed in #75, #77, #80 and #79. The verbs
+are the application layer's primitives, and their orchestration is interior to the
+agent. Every organ is one agent's own: a second agent gets its
 own set, and managing several agents belongs to WeaverWeb or a separate application, not
 to admin (operator's ruling of 2026-10-01). Every seam that crosses a process
 line is a Unix domain socket, and there is no listening network socket anywhere.
 
 ```text
-                weaver-admin  (the agent's management plane: loads, unloads; one unit)
+                weaver-admin  (the agent's management plane: per verb, as root)
                       |
    world --> weaver-gate --> [ worker: weaver-harness + weaver-trace + weaver-diagnostic ]
                                    |                 |
@@ -76,8 +93,9 @@ line is a Unix domain socket, and there is no listening network socket anywhere.
 
 - **`weaver-harness`** is the content-neutral switchboard: it holds the sockets, routes
   between organs, authors the trace, and holds no opinion about content. Its
-  `src/bin/worker` is the composition root that becomes a systemd unit;
-  `src/bin/pyworker` (feature `pyworker`, links pyo3) runs a loop written in Python.
+  `src/bin/worker` is the composition root, run under the agent's uid by admin's start
+  step, and `src/bin/pyworker` (feature `pyworker`, links pyo3) runs a loop written in
+  Python.
   Loops are workflow documents under `docs/crates/weaver-harness/Loops/`, not code in
   the switchboard.
 - **`weaver-trace`** writes the record, one event per line in canonical form, and tees
@@ -96,8 +114,9 @@ line is a Unix domain socket, and there is no listening network socket anywhere.
   on the ruling of 2026-10-02, and leaves the code in a later act.
 - **`weaver-admin`** is one agent's organ, invoked by the operator per verb: it reads only
   that agent's config root `<base>/<agent>/` (base from `WEAVER_ADMIN_CONFIG`, default
-  `/etc/weaver/admin`), stands its unit, opens its trace sink and hands it to the worker,
-  and names its SPU by that root's `spu-binary`.
+  `/etc/weaver/admin`), opens its trace sink and hands it to the worker, and names its
+  SPU by that root's `spu-binary`. Its start step takes the run lock and stands the
+  agent's processes as the declaration elects them (Spec section 6, #72).
 - **`weaver-internal`** holds internal tools that run inside the loop (the calculator).
   A tool that binds a listening port is external and reaches the agent through the gate;
   one that does not is internal.
@@ -219,11 +238,14 @@ with the trace in its own group (#56); small fixes are #39. The scripts are
 `decommission.sh`, and `deploy/turn.py <agent> "<text>"` sends one turn through a
 loaded agent's gate as the operator's uid with no sudo. The installed stack lives under
 `/etc/weaver/admin/<agent>/` (each agent's config root), `/etc/weaver/stack/` (the
-scripts' record of the install, which admin never reads), `<prefix>/bin` and
-`/var/log/weaver`; each agent is a systemd unit
-`weaver-worker@<agent>.service` under its own OS user. Run logs of redeploys are kept
-under `docs/project/redeploy-*.md`. The thinkpad runs a stack built from this tree at
-the split and completes turns through the gate (2026-09-30 15:33).
+scripts' record of the install, which admin never reads) and `<prefix>/bin`. Each
+agent's declaration, `admin.log` and `worker.log` (and its prompt, once #76 lands) live
+in the directory the root's `declaration-directory` names, by default the operator's
+`~/.weaveragent/<agent>/`. Each agent runs under its own OS user, started by admin's
+start step, with no systemd unit. `create-agent.sh` writes the connector's strict sudo
+rule. Taking down a single agent is still by hand (#35). A box installed before #50
+migrates by `REDEPLOY.md` section 8, which is the thinkpad's case, since it runs a stack
+built at the split. Run logs of redeploys are kept under `docs/project/redeploy-*.md`.
 
 ### Reading command output
 
