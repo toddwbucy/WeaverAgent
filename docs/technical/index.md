@@ -91,9 +91,12 @@ contracts are enough to build against.
 
 - weaver-web - the channel, the lifecycle view, and the live trace view. It is its
   own repository, toddwbucy/WeaverWeb, since 2026-09-26, and reaches an agent only
-  through its two connectors: gate-con at the gate, and admin-con, which will reach
-  admin's lifecycle and trace sockets, admitted by role, once WeaverAgent#50 lands.
-  Neither stands in this snapshot, and WeaverWeb holds no sudo path to admin.
+  through its two connectors: gate-con at the gate, and admin-con, which runs the
+  agent's fixed `weaver-admin` command lines with `sudo -n` through a strict sudo rule
+  the operator installs (nothing taken from the caller, the rule's lines its ceiling)
+  and reads the trace through the relay admin starts for a file sink, admitting one
+  declared reader (WeaverAgent#50). Neither connector stands in this snapshot, and
+  WeaverWeb itself invokes admin nowhere.
 
 ## The diagnostic domain
 
