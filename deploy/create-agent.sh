@@ -805,5 +805,5 @@ if [ "$ADMIN_BASE" = /etc/weaver/admin ]; then
   fi
 fi
 printf '   validate it before loading:\n'
-printf '     sudo WEAVER_ADMIN_CONFIG=%s %s validate %s\n' "$ADMIN_BASE" "$ADMIN_BINARY" "$NAME"
+printf '     sudo WEAVER_ADMIN_CONFIG=%q %q validate %s\n' "$ADMIN_BASE" "$ADMIN_BINARY" "$NAME"
 printf '   then: sudo deploy/verify-load.sh %s\n' "$NAME"

@@ -406,7 +406,11 @@ for agent in $AGENTS; do
     die "$agent: its trace $sink is not a regular file (a link or another entry), and the admin this installs refuses it (#62). Remove it and provision the trace as create-agent.sh lays it out, root:weaver-$agent-trace 0640 (deploy/REDEPLOY.md section 8). No command is given for it: chown and chmod would follow a link."
   fi
   if [ "$t_owner" != 0 ] || [ "$t_group" != "weaver-$agent-trace" ] || [ "$t_mode" != 640 ]; then
-    die "$agent: its trace $sink stands as uid $t_owner, group $t_group, mode $t_mode, and the admin this installs refuses a trace not root's, grouped weaver-$agent-trace and 0640 (#62). Re-lay it first: sudo chown root:weaver-$agent-trace $sink && sudo chmod 0640 $sink (deploy/REDEPLOY.md section 8)"
+    # The path is shell-quoted in the printed command, so a path holding a
+    # space, a glob or a substitution is copied as one word and runs nothing
+    # (Codex on #82).
+    quoted=$(printf '%q' "$sink")
+    die "$agent: its trace $sink stands as uid $t_owner, group $t_group, mode $t_mode, and the admin this installs refuses a trace not root's, grouped weaver-$agent-trace and 0640 (#62). Re-lay it first: sudo chown root:weaver-$agent-trace -- $quoted && sudo chmod 0640 -- $quoted (deploy/REDEPLOY.md section 8)"
   fi
 done
 printf '  traces        every file sink stands as the territory lays it out\n'

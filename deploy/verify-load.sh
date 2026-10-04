@@ -179,7 +179,7 @@ if [ -n "$FAULT" ]; then
   die "$AGENT: $FAULT, so the run is unloaded"
 fi
 if [ "$KEEP" -eq 1 ]; then
-  plan "left serving; unload with: sudo WEAVER_ADMIN_CONFIG=$ADMIN_BASE $ADMIN unload $AGENT"
+  plan "left serving; unload with: sudo WEAVER_ADMIN_CONFIG=$(printf '%q' "$ADMIN_BASE") $(printf '%q' "$ADMIN") unload $AGENT"
 else
   plan "unload      $(admin unload "$AGENT" | tail -1)"
   # **Nothing of the run is left**: no recorded constituent still stands under

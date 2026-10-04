@@ -1270,13 +1270,22 @@ esac
         # plan refuses it before the build, naming the re-lay. Perturbation:
         # drop the preflight, and the run reaches the build.
         decl = self.operator_home / ".weaveragent" / "existing" / "agent.toml"
-        trace = self.root / "agents" / "trace.ndjson"
+        # A path holding a space and a substitution, which a TOML string
+        # carries and the printed command must quote.
+        trace = self.root / "agents" / "a trace $(id).ndjson"
         trace.write_text("")
         trace.chmod(0o640)
         decl.write_text(f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "file"\npath = "{trace}"\ncreate = true\n')
         result = self.run_script("update-stack.sh")
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("Re-lay it first: sudo chown root:weaver-existing-trace", result.stderr)
+        # The printed command names the path as one shell word, so a path
+        # holding a space or a substitution runs nothing when copied.
+        # Perturbation: print the path verbatim, and the quoted form is absent.
+        import shlex as _shlex
+        printed = result.stderr.split("Re-lay it first: ", 1)[1].split(" (deploy/REDEPLOY.md")[0]
+        words = _shlex.split(printed)
+        self.assertEqual(words.count(str(trace)), 2, printed)
         self.assertFalse(any(c[:2] == ["cargo", "build"] for c in self.calls()))
         self.log.unlink(missing_ok=True)
         self.env["TRACE_GROUP_AS"] = "weaver-existing-trace"
