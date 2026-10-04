@@ -81,8 +81,8 @@ to running the admin binary as root. The answer is not a deployment fact: Weaver
 invokes admin nowhere, its earlier sudo path having been deleted, and only its admin-con
 connector will reach the verbs, running the agent's fixed `weaver-admin` command lines
 through a strict sudo rule the operator installs, on the operator's rulings of
-2026-10-03 on WeaverAgent#50. The operator contract carries those lines once the #50
-Spec act merges.
+2026-10-03 on WeaverAgent#50. The operator contract carries those lines, as the #50 Spec
+act (WeaverAgent#72) wrote them.
 
 ### weaver-gate-world-contract
 

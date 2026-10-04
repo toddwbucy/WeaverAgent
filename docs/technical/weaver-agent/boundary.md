@@ -24,10 +24,13 @@ prompt, the state-management settings, the elections and the save point it came 
 - **The agent's OS identity:** its users, groups, territory and modes.
 - **The gate's allow-list:** today it sits in the declaration, where admitting a
   connector moves the digest. It is proposed to move to the root as boundary (#61).
-- **Admin's two sockets,** lifecycle and trace, admitted by peer credential against the
-  per-agent role list `roles.toml` (#50, #63).
-- **Trace custody:** the trace group, the trace socket, and opening without following
-  links (#56, #62).
+- **The two doors admin offers a connector** (#50). The agent's fixed `weaver-admin`
+  command lines, run through a strict sudo rule that names the connector's own user and
+  takes nothing from the caller, the cause recorded being the uid sudo reports. And the
+  trace relay's door for a file sink, admitting the one reader `roles.toml` declares. No
+  socket of admin's stands, and the agent fails closed with its connector.
+- **Trace custody:** the trace group, the relay's door, and opening the trace through a
+  judged directory without following links (#56, #62).
 - **The connectors:** each is one agent's own appendage and runs as its own user
   (toddwbucy/WeaverTools#6).
 - **The operator's directory and the `operator` uid** (#57).

@@ -51,7 +51,11 @@ property it only confirms.
 **Authorization of lifecycle intent.** Whether this operator may run this verb
 against this agent - settled before anything is touched, the agent named as a
 name rather than a path and admitted by its own root-owned configuration root
-existing, and a refusal leaving the system exactly as it found it.
+existing, and a refusal leaving the system exactly as it found it. The kernel
+admits the invocation as root, and a delegated caller, WeaverWeb's admin-con,
+reaches it only through a strict sudo rule the operator installs: the agent's
+fixed command lines for the connector's own user, nothing taken from the
+caller, the cause recorded being the uid sudo reports (#50).
 
 **Verification of the boundary.** The identity resolves, the home directory
 exists with the ownership and modes a load requires, and the record's
@@ -158,19 +162,17 @@ releases - a conflict is discovered at admission, refused there, and the
 refusal travels back inside the enter aggregate. Admin arbitrates no hardware
 at any point.
 
-**Network ingress.** There is none, here or anywhere in the program. A local
-socket carrying an operator's verb binds no port and is reachable only by a
-process already on the host - and a network-attached surface on the admin side
-would be the first thing in the architecture arguing against the kernel
-bounding reach.
+**Network ingress.** There is none, here or anywhere in the program. A verb
+arrives as a command line run on the host, never over a socket, and the trace
+relay's door is a local socket that binds no port and admits one declared
+reader - and a network-attached surface on the admin side would be the first
+thing in the architecture arguing against the kernel bounding reach.
 
 **Repair.** Admin repairs nothing, adjudicates nothing, and calls nothing
 good, over any artifact it touches.
 
 ## What is not built
 
-- **The start step.** The Spec moved to it on 2026-10-03 (#50), and the code still
-  starts a systemd transient unit until the act that removes `unit.rs` lands.
 - **The log's format and retention.** Deferred on stated grounds: a format
   decided before a rollback has run is a format decided from no measurement.
   The artifact is named regardless, so the privileged half of the lifecycle

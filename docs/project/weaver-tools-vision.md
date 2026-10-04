@@ -478,28 +478,35 @@ with the care a contract takes.
 
 **Three gates stand between a person and a verb, and each is its own party's.**
 WeaverWeb authenticates the person and decides, in its own IAM, what that person may ask
-of which agent. admin-con holds a ceiling it never writes: it asks admin's `grants`
-which verbs its role permits and declares exactly that, so a request past the ceiling
-stops at the connector. weaver-admin checks the role of the connector's own service user
-by the kernel's peer credential against the agent's role list, which is the box's
-configuration and which WeaverWeb mirrors and never writes ("the box decides"). A
-compromised server or connector reaches no further than the roles the box granted. **The
-person reaches admin only as a claim**: admin-con may name the person it acts for, and
-admin logs that claim beside the verb and authorizes nothing on it (#51). gate-con
-carries no person at all, the gate admitting its service user by uid like any client.
-admin-con reads the trace through admin's trace socket under its role rather than
-through any grant into the territory (#50).
+of which agent, and it records the person in its own audit. admin-con maps WeaverWeb's
+abstract verb to one of the agent's fixed `weaver-admin <verb> <agent>` command lines,
+so no command crosses a wire, and runs it with `sudo -n` through a strict sudo rule the
+operator installs as the box's own boundary: it names the connector's own service user,
+grants exactly that agent's lines, and takes nothing from the caller, no argument, no
+environment and no standard input ("the box decides"). The connector's ceiling is the
+rule's lines, which it reads with `sudo -n -l` and never writes. The observer role's
+rule grants `show`, and the operator role's adds `validate`, `load`, `unload` and
+`stop`. A compromised server or connector reaches no further than starting and stopping
+its one agent. **The person never reaches admin**: the cause the agent's record carries
+is the uid sudo reports, the connector's, and which person asked stays WeaverWeb's
+record. gate-con carries no person at all, the gate admitting its service user by uid
+like any client. admin-con reads the trace through the trace relay admin starts beside a
+file sink, which admits exactly the one reader the agent's `roles.toml` declares, the
+connector's user, rather than through any grant into the territory. **The agent fails
+closed with its connector**: admin-con runs each verb from its own containment and sudo
+opens no session for it (`!pam_session`), so the agent it starts lives in that
+containment, and stopping the connector stops its agent (#50, toddwbucy/WeaverWeb#15).
 
 **The door contracts carry no principal, and the amendment once predicted here is
 withdrawn.** An earlier form of this section had each connector pass a verified
 principal across its door and both door contracts amended to carry it. The three gates
 make that unnecessary: authorization at the door rests on the connector's own service
-user and its role, the person's identity stays WeaverWeb's, and the only trace of the
-person inside the agent is the logged claim. The connectors build against the two
-external contracts the ruling of 2026-08-01 wrote, `weaver-gate-world-contract` and
-`weaver-admin-operator-contract`, as #50 extends the second. weaver-analysis reaches the
-record the same way an operator does, consuming a trace an operator holds and never
-touching weights.
+user and the lines its sudo rule grants, the person's identity stays WeaverWeb's, and
+nothing of the person enters the agent, the cause it records being the uid sudo reports.
+The connectors build against the two external contracts the ruling of 2026-08-01 wrote,
+`weaver-gate-world-contract` and `weaver-admin-operator-contract`, as #50 extends the
+second. weaver-analysis reaches the record the same way an operator does, consuming a
+trace an operator holds and never touching weights.
 
 **A post-training leg is a direction and not a consumer.** The clause that kept
 the native path alive is what it would stand on, a program that intends training
