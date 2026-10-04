@@ -101,7 +101,8 @@ fn open_file(
     let mut fd = unsafe { nix::libc::open(c_path.as_ptr(), flags) };
     let mut created = false;
     if fd == -1 {
-        match std::io::Error::last_os_error().raw_os_error() {
+        let error = std::io::Error::last_os_error();
+        match error.raw_os_error() {
             Some(nix::libc::ENOENT) if create => {
                 // SAFETY: as above; O_EXCL makes this open the creation, so a
                 // name claimed since the first look refuses rather than opens.
@@ -112,17 +113,26 @@ fn open_file(
                         TRACE_MODE as nix::libc::c_uint,
                     )
                 };
-                created = fd != -1;
+                if fd == -1 {
+                    // A name claimed between the first look and the creation.
+                    return Err(refuse(&format!(
+                        "was claimed while admin created it: {}",
+                        std::io::Error::last_os_error()
+                    )));
+                }
+                created = true;
             }
+            // **Only an absent trace the declaration does not create is no
+            // trace**; every other failure is the path being something it
+            // must not be, a link, a FIFO, a directory, refused by name
+            // (Codex on #82).
+            Some(nix::libc::ENOENT) => return Err(LifecycleRefusal::DescriptorsUnusable),
             Some(nix::libc::ELOOP) => {
                 return Err(refuse("is a link, and admin opens no link as the trace"));
             }
             Some(nix::libc::ENXIO) => return Err(refuse("is not a regular file")),
-            _ => {}
+            _ => return Err(refuse(&format!("cannot be opened as the trace: {error}"))),
         }
-    }
-    if fd == -1 {
-        return Err(LifecycleRefusal::DescriptorsUnusable);
     }
     // SAFETY: the kernel just created this descriptor and no other owner
     // exists.
@@ -534,6 +544,31 @@ mod tests {
         );
         // SAFETY: closing the read end this test opened.
         unsafe { nix::libc::close(reader) };
+    }
+
+    /// **A directory at the trace's name refuses by name**, not as an unusable
+    /// descriptor: the open fails `EISDIR` before any descriptor exists, and
+    /// only an absent trace the declaration does not create stays
+    /// `DescriptorsUnusable`. Perturbation: map every other open failure to
+    /// `DescriptorsUnusable` again and the directory case reads unusable.
+    #[test]
+    fn a_directory_at_the_trace_path_refuses_and_only_absence_is_unusable() {
+        let dir = scratch("trace-dir");
+        let path = dir.join("trace.ndjson");
+        std::fs::create_dir(&path).unwrap();
+        assert_eq!(
+            open(&file(&path, false), &custody()).err(),
+            Some(LifecycleRefusal::BoundaryUnverified)
+        );
+        assert_eq!(
+            open(&file(&path, true), &custody()).err(),
+            Some(LifecycleRefusal::BoundaryUnverified)
+        );
+        let absent = dir.join("absent.ndjson");
+        assert_eq!(
+            open(&file(&absent, false), &custody()).err(),
+            Some(LifecycleRefusal::DescriptorsUnusable)
+        );
     }
 
     /// **A trace another uid owns refuses**, as root inside a user namespace
