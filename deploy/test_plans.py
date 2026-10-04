@@ -314,9 +314,6 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertFalse([c for c in self.calls() if c[0] in forbidden
                           and c[:2] != ["systemctl", "list-units"]], self.calls())
 
-    def postgres(self, *args):
-        return self.create("--engine", "postgres", *args)
-
     def test_agent_plan_defers_privilege_and_preserves_fixture_files(self):
         self.install_stack()
         before = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
@@ -382,13 +379,6 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
                 self.assertIn("already", result.stderr)
         self.assert_unprivileged()
 
-    def test_apply_still_refuses_catalogue_collision_before_creation(self):
-        self.env.update(ALLOW_APPLY_CHECKS="1", ROLE_COLLISION="1")
-        result = self.postgres("--apply")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("role weaver_m1 already exists", result.stderr)
-        self.assertFalse(any("useradd" in c for c in self.calls()))
-
     def test_apply_requires_sudo_before_any_other_privileged_call(self):
         self.env.update(ALLOW_APPLY_CHECKS="1", SUDO_FAIL="1")
         result = self.create("--apply")
@@ -396,47 +386,9 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertIn("--apply needs sudo", result.stderr)
         self.assertEqual([c for c in self.calls() if c[0] == "sudo"], [["sudo", "-v"]])
 
-    def test_apply_read_failures_refuse_before_creating_accounts(self):
-        for fault, cause in (("pg_roles", "role catalog"),
-                             ("pg_database", "database catalog"), ("hba_file", "hba_file"),
-                             ("ident_file", "ident_file"), ("start", "start PostgreSQL"),
-                             ("is-active", "confirm PostgreSQL")):
-            with self.subTest(fault=fault):
-                self.log.unlink(missing_ok=True)
-                self.env.update(ALLOW_APPLY_CHECKS="1", READ_FAIL=fault)
-                result = self.postgres("--apply")
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(cause, result.stderr)
-                self.assertFalse(any("useradd" in c for c in self.calls()))
-
-    def test_apply_empty_authentication_paths_refuse_before_creation(self):
-        for path in ("hba_file", "ident_file"):
-            with self.subTest(path=path):
-                self.log.unlink(missing_ok=True)
-                self.env.update(ALLOW_APPLY_CHECKS="1", EMPTY_PATH=path)
-                result = self.postgres("--apply")
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("empty " + path, result.stderr)
-                self.assertFalse(any("useradd" in c for c in self.calls()))
-
     def assert_no_provisioning(self):
         self.assertFalse(any("useradd" in c or any("CREATE ROLE" in a or "CREATE DATABASE" in a for a in c)
                              for c in self.calls()), self.calls())
-
-    def test_authentication_preconditions_refuse_before_provisioning(self):
-        for fault in ("no-peer", "missing-hba", "missing-ident"):
-            with self.subTest(fault=fault):
-                self.log.unlink(missing_ok=True)
-                self.hba.write_text("local all all peer\n")
-                self.ident.touch()
-                if fault == "no-peer": self.hba.write_text("local all all trust\n")
-                elif fault == "missing-hba": self.hba.unlink()
-                else: self.ident.unlink()
-                self.env["ALLOW_APPLY_CHECKS"] = "1"
-                result = self.postgres("--apply")
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("anchor" if fault == "no-peer" else "authentication file", result.stderr)
-                self.assert_no_provisioning()
 
     def test_missing_admin_base_refuses_both_modes(self):
         self.env["WEAVER_ADMIN_CONFIG"] = str(self.root / "missing")
@@ -467,7 +419,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
     def test_the_rendered_declaration_is_toml_before_anything_is_made(self):
         # The plan renders and parse-checks the declaration it would write.
         # Perturbation: break the heredoc's quoting and the plan refuses here.
-        for engine in ("sqlite", "postgres"):
+        for engine in ("sqlite",):
             with self.subTest(engine=engine):
                 result = self.create("--session", "s-m1-1", "--engine", engine)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -581,30 +533,17 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertNotIn("SETENV", text)
         self.assertNotIn("env_keep", text)
 
-    def test_apply_fixture_reaches_the_end_with_postgres(self):
-        self.env["ALLOW_APPLY_CHECKS"] = "1"
-        result = self.postgres("--apply")
+    def test_the_embedded_engine_is_the_default_and_postgres_is_retired(self):
+        # The service engine retired on the operator's ruling of 2026-10-02 on
+        # #1, so an absent --engine is sqlite and postgres refuses by name
+        # before any call. Perturbations: default to nothing again, and the
+        # absent case refuses; accept postgres, and the plan runs.
+        result = self.create_naming()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("== made", result.stdout)
-        store = self.assert_agent_root("postgres")
-        self.assertEqual((store["database"], store["role"]), ("weaver_m1", "weaver_m1"))
-        self.assertIn("local   weaver_m1", self.hba.read_text())
-        self.assertIn("weaver-m1-state", self.ident.read_text())
-        calls = self.calls()
-        sql = [c for c in calls if "psql" in c]
-        self.assertTrue(any("CREATE ROLE" in c[-1] for c in sql))
-        self.assertTrue(any("CREATE DATABASE" in c[-1] for c in sql))
-        self.assertTrue(all("-X" in c for c in sql))
-        self.assertFalse(any("/etc/weaver/agents" in c for c in calls))
-        self.assert_rule(["show", "validate", "load", "unload", "stop"])
-
-    def test_an_unnamed_engine_refuses_naming_both(self):
-        # Neither engine is the default, per the operator's ruling on #38.
-        # Perturbation: default ENGINE to either and this case runs on.
-        result = self.create_naming("--apply")
+        self.assertIn("store engine    sqlite", result.stdout)
+        result = self.create_naming("--engine", "postgres", "--apply")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("--engine sqlite or --engine postgres", result.stderr + result.stdout)
-        self.assertIn("Neither is the default", result.stderr + result.stdout)
+        self.assertIn("the postgres engine retired", result.stderr)
         self.assert_unprivileged()
 
     def test_apply_fixture_reaches_the_end_with_sqlite(self):
@@ -957,7 +896,7 @@ esac
         # The probe is what holds the boundary on the box: a member that can read
         # the trace refuses before the root is moved into place, for either
         # engine. Perturbation: drop the probe, and the agent is admitted.
-        for engine in ("sqlite", "postgres"):
+        for engine in ("sqlite",):
             with self.subTest(engine=engine):
                 self.log.unlink(missing_ok=True)
                 shutil.rmtree(self.config / ".m1.partial", ignore_errors=True)
@@ -1741,10 +1680,10 @@ class DeclaredTests(unittest.TestCase):
                 self.assertEqual(self.read(text, "trace-sink.path", "string")[:2], (0, path))
 
     def test_the_store_election_reads_in_every_spelling(self):
-        for text in ('[state-store]\nengine = "postgres"\n', "[state-store]\nengine = 'postgres'\n",
-                     'state-store.engine = "postgres"\n', 'state-store = { engine = "postgres" }\n'):
+        for text in ('[state-store]\nengine = "sqlite"\n', "[state-store]\nengine = 'sqlite'\n",
+                     'state-store.engine = "sqlite"\n', 'state-store = { engine = "sqlite" }\n'):
             with self.subTest(text=text):
-                self.assertEqual(self.read(text, "state-store.engine", "string")[:2], (0, "postgres"))
+                self.assertEqual(self.read(text, "state-store.engine", "string")[:2], (0, "sqlite"))
                 self.assertEqual(self.read(text, "state-store", "table")[0], 0)
 
     def test_absence_and_a_bad_file_answer_apart(self):

@@ -810,14 +810,11 @@ read as an absent member. Absent, the election resolves to the embedded engine
 under that same requirement. `none` declines the member and requires nothing,
 and refuses a declaration that elects a state election beside it,
 `ConfigInvalid` naming `state-election`, per `weaver-types-Spec` section 2: an
-election with no member to receive it is malformed, not surplus. `postgres`
-requires
-`database` and `role` in the declaration and, on the box, the store's socket
-present under the path this crate's own configuration names, and the walk asks
-the store the two questions the charter's two gates pose: that the member's
-account maps to the declared role and that the agent's uid maps to none, each
-refused with `BoundaryUnverified` and never `ConfigInvalid`, for the reason the
-group case below gives. The grant surface is not judged here, only read, at the
+election with no member to receive it is malformed, not surplus. `postgres`,
+the retired service engine, refuses at the declaration's parse, `ConfigInvalid`
+naming `state-store.engine`, per `weaver-types-Spec` section 2, and the walk's
+two questions to that engine's gates retired with it on the operator's ruling of
+2026-10-02 on #1. The grant surface is not judged here, only read, at the
 enter and again at the leave, per `weaver-trace-PRD` section 3.1.
 
 **Every election but `none` requires the member's own account too, as of
@@ -825,13 +822,11 @@ enter and again at the leave, per `weaver-trace-PRD` section 3.1.
 from the same validated name section 1's identity is, and read from the
 account database rather than declared, for the reason the agent's home is read
 rather than composed: the uid the spawn drops to, the uid that owns the
-territory, and the uid the store's first gate is asked about are one kernel
-fact, and a declaration naming it would be a second place that fact is stated
+territory are one kernel fact, and a declaration naming it would be a second place that fact is stated
 and a value the operator could move under a running agent. A box lacking the
 account refuses `BoundaryUnverified` naming the account, exactly as a box
 lacking the member's binary does and for the same reason, the provisioning
-being what is absent. **The refusal stands ahead of the store's questions**,
-the account being what the first of them is about.
+being what is absent.
 
 ```graph
 node: admin-member-account-required-at-inventory
@@ -841,33 +836,6 @@ tag: perturbation
 edge: asserts
 from: weaver-admin
 to: admin-member-account-required-at-inventory
-```
-
-**Each gate is asked as the uid it is about, and this is a correction.** Until
-2026-09-15 the member's gate was asked from this process, so what the store had
-to admit was whichever account admin runs as, which is root, while the agent's
-gate was asked by a child under the agent's uid. One question therefore
-described the member and named admin, which is the defect issue #545 filed: the
-charter derives the object gate's identity from the kernel fact, and a question
-asked by a process that never dials the store derives nothing. Both questions
-now go the same way, a child re-executing this binary under the named uid and
-that identity's whole group set, primary first, and exiting with the answer,
-which is the mechanism the agent's gate has carried since 2026-09-04. **The
-identity is taken in the child before exec, groups then gids then uids**, as
-of 2026-09-24 on issue #675: a probe that left the uid to the spawn's own
-setting lost the privilege its group call needed, could not be spawned as any
-member, and so every agent electing postgres refused `validate`.
-**The second gate is unchanged**, no agent's uid reaching any store being the
-property already bought, and it is kept rather than rebuilt.
-
-```graph
-node: admin-store-gate-asks-as-the-member
-kind: assertion
-tag: perturbation
-
-edge: asserts
-from: weaver-admin
-to: admin-store-gate-asks-as-the-member
 ```
 
 **A restore is judged here too, and it names a save point**, on the operator's ruling of
@@ -1464,12 +1432,10 @@ for that door rides the vector and no name exists to ride it. The agent's uid re
 from the vector with both of its uses, the first door judging no credential under
 possession and the preload door admitting the operator principal and refusing the rest
 without knowing the agent by number. The territory is what the member needs to open the
-embedded store, and under the service engine the vector carries the store's socket, the
-database, and the role beside it, per `weaver-state-Spec` section 2, the engine itself
-first so the member knows which port to stand. The spelling is four flags ahead of the
-positionals, `--engine`, `--store-socket`, `--database`, and `--role`, each followed by
-its value, the first on every vector and the other three under the service engine alone,
-so the territory and the preload path keep their places behind them. **The preload path
+embedded store, and **the vector carries no flag**, per `weaver-state-Spec` section 2:
+the territory first and the preload path behind it, the `--engine` flag and the service
+engine's three having retired with that engine on the operator's ruling of 2026-10-02
+on #1, so one engine stands and the member needs no word to choose it. **The preload path
 is present where the resolved kind is diagnostic and nowhere else**, per
 `weaver-agent-PRD` section 6 as ruled 2026-08-24, the serving load that elected a record
 restore having retired on 2026-10-02 (#58), and its absence is a serving load rather
@@ -2122,11 +2088,10 @@ value that fails to read fails the invocation as `ConfigInvalid` with no field.
 `gate-binary`, `coordination-root`, `declaration-directory`, `operator` and
 `roles.toml`, `run-tool` and `control-tool` retiring with the init system they reached
 on 2026-10-03 (#50), the boundary file of section 9 below. Optional: `headroom-bytes`,
-`library-path`, per section 6, `load-bound-seconds`, per section 2, and
-`state-store-socket`, the last read under a service election alone, the service engine's
-conventional directory standing where the file is silent. **Every path a key names is
+`library-path`, per section 6, and `load-bound-seconds`, per section 2, the
+`state-store-socket` key having retired with the service engine. **Every path a key names is
 absolute**, `worker-binary`, `spu-binary`, `gate-binary`, `coordination-root`,
-`declaration-directory`, `library-path` and `state-store-socket` alike, and a relative
+`declaration-directory` and `library-path` alike, and a relative
 value fails the read naming the key, so no read resolves against the directory a caller
 ran sudo from and two invocations of one root always name the same files. **The agent's
 declaration stands in the operator's directory and not in the root**, on the operator's
@@ -2227,9 +2192,8 @@ as its identity prefix at load, and that gives the agent process no read of the 
 and no way to change it.
 
 **An optional value is absent only where nothing stands at its path.** Every optional
-value of this section, `headroom-bytes`, `library-path`, `load-bound-seconds` and
-`state-store-socket`,
-reads as absent only where the path itself names nothing, which is
+value of this section, `headroom-bytes`, `library-path` and `load-bound-seconds`, reads
+as absent only where the path itself names nothing, which is
 asked of the link and never of its target. A dangling link, a directory, bytes that are
 not UTF-8, or a read the kernel refuses is the operator's file failing to read, and
 fails the invocation before any verb rather than standing a default the operator did not
@@ -2452,7 +2416,7 @@ test targets alone beside them, as section 1 states. Explicit
 and convention-discovered targets pass through the same check.
 
 **Which invariant each claim serves, and why most serve none.** Twelve of the
-forty-four carry a `grounds` edge and those twelve carry thirteen edges, one
+forty-three carry a `grounds` edge and those twelve carry thirteen edges, one
 record grounding in two invariants. **All three records the boundary act of
 2026-08-28 added ground in none**, and the paragraph accounts for each rather
 than one. Section 6's runtime
@@ -2478,7 +2442,7 @@ six ground in it. **The atomic close-on-exec of section 6 grounds in it by the s
 relation rather than the first**, on the argument that clause states. Remove it and the
 log is still NDJSON, the FIFO still opens nonblocking, the inventory still repairs
 nothing, and the identity is still built from the validated name, so those ground in
-nothing. **Thirty-two claims grounding in no invariant is the expected result and not
+nothing. **Thirty-one claims grounding in no invariant is the expected result and not
 a gap**, per Document Format section 4: most of what this Spec elects is a rendering, a
 mode, an ordering, or a route, and representation is what the invariants are not about.
 
@@ -2551,14 +2515,16 @@ sentence listed it as unedged while its own record carried the edge.
 The records are at the clauses that argue the claims, across sections 1
 through 8, rather than gathered here, per Document Format section 6: this
 section sorts by instrument and the arguments are elsewhere, so a block here
-would sit apart from the prose that earns it. Forty-four records in all,
-twelve tagged for review, twenty-six for perturbation, four for the
+would sit apart from the prose that earns it. Forty-three records in all,
+twelve tagged for review, twenty-five for perturbation, four for the
 manifest, and two for a compile pin, the restore's judgment joining on
 2026-09-06 and the member's own account bringing four on 2026-09-15, all four
 watched since the spawn's drop moved from review to perturbation on 2026-09-26,
 its instrument driving the spawn inside a user namespace, and the start step of
 2026-10-03 retiring two review records and one perturbation record with the unit and
-bringing three perturbation records of its own. The residency record
+bringing three perturbation records of its own, and the service engine's
+retirement of 2026-10-02 taking `admin-store-gate-asks-as-the-member` with the
+store probe it watched. The residency record
 moved from review to
 perturbation on 2026-08-06, when the code act gave it a test, and the library
 surface from review to the manifest on 2026-09-15, its test having read the
@@ -2571,7 +2537,7 @@ act of 2026-08-28:
 `admin-granted-permission-refused-at-inventory`, is this recount's own act,
 counted with the record it adds. Whether the three uncounted arrivals name
 their removals was not audited in this recount and is owed beside the two
-below. **Two of the twenty-six perturbation records name no removal anywhere
+below. **Two of the twenty-five perturbation records name no removal anywhere
 in this document**:
 `admin-unload-answers-after-confirmed-stop` and
 `admin-kind-mismatch-refused-at-inventory`. A perturbation tag without a
@@ -2608,7 +2574,8 @@ forty, the boundary act's three of 2026-08-28 that the tag census names, then
 forty-four this section counts above, all on 2026-09-15 with the member's own
 account: `admin-member-account-required-at-inventory`,
 `admin-member-territory-is-the-members-own`, `admin-store-gate-asks-as-the-member`,
-and `admin-member-spawn-drops-to-its-account`. Each is named so this figure is
+and `admin-member-spawn-drops-to-its-account`, the third of them retiring with the
+service engine on 2026-10-02. Each is named so this figure is
 checkable against the file the way every other figure here is. An earlier form of
 this lead stated no endpoint at all, and stating one is what exposed that the lists did
 not reach it. Retired: the operator surface's six, its stream election, its accept-time
@@ -2623,8 +2590,9 @@ section 3, the state ask that follows a failed dial, of section 6, and the unloa
 on a confirmed stop, of section 3. **The twelfth departure and the seventh arrival are
 the one event the lead above argues**, the unit's declared open inverting to a declared
 absence. **A rebuild reads this movement as the recut's delta and not as this Spec's**,
-thirteen records having been added since by acts of their own, so a census taken
-against this paragraph alone lands thirteen short of section 10's forty-four.
+thirteen records having been added since by acts of their own and one retired, so a
+census taken against this paragraph alone lands twelve short of section 10's
+forty-three.
 
 **A claim this Spec cites and another Spec argues is declared by that Spec,**
 not here, because the assertion belongs where its argument and its test live
@@ -2681,11 +2649,6 @@ directive is asserted where the run happens.
   `weaver-<name>-state` account refuses every election but `none`, confirmed
   by watching the same declaration pass the inventory when the arm is removed,
   a load then standing a member under this crate's identity.
-- The store's first gate names the member: the walk asks its two questions as
-  the member's uid and then as the agent's, confirmed by watching the first
-  ask carry the account admin runs as, and by watching an in-process ask that
-  names no uid at all, each leaving the pair no longer opening with the
-  member.
 - The territory is the member's: a prepared territory is `0700` and owned by
   the member's account, and a room widened between loads is closed again,
   confirmed by watching the mode read `0750` when the group-owned preparation

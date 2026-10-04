@@ -785,8 +785,7 @@ where the loop is a file the worker reads, `file` is the path it resolved and `s
 the digest of that file as read at the load, both absent for a loop compiled into the
 binary. `state_member` is whether the state member's end arrived on the enter, the
 harness's own knowledge and never a read of the deployment. `state_store` is the store
-the member stands on, `StoreIdentity` by engine name and, under the service engine,
-database and role, copied from the enter's resolved election as of 2026-09-04 and
+the member stands on, `StoreIdentity` by engine name, copied from the enter's resolved election as of 2026-09-04 and
 written beside the member because the two answer different questions, the election being
 what the deployment asked for and the member whether an end arrived. The database and
 role are absent under the embedded engine, not null. Both ride the same `Elections`

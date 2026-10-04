@@ -36,10 +36,9 @@ load where any piece is missing, so the pieces are made first and admin is asked
 | Declaration directory | `~/.weaveragent/<name>/` in the operator's home, or `--declaration-directory` | the operator's, 0700, every directory above it the operator's or root's and closed |
 | Declaration | `<declaration directory>/agent.toml` | the operator's, written by create-agent as the operator |
 | Operations and worker logs | `<declaration directory>/admin.log` and `worker.log` | made by admin at the first verb, the operator's, 0640 |
-| Agent root, which is the admission | `/etc/weaver/admin/<name>/`: `worker-binary`, `spu-binary`, `gate-binary`, `coordination-root` (and `library-path`, `headroom-bytes`, `load-bound-seconds`, `state-store-socket` where the stack record has them), copied from the stack record, plus `declaration-directory`, `operator` (the operator's uid) and `roles.toml` (`trace-reader = "weaver-<name>-admincon"`) | root, directory 0755, files 0644, and admin refuses a root that is not root-owned or is group- or world-writable |
+| Agent root, which is the admission | `/etc/weaver/admin/<name>/`: `worker-binary`, `spu-binary`, `gate-binary`, `coordination-root` (and `library-path`, `headroom-bytes`, `load-bound-seconds` where the stack record has them), copied from the stack record, plus `declaration-directory`, `operator` (the operator's uid) and `roles.toml` (`trace-reader = "weaver-<name>-admincon"`) | root, directory 0755, files 0644, and admin refuses a root that is not root-owned or is group- or world-writable |
 | Sudo rule | `/etc/sudoers.d/weaver-<name>` | root 0440, checked by `visudo` |
 | Run directory | `<coordination-root>/weaver.run/<name>/`: `run.lock`, `admin.lock`, `trace.sock` | made by admin, root 0755 |
-| Store (postgres election only) | role and database `weaver_<name>`, one `peer map=weaver` line in `pg_hba.conf`, one `weaver` map line in `pg_ident.conf` | postgres |
 
 The operator joins three groups: `weaver-<name>` for the gate's socket,
 `weaver-<name>-state` for passage through the territory, and `weaver-<name>-trace` to
@@ -61,11 +60,9 @@ needs a fresh login before the groups apply: `newgrp` selects one group in one s
   weaver-<name>-admincon` and `getent group weaver-<name>-trace weaver-<name>-admin`
   fail, `<agent-directory>/weaver-<name>`, `/etc/weaver/admin/<name>`,
   `/etc/weaver/admin/.<name>.partial` and `/etc/sudoers.d/weaver-<name>` are absent, no
-  `agent.toml` stands in the declaration directory, and for a postgres election the role
-  and database do not exist. The script checks all of this and refuses rather than
+  `agent.toml` stands in the declaration directory. The script checks all of this and refuses rather than
   merging, because a half-made agent that looks whole is worse than an absent one.
 - `/etc/sudoers` includes `/etc/sudoers.d` (`@includedir /etc/sudoers.d`).
-- PostgreSQL is active, for a postgres election. The script starts it if not.
 
 ## 2. An agent with a store
 
@@ -73,40 +70,38 @@ needs a fresh login before the groups apply: `newgrp` selects one group in one s
 first. The plan needs no sudo and prints exactly what apply will make.
 
 ```sh
-deploy/create-agent.sh <name> --engine <sqlite|postgres> --artifact /opt/weaver/models/<artifact>
-deploy/create-agent.sh <name> --engine <sqlite|postgres> --artifact /opt/weaver/models/<artifact> --apply
+deploy/create-agent.sh <name> --artifact /opt/weaver/models/<artifact>
+deploy/create-agent.sh <name> --artifact /opt/weaver/models/<artifact> --apply
 ```
 
-`--engine` names the store and is required, since neither engine is the default: `sqlite`
-or `postgres`, either one the installed member carries. `none` is refused, and section 3
-makes that agent by hand. `--session` names the session the declaration opens, default
-`<name>-001`. `--spu <path>` gives this agent its own SPU, written as its root's
-`spu-binary` in place of the stack record's (the python SPU's zipapp, for instance), and
-without it the agent serves from the stack's. `--declaration-directory <path>` places
-the declaration elsewhere than `~/.weaveragent/<name>`. `--connector-role
-operator|observer` chooses which command lines the connector's sudo rule grants, section
-5, default `operator`.
+The store is the embedded sqlite engine, `--engine sqlite` and the default: the service
+engine, postgres, retired on the operator's ruling of 2026-10-02 on #1, and `--engine
+postgres` refuses. `--engine none` is refused too, and section 3 makes that agent by
+hand. `--session` names the session the declaration opens, default `<name>-001`. `--spu
+<path>` gives this agent its own SPU, written as its root's `spu-binary` in place of the
+stack record's (the python SPU's zipapp, for instance), and without it the agent serves
+from the stack's. `--declaration-directory <path>` places the declaration elsewhere than
+`~/.weaveragent/<name>`. `--connector-role operator|observer` chooses which command
+lines the connector's sudo rule grants, section 5, default `operator`.
 
 Apply writes the declaration as the operator, then stages the agent root under the
 dot-name `/etc/weaver/admin/.<name>.partial`, which admin's name check never admits, and
-probes the boundary. For sqlite: the member can write its state room, and the agent's
-own uid cannot enter it. For postgres: the member reaches the database as its role, and
-the agent's own uid is refused. For both: the member cannot read the trace, the relay
-holds the trace group alone, and the connector holds the access group and no group of
-the agent's. A refusal there is the boundary being wrong, not the agent, and leaves the
-staged root in place to read and remove. Then the sudo rule is rendered, checked with
-`visudo -cf`, and installed, and only after all of it does the root move to
-`/etc/weaver/admin/<name>/`, which is the admission. The last step runs one line
-through the rule as the connector's user (`validate` for the operator role, `show` for
-the observer), the way admin-con will.
+probes the boundary: the member can write its state room, the agent's own uid cannot
+enter it, the member cannot read the trace, the relay holds the trace group alone, and
+the connector holds the access group and no group of the agent's. A refusal there is the
+boundary being wrong, not the agent, and leaves the staged root in place to read and
+remove. Then the sudo rule is rendered, checked with `visudo -cf`, and installed, and
+only after all of it does the root move to `/etc/weaver/admin/<name>/`, which is the
+admission. The last step runs one line through the rule as the connector's user
+(`validate` for the operator role, `show` for the observer), the way admin-con will.
 
-The declaration the script writes is a working default: the artifact, `devices = [0]`,
-a plain system identity, `permission-mode = "deny"`, an empty tool set, surprisal on,
-the sink in the territory, and the store's engine (with its database and role for
-postgres). Edit `~/.weaveragent/<name>/agent.toml` as yourself before validating if the
-agent wants another prompt, a wider context, or `ask`. No sudo is needed: the file is
-yours. The fields are in `docs/technical/weaver-agent/agent-declaration.md`, and nothing
-defaults, so an absent or misspelled key refuses the parse by name.
+The declaration the script writes is a working default: the artifact, `devices = [0]`, a
+plain system identity, `permission-mode = "deny"`, an empty tool set, surprisal on, the
+sink in the territory, and the store's engine. Edit `~/.weaveragent/<name>/agent.toml`
+as yourself before validating if the agent wants another prompt, a wider context, or
+`ask`. No sudo is needed: the file is yours. The fields are in
+`docs/technical/weaver-agent/agent-declaration.md`, and nothing defaults, so an absent
+or misspelled key refuses the parse by name.
 
 ## 3. An agent without a store
 
@@ -135,7 +130,7 @@ D=~/.weaveragent/$N
 R=/etc/weaver/admin/.$N.partial
 sudo install -d -o root -g root -m 0755 "$R"
 for k in worker-binary spu-binary gate-binary coordination-root \
-         library-path headroom-bytes load-bound-seconds state-store-socket; do
+         library-path headroom-bytes load-bound-seconds; do
   [ ! -f /etc/weaver/stack/$k ] || sudo cp /etc/weaver/stack/$k "$R/$k"
 done
 echo "$D" | sudo tee "$R/declaration-directory" >/dev/null
@@ -263,20 +258,19 @@ first.
 
 ## 7. Taking an agent down
 
-`deploy/decommission.sh` takes every agent off a box, archiving first, and refuses
-while `show` reports any of them running. To take one agent down by hand, remove the
-pieces of section 0 in reverse. Unload it, and check `show` reads unloaded with no
-constituent. Remove its sudo rule `/etc/sudoers.d/weaver-<name>` first, so the connector
-can run nothing more, then its root `/etc/weaver/admin/<name>/`, which ends its
-admission, and its run directory `<coordination-root>/weaver.run/<name>/`. For
-postgres, drop the database, then the role, and remove its two authentication lines.
-`userdel -r` the agent's account and `userdel` the member's, the relay's and the
-connector's, then delete the groups, which `userdel` leaves while a member remains and
-which a later `useradd --user-group` of the same name would refuse on. Archive the
-territory and remove it. The declaration directory is yours and stays: it holds the
-declaration, the prompt and the two logs, the one record of what was done to the agent,
-and create-agent refuses to write over its `agent.toml`, so move it aside before making
-an agent of the same name again.
+`deploy/decommission.sh` takes every agent off a box, archiving first, and refuses while
+`show` reports any of them running. To take one agent down by hand, remove the pieces of
+section 0 in reverse. Unload it, and check `show` reads unloaded with no constituent.
+Remove its sudo rule `/etc/sudoers.d/weaver-<name>` first, so the connector can run
+nothing more, then its root `/etc/weaver/admin/<name>/`, which ends its admission, and
+its run directory `<coordination-root>/weaver.run/<name>/`. `userdel -r` the agent's
+account and `userdel` the member's, the relay's and the connector's, then delete the
+groups, which `userdel` leaves while a member remains and which a later `useradd
+--user-group` of the same name would refuse on. Archive the territory and remove it. The
+declaration directory is yours and stays: it holds the declaration, the prompt and the
+two logs, the one record of what was done to the agent, and create-agent refuses to
+write over its `agent.toml`, so move it aside before making an agent of the same name
+again.
 
 The groups, once the accounts are gone:
 

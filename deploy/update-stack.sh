@@ -272,7 +272,7 @@ BUILT="$BUILT/release"
 # A member joins the installed set by being written here.
 MEMBERS="pyworker worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state"
 
-MEMBER_FEATURES=weaver-harness/pyworker,weaver-state/sqlite,weaver-state/postgres
+MEMBER_FEATURES=weaver-harness/pyworker,weaver-state/sqlite
 SPU_FEATURES=weaver-spu/cuda
 FEATURES="$SPU_FEATURES,$MEMBER_FEATURES"
 

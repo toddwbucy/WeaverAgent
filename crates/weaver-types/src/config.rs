@@ -108,7 +108,10 @@ pub struct Cut {
 }
 
 /// The store election, per `weaver-types-Spec` section 2: which port the
-/// deployment elects, and the service engine's database and role.
+/// deployment elects. `database` and `role` belonged to the service engine,
+/// retired on the operator's ruling of 2026-10-02 on #1; they stay in the
+/// grammar and on the wire so no consumer's shape moves, and no engine
+/// takes them, the inventory refusing them where they are set.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct StateStore {
@@ -131,14 +134,15 @@ impl Default for StateStore {
 }
 
 /// The engines the state charter charters, and the declared absence of a
-/// member. Closed at three: a further engine is a state act before it is a
-/// variant.
+/// member. Closed at two: the service engine, postgres, retired on the
+/// operator's ruling of 2026-10-02 on #1 (reversing #38), and a declaration
+/// still electing it refuses at the parse by name, per `weaver-types-Spec`
+/// section 2. A further engine is a state act before it is a variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum StoreEngine {
     None,
     Sqlite,
-    Postgres,
 }
 
 /// What a load is for, per `weaver-agent-PRD` section 6 as amended
@@ -445,6 +449,7 @@ pub fn parse_boundary(source: &str) -> Result<crate::BoundaryFile, ConfigError> 
 /// ```
 #[cfg(feature = "config")]
 pub fn parse(source: &str) -> Result<AgentConfig, ConfigError> {
+    check_retired_engine(source)?;
     let config: AgentConfig =
         toml::from_str(source).map_err(|e| classify_toml_error(e.message()))?;
     if config
@@ -464,6 +469,30 @@ pub fn parse(source: &str) -> Result<AgentConfig, ConfigError> {
     check_trace_sink_surface(source, &config.trace_sink)?;
     check_declared_paths(&config)?;
     Ok(config)
+}
+
+/// **The retired engine refuses by name**, per `weaver-types-Spec` section 2:
+/// a declaration electing `engine = "postgres"`, retired on the operator's
+/// ruling of 2026-10-02 on #1, refuses `BadValue` naming
+/// `state-store.engine`, rather than the unnamed refusal an unknown variant
+/// would draw from the deserializer. A source that does not read as TOML is
+/// left to the parse, which names its own fault.
+#[cfg(feature = "config")]
+fn check_retired_engine(source: &str) -> Result<(), ConfigError> {
+    let Ok(table) = source.parse::<toml::Table>() else {
+        return Ok(());
+    };
+    let elected = table
+        .get("state-store")
+        .and_then(|store| store.get("engine"))
+        .and_then(|engine| engine.as_str());
+    if elected == Some("postgres") {
+        return Err(ConfigError {
+            field: Some(FieldName("state-store.engine".to_string())),
+            kind: ConfigErrorKind::BadValue,
+        });
+    }
+    Ok(())
 }
 
 /// **A path in a declaration carries no control character**, per

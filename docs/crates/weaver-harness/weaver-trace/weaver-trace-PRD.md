@@ -557,13 +557,11 @@ the declared value or the compiled default it fell back to, and the act that lan
 table shapes the member.
 
 **The store the member stands on is a third such fact, as of 2026-09-04.** Per
-`weaver-state-PRD` section 4 the engine is the deployment's election and, under the
-service engine, the database and the role are the object gate's own members, changing
-only across the load boundary. What a record was built into decides what can be asked of
-it later, so the `load` event names the engine and, where the service engine stands, its
-database and role, resolved as the enter carried them. **The leave reads the boundary
-back**: the harness reads the role's grant surface from the store's catalog at the enter
-through the member and again at the leave, and the `unload` event carries the reading as
+`weaver-state-PRD` section 4 the engine is the deployment's election, changing only
+across the load boundary. What a record was built into decides what can be asked of it
+later, so the `load` event names the engine, resolved as the enter carried it. **The
+leave reads the boundary back**: the harness reads the member's grant surface, its
+room's owner and mode, through the member at the enter and again at the leave, and the `unload` event carries the reading as
 unchanged, varied, or unreadable, the envelope the confirm drivers already carry for the
 engine libraries. A grant surface that varied inside a session is a boundary move the
 record carries and never absorbs, and one unreadable at the close is said to be so

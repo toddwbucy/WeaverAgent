@@ -223,7 +223,6 @@ pub struct StateStore {
 pub enum StoreEngine {
     None,
     Sqlite,
-    Postgres,
 }
 
 pub struct StateElection {
@@ -583,10 +582,13 @@ absence means, the embedded engine, so a declaration written before the member e
 still parses and still means what it meant, and the state member stands. Present, its
 `engine` names which port the deployment elects, as of 2026-09-04: `none` declares that
 no member stands, which is a deployment's real posture and the one the
-instrument-validation matrices ran under, `sqlite` the embedded engine, and `postgres`
-the service engine, for which `database` and `role` are required and for the other two
-are refused if present, the same cross-field rule admin holds for the gate instruction,
-judged at inventory before a process exists. **`none` beside a present `state_election`
+instrument-validation matrices ran under, and `sqlite` the embedded engine, for which
+`database` and `role` are refused if present, the same cross-field rule admin holds for
+the gate instruction, judged at inventory before a process exists. **`postgres`, the
+service engine, refuses at the parse**, `ConfigInvalid` naming `state-store.engine`, on
+the operator's ruling of 2026-10-02 on #1 that retired it, so a declaration written for
+it fails by name rather than as an unknown value. `database` and `role` stay in the
+type, refused for both engines, so such a declaration's other keys still read. **`none` beside a present `state_election`
 is refused by the same rule**: the election says what the tee sends to the member, and a
 declaration that elects what to send to a member it declined is malformed rather than
 surplus, refused `ConfigInvalid` naming the election, the way a granted permission
@@ -1406,12 +1408,10 @@ pub enum FaultCase {
 2026-09-04.** The config holds it as an option whose absence means the
 embedded engine, per section 2, and the payload holds it as admin resolved it
 at inventory, so the harness never re-derives an absence and the load event it
-authors names the engine and, under the service engine, the database and role,
-per `weaver-trace-PRD` section 3.1. `database` and `role` are present in the
-resolved value exactly where the engine is the service one, the cross-field
-rule having been judged before any process existed, and the member's own
-vector carries the same three, per `weaver-admin-Spec` section 6, so the two
-parties that need them read one resolution.
+authors names the engine, per `weaver-trace-PRD` section 3.1. `database` and
+`role` are absent from the resolved value, the cross-field rule having been
+judged before any process existed, and the member's own vector carries no
+engine word, per `weaver-admin-Spec` section 6, one engine standing.
 
 **`restore` and `stack` ride the enter as of 2026-09-04.** `restore` rides as `Lineage`,
 resolved by admin from the save point the load restores, on the operator's ruling of

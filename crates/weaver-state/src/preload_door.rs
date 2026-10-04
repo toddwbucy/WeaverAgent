@@ -2,6 +2,12 @@
 //! conforms: state-replay-answers-at-the-seal
 //! conforms: state-preload-door-stands-only-diagnostic
 //! Process-level comparison of custody's two doors against an independent record walk.
+//!
+//! The preload is driven by an in-tree client written to the preload door's
+//! wire (an opener, the distillates, the seal), so the suite tests the
+//! member and nothing outside this repository. It drove the `weaver-analysis`
+//! binary until the operator's ruling of 2026-10-04 put WeaverAnalysis out of
+//! this repository's concern.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
@@ -15,10 +21,10 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json, value::RawValue};
 use weaver_trace::{ElectedKind, Election, Tee};
 
-use super::postgres_scratch::Scratch;
+use weaver_state::engine::sqlite::Sqlite;
 
-// This spelling is independent of analysis. A changed binary must fail against
-// it. The message/identity labels describe the asks, not a second kind list.
+// This spelling is independent of the distiller. A changed projection must
+// fail against it. The message/identity labels describe the asks, not a second kind list.
 struct Selection {
     kind: &'static str,
     paths: &'static [&'static str],
@@ -340,7 +346,7 @@ impl Record {
     }
 
     // Only the live input's envelope is renamed. Raw payload values remain
-    // the recorded bytes; reconstruction reads the unchanged source record.
+    // the recorded bytes, on the live path and the preload path alike.
     fn destination_lines(&self, destination: &str) -> Vec<String> {
         self.lines
             .iter()
@@ -539,99 +545,20 @@ fn child_entry() {
         let result = super::member_entry(args.into_iter(), fd);
         std::process::exit(if result == ExitCode::SUCCESS { 0 } else { 1 });
     }
-    analysis_binary(); // Refuse missing/stale analysis before any child or database stands.
     assert!(
         nix::unistd::getuid().is_root(),
         "preload requires the operator credential; run these scratch tests with unshare -Ur (no sudo)"
     );
-}
-/// **The `weaver-analysis` binary this suite compares against, from its own
-/// repository.** The crate left this workspace for WeaverAnalysis on
-/// 2026-09-30, so its checkout is `WEAVER_ANALYSIS_DIR` where set, and the
-/// suite workshop's sibling `../WeaverAnalysis` otherwise. Where neither holds a
-/// Cargo.toml, the suite refuses, naming both. The binary is that checkout's
-/// debug build, located by its own `cargo metadata` (which follows
-/// `CARGO_TARGET_DIR`), and it refuses if missing or older than the checkout's
-/// sources.
-fn analysis_binary() -> PathBuf {
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let sibling = workspace.join("../WeaverAnalysis");
-    let named = std::env::var_os("WEAVER_ANALYSIS_DIR").map(PathBuf::from);
-    let checkout = match named {
-        Some(directory) if directory.join("Cargo.toml").is_file() => directory,
-        Some(directory) => panic!(
-            "WEAVER_ANALYSIS_DIR names {}, which holds no Cargo.toml; unset it to use the sibling {}",
-            directory.display(),
-            sibling.display()
-        ),
-        None if sibling.join("Cargo.toml").is_file() => sibling,
-        None => panic!(
-            "no WeaverAnalysis checkout: WEAVER_ANALYSIS_DIR is unset and the sibling {} holds no Cargo.toml",
-            sibling.display()
-        ),
-    };
-    let metadata = Command::new(env!("CARGO"))
-        .args([
-            "metadata",
-            "--format-version",
-            "1",
-            "--no-deps",
-            "--offline",
-        ])
-        .current_dir(&checkout)
-        .output()
-        .expect("cargo metadata runs in the WeaverAnalysis checkout");
-    assert!(
-        metadata.status.success(),
-        "cargo metadata in {} failed: {}",
-        checkout.display(),
-        String::from_utf8_lossy(&metadata.stderr)
-    );
-    let target: Value = serde_json::from_slice(&metadata.stdout).expect("cargo metadata is JSON");
-    let path = PathBuf::from(
-        target["target_directory"]
-            .as_str()
-            .expect("cargo metadata names a target directory"),
-    )
-    .join("debug/weaver-analysis");
-    assert!(
-        path.is_file(),
-        "missing {}: run cargo build --locked in {} before this suite",
-        path.display(),
-        checkout.display()
-    );
-    fn newest_source(directory: &std::path::Path) -> std::time::SystemTime {
-        std::fs::read_dir(directory)
-            .expect("analysis source directory")
-            .map(|entry| {
-                let entry = entry.unwrap();
-                if entry.file_type().unwrap().is_dir() {
-                    newest_source(&entry.path())
-                } else {
-                    entry.metadata().unwrap().modified().unwrap()
-                }
-            })
-            .max()
-            .expect("analysis sources")
-    }
-    assert!(
-        std::fs::metadata(&path).unwrap().modified().unwrap()
-            >= newest_source(&checkout.join("src")),
-        "stale {}: run cargo build --locked in {} before this suite",
-        path.display(),
-        checkout.display()
-    );
-    path
 }
 struct Member {
     process: Process,
     tee: Option<Tee>,
     wire: UnixStream,
     buffer: Vec<u8>,
+    // The store file lives in the directory, removed with it after Drop
+    // stops and reaps the member.
     directory: Directory,
-    // Fields drop in declaration order, after Drop stops/reaps the member.
-    // Keep database custody last, after process and socket handles.
-    _scratch: Scratch,
+    store: PathBuf,
 }
 impl Member {
     fn new(election: Election, diagnostic: bool, destination: &str) -> Self {
@@ -657,25 +584,16 @@ impl Member {
     fn spawn(diagnostic: bool) -> Self {
         let thread = std::thread::current();
         let test = thread.name().expect("named test thread");
-        let scratch = Scratch::new();
-        // Establish the schema before the child and a seeding observer connect.
-        // Otherwise their first opens can race PostgreSQL catalog creation.
-        drop(scratch.open());
         let directory = Directory::new();
+        // The member's store is the embedded engine's file in its territory.
+        // Stand the schema before the child and a seeding observer open it,
+        // so neither races the other's first creation.
+        let store = directory.0.join("state.sql");
+        drop(Sqlite::open(&store).expect("the embedded store stands"));
         let door = directory.0.join("preload.sock");
         let (wire, child) = UnixStream::pair().unwrap();
         let fd = child.as_raw_fd();
-        let mut args = vec![
-            "--engine".into(),
-            "postgres".into(),
-            "--store-socket".into(),
-            scratch.socket.clone(),
-            "--database".into(),
-            scratch.database.clone(),
-            "--role".into(),
-            scratch.role.clone(),
-            directory.0.to_str().unwrap().into(),
-        ];
+        let mut args: Vec<String> = vec![directory.0.to_str().unwrap().into()];
         if diagnostic {
             args.push(door.to_str().unwrap().into());
         }
@@ -711,7 +629,7 @@ impl Member {
             wire,
             buffer: Vec::new(),
             directory,
-            _scratch: scratch,
+            store,
         }
     }
     fn log(&self) -> String {
@@ -803,68 +721,36 @@ impl Member {
             assert!(self.tee.as_mut().unwrap().feed(line), "live tee detached");
         }
     }
-    fn reconstruct(
+    /// **The in-tree preload client**: dials the door, sends the opener
+    /// naming `destination` under `rule`, the distillate of every line of the
+    /// record through `cut` (the whole record where none), each renamed into
+    /// the destination session as the live path renames it, and the seal.
+    /// Returns how many distillates crossed.
+    fn preload(
         &mut self,
         record: &Record,
         cut: Option<&str>,
-        diagnostic: bool,
+        rule: &Election,
         destination: &str,
     ) -> usize {
-        let trace = self.directory.0.join("record.ndjson");
-        std::fs::write(&trace, record.lines.concat()).unwrap();
-        let stdout = self.directory.0.join("analysis.json");
-        let stderr = self.directory.0.join("analysis.log");
-        let binary = analysis_binary();
-        let mut command = Command::new(&binary);
-        command.arg("preload").arg(trace).arg(self.door());
-        if diagnostic {
-            command.arg("--diagnostic");
-        }
-        if diagnostic || cut.is_some() || destination != SESSION {
-            command.args(["--as", destination]);
-        }
-        if let Some(cut) = cut {
-            command.args(["--through", cut]);
-        }
-        let until = Instant::now() + WAIT;
-        loop {
-            command
-                .stdout(std::fs::File::create(&stdout).unwrap())
-                .stderr(std::fs::File::create(&stderr).unwrap());
-            let mut process = Process(command.spawn().unwrap());
-            if process.wait().success() {
-                break;
+        let length = if cut.is_some() {
+            record.cut
+        } else {
+            record.lines.len()
+        };
+        let mut driver = self.connect_preload();
+        driver
+            .write_all(weaver_trace::opener(destination, rule).as_bytes())
+            .unwrap();
+        let mut crossed = 0;
+        for line in &record.destination_lines(destination)[..length] {
+            if let Some(frame) = weaver_trace::distill(line, rule) {
+                driver.write_all(frame.as_bytes()).unwrap();
+                crossed += 1;
             }
-            let refusal = std::fs::read_to_string(&stderr).unwrap();
-            // Only retry a dial that could not have sent an opener. Every
-            // parse, projection or post-connect failure remains a refusal.
-            let dial_unavailable = [
-                "No such file or directory (os error 2)",
-                "Connection refused (os error 111)",
-            ]
-            .iter()
-            .any(|error| refusal.contains(&format!("the preload died: {error}")));
-            assert!(
-                dial_unavailable && Instant::now() < until,
-                "analysis refused: {refusal}"
-            );
-            std::thread::sleep(Duration::from_millis(5));
         }
-        let report: Value =
-            serde_json::from_str(&std::fs::read_to_string(stdout).unwrap()).unwrap();
-        assert_eq!(report["sealed"], true);
-        assert_eq!(report["source_session"], SESSION);
-        assert_eq!(report["destination_session"], destination);
-        assert_eq!(
-            report["mode"],
-            if diagnostic { "diagnostic" } else { "recorded" }
-        );
-        println!(
-            "W5B analysis={} preloaded={}",
-            binary.display(),
-            report["preloaded"]
-        );
-        report["preloaded"].as_u64().unwrap() as usize
+        driver.write_all(b"{}\n").unwrap();
+        crossed
     }
 }
 impl Drop for Member {
@@ -879,8 +765,8 @@ impl Drop for Member {
             let _ = self.process.0.kill();
         }
         let _ = self.process.0.wait();
-        // The process and all its PostgreSQL connections end before Scratch
-        // drops, on both the ordinary path and assertion unwinding.
+        // The process ends before its directory drops, on both the ordinary
+        // path and assertion unwinding.
     }
 }
 
@@ -939,7 +825,7 @@ fn matched_cuts(record: &Record, rule: &Election, diagnostic: bool, label: &str)
         live.feed(&primary[..length]);
         live.feed(&record.foreign_lines());
         let mut rebuilt = Member::new(rule.clone(), true, destination);
-        let preloaded = rebuilt.reconstruct(record, cut, diagnostic, destination);
+        let preloaded = rebuilt.preload(record, cut, rule, destination);
         rebuilt.feed(&record.foreign_lines());
         compare(
             &format!("{label}/{}", cut.unwrap_or("whole")),
@@ -956,14 +842,14 @@ fn matched_cuts(record: &Record, rule: &Election, diagnostic: bool, label: &str)
 }
 
 #[test]
-#[ignore = "needs WEAVER_STATE_TEST_PG scratch PostgreSQL and prebuilt weaver-analysis; run in unshare -Ur for the preload credential"]
+#[ignore = "needs the preload credential; run inside a user namespace by the watch below"]
 fn three_way_at_matched_cuts() {
     child_entry();
     matched_cuts(&Record::new(), &election(), true, "diagnostic");
 }
 
 #[test]
-#[ignore = "needs WEAVER_STATE_TEST_PG scratch PostgreSQL and prebuilt weaver-analysis; run in unshare -Ur for the preload credential"]
+#[ignore = "needs the preload credential; run inside a user namespace by the watch below"]
 fn dead_driver_retry_replaces_the_prefix() {
     child_entry();
     let record = Record::new();
@@ -995,7 +881,7 @@ fn dead_driver_retry_replaces_the_prefix() {
         rebuilt.receive(Duration::from_millis(150)).is_none(),
         "unsealed prefix answered replay"
     );
-    rebuilt.reconstruct(&record, None, true, DESTINATION);
+    rebuilt.preload(&record, None, &election(), DESTINATION);
     let answer = rebuilt
         .receive(WAIT)
         .expect("retry must release the parked replay at its seal");
@@ -1015,7 +901,7 @@ fn dead_driver_retry_replaces_the_prefix() {
 /// the restrictive case elects unknown material and the absent/null/empty
 /// fixtures, while excluding the ordinary event under both preload modes.
 #[test]
-#[ignore = "needs WEAVER_STATE_TEST_PG scratch PostgreSQL and prebuilt weaver-analysis; run in unshare -Ur for the preload credential"]
+#[ignore = "needs the preload credential; run inside a user namespace by the watch below"]
 fn recorded_rule_three_way_at_matched_cuts() {
     child_entry();
     let original = Record::new();
@@ -1046,9 +932,9 @@ fn recorded_rule_three_way_at_matched_cuts() {
 // Seed both the addressed session and a neighbor before a malformed opener.
 // Observe rows and index definitions directly: a rejected opener must not even
 // build indexes from the valid entries surrounding an invalid entry.
-fn seeded_custody(member: &Member) -> postgres::Client {
+fn seeded_custody(member: &Member) -> rusqlite::Connection {
     use weaver_state::Store;
-    let mut store = member._scratch.open();
+    let mut store = Sqlite::open(&member.store).expect("open the member's store to seed it");
     store
         .index_election(&weaver_state::Election {
             all_kinds: true,
@@ -1067,33 +953,40 @@ fn seeded_custody(member: &Member) -> postgres::Client {
             })
             .unwrap();
     }
-    postgres::Config::new()
-        .host_path(&member._scratch.socket)
-        .user(&member._scratch.role)
-        .dbname(&member._scratch.database)
-        .connect(postgres::NoTls)
-        .unwrap()
+    drop(store);
+    // An observer of its own, read-only, waiting out the member's writes.
+    let observer = rusqlite::Connection::open_with_flags(
+        &member.store,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .expect("observe the member's store");
+    observer
+        .busy_timeout(WAIT)
+        .expect("the observer waits out a write");
+    observer
 }
-fn custody_snapshot(client: &mut postgres::Client) -> Vec<Vec<String>> {
+fn custody_snapshot(client: &mut rusqlite::Connection) -> Vec<Vec<String>> {
     [
-        "SELECT row_to_json(e)::text FROM event e ORDER BY id",
-        "SELECT row_to_json(f)::text FROM field f ORDER BY event_id, key",
-        "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' ORDER BY indexname",
+        "SELECT json_object('id', id, 'session', session, 'run', run, 'turn', turn, \
+         'kind', kind, 'sequence', sequence) FROM event ORDER BY id",
+        "SELECT json_object('event_id', event_id, 'key', key, 'value', value) \
+         FROM field ORDER BY event_id, key",
+        "SELECT sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL ORDER BY name",
     ]
     .iter()
     .map(|query| {
-        client
-            .query(*query, &[])
+        let mut statement = client.prepare(query).unwrap();
+        statement
+            .query_map([], |row| row.get::<_, String>(0))
             .unwrap()
-            .iter()
-            .map(|row| row.get(0))
+            .map(Result::unwrap)
             .collect()
     })
     .collect()
 }
 
 #[test]
-#[ignore = "needs WEAVER_STATE_TEST_PG naming a scratch PostgreSQL socket directory, unshare -Ur, and a built weaver-analysis binary"]
+#[ignore = "needs the preload credential; run inside a user namespace by the watch below"]
 fn malformed_first_door_elections_leave_custody_untouched() {
     child_entry();
     for opener in super::tests::malformed_openers() {
@@ -1126,7 +1019,7 @@ fn malformed_first_door_elections_leave_custody_untouched() {
 }
 
 #[test]
-#[ignore = "needs WEAVER_STATE_TEST_PG naming a scratch PostgreSQL socket directory, unshare -Ur, and a built weaver-analysis binary"]
+#[ignore = "needs the preload credential; run inside a user namespace by the watch below"]
 fn malformed_preload_elections_leave_custody_untouched() {
     child_entry();
     let mut cases = super::tests::malformed_openers();
@@ -1143,11 +1036,13 @@ fn malformed_preload_elections_leave_custody_untouched() {
         cases.push(json!({"session":session,"election":valid_election}).to_string());
     }
     // A well-shaped opener can still be refused by the engine. That refusal
-    // belongs to this driver's attempt too, not to the standing member.
-    let long_path = "x".repeat(1024);
+    // belongs to this driver's attempt too, not to the standing member. The
+    // embedded engine cannot carry a NUL into its index statement, so an
+    // elected path holding one is refused inside the engine, after the
+    // opener parsed (the service engine refused an over-long name here).
     cases.push(
         json!({"session":"target","election":{"all_kinds":false,
-        "keys":[{"kind":"load","paths":["new.index",long_path]}]}})
+        "keys":[{"kind":"load","paths":["new.index","held\u{0}path"]}]}})
         .to_string(),
     );
     for opener in cases {
@@ -1204,7 +1099,7 @@ fn malformed_preload_elections_leave_custody_untouched() {
         } else if super::parse_election(&opener).is_none() {
             "malformed election in preload opener"
         } else {
-            "the elected key path"
+            "StoreUnavailable"
         };
         assert!(member.log().contains(fault), "{}", member.log());
         member.ask("shape", None); // The harness still serves on the same member.
@@ -1247,7 +1142,7 @@ fn malformed_preload_elections_leave_custody_untouched() {
 }
 
 #[test]
-#[ignore = "needs WEAVER_STATE_TEST_PG naming a scratch PostgreSQL socket directory, unshare -Ur, and a built weaver-analysis binary"]
+#[ignore = "needs the preload credential; run inside a user namespace by the watch below"]
 fn explicit_empty_elections_open_both_doors() {
     child_entry();
     for all_kinds in [false, true] {
@@ -1279,4 +1174,46 @@ fn explicit_empty_elections_open_both_doors() {
             assert_eq!(after[1].len(), 1, "neighbor's field remains");
         }
     }
+}
+
+/// **The watch for this module's instruments**: re-executes this test binary
+/// inside `unshare --map-root-user`, which gives the preload door its
+/// operator credential with no sudo, and runs every ignored instrument above
+/// against the embedded store. Where no user namespace can be entered, it
+/// prints a SKIP naming why and passes. Run as
+/// root, it runs the instruments in place.
+#[test]
+fn the_preload_door_instruments_are_watched_inside_a_user_namespace() {
+    let exe = std::env::current_exe().expect("the test binary names itself");
+    let mut command = if nix::unistd::getuid().is_root() {
+        Command::new(&exe)
+    } else {
+        let mut unshare = Command::new("unshare");
+        unshare.arg("--map-root-user").arg(&exe);
+        unshare
+    };
+    let ran = command
+        .args(["preload_door::", "--ignored", "--nocapture"])
+        .stdin(std::process::Stdio::null())
+        .output();
+    let output = match ran {
+        Ok(output) => output,
+        Err(e) => {
+            eprintln!("SKIP preload door watch: unshare could not run: {e}");
+            return;
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.starts_with("unshare:") {
+        eprintln!(
+            "SKIP preload door watch: no user namespace here: {}",
+            stderr.trim()
+        );
+        return;
+    }
+    assert!(
+        output.status.success() && stdout.contains("test result: ok. 6 passed"),
+        "the preload door instruments failed inside the namespace\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
 }

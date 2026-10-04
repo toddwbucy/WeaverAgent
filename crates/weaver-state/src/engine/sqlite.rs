@@ -615,6 +615,61 @@ mod tests {
     use super::*;
     use crate::store::*;
 
+    /// **A distillate lands whole or not at all**, the watch the embedded
+    /// engine owes since the service engine retired (`weaver-state-Spec`
+    /// section 10): a failure forced inside the landing's transaction, here a
+    /// trigger refusing one field row in place of the loop schema's
+    /// constraint that will be the natural lever, must refuse the landing and
+    /// leave the holdings unchanged, the event row rolled back with the field
+    /// rows. Perturbation: commit the event before its rows and the refused
+    /// landing leaves its event behind.
+    #[test]
+    fn a_distillate_lands_whole_or_not_at_all() {
+        let mut store = Sqlite::open(std::path::Path::new(":memory:")).expect("opens");
+        store
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER refuse_poison BEFORE INSERT ON field \
+                 WHEN NEW.key = 'poison' BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+            )
+            .expect("the lever stands");
+        let count = |store: &Sqlite, sql: &str| -> i64 {
+            store
+                .connection
+                .query_row(sql, [], |row| row.get(0))
+                .expect("counts")
+        };
+        store
+            .land(&Distillate {
+                session: "s".into(),
+                run: "r".into(),
+                turn: None,
+                kind: "load".into(),
+                sequence: 0,
+                pairs: vec![("kept".into(), "1".into())],
+            })
+            .expect("a sound distillate lands");
+        let refused = store.land(&Distillate {
+            session: "s".into(),
+            run: "r".into(),
+            turn: None,
+            kind: "load".into(),
+            sequence: 1,
+            pairs: vec![("fine".into(), "1".into()), ("poison".into(), "2".into())],
+        });
+        assert!(refused.is_err(), "the forced failure refuses the landing");
+        assert_eq!(
+            count(&store, "SELECT COUNT(*) FROM event"),
+            1,
+            "the refused distillate's event rolled back with its rows"
+        );
+        assert_eq!(
+            count(&store, "SELECT COUNT(*) FROM field"),
+            1,
+            "and none of its field rows stand"
+        );
+    }
+
     /// **A NUL in a message lands verbatim**, the shared test run on this
     /// engine and its tables read: the content is a `field` row and no part
     /// stands. Perturbation: drop the holdable check from `typed::split`, and

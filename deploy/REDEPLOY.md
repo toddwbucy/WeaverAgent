@@ -21,22 +21,20 @@ Record in the run log, from the box, not from memory:
 hostname; uname -r
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
 nvcc --version | tail -1
-pacman -Q cuda cccl postgresql
+pacman -Q cuda cccl
 rustup show active-toolchain
 sudo deploy/decommission.sh            # the plan: what stands, discovered
 ```
 
 The plan lists every configuration base under `/etc/weaver`, each agent root under a
 base with its declaration directory, the sudo rules `/etc/sudoers.d/weaver-*`, the
-install prefixes the roots name, every agent with its accounts, whether each agent
-runs (asked of the installed admin with `show`), any `weaver-worker@<agent>.service`
-unit a box from before #50 still carries, the territories, record and log directories,
-and the store's roles and databases. Discovery is by rule, not by one layout. The
-agents are the roots' names, the names of every `weaver-*` account and group with its
-reserved suffix stripped, and the allow-lists and declarations of the box-wide layout
-before 2026-10-01. The databases and roles are `weaver_<agent>` for those agents and
-whatever their declarations name. If it lists something this runbook does not mention,
-the runbook is what gets amended.
+install prefixes the roots name, every agent with its accounts, whether each agent runs
+(asked of the installed admin with `show`), any `weaver-worker@<agent>.service` unit a
+box from before #50 still carries, and the territories, record and log directories.
+Discovery is by rule, not by one layout. The agents are the roots' names, the names of
+every `weaver-*` account and group with its reserved suffix stripped, and the
+allow-lists and declarations of the box-wide layout before 2026-10-01. If it lists
+something this runbook does not mention, the runbook is what gets amended.
 
 **What a stack consists of**, so a reader knows what the plan is enumerating:
 
@@ -53,7 +51,6 @@ the runbook is what gets amended.
 | The python SPU prefix and zipapp | `<prefix>/python-spu/` | `python-spu/README.md` |
 | Accounts: the agent's `weaver-<name>` (home `/home/weaver-<name>`, 2750), the member's `weaver-<name>-state`, the relay's `weaver-<name>-relay`, the connector's `weaver-<name>-admincon`, and the groups `weaver-<name>-trace` and `weaver-<name>-admin` | passwd | create-agent |
 | Territory `weaver-<name>/` (root:weaver-<name>-state 0710, passage only) with `state/` (member 0700) and `trace.ndjson` (root:weaver-<name>-trace 0640) | the stack record's `agent-directory`, default `/var/lib/weaver-agent` | create-agent |
-| Postgres election only: role and database `weaver_<name>`, a `peer map=weaver` line in `pg_hba.conf`, a `weaver` map line in `pg_ident.conf` | PostgreSQL | create-agent |
 | Run directory: `run.lock`, `admin.lock` and the trace door `trace.sock` | `<coordination-root>/weaver.run/<name>/` (root 0755, on tmpfs under `/run`) | admin, at its first verb |
 
 No unit and no init system is part of a stack. Admin's start step stands the worker, its
@@ -100,10 +97,7 @@ again without a purge. The archive holds:
   `tmp-weaver`. A name built from a path carries the whole path, its slashes made dashes
   (`territories-var-lib-weaver-agent`), and a name an archive already holds takes the
   first free `-2`, `-3`, so no archive is ever written over another.
-- `postgres/<db>.dump` (custom format), `roles.sql`, and copies of `pg_hba.conf` and
-  `pg_ident.conf`.
-- `PURGE-LIST`: the exact paths, users, groups, databases and roles the purge may
-  touch. Read it.
+- `PURGE-LIST`: the exact paths, users and groups the purge may touch. Read it.
 - `SHA256SUMS`, verified before the script says archived, and again before a purge.
 
 Models stay in `<prefix>/models` on purpose: they are artifacts, not binaries or
@@ -122,18 +116,19 @@ sudo deploy/decommission.sh --purge /mnt/bulk-store/dev-archive-<date>-<host>
 ```
 
 Removes the sudo rules first, so no connector can start a run, then asks every agent
-again and refuses if any runs. Stops any unit of a box from before #50, drops the
-databases then the roles, removes the weaver lines from `pg_hba.conf` and
-`pg_ident.conf` (backups beside them) and reloads PostgreSQL, removes the `weaver-*`
-users with their homes and their groups, removes every path on the list (the sudo rules
-and the run directories among them), removes a prefix left empty, and prints what
-remains. After it, `getent passwd | grep weaver-` and `ls /opt/weaver` should show
+again and refuses if any runs. Stops any unit of a box from before #50, removes the
+`weaver-*` users with their homes and their groups, removes every path on the list (the
+sudo rules and the run directories among them), removes a prefix left empty, and prints
+what remains. After it, `getent passwd | grep weaver-` and `ls /opt/weaver` should show
 nothing but `models`.
 
 Not touched, because they are the operator's and not the stack's: the declaration
-directories, the operator's membership of `video` and `render` (the agents'
-memberships go with their accounts), `/opt/cuda`, PostgreSQL itself, the bulk-store
-mount.
+directories, the operator's membership of `video` and `render` (the agents' memberships
+go with their accounts), `/opt/cuda`, the bulk-store mount, and any PostgreSQL a box
+from before the service engine's retirement still runs: its `weaver_*` roles and
+databases and its authentication lines are the operator's to dump and drop by hand,
+since decommission no longer discovers them (it matched every `weaver%` database,
+#35).
 
 ## 3. Build and install
 
@@ -152,14 +147,14 @@ What it does, so the log can say which step a failure was at:
    already stands, or if `/etc/weaver/admin` holds anything.
 2. Names the tree: the git revision, or `nogit-<lockfile sha>` on a tree without git.
 3. `cargo test --release --locked -p weaver-trace -p weaver-harness -p weaver-state
-   --features weaver-harness/pyworker,weaver-state/sqlite,weaver-state/postgres`.
-   The selection is the crates the stack runs, with every store engine's feature on,
-   so each engine an agent may elect is tested before it is installed. A
+   --features weaver-harness/pyworker,weaver-state/sqlite`. The selection is the
+   crates the stack runs, with the store engine's feature on, so the engine an agent
+   elects is tested before it is installed. A
    workspace-wide `cargo test --locked` also compiles and passes (#37).
 4. `cargo build --release --locked --workspace --features
-   weaver-spu/cuda,weaver-harness/pyworker,weaver-state/sqlite,weaver-state/postgres`.
-   Every engine an agent may elect is named, the default one included, or the member
-   refuses that agent at load (measured 2026-09-11).
+   weaver-spu/cuda,weaver-harness/pyworker,weaver-state/sqlite`. The engine is named,
+   though it is the default, or the member refuses an agent electing it at load
+   (measured 2026-09-11).
 5. Installs the seven members to `<prefix>/bin` (root, 0755), `weaver-trace-relay`
    beside the worker where admin finds it, and the `libggml*` and `libllama*` objects
    to `<prefix>/lib`, from llama-cpp-sys's `out/lib` under the target's `build/`
@@ -170,7 +165,7 @@ What it does, so the log can say which step a failure was at:
 6. Writes the stack record `/etc/weaver/stack/`: the three binary paths,
    `coordination-root=/run`, `library-path=<prefix>/lib`, and for the scripts alone
    `prefix` and `agent-directory`. Admin never reads it. An operator who wants
-   `headroom-bytes`, `load-bound-seconds` or `state-store-socket` on every agent writes
+   `headroom-bytes` or `load-bound-seconds` on every agent writes
    it into the record before making agents. Creates the admin base `/etc/weaver/admin`
    empty (root 0755) and the agent directory `/var/lib/weaver-agent` (root 0755), under
    which each territory is root:weaver-<name>-state 0710, not setgid.
@@ -186,29 +181,26 @@ up first and add it only for an agent that needs it.
 The per-agent procedure in full is `HowToDeployANewAgent.md`, and this is the summary.
 One at a time, as the operator, plan first, then `--apply`. The script refuses to merge
 with anything half-made, so a name that already has an account, a group, a directory,
-an agent root, a sudo rule, a declaration, a role or a database must be cleaned up
-first.
+an agent root, a sudo rule or a declaration must be cleaned up first.
 
 ```sh
-deploy/create-agent.sh m1 --engine <sqlite|postgres> --artifact /opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf
-deploy/create-agent.sh m1 --engine <sqlite|postgres> --artifact /opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf --apply
+deploy/create-agent.sh m1 --artifact /opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf
+deploy/create-agent.sh m1 --artifact /opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf --apply
 ```
 
-The store is the one `--engine` names, `sqlite` or `postgres`, and the option is
-required since neither is the default. The script makes the four accounts and the two
+The store is the embedded sqlite engine, the default (the service engine retired on the
+operator's ruling of 2026-10-02 on #1). The script makes the four accounts and the two
 groups, the territory (root:weaver-<name>-state 0710 under the stack record's
 `agent-directory`, passage by group with no access entries) and its trace
-(root:weaver-<name>-trace 0640, which the member cannot read), for postgres the role,
-database and two authentication lines, the declaration in the operator's
-`~/.weaveragent/<name>/`, and the agent root staged under a dot-name: every key copied
-from the stack record, `declaration-directory`, `operator` and `roles.toml`. It then
-proves the boundary (for either engine the member cannot read the trace, the relay
-holds the trace group alone and the connector the access group and nothing of the
-agent's, for sqlite the member can write its state room and the agent's own uid cannot
-enter it, and for postgres the member reaches the database and the agent's own uid does
-not), installs the sudo rule once `visudo` passes it, and only then moves the root into
-place, which is the admission. The operator's three new group memberships need a fresh
-login before they apply (`newgrp` selects one group in one shell).
+(root:weaver-<name>-trace 0640, which the member cannot read), the declaration in the
+operator's `~/.weaveragent/<name>/`, and the agent root staged under a dot-name: every
+key copied from the stack record, `declaration-directory`, `operator` and `roles.toml`.
+It then proves the boundary (the member cannot read the trace, the relay holds the trace
+group alone and the connector the access group and nothing of the agent's, and the
+member can write its state room and the agent's own uid cannot enter it), installs the
+sudo rule once `visudo` passes it, and only then moves the root into place, which is the
+admission. The operator's three new group memberships need a fresh login before they
+apply (`newgrp` selects one group in one shell).
 
 An agent electing no store (`[state-store] engine = "none"`) is made by hand, since
 there is no member or store to provision or probe: `HowToDeployANewAgent.md` section 3.

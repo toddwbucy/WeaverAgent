@@ -11,8 +11,8 @@
 # `/etc/weaver/admin*`, each agent's root is a directory under one, the install
 # and territory paths are read out of them, the agents are the union of every
 # root, every allow-list and declaration of the box-wide layout before
-# 2026-10-01, and every `weaver-*` account and group, and the store's roles are
-# asked of PostgreSQL. A box fact this script needs and cannot find is printed
+# 2026-10-01, and every `weaver-*` account and group. A box fact this script
+# needs and cannot find is printed
 # as unknown, never guessed, and the plan is the same reads the archive and the
 # purge make.
 #
@@ -50,8 +50,14 @@
 #
 # **Root, because most of what stands is root's or the agents'.** Territories
 # are 0700 under the agent's uid, the record's directory is root's and not
-# searchable, the log is root's, and the store's files are postgres's. Run it
-# under sudo; it refuses otherwise.
+# searchable, and the log is root's. Run it under sudo; it refuses otherwise.
+#
+# **No store is discovered or purged.** The service engine retired on the
+# operator's ruling of 2026-10-02 on #1, and its discovery here matched every
+# `weaver%` database on the box (#35), so the PostgreSQL roles and databases a
+# box from before the retirement still carries are the operator's to dump and
+# drop by hand (deploy/REDEPLOY.md section 2). The embedded store's file lives
+# in each territory and goes with it.
 set -euo pipefail
 
 say()  { printf '\n== %s\n' "$*"; }
@@ -311,20 +317,6 @@ done
 mapfile -t TMP_PATHS < <(find /tmp -maxdepth 1 \( -name 'weaver-*' -o -name 'torchinductor_weaver-*' \) 2>/dev/null)
 [ ${#TMP_PATHS[@]} -gt 0 ] && plan "/tmp: ${#TMP_PATHS[@]} weaver-* entries"
 
-say "store"
-PG_ROLES=(); PG_DBS=(); HBA=""; IDENT=""
-if systemctl is-active --quiet postgresql 2>/dev/null; then
-  mapfile -t PG_ROLES < <(sudo -u postgres psql -X -tAc "select rolname from pg_roles where rolname like 'weaver%'" 2>/dev/null || true)
-  mapfile -t PG_DBS < <(sudo -u postgres psql -X -tAc "select datname from pg_database where datname like 'weaver%'" 2>/dev/null || true)
-  HBA=$(sudo -u postgres psql -X -tAc 'show hba_file' 2>/dev/null || true)
-  IDENT=$(sudo -u postgres psql -X -tAc 'show ident_file' 2>/dev/null || true)
-  plan "roles      ${PG_ROLES[*]:-none}"
-  plan "databases  ${PG_DBS[*]:-none}"
-  [ -n "$HBA" ]   && plan "hba lines   $(grep -c 'weaver' "$HBA" 2>/dev/null || echo 0) in $HBA"
-  [ -n "$IDENT" ] && plan "ident lines $(grep -c 'weaver' "$IDENT" 2>/dev/null || echo 0) in $IDENT"
-else
-  plan "postgresql not active; store not inspected"
-fi
 
 [ "$MODE" = plan ] && { say "plan only. rerun with --archive [DIR], then --purge [DIR]"; exit 0; }
 
@@ -342,7 +334,7 @@ free_name() {
 # squashes root to nobody, so root can neither create a directory the operator
 # owns nor own what it writes there. Every read of a territory, the record or
 # the store stays root's, and every byte that lands under $DEST goes through
-# the operator's account: tar and pg_dump write to stdout, and the operator's
+# the operator's account: tar writes to stdout, and the operator's
 # shell writes the file. Measured 2026-09-30: mkdir as root failed on the
 # export, and a file root did write arrived owned by nobody.
 as_op() { sudo -u "$OPERATOR" -H "$@"; }
@@ -359,7 +351,7 @@ if [ "$MODE" = archive ]; then
   [ -e "$DEST/SHA256SUMS" ] && die "$DEST already holds an archive; name another directory"
   # **The delegated door shuts for the snapshot** (Codex on #79): each rule is
   # moved to a dot-name sudo never reads, so no connector can start a run
-  # while tar and pg_dump copy, then every agent is asked again. A run found
+  # while tar copies, then every agent is asked again. A run found
   # puts the rules back and refuses. Otherwise they stay disabled, archived
   # under their disabled names, until the purge removes them. To serve again
   # without purging, move each `.weaver-<agent>.decommissioning` back to
@@ -398,7 +390,6 @@ if [ "$MODE" = archive ]; then
     echo "driver    $(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -1 || echo none)"
     echo "nvcc      $([ -n "$NVCC" ] && "$NVCC" --version | tail -1 || echo none)"
     echo "cccl      $(pacman -Q cccl 2>/dev/null || echo unknown)"
-    echo "postgres  $(pacman -Q postgresql 2>/dev/null || echo unknown)"
     echo "toolchain $(as_op rustup show active-toolchain 2>/dev/null | cut -d' ' -f1 || echo unknown)"
     echo
     echo "## accounts"; for u in "${WEAVER_USERS[@]}"; do getent passwd "$u" || true; done
@@ -416,11 +407,6 @@ if [ "$MODE" = archive ]; then
     echo
     echo "## models (kept in place, not copied)"
     for p in "${!PREFIXES[@]}"; do [ -d "$p/models" ] && { find "$p/models" -type f -size +1M -exec sha256sum {} \; 2>/dev/null || true; }; done
-    echo
-    echo "## store"
-    echo "roles: ${PG_ROLES[*]:-none}"; echo "databases: ${PG_DBS[*]:-none}"
-    [ -n "$HBA" ]   && { echo "## $HBA weaver lines";   grep -n 'weaver' "$HBA" 2>/dev/null || true; }
-    [ -n "$IDENT" ] && { echo "## $IDENT weaver lines"; grep -n 'weaver' "$IDENT" 2>/dev/null || true; }
     echo
     echo "## modes of everything archived"
     for pth in "${TERRITORY_PATHS[@]}" "${HOMES[@]}" "${!PREFIXES[@]}" /etc/weaver; do
@@ -475,19 +461,8 @@ if [ "$MODE" = archive ]; then
   [ ${#HOMES[@]} -gt 0 ] && archive_path home-weaver-users "${HOMES[@]}"
   [ ${#TMP_PATHS[@]} -gt 0 ] && archive_path tmp-weaver "${TMP_PATHS[@]}"
 
-  if [ ${#PG_DBS[@]} -gt 0 ]; then
-    as_op mkdir -p "$DEST/postgres"
-    for db in "${PG_DBS[@]}"; do
-      sudo -u postgres pg_dump -Fc "$db" | to_file "$DEST/postgres/$db.dump"
-      plan "postgres/$db.dump"
-    done
-    { sudo -u postgres pg_dumpall --roles-only 2>/dev/null | grep -i weaver || true; } | to_file "$DEST/postgres/roles.sql"
-    [ -n "$HBA" ]   && cat "$HBA"   | to_file "$DEST/postgres/pg_hba.conf"
-    [ -n "$IDENT" ] && cat "$IDENT" | to_file "$DEST/postgres/pg_ident.conf"
-  fi
-
-  # What --purge may touch, and nothing else. Accounts, roles and databases
-  # are listed by kind so the purge removes them by the right verb.
+  # What --purge may touch, and nothing else. Accounts and groups are listed
+  # by kind so the purge removes them by the right verb.
   {
     for pth in "${PURGE[@]}"; do echo "path $pth"; done
     # The run directories are tmpfs state, purged without an archive.
@@ -497,10 +472,6 @@ if [ "$MODE" = archive ]; then
     done
     for u in "${WEAVER_USERS[@]}";  do echo "user $u"; done
     for g in "${WEAVER_GROUPS[@]}"; do echo "group $g"; done
-    for db in "${PG_DBS[@]}";       do echo "database $db"; done
-    for r in "${PG_ROLES[@]}";      do echo "role $r"; done
-    [ -n "$HBA" ]   && echo "hba $HBA"
-    [ -n "$IDENT" ] && echo "ident $IDENT"
     true
   } | to_file "$DEST/PURGE-LIST"
 
@@ -536,29 +507,6 @@ say "units"
 for u in "${UNITS[@]}"; do systemctl stop "$u" 2>/dev/null || true; systemctl reset-failed "$u" 2>/dev/null || true; plan "stopped $u"; done
 systemctl stop "$SLICE" 2>/dev/null && plan "stopped $SLICE" || true
 
-say "store"
-while read -r kind name; do
-  case $kind in
-    database) sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS $name;" >/dev/null && plan "dropped database $name" ;;
-  esac
-done < "$DEST/PURGE-LIST"
-while read -r kind name; do
-  case $kind in
-    role) sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c "DROP ROLE IF EXISTS $name;" >/dev/null && plan "dropped role $name" ;;
-  esac
-done < "$DEST/PURGE-LIST"
-while read -r kind name; do
-  case $kind in
-    hba|ident)
-      cp -a "$name" "$name.before-decommission-$STAMP"
-      # create-agent.sh wrote `local <db> <role> peer map=weaver` and
-      # `weaver <member> <role>`; both carry the word, nothing else in a
-      # stock file does.
-      sed -i '/weaver/d' "$name"
-      plan "removed weaver lines from $name (backup beside it)" ;;
-  esac
-done < "$DEST/PURGE-LIST"
-systemctl is-active --quiet postgresql 2>/dev/null && systemctl reload postgresql
 
 say "accounts"
 while read -r kind name; do
