@@ -326,7 +326,14 @@ install prefix, `/opt/weaver` by default.
 
    A territory from before 2026-10-02 that is still grouped to its member and setgid is
    re-laid first, with its trace root:weaver-<a>-trace 0640, as `create-agent.sh` makes
-   one (`HowToDeployANewAgent.md` section 0).
+   one (`HowToDeployANewAgent.md` section 0). **Every trace must stand root's, grouped
+   `weaver-<a>-trace`, 0640**, which admin checks at every load since #62. An admin
+   before #62 recreated a lost trace root:root, so re-lay any such regular file with
+   `sudo chown root:weaver-$A-trace <trace> && sudo chmod 0640 <trace>`, and remove a
+   link or any other entry at the trace's path and provision the trace afresh, since
+   chown and chmod follow a link. `update-stack.sh` refuses before its build while one
+   stands otherwise, naming what it found and what is required and pointing here, and
+   prints no command.
 
 4. **Install the connector's sudo rule**, checked before it is placed:
 
@@ -347,7 +354,10 @@ install prefix, `/opt/weaver` by default.
    write `library-path` with the install's library directory (`<prefix>/lib`), root
    0644.
 
-6. **Install** with `deploy/update-stack.sh --install`, which now installs
+6. **Pull main first** (`git pull --ff-only` on `main`), so the `update-stack.sh` that runs
+   carries the checks of the stack it installs, the trace preflight of step 3 among
+   them. A script from before that re-executes itself after its fast-forward would run
+   its old checks. Then **install** with `deploy/update-stack.sh --install`, which now installs
    `weaver-trace-relay`, then validates, loads and reads back every agent before it
    reports the box current. Run `sudo deploy/verify-load.sh <a>` for each agent to
    check its constituents. The old per-agent logs `/var/log/weaver/<a>/admin.log` stay

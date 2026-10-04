@@ -20,6 +20,7 @@
 # this diffs deployed against built and installs only what differs.
 set -euo pipefail
 
+ORIGINAL_ARGS=("$@")
 INSTALL=0
 [ "${1:-}" = "--install" ] && INSTALL=1
 
@@ -377,6 +378,37 @@ for agent in $AGENTS; do
 done
 printf '  elected store every agent under the base elects one this build carries\n'
 
+# **Every file sink's trace stands as the territory lays it out**, root's,
+# grouped `weaver-<agent>-trace`, 0640, which the admin this installs checks at
+# every load (#62). An admin before #62 recreated a lost trace root:root, and
+# `validate` never opens the sink, so such a trace is found here, before the
+# build, with the command that re-lays it, rather than at the verify step's
+# load after the install (Codex on #82). Asked of the file itself, as the
+# operator, who passes the territory by its group.
+for agent in $AGENTS; do
+  decl=$(declaration_of "$agent") || exit 1
+  rc=0
+  kind=$(declared "$decl" trace-sink.kind string) || rc=$?
+  [ "$rc" -eq 0 ] && [ "$kind" = file ] || continue
+  sink=$(declared "$decl" trace-sink.path string) || die "$agent: the declaration's trace-sink.path does not read"
+  [ -e "$sink" ] || [ -L "$sink" ] || continue
+  # The type by predicate, never by `%F`'s words, which call a zero-byte file
+  # "regular empty file" (Codex on #82).
+  t_type="regular file"
+  { [ -f "$sink" ] && [ ! -L "$sink" ]; } || t_type="not a regular file"
+  read -r t_owner t_group t_mode < <(stat -c '%u %G %a' -- "$sink" 2>/dev/null) \
+    || die "$agent: cannot read its trace $sink as $OPERATOR_NAME, so whether it stands as #62 requires is unknown"
+  # **The facts, and no command** (the Planner's call on #82): a printed root
+  # command grows a surface with each fix, a link it follows, a path it does
+  # not quote, so the refusal names what stands and what is required and
+  # points to the runbook, where the operator reads the re-lay with a real
+  # path in context.
+  if [ "$t_type" != "regular file" ] || [ "$t_owner" != 0 ] || [ "$t_group" != "weaver-$agent-trace" ] || [ "$t_mode" != 640 ]; then
+    die "$agent: its trace $(printf '%q' "$sink") stands as uid $t_owner, group $t_group, mode $t_mode, $t_type. The admin this installs requires uid 0, group weaver-$agent-trace, mode 640, a regular file and not a link (#62). Re-lay it per deploy/REDEPLOY.md section 8, step 3, then rerun."
+  fi
+done
+printf '  traces        every file sink stands as the territory lays it out\n'
+
 # --------------------------------------------------------------- 2. update main
 say "tree"
 # **A failed refresh is not a stale-but-fine refresh.** Suppressing it would
@@ -393,6 +425,15 @@ else
 fi
 AFTER=$(git rev-parse --short HEAD)
 printf '  %s -> %s\n' "$BEFORE" "$AFTER"
+# **The run checks with the code it installs** (Codex on #82): a fast-forward
+# that moved HEAD has changed this very script, and the checks above ran from
+# the copy that started, so the fetched copy runs the whole plan again, once.
+# The very first upgrade to a script carrying this re-execution runs the old
+# copy; REDEPLOY.md section 8 has the operator pull main first for that reason.
+if [ "$BEFORE" != "$AFTER" ] && [ -z "${WEAVER_UPDATE_REEXECUTED:-}" ]; then
+  printf '  the tree moved, so the fetched update-stack.sh runs the plan again\n'
+  exec env WEAVER_UPDATE_REEXECUTED=1 bash "$REPO/deploy/update-stack.sh" "${ORIGINAL_ARGS[@]}"
+fi
 # **A commit names what is installed only if the tree matches it.** Any
 # uncommitted edit, a hand-changed source or a lock cargo repaired on its way
 # past, installs under this commit's name and the closing line says the box

@@ -276,5 +276,4 @@ sudo install -d -o root -g root -m 0755 "$AGENT_DIR"
 
 say "installed at $REV"
 plan "next: deploy/create-agent.sh <name> --engine <sqlite|postgres> --artifact <path> [--apply], one agent at a time"
-plan "then: sudo WEAVER_ADMIN_CONFIG=$ADMIN_BASE $PREFIX/bin/weaver-admin validate <name>"
-plan "then: sudo deploy/verify-load.sh <name>"
+plan "then: validate each agent with the validate verb of $(printf '%q' "$PREFIX/bin/weaver-admin") as root, and prove its load with deploy/verify-load.sh as root (deploy/HowToDeployANewAgent.md section 4)"

@@ -28,6 +28,14 @@ if name == 'stat':
     # tester's, so the ownership `held_closed` judges is answered as uid 0
     # for anything under the fixture and read from the file itself elsewhere;
     # the mode is always the file's own. Not logged: it is a look, not a call.
+    if args[:1] == ['-c'] and args[1] == '%u %G %a':
+        # The trace's look: root under the fixture, its group what the test
+        # names, its mode the file's own.
+        path = pathlib.Path(args[-1])
+        st = os.lstat(path)
+        print(0 if path.is_relative_to(root) else st.st_uid, os.environ.get('TRACE_GROUP_AS', 'nobody-group'),
+              format(st.st_mode & 0o7777, 'o'))
+        sys.exit(0)
     if args[:1] == ['-c'] and args[1] == '%u %a':
         path = pathlib.Path(args[-1])
         st = os.lstat(path)
@@ -243,7 +251,7 @@ class PlanTests(unittest.TestCase):
                     "FIXTURE_ROOT": str(self.root)}
         for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "ROLE_COLLISION", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
                      "VISUDO_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
-                     "COLLISION_GROUP", "KEEP_ALIVE"):
+                     "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS"):
             self.env.pop(name, None)
         # Redirect even shell builtin /home probes into the fixture. The
         # production scripts have no test-only path switches and never read
@@ -288,6 +296,16 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
     def create_naming(self, *args):
         self.install_stack()
         return self.run_script("create-agent.sh", "m1", "--artifact", str(self.artifact), *args)
+
+    def assert_no_printed_root_command(self, result):
+        # No script prints a root command for the operator to copy, every
+        # remedy pointing to the runbook instead (the Planner's call on #82).
+        # A command is sudo followed by an option, a path, an assignment or a
+        # file verb; the plan's "sudo rule" label is none of these.
+        import re as _re
+        command = _re.compile(r"(^|[\s:])sudo\s+(-|/|[A-Z_]+=|deploy/|chown|chmod|chgrp|rm\b|mv\b)")
+        printed = [l for l in (result.stdout + result.stderr).splitlines() if command.search(l)]
+        self.assertEqual(printed, [], printed)
 
     def assert_unprivileged(self):
         # `systemctl list-units` is a look any user may take, and the only
@@ -604,6 +622,8 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertFalse(any("psql" in c or "systemctl" in c for c in calls), calls)
         self.assertTrue(any(c[:4] == ["sudo", "-u", "weaver-m1", "test"] for c in calls))
         self.assert_rule(["show", "validate", "load", "unload", "stop"])
+        self.assertIn("validate it before loading, with the validate verb of", result.stdout)
+        self.assert_no_printed_root_command(result)
 
     def test_the_connector_role_chooses_the_rules_lines(self):
         # weaver-admin-Spec section 2: the observer's rule grants `show`, the
@@ -1255,6 +1275,60 @@ esac
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("cannot ask systemd", result.stderr)
         self.assertFalse(any(c[:2] == ["systemctl", "list-units"] for c in self.calls()))
+
+    def test_stack_refuses_a_trace_the_old_admin_recreated(self):
+        # Codex on #82: an admin before #62 recreated a lost trace root:root,
+        # which the new admin refuses at load and validate never sees, so the
+        # plan refuses it before the build, naming the re-lay. Perturbation:
+        # drop the preflight, and the run reaches the build.
+        decl = self.operator_home / ".weaveragent" / "existing" / "agent.toml"
+        # A path holding a space and a substitution, which a TOML string
+        # carries and the printed command must quote.
+        trace = self.root / "agents" / "a trace $(id).ndjson"
+        trace.write_text("")
+        trace.chmod(0o640)
+        decl.write_text(f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "file"\npath = "{trace}"\ncreate = true\n')
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        # The facts and no command (the Planner's call on #82): what stands,
+        # what is required, and the runbook step. Perturbation: print a
+        # command again, and a line starts with sudo.
+        for fact in ("uid 0", "group nobody-group", "mode 640", "regular file",
+                     "requires uid 0, group weaver-existing-trace, mode 640, a regular file and not a link",
+                     "deploy/REDEPLOY.md section 8, step 3"):
+            self.assertIn(fact, result.stderr)
+        self.assert_no_printed_root_command(result)
+        self.assertFalse(any(c[:2] == ["cargo", "build"] for c in self.calls()))
+        self.log.unlink(missing_ok=True)
+        self.env["TRACE_GROUP_AS"] = "weaver-existing-trace"
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("every file sink stands as the territory lays it out", result.stdout)
+        # The trace is empty, as a freshly provisioned one is, and still passes:
+        # its type is asked by predicate, never by stat's words for it.
+        self.assertEqual(trace.stat().st_size, 0)
+        # A link at the trace's path is given no command, chown and chmod
+        # following a link to whatever it names. Perturbation: give it the
+        # re-lay command, and this fails.
+        target = self.root / "agents" / "elsewhere"
+        target.write_text("")
+        trace.unlink()
+        trace.symlink_to(target)
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("not a regular file", result.stderr)
+        self.assert_no_printed_root_command(result)
+
+    def test_stack_runs_the_fetched_copy_after_its_fast_forward(self):
+        # Codex on #82: the checks run from the copy that started, so a
+        # fast-forward that moved HEAD re-executes the fetched script once.
+        # Perturbation: drop the re-execution, or its guard, and this fails.
+        text = (self.repo / "deploy" / "update-stack.sh").read_text()
+        after = text.index('AFTER=$(git rev-parse --short HEAD)')
+        reexec = text.index('exec env WEAVER_UPDATE_REEXECUTED=1 bash "$REPO/deploy/update-stack.sh" "${ORIGINAL_ARGS[@]}"')
+        self.assertLess(after, reexec)
+        self.assertIn('[ "$BEFORE" != "$AFTER" ] && [ -z "${WEAVER_UPDATE_REEXECUTED:-}" ]', text)
+        self.assertLess(text.index('ORIGINAL_ARGS=("$@")'), text.index('INSTALL=0'))
 
     def test_stack_reads_each_declaration_from_its_directory(self):
         # The declaration lives in the directory the root names. One the

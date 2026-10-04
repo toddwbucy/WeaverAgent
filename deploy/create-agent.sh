@@ -625,11 +625,12 @@ say "territory"
 # directory. The territory is root's, grouped to the member, 0710 and not
 # setgid: the member may pass to its room but not list, and nothing written
 # here takes the member's group. The trace is made here, before the first load,
-# root:$TRACE_GROUP 0640: admin opens an existing sink append-only and leaves
-# its owner and mode alone, so the member, outside that group, cannot read it,
-# and the operator reads it through the group. Were the file ever removed,
-# admin recreates it root:root 0640, which fails closed. The agent's uid, in no
-# group of either, cannot enter. The state subdirectory is the member's own.
+# root:$TRACE_GROUP 0640, the layout admin checks at every load (#62): admin
+# opens it append-only, never through a link, and refuses a trace that stands
+# otherwise, so the member, outside that group, cannot read it, and the
+# operator reads it through the group. Were the file ever removed, admin
+# recreates it at this same layout where the declaration elects creation. The
+# agent's uid, in no group of either, cannot enter. The state subdirectory is the member's own.
 sudo install -d -o root -g "$MEMBER_USER" -m 0710 "$HOME_DIR"
 sudo install -o root -g "$TRACE_GROUP" -m 0640 /dev/null "$HOME_DIR/trace.ndjson"
 sudo install -d -o "$MEMBER_USER" -g "$MEMBER_USER" -m 0700 "$STATE_DIR"
@@ -800,9 +801,8 @@ if [ "$ADMIN_BASE" = /etc/weaver/admin ]; then
   if answer=$(probe_connector "$check_verb"); then
     printf '   %s ran %s through its rule: %s\n' "$CONNECTOR_USER" "$check_verb" "$answer"
   else
-    die "$NAME is admitted, but its connector $CONNECTOR_USER could not run $check_verb through $SUDO_RULE: $answer. Another sudo policy may override the rule (sudo -l -U $CONNECTOR_USER shows what it grants)"
+    die "$NAME is admitted, but its connector $CONNECTOR_USER could not run $check_verb through $SUDO_RULE: $answer. Another sudo policy may override the rule. Listing what it grants the connector is in deploy/HowToDeployANewAgent.md section 5."
   fi
 fi
-printf '   validate it before loading:\n'
-printf '     sudo WEAVER_ADMIN_CONFIG=%s %s validate %s\n' "$ADMIN_BASE" "$ADMIN_BINARY" "$NAME"
-printf '   then: sudo deploy/verify-load.sh %s\n' "$NAME"
+printf '   validate it before loading, with the validate verb of %q for %s as root,\n' "$ADMIN_BINARY" "$NAME"
+printf '   then prove its load with deploy/verify-load.sh as root (deploy/HowToDeployANewAgent.md section 4)\n'
