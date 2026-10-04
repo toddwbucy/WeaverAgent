@@ -63,9 +63,12 @@ behind a boundary the kernel enforces.
 
 ## Architecture
 
-A deployed agent is up to five processes on one machine: the worker, the SPU and the
-gate, the state member unless the store engine is `none`, and the trace relay where the
-sink is a file. Beside them stands its own `weaver-admin`, the
+A deployed agent is a set of processes on one machine, with the declaration electing
+which ones stand. Admin's start step stands the worker, and the state member and the
+trace relay where the declaration elects them. The worker forks the SPU, the gate and
+any further organs the declaration names. `weaver-admin-Spec` section 6 and
+`weaver-harness-Spec` section 2 are the authority on the exact set, and this file
+does not count it. Beside them stands its own `weaver-admin`, the
 agent's lifecycle driver and management plane. Admin runs per verb as root, from the
 operator's root shell or, for admin-con, through a strict sudo rule that grants fixed
 command lines with no caller-chosen argument, and is not resident while the agent
@@ -90,8 +93,8 @@ line is a Unix domain socket, and there is no listening network socket anywhere.
 
 - **`weaver-harness`** is the content-neutral switchboard: it holds the sockets, routes
   between organs, authors the trace, and holds no opinion about content. Its
-  `src/bin/worker` is the composition root admin's start step runs under the agent's
-  uid, and `src/bin/pyworker` (feature `pyworker`, links pyo3) runs a loop written in
+  `src/bin/worker` is the composition root, run under the agent's uid by admin's start
+  step, and `src/bin/pyworker` (feature `pyworker`, links pyo3) runs a loop written in
   Python.
   Loops are workflow documents under `docs/crates/weaver-harness/Loops/`, not code in
   the switchboard.
@@ -113,8 +116,7 @@ line is a Unix domain socket, and there is no listening network socket anywhere.
   that agent's config root `<base>/<agent>/` (base from `WEAVER_ADMIN_CONFIG`, default
   `/etc/weaver/admin`), opens its trace sink and hands it to the worker, and names its
   SPU by that root's `spu-binary`. Its start step takes the run lock and stands the
-  worker, the state member unless the store engine is `none`, and the trace relay
-  where the sink is a file (Spec section 6, #72).
+  agent's processes as the declaration elects them (Spec section 6, #72).
 - **`weaver-internal`** holds internal tools that run inside the loop (the calculator).
   A tool that binds a listening port is external and reaches the agent through the gate;
   one that does not is internal.
