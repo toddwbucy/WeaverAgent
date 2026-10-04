@@ -297,6 +297,16 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.install_stack()
         return self.run_script("create-agent.sh", "m1", "--artifact", str(self.artifact), *args)
 
+    def assert_no_printed_root_command(self, result):
+        # No script prints a root command for the operator to copy, every
+        # remedy pointing to the runbook instead (the Planner's call on #82).
+        # A command is sudo followed by an option, a path, an assignment or a
+        # file verb; the plan's "sudo rule" label is none of these.
+        import re as _re
+        command = _re.compile(r"(^|[\s:])sudo\s+(-|/|[A-Z_]+=|deploy/|chown|chmod|chgrp|rm\b|mv\b)")
+        printed = [l for l in (result.stdout + result.stderr).splitlines() if command.search(l)]
+        self.assertEqual(printed, [], printed)
+
     def assert_unprivileged(self):
         # `systemctl list-units` is a look any user may take, and the only
         # systemctl call a plan makes.
@@ -612,6 +622,8 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertFalse(any("psql" in c or "systemctl" in c for c in calls), calls)
         self.assertTrue(any(c[:4] == ["sudo", "-u", "weaver-m1", "test"] for c in calls))
         self.assert_rule(["show", "validate", "load", "unload", "stop"])
+        self.assertIn("validate it before loading, with the validate verb of", result.stdout)
+        self.assert_no_printed_root_command(result)
 
     def test_the_connector_role_chooses_the_rules_lines(self):
         # weaver-admin-Spec section 2: the observer's rule grants `show`, the
@@ -1278,14 +1290,14 @@ esac
         decl.write_text(f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "file"\npath = "{trace}"\ncreate = true\n')
         result = self.run_script("update-stack.sh")
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("Re-lay it first: sudo chown root:weaver-existing-trace", result.stderr)
-        # The printed command names the path as one shell word, so a path
-        # holding a space or a substitution runs nothing when copied.
-        # Perturbation: print the path verbatim, and the quoted form is absent.
-        import shlex as _shlex
-        printed = result.stderr.split("Re-lay it first: ", 1)[1].split(" (deploy/REDEPLOY.md")[0]
-        words = _shlex.split(printed)
-        self.assertEqual(words.count(str(trace)), 2, printed)
+        # The facts and no command (the Planner's call on #82): what stands,
+        # what is required, and the runbook step. Perturbation: print a
+        # command again, and a line starts with sudo.
+        for fact in ("uid 0", "group nobody-group", "mode 640", "regular file",
+                     "requires uid 0, group weaver-existing-trace, mode 640, a regular file and not a link",
+                     "deploy/REDEPLOY.md section 8, step 3"):
+            self.assertIn(fact, result.stderr)
+        self.assert_no_printed_root_command(result)
         self.assertFalse(any(c[:2] == ["cargo", "build"] for c in self.calls()))
         self.log.unlink(missing_ok=True)
         self.env["TRACE_GROUP_AS"] = "weaver-existing-trace"
@@ -1304,9 +1316,8 @@ esac
         trace.symlink_to(target)
         result = self.run_script("update-stack.sh")
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("is not a regular file", result.stderr)
-        self.assertIn("No command is given for it", result.stderr)
-        self.assertNotIn("sudo chown", result.stderr)
+        self.assertIn("not a regular file", result.stderr)
+        self.assert_no_printed_root_command(result)
 
     def test_stack_runs_the_fetched_copy_after_its_fast_forward(self):
         # Codex on #82: the checks run from the copy that started, so a

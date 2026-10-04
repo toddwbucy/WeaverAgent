@@ -398,19 +398,13 @@ for agent in $AGENTS; do
   { [ -f "$sink" ] && [ ! -L "$sink" ]; } || t_type="not a regular file"
   read -r t_owner t_group t_mode < <(stat -c '%u %G %a' -- "$sink" 2>/dev/null) \
     || die "$agent: cannot read its trace $sink as $OPERATOR_NAME, so whether it stands as #62 requires is unknown"
-  # **The remedy fits what stands** (Codex on #82): a regular file is re-laid
-  # in place, owner included; a link or any other entry is never given a
-  # command, chown and chmod following a link to whatever it names, so it is
-  # removed and the trace provisioned as create-agent.sh lays it out.
-  if [ "$t_type" != "regular file" ]; then
-    die "$agent: its trace $sink is not a regular file (a link or another entry), and the admin this installs refuses it (#62). Remove it and provision the trace as create-agent.sh lays it out, root:weaver-$agent-trace 0640 (deploy/REDEPLOY.md section 8). No command is given for it: chown and chmod would follow a link."
-  fi
-  if [ "$t_owner" != 0 ] || [ "$t_group" != "weaver-$agent-trace" ] || [ "$t_mode" != 640 ]; then
-    # The path is shell-quoted in the printed command, so a path holding a
-    # space, a glob or a substitution is copied as one word and runs nothing
-    # (Codex on #82).
-    quoted=$(printf '%q' "$sink")
-    die "$agent: its trace $sink stands as uid $t_owner, group $t_group, mode $t_mode, and the admin this installs refuses a trace not root's, grouped weaver-$agent-trace and 0640 (#62). Re-lay it first: sudo chown root:weaver-$agent-trace -- $quoted && sudo chmod 0640 -- $quoted (deploy/REDEPLOY.md section 8)"
+  # **The facts, and no command** (the Planner's call on #82): a printed root
+  # command grows a surface with each fix, a link it follows, a path it does
+  # not quote, so the refusal names what stands and what is required and
+  # points to the runbook, where the operator reads the re-lay with a real
+  # path in context.
+  if [ "$t_type" != "regular file" ] || [ "$t_owner" != 0 ] || [ "$t_group" != "weaver-$agent-trace" ] || [ "$t_mode" != 640 ]; then
+    die "$agent: its trace $(printf '%q' "$sink") stands as uid $t_owner, group $t_group, mode $t_mode, $t_type. The admin this installs requires uid 0, group weaver-$agent-trace, mode 640, a regular file and not a link (#62). Re-lay it per deploy/REDEPLOY.md section 8, step 3, then rerun."
   fi
 done
 printf '  traces        every file sink stands as the territory lays it out\n'

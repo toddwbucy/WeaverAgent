@@ -801,9 +801,8 @@ if [ "$ADMIN_BASE" = /etc/weaver/admin ]; then
   if answer=$(probe_connector "$check_verb"); then
     printf '   %s ran %s through its rule: %s\n' "$CONNECTOR_USER" "$check_verb" "$answer"
   else
-    die "$NAME is admitted, but its connector $CONNECTOR_USER could not run $check_verb through $SUDO_RULE: $answer. Another sudo policy may override the rule (sudo -l -U $CONNECTOR_USER shows what it grants)"
+    die "$NAME is admitted, but its connector $CONNECTOR_USER could not run $check_verb through $SUDO_RULE: $answer. Another sudo policy may override the rule. Listing what it grants the connector is in deploy/HowToDeployANewAgent.md section 5."
   fi
 fi
-printf '   validate it before loading:\n'
-printf '     sudo WEAVER_ADMIN_CONFIG=%q %q validate %s\n' "$ADMIN_BASE" "$ADMIN_BINARY" "$NAME"
-printf '   then: sudo deploy/verify-load.sh %s\n' "$NAME"
+printf '   validate it before loading, with the validate verb of %q for %s as root,\n' "$ADMIN_BINARY" "$NAME"
+printf '   then prove its load with deploy/verify-load.sh as root (deploy/HowToDeployANewAgent.md section 4)\n'
