@@ -1276,7 +1276,7 @@ esac
         decl.write_text(f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "file"\npath = "{trace}"\ncreate = true\n')
         result = self.run_script("update-stack.sh")
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("Re-lay it first: sudo chgrp weaver-existing-trace", result.stderr)
+        self.assertIn("Re-lay it first: sudo chown root:weaver-existing-trace", result.stderr)
         self.assertFalse(any(c[:2] == ["cargo", "build"] for c in self.calls()))
         self.log.unlink(missing_ok=True)
         self.env["TRACE_GROUP_AS"] = "weaver-existing-trace"
@@ -1286,6 +1286,18 @@ esac
         # The trace is empty, as a freshly provisioned one is, and still passes:
         # its type is asked by predicate, never by stat's words for it.
         self.assertEqual(trace.stat().st_size, 0)
+        # A link at the trace's path is given no command, chown and chmod
+        # following a link to whatever it names. Perturbation: give it the
+        # re-lay command, and this fails.
+        target = self.root / "agents" / "elsewhere"
+        target.write_text("")
+        trace.unlink()
+        trace.symlink_to(target)
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("is not a regular file", result.stderr)
+        self.assertIn("No command is given for it", result.stderr)
+        self.assertNotIn("sudo chown", result.stderr)
 
     def test_stack_runs_the_fetched_copy_after_its_fast_forward(self):
         # Codex on #82: the checks run from the copy that started, so a

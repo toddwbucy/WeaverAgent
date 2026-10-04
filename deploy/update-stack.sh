@@ -398,8 +398,15 @@ for agent in $AGENTS; do
   { [ -f "$sink" ] && [ ! -L "$sink" ]; } || t_type="not a regular file"
   read -r t_owner t_group t_mode < <(stat -c '%u %G %a' -- "$sink" 2>/dev/null) \
     || die "$agent: cannot read its trace $sink as $OPERATOR_NAME, so whether it stands as #62 requires is unknown"
-  if [ "$t_type" != "regular file" ] || [ "$t_owner" != 0 ] || [ "$t_group" != "weaver-$agent-trace" ] || [ "$t_mode" != 640 ]; then
-    die "$agent: its trace $sink stands as uid $t_owner, group $t_group, mode $t_mode ($t_type), and the admin this installs refuses a trace not root's, grouped weaver-$agent-trace and 0640 (#62). Re-lay it first: sudo chgrp weaver-$agent-trace $sink && sudo chmod 0640 $sink (deploy/REDEPLOY.md section 8)"
+  # **The remedy fits what stands** (Codex on #82): a regular file is re-laid
+  # in place, owner included; a link or any other entry is never given a
+  # command, chown and chmod following a link to whatever it names, so it is
+  # removed and the trace provisioned as create-agent.sh lays it out.
+  if [ "$t_type" != "regular file" ]; then
+    die "$agent: its trace $sink is not a regular file (a link or another entry), and the admin this installs refuses it (#62). Remove it and provision the trace as create-agent.sh lays it out, root:weaver-$agent-trace 0640 (deploy/REDEPLOY.md section 8). No command is given for it: chown and chmod would follow a link."
+  fi
+  if [ "$t_owner" != 0 ] || [ "$t_group" != "weaver-$agent-trace" ] || [ "$t_mode" != 640 ]; then
+    die "$agent: its trace $sink stands as uid $t_owner, group $t_group, mode $t_mode, and the admin this installs refuses a trace not root's, grouped weaver-$agent-trace and 0640 (#62). Re-lay it first: sudo chown root:weaver-$agent-trace $sink && sudo chmod 0640 $sink (deploy/REDEPLOY.md section 8)"
   fi
 done
 printf '  traces        every file sink stands as the territory lays it out\n'
