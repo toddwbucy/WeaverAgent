@@ -22,9 +22,10 @@ state management and memory are built from it and rebuild from it.
 
 - **The three layers:** trace, state management and memory, with authority running
   downward.
-- **Custody:** the agent never reaches its own trace. Root opens the sink, and readers
-  reach it only through the trace group or the trace relay's door, which admits the one
-  reader the agent's `roles.toml` declares.
+- **Custody:** the agent never reaches its own trace. Root opens the sink, and for a
+  file sink readers reach it only through the trace group or the trace relay's door,
+  which admits the one reader the agent's `roles.toml` declares (weaver-admin-Spec
+  section 6). A pipe or socket sink's reader is the operator's own.
 - **Save-point events,** and how a rebuild honours a reset.
 - **Reproducibility:** what the deployment-tuple run proved (WeaverTools#9).
 - **What the trace does not record:** side effects beyond the agent's seams, such as

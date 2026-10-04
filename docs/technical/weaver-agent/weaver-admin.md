@@ -163,10 +163,11 @@ refusal travels back inside the enter aggregate. Admin arbitrates no hardware
 at any point.
 
 **Network ingress.** There is none, here or anywhere in the program. A verb
-arrives as a command line run on the host, never over a socket, and the trace
-relay's door is a local socket that binds no port and admits one declared
-reader - and a network-attached surface on the admin side would be the first
-thing in the architecture arguing against the kernel bounding reach.
+arrives as a command line run on the host, never over a socket. Admin listens on
+no socket of its own, and the one socket its start step binds, for a file sink,
+is the trace relay's door, a local socket that binds no port and admits one
+declared reader - and a network-attached surface on the admin side would be the
+first thing in the architecture arguing against the kernel bounding reach.
 
 **Repair.** Admin repairs nothing, adjudicates nothing, and calls nothing
 good, over any artifact it touches.
