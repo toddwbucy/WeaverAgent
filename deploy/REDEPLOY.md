@@ -326,7 +326,11 @@ install prefix, `/opt/weaver` by default.
 
    A territory from before 2026-10-02 that is still grouped to its member and setgid is
    re-laid first, with its trace root:weaver-<a>-trace 0640, as `create-agent.sh` makes
-   one (`HowToDeployANewAgent.md` section 0).
+   one (`HowToDeployANewAgent.md` section 0). **Every trace must stand root's, grouped
+   `weaver-<a>-trace`, 0640**, which admin checks at every load since #62. An admin
+   before #62 recreated a lost trace root:root, so re-lay any such trace with `sudo
+   chgrp weaver-$A-trace <trace> && sudo chmod 0640 <trace>`. `update-stack.sh`
+   refuses before its build, naming the command, while one stands otherwise.
 
 4. **Install the connector's sudo rule**, checked before it is placed:
 

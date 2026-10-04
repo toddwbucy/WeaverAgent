@@ -28,6 +28,15 @@ if name == 'stat':
     # tester's, so the ownership `held_closed` judges is answered as uid 0
     # for anything under the fixture and read from the file itself elsewhere;
     # the mode is always the file's own. Not logged: it is a look, not a call.
+    if args[:1] == ['-c'] and args[1] == '%u %G %a %F':
+        # The trace's look: root under the fixture, its group what the test
+        # names, its mode and type the file's own.
+        path = pathlib.Path(args[-1])
+        st = os.lstat(path)
+        kind = 'regular file' if path.is_file() and not path.is_symlink() else 'other'
+        print(0 if path.is_relative_to(root) else st.st_uid, os.environ.get('TRACE_GROUP_AS', 'nobody-group'),
+              format(st.st_mode & 0o7777, 'o'), kind)
+        sys.exit(0)
     if args[:1] == ['-c'] and args[1] == '%u %a':
         path = pathlib.Path(args[-1])
         st = os.lstat(path)
@@ -243,7 +252,7 @@ class PlanTests(unittest.TestCase):
                     "FIXTURE_ROOT": str(self.root)}
         for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "ROLE_COLLISION", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
                      "VISUDO_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
-                     "COLLISION_GROUP", "KEEP_ALIVE"):
+                     "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS"):
             self.env.pop(name, None)
         # Redirect even shell builtin /home probes into the fixture. The
         # production scripts have no test-only path switches and never read
@@ -1255,6 +1264,26 @@ esac
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("cannot ask systemd", result.stderr)
         self.assertFalse(any(c[:2] == ["systemctl", "list-units"] for c in self.calls()))
+
+    def test_stack_refuses_a_trace_the_old_admin_recreated(self):
+        # Codex on #82: an admin before #62 recreated a lost trace root:root,
+        # which the new admin refuses at load and validate never sees, so the
+        # plan refuses it before the build, naming the re-lay. Perturbation:
+        # drop the preflight, and the run reaches the build.
+        decl = self.operator_home / ".weaveragent" / "existing" / "agent.toml"
+        trace = self.root / "agents" / "trace.ndjson"
+        trace.write_text("")
+        trace.chmod(0o640)
+        decl.write_text(f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "file"\npath = "{trace}"\ncreate = true\n')
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("Re-lay it first: sudo chgrp weaver-existing-trace", result.stderr)
+        self.assertFalse(any(c[:2] == ["cargo", "build"] for c in self.calls()))
+        self.log.unlink(missing_ok=True)
+        self.env["TRACE_GROUP_AS"] = "weaver-existing-trace"
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("every file sink stands as the territory lays it out", result.stdout)
 
     def test_stack_reads_each_declaration_from_its_directory(self):
         # The declaration lives in the directory the root names. One the

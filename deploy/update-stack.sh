@@ -377,6 +377,28 @@ for agent in $AGENTS; do
 done
 printf '  elected store every agent under the base elects one this build carries\n'
 
+# **Every file sink's trace stands as the territory lays it out**, root's,
+# grouped `weaver-<agent>-trace`, 0640, which the admin this installs checks at
+# every load (#62). An admin before #62 recreated a lost trace root:root, and
+# `validate` never opens the sink, so such a trace is found here, before the
+# build, with the command that re-lays it, rather than at the verify step's
+# load after the install (Codex on #82). Asked of the file itself, as the
+# operator, who passes the territory by its group.
+for agent in $AGENTS; do
+  decl=$(declaration_of "$agent") || exit 1
+  rc=0
+  kind=$(declared "$decl" trace-sink.kind string) || rc=$?
+  [ "$rc" -eq 0 ] && [ "$kind" = file ] || continue
+  sink=$(declared "$decl" trace-sink.path string) || die "$agent: the declaration's trace-sink.path does not read"
+  [ -e "$sink" ] || [ -L "$sink" ] || continue
+  read -r t_owner t_group t_mode t_type < <(stat -c '%u %G %a %F' -- "$sink" 2>/dev/null) \
+    || die "$agent: cannot read its trace $sink as $OPERATOR_NAME, so whether it stands as #62 requires is unknown"
+  if [ "$t_type" != "regular file" ] || [ "$t_owner" != 0 ] || [ "$t_group" != "weaver-$agent-trace" ] || [ "$t_mode" != 640 ]; then
+    die "$agent: its trace $sink stands as uid $t_owner, group $t_group, mode $t_mode ($t_type), and the admin this installs refuses a trace not root's, grouped weaver-$agent-trace and 0640 (#62). Re-lay it first: sudo chgrp weaver-$agent-trace $sink && sudo chmod 0640 $sink (deploy/REDEPLOY.md section 8)"
+  fi
+done
+printf '  traces        every file sink stands as the territory lays it out\n'
+
 # --------------------------------------------------------------- 2. update main
 say "tree"
 # **A failed refresh is not a stale-but-fine refresh.** Suppressing it would
