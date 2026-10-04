@@ -1066,8 +1066,10 @@ the territory lays it out** (#56): owned by root or the admin principal, grouped
 provisioned, which refuses rather than being appended to. Where the flag is set and no
 trace stands, admin creates it exclusively (`O_CREAT|O_EXCL`) and gives it that layout,
 so the next load finds it as provisioning would have. Every refusal here is
-`BoundaryUnverified`, naming the path on stderr, and an absent trace without the flag
-stays `DescriptorsUnusable`. This is the custody of charter section 7. The relay's
+`BoundaryUnverified`, naming the path on stderr. An absent trace without the flag is
+refused earlier, by section 4's inventory, as `BoundaryUnverified` before the open is
+reached, and only a trace that vanishes between the inventory and the open reads
+`DescriptorsUnusable` here. This is the custody of charter section 7. The relay's
 read-only reopen goes through `/proc/self/fd` of this judged descriptor, per section 6,
 and never through the path. Append-only rides the open file description, verified: a
 duplicate of the descriptor carries the flag, so the worker's copy appends wherever it
