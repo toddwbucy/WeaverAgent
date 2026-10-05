@@ -2072,8 +2072,9 @@ act: under the dead-peer conversion the unload would still finish clean and the 
 load would restore an older save point with no reset recorded, so whether a missed leave
 save point refuses the leave or keeps the run marked unclean is that act's to elect. A
 save point is never overwritten, so each answer names a new one, and this crate authors
-the event that records it, per `weaver-trace-PRD`, an event the tee never sends to state
-under any election, so the save point and a rebuild to its position hold the same. **A
+the `save_point` event that records it, per `weaver-trace-Spec` section 3, the save
+point by digest and the position it covers, an event the tee never sends to state under
+any election, so the save point and a rebuild to its position hold the same. **A
 live restore is the loop's to trigger**: on the operator's demand this crate sends the
 `restore` ask naming a save point in the member's room, and on its answer flushes the
 decode session to `keep = 0` through the decode contract's existing cut before the next
@@ -2141,13 +2142,15 @@ the ruling of 2026-10-02 on #58's fourth review round: the answered stamp, the s
 point's digest, run, sequence and last turn, must equal the same four members of the
 enter's `Lineage`, or be absent where the enter names none, the other members,
 `operator_supplied` and `built_from`, being admin's resolution and never the member's to
-answer, and a refusal, a miss, or a disagreement refuses the enter through the fan-out's
-after-load failure, so no `load` event names state the member did not restore. **The
-reset is authored from the enter**: where the enter carries `reset`, beside its lineage
-and whether or not a save point stands, resolved by admin from its clean-unload marker
-per `weaver-admin-Spec` section 4, this crate authors the reset event after the `load`
-event, naming the prior run, the reason, and the save point reset to or none where the
-store stands empty, so a rebuild from the record honours it, per `weaver-trace-PRD`.
+answer, and a refusal, a miss, or a disagreement refuses the enter before it authors
+`load`, through the fan-out's before-load refusal with the stream still clean, so no
+`load` event names state the member did not restore. **The reset rides the `load`
+event**: where the enter carries `reset`, beside its lineage and whether or not a save
+point stands, resolved by admin from its clean-unload marker per `weaver-admin-Spec`
+section 4, this crate copies it onto the `load` event beside the lineage, per
+`weaver-trace-Spec` section 3, the prior run and the reason, the save point reset to
+being the lineage's or none where the store stands empty, so a rebuild from the record
+honours it, per `weaver-trace-PRD`.
 **Each enter ask that returns events reaches the record as a `recall` before the open is
 built from it**, as of 2026-09-26 per `weaver-trace-Spec` section 3, a recall the
 recorder will not take being named in an `identity_prefix_unrecorded` fault rather than
@@ -2175,10 +2178,7 @@ the identity ask's miss being one of the two the dead-peer clause does not conve
 diagnostic enter therefore waits on the driver as its replay does and refuses without
 one after the bound**, and the answer it opens on is the record's own. **The instrument
 is perturbation, on the ordinal**: the first turn of a restoring run is numbered one,
-watched to fail when the ordinal is taken from the lineage's last turn. The perturbation
-that watched the restored conversation retires with the record restore, and the code act
-that lands the save point removes its test and rewrites the one-past-the-cut test of
-2026-09-06 to this rule.
+watched to fail when the ordinal is taken from the lineage's last turn.
 
 ```graph
 node: harness-restoring-run-numbers-turns-from-one

@@ -362,7 +362,7 @@ the derive default emits `"MessageUser"` and `rename_all = "snake_case"` emits
 it to a scheme would put a second spelling of every kind on the wire, which is the
 one-name-two-nodes defect the Document Format rules against for identifiers and
 which reads the same way for a consumer keying on a kind. The mapping is total:
-twenty-four variants, twenty-four renames, and the wire spelling is the charter's.
+twenty-five variants, twenty-five renames, and the wire spelling is the charter's.
 
 ```graph
 node: trace-kind-explicit-renames
@@ -447,7 +447,7 @@ from: weaver-trace
 to: trace-subsystem-case-set
 ```
 
-**Twenty-four kinds, exhaustive, matching charter section 3.1 exactly.** The enum is
+**Twenty-five kinds, exhaustive, matching charter section 3.1 exactly.** The enum is
 exhaustive rather than `#[non_exhaustive]` because the set is closed by ruling and
 adding one is an edit to the charter and to every contract naming the set: an
 attribute that let a consumer absorb a further kind into a wildcard would defeat
@@ -652,7 +652,7 @@ from: weaver-trace
 to: trace-turn-close-internally-tagged
 ```
 
-**The kind-to-payload mapping is total, twenty-four kinds and eighteen dispositions**,
+**The kind-to-payload mapping is total, twenty-five kinds and nineteen dispositions**,
 the payload-free case counting as one of them. `refusal` carries `Refusal`, spliced, the
 organ's own account of what it turned away. `session.closed` and `turn.started` carry
 `None`, and `unload` carries `UnloadClose`, its grant surface present where a member
@@ -668,9 +668,10 @@ its two own shapes, `ClassifyAsk` and `ClassifyScored`. **A refused classify aut
 output at all** and reaches the record under `refusal`, so a refusal the exchange met is
 still the record's fact and never a fabricated answer, carried by the kind the class
 gives it rather than by the outcome's own variant. The tool bracket's two carry
-`Deferred`. `recall` carries `RecallAccount`. `score` carries `TaskScore`. Three plus
-one plus five plus one plus one plus two plus four plus two plus two plus one plus one
-plus one is twenty-four, which is the whole of charter section 3.1's set.
+`Deferred`. `recall` carries `RecallAccount`. `score` carries `TaskScore`. `save_point`
+carries `SavePointTaken`. Three plus one plus five plus one plus one plus two plus four
+plus two plus two plus one plus one plus one plus one is twenty-five, which is the whole
+of charter section 3.1's set.
 
 **The count is stated because it has twice been wrong, and the second time
 it was wrong silently.** An earlier draft assigned thirteen and left
@@ -683,7 +684,7 @@ like a mapping that is total**, which is why the recount lands as prose here
 and as a member list above rather than as a claim about totality alone.
 
 **The kind count stopped being prose alone on 2026-09-16**, `tests/kinds.rs` checking
-an array of twenty-four against an exhaustive match over the kind set, so an act that
+an array of twenty-five against an exhaustive match over the kind set, so an act that
 adds a kind and answers the crate's own matches stops at that test's match. **It does
 not reach an act that writes the new arm there too and leaves the array alone**, both
 of the test's assertions walking the array and so never reaching a kind the array does
@@ -1058,6 +1059,27 @@ edge: asserts
 from: weaver-trace
 to: trace-score-records-the-verdict-and-its-terms
 ```
+
+**`save_point` records a save point taken, the twenty-fifth kind**, on the operator's
+ruling of 2026-10-02 on #58's fourth question that where state came from is a fact on
+the record, landed by the save-point act of 2026-10-05 with its emitter. The harness
+authors it from the state seam's `snapshot` answer, at every serving leave after
+`unload` and, with admin's save-point act, on the operator's demand, per
+`weaver-harness-Spec` section 6. **The payload is `SavePointTaken`**: `save_point`,
+the digest of the save point's bytes, which is its identity in the operator's directory
+and the `save_point` a later load's lineage names; `run` and `sequence`, the trace
+position of the last distillate it holds; `turn`, the last turn that run holds in it,
+zero where it holds none; and `name`, the file name the member wrote it under in its
+own room, so the operator can find the file the digest names, never its path. **The
+kind forbids a turn**, the save point being taken at the leave or between turns, for
+the flush's reason. **It never crosses the tee into state, whatever the election**, per
+the charter's section 3: it is provenance about the holdings, authored after the
+holdings it names were taken, so a save point could never hold its own event and a
+rebuild that landed it would hold what no restore holds, and `distill` refuses the kind
+before the election is consulted. The diagnostic record carries no save point, a
+diagnostic binding taking none. The restore's event and its operator-supplied mark are
+admin's save-point act's to name, and the reset rides the `load` event's `reset`
+member above.
 
 **`score` and the classify pair are the precedents for every loop judgment**, per the
 charter's section 3.1 on the operator's ruling of 2026-10-02: a judgment the loop makes,
@@ -1765,7 +1787,7 @@ arm dropped, the arm widened to any kind, and the render re-encoded through a
 sort rather than an owing.** What it watches is one row of
 `trace-kind-payload-mapping-total` and one payload's reading of
 `trace-splice-or-shape`, both review-tagged claims made over the whole set of
-twenty-four kinds and of every spliced payload. A `perturbation` tag on either
+twenty-five kinds and of every spliced payload. A `perturbation` tag on either
 would claim an instrument for a claim the instrument does not reach, a tag
 naming the mechanism its own clause names rather than the nearest test that
 touches it, and a node declared for the single row would be a second authority
@@ -1857,8 +1879,11 @@ the fact exists.
 - A restored message is recorded turnless under `message.restored` with the message
   whole, per section 3: the recorder refuses one carrying a turn or another kind's
   payload, watched to fail when the kind leaves `turn_forbidden` or the message
-  pairing row. The watch that a restoring enter lands the restored exchange with no
-  fault retires with the record restore, and the save-point code act removes it.
+  pairing row.
+- A save point taken is recorded turnless under `save_point` with its digest, position
+  and name, per section 3, authored by the harness after `unload` from the member's
+  answer, watched to fail when the ask is sent before `unload` is authored, and never
+  distilled by the tee, watched to fail when `distill` stops refusing the kind.
 - A score is recorded turnless with the verdict and the ratio's two terms, per section
   3: the recorder refuses one carrying a turn or another kind's payload, watched to fail
   when the kind leaves `turn_forbidden` or its pairing row, and the port records one per
@@ -1982,7 +2007,10 @@ custody and answered by not distilling, the guard standing against a caller outs
 custody rather than a case inside it. **A `message.restored` line distills whole too**,
 as of 2026-09-26 (#697): it is the conversation a branch's run opened under, and a
 restore from that branch rebuilds it from what custody holds, so no election may thin
-it. Two properties of the read carry assertions.
+it. **A `save_point` line never crosses**, whatever the election, per section 3 and
+the charter's section 3: `distill` refuses the kind before the election is consulted,
+`all_kinds` and an election naming it included. Two properties of the read carry
+assertions.
 
 **The envelope is not electable, and no election can produce an unattributable
 row.** Every distilled event carries session, run, turn, kind, and sequence as

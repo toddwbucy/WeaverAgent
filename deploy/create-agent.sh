@@ -61,7 +61,7 @@
 # remembered.
 #
 # **Two accounts, because the wall is the room and one identity**, per
-# `weaver-state-PRD` section 4: the member holds its store's file in a state
+# `weaver-state-PRD` section 4: the member writes its save points into a state
 # room it owns, and the agent's own uid cannot enter that room. That wall is
 # verified at the end rather than assumed. No password exists anywhere in here.
 #
@@ -471,7 +471,7 @@ plan "home            /home/$AGENT_USER        the agent's own, where its tools 
 plan "directory       $HOME_DIR        root:$MEMBER_USER 0710, passage only, no listing"
 plan "trace           $HOME_DIR/trace.ndjson  root:$TRACE_GROUP 0640, made before the first load"
 plan "state territory $STATE_DIR       $MEMBER_USER 0700, which the agent's uid cannot enter"
-plan "store           sqlite, its file in the state territory"
+plan "store           sqlite in memory, its save points in the state territory"
 plan "agent root      $AGENT_ROOT      root 0755, keys 0644, copied from $STACK"
 plan "spu-binary      $SPU_BINARY$( [ -n "$SPU_OVERRIDE" ] && printf '  (--spu, in place of the stack record'"'"'s)' )"
 plan "operator key    $OPERATOR_UID ($OPERATOR)"
@@ -592,9 +592,9 @@ printf '   staged at %s\n' "$STAGE"
 
 say "the wall, verified rather than assumed"
 # A refusal here leaves the root staged and not admitted.
-# **The store's gate is the room itself**: the member opens its file in the
-# state territory, so the member must be able to write there and the agent's
-# own uid must not be able to enter it.
+# **The store's gate is the room itself**: the member writes its save points
+# into the state territory, so the member must be able to write there and the
+# agent's own uid must not be able to enter it.
 if sudo -u "$MEMBER_USER" test -w "$STATE_DIR" && sudo -u "$MEMBER_USER" test -x "$STATE_DIR"; then
   printf '   %s can write its state room %s\n' "$MEMBER_USER" "$STATE_DIR"
 else

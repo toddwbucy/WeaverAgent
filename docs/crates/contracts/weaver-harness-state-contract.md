@@ -332,9 +332,10 @@ serving leave and on the operator's demand, and never under a diagnostic binding
 whole of its holdings with the schema they stand under as a new file in its own room,
 the territory's `state/`, never overwriting one that stands, per `weaver-state-PRD`
 section 4, and admin publishes each finished one into the operator's directory at the
-next load or unload. The answer carries four members: `save-point`, the name it wrote,
-`run` and `sequence`, the trace position of the last distillate it holds, and `digest`,
-the digest of its bytes, which the harness records on the trace. It answers against the
+next load or unload. The answer carries five members: `save-point`, the name it wrote,
+`run` and `sequence`, the trace position of the last distillate it holds, `turn`, the
+last turn that run's holdings carry, and `digest`, the digest of its bytes, which the
+harness records on the trace as the `save_point` event of `weaver-trace-PRD` section 3. It answers against the
 holdings the stream carried before it, like `shape`, and parks never. A write that fails
 is not answered and leaves no file under a finished name, the asker's bound converting
 the silence into the missing answer of section 5, and the harness records no save point
@@ -346,9 +347,9 @@ added 2026-10-02 on the operator's ruling on #58 that a live restore swaps state
 unloading and that the harness triggers it. The ask carries one member, `save-point`, a
 name the member's room holds, and the custodian reads only its own room for it, never a
 path the name could lead out of. The custodian replaces its holdings whole with the save
-point's, or leaves them as they stood. The answer carries the four members the
+point's, or leaves them as they stood. The answer carries the five members the
 `snapshot` answer carries, read from the save point, so the harness records which save
-point and which position on the trace before it acts, and a fifth, `identity`, the
+point and which position on the trace before it acts, and a sixth, `identity`, the
 prefix the save point holds: the turnless `message.system` events of its newest run that
 holds any, in landing order, served as the `identity` ask serves them, an empty list
 where it holds none. The live restore is the one serving path that reads a prefix from

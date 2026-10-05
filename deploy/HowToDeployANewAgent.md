@@ -31,7 +31,7 @@ load where any piece is missing, so the pieces are made first and admin is asked
 | Access group, the trace door's | `weaver-<name>-admin` | system group, held by the connector |
 | Connector account, admin-con's service user | `weaver-<name>-admincon`, no home | system user, nologin, holds the access group and nothing of the agent's |
 | Territory | `<agent-directory>/weaver-<name>/`, the stack record's `agent-directory` (default `/var/lib/weaver-agent`, root 0755) | root:weaver-<name>-state 0710, not setgid: the member passes to its room, lists nothing, and no access entry is set |
-| State room (agents with a store) | `<territory>/state/`, where a sqlite store keeps its file | member 0700, unreachable by the agent's uid |
+| State room (agents with a store) | `<territory>/state/`, where the member writes its save points | member 0700, unreachable by the agent's uid |
 | Trace sink | `<territory>/trace.ndjson` | made by create-agent before the first load, root:weaver-<name>-trace 0640, so the member cannot read it, and admin opens it append-only at load and leaves its owner and mode alone |
 | Declaration directory | `~/.weaveragent/<name>/` in the operator's home, or `--declaration-directory` | the operator's, 0700, every directory above it the operator's or root's and closed |
 | Declaration | `<declaration directory>/agent.toml` | the operator's, written by create-agent as the operator |
