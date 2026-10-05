@@ -95,6 +95,12 @@ pub trait Store {
     /// The whole database serialized, the save point's image, per
     /// `weaver-state-Spec` section 3.
     fn image(&self) -> Result<Vec<u8>, CustodyFault>;
+    /// Judge an image without adopting it: what its own catalog says its
+    /// schema is and what position its holdings cover, read from a scratch
+    /// copy, so a stamp is never trusted over the bytes it claims to stamp.
+    /// An image that is no database, fails the engine's check or holds no
+    /// event table is refused here.
+    fn judge_image(&self, image: &[u8]) -> Result<ImageFacts, CustodyFault>;
     /// Replace the holdings whole with an image's, the load's restore and the
     /// live `restore` ask's one mechanism. On a failure the holdings stand.
     fn adopt(&mut self, image: &[u8]) -> Result<(), CustodyFault>;
@@ -107,6 +113,15 @@ pub trait Store {
     /// last distillate landed and the last turn that run's holdings carry.
     /// `None` where nothing has landed.
     fn position(&self) -> Result<Option<crate::save_point::Stamp>, CustodyFault>;
+}
+
+/// What an image says of itself, read from a scratch copy before any
+/// adoption: its schema text as [`Store::schema`] renders it, and the
+/// position its holdings cover as [`Store::position`] reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageFacts {
+    pub schema: String,
+    pub position: Option<crate::save_point::Stamp>,
 }
 
 /// One run's shape, the answer's material: the run reference and the held

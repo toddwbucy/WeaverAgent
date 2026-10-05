@@ -11,7 +11,9 @@
 
 use rusqlite::Connection;
 
-use crate::store::{CustodyFault, Distillate, Election, RecalledEvent, RunShape, Store};
+use crate::store::{
+    CustodyFault, Distillate, Election, ImageFacts, RecalledEvent, RunShape, Store,
+};
 use crate::typed::{MeasurementRow, MessageRow, PartRow, SeriesRow, Typed, served, split};
 
 /// The embedded engine: one sqlite database in memory, per
@@ -397,15 +399,13 @@ impl Store for Sqlite {
         Ok(data.to_vec())
     }
 
-    /// Replace the holdings whole with the image's. **The image is judged on
-    /// a scratch connection first**, because the engine adopts an image
-    /// lazily and bytes that are no database fault on their first use, which
-    /// would be after the live holdings had already left: the scratch copy
-    /// must pass the engine's own check and hold the event table before the
-    /// live connection takes the image, so a failure leaves the holdings
-    /// standing. The statement cache is dropped after the swap because every
-    /// cached statement was prepared against the holdings that left.
-    fn adopt(&mut self, image: &[u8]) -> Result<(), CustodyFault> {
+    /// What the image says of itself, read from a scratch copy: the engine
+    /// adopts an image lazily and bytes that are no database fault on their
+    /// first use, so the scratch copy must pass the engine's own check and
+    /// hold the event table, and then its catalog and its last landing are
+    /// read exactly as the live store's are, so the facts a stamp claims
+    /// can be held against the bytes before anything is adopted.
+    fn judge_image(&self, image: &[u8]) -> Result<ImageFacts, CustodyFault> {
         let fault =
             |what: &str, e: rusqlite::Error| CustodyFault::SavePoint(format!("{what}: {e}"));
         let mut probe = Connection::open_in_memory().map_err(|e| fault("probe", e))?;
@@ -421,84 +421,104 @@ impl Store for Sqlite {
         probe
             .prepare("SELECT id FROM event LIMIT 0")
             .map_err(|e| fault("event table", e))?;
-        drop(probe);
+        Ok(ImageFacts {
+            schema: schema_of(&probe)?,
+            position: position_of(&probe)?,
+        })
+    }
+
+    /// Replace the holdings whole with the image's, judged first by
+    /// [`Store::judge_image`] so a failure leaves the holdings standing. The
+    /// statement cache is dropped after the swap because every cached
+    /// statement was prepared against the holdings that left.
+    fn adopt(&mut self, image: &[u8]) -> Result<(), CustodyFault> {
+        self.judge_image(image)?;
         self.connection
             .deserialize_read_exact(rusqlite::MAIN_DB, image, image.len(), false)
-            .map_err(|e| fault("deserialize", e))?;
+            .map_err(|e| CustodyFault::SavePoint(format!("deserialize: {e}")))?;
         self.connection.flush_prepared_statement_cache();
         Ok(())
     }
 
-    /// The schema as text: every object the catalog holds with its
-    /// statement, in a fixed order, the elected indexes left out because a
-    /// load's election is the load's and never the schema's.
+    /// The schema as text, per [`schema_of`].
     fn schema(&self) -> Result<String, CustodyFault> {
-        let fault = |e: rusqlite::Error| CustodyFault::StoreUnavailable(e.to_string());
-        let mut query = self
-            .connection
-            .prepare_cached(
-                "SELECT type, name, sql FROM sqlite_master
-                 WHERE sql IS NOT NULL AND name NOT LIKE 'field_elected_%'
-                 ORDER BY type, name",
-            )
-            .map_err(fault)?;
-        let rows: Vec<(String, String, String)> = query
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-            .map_err(fault)?
-            .collect::<Result<_, _>>()
-            .map_err(fault)?;
-        let mut text = String::new();
-        for (kind, name, sql) in rows {
-            text.push_str(&kind);
-            text.push(' ');
-            text.push_str(&name);
-            text.push('\n');
-            text.push_str(&sql);
-            text.push('\n');
-        }
-        Ok(text)
+        schema_of(&self.connection)
     }
 
-    /// The position the holdings cover: the last landed event by the `id`
-    /// column, custody's own order key, and the last turn its run carries by
-    /// the same order, read as the number of a `t-<n>` key and zero where
-    /// the run holds no turn. **The turn is looked up under the last
-    /// event's session as well as its run**, because the store holds every
-    /// session and a run reference is distinct only within one.
+    /// The position the holdings cover, per [`position_of`].
     fn position(&self) -> Result<Option<crate::save_point::Stamp>, CustodyFault> {
-        use rusqlite::OptionalExtension;
-        let fault = |e: rusqlite::Error| CustodyFault::StoreUnavailable(e.to_string());
-        let last: Option<(String, String, i64)> = self
-            .connection
-            .prepare_cached("SELECT session, run, sequence FROM event ORDER BY id DESC LIMIT 1")
-            .map_err(fault)?
-            .query_row([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-            .optional()
-            .map_err(fault)?;
-        let Some((session, run, sequence)) = last else {
-            return Ok(None);
-        };
-        let turn: Option<String> = self
-            .connection
-            .prepare_cached(
-                "SELECT turn FROM event WHERE session = ?1 AND run = ?2 AND turn IS NOT NULL
-                 ORDER BY id DESC LIMIT 1",
-            )
-            .map_err(fault)?
-            .query_row([&session, &run], |row| row.get(0))
-            .optional()
-            .map_err(fault)?;
-        let turn = turn
-            .as_deref()
-            .and_then(|t| t.strip_prefix("t-"))
-            .and_then(|n| n.parse::<u64>().ok())
-            .unwrap_or(0);
-        Ok(Some(crate::save_point::Stamp {
-            run,
-            sequence: u64::try_from(sequence).unwrap_or(0),
-            turn,
-        }))
+        position_of(&self.connection)
     }
+}
+
+/// The schema as text: every object the catalog holds with its statement, in
+/// a fixed order, the elected indexes left out because a load's election is
+/// the load's and never the schema's. Read on the live connection and on a
+/// scratch copy of an image alike, so the two compare.
+fn schema_of(connection: &Connection) -> Result<String, CustodyFault> {
+    let fault = |e: rusqlite::Error| CustodyFault::StoreUnavailable(e.to_string());
+    let mut query = connection
+        .prepare_cached(
+            "SELECT type, name, sql FROM sqlite_master
+             WHERE sql IS NOT NULL AND name NOT LIKE 'field_elected_%'
+             ORDER BY type, name",
+        )
+        .map_err(fault)?;
+    let rows: Vec<(String, String, String)> = query
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .map_err(fault)?
+        .collect::<Result<_, _>>()
+        .map_err(fault)?;
+    let mut text = String::new();
+    for (kind, name, sql) in rows {
+        text.push_str(&kind);
+        text.push(' ');
+        text.push_str(&name);
+        text.push('\n');
+        text.push_str(&sql);
+        text.push('\n');
+    }
+    Ok(text)
+}
+
+/// The position the holdings cover: the last landed event by the `id`
+/// column, custody's own order key, and the last turn its run carries by the
+/// same order, read as the number of a `t-<n>` key and zero where the run
+/// holds no turn. **The turn is looked up under the last event's session as
+/// well as its run**, because the store holds every session and a run
+/// reference is distinct only within one. Read on the live connection and on
+/// a scratch copy of an image alike.
+fn position_of(connection: &Connection) -> Result<Option<crate::save_point::Stamp>, CustodyFault> {
+    use rusqlite::OptionalExtension;
+    let fault = |e: rusqlite::Error| CustodyFault::StoreUnavailable(e.to_string());
+    let last: Option<(String, String, i64)> = connection
+        .prepare_cached("SELECT session, run, sequence FROM event ORDER BY id DESC LIMIT 1")
+        .map_err(fault)?
+        .query_row([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .optional()
+        .map_err(fault)?;
+    let Some((session, run, sequence)) = last else {
+        return Ok(None);
+    };
+    let turn: Option<String> = connection
+        .prepare_cached(
+            "SELECT turn FROM event WHERE session = ?1 AND run = ?2 AND turn IS NOT NULL
+             ORDER BY id DESC LIMIT 1",
+        )
+        .map_err(fault)?
+        .query_row([&session, &run], |row| row.get(0))
+        .optional()
+        .map_err(fault)?;
+    let turn = turn
+        .as_deref()
+        .and_then(|t| t.strip_prefix("t-"))
+        .and_then(|n| n.parse::<u64>().ok())
+        .unwrap_or(0);
+    Ok(Some(crate::save_point::Stamp {
+        run,
+        sequence: u64::try_from(sequence).unwrap_or(0),
+        turn,
+    }))
 }
 
 /// The typed landing's tables, per `weaver-state-Spec` section 3: a message's
@@ -1040,6 +1060,25 @@ mod tests {
             )
             .expect("counts");
         assert_eq!(elected, 1, "the image carries the election's index too");
+        // The image says of itself what the store it came from says, the
+        // elected index left out of the schema. Perturbation: read the
+        // schema from the live connection in `judge_image` and the extra
+        // table below goes unseen.
+        let facts = restored.judge_image(&image).expect("judged");
+        assert_eq!(facts.schema, restored.schema().expect("schema"));
+        assert_eq!(facts.position, restored.position().expect("position"));
+        let mut altered = Sqlite::stand().expect("stands");
+        altered.adopt(&image).expect("adopts");
+        altered
+            .connection
+            .execute_batch("CREATE TABLE extra (x)")
+            .expect("alters");
+        let altered_image = altered.image().expect("serializes");
+        assert_ne!(
+            restored.judge_image(&altered_image).expect("judged").schema,
+            facts.schema,
+            "an image with another catalog says so"
+        );
         assert!(
             restored.adopt(b"not an image").is_err(),
             "bytes that are no database are refused"

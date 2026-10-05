@@ -247,7 +247,7 @@ fn member_entry(
     // would carry.
     let restored = match handed {
         None => Restored::Empty,
-        Some(save_point) => match adopt_judged(store.as_mut(), &save_point) {
+        Some(save_point) => match adopt_judged(store.as_mut(), &election, &save_point) {
             Ok(stamp) => Restored::Lineage {
                 digest: save_point.digest(),
                 stamp,
@@ -292,6 +292,7 @@ fn member_entry(
         store: store.as_mut(),
         room: &room,
         session: &session,
+        election: &election,
         restored,
     };
     serve(lines, preload, preload_socket, &mut custody)
@@ -301,18 +302,42 @@ fn member_entry(
 /// `weaver-state-Spec` section 3, answering the stamp it carries, or the
 /// reason it is refused with the holdings as they stood. The one judgment
 /// the member makes of a save point, shared by the load's restore and the
-/// live `restore` ask.
+/// live `restore` ask. **The image is judged by what it says of itself and
+/// never by the stamp alone**: its own catalog must be the standing schema
+/// and its own last landing must be the position the stamp claims, so a
+/// stamp written to agree cannot carry a foreign image past the schema
+/// rule, and a stamp that lies about its position is refused as one that
+/// disagrees. The active election's indexes are rebuilt on the adopted
+/// holdings, since the image carries the election of the load that took
+/// it and the indexes are this load's.
 fn adopt_judged(
     store: &mut dyn Store,
+    election: &Election,
     save_point: &SavePoint,
 ) -> Result<weaver_state::save_point::Stamp, &'static str> {
     let standing = store.schema().map_err(|_| "schema unreadable")?;
     if schema_digest(&standing) != save_point.schema {
         return Err("schema-mismatch");
     }
+    let facts = store
+        .judge_image(&save_point.image)
+        .map_err(|_| "image refused by the engine")?;
+    if schema_digest(&facts.schema) != save_point.schema {
+        return Err("schema-mismatch");
+    }
+    let claimed = &save_point.stamp;
+    let empty = claimed.run.is_empty() && claimed.sequence == 0 && claimed.turn == 0;
+    match &facts.position {
+        None if empty => {}
+        Some(held) if held == claimed => {}
+        _ => return Err("stamp disagrees with the image"),
+    }
     store
         .adopt(&save_point.image)
         .map_err(|_| "image refused by the engine")?;
+    store
+        .index_election(election)
+        .map_err(|_| "election could not be rebuilt on the restored holdings")?;
     Ok(save_point.stamp.clone())
 }
 
@@ -322,6 +347,9 @@ struct Custody<'a> {
     store: &'a mut dyn Store,
     room: &'a Room,
     session: &'a str,
+    /// The opener's election, held so a live restore rebuilds this load's
+    /// indexes on the restored holdings.
+    election: &'a Election,
     restored: Restored,
 }
 
@@ -643,7 +671,7 @@ fn answer_frame(
                 .room
                 .read(save_point)
                 .map_err(|e| CustodyFault::SavePoint(e.to_string()))?;
-            let stamp = adopt_judged(custody.store, &read)
+            let stamp = adopt_judged(custody.store, custody.election, &read)
                 .map_err(|reason| CustodyFault::SavePoint(reason.to_string()))?;
             let identity = custody.store.identity(session)?;
             Ok(render_restore_answer(

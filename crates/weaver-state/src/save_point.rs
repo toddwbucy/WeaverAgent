@@ -17,6 +17,9 @@
 //!
 //! The check is sha256 over the stamp line, its newline, and the image, so a
 //! stamp altered, an image flipped or a file torn short all read as corrupt,
+//! and the check line has one spelling, which `parse` requires byte for byte
+//! so that a parsed save point's bytes are the file's and its digest the
+//! file's digest,
 //! and the check line itself is covered by the digest: **the digest is sha256
 //! over the whole file** and is the save point's identity on the trace and
 //! in the operator's directory. **The name is the digest**, so two save points
@@ -126,9 +129,14 @@ impl SavePoint {
         hex(&hasher.finalize())
     }
 
+    /// The check line in its one spelling.
+    fn check_line(&self) -> String {
+        serde_json::json!({"check": self.check()}).to_string()
+    }
+
     /// The file's bytes: stamp line, check line, image.
     pub fn bytes(&self) -> Vec<u8> {
-        let check = serde_json::json!({"check": self.check()}).to_string();
+        let check = self.check_line();
         let mut out = Vec::with_capacity(self.header.len() + check.len() + self.image.len() + 2);
         out.extend_from_slice(self.header.as_bytes());
         out.push(b'\n');
@@ -167,13 +175,7 @@ impl SavePoint {
             .iter()
             .position(|&b| b == b'\n')
             .ok_or_else(|| malformed("no check line"))?;
-        let check: serde_json::Value = serde_json::from_slice(&rest[..second])
-            .map_err(|e| malformed(&format!("check line: {e}")))?;
-        let check = check
-            .get("check")
-            .and_then(|c| c.as_str())
-            .ok_or_else(|| malformed("check line names no check"))?
-            .to_string();
+        let check_line = &rest[..second];
         let image = &rest[second + 1..];
         let header: serde_json::Value = serde_json::from_str(&header_line)
             .map_err(|e| malformed(&format!("stamp line: {e}")))?;
@@ -209,7 +211,11 @@ impl SavePoint {
             image: image.to_vec(),
             header: header_line,
         };
-        if parsed.check() != check {
+        // The check line is required in its one spelling, the one `bytes`
+        // renders, so the bytes a parsed save point renders are the bytes it
+        // was read from and the digest is the file's: a check line spelled
+        // any other way, whatever check it names, is not this format.
+        if check_line != parsed.check_line().as_bytes() {
             return Err(SavePointFault::CheckFailed);
         }
         Ok(parsed)
@@ -458,6 +464,27 @@ mod tests {
             SavePoint::parse(&stamp_flipped),
             Err(SavePointFault::CheckFailed),
             "an altered stamp is corrupt, never a position"
+        );
+        // A check line spelled another way, the same check inside it, is
+        // not this format: a parsed save point's digest is the file's.
+        // Perturbation: parse the check line as JSON and compare the named
+        // check, and the respelled file parses with a digest that is not
+        // sha256 of its bytes.
+        let line_end = bytes.iter().position(|&b| b == b'\n').unwrap() + 1;
+        let check_end = line_end + bytes[line_end..].iter().position(|&b| b == b'\n').unwrap();
+        let mut respelled = bytes[..line_end].to_vec();
+        respelled.extend_from_slice(b"{ \"check\" : ");
+        respelled.extend_from_slice(&bytes[line_end + 9..check_end - 1]);
+        respelled.extend_from_slice(b" }");
+        respelled.extend_from_slice(&bytes[check_end..]);
+        assert_eq!(
+            SavePoint::parse(&respelled),
+            Err(SavePointFault::CheckFailed)
+        );
+        assert_eq!(
+            SavePoint::parse(&bytes).expect("sound").digest(),
+            hex(&sha2::Sha256::digest(&bytes)),
+            "a parsed save point's digest is sha256 of the file"
         );
         assert!(matches!(
             SavePoint::parse(b"not a save point"),

@@ -1531,6 +1531,69 @@ fn a_damaged_or_foreign_save_point_never_reaches_the_holdings() {
         answer_shape(&member.ask("shape", None)).is_empty(),
         "and the member stands empty"
     );
+    // A stamp written to agree cannot carry a foreign image past the rule:
+    // the image's own catalog has the extra table, whatever the stamp names.
+    // Perturbation: drop the image's schema comparison in `adopt_judged`
+    // and this restores.
+    let lying = {
+        let mut store = Sqlite::stand().expect("stands");
+        let standing = store.schema().unwrap();
+        store
+            .land(&weaver_state::Distillate {
+                session: SESSION.into(),
+                run: "r-lying".into(),
+                turn: None,
+                kind: "load".into(),
+                sequence: 0,
+                pairs: vec![],
+            })
+            .unwrap();
+        let image = store.image().unwrap();
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .deserialize_read_exact(rusqlite::MAIN_DB, &image[..], image.len(), false)
+            .unwrap();
+        connection.execute_batch("CREATE TABLE extra (x)").unwrap();
+        let extra = connection.serialize(rusqlite::MAIN_DB).unwrap().to_vec();
+        let save_point = SavePoint::take(store.position().unwrap().unwrap(), &standing, extra);
+        let path = foreign_dir.0.join("lying.save-point");
+        std::fs::write(&path, save_point.bytes()).unwrap();
+        path
+    };
+    let mut member = Member::new_with(rule.clone(), false, SESSION, Some(&lying));
+    let answered: Value = serde_json::from_str(&member.ask("restored", None)).unwrap();
+    assert_eq!(
+        answered["answer"]["restored"],
+        json!({"refused": "schema-mismatch"}),
+        "a stamp naming the standing schema over a foreign image is refused"
+    );
+    // A stamp that lies about its position is refused as one that disagrees.
+    let misstamped = {
+        let mut store = Sqlite::stand().expect("stands");
+        store
+            .land(&weaver_state::Distillate {
+                session: SESSION.into(),
+                run: "r-stamped".into(),
+                turn: None,
+                kind: "load".into(),
+                sequence: 3,
+                pairs: vec![],
+            })
+            .unwrap();
+        let mut stamp = store.position().unwrap().unwrap();
+        stamp.sequence += 1;
+        let save_point = SavePoint::take(stamp, &store.schema().unwrap(), store.image().unwrap());
+        let path = foreign_dir.0.join("misstamped.save-point");
+        std::fs::write(&path, save_point.bytes()).unwrap();
+        path
+    };
+    let mut member = Member::new_with(rule.clone(), false, SESSION, Some(&misstamped));
+    let answered: Value = serde_json::from_str(&member.ask("restored", None)).unwrap();
+    assert_eq!(
+        answered["answer"]["restored"],
+        json!({"refused": "stamp disagrees with the image"}),
+        "a stamp that lies about its position is refused"
+    );
 
     // A live restore of a damaged save point leaves the holdings standing.
     member.feed(&lines[..record.cut]);
@@ -1560,6 +1623,35 @@ fn a_damaged_or_foreign_save_point_never_reaches_the_holdings() {
     );
     let back = stamp_of(&member.ask_restore(&taken.name), "restore");
     assert_eq!(back.digest, taken.digest, "the sound one still restores");
+    // A live restore of a save point taken under another election stands
+    // this load's election on the restored holdings. Perturbation: drop the
+    // `index_election` from `adopt_judged` and the elected index is gone.
+    let unelected = {
+        let mut store = Sqlite::stand().expect("stands");
+        store
+            .land(&weaver_state::Distillate {
+                session: SESSION.into(),
+                run: "r-unelected".into(),
+                turn: None,
+                kind: "load".into(),
+                sequence: 0,
+                pairs: vec![],
+            })
+            .unwrap();
+        SavePoint::take(
+            store.position().unwrap().unwrap(),
+            &store.schema().unwrap(),
+            store.image().unwrap(),
+        )
+    };
+    std::fs::write(member.directory.0.join("unelected"), unelected.bytes()).unwrap();
+    stamp_of(&member.ask_restore("unelected"), "restore");
+    let after = member.tables();
+    assert!(
+        after[2].iter().any(|sql| sql.contains("field_elected_")),
+        "the active election's indexes stand on the restored holdings: {:?}",
+        after[2]
+    );
 
     // A torn save point handed at the spawn refuses the start.
     let torn = foreign_dir.0.join("torn.save-point");
