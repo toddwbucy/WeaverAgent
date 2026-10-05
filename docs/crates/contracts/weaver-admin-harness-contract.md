@@ -331,8 +331,8 @@ the kind of the binding, resolved to serving where the declaration is silent, th
 sink handle, the state channel's end where the member stands, the SPU instruction the
 fan-out admits, the gate instruction the fan-out starts where the kind declares a Gate,
 the state election the tee applies, resolved to the ruled default where the declaration
-is silent, the store election the member stands on with its database and role under the
-service engine, resolved to the embedded engine where the declaration is silent, the
+is silent, the store election the member stands on, resolved to the embedded engine
+where the declaration is silent, the
 lineage of the save point the load restores, its digest, the run, sequence and last turn
 it covers, whether the operator supplied it, where the offline builder made it from a
 record that record's session and the run and turn of its cut, resolved by admin and

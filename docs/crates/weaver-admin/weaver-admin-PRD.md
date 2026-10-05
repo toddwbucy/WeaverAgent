@@ -560,8 +560,8 @@ and never substitutes its own test for the owner's judgment, per the operator's 
 of 2026-09-05 on issue #456.** The uid, the home, the sink, and the boundary's members
 with their modes are admin's to judge, because admin provisions them and holds custody
 of where the record leaves the system. A fact interior to another organ is not:
-whether these weights load at this precision, whether this family exposes the taps the
-declaration elects, whether a Postgres account carries the grant it claims. Where the
+whether these weights load at this precision, or whether this family exposes the taps
+the declaration elects. Where the
 owner can be asked before any process exists, the inventory asks and carries the
 answer, telling a refusal from an owner that could not be reached, which is the
 distinction an ask has and a look does not. Where the owner is the organ a load stands

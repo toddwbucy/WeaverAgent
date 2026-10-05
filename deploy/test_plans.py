@@ -120,14 +120,6 @@ elif name == 'sudo':
     op, *rest = command
     if op == 'sh': shell_read(rest)
     elif op == 'systemctl': sys.exit(2 if os.environ.get('READ_FAIL') == rest[0] else 0)
-    elif op == 'psql':
-        query = rest[-1]
-        if os.environ.get('READ_FAIL') and os.environ['READ_FAIL'] in query: sys.exit(2)
-        if os.environ.get('EMPTY_PATH') and os.environ['EMPTY_PATH'] in query: sys.exit(0)
-        if 'pg_roles' in query and os.environ.get('ROLE_COLLISION'): print('1')
-        elif 'show hba_file' in query: print(root / 'pg_hba.conf')
-        elif 'show ident_file' in query: print(root / 'pg_ident.conf')
-        elif query == 'select 1': sys.exit(1 if identity == 'weaver-m1' else 0)
     elif op in ('grep', 'sed'):
         # Execute only the text operation on scratch files, never via sudo.
         file = pathlib.Path(mapped(rest[-1]))
@@ -249,7 +241,7 @@ class PlanTests(unittest.TestCase):
                     "CARGO_TARGET_DIR": str(self.root / 'target with "quotes"'),
                     "USER": "fixture-no-home", "PROBE": str(self.root / "probe"),
                     "FIXTURE_ROOT": str(self.root)}
-        for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "ROLE_COLLISION", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
+        for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
                      "VISUDO_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
                      "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS"):
             self.env.pop(name, None)
@@ -278,8 +270,8 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
 
     def create(self, *args):
-        # No engine is the default, so a case that names none runs as sqlite,
-        # named here rather than assumed by the script.
+        # sqlite is the default, named here anyway so a case reads the
+        # election it runs under rather than assuming it.
         engine = [] if "--engine" in args else ["--engine", "sqlite"]
         return self.create_naming(*engine, *args)
 
@@ -313,9 +305,6 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         forbidden = {"sudo", "systemctl", "psql", "mktemp", "setfacl"}
         self.assertFalse([c for c in self.calls() if c[0] in forbidden
                           and c[:2] != ["systemctl", "list-units"]], self.calls())
-
-    def postgres(self, *args):
-        return self.create("--engine", "postgres", *args)
 
     def test_agent_plan_defers_privilege_and_preserves_fixture_files(self):
         self.install_stack()
@@ -382,13 +371,6 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
                 self.assertIn("already", result.stderr)
         self.assert_unprivileged()
 
-    def test_apply_still_refuses_catalogue_collision_before_creation(self):
-        self.env.update(ALLOW_APPLY_CHECKS="1", ROLE_COLLISION="1")
-        result = self.postgres("--apply")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("role weaver_m1 already exists", result.stderr)
-        self.assertFalse(any("useradd" in c for c in self.calls()))
-
     def test_apply_requires_sudo_before_any_other_privileged_call(self):
         self.env.update(ALLOW_APPLY_CHECKS="1", SUDO_FAIL="1")
         result = self.create("--apply")
@@ -396,47 +378,9 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertIn("--apply needs sudo", result.stderr)
         self.assertEqual([c for c in self.calls() if c[0] == "sudo"], [["sudo", "-v"]])
 
-    def test_apply_read_failures_refuse_before_creating_accounts(self):
-        for fault, cause in (("pg_roles", "role catalog"),
-                             ("pg_database", "database catalog"), ("hba_file", "hba_file"),
-                             ("ident_file", "ident_file"), ("start", "start PostgreSQL"),
-                             ("is-active", "confirm PostgreSQL")):
-            with self.subTest(fault=fault):
-                self.log.unlink(missing_ok=True)
-                self.env.update(ALLOW_APPLY_CHECKS="1", READ_FAIL=fault)
-                result = self.postgres("--apply")
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(cause, result.stderr)
-                self.assertFalse(any("useradd" in c for c in self.calls()))
-
-    def test_apply_empty_authentication_paths_refuse_before_creation(self):
-        for path in ("hba_file", "ident_file"):
-            with self.subTest(path=path):
-                self.log.unlink(missing_ok=True)
-                self.env.update(ALLOW_APPLY_CHECKS="1", EMPTY_PATH=path)
-                result = self.postgres("--apply")
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("empty " + path, result.stderr)
-                self.assertFalse(any("useradd" in c for c in self.calls()))
-
     def assert_no_provisioning(self):
         self.assertFalse(any("useradd" in c or any("CREATE ROLE" in a or "CREATE DATABASE" in a for a in c)
                              for c in self.calls()), self.calls())
-
-    def test_authentication_preconditions_refuse_before_provisioning(self):
-        for fault in ("no-peer", "missing-hba", "missing-ident"):
-            with self.subTest(fault=fault):
-                self.log.unlink(missing_ok=True)
-                self.hba.write_text("local all all peer\n")
-                self.ident.touch()
-                if fault == "no-peer": self.hba.write_text("local all all trust\n")
-                elif fault == "missing-hba": self.hba.unlink()
-                else: self.ident.unlink()
-                self.env["ALLOW_APPLY_CHECKS"] = "1"
-                result = self.postgres("--apply")
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("anchor" if fault == "no-peer" else "authentication file", result.stderr)
-                self.assert_no_provisioning()
 
     def test_missing_admin_base_refuses_both_modes(self):
         self.env["WEAVER_ADMIN_CONFIG"] = str(self.root / "missing")
@@ -467,7 +411,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
     def test_the_rendered_declaration_is_toml_before_anything_is_made(self):
         # The plan renders and parse-checks the declaration it would write.
         # Perturbation: break the heredoc's quoting and the plan refuses here.
-        for engine in ("sqlite", "postgres"):
+        for engine in ("sqlite",):
             with self.subTest(engine=engine):
                 result = self.create("--session", "s-m1-1", "--engine", engine)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -581,30 +525,20 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertNotIn("SETENV", text)
         self.assertNotIn("env_keep", text)
 
-    def test_apply_fixture_reaches_the_end_with_postgres(self):
-        self.env["ALLOW_APPLY_CHECKS"] = "1"
-        result = self.postgres("--apply")
+    def test_the_embedded_engine_is_the_default_and_others_are_unprovided(self):
+        # sqlite is the one engine this build provides (#1, #86), so an absent
+        # --engine is sqlite and any other name refuses as unprovided before
+        # any call, postgres one case among them. Perturbations: default to
+        # nothing again, and the absent case refuses; accept any engine, and
+        # the plan runs.
+        result = self.create_naming()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("== made", result.stdout)
-        store = self.assert_agent_root("postgres")
-        self.assertEqual((store["database"], store["role"]), ("weaver_m1", "weaver_m1"))
-        self.assertIn("local   weaver_m1", self.hba.read_text())
-        self.assertIn("weaver-m1-state", self.ident.read_text())
-        calls = self.calls()
-        sql = [c for c in calls if "psql" in c]
-        self.assertTrue(any("CREATE ROLE" in c[-1] for c in sql))
-        self.assertTrue(any("CREATE DATABASE" in c[-1] for c in sql))
-        self.assertTrue(all("-X" in c for c in sql))
-        self.assertFalse(any("/etc/weaver/agents" in c for c in calls))
-        self.assert_rule(["show", "validate", "load", "unload", "stop"])
-
-    def test_an_unnamed_engine_refuses_naming_both(self):
-        # Neither engine is the default, per the operator's ruling on #38.
-        # Perturbation: default ENGINE to either and this case runs on.
-        result = self.create_naming("--apply")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("--engine sqlite or --engine postgres", result.stderr + result.stdout)
-        self.assertIn("Neither is the default", result.stderr + result.stdout)
+        self.assertIn("store engine    sqlite", result.stdout)
+        for engine in ("postgres", "mysql"):
+            result = self.create_naming("--engine", engine, "--apply")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(f"{engine} is not an engine this build provides",
+                          result.stderr)
         self.assert_unprivileged()
 
     def test_apply_fixture_reaches_the_end_with_sqlite(self):
@@ -957,7 +891,7 @@ esac
         # The probe is what holds the boundary on the box: a member that can read
         # the trace refuses before the root is moved into place, for either
         # engine. Perturbation: drop the probe, and the agent is admitted.
-        for engine in ("sqlite", "postgres"):
+        for engine in ("sqlite",):
             with self.subTest(engine=engine):
                 self.log.unlink(missing_ok=True)
                 shutil.rmtree(self.config / ".m1.partial", ignore_errors=True)
@@ -1345,6 +1279,19 @@ esac
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn(str(decl) + " cannot be read", result.stderr)
 
+    def test_stack_refuses_an_unprovided_engine_and_names_the_migration(self):
+        # A pre-#85 declaration electing postgres refuses before the build,
+        # as an engine this build does not provide, and points to the
+        # migration step rather than to a feature the workspace lacks.
+        # Perturbation: restore the old remedy and the step goes unnamed.
+        decl = self.operator_home / ".weaveragent" / "existing" / "agent.toml"
+        decl.write_text('[state-store]\nengine = "postgres"\ndatabase = "d"\nrole = "r"\n')
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("postgres store, which is not an engine this build provides", result.stderr)
+        self.assertIn("REDEPLOY.md section 8 step 2", result.stderr)
+        self.assertNotIn("Name weaver-state/postgres", result.stderr)
+
     def test_stack_agents_are_the_roots_under_the_base(self):
         # A staged root under a dot-name, a plain file, and a root naming no
         # declaration directory are not agents. Perturbation: drop the
@@ -1684,7 +1631,7 @@ class BootstrapStandingTests(unittest.TestCase):
 
 
 STUB_ADMIN = """#!/bin/sh
-printf '%s\\n' "boundary unverified: no store socket at /run/weaver/fixture" >&2
+printf '%s\\n' "boundary unverified: no weaver-state binary beside the worker's" >&2
 printf '%s\\n' '{"kind":"refused","reason":"boundary_unverified"}'
 exit 1
 """
@@ -1741,10 +1688,10 @@ class DeclaredTests(unittest.TestCase):
                 self.assertEqual(self.read(text, "trace-sink.path", "string")[:2], (0, path))
 
     def test_the_store_election_reads_in_every_spelling(self):
-        for text in ('[state-store]\nengine = "postgres"\n', "[state-store]\nengine = 'postgres'\n",
-                     'state-store.engine = "postgres"\n', 'state-store = { engine = "postgres" }\n'):
+        for text in ('[state-store]\nengine = "sqlite"\n', "[state-store]\nengine = 'sqlite'\n",
+                     'state-store.engine = "sqlite"\n', 'state-store = { engine = "sqlite" }\n'):
             with self.subTest(text=text):
-                self.assertEqual(self.read(text, "state-store.engine", "string")[:2], (0, "postgres"))
+                self.assertEqual(self.read(text, "state-store.engine", "string")[:2], (0, "sqlite"))
                 self.assertEqual(self.read(text, "state-store", "table")[0], 0)
 
     def test_absence_and_a_bad_file_answer_apart(self):
@@ -1798,7 +1745,7 @@ class AdminAnswerTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout,
                              '{"kind":"refused","reason":"boundary_unverified"}\n')
-            self.assertIn("admin: boundary unverified: no store socket at /run/weaver/fixture",
+            self.assertIn("admin: boundary unverified: no weaver-state binary beside the worker's",
                           result.stderr)
 
     def test_both_call_sites_reach_the_helper(self):

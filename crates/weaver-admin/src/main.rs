@@ -116,9 +116,6 @@ struct ServiceConfig {
     /// `stop` or `show` from a running agent, whose log lines then carry no
     /// digest.
     boundary: Result<BoundaryRead, String>,
-    /// The directory the store's unix socket stands in, per Spec section 9
-    /// as of 2026-09-04: read under a service election and otherwise idle.
-    state_store_socket: PathBuf,
 }
 
 /// A boundary file that read and parsed.
@@ -193,27 +190,6 @@ fn main() {
     // per Spec section 2, so a caller cancelling, timing out or hanging up,
     // which sudo relays, cannot end a verb part way.
     start::ignore_terminating_signals();
-    // **The store's second question is answered by this binary under the
-    // agent's uid**, per `weaver-admin-Spec` section 4 as of 2026-09-04: the
-    // parent sets the variable and three arguments, and the child asks the
-    // store and exits with the answer. This is not a verb of the surface,
-    // and an invocation that carries the variable serves no verb.
-    if std::env::var_os(inventory::PROBE_STORE_VARIABLE).is_some() {
-        let arguments: Vec<String> = std::env::args().skip(1).collect();
-        let admitted = match arguments.as_slice() {
-            [socket, database, role] => {
-                inventory::store_admits(std::path::Path::new(socket), database, role)
-            }
-            _ => Err(std::io::Error::other(
-                "the probe takes socket, database, role",
-            )),
-        };
-        std::process::exit(match admitted {
-            Ok(true) => 0,
-            Ok(false) => 1,
-            Err(_) => 2,
-        });
-    }
     let outcome = run();
     // **The answer is one JSON object on standard output and the exit status
     // agrees with it.** Zero exits an answer and a non-zero status exits a
@@ -449,8 +425,6 @@ fn stand_state_member(
             &territory,
             &inventory.binding,
             inventory.lineage.is_some(),
-            &store,
-            &config.state_store_socket,
         ))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null());
@@ -565,8 +539,8 @@ fn prepare_territory(
 ///
 /// conforms: admin-member-spawn-drops-to-its-account
 fn become_member(member: inventory::MemberAccount) -> std::io::Result<()> {
-    // The drop lives in `inventory::drop_to`, shared with the store probe
-    // since issue #675, so the order described above is implemented once.
+    // The drop lives in `inventory::drop_to` since issue #675, so the order
+    // described above is implemented once.
     inventory::drop_to(member.uid, &[member.gid as nix::libc::gid_t])
 }
 
@@ -601,32 +575,11 @@ fn member_vector(
     territory: &std::path::Path,
     binding: &weaver_types::EnterBinding,
     restoring: bool,
-    store: &weaver_types::StateStore,
-    store_socket: &std::path::Path,
 ) -> Vec<std::ffi::OsString> {
-    // **The engine leads**, so the member knows which port to stand before
-    // it reads a positional, per Spec section 6 as of 2026-09-04, and under
-    // the service engine the socket, the database, and the role follow it.
-    let mut vector: Vec<std::ffi::OsString> = vec!["--engine".into()];
-    vector.push(
-        match store.engine {
-            weaver_types::StoreEngine::None => "none",
-            weaver_types::StoreEngine::Sqlite => "sqlite",
-            weaver_types::StoreEngine::Postgres => "postgres",
-        }
-        .into(),
-    );
-    if store.engine == weaver_types::StoreEngine::Postgres {
-        vector.push("--store-socket".into());
-        vector.push(store_socket.as_os_str().to_owned());
-        for (flag, value) in [("--database", &store.database), ("--role", &store.role)] {
-            if let Some(value) = value {
-                vector.push(flag.into());
-                vector.push(value.into());
-            }
-        }
-    }
-    vector.push(territory.as_os_str().to_owned());
+    // **The territory leads and no flag rides**, per Spec section 6: the one
+    // engine is the embedded one, so the engine flag left the vector with
+    // the service engine on the operator's ruling of 2026-10-02 on #1.
+    let mut vector: Vec<std::ffi::OsString> = vec![territory.as_os_str().to_owned()];
     // The door's name rides the vector under a diagnostic binding and,
     // since 2026-09-04, under a serving load that elects a restore, per Spec
     // section 6 and issue #432: the member binds the name only where this
@@ -713,9 +666,8 @@ fn take_inventory(
         // gid too few admits one that does not.
         agent_gids: agent_gids(&user),
         home: user.dir.clone(),
-        // The two box facts the store rules read, per Spec section 4 as of
-        // 2026-09-04: the member's binary beside the worker's, and the
-        // store's socket directory from this crate's own file.
+        // The box fact the store rule reads, per Spec section 4: the member's
+        // binary beside the worker's.
         member_binary: config
             .worker
             .parent()
@@ -731,12 +683,10 @@ fn take_inventory(
                     .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
                     .unwrap_or(false)
             }),
-        store_socket: config.state_store_socket.clone(),
         // **The member's own account, looked up from the derived name.** It
         // is read here rather than constructed, for the reason the home is:
-        // the uid the spawn drops to, the uid that owns the territory, and
-        // the uid the store's first gate answers about are the account
-        // database's fact and not this crate's. An absent account is a box
+        // the uid the spawn drops to and the uid that owns the territory are
+        // the account database's fact and not this crate's. An absent account is a box
         // the provisioning has not finished, which section 4 refuses for
         // every election but `none`.
         member_account: nix::unistd::User::from_name(&inventory::member_identity_for(agent))
@@ -1721,8 +1671,8 @@ fn read_boundary(root: &std::path::Path) -> Result<BoundaryRead, String> {
 
 /// Reads the root's values, per Spec section 9. Required: `worker-binary`,
 /// `spu-binary`, `gate-binary`, `coordination-root`, `declaration-directory`,
-/// `operator` and `roles.toml`. Optional: `headroom-bytes`, `library-path`,
-/// `load-bound-seconds` and `state-store-socket`. A failure names the value;
+/// `operator` and `roles.toml`. Optional: `headroom-bytes`, `library-path` and
+/// `load-bound-seconds`. A failure names the value;
 /// a failure of the boundary file starts with its name, which the caller
 /// carries as the refusal's field.
 fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<ServiceConfig, String> {
@@ -1816,8 +1766,6 @@ fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<Servi
         operator,
         operator_gid: 0,
         boundary,
-        state_store_socket: optional_path("state-store-socket")?
-            .unwrap_or_else(|| PathBuf::from(inventory::STORE_SOCKET_DIRECTORY)),
     })
 }
 
@@ -2009,8 +1957,6 @@ mod tests {
     #[test]
     fn the_vector_follows_the_kind_in_both_directions() {
         let territory = std::path::Path::new("/dbpool/agents/alpha/state");
-        let embedded = weaver_types::StateStore::default();
-        let socket = std::path::Path::new("/run/postgresql");
         let serving_binding = weaver_types::EnterBinding::Serving {
             gate_instruction: weaver_types::GateInstruction {
                 access_rule: weaver_types::AccessRule {
@@ -2020,43 +1966,35 @@ mod tests {
                 },
             },
         };
-        let serving = member_vector(territory, &serving_binding, false, &embedded, socket);
+        let serving = member_vector(territory, &serving_binding, false);
         assert_eq!(
             serving.len(),
-            3,
-            "a serving load carries the engine pair and the territory alone"
+            1,
+            "a serving load carries the territory alone"
         );
-        assert_eq!(serving[0], "--engine");
-        assert_eq!(serving[1], "sqlite");
-        assert_eq!(serving[2], territory.as_os_str());
-        let diagnostic = member_vector(
-            territory,
-            &weaver_types::EnterBinding::Diagnostic,
-            false,
-            &embedded,
-            socket,
-        );
+        assert_eq!(serving[0], territory.as_os_str());
+        let diagnostic = member_vector(territory, &weaver_types::EnterBinding::Diagnostic, false);
         assert_eq!(
             diagnostic.len(),
-            4,
+            2,
             "a diagnostic load carries the preload path"
         );
-        assert_eq!(diagnostic[2], territory.as_os_str());
+        assert_eq!(diagnostic[0], territory.as_os_str());
         assert_eq!(
-            diagnostic[3],
+            diagnostic[1],
             territory.join("preload.sock").into_os_string(),
             "the territory with the fixed leaf, no invocation input composing it"
         );
         // **A serving load that elects a restore names the door too**, per
         // Spec section 6 as of 2026-09-04 and issue #432, the same arm.
-        let restoring = member_vector(territory, &serving_binding, true, &embedded, socket);
+        let restoring = member_vector(territory, &serving_binding, true);
         assert_eq!(
             restoring.len(),
-            4,
+            2,
             "a restoring serving load carries the preload path"
         );
         assert_eq!(
-            restoring[3],
+            restoring[1],
             territory.join("preload.sock").into_os_string()
         );
     }
@@ -2513,7 +2451,6 @@ mod tests {
             "coordination-root",
             "declaration-directory",
             "library-path",
-            "state-store-socket",
         ] {
             fresh();
             std::fs::write(root.join(name), "relative/path").unwrap();
@@ -2554,12 +2491,7 @@ mod tests {
             std::fs::create_dir_all(&root).unwrap();
             write_root(&root);
         };
-        for name in [
-            "headroom-bytes",
-            "library-path",
-            "load-bound-seconds",
-            "state-store-socket",
-        ] {
+        for name in ["headroom-bytes", "library-path", "load-bound-seconds"] {
             fresh();
             assert!(
                 load_service_config_from(&root, "alpha").is_ok(),
@@ -2609,7 +2541,6 @@ mod tests {
                 digest: "0".repeat(64),
                 reader: "weaver-alpha-admincon".into(),
             }),
-            state_store_socket: PathBuf::from(inventory::STORE_SOCKET_DIRECTORY),
         }
     }
 
@@ -3228,8 +3159,8 @@ mod tests {
     /// supplementary set that group alone, none of root's. The member's end
     /// is read too, a socket at the fixed number.
     ///
-    /// `drop_to`'s own instrument, beside the store probe's in the inventory
-    /// module, watches the order of the three calls and the saved ids. This
+    /// `drop_to`'s own instrument, in the inventory module, watches the order
+    /// of the three calls and the saved ids. This
     /// one watches that the member's spawn takes the drop at all, which no
     /// reading of `drop_to` can see.
     ///

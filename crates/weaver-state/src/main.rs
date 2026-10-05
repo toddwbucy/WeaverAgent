@@ -110,27 +110,21 @@ fn member_entry(
     // member on the vector because no exchange this member holds carries a
     // path. The first door rides no argument at all, its end inherited at
     // the fixed number above.
-    // **The store election rides the vector too**, per `weaver-state-Spec`
-    // section 4 as of 2026-09-04: `--engine` names the port, and under the
-    // service engine `--store-socket`, `--database`, and `--role` name where
-    // and as whom the member connects. Absent flags mean the embedded
-    // engine, which is what an absent election means in the declaration.
+    // **No flag rides the vector**, per `weaver-state-Spec` section 2: the
+    // one engine is the embedded one, so the engine flag left the vector with
+    // the service engine and its three flags, on the operator's ruling of
+    // 2026-10-02 on #1, and a vector still carrying any flag refuses.
     let Some(vector) = StoreVector::parse(arguments) else {
         eprintln!(
             "{}",
             serde_json::json!({
                 "state_fault":
-                    "usage: weaver-state [--engine sqlite|postgres] [--store-socket DIR] \
-                     [--database NAME] [--role NAME] <territory> [preload-socket]"
+                    "usage: weaver-state <territory> [preload-socket]"
             })
         );
         return std::process::ExitCode::FAILURE;
     };
     let StoreVector {
-        engine,
-        socket,
-        database,
-        role,
         territory,
         preload_socket,
     } = vector;
@@ -168,7 +162,7 @@ fn member_entry(
         std::os::unix::net::UnixStream::from_raw_fd(first_door)
     };
 
-    let mut store: Box<dyn Store> = match open_store(&engine, &territory, socket, database, role) {
+    let mut store: Box<dyn Store> = match open_store(&territory) {
         Ok(store) => store,
         Err(fault) => {
             eprintln!(
@@ -231,90 +225,35 @@ fn member_entry(
     serve(lines, preload, preload_socket, store.as_mut(), &session)
 }
 
-/// The member's vector, parsed: the flags in any order before the two
-/// positionals the vector has always carried.
+/// The member's vector, parsed: the territory and, under a diagnostic
+/// binding, the preload name. Any flag refuses, the engine's having retired.
 struct StoreVector {
-    engine: String,
-    socket: Option<String>,
-    database: Option<String>,
-    role: Option<String>,
     territory: String,
     preload_socket: Option<String>,
 }
 
 impl StoreVector {
     fn parse(arguments: impl Iterator<Item = String>) -> Option<StoreVector> {
-        let mut engine = String::from("sqlite");
-        let mut socket = None;
-        let mut database = None;
-        let mut role = None;
-        let mut positional = Vec::new();
-        let mut arguments = arguments.peekable();
-        while let Some(argument) = arguments.next() {
-            match argument.as_str() {
-                "--engine" => engine = arguments.next()?,
-                "--store-socket" => socket = Some(arguments.next()?),
-                "--database" => database = Some(arguments.next()?),
-                "--role" => role = Some(arguments.next()?),
-                flag if flag.starts_with("--") => return None,
-                _ => positional.push(argument),
-            }
+        let positional: Vec<String> = arguments.collect();
+        if positional.iter().any(|argument| argument.starts_with("--")) {
+            return None;
         }
         if positional.is_empty() || positional.len() > 2 {
             return None;
         }
         let mut positional = positional.into_iter();
         Some(StoreVector {
-            engine,
-            socket,
-            database,
-            role,
             territory: positional.next()?,
             preload_socket: positional.next(),
         })
     }
 }
 
-/// The engine the vector elects, opened, per `weaver-state-Spec` section 3:
-/// the embedded engine at the territory's `state.sql`, the service engine
-/// over its socket under the declared database and role. An engine this
-/// binary was not built with, or one the vector spells that the port does
-/// not name, is `StoreUnavailable`: the member cannot stand on a store it
-/// does not carry, and admin's inventory should have refused the load
-/// before the vector was built.
-fn open_store(
-    engine: &str,
-    territory: &str,
-    socket: Option<String>,
-    database: Option<String>,
-    role: Option<String>,
-) -> Result<Box<dyn Store>, weaver_state::CustodyFault> {
-    use weaver_state::CustodyFault;
-    match engine {
-        #[cfg(feature = "sqlite")]
-        "sqlite" => {
-            let path = std::path::Path::new(territory).join("state.sql");
-            Ok(Box::new(weaver_state::engine::sqlite::Sqlite::open(&path)?))
-        }
-        #[cfg(feature = "postgres")]
-        "postgres" => {
-            let socket = socket.unwrap_or_else(|| String::from("/run/postgresql"));
-            let (Some(database), Some(role)) = (database, role) else {
-                return Err(CustodyFault::StoreUnavailable(String::from(
-                    "the service engine needs --database and --role",
-                )));
-            };
-            Ok(Box::new(weaver_state::engine::postgres::Postgres::open(
-                &socket, &database, &role,
-            )?))
-        }
-        other => {
-            let _ = (territory, socket, database, role);
-            Err(CustodyFault::StoreUnavailable(format!(
-                "no engine named {other:?} in this binary"
-            )))
-        }
-    }
+/// The store, opened, per `weaver-state-Spec` section 3: the embedded engine
+/// at the territory's `state.sql`, the one engine this member carries.
+fn open_store(territory: &str) -> Result<Box<dyn Store>, weaver_state::CustodyFault> {
+    let path = std::path::Path::new(territory).join("state.sql");
+    Ok(Box::new(weaver_state::engine::sqlite::Sqlite::open(&path)?))
 }
 
 /// Custody until closure, across the doors this standing carries.
@@ -422,7 +361,7 @@ fn serve(
                         };
                         // **A refused election says which path refused it.**
                         // This door can fail on an election the operator
-                        // wrote, per the service engine's naming. Preserve
+                        // wrote. Preserve
                         // the diagnosis while the member stays alive for a
                         // retry. The first door prints the same fault before
                         // its startup exit.
@@ -1011,51 +950,35 @@ mod tests {
         }
     }
 
-    /// **The engine leads and the positionals keep their places**, per
-    /// `weaver-state-Spec` section 4 as of 2026-09-04. Perturbation: parse
-    /// the flags after the positionals and the diagnostic case reads the
-    /// preload name as the territory.
+    /// **The vector is the territory and the preload name, and no flag**, per
+    /// `weaver-state-Spec` section 2: the engine flag and the service engine's
+    /// three left with that engine. Perturbation: accept `--engine` again and
+    /// the retired flag parses.
     #[test]
-    fn the_vector_elects_the_engine_before_the_territory() {
+    fn the_vector_is_the_territory_and_the_preload_name() {
         fn words(v: &[&str]) -> std::vec::IntoIter<String> {
             v.iter()
                 .map(|w| w.to_string())
                 .collect::<Vec<_>>()
                 .into_iter()
         }
-        let embedded =
-            super::StoreVector::parse(words(&["--engine", "sqlite", "/t"])).expect("parses");
-        assert_eq!(embedded.engine, "sqlite");
-        assert_eq!(embedded.territory, "/t");
-        assert!(embedded.preload_socket.is_none());
-        let bare = super::StoreVector::parse(words(&["/t", "/t/preload.sock"])).expect("parses");
+        let serving = super::StoreVector::parse(words(&["/t"])).expect("parses");
+        assert_eq!(serving.territory, "/t");
+        assert!(serving.preload_socket.is_none());
+        let diagnostic =
+            super::StoreVector::parse(words(&["/t", "/t/preload.sock"])).expect("parses");
+        assert_eq!(diagnostic.territory, "/t");
         assert_eq!(
-            bare.engine, "sqlite",
-            "absent flags are the embedded engine"
+            diagnostic.preload_socket.as_deref(),
+            Some("/t/preload.sock")
         );
-        assert_eq!(bare.preload_socket.as_deref(), Some("/t/preload.sock"));
-        let service = super::StoreVector::parse(words(&[
-            "--engine",
-            "postgres",
-            "--store-socket",
-            "/run/postgresql",
-            "--database",
-            "d",
-            "--role",
-            "r",
-            "/t",
-            "/t/preload.sock",
-        ]))
-        .expect("parses");
-        assert_eq!(service.engine, "postgres");
-        assert_eq!(service.socket.as_deref(), Some("/run/postgresql"));
-        assert_eq!(service.database.as_deref(), Some("d"));
-        assert_eq!(service.role.as_deref(), Some("r"));
-        assert_eq!(service.territory, "/t");
-        assert!(
-            super::StoreVector::parse(words(&["--engine"])).is_none(),
-            "a flag without a value"
-        );
+        // The retired flags refuse as any unknown flag does.
+        for flag in ["--engine", "--store-socket", "--database", "--role"] {
+            assert!(
+                super::StoreVector::parse(words(&[flag, "x", "/t"])).is_none(),
+                "{flag} retired with the service engine"
+            );
+        }
         assert!(
             super::StoreVector::parse(words(&["--other", "x", "/t"])).is_none(),
             "an unknown flag"
@@ -1255,7 +1178,7 @@ mod tests {
     /// this function on a serving load, so the absence is decided in
     /// `StoreVector::parse`, and defaulting the preload positional there
     /// stands a door nothing should dial. Watched under exactly that change,
-    /// by `the_vector_elects_the_engine_before_the_territory`, whose
+    /// by `the_vector_is_the_territory_and_the_preload_name`, whose
     /// `preload_socket.is_none()` fails on it.
     ///
     /// **This test watches the positive half**, that a named one stands. Its
@@ -1455,13 +1378,5 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "postgres"))]
-use weaver_state::engine;
-
-#[cfg(all(test, feature = "postgres"))]
-#[allow(dead_code)]
-#[path = "engine/postgres_scratch.rs"]
-mod postgres_scratch;
-
-#[cfg(all(test, feature = "postgres"))]
-mod comparison;
+#[cfg(all(test, feature = "sqlite"))]
+mod preload_door;

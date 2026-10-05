@@ -63,9 +63,9 @@ pub struct AgentConfig {
     /// The store the state member stands on, per `weaver-types-Spec` section
     /// 2 and the ruling of 2026-09-04 that the store is a port: absent means
     /// the embedded engine with the member standing, and the cross-field
-    /// rules - `database` and `role` exactly under the service engine, and
-    /// no election beside `none` - are admin's at inventory, this parse
-    /// checking each field alone.
+    /// rules - no `database` or `role` for any engine this build provides,
+    /// and no election beside `none` - are admin's at inventory, this parse
+    /// checking each field alone, beside refusing an unprovided engine.
     #[serde(default)]
     pub state_store: Option<StateStore>,
     /// The agent's loop file, per `weaver-types-Spec` section 2 and the
@@ -108,7 +108,10 @@ pub struct Cut {
 }
 
 /// The store election, per `weaver-types-Spec` section 2: which port the
-/// deployment elects, and the service engine's database and role.
+/// deployment elects. `database` and `role` belonged to the service engine,
+/// retired on the operator's ruling of 2026-10-02 on #1; they stay in the
+/// grammar and on the wire so no consumer's shape moves, and no engine
+/// takes them, the inventory refusing them where they are set.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct StateStore {
@@ -131,14 +134,15 @@ impl Default for StateStore {
 }
 
 /// The engines the state charter charters, and the declared absence of a
-/// member. Closed at three: a further engine is a state act before it is a
-/// variant.
+/// member. Closed at the engines this build provides, and a declaration
+/// electing any other refuses at the parse naming `state-store.engine`, per
+/// `weaver-types-Spec` section 2. A further engine is a state act before it
+/// is a variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum StoreEngine {
     None,
     Sqlite,
-    Postgres,
 }
 
 /// What a load is for, per `weaver-agent-PRD` section 6 as amended
@@ -445,6 +449,7 @@ pub fn parse_boundary(source: &str) -> Result<crate::BoundaryFile, ConfigError> 
 /// ```
 #[cfg(feature = "config")]
 pub fn parse(source: &str) -> Result<AgentConfig, ConfigError> {
+    check_provided_engine(source)?;
     let config: AgentConfig =
         toml::from_str(source).map_err(|e| classify_toml_error(e.message()))?;
     if config
@@ -464,6 +469,31 @@ pub fn parse(source: &str) -> Result<AgentConfig, ConfigError> {
     check_trace_sink_surface(source, &config.trace_sink)?;
     check_declared_paths(&config)?;
     Ok(config)
+}
+
+/// **An engine this build does not provide refuses naming the field**, per
+/// `weaver-types-Spec` section 2 and the operator's ruling of 2026-10-05
+/// (#86): a declaration electing any engine but `none` or `sqlite` refuses
+/// `BadValue` naming `state-store.engine`, rather than the unnamed refusal an
+/// unknown variant would draw from the deserializer. No engine is refused by
+/// its own name. A source that does not read as TOML, or an engine that is
+/// not a string, is left to the parse, which names its own fault.
+#[cfg(feature = "config")]
+fn check_provided_engine(source: &str) -> Result<(), ConfigError> {
+    let Ok(table) = source.parse::<toml::Table>() else {
+        return Ok(());
+    };
+    let elected = table
+        .get("state-store")
+        .and_then(|store| store.get("engine"))
+        .and_then(|engine| engine.as_str());
+    if elected.is_some_and(|engine| !matches!(engine, "none" | "sqlite")) {
+        return Err(ConfigError {
+            field: Some(FieldName("state-store.engine".to_string())),
+            kind: ConfigErrorKind::BadValue,
+        });
+    }
+    Ok(())
 }
 
 /// **A path in a declaration carries no control character**, per

@@ -391,9 +391,11 @@ no server, no network and no pool, and one peer, so the store is one agent's as 
 organ is, per `weaver-agent-PRD` section 6.
 
 **The service engine is retired**, reversing the ruling of 2026-09-04 and its
-confirmation of 2026-09-30 on #38, on the operator's ruling of 2026-10-02. A shared
-database server is a substrate many agents could reach across, which breaks
-individuation, and local-first means one embedded database per agent. What the
+confirmation of 2026-09-30 on #38, on the operator's ruling of 2026-10-02, because
+local-first means one embedded database per agent. **The store sits behind
+`weaver-harness-state-contract`, the embedded engine is this local-first deployment's
+implementation of it, and another deployment may implement the same contract with
+another engine**, on the operator's ruling of 2026-10-05 (#86). What the
 service engine was elected to buy, a queryable structure that similarity, ranking and
 a classifier in front of the selection make cheap, the embedded engine holds too, and
 the ranking and the classifying are the loop's through the SPU rather than the store's.
@@ -504,8 +506,7 @@ today.
   own, and the previous program's graph store is the one most likely to ask,
   having been tied into that program's base code. It arrives as a port
   implementation in its own act, with its own custody clause, and never in the
-  base, and it answers the individuation ground section 4 retired the service
-  engine on: one database per agent, reached by one peer, with nothing another
+  base, and it answers section 4's custody ground: one database per agent, reached by one peer, with nothing another
   agent can reach across.
 - **The preload door's contract, owed.** Section 3 makes the door the path by
   which the trace reaches a rebuild, landing whole and honouring every reset

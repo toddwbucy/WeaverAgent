@@ -18,15 +18,15 @@
 # `/etc/weaver/stack/` holds the box-wide defaults, one file per key, which
 # `create-agent.sh` copies into each new agent's root: `worker-binary`,
 # `spu-binary`, `gate-binary`, `coordination-root` and `library-path`, and for
-# the scripts alone `prefix` and `agent-directory`. `headroom-bytes`,
-# `load-bound-seconds` and `state-store-socket` are optional; this script
-# writes none of them, and an operator who writes one into the record has it
-# copied into every agent made after. The admin base is created empty here,
-# root-owned 0755, and gains one root per agent. **No init system is
-# involved**: admin's start step stands the agent itself, on the operator's
-# ruling of 2026-10-03 (#50), so no unit, run tool or control tool is
-# installed or recorded, and each agent's operations log lives in its
-# declaration directory rather than under a box log directory.
+# the scripts alone `prefix` and `agent-directory`. `headroom-bytes` and
+# `load-bound-seconds` are optional, and this script writes neither. An
+# operator who writes one into the record has it copied into every agent made
+# after. The admin base is created empty here, root-owned 0755, and gains one
+# root per agent. **No init system is involved**: admin's start step stands
+# the agent itself, on the operator's ruling of 2026-10-03 (#50), so no unit,
+# run tool or control tool is installed or recorded, and each agent's
+# operations log lives in its declaration directory rather than under a box
+# log directory.
 #
 # Box facts are environment, defaulted, printed, and never discovered from a
 # directory listing (the install set is named, per update-stack.sh):
@@ -71,7 +71,7 @@ AGENT_DIR=${WEAVER_AGENT_DIR:-/var/lib/weaver-agent}
 CUDA_LIB_DIR=${CUDA_LIB_DIR:-/opt/cuda/lib64}
 
 MEMBERS="pyworker worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state"
-MEMBER_FEATURES=weaver-harness/pyworker,weaver-state/sqlite,weaver-state/postgres
+MEMBER_FEATURES=weaver-harness/pyworker,weaver-state/sqlite
 SPU_FEATURES=weaver-spu/cuda
 FEATURES="$SPU_FEATURES,$MEMBER_FEATURES"
 # The engine's shared objects. llama-cpp-sys builds them into its own
@@ -97,7 +97,6 @@ plan "driver        $(nvidia-smi --query-gpu=name,driver_version --format=csv,no
 plan "nvcc          $(nvcc --version 2>/dev/null | tail -1 | sed 's/^Build //' || echo none)"
 CCCL=$(pacman -Q cccl 2>/dev/null | awk '{print $2}' || true)
 plan "cccl          ${CCCL:-unknown}"
-plan "postgresql    $(systemctl is-active postgresql 2>/dev/null || echo inactive)"
 plan "will build    $FEATURES"
 plan "will install  $MEMBERS"
 
@@ -275,5 +274,5 @@ plan "admin base $ADMIN_BASE (empty)"
 sudo install -d -o root -g root -m 0755 "$AGENT_DIR"
 
 say "installed at $REV"
-plan "next: deploy/create-agent.sh <name> --engine <sqlite|postgres> --artifact <path> [--apply], one agent at a time"
+plan "next: deploy/create-agent.sh <name> --artifact <path> [--apply], one agent at a time"
 plan "then: validate each agent with the validate verb of $(printf '%q' "$PREFIX/bin/weaver-admin") as root, and prove its load with deploy/verify-load.sh as root (deploy/HowToDeployANewAgent.md section 4)"

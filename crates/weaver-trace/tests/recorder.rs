@@ -1361,9 +1361,7 @@ fn the_load_names_its_loop_and_its_member() {
         cause: weaver_trace::Cause { uid: 0 },
         library_path: None,
         state_store: weaver_trace::StoreIdentity {
-            engine: "postgres".into(),
-            database: Some("weaver_karl".into()),
-            role: Some("weaver_karl".into()),
+            engine: "sqlite".into(),
         },
         composer: weaver_trace::LoopIdentity::file(
             "pyworker",
@@ -1375,18 +1373,8 @@ fn the_load_names_its_loop_and_its_member() {
     assert_eq!(rendered["state_member"], serde_json::json!(true));
     assert_eq!(
         rendered["state_store"],
-        serde_json::json!({"engine": "postgres", "database": "weaver_karl", "role": "weaver_karl"}),
-        "the load names the store the member stands on"
-    );
-    assert_eq!(
-        serde_json::to_value(weaver_trace::StoreIdentity {
-            engine: "sqlite".into(),
-            database: None,
-            role: None
-        })
-        .expect("renders"),
         serde_json::json!({"engine": "sqlite"}),
-        "the embedded engine names no database and no role, not null ones"
+        "the load names the store the member stands on by its engine alone"
     );
     assert_eq!(
         rendered["composer"]["binary"],

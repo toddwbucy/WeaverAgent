@@ -37,9 +37,6 @@ pub struct Boundary {
     /// election but `none` requires it, so its absence is the box's fault
     /// and never an absent member.
     pub member_binary: Option<std::path::PathBuf>,
-    /// The directory the store's socket stands in, from this crate's own
-    /// configuration, read under the service engine alone.
-    pub store_socket: std::path::PathBuf,
     /// The state member's own account where the box carries one, per
     /// `weaver-state-PRD` section 4: the member holds its territory by
     /// owning it, so every election but `none` requires the account the
@@ -48,10 +45,9 @@ pub struct Boundary {
     pub member_account: Option<MemberAccount>,
 }
 
-/// The state member's own kernel identity: the uid the spawn drops to, the
-/// uid that owns the territory, and the uid the store's first gate answers
-/// about, which are one uid because the charter's custody argument rests on
-/// their being one.
+/// The state member's own kernel identity: the uid the spawn drops to and
+/// the uid that owns the territory, which are one uid because the charter's
+/// custody argument rests on their being one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemberAccount {
     pub uid: u32,
@@ -204,14 +200,6 @@ fn take_inventory_against(
                 return Err(store_invalid("state-store.role"));
             }
         }
-        StoreEngine::Postgres => {
-            if store.database.is_none() {
-                return Err(store_invalid("state-store.database"));
-            }
-            if store.role.is_none() {
-                return Err(store_invalid("state-store.role"));
-            }
-        }
     }
 
     // A granted permission member is refused, per `weaver-admin-Spec`
@@ -292,12 +280,8 @@ fn take_inventory_against(
     // the member's binary: the leg's standing is the declaration's fact and
     // not the directory's, per `weaver-state-PRD` section 4 and issue #381,
     // so a box lacking the binary refuses rather than running without a leg
-    // the declaration never declined. The service engine further requires
-    // the store's socket under the configured directory, and the walk asks
-    // the store the two questions the charter's two gates pose: that this
-    // account, the member's, maps to the declared role, and that the agent's
-    // uid maps to none. Each is `BoundaryUnverified` and never
-    // `ConfigInvalid`, for the reason the group case below gives: the
+    // the declaration never declined. The refusal is `BoundaryUnverified` and
+    // never `ConfigInvalid`, for the reason the group case below gives: the
     // declaration is well formed and the fault is the provisioning's.
     if store.engine != StoreEngine::None && boundary.member_binary.is_none() {
         diag!("boundary unverified: no weaver-state binary beside the worker's");
@@ -307,9 +291,7 @@ fn take_inventory_against(
     // its territory by owning it, so a member with no account of its own has
     // no territory to hold and would run as this crate does. A box lacking
     // the account refuses here for the reason a box lacking the binary does,
-    // the provisioning being what is missing, and refuses before the store is
-    // asked anything, because the account is what the first gate is asked
-    // about.
+    // the provisioning being what is missing.
     //
     // conforms: admin-member-account-required-at-inventory
     if store.engine != StoreEngine::None && boundary.member_account.is_none() {
@@ -320,26 +302,6 @@ fn take_inventory_against(
             member_identity_for(name)
         );
         return Err(LifecycleRefusal::BoundaryUnverified);
-    }
-    if store.engine == StoreEngine::Postgres {
-        let (Some(database), Some(role)) = (store.database.as_deref(), store.role.as_deref())
-        else {
-            unreachable!("the declaration's half required both");
-        };
-        let socket = boundary.store_socket.join(STORE_SOCKET_LEAF);
-        if !std::fs::metadata(&socket)
-            .map(|m| std::os::unix::fs::FileTypeExt::is_socket(&m.file_type()))
-            .unwrap_or(false)
-        {
-            diag!(
-                "boundary unverified: no store socket at {}",
-                socket.display()
-            );
-            return Err(LifecycleRefusal::BoundaryUnverified);
-        }
-        store_gate(boundary, database, role, |uid, gids| {
-            store_admits_as(&boundary.store_socket, uid, gids, database, role)
-        })?;
     }
 
     // **A restore is judged here too**, per `weaver-admin-Spec` section 4 as
@@ -585,59 +547,6 @@ pub fn file_digest(path: &Path) -> String {
     hex
 }
 
-/// The service engine's conventional socket directory, standing where this
-/// crate's configuration names none.
-pub const STORE_SOCKET_DIRECTORY: &str = "/run/postgresql";
-
-/// The leaf the store's socket carries under its directory, at the engine's
-/// default port.
-pub const STORE_SOCKET_LEAF: &str = ".s.PGSQL.5432";
-
-/// The name of the environment variable under which this binary, re-executed
-/// as the agent's uid, answers the store's second question instead of
-/// serving a verb: no verb of the operator's surface is added for a question
-/// the surface never asks.
-pub const PROBE_STORE_VARIABLE: &str = "WEAVER_ADMIN_PROBE_STORE";
-
-/// **Does the store admit this process as `role` on `database`?** Asked in
-/// the engine's own startup handshake over the unix socket, with no client
-/// library: one startup message carrying the role and database, and one
-/// answer read, an authentication-complete meaning the store's peer
-/// authentication mapped this account to the role, and anything else meaning
-/// it did not. An authentication method this process cannot answer, a
-/// password or a challenge, counts as not admitted, because the member
-/// authenticates by peer credential and nothing else. The error names a
-/// socket that could not be spoken to, never a refusal.
-pub fn store_admits(socket_dir: &Path, database: &str, role: &str) -> std::io::Result<bool> {
-    use std::io::{Read, Write};
-    let mut stream = std::os::unix::net::UnixStream::connect(socket_dir.join(STORE_SOCKET_LEAF))?;
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
-    let mut body = Vec::new();
-    body.extend_from_slice(&196_608u32.to_be_bytes());
-    for (key, value) in [("user", role), ("database", database)] {
-        body.extend_from_slice(key.as_bytes());
-        body.push(0);
-        body.extend_from_slice(value.as_bytes());
-        body.push(0);
-    }
-    body.push(0);
-    let mut message = ((body.len() + 4) as u32).to_be_bytes().to_vec();
-    message.extend_from_slice(&body);
-    stream.write_all(&message)?;
-    let mut head = [0u8; 5];
-    stream.read_exact(&mut head)?;
-    let length = u32::from_be_bytes([head[1], head[2], head[3], head[4]]) as usize;
-    let admitted = if head[0] == b'R' && length >= 8 {
-        let mut code = [0u8; 4];
-        stream.read_exact(&mut code)?;
-        u32::from_be_bytes(code) == 0
-    } else {
-        false
-    };
-    let _ = stream.write_all(&[b'X', 0, 0, 0, 4]);
-    Ok(admitted)
-}
-
 /// **A command that runs `program` as exactly `uid` with exactly `gids`**, the
 /// first of them primary. The identity is taken in the pre-exec by
 /// [`drop_to`] and nowhere else: `CommandExt::uid` and `CommandExt::gid` are
@@ -649,6 +558,7 @@ pub fn store_admits(socket_dir: &Path, database: &str, role: &str) -> std::io::R
 ///
 /// An empty `gids` is refused before any spawn: an identity with no primary
 /// group is not one this crate can hand a process.
+#[cfg(test)]
 pub fn identity_command(
     program: &Path,
     uid: u32,
@@ -676,8 +586,8 @@ pub fn identity_command(
 /// then the gids, then the uids, each of the three ids set so no saved id
 /// survives to return to. `setgroups` and `setresgid` need the privilege
 /// `setresuid` gives away, so the uid goes last. Called in a pre-exec while
-/// the fork still holds root, by the store probe through
-/// [`identity_command`] and by the member's spawn.
+/// the fork still holds root, by the member's spawn, and in the tests through
+/// `identity_command`, the harness that measures it.
 ///
 /// Async-signal-safe throughout, per the pre-exec contract. A failure returns
 /// the error, which fails the spawn, so a process this crate could not
@@ -697,134 +607,6 @@ pub fn drop_to(uid: u32, gids: &[nix::libc::gid_t]) -> std::io::Result<()> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(())
-}
-
-/// **Does the store admit `uid` as `role`?** The question both of the
-/// charter's gates pose, and the one this process cannot ask as itself: peer
-/// authentication reads the connecting uid, so this binary re-executes itself
-/// under the named uid and that identity's whole group set, with
-/// [`PROBE_STORE_VARIABLE`] set, and the child asks [`store_admits`] and exits
-/// zero for admitted and one for refused. Any other exit is the probe failing
-/// to run, which is an error and not an answer.
-///
-/// **Both gates go through here as of 2026-09-15**, per issue #545. The first
-/// gate asked [`store_admits`] from this process, so the identity the store
-/// had to admit was whichever account admin runs as - root - rather than the
-/// member's, and the charter's derivation of the object gate from the kernel
-/// fact was asserted about a process that never dials the store.
-pub fn store_admits_as(
-    socket_dir: &Path,
-    uid: u32,
-    gids: &[u32],
-    database: &str,
-    role: &str,
-) -> std::io::Result<bool> {
-    probe_store_as(
-        &std::env::current_exe()?,
-        socket_dir,
-        uid,
-        gids,
-        database,
-        role,
-    )
-}
-
-/// [`store_admits_as`] with the program named, so the probe's own
-/// construction - identity, environment, arguments, the exit reading - can be
-/// driven by a program that reports the identity it was given. Production
-/// passes this binary. Issue #675 lived in exactly this construction.
-pub fn probe_store_as(
-    program: &Path,
-    socket_dir: &Path,
-    uid: u32,
-    gids: &[u32],
-    database: &str,
-    role: &str,
-) -> std::io::Result<bool> {
-    // **The probe carries the group set of the identity it stands for**, not
-    // this crate's: the spawned member's drop narrows its own set to exactly
-    // its group, so a probe inheriting root's memberships would reach a store
-    // socket on a group the identity does not hold, and answer about access
-    // that identity will not have. For the member that is a gate passing on a
-    // dial that will fail, and for the agent a refusal observed for the wrong
-    // reason. [`identity_command`] sets the whole set in the right order.
-    let mut probe = identity_command(program, uid, gids)?;
-    probe
-        .env_clear()
-        .env(PROBE_STORE_VARIABLE, "1")
-        .arg(socket_dir)
-        .arg(database)
-        .arg(role)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    match probe.status()?.code() {
-        Some(0) => Ok(true),
-        Some(1) => Ok(false),
-        other => Err(std::io::Error::other(format!(
-            "the probe under uid {uid} ended with {other:?}"
-        ))),
-    }
-}
-
-/// **The store's two gates, asked in order and each as the uid it is about.**
-///
-/// The charter's wall is two questions of one store: the member's account
-/// maps to the declared role, and the agent's uid maps to none. Peer
-/// authentication welds the object gate to the service gate, so each question
-/// is answered by connecting as the uid it asks about - which is why the
-/// member's gate is asked by a child under the member's account and never
-/// from this process, whose account is root and is party to neither gate.
-///
-/// The asking is a parameter so the call site is watched. What a test can
-/// present is which uid each gate names and what the walk does with the
-/// answers; what it cannot present is a provisioned store, and the mechanism
-/// that carries the uid is [`store_admits_as`], already standing for the
-/// agent's gate since 2026-09-04.
-///
-/// conforms: admin-store-gate-asks-as-the-member
-fn store_gate(
-    boundary: &Boundary,
-    database: &str,
-    role: &str,
-    mut ask: impl FnMut(u32, &[u32]) -> std::io::Result<bool>,
-) -> Result<(), LifecycleRefusal> {
-    let Some(member) = boundary.member_account else {
-        // Unreachable from the walk, which requires the account above, and
-        // stated rather than unwrapped: a gate that assumed an account would
-        // be asking the store about nobody.
-        diag!("boundary unverified: no member account to ask the store about");
-        return Err(LifecycleRefusal::BoundaryUnverified);
-    };
-    match ask(member.uid, &[member.gid]) {
-        Ok(true) => {}
-        Ok(false) => {
-            diag!(
-                "boundary unverified: the store does not map the member's uid {} to role \
-                 {role:?} on database {database:?}",
-                member.uid
-            );
-            return Err(LifecycleRefusal::BoundaryUnverified);
-        }
-        Err(e) => {
-            diag!("boundary unverified: the store could not be asked as the member: {e}");
-            return Err(LifecycleRefusal::BoundaryUnverified);
-        }
-    }
-    match ask(boundary.agent_uid, &boundary.agent_gids) {
-        Ok(false) => Ok(()),
-        Ok(true) => {
-            diag!(
-                "boundary unverified: the store maps the agent's uid {} to role {role:?}",
-                boundary.agent_uid
-            );
-            Err(LifecycleRefusal::BoundaryUnverified)
-        }
-        Err(e) => {
-            diag!("boundary unverified: the store could not be asked as the agent: {e}");
-            Err(LifecycleRefusal::BoundaryUnverified)
-        }
-    }
 }
 
 /// The declaration's digest, sha256 of the file's bytes as read, hex.
@@ -1447,7 +1229,6 @@ mod tests {
             // engine and so requires a member binary: this process's own
             // stands in for it, present on every box the suite runs on.
             member_binary: Some(std::path::PathBuf::from("/proc/self/exe")),
-            store_socket: std::path::PathBuf::from(STORE_SOCKET_DIRECTORY),
             // And an account for the member, which the same election
             // requires: this process's own credentials stand in for it,
             // being the one account every box the suite runs on carries.
@@ -1517,7 +1298,7 @@ mod tests {
         let home = root.join("home");
         std::fs::create_dir_all(&home).expect("home");
         let boundary = boundary(&home, 65533);
-        let cases: [(&str, &str); 5] = [
+        let cases: [(&str, &str); 4] = [
             (
                 "engine = \"none\"\n\n[state-election]\nall-kinds = true\nkeys = []\n",
                 "state-election",
@@ -1527,14 +1308,8 @@ mod tests {
                 "state-store.database",
             ),
             ("engine = \"sqlite\"\nrole = \"r\"\n", "state-store.role"),
-            (
-                "engine = \"postgres\"\nrole = \"r\"\n",
-                "state-store.database",
-            ),
-            (
-                "engine = \"postgres\"\ndatabase = \"d\"\n",
-                "state-store.role",
-            ),
+            // An engine this build does not provide refuses at the parse.
+            ("engine = \"postgres\"\n", "state-store.engine"),
         ];
         for (store, field) in cases {
             let source = config_source_electing(&home, store);
@@ -1547,14 +1322,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// **Every election but `none` requires the member's binary**, and the
-    /// service engine requires the store's socket, each `BoundaryUnverified`.
-    /// Perturbation: drop the binary check and the first case passes the
-    /// inventory or fails later on the sink instead, and drop the socket
-    /// check and the second reaches the store's handshake against a
-    /// directory holding no socket, failing as an ask rather than a look.
+    /// **Every election but `none` requires the member's binary**,
+    /// `BoundaryUnverified`. Perturbation: drop the binary check and the first
+    /// case passes the inventory or fails later on the sink instead.
     #[test]
-    fn every_election_but_none_requires_the_member_and_postgres_its_socket() {
+    fn every_election_but_none_requires_the_member() {
         let name = AgentName("alpha".into());
         let root = crate::scratch::Scratch(
             std::env::temp_dir().join(format!("wt-store-box-{}", std::process::id())),
@@ -1585,19 +1357,6 @@ mod tests {
             "none declines the member and requires nothing"
         );
 
-        let mut without_socket = boundary(&home, 65533);
-        without_socket.store_socket = root.join("no-such-store");
-        let service = config_source_electing(
-            &sink_dir,
-            "engine = \"postgres\"\ndatabase = \"d\"\nrole = \"r\"\n",
-        );
-        assert!(
-            matches!(
-                take_inventory(&name, &service, &without_socket),
-                Err(LifecycleRefusal::BoundaryUnverified)
-            ),
-            "the service engine requires the store's socket under the configured directory"
-        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1655,146 +1414,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// **Each of the store's two gates is asked as the uid it is about**, the
-    /// member's first and the agent's second, per `weaver-state-PRD` section
-    /// 4's welding of the object gate to the service gate.
-    ///
-    /// The defect issue #545 filed is exactly the first uid: the member's
-    /// gate was asked from this process, so the identity the store had to
-    /// admit was whichever account admin runs as, which is root, and no
-    /// member-specific account was resolved anywhere. The second gate is
-    /// unchanged and its property is re-asserted here, no agent's uid
-    /// reaching any store being what the walk already bought.
-    ///
-    /// Perturbation: ask the first gate with `boundary.admin_uid`, or with
-    /// an in-process `store_admits` that names no uid at all, and the walk
-    /// refuses a store this fixture maps the member on, the recorded pair no
-    /// longer opening with the member's account. Watched failing 2026-09-15
-    /// under both.
-    ///
-    /// conforms: admin-store-gate-asks-as-the-member
-    #[test]
-    fn the_store_is_asked_as_the_member_and_then_as_the_agent() {
-        let mut bound = boundary(std::path::Path::new("/nonexistent"), 65533);
-        bound.member_account = Some(MemberAccount { uid: 4242, gid: 43 });
-        bound.agent_gids = vec![65531];
-
-        // Both gates answering as the charter requires: the member admitted,
-        // the agent refused.
-        let mut asked = Vec::new();
-        let walked = store_gate(&bound, "weaver_alpha", "weaver_alpha", |uid, gids| {
-            asked.push((uid, gids.to_vec()));
-            Ok(uid == 4242)
-        });
-        assert!(walked.is_ok(), "the member admitted and the agent refused");
-        assert_eq!(
-            asked,
-            vec![(4242, vec![43]), (65533, vec![65531])],
-            "the member's account first and the agent's uid second, each with its \
-             own whole group set rather than this crate's"
-        );
-        assert!(
-            !asked.iter().any(|(uid, _)| *uid == bound.admin_uid),
-            "and neither gate is asked as the account admin runs as"
-        );
-
-        // A store that does not map the member refuses the load rather than
-        // standing a member that cannot reach its own database.
-        let refused = store_gate(&bound, "weaver_alpha", "weaver_alpha", |_, _| Ok(false));
-        assert!(
-            matches!(refused, Err(LifecycleRefusal::BoundaryUnverified)),
-            "the first gate closed is a boundary unverified"
-        );
-        // And a store that admits the agent refuses, which is the property
-        // bought on 2026-09-04 and kept here.
-        let open = store_gate(&bound, "weaver_alpha", "weaver_alpha", |_, _| Ok(true));
-        assert!(
-            matches!(open, Err(LifecycleRefusal::BoundaryUnverified)),
-            "an agent uid the store maps is a boundary unverified"
-        );
-        // A store that cannot be asked is an error and never an answer.
-        let unasked = store_gate(&bound, "weaver_alpha", "weaver_alpha", |_, _| {
-            Err(std::io::Error::other("no store"))
-        });
-        assert!(
-            matches!(unasked, Err(LifecycleRefusal::BoundaryUnverified)),
-            "a store that could not be asked answers neither gate"
-        );
-    }
-
-    /// **A room for the stand-in probe, in the shared temporary directory,
-    /// never looser than its final mode.** It is made with `mkdir` at `0700`
-    /// under a name no other run uses, so a path already standing there, a
-    /// planted symlink included, refuses rather than being followed. A umask
-    /// can only tighten that. The stand-in script is created new at `0755`,
-    /// root-owned, so nothing else can hold it open for writing. Only then is
-    /// the room's group set to the probe's group and the room opened to
-    /// `0770`, so the probe can write its record and no user outside the
-    /// probe's group can enter. Inside the namespace that group maps to a
-    /// subordinate gid nobody holds. The test assumes ids 4242 to 4244 belong
-    /// to no one on a box that runs it as real root.
-    ///
-    /// **The room stays owned by the test**, root inside the namespace, which
-    /// is the invoking user on the host. A run killed before its drop
-    /// therefore leaves a directory that user removes with a plain `rm`,
-    /// where a room owned by the probe's uid would need the namespace again.
-    /// Removed on drop.
-    struct ProbeRoom {
-        path: std::path::PathBuf,
-        script: std::path::PathBuf,
-    }
-
-    /// The stand-in for this binary in reading 3: records its status, its
-    /// database and role arguments and its environment into the room it is
-    /// handed where the socket directory goes. It exits one when the role is
-    /// `refuse` and zero otherwise, which the probe reads as refused and
-    /// admitted.
-    const STAND_IN: &str = "#!/bin/sh\n\
-         /bin/cat /proc/self/status > \"$1/status\"\n\
-         printf 'args %s %s\\n' \"$2\" \"$3\" > \"$1/seen\"\n\
-         env | sed 's/^/env /' >> \"$1/seen\"\n\
-         [ \"$3\" = refuse ] && exit 1\n\
-         exit 0\n";
-
-    impl ProbeRoom {
-        fn make(parent: &std::path::Path, gid: u32) -> std::io::Result<Self> {
-            let unique = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or_default();
-            let name = format!("weaver-675-{}-{unique}", std::process::id());
-            Self::at(parent.join(name), gid)
-        }
-
-        fn at(path: std::path::PathBuf, gid: u32) -> std::io::Result<Self> {
-            use std::io::Write;
-            use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
-            std::fs::DirBuilder::new().mode(0o700).create(&path)?;
-            let room = Self {
-                script: path.join("probe.sh"),
-                path,
-            };
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o755)
-                .open(&room.script)?
-                .write_all(STAND_IN.as_bytes())?;
-            // A umask can only have narrowed the script; this restores the
-            // execute bit the probe needs and opens nothing further.
-            std::fs::set_permissions(&room.script, std::fs::Permissions::from_mode(0o755))?;
-            std::os::unix::fs::chown(&room.path, None, Some(gid))?;
-            std::fs::set_permissions(&room.path, std::fs::Permissions::from_mode(0o770))?;
-            Ok(room)
-        }
-    }
-
-    impl Drop for ProbeRoom {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
-    }
-
     /// The uid, gid and group lines of a `/proc/<pid>/status` text, each
     /// with its fields joined by single spaces.
     fn status_identity(status: &str) -> (String, String, String) {
@@ -1838,22 +1457,16 @@ mod tests {
         }
     }
 
-    /// **The identity drop, measured in the kernel, on the construction the
-    /// store probe really uses.** Needs euid 0, and runs through
-    /// `the_identity_drop_is_watched_inside_a_user_namespace` on a box where
-    /// that is not the invoking uid. Three readings, each for a different
-    /// half of the property:
+    /// **The identity drop, measured in the kernel.** Needs euid 0, and runs
+    /// through `the_identity_drop_is_watched_inside_a_user_namespace` on a box
+    /// where that is not the invoking uid. Two readings, each for a different
+    /// half of the property (a third, the store probe's own construction,
+    /// retired with the service engine on the ruling of 2026-10-02 on #1):
     ///
     /// 1. Before exec, through [`and_no_saved_id_survives`]: the real,
     ///    effective and saved uids are all 4242 and the gids all 4243.
     /// 2. After exec, from the child's own status: the uid and gid lines, and
     ///    the supplementary set exactly 4243 and 4244, none of root's.
-    /// 3. Through [`probe_store_as`], the store probe's own construction, with
-    ///    [`STAND_IN`] standing for this binary in a [`ProbeRoom`]: the same
-    ///    identity must land, the arguments must arrive as database then role,
-    ///    none of this process's environment may cross, and an exit of one
-    ///    must read as refused. The room's mode, owner and removal are
-    ///    asserted, and a room whose name is already taken must be refused.
     ///
     /// Perturbations, each watched failing 2026-09-24 through the namespace
     /// watch:
@@ -1862,12 +1475,7 @@ mod tests {
     ///   `setgroups` alone in the pre-exec: the spawn fails `EPERM`;
     /// - `setgroups` removed from `drop_to`: root's supplementary set remains;
     /// - `setresuid(user, user, 0)` or `setresgid(p, p, 0)`: reading 1;
-    /// - `probe_store_as` rebuilt on `Command::new` with `.uid` alone;
-    /// - database and role swapped, `env_clear` removed, or exit one no longer
-    ///   read as refused: reading 3;
-    /// - the room made recursively, opened to `0777`, or not removed on drop.
     ///
-    /// conforms: admin-store-gate-asks-as-the-member
     #[test]
     #[ignore = "needs euid 0: run by the_identity_drop_is_watched_inside_a_user_namespace"]
     fn identity_command_lands_the_whole_identity_as_root() {
@@ -1899,91 +1507,6 @@ mod tests {
         assert_eq!(
             groups, "4243 4244",
             "exactly the identity's set, none of root's"
-        );
-
-        // Reading 3: the store probe's own construction, in a room only the
-        // probe's identity can enter, removed however this test ends.
-        let room = ProbeRoom::make(&std::env::temp_dir(), 4243)
-            .expect("an exclusive room is made for the probe");
-        {
-            use std::os::unix::fs::MetadataExt;
-            let meta = std::fs::symlink_metadata(&room.path).expect("the room stands");
-            assert!(meta.is_dir(), "the room is a directory, not a link");
-            assert_eq!(
-                meta.mode() & 0o7777,
-                0o770,
-                "the room opens to its group only"
-            );
-            assert_eq!(meta.uid(), 0, "the room stays owned by the test");
-            assert_eq!(meta.gid(), 4243, "and its group is the probe's");
-        }
-        let admitted = probe_store_as(&room.script, &room.path, 4242, &[4243, 4244], "db", "role")
-            .expect("the probe construction spawns as the identity");
-        assert!(admitted, "a probe exiting zero reads as admitted");
-        let (uids, gids, groups) = status_identity(
-            &std::fs::read_to_string(room.path.join("status")).expect("the probe recorded itself"),
-        );
-        assert_eq!(
-            uids, "4242 4242 4242 4242",
-            "the probe runs as the member's uid"
-        );
-        assert_eq!(gids, "4243 4243 4243 4243", "under its primary group");
-        assert_eq!(groups, "4243 4244", "carrying exactly its set");
-        let seen =
-            std::fs::read_to_string(room.path.join("seen")).expect("the probe recorded its call");
-        assert!(
-            seen.lines().any(|l| l == "args db role"),
-            "database then role, after the socket directory: {seen}"
-        );
-        assert!(
-            seen.lines()
-                .any(|l| l == format!("env {PROBE_STORE_VARIABLE}=1")),
-            "the probe variable is set: {seen}"
-        );
-        assert!(
-            !seen
-                .lines()
-                .any(|l| l.starts_with("env HOME=") || l.starts_with("env PATH=")),
-            "and nothing of this process's environment crosses: {seen}"
-        );
-        let refused = probe_store_as(
-            &room.script,
-            &room.path,
-            4242,
-            &[4243, 4244],
-            "db",
-            "refuse",
-        )
-        .expect("a probe that answers refused still ran");
-        assert!(
-            !refused,
-            "a probe exiting one reads as refused, never as an error"
-        );
-        let room_path = room.path.clone();
-        drop(room);
-        assert!(
-            !room_path.exists(),
-            "the room is removed when the reading ends"
-        );
-
-        // The room is exclusive: a path already standing at its name refuses
-        // rather than being used. The planted link points at a real directory,
-        // the case a following `mkdir -p` would enter. Both are made inside a
-        // yard that is itself an exclusive room, so this touches nothing it did
-        // not create and the yard's drop removes all of it.
-        let yard = ProbeRoom::make(&std::env::temp_dir(), 4243).expect("the yard is made");
-        let target = yard.path.join("target");
-        let planted = yard.path.join("planted");
-        std::fs::create_dir(&target).expect("the link's target is made");
-        std::os::unix::fs::symlink(&target, &planted).expect("a symlink is planted");
-        let taken = ProbeRoom::at(planted, 4243);
-        let refused = taken.is_err();
-        let followed = target.join("probe.sh").exists();
-        drop(taken);
-        drop(yard);
-        assert!(
-            refused && !followed,
-            "a room whose name is already taken is refused, not entered through the link"
         );
 
         let empty = identity_command(std::path::Path::new("/bin/cat"), 4242, &[]);
@@ -2257,7 +1780,6 @@ mod tests {
             agent_gids: vec![65531],
             home: home.clone(),
             member_binary: Some(std::path::PathBuf::from("/proc/self/exe")),
-            store_socket: std::path::PathBuf::from(STORE_SOCKET_DIRECTORY),
             member_account: Some(MemberAccount {
                 uid: nix::unistd::getuid().as_raw(),
                 gid: nix::unistd::getgid().as_raw(),

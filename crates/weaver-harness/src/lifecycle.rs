@@ -1395,11 +1395,8 @@ impl Harness {
                 engine: match payload.state_store.engine {
                     weaver_types::StoreEngine::None => "none",
                     weaver_types::StoreEngine::Sqlite => "sqlite",
-                    weaver_types::StoreEngine::Postgres => "postgres",
                 }
                 .to_string(),
-                database: payload.state_store.database.clone(),
-                role: payload.state_store.role.clone(),
             },
             composer: self
                 .composer

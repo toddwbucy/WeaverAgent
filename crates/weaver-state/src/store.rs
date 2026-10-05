@@ -301,7 +301,7 @@ pub fn parse_distillate(frame: &str) -> Option<Distillate> {
     })
 }
 
-/// A branch's record as the tee distils it, for both engines' restore tests
+/// A branch's record as the tee distils it, for the engine's restore tests
 /// (#697): its identity, the conversation it inherited as `message.restored`
 /// rows, then its own turn. The election names the turned message kinds and
 /// not the restored one, so the restored rows reach custody by the tee's

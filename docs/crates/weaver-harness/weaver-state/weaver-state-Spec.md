@@ -60,9 +60,8 @@ recorded in charter section 5 under Working Process section 6.
 **Dependencies, external.** One engine, behind the feature named for it: `rusqlite` with
 its bundled engine, so the store's version is the build's fact rather than the host's,
 its serialization interface carrying the save point, pinned by the lock file like every
-dependency. **The `postgres` client and its feature retire** with the service engine, on
-the operator's ruling of 2026-10-02 reversing #38, in the code act that removes the
-engine. `serde_json` for the canonical event JSON the ingest reads. `nix` for the
+dependency. **The `postgres` client and its feature are retired** with the service
+engine, on the operator's ruling of 2026-10-02 reversing #38. `serde_json` for the canonical event JSON the ingest reads. `nix` for the
 preload door's credential check and for the descriptor handling both doors and the save
 point's descriptor require. Nothing else: no async runtime, no logging crate, no HTTP,
 per the corpus's standing refusals.
@@ -86,17 +85,18 @@ deleted, and the load of section 3 rebuilds. The descriptor's number is a fixed
 convention between this crate and admin, the code act's to elect beside the first
 door's, and it is probed before it is adopted, by the rule below, a regular file open
 for reading. A live restore reads a save point from the member's own room by name, per
-section 4, and needs no descriptor. The engine flag and the
-service engine's three flags leave the vector with that engine, in the code act that
-removes it, `weaver-admin-Spec` section 6 moving in the same act.
+section 4, and needs no descriptor. **The vector carries no flag**: it is the territory
+and, under a diagnostic binding, the preload name, per `weaver-admin-Spec` section 6.
+The engine flag and the service engine's three flags left it with that engine, and the
+member refuses any flag by name.
 
 The first door's end arrives with the process, per the operator's ruling of 2026-08-26:
 admin creates the pair at the spawn and this member inherits its end, so the peer is
 authenticated by possession and no credential is judged on this door, the one party that
 can hold the other end being the one the enter handed it to. The end's number is the
 code act's to elect, a fixed convention between this crate and admin rather than a value
-the vector carries, so the vector's positionals are the territory and the preload path
-alone, the engine's flags standing ahead of them, per `weaver-admin-Spec` section 6.
+the vector carries, so the vector is the territory and the preload path alone, with no
+flag, per `weaver-admin-Spec` section 6.
 **The number is probed before it is adopted**: the member reads the number's socket type
 and refuses, with a named fault, a number holding no stream socket, because a hand-run
 process holds whatever its shell left there and an adoption would read it as seam
@@ -132,9 +132,11 @@ port and never to an engine, so the seam's traffic is the same whatever answers 
 **One engine stands**, `Sqlite`, an embedded database opened in memory in this process,
 one database and never more, with no file of its own, no server, no network and no
 pool. Its holdings reach the disk only as a save point, per the clause below. **The
-service engine, `Postgres`, retires** with its module, its feature and its suites, in
-the code act that removes it, the ruling of 2026-09-04 that elected it being reversed
-because a shared database server breaks individuation, per the charter's section 4.
+service engine, `Postgres`, is retired** with its module, its feature and its suites,
+the ruling of 2026-09-04 that elected it being reversed, per the charter's section 4.
+**The store sits behind `weaver-harness-state-contract`, the embedded engine is this
+local-first deployment's implementation of it, and another deployment may implement
+the same contract with another engine**, on the operator's ruling of 2026-10-05 (#86).
 The port is the one place a query language is spelled, and a further engine is an
 implementation of the port in its own act.
 
@@ -687,13 +689,20 @@ code act that lands it, and one with the run lock, owed by the start step's code
   serving load stands a door nothing should dial.
 - The preload door refuses every peer but the operator, watched by dropping
   the root arm from the accept, which admits the agent's own uid.
-- A distillate lands whole. Its watch stood at the service engine as of PR #644,
-  a pair carrying a NUL that engine's `TEXT` refuses forcing the failure inside the
-  transaction, and it leaves with that engine. **The embedded engine owes the
-  watch**: the code act that retires the service engine forces a failure inside
-  the embedded landing's transaction, the loop schema's own constraint refusing a
-  row being the natural lever, requires the refusal and unchanged holdings, and
-  perturbs by committing the event before its rows.
+- A distillate lands whole, watched at the embedded engine by
+  `a_distillate_lands_whole_or_not_at_all`: a trigger refuses one pair inside the
+  landing's transaction, and the suite requires the refusal and the holdings
+  unchanged by it. The perturbation commits the event before its rows, and the
+  event survives the refused landing.
+- A preload landed and sealed answers like the live path, watched across the
+  process boundary by the `preload_door` suite: an in-tree client writes the
+  door's wire (the opener, the distillates, the seal) to one member while a tee
+  feeds the same record to another, and both answer every ask as an independent
+  walk of the record says, at a cut and whole, with a dead driver's prefix
+  replaced by its retry and malformed openers leaving custody untouched. It runs
+  inside a user namespace for the operator credential, by its watch. Perturbed by
+  reading no seal (the parked asks never answer) and by an opener naming the
+  source session (the reconstruction answers for the wrong session).
 - A named member lands typed and serves what the record reads, watched by
   `recorded_lines_land_typed`. It distills four recorded lines through
   the tee, lands them, and requires the replay to serve every pair as it crossed,
@@ -743,10 +752,12 @@ code act that lands it, and one with the run lock, owed by the start step's code
   the neutral substrate holds the event. The perturbation drops the constraint from
   the schema the store stands, and the row lands.
 
-**The service engine's suites retire with it.** The scratch PostgreSQL suites of
+**The service engine's suites are retired with it**: the scratch PostgreSQL suites of
 PR #644, the statement suite over the index naming, and the `--features postgres`
-runs leave in the code act that removes the engine, and nothing here rests on them
-after it.
+runs. **The suites that drove the `weaver-analysis` binary against the preload door are
+retired too**, on the operator's ruling of 2026-10-04 that WeaverAnalysis is out of this
+repository's concern: they tested that binary rather than the member, and the door they
+reached is watched by the in-tree client above.
 
 **Enforced by review, and each clause names what would buy it.** Review here
 means the instrument was not bought and never that none exists, per Document

@@ -272,7 +272,7 @@ BUILT="$BUILT/release"
 # A member joins the installed set by being written here.
 MEMBERS="pyworker worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state"
 
-MEMBER_FEATURES=weaver-harness/pyworker,weaver-state/sqlite,weaver-state/postgres
+MEMBER_FEATURES=weaver-harness/pyworker,weaver-state/sqlite
 SPU_FEATURES=weaver-spu/cuda
 FEATURES="$SPU_FEATURES,$MEMBER_FEATURES"
 
@@ -344,9 +344,9 @@ fi
 # the review of 2026-09-13 and for the reason the cccl gate above gives: a
 # failure here is cheaper than one twenty minutes into a build, and this class
 # cost a build, an install and a rollback before it named itself. `weaver-admin
-# validate` cannot cover it. It asks that the binary exists and that the store
-# admits the role, never that the binary carries the engine, which is why karl
-# validated and then refused at load.
+# validate` cannot cover it. It asked that the binary existed, never that the
+# binary carried the engine, which is why karl validated and then refused at
+# load.
 #
 # **The two statements are separate on purpose and reconciled here.**
 # `create-agent.sh` writes the engine into a declaration and this script names
@@ -373,7 +373,7 @@ for agent in $AGENTS; do
   [ "$elected" = none ] && continue
   case ",$FEATURES," in
     *",weaver-state/$elected,"*) ;;
-    *) die "$agent elects the $elected store and the build carries $FEATURES, so the member would refuse it at load. Name weaver-state/$elected in FEATURES, or change the declaration." ;;
+    *) die "$agent elects the $elected store, which is not an engine this build provides (it carries $FEATURES), so the member would refuse it at load. Change $decl's [state-store] to engine = \"sqlite\" with no database or role, per deploy/REDEPLOY.md section 8 step 2." ;;
   esac
 done
 printf '  elected store every agent under the base elects one this build carries\n'

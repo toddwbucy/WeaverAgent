@@ -6,7 +6,8 @@
 #   ./deploy/create-agent.sh fred --engine sqlite --artifact /path/to.gguf            plan only
 #   ./deploy/create-agent.sh fred --engine sqlite --artifact /path/to.gguf --apply    act
 #
-# Options: --engine sqlite|postgres (required), --session <name>
+# Options: --engine sqlite (the default, and the one engine since the service
+# engine retired on the operator's ruling of 2026-10-02 on #1), --session <name>
 # (default <name>-001), --spu <path> (this agent's SPU, in place of the
 # stack record's `spu-binary`), --declaration-directory <path> (default
 # `~/.weaveragent/<name>` in the operator's home), --connector-role
@@ -59,26 +60,16 @@
 # operator's to make. This file is that act written down once instead of
 # remembered.
 #
-# **Two accounts, because the wall is two gates and one identity**, per
-# `weaver-state-PRD` section 4 as ruled 2026-09-04. The service gate is
-# kernel-class: the member dials the store's socket under its own account and
-# the peer is verified by credential. The object gate is the database and the
-# role's grants. Peer authentication welds them, the store mapping the
-# member's kernel identity to its role, so the agent's own uid maps to no
-# role and is refused at the second gate where it was not refused at the
-# first. That refusal is verified at the end rather than assumed.
-#
-# **No password exists anywhere in here.** Peer authentication derives the
-# object gate's identity from the kernel fact rather than asserting it a
-# second time, so there is no secret to store, rotate, or leak.
+# **Two accounts, because the wall is the room and one identity**, per
+# `weaver-state-PRD` section 4: the member holds its store's file in a state
+# room it owns, and the agent's own uid cannot enter that room. That wall is
+# verified at the end rather than assumed. No password exists anywhere in here.
 #
 # **The member's account is derived and no longer named**, as of 2026-09-15 and
 # issue #545. `weaver-admin` resolves `weaver-<name>-state`, drops to it at the
-# member's spawn, hands it the territory by chown, and asks the store's first
-# gate as it, so there is one account the store must admit and this script
-# cannot choose a weaker one. The `--member-identity` flag that named the
-# choice while the code ran the member as root is refused rather than ignored,
-# a box provisioned under it having mapped root in `pg_ident.conf`.
+# member's spawn and hands it the territory by chown, so this script cannot
+# choose a weaker account. The `--member-identity` flag that named the choice
+# while the code ran the member as root is refused rather than ignored.
 set -euo pipefail
 
 say()  { printf '\n== %s\n' "$*"; }
@@ -90,18 +81,13 @@ shift || true
 APPLY=0
 ARTIFACT=""
 SESSION=""
-# **The engine is an election and not a constant.** An earlier form wrote
-# `postgres` into every declaration with nothing saying so, while
-# `deploy/update-stack.sh` separately named which engines the build carries.
-# Two statements of one fact from two decisions is how a declaration comes to
-# elect an engine the installed member cannot serve, which is what happened on
-# 2026-09-11. They are still two statements, deliberately, because a build
-# serves engines no agent has elected yet; `update-stack.sh` reconciles them
-# before it spends a build, and refuses by name where they disagree.
-# **No engine is the default.** postgres and sqlite stand side by side, on
-# the operator's ruling on #38, so the operator names one and its absence is
-# refused below rather than read as either.
-ENGINE=
+# **The engine is an election and not a constant**, written into the
+# declaration, which `deploy/update-stack.sh` reconciles against what the build
+# carries before it spends a build. **The embedded engine is the default**: it
+# is the one engine this build provides, on the operator's rulings of
+# 2026-10-02 on #1 (reversing #38, whose "no engine is the default" rested on
+# two engines standing side by side) and 2026-10-05 (#86).
+ENGINE=sqlite
 SPU_OVERRIDE=""
 DECL_DIR=""
 CONNECTOR_ROLE=operator
@@ -116,11 +102,9 @@ while [ $# -gt 0 ]; do
     --session)  [ $# -ge 2 ] || die "--session needs a name"; SESSION=$2; shift ;;
     --member-identity) die "--member-identity is retired as of 2026-09-15, issue #545. The
    member's account is weaver-<name>-state, derived by weaver-admin from the
-   agent's name, and the store must admit that and nothing else. An agent made
-   before this date mapped root: change its pg_ident.conf line to name
-   weaver-<name>-state, and lay its territory out as create-agent.sh now makes
-   one: root:weaver-<name>-state 0710, its trace root:weaver-<name>-trace 0640
-   (deploy/REDEPLOY.md, existing territories)." ;;
+   agent's name. Lay an agent made before this date out as create-agent.sh now
+   makes one: root:weaver-<name>-state 0710, its trace root:weaver-<name>-trace
+   0640 (deploy/REDEPLOY.md, existing territories)." ;;
     --engine)   [ $# -ge 2 ] || die "--engine needs a name"; ENGINE=$2; shift ;;
     --spu)      [ $# -ge 2 ] || die "--spu needs a path"; SPU_OVERRIDE=$2; shift ;;
     --declaration-directory) [ $# -ge 2 ] || die "--declaration-directory needs a path"; DECL_DIR=$2; shift ;;
@@ -131,9 +115,9 @@ while [ $# -gt 0 ]; do
 done
 
 
-# The name is a unix user, a role, a database and a directory, so it is
-# bounded to what all four accept without quoting.
-[ -n "$NAME" ] || die "name the agent: create-agent.sh <name> --engine <sqlite|postgres> --artifact <path>"
+# The name is a unix user, a group and a directory, so it is bounded to what
+# all three accept without quoting.
+[ -n "$NAME" ] || die "name the agent: create-agent.sh <name> --artifact <path>"
 [[ "$NAME" =~ ^[a-z][a-z0-9]{1,15}$ ]] || die "the name is lowercase letters and digits, 2 to 16 characters: '$NAME'"
 [ -n "$ARTIFACT" ] || die "name the artifact the decoder binds: --artifact <path>"
 SESSION=${SESSION:-$NAME-001}
@@ -172,19 +156,15 @@ esac
 
 
 # **An engine this script cannot provision is refused here rather than written
-# into a declaration.** `weaver-types` admits `none`, `sqlite` and `postgres`,
-# and anything else fails the inventory's parse after every account, database
-# and access entry has already been made. A sqlite agent is the postgres one
-# minus the store half: the same two accounts, territory and state room, the
-# member keeping its database file in the room, and no role, database or
-# admission line, which the inventory refuses for it. `none` is a lawful
-# election and not one this script serves: an agent electing no store has no
-# member and no room to verify. Declare that one by hand.
+# into a declaration.** `weaver-types` admits `none` and `sqlite` and refuses
+# any other engine at the parse, which would come after every account had been
+# made. No engine is refused by its own name (#86). `none` is a lawful election and not one this script
+# serves: an agent electing no store has no member and no room to verify.
+# Declare that one by hand.
 case "$ENGINE" in
-  "") die "name the store engine: --engine sqlite or --engine postgres. Neither is the default." ;;
-  sqlite|postgres) ;;
-  none) die "none is a lawful election and not one this script makes: there is no member, no state room and no store to probe. Declare it by hand, per deploy/HowToDeployANewAgent.md section 3. What this option exists for is to name the engine rather than assume it, so that deploy/update-stack.sh can reconcile the declaration against the build." ;;
-  *) die "no store engine named $ENGINE. weaver-types admits none, sqlite and postgres, and this script provisions sqlite and postgres." ;;
+  sqlite) ;;
+  none) die "none is a lawful election and not one this script makes: there is no member, no state room and no store to probe. Declare it by hand, per deploy/HowToDeployANewAgent.md section 3." ;;
+  *) die "$ENGINE is not an engine this build provides: weaver-types admits none and sqlite, and this script provisions sqlite, the default." ;;
 esac
 
 OPERATOR=$(id -un)
@@ -201,8 +181,6 @@ RELAY_USER="weaver-$NAME-relay"    # the trace relay's uid, its one group the tr
 ACCESS_GROUP="weaver-$NAME-admin"  # the trace door's group, which the declared reader holds
 CONNECTOR_USER="weaver-$NAME-admincon"  # the connector's service user: the reader, and the sudo rule's one user
 SUDO_RULE="/etc/sudoers.d/weaver-$NAME"
-ROLE="weaver_$NAME"                # postgres spells with underscores
-DATABASE="weaver_$NAME"
 ADMIN_BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
 STACK=${WEAVER_STACK_RECORD:-/etc/weaver/stack}
 AGENT_ROOT="$ADMIN_BASE/$NAME"
@@ -275,7 +253,7 @@ trim() {
 # for. A key that is absent, empty or unreadable refuses by name; only the
 # optional keys may be absent.
 REQUIRED_KEYS="worker-binary spu-binary gate-binary coordination-root"
-OPTIONAL_KEYS="headroom-bytes library-path load-bound-seconds state-store-socket"
+OPTIONAL_KEYS="headroom-bytes library-path load-bound-seconds"
 stack_key() { # stack_key KEY required|optional
   local file="$STACK/$1" value
   [ -d "$STACK" ] || die "no stack record at $STACK: bootstrap-stack.sh writes it"
@@ -422,16 +400,12 @@ keys = [
   { kind = "message.assistant", paths = ["content"] },
 ]
 
-# **The engine, the database and the role are members of the binding**, per
-# weaver-state-PRD section 4: declared here, changing only across the load
-# boundary, and named on the load event like every fact that decides a
-# record.
+# **The engine is a member of the binding**, per weaver-state-PRD section 4:
+# declared here, changing only across the load boundary, and named on the load
+# event like every fact that decides a record.
 [state-store]
 engine = "$ENGINE"
 TOML
-if [ "$ENGINE" = postgres ]; then
-  printf 'database = "%s"\nrole = "%s"\n' "$DATABASE" "$ROLE"
-fi
 }
 DECLARATION_TEXT=$(render_declaration)
 command -v python3 >/dev/null || die "python3 is not on PATH, and the declaration is parse-checked with its tomllib before anything is made"
@@ -485,8 +459,6 @@ bad=$(creatable_in "$ADMIN_BASE") || die "the admin base $ADMIN_BASE lets anothe
 # identity map, the territory's owner and the spawn's uid are one fact rather
 # than three the operator keeps agreeing.
 
-HBA=""; IDENT=""   # asked of the store itself rather than guessed from a distro path
-
 say "plan for agent '$NAME'"
 plan "agent account   $AGENT_USER      (system, nologin, the worker's uid)"
 plan "member account  $MEMBER_USER     (system, nologin, owns the state territory)"
@@ -499,14 +471,7 @@ plan "home            /home/$AGENT_USER        the agent's own, where its tools 
 plan "directory       $HOME_DIR        root:$MEMBER_USER 0710, passage only, no listing"
 plan "trace           $HOME_DIR/trace.ndjson  root:$TRACE_GROUP 0640, made before the first load"
 plan "state territory $STATE_DIR       $MEMBER_USER 0700, which the agent's uid cannot enter"
-if [ "$ENGINE" = postgres ]; then
-  plan "role            $ROLE            postgres, no password, peer only"
-  plan "database        $DATABASE        owned by $ROLE"
-  plan "admission       local $DATABASE $ROLE peer map=weaver"
-  plan "identity map    weaver $MEMBER_USER -> $ROLE"
-else
-  plan "store           sqlite, its file in the state territory; no role, database or admission line"
-fi
+plan "store           sqlite, its file in the state territory"
 plan "agent root      $AGENT_ROOT      root 0755, keys 0644, copied from $STACK"
 plan "spu-binary      $SPU_BINARY$( [ -n "$SPU_OVERRIDE" ] && printf '  (--spu, in place of the stack record'"'"'s)' )"
 plan "operator key    $OPERATOR_UID ($OPERATOR)"
@@ -547,53 +512,11 @@ refuse_existing "$SUDO_RULE" "sudo rule"
 [ -z "$SPU_OVERRIDE" ] || [ -x "$SPU_OVERRIDE" ] || printf '   WARNING: the --spu path is not executable from this shell: %s\n' "$SPU_OVERRIDE"
 if [ "$APPLY" -eq 0 ]; then
   printf '   no collision found in accounts and paths visible to this uid\n'
-  printf '   PENDING --apply: privileged collision checks, service and store catalogs\n'
+  printf '   PENDING --apply: privileged collision checks\n'
   printf '   PENDING --apply: authentication paths, the sudoers include, visudo\n'
   say "plan only"
   printf '   no provisioning performed; rerun with --apply to check and make it\n'
   exit 0
-fi
-if [ "$ENGINE" = postgres ]; then
-# **A retired agent can leave its role or database behind.** Discovering
-# that at CREATE ROLE would leave both accounts and directories half-made.
-# Start the store and ask its catalogues before creating anything local.
-sudo -n systemctl start postgresql || die "cannot start PostgreSQL for preflight checks"
-sudo -n systemctl is-active --quiet postgresql \
-  || die "cannot confirm PostgreSQL is active for preflight checks"
-
-# Judge each read's status before interpreting its answer. Failed queries
-# must never become empty results, and psql startup files must not alter them.
-read_store() {
-  sudo -n -u postgres psql -X -v ON_ERROR_STOP=1 -tAc "$2" \
-    || die "cannot read $1 from PostgreSQL"
-}
-role_exists=$(read_store "role catalog" "select 1 from pg_roles where rolname='$ROLE'") || exit 1
-case "$role_exists" in
-  1) die "the role $ROLE already exists: drop it or pick another name" ;;
-  "") ;;
-  *) die "unexpected role catalog answer" ;;
-esac
-database_exists=$(read_store "database catalog" "select 1 from pg_database where datname='$DATABASE'") || exit 1
-case "$database_exists" in
-  1) die "the database $DATABASE already exists: drop it or pick another name" ;;
-  "") ;;
-  *) die "unexpected database catalog answer" ;;
-esac
-HBA=$(read_store "hba_file" 'show hba_file') || exit 1
-IDENT=$(read_store "ident_file" 'show ident_file') || exit 1
-[ -n "$HBA" ] || die "empty hba_file from PostgreSQL"
-[ -n "$IDENT" ] || die "empty ident_file from PostgreSQL"
-printf '   the store is up and carries no %s\n' "$ROLE"
-printf '   local collision checks completed\n'
-# Both authentication files and the insertion anchor are known now. Refuse
-# before accounts, directories, roles or databases are made, not at the edit.
-for auth_file in "$HBA" "$IDENT"; do
-  require_path -f "$auth_file" "authentication file is missing or not regular"
-  require_path -r "$auth_file" "authentication file is not readable"
-  require_path -w "$auth_file" "authentication file is not writable"
-done
-sudo -n grep -qE '^local[[:space:]]+all[[:space:]]+all[[:space:]]+peer([[:space:]]|$)' "$HBA" \
-  || die "cannot find 'local all all peer' anchor in $HBA"
 fi
 
 say "accounts"
@@ -635,21 +558,6 @@ sudo install -d -o root -g "$MEMBER_USER" -m 0710 "$HOME_DIR"
 sudo install -o root -g "$TRACE_GROUP" -m 0640 /dev/null "$HOME_DIR/trace.ndjson"
 sudo install -d -o "$MEMBER_USER" -g "$MEMBER_USER" -m 0700 "$STATE_DIR"
 
-if [ "$ENGINE" = postgres ]; then
-say "store"
-sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c "CREATE ROLE $ROLE LOGIN;"
-sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c "CREATE DATABASE $DATABASE OWNER $ROLE;"
-
-say "gates"
-# The admission line precedes the catch-all, because pg_hba takes the first
-# match and `local all all peer` would otherwise demand that the kernel name
-# equal the role name, which is exactly what the map exists to avoid.
-sudo cp -a "$HBA" "$HBA.before-$NAME"
-sudo cp -a "$IDENT" "$IDENT.before-$NAME"
-sudo sed -i "0,/^local\s\+all\s\+all\s\+peer/s||local   $DATABASE   $ROLE   peer map=weaver\nlocal   all             all                                     peer|" "$HBA"
-printf 'weaver          %s                    %s\n' "$MEMBER_USER" "$ROLE" | sudo tee -a "$IDENT" >/dev/null
-sudo systemctl reload postgresql
-fi
 
 say "declaration"
 # **Made and written as the operator**, never as root: the directory is the
@@ -682,39 +590,23 @@ printf 'trace-reader = "%s"\n' "$CONNECTOR_USER" | sudo tee "$STAGE/roles.toml" 
 sudo chmod 0644 "$STAGE"/*
 printf '   staged at %s\n' "$STAGE"
 
-say "both gates, verified rather than assumed"
-# **Each probe names the role.** Without `-U` psql defaults the role to the
-# connecting account's own name, so the check would ask about a role nobody
-# created and fail for a reason that is not the gate.
+say "the wall, verified rather than assumed"
 # A refusal here leaves the root staged and not admitted.
-if [ "$ENGINE" = postgres ]; then
-  if sudo -u "$MEMBER_USER" psql -X -v ON_ERROR_STOP=1 -U "$ROLE" -d "$DATABASE" -c 'select 1' >/dev/null 2>&1; then
-    printf '   %s reaches the database as %s\n' "$MEMBER_USER" "$ROLE"
-  else
-    die "the member cannot reach its database: the first gate or the map is wrong"
-  fi
-  if sudo -u "$AGENT_USER" psql -X -v ON_ERROR_STOP=1 -U "$ROLE" -d "$DATABASE" -c 'select 1' >/dev/null 2>&1; then
-    die "THE AGENT'S UID REACHED THE DATABASE: the second gate is open"
-  else
-    printf "   the agent's own uid is refused, which is the gate the charter asks for\n"
-  fi
+# **The store's gate is the room itself**: the member opens its file in the
+# state territory, so the member must be able to write there and the agent's
+# own uid must not be able to enter it.
+if sudo -u "$MEMBER_USER" test -w "$STATE_DIR" && sudo -u "$MEMBER_USER" test -x "$STATE_DIR"; then
+  printf '   %s can write its state room %s\n' "$MEMBER_USER" "$STATE_DIR"
 else
-  # **A sqlite store's gate is the room itself**: the member opens its file
-  # in the state territory, so the member must be able to write there and
-  # the agent's own uid must not be able to enter it.
-  if sudo -u "$MEMBER_USER" test -w "$STATE_DIR" && sudo -u "$MEMBER_USER" test -x "$STATE_DIR"; then
-    printf '   %s can write its state room %s\n' "$MEMBER_USER" "$STATE_DIR"
-  else
-    die "the member cannot write its state room $STATE_DIR: its passage or ownership is wrong"
-  fi
-  if sudo -u "$AGENT_USER" test -x "$STATE_DIR"; then
-    die "THE AGENT'S UID CAN ENTER THE STATE ROOM $STATE_DIR: the wall is open"
-  else
-    printf "   the agent's own uid cannot enter the state room, which is the wall the charter asks for\n"
-  fi
+  die "the member cannot write its state room $STATE_DIR: its passage or ownership is wrong"
+fi
+if sudo -u "$AGENT_USER" test -x "$STATE_DIR"; then
+  die "THE AGENT'S UID CAN ENTER THE STATE ROOM $STATE_DIR: the wall is open"
+else
+  printf "   the agent's own uid cannot enter the state room, which is the wall the charter asks for\n"
 fi
 
-# **The member cannot read the trace**, for either engine: its ingress is the
+# **The member cannot read the trace**: its ingress is the
 # tee's distillate and nothing more (weaver-state-PRD).
 if sudo -u "$MEMBER_USER" test -r "$HOME_DIR/trace.ndjson"; then
   die "THE MEMBER $MEMBER_USER CAN READ THE TRACE $HOME_DIR/trace.ndjson: the trace's group or mode is open"

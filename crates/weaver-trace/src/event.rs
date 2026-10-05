@@ -542,18 +542,13 @@ pub enum GrantSurface {
     Unreadable,
 }
 
-/// The store the state member stands on, per `weaver-trace-PRD` section 3.1
-/// as of 2026-09-04: the engine by its name, and under the service engine
-/// the database and the role. Written whole on the load. This crate spells
-/// the shape itself, as it does the loop's, because the floor's election
-/// type is the declaration's and the record names what was resolved.
+/// The store the state member stands on, per `weaver-trace-PRD` section 3.1:
+/// the engine by its name. Written whole on the load. This crate spells the
+/// shape itself, as it does the loop's, because the floor's election type is
+/// the declaration's and the record names what was resolved.
 #[derive(Default, Debug, Clone, PartialEq, Serialize)]
 pub struct StoreIdentity {
     pub engine: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub database: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub role: Option<String>,
 }
 
 /// The diagnostic elections a load declared, per charter section 3.2.
@@ -625,8 +620,7 @@ pub struct Elections {
     /// record written before the member existed is absent, not false.
     pub state_member: bool,
     /// The store the member stands on, per `weaver-trace-PRD` section 3.1
-    /// as of 2026-09-04: the engine, and under the service engine the
-    /// database and role, copied from the enter, the floor's own shape.
+    /// as of 2026-09-04: the engine by its name, copied from the enter.
     /// Written beside `state_member` because the two answer different
     /// questions: the election is what the deployment asked for and the
     /// member is whether an end arrived.
@@ -704,8 +698,6 @@ mod lineage_tests {
             state_member: true,
             state_store: StoreIdentity {
                 engine: "sqlite".into(),
-                database: None,
-                role: None,
             },
             composer: LoopIdentity::compiled("test"),
             declaration: "d".into(),

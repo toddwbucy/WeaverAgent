@@ -223,7 +223,6 @@ pub struct StateStore {
 pub enum StoreEngine {
     None,
     Sqlite,
-    Postgres,
 }
 
 pub struct StateElection {
@@ -583,10 +582,16 @@ absence means, the embedded engine, so a declaration written before the member e
 still parses and still means what it meant, and the state member stands. Present, its
 `engine` names which port the deployment elects, as of 2026-09-04: `none` declares that
 no member stands, which is a deployment's real posture and the one the
-instrument-validation matrices ran under, `sqlite` the embedded engine, and `postgres`
-the service engine, for which `database` and `role` are required and for the other two
-are refused if present, the same cross-field rule admin holds for the gate instruction,
-judged at inventory before a process exists. **`none` beside a present `state_election`
+instrument-validation matrices ran under, and `sqlite` the embedded engine, for which
+`database` and `role` are refused if present, the same cross-field rule admin holds for
+the gate instruction, judged at inventory before a process exists. **An engine this
+build does not provide refuses at the parse**, `BadValue` naming `state-store.engine`,
+which admin answers `ConfigInvalid`, so a declaration electing one fails naming the
+field rather than as an unnamed unknown value. No engine is refused by its own name: on
+the operator's ruling of 2026-10-05 (#86) another deployment may provide another engine
+behind the same contract, and the service engine, postgres, is simply not provided here
+since the ruling of 2026-10-02 on #1. `database` and `role` stay in the type, refused
+for both provided engines. **`none` beside a present `state_election`
 is refused by the same rule**: the election says what the tee sends to the member, and a
 declaration that elects what to send to a member it declined is malformed rather than
 surplus, refused `ConfigInvalid` naming the election, the way a granted permission
@@ -594,9 +599,9 @@ naming a field is. `none` with the election absent is whole, the ruled default s
 written on the load event as the record's posture, per `weaver-trace-PRD` section 3.1,
 beside a `state_member` of false. The three are the binding's members: they change only
 across the load boundary, they ride the enter directive resolved, and the load event
-records them, per `weaver-trace-PRD` section 3.1. The enum is closed at three because
-the state charter charters two engines and the absence of a member, and a further engine
-is a state act before it is a variant. `binding_kind` may be absent because
+records them, per `weaver-trace-PRD` section 3.1. The enum is closed at two because
+this build provides one engine, the embedded one, beside the absence of a member, and a
+further engine is a state act before it is a variant. `binding_kind` may be absent because
 `weaver-types-PRD` section 2.1 rules what absence means, a serving binding, so a
 declaration written before the member existed still parses and still means what it
 meant, on the same footing as `loop_file` above. The enum is closed at two cases because
@@ -1406,12 +1411,10 @@ pub enum FaultCase {
 2026-09-04.** The config holds it as an option whose absence means the
 embedded engine, per section 2, and the payload holds it as admin resolved it
 at inventory, so the harness never re-derives an absence and the load event it
-authors names the engine and, under the service engine, the database and role,
-per `weaver-trace-PRD` section 3.1. `database` and `role` are present in the
-resolved value exactly where the engine is the service one, the cross-field
-rule having been judged before any process existed, and the member's own
-vector carries the same three, per `weaver-admin-Spec` section 6, so the two
-parties that need them read one resolution.
+authors names the engine, per `weaver-trace-PRD` section 3.1. `database` and
+`role` are absent from the resolved value, the cross-field rule having been
+judged before any process existed, and the member's own vector carries no
+engine word, per `weaver-admin-Spec` section 6, one engine standing.
 
 **`restore` and `stack` ride the enter as of 2026-09-04.** `restore` rides as `Lineage`,
 resolved by admin from the save point the load restores, on the operator's ruling of
