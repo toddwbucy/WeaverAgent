@@ -1315,11 +1315,8 @@ mod tests {
                 "state-store.database",
             ),
             ("engine = \"sqlite\"\nrole = \"r\"\n", "state-store.role"),
-            // The retired service engine refuses at the parse, by name.
-            (
-                "engine = \"postgres\"\ndatabase = \"d\"\nrole = \"r\"\n",
-                "state-store.engine",
-            ),
+            // An engine this build does not provide refuses at the parse.
+            ("engine = \"postgres\"\n", "state-store.engine"),
         ];
         for (store, field) in cases {
             let source = config_source_electing(&home, store);

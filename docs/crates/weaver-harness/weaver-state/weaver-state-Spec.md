@@ -133,8 +133,10 @@ port and never to an engine, so the seam's traffic is the same whatever answers 
 one database and never more, with no file of its own, no server, no network and no
 pool. Its holdings reach the disk only as a save point, per the clause below. **The
 service engine, `Postgres`, is retired** with its module, its feature and its suites,
-the ruling of 2026-09-04 that elected it being reversed because a shared database server
-breaks individuation, per the charter's section 4.
+the ruling of 2026-09-04 that elected it being reversed, per the charter's section 4.
+**The store sits behind `weaver-harness-state-contract`, the embedded engine is this
+local-first deployment's implementation of it, and another deployment may implement
+the same contract with another engine**, on the operator's ruling of 2026-10-05 (#86).
 The port is the one place a query language is spelled, and a further engine is an
 implementation of the port in its own act.
 

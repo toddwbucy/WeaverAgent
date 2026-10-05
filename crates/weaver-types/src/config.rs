@@ -134,10 +134,10 @@ impl Default for StateStore {
 }
 
 /// The engines the state charter charters, and the declared absence of a
-/// member. Closed at two: the service engine, postgres, retired on the
-/// operator's ruling of 2026-10-02 on #1 (reversing #38), and a declaration
-/// still electing it refuses at the parse by name, per `weaver-types-Spec`
-/// section 2. A further engine is a state act before it is a variant.
+/// member. Closed at the engines this build provides, and a declaration
+/// electing any other refuses at the parse naming `state-store.engine`, per
+/// `weaver-types-Spec` section 2. A further engine is a state act before it
+/// is a variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum StoreEngine {
@@ -449,7 +449,7 @@ pub fn parse_boundary(source: &str) -> Result<crate::BoundaryFile, ConfigError> 
 /// ```
 #[cfg(feature = "config")]
 pub fn parse(source: &str) -> Result<AgentConfig, ConfigError> {
-    check_retired_engine(source)?;
+    check_provided_engine(source)?;
     let config: AgentConfig =
         toml::from_str(source).map_err(|e| classify_toml_error(e.message()))?;
     if config
@@ -471,14 +471,15 @@ pub fn parse(source: &str) -> Result<AgentConfig, ConfigError> {
     Ok(config)
 }
 
-/// **The retired engine refuses by name**, per `weaver-types-Spec` section 2:
-/// a declaration electing `engine = "postgres"`, retired on the operator's
-/// ruling of 2026-10-02 on #1, refuses `BadValue` naming
-/// `state-store.engine`, rather than the unnamed refusal an unknown variant
-/// would draw from the deserializer. A source that does not read as TOML is
-/// left to the parse, which names its own fault.
+/// **An engine this build does not provide refuses naming the field**, per
+/// `weaver-types-Spec` section 2 and the operator's ruling of 2026-10-05
+/// (#86): a declaration electing any engine but `none` or `sqlite` refuses
+/// `BadValue` naming `state-store.engine`, rather than the unnamed refusal an
+/// unknown variant would draw from the deserializer. No engine is refused by
+/// its own name. A source that does not read as TOML, or an engine that is
+/// not a string, is left to the parse, which names its own fault.
 #[cfg(feature = "config")]
-fn check_retired_engine(source: &str) -> Result<(), ConfigError> {
+fn check_provided_engine(source: &str) -> Result<(), ConfigError> {
     let Ok(table) = source.parse::<toml::Table>() else {
         return Ok(());
     };
@@ -486,7 +487,7 @@ fn check_retired_engine(source: &str) -> Result<(), ConfigError> {
         .get("state-store")
         .and_then(|store| store.get("engine"))
         .and_then(|engine| engine.as_str());
-    if elected == Some("postgres") {
+    if elected.is_some_and(|engine| !matches!(engine, "none" | "sqlite")) {
         return Err(ConfigError {
             field: Some(FieldName("state-store.engine".to_string())),
             kind: ConfigErrorKind::BadValue,

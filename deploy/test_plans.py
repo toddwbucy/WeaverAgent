@@ -533,17 +533,20 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertNotIn("SETENV", text)
         self.assertNotIn("env_keep", text)
 
-    def test_the_embedded_engine_is_the_default_and_postgres_is_retired(self):
-        # The service engine retired on the operator's ruling of 2026-10-02 on
-        # #1, so an absent --engine is sqlite and postgres refuses by name
-        # before any call. Perturbations: default to nothing again, and the
-        # absent case refuses; accept postgres, and the plan runs.
+    def test_the_embedded_engine_is_the_default_and_others_are_unprovided(self):
+        # sqlite is the one engine this build provides (#1, #86), so an absent
+        # --engine is sqlite and any other name refuses as unprovided before
+        # any call, postgres one case among them. Perturbations: default to
+        # nothing again, and the absent case refuses; accept any engine, and
+        # the plan runs.
         result = self.create_naming()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("store engine    sqlite", result.stdout)
-        result = self.create_naming("--engine", "postgres", "--apply")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("the postgres engine retired", result.stderr)
+        for engine in ("postgres", "mysql"):
+            result = self.create_naming("--engine", engine, "--apply")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(f"{engine} is not an engine this build provides",
+                          result.stderr)
         self.assert_unprivileged()
 
     def test_apply_fixture_reaches_the_end_with_sqlite(self):

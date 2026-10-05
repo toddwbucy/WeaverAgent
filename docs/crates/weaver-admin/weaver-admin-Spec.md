@@ -810,11 +810,11 @@ read as an absent member. Absent, the election resolves to the embedded engine
 under that same requirement. `none` declines the member and requires nothing,
 and refuses a declaration that elects a state election beside it,
 `ConfigInvalid` naming `state-election`, per `weaver-types-Spec` section 2: an
-election with no member to receive it is malformed, not surplus. `postgres`,
-the retired service engine, refuses at the declaration's parse, `ConfigInvalid`
+election with no member to receive it is malformed, not surplus. An engine
+this build does not provide refuses at the declaration's parse, `ConfigInvalid`
 naming `state-store.engine`, per `weaver-types-Spec` section 2, and the walk's
-two questions to that engine's gates retired with it on the operator's ruling of
-2026-10-02 on #1. The grant surface is not judged here, only read, at the
+two questions to the service engine's gates retired with that engine on the
+operator's ruling of 2026-10-02 on #1. The grant surface is not judged here, only read, at the
 enter and again at the leave, per `weaver-trace-PRD` section 3.1.
 
 **Every election but `none` requires the member's own account too, as of

@@ -584,11 +584,14 @@ still parses and still means what it meant, and the state member stands. Present
 no member stands, which is a deployment's real posture and the one the
 instrument-validation matrices ran under, and `sqlite` the embedded engine, for which
 `database` and `role` are refused if present, the same cross-field rule admin holds for
-the gate instruction, judged at inventory before a process exists. **`postgres`, the
-service engine, refuses at the parse**, `ConfigInvalid` naming `state-store.engine`, on
-the operator's ruling of 2026-10-02 on #1 that retired it, so a declaration written for
-it fails by name rather than as an unknown value. `database` and `role` stay in the
-type, refused for both engines, so such a declaration's other keys still read. **`none` beside a present `state_election`
+the gate instruction, judged at inventory before a process exists. **An engine this
+build does not provide refuses at the parse**, `BadValue` naming `state-store.engine`,
+which admin answers `ConfigInvalid`, so a declaration electing one fails naming the
+field rather than as an unnamed unknown value. No engine is refused by its own name: on
+the operator's ruling of 2026-10-05 (#86) another deployment may provide another engine
+behind the same contract, and the service engine, postgres, is simply not provided here
+since the ruling of 2026-10-02 on #1. `database` and `role` stay in the type, refused
+for both provided engines. **`none` beside a present `state_election`
 is refused by the same rule**: the election says what the tee sends to the member, and a
 declaration that elects what to send to a member it declined is malformed rather than
 surplus, refused `ConfigInvalid` naming the election, the way a granted permission

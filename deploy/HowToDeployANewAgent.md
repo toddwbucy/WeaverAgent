@@ -74,9 +74,9 @@ deploy/create-agent.sh <name> --artifact /opt/weaver/models/<artifact>
 deploy/create-agent.sh <name> --artifact /opt/weaver/models/<artifact> --apply
 ```
 
-The store is the embedded sqlite engine, `--engine sqlite` and the default: the service
-engine, postgres, retired on the operator's ruling of 2026-10-02 on #1, and `--engine
-postgres` refuses. `--engine none` is refused too, and section 3 makes that agent by
+The store is the embedded sqlite engine, `--engine sqlite` and the default, the one
+engine this build provides (#1, #86), and any other engine refuses as one this build
+does not provide. `--engine none` is refused too, and section 3 makes that agent by
 hand. `--session` names the session the declaration opens, default `<name>-001`. `--spu
 <path>` gives this agent its own SPU, written as its root's `spu-binary` in place of the
 stack record's (the python SPU's zipapp, for instance), and without it the agent serves

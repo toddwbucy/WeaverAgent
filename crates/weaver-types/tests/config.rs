@@ -262,31 +262,38 @@ fn unknown_key_refuses() {
     assert_eq!(err.field, Some(FieldName("permission-modes".into())));
 }
 
+/// **An engine this build does not provide refuses naming the field**, per
+/// `weaver-types-Spec` section 2 and the ruling of 2026-10-05 (#86): every
+/// unprovided name, postgres one case among them, refuses `BadValue` naming
+/// `state-store.engine`, and both provided elections still parse.
+/// Perturbation: drop the provided-engine check and each refusal names no
+/// field.
+#[test]
+fn an_engine_this_build_does_not_provide_refuses_naming_the_field() {
+    for engine in ["postgres", "mysql", "Sqlite", ""] {
+        let refused = parse(&format!(
+            "{}\n[state-store]\nengine = \"{engine}\"\n",
+            full_config()
+        ))
+        .unwrap_err();
+        assert_eq!(refused.kind, ConfigErrorKind::BadValue, "{engine:?}");
+        assert_eq!(
+            refused.field,
+            Some(weaver_types::FieldName("state-store.engine".to_string())),
+            "{engine:?}"
+        );
+    }
+    for engine in ["sqlite", "none"] {
+        parse(&format!(
+            "{}\n[state-store]\nengine = \"{engine}\"\n",
+            full_config()
+        ))
+        .unwrap_or_else(|e| panic!("{engine} parses: {e:?}"));
+    }
+}
+
 /// An empty device set is a parse error rather than a default: a binding
 /// assigning no device is a declaration the operator did not finish.
-/// **The retired engine refuses by name**, per `weaver-types-Spec` section 2:
-/// a declaration electing postgres, retired on the ruling of 2026-10-02 on
-/// #1, refuses `BadValue` naming `state-store.engine`, and the embedded engine
-/// still parses. Perturbation: drop the retired-engine check and the refusal
-/// names no field.
-#[test]
-fn the_retired_postgres_engine_refuses_by_name() {
-    let refused = parse(&format!(
-        "{}\n[state-store]\nengine = \"postgres\"\ndatabase = \"d\"\nrole = \"r\"\n",
-        full_config()
-    ))
-    .unwrap_err();
-    assert_eq!(refused.kind, ConfigErrorKind::BadValue);
-    assert_eq!(
-        refused.field,
-        Some(weaver_types::FieldName("state-store.engine".to_string()))
-    );
-    parse(&format!(
-        "{}\n[state-store]\nengine = \"sqlite\"\n",
-        full_config()
-    ))
-    .expect("the embedded engine still parses");
-}
 
 #[test]
 fn empty_device_set_refuses() {

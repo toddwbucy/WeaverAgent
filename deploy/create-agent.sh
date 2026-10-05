@@ -83,10 +83,10 @@ ARTIFACT=""
 SESSION=""
 # **The engine is an election and not a constant**, written into the
 # declaration, which `deploy/update-stack.sh` reconciles against what the build
-# carries before it spends a build. **The embedded engine is the default**: the
-# service engine, postgres, retired on the operator's ruling of 2026-10-02 on
-# #1 (reversing #38, whose "no engine is the default" rested on two engines
-# standing side by side), so sqlite is the one engine this script provisions.
+# carries before it spends a build. **The embedded engine is the default**: it
+# is the one engine this build provides, on the operator's rulings of
+# 2026-10-02 on #1 (reversing #38, whose "no engine is the default" rested on
+# two engines standing side by side) and 2026-10-05 (#86).
 ENGINE=sqlite
 SPU_OVERRIDE=""
 DECL_DIR=""
@@ -156,16 +156,15 @@ esac
 
 
 # **An engine this script cannot provision is refused here rather than written
-# into a declaration.** `weaver-types` admits `none` and `sqlite`, and refuses
-# the retired `postgres` by name at the parse, which would come after every
-# account had been made. `none` is a lawful election and not one this script
+# into a declaration.** `weaver-types` admits `none` and `sqlite` and refuses
+# any other engine at the parse, which would come after every account had been
+# made. No engine is refused by its own name (#86). `none` is a lawful election and not one this script
 # serves: an agent electing no store has no member and no room to verify.
 # Declare that one by hand.
 case "$ENGINE" in
   sqlite) ;;
-  postgres) die "the postgres engine retired on the operator's ruling of 2026-10-02 on #1: an agent's store is the embedded sqlite engine, the default." ;;
   none) die "none is a lawful election and not one this script makes: there is no member, no state room and no store to probe. Declare it by hand, per deploy/HowToDeployANewAgent.md section 3." ;;
-  *) die "no store engine named $ENGINE. weaver-types admits none and sqlite, and this script provisions sqlite." ;;
+  *) die "$ENGINE is not an engine this build provides: weaver-types admits none and sqlite, and this script provisions sqlite, the default." ;;
 esac
 
 OPERATOR=$(id -un)
