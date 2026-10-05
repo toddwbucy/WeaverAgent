@@ -278,8 +278,8 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
 
     def create(self, *args):
-        # No engine is the default, so a case that names none runs as sqlite,
-        # named here rather than assumed by the script.
+        # sqlite is the default, named here anyway so a case reads the
+        # election it runs under rather than assuming it.
         engine = [] if "--engine" in args else ["--engine", "sqlite"]
         return self.create_naming(*engine, *args)
 
@@ -1286,6 +1286,19 @@ esac
             decl.chmod(0o644)
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn(str(decl) + " cannot be read", result.stderr)
+
+    def test_stack_refuses_an_unprovided_engine_and_names_the_migration(self):
+        # A pre-#85 declaration electing postgres refuses before the build,
+        # as an engine this build does not provide, and points to the
+        # migration step rather than to a feature the workspace lacks.
+        # Perturbation: restore the old remedy and the step goes unnamed.
+        decl = self.operator_home / ".weaveragent" / "existing" / "agent.toml"
+        decl.write_text('[state-store]\nengine = "postgres"\ndatabase = "d"\nrole = "r"\n')
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("postgres store, which is not an engine this build provides", result.stderr)
+        self.assertIn("REDEPLOY.md section 8 step 2", result.stderr)
+        self.assertNotIn("Name weaver-state/postgres", result.stderr)
 
     def test_stack_agents_are_the_roots_under_the_base(self):
         # A staged root under a dot-name, a plain file, and a root naming no

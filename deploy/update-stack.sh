@@ -373,7 +373,7 @@ for agent in $AGENTS; do
   [ "$elected" = none ] && continue
   case ",$FEATURES," in
     *",weaver-state/$elected,"*) ;;
-    *) die "$agent elects the $elected store and the build carries $FEATURES, so the member would refuse it at load. Name weaver-state/$elected in FEATURES, or change the declaration." ;;
+    *) die "$agent elects the $elected store, which is not an engine this build provides (it carries $FEATURES), so the member would refuse it at load. Change $decl's [state-store] to engine = \"sqlite\" with no database or role, per deploy/REDEPLOY.md section 8 step 2." ;;
   esac
 done
 printf '  elected store every agent under the base elects one this build carries\n'

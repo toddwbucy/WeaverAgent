@@ -87,8 +87,9 @@ rules stay disabled until the purge removes them, and moving one back serves its
 again without a purge. The archive holds:
 
 - `box-facts.txt`: accounts, groups, units, sha256 of every installed binary,
-  library and model, the store's roles and the two authentication files' weaver
-  lines, and the mode of everything archived.
+  library and model, and the mode of everything archived. It records no PostgreSQL
+  facts: an old box's `weaver_*` roles, databases and authentication lines are the
+  operator's to inspect and drop by hand (section 2, #35).
 - One `.tar.zst` per piece, owners, ACLs and xattrs preserved: `etc-weaver`,
   `sudoers-weaver`, `declaration-directories`, `ld-so-conf`, `opt-<prefix path>` (bin,
   lib, python-spu, the backup-* directories, never models), `territories-<base path>`
@@ -305,6 +306,13 @@ install prefix, `/opt/weaver` by default.
 
    The copy goes beside the base, never inside it, where its name would be read as an
    agent's.
+
+   **An agent electing `postgres` moves to the embedded engine here**, since postgres
+   is not an engine this build provides (#85) and `update-stack.sh` refuses such a
+   declaration before its build. In `$D/agent.toml`, set `[state-store]` to
+   `engine = "sqlite"` and delete its `database` and `role` lines. The new member
+   starts with no save point, as an agent's first load does, and the old PostgreSQL
+   database and role are the operator's to drop by hand (section 2).
 
 3. **Provision the relay, the access group and the connector**, as `create-agent.sh`
    makes them:
