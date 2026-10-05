@@ -2097,22 +2097,37 @@ fn leave(run: &mut Run, cause: Option<weaver_types::Cause>) -> Result<(), Lifecy
         // a missed leave save point owes is the open item carried on #1.
         // **A diagnostic binding takes no save point**: this arm is the
         // serving record's alone.
-        if let Some(taken) = run.state.as_mut().and_then(|seam| seam.ask_snapshot()) {
-            let _ = run.author.author(
-                &mut run.recorder,
-                Kind::SavePoint,
-                Subsystem::Harness,
-                None,
-                Some(weaver_trace::Payload::SavePoint(
-                    weaver_trace::SavePointTaken {
-                        save_point: taken.stamp.digest,
-                        run: taken.stamp.run,
-                        sequence: taken.stamp.sequence,
-                        turn: taken.stamp.turn,
-                        name: taken.name,
-                    },
-                )),
-            );
+        if let Some(seam) = run.state.as_mut() {
+            match seam.ask_snapshot() {
+                Some(taken) => {
+                    let _ = run.author.author(
+                        &mut run.recorder,
+                        Kind::SavePoint,
+                        Subsystem::Harness,
+                        None,
+                        Some(weaver_trace::Payload::SavePoint(
+                            weaver_trace::SavePointTaken {
+                                save_point: taken.stamp.digest,
+                                run: taken.stamp.run,
+                                sequence: taken.stamp.sequence,
+                                turn: taken.stamp.turn,
+                                name: taken.name,
+                            },
+                        )),
+                    );
+                }
+                // The miss is said, never silent, so an operator reading
+                // the worker's log learns the leave took no save point;
+                // what it owes beyond that is A3.0's election.
+                None => eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "organ": "harness",
+                        "miss": "leave-save-point-unanswered",
+                        "run": run.run.0,
+                    })
+                ),
+            }
         }
     }
 

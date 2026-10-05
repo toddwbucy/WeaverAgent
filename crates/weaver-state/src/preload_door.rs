@@ -1507,7 +1507,10 @@ fn a_damaged_or_foreign_save_point_never_reaches_the_holdings() {
                 pairs: vec![],
             })
             .unwrap();
-        let schema = format!("{}\ntable extra\nCREATE TABLE extra (x)\n", store.schema().unwrap());
+        let schema = format!(
+            "{}\ntable extra\nCREATE TABLE extra (x)\n",
+            store.schema().unwrap()
+        );
         let save_point = SavePoint::take(
             store.position().unwrap().unwrap(),
             &schema,
@@ -1540,14 +1543,21 @@ fn a_damaged_or_foreign_save_point_never_reaches_the_holdings() {
     std::fs::write(member.directory.0.join("flipped"), &flipped).unwrap();
     std::fs::write(member.directory.0.join("torn"), &sound[..sound.len() / 2]).unwrap();
     for name in ["flipped", "torn", "../flipped", ".part-x", "absent"] {
-        member.send(&format!("{}\n", json!({"ask":{"restore":{"save-point":name}}})));
+        member.send(&format!(
+            "{}\n",
+            json!({"ask":{"restore":{"save-point":name}}})
+        ));
         assert!(
             member.receive(Duration::from_millis(250)).is_none(),
             "{name} restored: {}",
             member.log()
         );
     }
-    assert_eq!(member.tables(), before, "the holdings stand after every refusal");
+    assert_eq!(
+        member.tables(),
+        before,
+        "the holdings stand after every refusal"
+    );
     let back = stamp_of(&member.ask_restore(&taken.name), "restore");
     assert_eq!(back.digest, taken.digest, "the sound one still restores");
 
@@ -1556,7 +1566,10 @@ fn a_damaged_or_foreign_save_point_never_reaches_the_holdings() {
     std::fs::write(&torn, &sound[..sound.len() / 2]).unwrap();
     let mut refused = Member::spawn_with(false, Some(&torn));
     let status = refused.process.wait();
-    assert!(!status.success(), "a torn save point at the descriptor refuses the start");
+    assert!(
+        !status.success(),
+        "a torn save point at the descriptor refuses the start"
+    );
     assert!(
         refused.log().contains("the save point descriptor refuses"),
         "{}",

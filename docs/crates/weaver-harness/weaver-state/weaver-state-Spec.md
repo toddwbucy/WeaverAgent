@@ -366,8 +366,10 @@ schema compared at a load is the one the store stands at open, the build's own. 
 image is judged before it is adopted**: the engine adopts lazily and faults on first
 use, so the member deserializes the image on a scratch connection, requires the
 engine's own check to pass and the event table to stand, and only then swaps it in,
-so a failed adoption leaves the holdings standing. An empty store has no position, and
-a save point taken of one names no run and sequence zero.
+so a failed adoption leaves the holdings standing. **An empty store has no position**,
+and what a save point taken of one is stamped with is the save-point act's provisional
+election, no run and sequence zero, pending the operator's ruling on the carried item
+r4170886146 in A3.0, the member learning no run until a distillate lands.
 
 **A load restores a save point and replays no tail.** At the spawn the member reads the
 save point through the descriptor into its in-memory database and holds its stamp, per
