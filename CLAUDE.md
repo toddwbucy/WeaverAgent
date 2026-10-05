@@ -110,8 +110,9 @@ line is a Unix domain socket, and there is no listening network socket anywhere.
 - **`weaver-gate`** is the world-facing organ: it admits a dialer by uid, relays one JSON
   line in and one out, and holds the tool hooks.
 - **`weaver-state`** is state management's store: an in-memory embedded SQLite in the
-  state member's process, with save points (#58); postgres is retired as a state engine
-  on the ruling of 2026-10-02, and leaves the code in a later act.
+  state member's process, with save points (#58). postgres is retired and removed (#85),
+  and the embedded engine is the local-first deployment's implementation behind the
+  harness-state contract (#86).
 - **`weaver-admin`** is one agent's organ, invoked by the operator per verb: it reads only
   that agent's config root `<base>/<agent>/` (base from `WEAVER_ADMIN_CONFIG`, default
   `/etc/weaver/admin`), opens its trace sink and hands it to the worker, and names its
@@ -186,25 +187,25 @@ cargo fmt --all -- --check
 means the gate could not run (cold cache, network needed, unreadable manifest), so the
 lock is unchecked rather than clean. Its header carries the measurements.
 
-**Workspace-wide `cargo test --workspace --locked` compiles and passes** (since #37). Two
-tests meet `weaver-analysis`, the crate that left, from its own repository:
+**Workspace-wide `cargo test --workspace --locked` compiles and passes** (since #37). One
+test meets `weaver-analysis`, the crate that left, from its own repository, until C5
+(#76) removes it:
 
 - `crates/weaver-types/tests/config.rs` includes a pinned copy of WeaverAnalysis's
   `derived-surrogate.toml` (`crates/weaver-types/tests/fixtures/`), with the
   WeaverAnalysis commit it came from named in the const's doc. A drift test compares it
   against the checkout below and skips, saying so, when there is none.
-- `crates/weaver-state/src/comparison.rs` finds the WeaverAnalysis checkout from
-  `WEAVER_ANALYSIS_DIR`, else the sibling `../WeaverAnalysis`, refusing by name when
-  neither holds one. It locates that checkout's debug `weaver-analysis` through its
-  own `cargo metadata` and refuses a stale build. The preload and comparison suites
-  stay `#[ignore]` and need scratch PostgreSQL (`unshare -Ur`, no sudo).
+
+The state member's preload-door suites (`crates/weaver-state/src/preload_door.rs`) drive
+the door with an in-tree client and run as `#[ignore]` instruments under a watch that
+re-executes them inside `unshare --map-root-user`. They need neither PostgreSQL nor
+WeaverAnalysis.
 
 The deploy scripts already select
 crates: `deploy/bootstrap-stack.sh` and `deploy/update-stack.sh` test `weaver-trace`,
-`weaver-harness` and `weaver-state` with `weaver-harness/pyworker,weaver-state/sqlite,
-weaver-state/postgres`, then build the workspace in release with `weaver-spu/cuda`
-added, because every engine an agent may elect must be compiled in or the member
-refuses that agent at load.
+`weaver-harness` and `weaver-state` with `weaver-harness/pyworker,weaver-state/sqlite`,
+then build the workspace in release with `weaver-spu/cuda` added, because every engine
+an agent may elect must be compiled in or the member refuses that agent at load.
 
 **`weaver-spu`'s gate carries `--features cuda,gguf`.** A bare run leaves
 `decoder/native.rs`, `decoder/native_pair.rs` and every test reaching them uncompiled,
@@ -230,9 +231,10 @@ pytest -q                                                 # CPU; the venv is hel
 ### Deploying and driving an agent
 
 `deploy/REDEPLOY.md` (a box from scratch) and `deploy/HowToDeployANewAgent.md` (one
-agent on a standing stack) are the runbooks. sqlite is the state engine; postgres is
-retired by the ruling of 2026-10-02 (#1, reversing #38), though the scripts still build
-it until the act that removes it. `create-agent.sh` lays each territory out by group,
+agent on a standing stack) are the runbooks. sqlite is the state engine. postgres is
+removed (#1, reversing #38, and #85): the scripts neither build nor provision it, and
+`create-agent.sh`'s `--engine` defaults to sqlite and refuses an engine this build does
+not provide. `create-agent.sh` lays each territory out by group,
 with the trace in its own group (#56); small fixes are #39. The scripts are
 `bootstrap-stack.sh`, `update-stack.sh`, `create-agent.sh`, `verify-load.sh`,
 `decommission.sh`, and `deploy/turn.py <agent> "<text>"` sends one turn through a
