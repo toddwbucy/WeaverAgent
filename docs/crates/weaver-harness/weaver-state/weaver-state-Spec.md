@@ -95,8 +95,8 @@ admin creates the pair at the spawn and this member inherits its end, so the pee
 authenticated by possession and no credential is judged on this door, the one party that
 can hold the other end being the one the enter handed it to. The end's number is the
 code act's to elect, a fixed convention between this crate and admin rather than a value
-the vector carries, so the vector's positionals are the territory and the preload path
-alone, the engine's flags standing ahead of them, per `weaver-admin-Spec` section 6.
+the vector carries, so the vector is the territory and the preload path alone, with no
+flag, per `weaver-admin-Spec` section 6.
 **The number is probed before it is adopted**: the member reads the number's socket type
 and refuses, with a named fault, a number holding no stream socket, because a hand-run
 process holds whatever its shell left there and an adoption would read it as seam

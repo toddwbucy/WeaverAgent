@@ -673,8 +673,7 @@ mod tests {
     /// **A NUL in a message lands verbatim**, the shared test run on this
     /// engine and its tables read: the content is a `field` row and no part
     /// stands. Perturbation: drop the holdable check from `typed::split`, and
-    /// the service engine refuses the landing while the embedded one holds the
-    /// part typed, so this engine's count fails.
+    /// this engine holds the part typed, so its count fails.
     #[test]
     fn a_nul_in_a_message_lands_verbatim() {
         let mut store = Sqlite::open(std::path::Path::new(":memory:")).expect("opens");

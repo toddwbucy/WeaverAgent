@@ -361,7 +361,7 @@ fn serve(
                         };
                         // **A refused election says which path refused it.**
                         // This door can fail on an election the operator
-                        // wrote, per the service engine's naming. Preserve
+                        // wrote. Preserve
                         // the diagnosis while the member stays alive for a
                         // retry. The first door prints the same fault before
                         // its startup exit.

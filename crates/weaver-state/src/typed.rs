@@ -14,9 +14,10 @@
 //! typed fragment through [`render`], the function every answer uses, and
 //! compares it with the pair's value, so a typed row can never serve a
 //! spelling the record did not hold. A value that does not decode, decodes
-//! and renders differently, or decodes to a string carrying U+0000 that the
-//! service engine's `TEXT` refuses, lands verbatim instead, and custody keeps
-//! it whole either way.
+//! and renders differently, or decodes to a string carrying U+0000, lands
+//! verbatim instead, a rule the retired service engine's `TEXT` forced and
+//! that stands until the loop's schema re-elects it, and custody keeps it
+//! whole either way.
 
 use weaver_traits::{ContentBlock, Role, ToolCall, ToolResultBlock};
 
@@ -143,9 +144,8 @@ impl Typed {
     }
 
     /// Whether every engine can hold these rows. A decoded string carrying
-    /// U+0000 is refused by the service engine's `TEXT`, so a member holding
-    /// one lands verbatim, where JSON escapes it, and does so under both
-    /// engines so the two answer alike.
+    /// U+0000 lands verbatim, where JSON escapes it, the rule the retired
+    /// service engine's `TEXT` forced, per `weaver-state-Spec` section 3.
     fn holdable(&self) -> bool {
         let clean = |text: &Option<String>| text.as_deref().is_none_or(|t| !t.contains('\0'));
         self.message.as_ref().is_none_or(|m| clean(&m.role))

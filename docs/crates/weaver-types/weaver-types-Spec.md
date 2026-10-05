@@ -599,9 +599,9 @@ naming a field is. `none` with the election absent is whole, the ruled default s
 written on the load event as the record's posture, per `weaver-trace-PRD` section 3.1,
 beside a `state_member` of false. The three are the binding's members: they change only
 across the load boundary, they ride the enter directive resolved, and the load event
-records them, per `weaver-trace-PRD` section 3.1. The enum is closed at three because
-the state charter charters two engines and the absence of a member, and a further engine
-is a state act before it is a variant. `binding_kind` may be absent because
+records them, per `weaver-trace-PRD` section 3.1. The enum is closed at two because
+this build provides one engine, the embedded one, beside the absence of a member, and a
+further engine is a state act before it is a variant. `binding_kind` may be absent because
 `weaver-types-PRD` section 2.1 rules what absence means, a serving binding, so a
 declaration written before the member existed still parses and still means what it
 meant, on the same footing as `loop_file` above. The enum is closed at two cases because
