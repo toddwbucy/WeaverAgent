@@ -10,7 +10,7 @@
 //! one file: a stamp line, a check line, and the engine's image.
 //!
 //! ```text
-//! {"weaver-save-point":1,"run":"r-1","sequence":41,"turn":2,"schema":"<hex>","image":<n>,"taken":{"pid":<p>,"wall_ns":<t>}}
+//! {"weaver-save-point":1,"run":"r-1","sequence":41,"turn":2,"schema":"<hex>","image":<n>,"taken":{"pid":<p>,"ordinal":<k>,"wall_ns":"<t>"}}
 //! {"check":"<hex>"}
 //! <n bytes of image>
 //! ```
