@@ -114,12 +114,12 @@ pub enum Subsystem {
     Tool,
 }
 
-/// The twenty-four event kinds, exhaustive, matching the charter's section 3.1
+/// The twenty-five event kinds, exhaustive, matching the charter's section 3.1
 /// exactly. Every kind carries an explicit rename because no scheme produces
 /// the charter's dotted names, and the enum is exhaustive because the set is
 /// closed by ruling: an attribute that let a consumer absorb a further kind
 /// into a wildcard would defeat the closure the corpus keys on. **The count
-/// is pinned in `tests/kinds.rs`**, an array of twenty-four checked against an
+/// is pinned in `tests/kinds.rs`**, an array of twenty-five checked against an
 /// exhaustive match over this enum, so a kind added here and answered in the
 /// crate's own matches stops at that file's match. An act that writes the new
 /// arm there too and leaves the array alone still passes, which is issue
@@ -193,6 +193,14 @@ pub enum Kind {
     /// run's close, between turns, so it belongs to none.
     #[serde(rename = "score")]
     Score,
+    /// A save point taken, per charter section 3.1's twenty-fifth kind, on
+    /// the operator's ruling of 2026-10-02 on #58's fourth question: which
+    /// save point, by digest, and the trace position it covers. Authored
+    /// after the holdings it names were taken, turnless, and outside every
+    /// election, so the tee never sends it to state and no save point holds
+    /// its own event.
+    #[serde(rename = "save_point")]
+    SavePoint,
 }
 
 /// What an event carries beside its envelope. Untagged: the envelope's `kind`
@@ -205,7 +213,7 @@ pub enum Kind {
 /// back, the working structure holding rendered lines, and the asymmetry is a
 /// compile property pinned at the crate root.
 ///
-/// The kind-to-payload mapping is total, twenty-four kinds and eighteen
+/// The kind-to-payload mapping is total, twenty-five kinds and nineteen
 /// dispositions, the payload-free case counting as one of them.
 /// **`pairing_licensed` in `writer.rs` enforces the mapping and is the
 /// authority on it**, this comment naming only which variant of this enum
@@ -219,8 +227,8 @@ pub enum Kind {
 /// carries `Flush`, `elision` carries `Elision`, `refusal` carries
 /// `Refusal`, the four model kinds carry their four own variants, the
 /// classify pair carries its two, `recall` carries `Recall`, `score` carries
-/// `Score`, and the tool
-/// bracket's two carry `Deferred`.
+/// `Score`, `save_point` carries `SavePoint`, and the tool bracket's two
+/// carry `Deferred`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum Payload {
@@ -298,6 +306,10 @@ pub enum Payload {
     /// task hands the harness at the run's close, per charter section 3.1's
     /// twenty-fourth kind.
     Score(TaskScore),
+    /// A save point taken, shaped on the flush's precedent: plain small data
+    /// the harness authors from the state seam's `snapshot` answer, per
+    /// charter section 3.1's twenty-fifth kind.
+    SavePoint(SavePointTaken),
     /// The payloads whose shapes their own workflows settle, since the trace
     /// act of 2026-08-02 the tool bracket's two alone. Raw bytes in the
     /// interim rather than a placeholder struct, because a struct shaped
@@ -364,6 +376,20 @@ pub struct TaskScore {
     pub passed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ratio: Option<ScoreRatio>,
+}
+
+/// A save point taken, per `weaver-trace-Spec` section 3: the save point by
+/// its digest, the trace position it covers, the run and sequence of the
+/// last distillate it holds and the last turn that run holds in it, and the
+/// name the member wrote it under in its own room, so the operator can find
+/// the file the digest names. Never its path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SavePointTaken {
+    pub save_point: String,
+    pub run: String,
+    pub sequence: u64,
+    pub turn: u64,
+    pub name: String,
 }
 
 /// The ratio's two terms: what the run measured over what the task supplies,
@@ -645,12 +671,20 @@ pub struct Elections {
     /// election was the default, so such a record replays its token path
     /// and cannot be certified for state.
     pub tee: Option<crate::tee::Election>,
-    /// Where the session stands from a record, per `weaver-trace-Spec`
-    /// section 3 as of 2026-09-06 and the charter's 3.1: the parent's
-    /// session, the run the cut falls in, and the turn the holdings stop at,
-    /// copied from the enter. Absent otherwise, never null.
+    /// Where the load restored a save point, per `weaver-trace-Spec`
+    /// section 3 on the operator's rulings of 2026-10-02 on #58: the save
+    /// point's digest, the position it covers, whether the operator
+    /// supplied it and where the builder cut it from, copied from the enter.
+    /// Absent otherwise, never null.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lineage: Option<Box<Lineage>>,
+    /// The reset the load records, beside the lineage and apart from it,
+    /// per the same section: present only where the agent's last run did
+    /// not end in a clean unload, whether or not a save point stands, the
+    /// prior run and the reason as admin resolved them and the save point
+    /// reset to being the lineage's. Absent otherwise, never null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reset: Option<Reset>,
     /// The digests of the organ binaries admin started, keyed by name, per
     /// the same section, so a record is sufficient for its own conditions.
     pub stack: std::collections::BTreeMap<String, String>,
@@ -675,13 +709,37 @@ pub struct Cause {
     pub uid: u32,
 }
 
-/// A restore's lineage as the load event names it, per `weaver-trace-Spec`
-/// section 3.
+/// A save point's lineage as the load event names it, per `weaver-trace-Spec`
+/// section 3: `save_point` is the digest, `run` and `sequence` the position
+/// it covers, `turn` the last turn that run holds in it, `operator_supplied`
+/// whether the operator supplied it, and `built_from`, present only where the
+/// offline builder made it from a record, that record's session and cut.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Lineage {
+    pub save_point: String,
+    pub run: String,
+    pub sequence: u64,
+    pub turn: u64,
+    pub operator_supplied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub built_from: Option<Branch>,
+}
+
+/// Where the offline builder cut a record: its session as `parent`, the run
+/// the cut falls in, and the turn the holdings stop at.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Branch {
     pub parent: String,
     pub run: String,
     pub through: u64,
+}
+
+/// The reset a load records, per `weaver-trace-Spec` section 3: the run that
+/// did not end in a clean unload and the reason as admin resolved it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Reset {
+    pub prior_run: String,
+    pub reason: String,
 }
 
 #[cfg(test)]
@@ -703,6 +761,7 @@ mod lineage_tests {
             declaration: "d".into(),
             tee: None,
             lineage,
+            reset: None,
             stack,
             boundary: String::new(),
             cause: Cause { uid: 0 },
@@ -710,30 +769,52 @@ mod lineage_tests {
         }
     }
 
-    /// **The load names its lineage where the session stands from a record
-    /// and its stack on every load**, per `weaver-trace-Spec` section 3 as
-    /// of 2026-09-06: the lineage absent rather than null where the load
-    /// stands from nothing, and the stack keyed by name.
+    /// **The load names its lineage where it restored a save point, its reset
+    /// where the last run stopped unclean, and its stack on every load**, per
+    /// `weaver-trace-Spec` section 3 on the rulings of 2026-10-02 on #58: the
+    /// lineage and the reset each absent rather than null where the load
+    /// carries none, the lineage's `built_from` absent where no builder cut
+    /// it, and the stack keyed by name.
     ///
-    /// Perturbation: drop the `skip_serializing_if` on `lineage` and the
-    /// absence assertion fails on a null member. Watched under exactly that
-    /// removal.
+    /// Perturbation: drop the `skip_serializing_if` on `lineage` or on
+    /// `reset` and the absence assertion fails on a null member. Watched
+    /// under each removal.
     #[test]
-    fn the_load_names_its_lineage_and_its_stack() {
+    fn the_load_names_its_lineage_its_reset_and_its_stack() {
         let rendered = serde_json::to_string(&elections(None)).expect("renders");
         assert!(
             !rendered.contains("lineage"),
             "absent, never null: {rendered}"
         );
+        assert!(
+            !rendered.contains("reset"),
+            "absent, never null: {rendered}"
+        );
         assert!(rendered.contains("\"stack\":{\"weaver-harness\":\"ab12\"}"));
         let rendered = serde_json::to_string(&elections(Some(Box::new(Lineage {
-            parent: "s-1".into(),
+            save_point: "ab12".into(),
             run: "r-a".into(),
-            through: 2,
+            sequence: 41,
+            turn: 2,
+            operator_supplied: false,
+            built_from: None,
         }))))
         .expect("renders");
         assert!(
-            rendered.contains("\"lineage\":{\"parent\":\"s-1\",\"run\":\"r-a\",\"through\":2}"),
+            rendered.contains(concat!(
+                "\"lineage\":{\"save_point\":\"ab12\",\"run\":\"r-a\",",
+                "\"sequence\":41,\"turn\":2,\"operator_supplied\":false}"
+            )),
+            "{rendered}"
+        );
+        let mut reset = elections(None);
+        reset.reset = Some(Reset {
+            prior_run: "r-z".into(),
+            reason: "no-clean-unload".into(),
+        });
+        let rendered = serde_json::to_string(&reset).expect("renders");
+        assert!(
+            rendered.contains("\"reset\":{\"prior_run\":\"r-z\",\"reason\":\"no-clean-unload\"}"),
             "{rendered}"
         );
     }

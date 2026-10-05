@@ -102,10 +102,11 @@ pub use identity::{
     TraceRequest, authorized,
 };
 pub use wire::{
-    AgentName, AgentState, Candidate, Composer, DECODE_MESSAGE_BOUND, EnterBinding, EnterPayload,
-    ExchangeId, FaultCase, FaultReport, Finish, Generation, KillCause, LabelAnswer, LabelDirective,
-    LabelRefusal, LifecycleAnswer, LifecycleAsk, LifecycleDirective, LifecycleRefusal, Lineage,
-    LoadFacts, MAX_ENVELOPE_BYTES, Opener, OrganEnvelope, Payload, Position, RefusalRecord,
-    RefusingOrgan, RunId, ScoredLabel, SegmentPreamble, SessionId, TokenAnswer, TokenAsk,
-    TokenDirective, TokenRefusal, ToolExecution, ToolOutcome, TurnFrame, TurnKey,
+    AgentName, AgentState, Branch, Candidate, Composer, DECODE_MESSAGE_BOUND, EnterBinding,
+    EnterPayload, ExchangeId, FaultCase, FaultReport, Finish, Generation, KillCause, LabelAnswer,
+    LabelDirective, LabelRefusal, LifecycleAnswer, LifecycleAsk, LifecycleDirective,
+    LifecycleRefusal, Lineage, LoadFacts, MAX_ENVELOPE_BYTES, Opener, OrganEnvelope, Payload,
+    Position, RefusalRecord, RefusingOrgan, Reset, ResetReason, RunId, ScoredLabel,
+    SegmentPreamble, SessionId, TokenAnswer, TokenAsk, TokenDirective, TokenRefusal, ToolExecution,
+    ToolOutcome, TurnFrame, TurnKey,
 };

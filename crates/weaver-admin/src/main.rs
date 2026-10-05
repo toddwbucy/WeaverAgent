@@ -994,6 +994,9 @@ fn run_load(
                 state_store: inventory.config.state_store.clone().unwrap_or_default(),
                 declaration: inventory.declaration.clone(),
                 restore: inventory.lineage.clone(),
+                // No reset until admin's clean-unload marker lands with its
+                // save-point act (A3.2), per `weaver-admin-Spec` section 4.
+                reset: None,
                 stack,
                 // The boundary file's digest, the cause and the judged
                 // libraries, per `weaver-types-Spec` section 4 as of

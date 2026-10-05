@@ -58,6 +58,7 @@
 //!         Kind::Recall => "recall",
 //!         Kind::MessageRestored => "message.restored",
 //!         Kind::Score => "score",
+//!         Kind::SavePoint => "save_point",
 //!     }
 //! }
 //! ```
@@ -148,10 +149,11 @@ mod writer;
 
 pub use canonical::{MonotonicNs, Sequence};
 pub use event::{
-    Candidate, Cause, ClassifyAsk, ClassifyScored, Elections, ElisionSpan, Envelope, Event, Finish,
-    FlushCounts, GrantSurface, Kind, Line, Lineage, LoopIdentity, ModelField, ModelOutput, Payload,
-    RecallAccount, RecallAsk, RecallVerb, RecalledIdentity, RunRef, ScoreRatio, SessionRef,
-    StopReason, StoreIdentity, Subsystem, TaskScore, TurnClose, TurnRef, UnloadClose, raw_payload,
+    Branch, Candidate, Cause, ClassifyAsk, ClassifyScored, Elections, ElisionSpan, Envelope, Event,
+    Finish, FlushCounts, GrantSurface, Kind, Line, Lineage, LoopIdentity, ModelField, ModelOutput,
+    Payload, RecallAccount, RecallAsk, RecallVerb, RecalledIdentity, Reset, RunRef, SavePointTaken,
+    ScoreRatio, SessionRef, StopReason, StoreIdentity, Subsystem, TaskScore, TurnClose, TurnRef,
+    UnloadClose, raw_payload,
 };
 pub use failure::{Failure, FieldName, SubmitRefusal, WriteError};
 pub use structure::{Record, WorkingStructure};

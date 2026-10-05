@@ -414,13 +414,20 @@ pub struct EnterPayload {
     /// record both name what they were built from and the harness holds no
     /// file.
     pub declaration: String,
-    /// The lineage of the restore where the declaration elects one, resolved
-    /// by admin and never the record's path, per `weaver-types-Spec` section
-    /// 4 as of 2026-09-04 and issue #432: the harness names the parent on the
-    /// load event and starts its turn ordinal from the cut without opening
-    /// anything.
+    /// The lineage of the save point the load restores, resolved by admin
+    /// from the save point's stamp and never its path, per `weaver-types-Spec`
+    /// section 4 on the operator's rulings of 2026-10-02 on #58: the harness
+    /// names it on the load event, compares it with what the member answers
+    /// to the `restored` ask, and numbers the run's turns from one whatever
+    /// it carries. Absent where the load stands from nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restore: Option<Lineage>,
+    /// The reset the load records, present where the agent's last run did
+    /// not end in a clean unload, whether or not a save point stands, per the
+    /// same section: admin resolves it from its clean-unload marker and the
+    /// harness copies it onto the load event. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset: Option<Reset>,
     /// The digests of the organ binaries admin started, keyed by the
     /// binary's name, so the load event names the stack that ran it, per the
     /// same section. Admin's fact, authored by the harness as it authors the
@@ -440,14 +447,47 @@ pub struct EnterPayload {
     pub library_path: Option<String>,
 }
 
-/// A restore's lineage as admin resolved it: the parent's session, the run
-/// the cut falls in, and the turn the holdings stop at, a whole record
-/// resolved to its last run's last turn.
+/// A save point's lineage as admin resolved it from the stamp, per
+/// `weaver-types-Spec` section 4 on the operator's rulings of 2026-10-02 on
+/// #58: the save point's digest, the run and sequence of the last distillate
+/// it holds, the last turn that run holds in it, whether the operator
+/// supplied it, and, where the offline builder made it from a record, that
+/// record's session and the cut.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Lineage {
+    pub save_point: String,
+    pub run: RunId,
+    pub sequence: u64,
+    pub turn: u64,
+    pub operator_supplied: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub built_from: Option<Branch>,
+}
+
+/// Where the offline builder cut a record to make a save point: the record's
+/// session, the run the cut falls in, and the turn the holdings stop at.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Branch {
     pub parent: SessionId,
     pub run: RunId,
     pub through: u64,
+}
+
+/// The reset a load records after an unclean stop, per `weaver-types-Spec`
+/// section 4: the run that never unloaded cleanly and the reason admin
+/// resolved from its marker.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Reset {
+    pub prior_run: RunId,
+    pub reason: ResetReason,
+}
+
+/// Why a load resets, one reason today: the marker says the prior run never
+/// unloaded cleanly. `UnitFailed` retired with the unit on 2026-10-03 (#50).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResetReason {
+    NoCleanUnload,
 }
 
 /// The binding kind as admin resolved it, per `weaver-types-Spec` section 4:

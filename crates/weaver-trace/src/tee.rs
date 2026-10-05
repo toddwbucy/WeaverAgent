@@ -121,6 +121,14 @@ struct FrameEnvelope<'a> {
 /// here is unreachable in custody and answered by not distilling.
 pub fn distill(line: &str, election: &Election) -> Option<String> {
     let event: CanonicalLine = serde_json::from_str(line).ok()?;
+    // **The save-point kind never crosses the tee, whatever the election**,
+    // per `weaver-trace-PRD` section 3 on the operator's ruling of 2026-10-02
+    // on #58: it is provenance about the holdings, authored after the
+    // holdings it names were taken, so a save point could never hold its own
+    // event and a rebuild that landed it would hold what no restore holds.
+    if event.kind == "save_point" {
+        return None;
+    }
     let mut pairs: BTreeMap<std::borrow::Cow<'_, str>, &RawValue> = BTreeMap::new();
     // **A turnless `message.system` line distills whole under every
     // election**, per `weaver-trace-Spec` section 11 as of 2026-09-04: the
@@ -256,6 +264,29 @@ mod tests {
         r#""sequence":"7","subsystem":"harness","wall_ms":1,"monotonic_ns":"2","#,
         r#""payload":{"close":"clean","request":{"sampling":{"temperature":0.70}}}}"#
     );
+
+    /// **A `save_point` line never crosses the tee**, under the default
+    /// election, under `all_kinds`, and under an election naming the kind,
+    /// per `weaver-trace-PRD` section 3. Perturbation: drop the kind check
+    /// from `distill` and the `all_kinds` case distills.
+    #[test]
+    fn a_save_point_never_crosses_the_tee() {
+        const SAVE_POINT: &str = concat!(
+            r#"{"session":"alpha-1","run":"r-1","kind":"save_point","sequence":"9","#,
+            r#""subsystem":"harness","wall_ms":1,"monotonic_ns":"2","#,
+            r#""payload":{"save_point":"ab","run":"r-1","sequence":8,"turn":1,"name":"ab.save-point"}}"#
+        );
+        assert!(distill(SAVE_POINT, &Election::default()).is_none());
+        let naming = Election {
+            all_kinds: true,
+            keys: vec![ElectedKind {
+                kind: "save_point".into(),
+                paths: vec!["save_point".into()],
+            }],
+        };
+        assert!(distill(SAVE_POINT, &naming).is_none());
+        assert!(distill(LINE, &naming).is_some(), "other kinds still cross");
+    }
 
     /// The default election: the envelope of every kind and nothing more.
     /// The frame carries the five, spelled as the canonical form spelled

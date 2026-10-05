@@ -18,7 +18,9 @@ sqlite = ["dep:rusqlite"]
 [dependencies]
 weaver-types = { path = "../weaver-types" }
 weaver-traits = { path = "../weaver-traits" }
-rusqlite = { version = "0.37", features = ["bundled"], optional = true }
+# `serialize` is the engine's serialization interface, which carries the
+# save point, per `weaver-state-Spec` sections 1 and 3.
+rusqlite = { version = "0.37", features = ["bundled", "serialize"], optional = true }
 # `float_roundtrip` makes serde_json's float parse correctly rounded, so a
 # reading the SPU rendered parses to the value it rendered and the typed
 # landing of weaver-state-Spec section 3 can hold it typed. Without it the
@@ -26,6 +28,9 @@ rusqlite = { version = "0.37", features = ["bundled"], optional = true }
 # exactness rule sends the reading to `field` verbatim.
 serde_json = { version = "1", features = ["raw_value", "float_roundtrip"] }
 nix = { version = "0.31", features = ["socket", "fs", "uio", "user", "poll"] }
+# The save point's check and digest, sha256 over its bytes, per
+# `weaver-state-Spec` section 3 under section 6's election.
+sha2 = "0.10"
 
 # Test scaffolding only, per the operator ruling of 2026-09-22: wire
 # round trips and live comparisons use the tee; production imports none.
