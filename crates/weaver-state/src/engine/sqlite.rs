@@ -462,28 +462,30 @@ impl Store for Sqlite {
     /// The position the holdings cover: the last landed event by the `id`
     /// column, custody's own order key, and the last turn its run carries by
     /// the same order, read as the number of a `t-<n>` key and zero where
-    /// the run holds no turn.
+    /// the run holds no turn. **The turn is looked up under the last
+    /// event's session as well as its run**, because the store holds every
+    /// session and a run reference is distinct only within one.
     fn position(&self) -> Result<Option<crate::save_point::Stamp>, CustodyFault> {
         use rusqlite::OptionalExtension;
         let fault = |e: rusqlite::Error| CustodyFault::StoreUnavailable(e.to_string());
-        let last: Option<(String, i64)> = self
+        let last: Option<(String, String, i64)> = self
             .connection
-            .prepare_cached("SELECT run, sequence FROM event ORDER BY id DESC LIMIT 1")
+            .prepare_cached("SELECT session, run, sequence FROM event ORDER BY id DESC LIMIT 1")
             .map_err(fault)?
-            .query_row([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .query_row([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
             .optional()
             .map_err(fault)?;
-        let Some((run, sequence)) = last else {
+        let Some((session, run, sequence)) = last else {
             return Ok(None);
         };
         let turn: Option<String> = self
             .connection
             .prepare_cached(
-                "SELECT turn FROM event WHERE run = ?1 AND turn IS NOT NULL
+                "SELECT turn FROM event WHERE session = ?1 AND run = ?2 AND turn IS NOT NULL
                  ORDER BY id DESC LIMIT 1",
             )
             .map_err(fault)?
-            .query_row([&run], |row| row.get(0))
+            .query_row([&session, &run], |row| row.get(0))
             .optional()
             .map_err(fault)?;
         let turn = turn
@@ -972,6 +974,19 @@ mod tests {
                 turn: 0
             },
             "by landing order, and a run with no turn reads zero"
+        );
+        // Another session's run of the same name holds a turn; the stamp
+        // of this session's turnless run must not borrow it. Perturbation:
+        // drop `session` from the turn lookup and this reads 5.
+        let mut foreign = landed("other", "r-3", "message.user", 1);
+        foreign.turn = Some("t-5".into());
+        store.land(&foreign).expect("lands");
+        store.land(&landed("s", "r-3", "load", 0)).expect("lands");
+        let stamp = store.position().expect("reads").expect("a position");
+        assert_eq!(
+            (stamp.run.as_str(), stamp.turn),
+            ("r-3", 0),
+            "the turn is the last event's session's and never a namesake run's"
         );
     }
 

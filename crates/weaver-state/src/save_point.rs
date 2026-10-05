@@ -20,11 +20,12 @@
 //! and the check line itself is covered by the digest: **the digest is sha256
 //! over the whole file** and is the save point's identity on the trace and
 //! in the operator's directory. **The name is the digest**, so two save points
-//! with different bytes can never share one, and the stamp's `taken` member
-//! makes two save points of the same holdings at the same position different
-//! bytes, so two `snapshot` asks on unchanged holdings give two files by
-//! construction, which settles the collision the Planner carried on #1 from
-//! #58's round 17. **A whole write earns its finished name by a link**: the
+//! with different bytes can never share one, and the stamp's `taken` member,
+//! the writing process, a counter that process never repeats, and the wall
+//! clock, makes two save points of the same holdings at the same position
+//! different bytes whatever the clock does, so two `snapshot` asks on
+//! unchanged holdings give two files by construction, which settles the
+//! collision the Planner carried on #1 from #58's round 17. **A whole write earns its finished name by a link**: the
 //! bytes go to a part name created exclusively, are synced, and are linked
 //! under the finished name, a link refusing an existing entry where a rename
 //! would replace it, so no path through this module overwrites a file.
@@ -84,8 +85,13 @@ pub struct SavePoint {
 }
 
 impl SavePoint {
-    /// Stamp an image taken now.
+    /// Stamp an image taken now. The `taken` nonce is the process, its own
+    /// count of save points taken, which never repeats within a process, and
+    /// the wall clock, so no two save points this process takes share bytes
+    /// even where the clock stands still or moves back.
     pub fn take(stamp: Stamp, schema_text: &str, image: Vec<u8>) -> SavePoint {
+        static TAKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let ordinal = TAKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let wall_ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
@@ -100,7 +106,7 @@ impl SavePoint {
             "turn": stamp.turn,
             "schema": schema,
             "image": image.len(),
-            "taken": {"pid": std::process::id(), "wall_ns": wall_ns.to_string()},
+            "taken": {"pid": std::process::id(), "ordinal": ordinal, "wall_ns": wall_ns.to_string()},
         })
         .to_string();
         SavePoint {
@@ -262,8 +268,10 @@ impl Room {
     /// Write a save point as a new file and answer its finished name. The
     /// bytes go to a part name created exclusively, are synced, and are linked
     /// under the finished name; the link refuses an existing entry, so nothing
-    /// here overwrites. Every failure removes the part and leaves no file
-    /// under a finished name.
+    /// here overwrites; and the room is synced so the entry is durable before
+    /// the name is answered. Every failure removes the part, a failed room
+    /// sync removes the finished name too, and no file stands under a
+    /// finished name the answer did not give.
     pub fn write(&self, save_point: &SavePoint) -> Result<String, SavePointFault> {
         use nix::fcntl::OFlag;
         let name = save_point.name();
@@ -297,7 +305,14 @@ impl Room {
             nix::unistd::UnlinkatFlags::NoRemoveDir,
         );
         outcome?;
-        let _ = nix::unistd::fsync(self.dir.as_fd());
+        if let Err(e) = nix::unistd::fsync(self.dir.as_fd()) {
+            let _ = nix::unistd::unlinkat(
+                self.dir.as_fd(),
+                name.as_str(),
+                nix::unistd::UnlinkatFlags::NoRemoveDir,
+            );
+            return Err(io("sync room", e));
+        }
         Ok(name)
     }
 
@@ -406,6 +421,11 @@ mod tests {
             first.name(),
             second.name(),
             "two save points at one position never share a name"
+        );
+        assert!(
+            first.header.contains("\"ordinal\":") && second.header != first.header,
+            "the nonce carries the process's own count: {}",
+            first.header
         );
     }
 
