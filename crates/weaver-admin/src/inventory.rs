@@ -45,10 +45,9 @@ pub struct Boundary {
     pub member_account: Option<MemberAccount>,
 }
 
-/// The state member's own kernel identity: the uid the spawn drops to, the
-/// uid that owns the territory, and the uid the store's first gate answers
-/// about, which are one uid because the charter's custody argument rests on
-/// their being one.
+/// The state member's own kernel identity: the uid the spawn drops to and
+/// the uid that owns the territory, which are one uid because the charter's
+/// custody argument rests on their being one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemberAccount {
     pub uid: u32,
@@ -281,12 +280,8 @@ fn take_inventory_against(
     // the member's binary: the leg's standing is the declaration's fact and
     // not the directory's, per `weaver-state-PRD` section 4 and issue #381,
     // so a box lacking the binary refuses rather than running without a leg
-    // the declaration never declined. The service engine further requires
-    // the store's socket under the configured directory, and the walk asks
-    // the store the two questions the charter's two gates pose: that this
-    // account, the member's, maps to the declared role, and that the agent's
-    // uid maps to none. Each is `BoundaryUnverified` and never
-    // `ConfigInvalid`, for the reason the group case below gives: the
+    // the declaration never declined. The refusal is `BoundaryUnverified` and
+    // never `ConfigInvalid`, for the reason the group case below gives: the
     // declaration is well formed and the fault is the provisioning's.
     if store.engine != StoreEngine::None && boundary.member_binary.is_none() {
         diag!("boundary unverified: no weaver-state binary beside the worker's");
@@ -296,9 +291,7 @@ fn take_inventory_against(
     // its territory by owning it, so a member with no account of its own has
     // no territory to hold and would run as this crate does. A box lacking
     // the account refuses here for the reason a box lacking the binary does,
-    // the provisioning being what is missing, and refuses before the store is
-    // asked anything, because the account is what the first gate is asked
-    // about.
+    // the provisioning being what is missing.
     //
     // conforms: admin-member-account-required-at-inventory
     if store.engine != StoreEngine::None && boundary.member_account.is_none() {

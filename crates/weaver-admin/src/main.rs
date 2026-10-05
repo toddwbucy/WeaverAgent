@@ -539,8 +539,8 @@ fn prepare_territory(
 ///
 /// conforms: admin-member-spawn-drops-to-its-account
 fn become_member(member: inventory::MemberAccount) -> std::io::Result<()> {
-    // The drop lives in `inventory::drop_to`, shared with the store probe
-    // since issue #675, so the order described above is implemented once.
+    // The drop lives in `inventory::drop_to` since issue #675, so the order
+    // described above is implemented once.
     inventory::drop_to(member.uid, &[member.gid as nix::libc::gid_t])
 }
 
@@ -666,9 +666,8 @@ fn take_inventory(
         // gid too few admits one that does not.
         agent_gids: agent_gids(&user),
         home: user.dir.clone(),
-        // The two box facts the store rules read, per Spec section 4 as of
-        // 2026-09-04: the member's binary beside the worker's, and the
-        // store's socket directory from this crate's own file.
+        // The box fact the store rule reads, per Spec section 4: the member's
+        // binary beside the worker's.
         member_binary: config
             .worker
             .parent()
@@ -686,9 +685,8 @@ fn take_inventory(
             }),
         // **The member's own account, looked up from the derived name.** It
         // is read here rather than constructed, for the reason the home is:
-        // the uid the spawn drops to, the uid that owns the territory, and
-        // the uid the store's first gate answers about are the account
-        // database's fact and not this crate's. An absent account is a box
+        // the uid the spawn drops to and the uid that owns the territory are
+        // the account database's fact and not this crate's. An absent account is a box
         // the provisioning has not finished, which section 4 refuses for
         // every election but `none`.
         member_account: nix::unistd::User::from_name(&inventory::member_identity_for(agent))
@@ -3161,8 +3159,8 @@ mod tests {
     /// supplementary set that group alone, none of root's. The member's end
     /// is read too, a socket at the fixed number.
     ///
-    /// `drop_to`'s own instrument, beside the store probe's in the inventory
-    /// module, watches the order of the three calls and the saved ids. This
+    /// `drop_to`'s own instrument, in the inventory module, watches the order
+    /// of the three calls and the saved ids. This
     /// one watches that the member's spawn takes the drop at all, which no
     /// reading of `drop_to` can see.
     ///

@@ -1397,8 +1397,6 @@ impl Harness {
                     weaver_types::StoreEngine::Sqlite => "sqlite",
                 }
                 .to_string(),
-                database: payload.state_store.database.clone(),
-                role: payload.state_store.role.clone(),
             },
             composer: self
                 .composer

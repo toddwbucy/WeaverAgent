@@ -1362,8 +1362,6 @@ fn the_load_names_its_loop_and_its_member() {
         library_path: None,
         state_store: weaver_trace::StoreIdentity {
             engine: "sqlite".into(),
-            database: None,
-            role: None,
         },
         composer: weaver_trace::LoopIdentity::file(
             "pyworker",
@@ -1376,7 +1374,7 @@ fn the_load_names_its_loop_and_its_member() {
     assert_eq!(
         rendered["state_store"],
         serde_json::json!({"engine": "sqlite"}),
-        "the load names the store the member stands on, and no database or role, not null ones"
+        "the load names the store the member stands on by its engine alone"
     );
     assert_eq!(
         rendered["composer"]["binary"],

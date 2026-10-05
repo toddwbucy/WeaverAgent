@@ -305,8 +305,6 @@ pub struct LoopIdentity {
 
 pub struct StoreIdentity {
     pub engine: String,
-    pub database: Option<String>,
-    pub role: Option<String>,
 }
 
 pub struct UnloadClose {
@@ -787,8 +785,7 @@ binary. `state_member` is whether the state member's end arrived on the enter, t
 harness's own knowledge and never a read of the deployment. `state_store` is the store
 the member stands on, `StoreIdentity` by engine name, copied from the enter's resolved election as of 2026-09-04 and
 written beside the member because the two answer different questions, the election being
-what the deployment asked for and the member whether an end arrived. The database and
-role are absent under the embedded engine, not null. Both ride the same `Elections`
+what the deployment asked for and the member whether an end arrived. Both ride the same `Elections`
 payload rather than a second member on the event, because the payload is the record's
 declaration of its posture and these are posture, and each is named individually for the
 drift reason above. **The digest is the file at the load**: a Python-iterating worker

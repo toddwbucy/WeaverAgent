@@ -344,9 +344,9 @@ fi
 # the review of 2026-09-13 and for the reason the cccl gate above gives: a
 # failure here is cheaper than one twenty minutes into a build, and this class
 # cost a build, an install and a rollback before it named itself. `weaver-admin
-# validate` cannot cover it. It asks that the binary exists and that the store
-# admits the role, never that the binary carries the engine, which is why karl
-# validated and then refused at load.
+# validate` cannot cover it. It asked that the binary existed, never that the
+# binary carried the engine, which is why karl validated and then refused at
+# load.
 #
 # **The two statements are separate on purpose and reconciled here.**
 # `create-agent.sh` writes the engine into a declaration and this script names

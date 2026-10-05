@@ -547,7 +547,7 @@ fn child_entry() {
     }
     assert!(
         nix::unistd::getuid().is_root(),
-        "preload requires the operator credential; run these scratch tests with unshare -Ur (no sudo)"
+        "preload requires the operator credential; run these instruments with unshare --map-root-user (no sudo)"
     );
 }
 struct Member {

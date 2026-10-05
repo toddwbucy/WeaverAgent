@@ -120,14 +120,6 @@ elif name == 'sudo':
     op, *rest = command
     if op == 'sh': shell_read(rest)
     elif op == 'systemctl': sys.exit(2 if os.environ.get('READ_FAIL') == rest[0] else 0)
-    elif op == 'psql':
-        query = rest[-1]
-        if os.environ.get('READ_FAIL') and os.environ['READ_FAIL'] in query: sys.exit(2)
-        if os.environ.get('EMPTY_PATH') and os.environ['EMPTY_PATH'] in query: sys.exit(0)
-        if 'pg_roles' in query and os.environ.get('ROLE_COLLISION'): print('1')
-        elif 'show hba_file' in query: print(root / 'pg_hba.conf')
-        elif 'show ident_file' in query: print(root / 'pg_ident.conf')
-        elif query == 'select 1': sys.exit(1 if identity == 'weaver-m1' else 0)
     elif op in ('grep', 'sed'):
         # Execute only the text operation on scratch files, never via sudo.
         file = pathlib.Path(mapped(rest[-1]))
@@ -249,7 +241,7 @@ class PlanTests(unittest.TestCase):
                     "CARGO_TARGET_DIR": str(self.root / 'target with "quotes"'),
                     "USER": "fixture-no-home", "PROBE": str(self.root / "probe"),
                     "FIXTURE_ROOT": str(self.root)}
-        for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "ROLE_COLLISION", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
+        for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
                      "VISUDO_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
                      "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS"):
             self.env.pop(name, None)
@@ -1639,7 +1631,7 @@ class BootstrapStandingTests(unittest.TestCase):
 
 
 STUB_ADMIN = """#!/bin/sh
-printf '%s\\n' "boundary unverified: no store socket at /run/weaver/fixture" >&2
+printf '%s\\n' "boundary unverified: no weaver-state binary beside the worker's" >&2
 printf '%s\\n' '{"kind":"refused","reason":"boundary_unverified"}'
 exit 1
 """
@@ -1753,7 +1745,7 @@ class AdminAnswerTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout,
                              '{"kind":"refused","reason":"boundary_unverified"}\n')
-            self.assertIn("admin: boundary unverified: no store socket at /run/weaver/fixture",
+            self.assertIn("admin: boundary unverified: no weaver-state binary beside the worker's",
                           result.stderr)
 
     def test_both_call_sites_reach_the_helper(self):

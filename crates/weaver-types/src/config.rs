@@ -63,9 +63,9 @@ pub struct AgentConfig {
     /// The store the state member stands on, per `weaver-types-Spec` section
     /// 2 and the ruling of 2026-09-04 that the store is a port: absent means
     /// the embedded engine with the member standing, and the cross-field
-    /// rules - `database` and `role` exactly under the service engine, and
-    /// no election beside `none` - are admin's at inventory, this parse
-    /// checking each field alone.
+    /// rules - no `database` or `role` for any engine this build provides,
+    /// and no election beside `none` - are admin's at inventory, this parse
+    /// checking each field alone, beside refusing an unprovided engine.
     #[serde(default)]
     pub state_store: Option<StateStore>,
     /// The agent's loop file, per `weaver-types-Spec` section 2 and the
