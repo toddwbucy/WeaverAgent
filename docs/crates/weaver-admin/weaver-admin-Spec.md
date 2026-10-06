@@ -758,10 +758,9 @@ file that is the operator's own with link count one and writable by no group or 
 and answers its bytes. **The uid-0 admission section 9 gives `agent.toml` is not
 extended to the prompt, and a second link refuses**: a hard link is not a symbolic
 link, and an operator-placed link to a root-owned file elsewhere would otherwise pass
-the judgment and be read, as root, and seated as the prompt. This is the prompt-file
-act's election of option (a) on the question raised on #76 on 2026-10-05, pending the
-operator's word. **The read is bounded at one mebibyte**, the same act's election
-pending the operator: a file past it refuses on its size, judged on the descriptor
+the judgment and be read, as root, and seated as the prompt. This is option (a) of
+the question raised on #76 on 2026-10-05, the operator's ruling of 2026-10-06 (#76). **The read is bounded at one mebibyte**, the operator's ruling of
+2026-10-06 (#76): a file past it refuses on its size, judged on the descriptor
 before any byte is read, and the read takes no more than the ceiling, so a declaration
 naming a large file costs admin, reading as root, one bounded read and never a whole
 file; the number is the same order as the state seam's answer ceiling and far past any
