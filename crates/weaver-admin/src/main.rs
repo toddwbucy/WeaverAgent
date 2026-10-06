@@ -2442,8 +2442,9 @@ mod tests {
     /// the write-bit test and the group-writable file reads; drop the
     /// directory's re-judgment and the opened directory reads; drop the
     /// regular-file test and the FIFO answers empty bytes; drop the link
-    /// count and the hard-linked file reads; drop the size judgment and the
-    /// file one byte past the ceiling reads. A failure to open for any
+    /// count and the hard-linked file reads; drop both the size judgment
+    /// and the read's bound and the file one byte past the ceiling reads,
+    /// either alone being caught by the other. A failure to open for any
     /// reason but absence refuses the boundary, which no honest case can
     /// make as the operator, so the arms carry it.
     #[test]
