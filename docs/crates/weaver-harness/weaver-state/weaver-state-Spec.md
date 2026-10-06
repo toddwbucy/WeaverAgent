@@ -59,12 +59,14 @@ recorded in charter section 5 under Working Process section 6.
 
 **Dependencies, external.** One engine, behind the feature named for it: `rusqlite` with
 its bundled engine, so the store's version is the build's fact rather than the host's,
-its serialization interface carrying the save point, pinned by the lock file like every
-dependency. **The `postgres` client and its feature are retired** with the service
-engine, on the operator's ruling of 2026-10-02 reversing #38. `serde_json` for the canonical event JSON the ingest reads. `nix` for the
-preload door's credential check and for the descriptor handling both doors and the save
-point's descriptor require. Nothing else: no async runtime, no logging crate, no HTTP,
-per the corpus's standing refusals.
+and with its `serialize` feature, the serialization interface that carries the save
+point, pinned by the lock file like every dependency. **The `postgres` client and its
+feature are retired** with the service engine, on the operator's ruling of 2026-10-02
+reversing #38. `serde_json` for the canonical event JSON the ingest reads. `nix` for the
+preload door's credential check and for the descriptor handling both doors, the room
+and the save point's descriptor require. `sha2` for the save point's check and digest,
+under section 6's election that the check and the digest are the code act's. Nothing
+else: no async runtime, no logging crate, no HTTP, per the corpus's standing refusals.
 
 ## 2. The process and its territory
 
@@ -81,11 +83,16 @@ finished one into the operator's declaration directory at the next load or unloa
 directory for reading, the latest by default or the one `restore` names, and the member
 inherits it at its spawn the way it inherits the first door's end. Where no save point
 exists the descriptor is absent, which is an agent's first load or every save point
-deleted, and the load of section 3 rebuilds. The descriptor's number is a fixed
-convention between this crate and admin, the code act's to elect beside the first
-door's, and it is probed before it is adopted, by the rule below, a regular file open
-for reading. A live restore reads a save point from the member's own room by name, per
-section 4, and needs no descriptor. **The vector carries no flag**: it is the territory
+deleted, and the load of section 3 rebuilds. **The descriptor's number is 4**, beside
+the first door's 3, a fixed convention between this crate and admin elected by the
+save-point act of 2026-10-05, and it is probed before it is adopted, by the rule below
+and before this process opens anything of its own, a regular file open for reading: a
+number holding nothing is the first load, and a number holding anything else is a fault
+the member refuses to start on. A live restore reads a save point from the member's own
+room by name, per section 4, and needs no descriptor. **The room is opened once by its
+path and held as a directory descriptor for the member's life**: every save point is
+written and read relative to it and never by a path, and the `grants` ask reads its
+boundary through it. **The vector carries no flag**: it is the territory
 and, under a diagnostic binding, the preload name, per `weaver-admin-Spec` section 6.
 The engine flag and the service engine's three flags left it with that engine, and the
 member refuses any flag by name.
@@ -336,7 +343,60 @@ it covers**, the run and the sequence of the last distillate landed in it and th
 turn that run's holdings carry, and with a check over its own bytes, so a save point
 written in part or damaged since reads as corrupt rather than as holdings, and its
 finished name is given only once the write is whole, so a torn write leaves no file
-under a finished name.
+under a finished name. **The layout, the name, the check and the digest are the
+save-point act's elections of 2026-10-05**, closing section 6's cell. A save point is
+three parts in one file: a stamp line, a check line, and the engine's image. The stamp
+line is one JSON object carrying exactly seven members, the format's version, the run,
+sequence and turn, the digest of the schema text the image stands under, the image's
+length, and `taken`, which carries exactly three, the writing process, that process's
+own count of save points taken, which it never repeats, and the wall clock, which
+together tell two save points of one position apart whatever the clock does; a stamp
+line with a member absent, extra or of another type is not this format and is refused
+before any digest or name is computed from it. The check line names sha256 over the stamp line, its newline and the
+image, so a stamp altered, an image flipped or a file torn short all read as corrupt.
+The digest is sha256 over the whole file and the name is the digest with the suffix
+`.save-point`, so two save points with different bytes never share a name and two
+`snapshot` asks on unchanged holdings, differing in `taken`, give two files by
+construction. A whole write earns its finished name by a link: the bytes go to a part
+name created exclusively, are synced, and are linked under the finished name, a link
+refusing an existing entry where a rename would replace it, so no path writes over a
+file; a failed write removes the part and leaves no file under a finished name. **The
+schema the stamp names is the store's own**: every object of the catalog with its
+statement, in a fixed order, exempting only an object of type index whose statement is
+exactly the election's generated form, `CREATE INDEX field_elected_<hex of the key path>
+ON field (key, value) WHERE key = '<the key path>'`, because a load's election is the
+load's and not the schema's, so a later load's differing election is not a save point
+that disagrees; anything else under that prefix, a table, a trigger or an index of
+another shape, and any other object, is schema and must match, on the operator's ruling
+of 2026-10-05 on #1. The loop's schema slot is not yet in the opener, so the
+schema compared at a load is the one the store stands at open, the build's own. **The
+one rule of adoption**, on that ruling and the operator's ruling of 2026-10-06 on #1
+that a restore is a reload of the agent's state and never a patch into a running
+session: everything the member proves about an image and everything it derives from
+it, the schema, the position, the prefix the `restore` answer carries and the index
+set, is computed on a scratch copy; the live connection is touched exactly once, last,
+after the answer frame is built and sized against the answer ceiling; and a failure
+anywhere leaves the live holdings as they stood and the ask unanswered. So the engine,
+which adopts lazily and faults on first use, deserializes the image on a scratch
+connection, requires its own check to pass and the event table to stand, reads the
+image's own catalog, last landing and seated prefix and refuses a stamp that disagrees
+with either fact, drops every index in the election's generated form from the scratch
+copy and builds the active election's in their place, so the index set after adoption
+is exactly this load's at a load and at a live restore alike, and only then swaps the
+finished image in whole. A `restore` whose answer would exceed the ceiling refuses
+before anything moves. **A value the stamp cannot represent refuses the image and
+never defaults**: a sequence below zero, which the ingest refuses at the landing as the
+canonical form never spells one, or a turn key that is not `t-<n>`, is holdings this
+member never landed, and a stamp reading zero over them would pass with a false lineage.
+**One save point has one name**: the room reads a save point only under its own name,
+the digest with the suffix, and the same bytes under another name are an alias and
+refused, so the name an answer or the `save_point` event carries is the digest's by
+construction. What the harness owes a restore, the flush before and the
+rebuild after, and a restore whose answer is lost failing closed as a reload that did
+not complete, is the loop act's under the ruling of 2026-10-06. **An empty store has no position**,
+and what a save point taken of one is stamped with is the save-point act's provisional
+election, no run and sequence zero, pending the operator's ruling on the carried item
+r4170886146 in A3.0, the member learning no run until a distillate lands.
 
 **A load restores a save point and replays no tail.** At the spawn the member reads the
 save point through the descriptor into its in-memory database and holds its stamp, per
@@ -454,25 +514,28 @@ silence is the harness's bound to convert into a missing answer. **The `restored
 answers the load's outcome**, per the contract's eighth ask of 2026-10-02: the member
 judges the descriptor's save point against the opener's schema when the opener lands,
 holds the outcome, and answers `{"answer":{"restored":{"lineage":{...}}}}` with the
-stamp it restored, `{"answer":{"restored":{}}}` where it stood empty, or
+stamp it restored, its `lineage` carrying `digest`, `run`, `sequence` and `turn`,
+`{"answer":{"restored":{}}}` where it stood empty, or
 `{"answer":{"restored":{"refused":"schema-mismatch"}}}`, immediately and parking never.
 **The `snapshot` ask
 writes a save point and answers its stamp**, per the contract's sixth ask of 2026-10-02:
 the member serializes the whole database with its schema and its stamp, writes it as a
 new file in its room, never over one that stands, and answers
-`{"answer":{"snapshot":{"save-point":...,"run":...,"sequence":...,"digest":...}}}`
-naming the file, the position it covers and the digest of its bytes, or drops the ask
-unanswered where the write failed, the silence converting at the harness into a missing
-answer like every other. It runs in stream order like every ask, so the save point
+`{"answer":{"snapshot":{"save-point":...,"run":...,"sequence":...,"turn":...,"digest":...}}}`
+naming the file, the position it covers with the last turn that run's holdings carry,
+and the digest of its bytes, or drops the ask unanswered where the write failed, the
+silence converting at the harness into a missing answer like every other. It runs in stream order like every ask, so the save point
 covers exactly the distillates the stream carried before it, and a write that failed
 part way is what the load's check exists to catch. **The `restore` ask replaces the
 holdings from a save point in the room**, per the contract's seventh ask of 2026-10-02:
 the member opens the named file relative to its room's descriptor, refusing a name that
 is not a plain entry of the room, checks it and its schema as a load does, and only then
 swaps it in for the live database whole, answering `{"answer":{"restore":{...}}}`
-carrying the `snapshot` answer's four members and `identity`, the prefix read from the
+carrying the `snapshot` answer's five members and `identity`, the prefix read from the
 restored holdings as the `identity` ask reads it, or drops the ask unanswered with the
-holdings as they stood. The distillates the stream carries after the ask land on the
+holdings as they stood. A name that is not a plain entry of the room, empty, `.`, `..`,
+carrying `/` or NUL, or dotted, which is where the part files live, is refused before
+anything is opened. The distillates the stream carries after the ask land on the
 restored holdings.
 
 **Three protocol bounds are this crate's elections, each named with what its
@@ -655,9 +718,9 @@ is cited at a test.** Every `conforms:` line in the crate sits at a `//!` file
 header but one, the line inside `stand_preload_name`, which is a function the
 binary runs, so none of the nine is a sighting under that rule.
 
-**Requiring a perturbation-verified test.** Eleven claims stand today, each watched
-where the behaviour sits, three join them with the store primitive, owed by the
-code act that lands it, and one with the run lock, owed by the start step's code act.
+**Requiring a perturbation-verified test.** Fifteen claims stand today, each watched
+where the behaviour sits, the store primitive's four landed on 2026-10-05 as instruments
+of the `preload_door` suite beside the room's own unit tests.
 
 - The member holds the run lock for its life, watched by the member binary started as
   admin starts it, a stream socket at 3 and a stand-in lock at 9, and read from outside
@@ -824,11 +887,6 @@ operator's ruling of 2026-10-02 moves that landing toward the loop's schema.
   aggregate landed with the serve act, and which further derivations
   custody performs stays elected ask by ask, because a derivation is named
   by what reads it.
-- **The save point's format and its write.** Section 3 fixes what a save point holds,
-  the whole database with its schema, its stamp and a check, and that it is a new
-  file never rewritten, and leaves to the code act how it is laid out, how its name
-  is formed, what the check and the digest are, and how a whole write earns its
-  finished name.
 - **The builder's runner.** Section 3 has the offline save-point builder rebuild
   through the preload door, which stands otherwise only under a diagnostic binding
   and is dialed by the operator's driver, so which party runs the builder before a

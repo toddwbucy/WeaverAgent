@@ -4,35 +4,36 @@
 //! conforms: state-serve-restricts-to-the-session
 //!
 //! The embedded engine, per `weaver-state-Spec` section 3: the store the
-//! 2026-08-18 ruling elected, one file in the member's territory, behind the
-//! `sqlite` feature and the default an absent election means.
-
-use std::path::Path;
+//! 2026-08-18 ruling elected, opened in memory in the member's process with
+//! no file of its own since the operator's rulings of 2026-10-02 on #58, its
+//! holdings reaching the disk only as a save point, behind the `sqlite`
+//! feature, the one engine that stands.
 
 use rusqlite::Connection;
 
-use crate::store::{CustodyFault, Distillate, Election, RecalledEvent, RunShape, Store};
+use crate::store::{
+    CustodyFault, Distillate, Election, ImageFacts, RecalledEvent, RunShape, Store,
+};
 use crate::typed::{MeasurementRow, MessageRow, PartRow, SeriesRow, Typed, served, split};
 
-/// The embedded engine: one sqlite file in the member's territory, per
-/// `weaver-state-Spec` section 3, the store the 2026-08-18 ruling elected.
+/// The embedded engine: one sqlite database in memory, per
+/// `weaver-state-Spec` section 3, the store the 2026-08-18 ruling elected and
+/// the rulings of 2026-10-02 took off the disk.
 pub struct Sqlite {
     connection: Connection,
-    path: std::path::PathBuf,
 }
 
 impl Sqlite {
-    /// Open or create the store and stand the schema, per the Spec: the
-    /// event and field tables, the typed landing's four, and the standing
-    /// indexes. The
-    /// election's own indexes arrive with [`Store::index_election`], read
-    /// from the seam's opener.
-    pub fn open(path: &Path) -> Result<Sqlite, CustodyFault> {
-        let connection =
-            Connection::open(path).map_err(|e| CustodyFault::StoreUnavailable(e.to_string()))?;
-        // Durability yields to speed, per the Spec's election: the
-        // derivative is rebuildable from the record and the session never
-        // depends on it.
+    /// Stand the store in memory with its schema, per the Spec: the event
+    /// and field tables, the typed landing's four, and the standing indexes.
+    /// The election's own indexes arrive with [`Store::index_election`], read
+    /// from the seam's opener, and a save point's holdings with
+    /// [`Store::adopt`].
+    pub fn stand() -> Result<Sqlite, CustodyFault> {
+        let connection = Connection::open_in_memory()
+            .map_err(|e| CustodyFault::StoreUnavailable(e.to_string()))?;
+        // Durability is the save point's, per the Spec: the live store pays
+        // no disk write per landing.
         connection
             .execute_batch(
                 "PRAGMA journal_mode = MEMORY;
@@ -57,10 +58,7 @@ impl Sqlite {
         connection
             .execute_batch(TYPED_SCHEMA)
             .map_err(|e| CustodyFault::StoreUnavailable(e.to_string()))?;
-        Ok(Sqlite {
-            connection,
-            path: path.to_path_buf(),
-        })
+        Ok(Sqlite { connection })
     }
 }
 
@@ -285,9 +283,13 @@ impl Store for Sqlite {
                     )
                     .map_err(fault)?;
                 let turns: Vec<(String, String, String)> = turns_query
-                    .query_map(rusqlite::params![session, count as i64], |row| {
-                        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-                    })
+                    // A bound past the engine's integer bounds nothing less
+                    // than everything, so it saturates rather than wrapping
+                    // into a negative limit the engine reads as none.
+                    .query_map(
+                        rusqlite::params![session, i64::try_from(count).unwrap_or(i64::MAX)],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
                     .map_err(fault)?
                     .collect::<Result<_, _>>()
                     .map_err(fault)?;
@@ -344,28 +346,187 @@ impl Store for Sqlite {
         Ok(recalled)
     }
 
-    /// Under the embedded engine the boundary is the filesystem's, per
-    /// `weaver-state-PRD` section 4: the file's owner, group, and mode are
-    /// the whole of the grant surface, and a file that cannot be read is
-    /// an unreadable surface.
-    fn grants(&self) -> Result<Vec<String>, CustodyFault> {
-        use std::os::unix::fs::MetadataExt;
-        let meta = std::fs::metadata(&self.path)
-            .map_err(|e| CustodyFault::StoreUnavailable(e.to_string()))?;
-        Ok(vec![
-            format!("owner {}:{}", meta.uid(), meta.gid()),
-            format!("mode {:04o}", meta.mode() & 0o7777),
-        ])
-    }
-
     /// The turnless `message.system` rows of the session's newest run that
     /// holds any, in landing order with their pairs, per `weaver-state-Spec`
     /// section 4's identity ask: every load records the prefix it seated,
     /// so the one in force is the newest run's.
     fn identity(&self, session: &str) -> Result<Vec<RecalledEvent>, CustodyFault> {
-        let fault = |e: rusqlite::Error| CustodyFault::StoreUnavailable(e.to_string());
-        let mut events_query = self
+        identity_of(&self.connection, session)
+    }
+    /// The whole database through the engine's serialization interface,
+    /// per `weaver-state-Spec` sections 1 and 3.
+    fn image(&self) -> Result<Vec<u8>, CustodyFault> {
+        let data = self
             .connection
+            .serialize(rusqlite::MAIN_DB)
+            .map_err(|e| CustodyFault::SavePoint(format!("serialize: {e}")))?;
+        Ok(data.to_vec())
+    }
+
+    /// What the image says of itself, read from a scratch copy: the engine
+    /// adopts an image lazily and bytes that are no database fault on their
+    /// first use, so the scratch copy must pass the engine's own check and
+    /// hold the event table, and then its catalog and its last landing are
+    /// read exactly as the live store's are, so the facts a stamp claims
+    /// can be held against the bytes before anything is adopted.
+    fn judge_image(&self, image: &[u8], session: &str) -> Result<ImageFacts, CustodyFault> {
+        let fault =
+            |what: &str, e: rusqlite::Error| CustodyFault::SavePoint(format!("{what}: {e}"));
+        let mut probe = Connection::open_in_memory().map_err(|e| fault("probe", e))?;
+        probe
+            .deserialize_read_exact(rusqlite::MAIN_DB, image, image.len(), true)
+            .map_err(|e| fault("deserialize", e))?;
+        let verdict: String = probe
+            .query_row("PRAGMA quick_check", [], |row| row.get(0))
+            .map_err(|e| fault("quick_check", e))?;
+        if verdict != "ok" {
+            return Err(CustodyFault::SavePoint(format!("quick_check: {verdict}")));
+        }
+        probe
+            .prepare("SELECT id FROM event LIMIT 0")
+            .map_err(|e| fault("event table", e))?;
+        Ok(ImageFacts {
+            schema: schema_of(&probe)?,
+            position: position_of(&probe)?,
+            identity: identity_of(&probe, session)?,
+        })
+    }
+
+    /// Replace the holdings whole with the image's, **as a commit step**, per
+    /// the operator's rulings of 2026-10-05 and 2026-10-06 on #1: the image
+    /// is judged on a scratch copy, every index in the election's generated
+    /// form is dropped from that copy and the active election's are built in
+    /// their place, so the index set after adoption is exactly this load's,
+    /// and the finished copy is serialized and swapped into the live
+    /// connection whole, so a failure anywhere before the swap leaves the
+    /// live holdings standing and the swap itself takes an image already
+    /// proven to deserialize. The statement cache is dropped after the swap
+    /// because every cached statement was prepared against the holdings that
+    /// left.
+    fn adopt(&mut self, image: &[u8], election: &Election) -> Result<(), CustodyFault> {
+        let fault =
+            |what: &str, e: rusqlite::Error| CustodyFault::SavePoint(format!("{what}: {e}"));
+        self.judge_image(image, "")?;
+        let mut scratch = Connection::open_in_memory().map_err(|e| fault("scratch", e))?;
+        scratch
+            .deserialize_read_exact(rusqlite::MAIN_DB, image, image.len(), false)
+            .map_err(|e| fault("deserialize", e))?;
+        drop_elected_indexes(&scratch)?;
+        build_indexes(&scratch, election)?;
+        let finished = scratch
+            .serialize(rusqlite::MAIN_DB)
+            .map_err(|e| fault("serialize finished", e))?
+            .to_vec();
+        drop(scratch);
+        self.connection
+            .deserialize_read_exact(rusqlite::MAIN_DB, &finished[..], finished.len(), false)
+            .map_err(|e| fault("swap", e))?;
+        self.connection.flush_prepared_statement_cache();
+        Ok(())
+    }
+
+    /// The schema as text, per [`schema_of`].
+    fn schema(&self) -> Result<String, CustodyFault> {
+        schema_of(&self.connection)
+    }
+
+    /// The position the holdings cover, per [`position_of`].
+    fn position(&self) -> Result<Option<crate::save_point::Stamp>, CustodyFault> {
+        position_of(&self.connection)
+    }
+}
+
+/// The schema as text: every object the catalog holds with its statement, in
+/// a fixed order, **exempting only an index whose statement is exactly the
+/// election's generated form**, per the operator's ruling of 2026-10-05 on
+/// #1, because a load's election is the load's and never the schema's, and
+/// anything else under the elected prefix, a table, a trigger or an index of
+/// another shape, is schema and must match. Read on the live connection and
+/// on a scratch copy of an image alike, so the two compare.
+fn schema_of(connection: &Connection) -> Result<String, CustodyFault> {
+    let fault = |e: rusqlite::Error| CustodyFault::StoreUnavailable(e.to_string());
+    let mut query = connection
+        .prepare_cached(
+            "SELECT type, name, sql FROM sqlite_master
+             WHERE sql IS NOT NULL
+             ORDER BY type, name",
+        )
+        .map_err(fault)?;
+    let rows: Vec<(String, String, String)> = query
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .map_err(fault)?
+        .collect::<Result<_, _>>()
+        .map_err(fault)?;
+    let mut text = String::new();
+    for (kind, name, sql) in rows {
+        if kind == "index" && elected_index_form(&name).as_deref() == Some(sql.as_str()) {
+            continue;
+        }
+        text.push_str(&kind);
+        text.push(' ');
+        text.push_str(&name);
+        text.push('\n');
+        text.push_str(&sql);
+        text.push('\n');
+    }
+    Ok(text)
+}
+
+/// The position the holdings cover: the last landed event by the `id`
+/// column, custody's own order key, and the last turn its run carries by the
+/// same order, read as the number of a `t-<n>` key and zero where the run
+/// holds no turn. **The turn is looked up under the last event's session as
+/// well as its run**, because the store holds every session and a run
+/// reference is distinct only within one. Read on the live connection and on
+/// a scratch copy of an image alike.
+fn position_of(connection: &Connection) -> Result<Option<crate::save_point::Stamp>, CustodyFault> {
+    use rusqlite::OptionalExtension;
+    let fault = |e: rusqlite::Error| CustodyFault::StoreUnavailable(e.to_string());
+    let last: Option<(String, String, i64)> = connection
+        .prepare_cached("SELECT session, run, sequence FROM event ORDER BY id DESC LIMIT 1")
+        .map_err(fault)?
+        .query_row([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .optional()
+        .map_err(fault)?;
+    let Some((session, run, sequence)) = last else {
+        return Ok(None);
+    };
+    let turn: Option<String> = connection
+        .prepare_cached(
+            "SELECT turn FROM event WHERE session = ?1 AND run = ?2 AND turn IS NOT NULL
+             ORDER BY id DESC LIMIT 1",
+        )
+        .map_err(fault)?
+        .query_row([&session, &run], |row| row.get(0))
+        .optional()
+        .map_err(fault)?;
+    // **A value the stamp cannot represent refuses the position and never
+    // defaults**: a sequence below zero, or a turn key that is not `t-<n>`,
+    // is holdings this member never landed from the canonical form, and a
+    // stamp reading zero over them would pass the judgment with a false
+    // lineage. Zero is the reading only where the run holds no turn.
+    let turn = match turn.as_deref() {
+        None => 0,
+        Some(key) => key
+            .strip_prefix("t-")
+            .and_then(|n| n.parse::<u64>().ok())
+            .ok_or_else(|| CustodyFault::SavePoint(format!("turn key {key:?} is not t-<n>")))?,
+    };
+    let sequence = u64::try_from(sequence)
+        .map_err(|_| CustodyFault::SavePoint(format!("sequence {sequence} is below zero")))?;
+    Ok(Some(crate::save_point::Stamp {
+        run,
+        sequence,
+        turn,
+    }))
+}
+
+/// The session's seated prefix as the `identity` ask serves it, read on the
+/// live connection and on a scratch copy of an image alike.
+fn identity_of(connection: &Connection, session: &str) -> Result<Vec<RecalledEvent>, CustodyFault> {
+    {
+        let fault = |e: rusqlite::Error| CustodyFault::StoreUnavailable(e.to_string());
+        let mut events_query = connection
             .prepare_cached(
                 "SELECT id, session, run, turn, kind, sequence FROM event
                  WHERE session = ?1 AND kind = 'message.system' AND turn IS NULL
@@ -392,7 +553,7 @@ impl Store for Sqlite {
             .map_err(fault)?;
         let mut held = Vec::with_capacity(rows.len());
         for (id, session, run, turn, kind, sequence) in rows {
-            let pairs = pairs_of(&self.connection, id)?;
+            let pairs = pairs_of(connection, id)?;
             held.push(RecalledEvent {
                 session,
                 run,
@@ -588,14 +749,10 @@ fn build_indexes(
 ) -> Result<(), CustodyFault> {
     for (_kind, keys) in &election.keys {
         for key in keys {
-            use std::fmt::Write;
-            let mut name = String::with_capacity(key.len() * 2);
-            for byte in key.bytes() {
-                let _ = write!(name, "{byte:02x}");
-            }
-            let statement = format!(
-                "CREATE INDEX IF NOT EXISTS field_elected_{name} ON field (key, value) WHERE key = {}",
-                quoted(key)
+            let statement = elected_index_statement(key).replacen(
+                "CREATE INDEX ",
+                "CREATE INDEX IF NOT EXISTS ",
+                1,
             );
             connection
                 .execute(&statement, [])
@@ -603,6 +760,78 @@ fn build_indexes(
         }
     }
     Ok(())
+}
+
+/// Drop every index whose statement is exactly the election's generated
+/// form, the exemption's own test, so what stands after the build is the
+/// active election's set and never a union with the election of the load
+/// that took the image.
+fn drop_elected_indexes(connection: &rusqlite::Connection) -> Result<(), CustodyFault> {
+    let fault = |e: rusqlite::Error| CustodyFault::SavePoint(e.to_string());
+    let generated: Vec<String> = connection
+        .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL")
+        .map_err(fault)?
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(fault)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(fault)?
+        .into_iter()
+        .filter(|(name, sql)| elected_index_form(name).as_deref() == Some(sql.as_str()))
+        .map(|(name, _)| name)
+        .collect();
+    for name in generated {
+        connection
+            .execute(&format!("DROP INDEX {}", quoted_identifier(&name)), [])
+            .map_err(fault)?;
+    }
+    Ok(())
+}
+
+/// A name as a double-quoted SQL identifier, sqlite's own doubling rule.
+fn quoted_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// An elected index's name: the key path, hex-encoded, under the prefix.
+fn elected_index_name(key: &str) -> String {
+    use std::fmt::Write;
+    let mut name = String::with_capacity(ELECTED_PREFIX.len() + key.len() * 2);
+    name.push_str(ELECTED_PREFIX);
+    for byte in key.bytes() {
+        let _ = write!(name, "{byte:02x}");
+    }
+    name
+}
+
+const ELECTED_PREFIX: &str = "field_elected_";
+
+/// The election's generated statement for one key path, as the catalog
+/// stores it: the engine keeps the statement text and drops the `IF NOT
+/// EXISTS` clause, so this is the one form an exempt index may carry.
+fn elected_index_statement(key: &str) -> String {
+    format!(
+        "CREATE INDEX {} ON field (key, value) WHERE key = {}",
+        elected_index_name(key),
+        quoted(key)
+    )
+}
+
+/// The generated form an index of this name would carry, derived from the
+/// name alone, or nothing where the name is not an elected index's: the
+/// prefix, then the key path in hex that decodes to UTF-8.
+fn elected_index_form(name: &str) -> Option<String> {
+    let hex = name.strip_prefix(ELECTED_PREFIX)?;
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    let bytes: Option<Vec<u8>> = (0..hex.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).ok())
+        .collect();
+    let key = String::from_utf8(bytes?).ok()?;
+    Some(elected_index_statement(&key))
 }
 
 /// A string as a single-quoted SQL literal, sqlite's own doubling rule.
@@ -625,7 +854,7 @@ mod tests {
     /// landing leaves its event behind.
     #[test]
     fn a_distillate_lands_whole_or_not_at_all() {
-        let mut store = Sqlite::open(std::path::Path::new(":memory:")).expect("opens");
+        let mut store = Sqlite::stand().expect("opens");
         store
             .connection
             .execute_batch(
@@ -676,7 +905,7 @@ mod tests {
     /// this engine holds the part typed, so its count fails.
     #[test]
     fn a_nul_in_a_message_lands_verbatim() {
-        let mut store = Sqlite::open(std::path::Path::new(":memory:")).expect("opens");
+        let mut store = Sqlite::stand().expect("opens");
         super::super::a_nul_in_a_message_lands_verbatim_and_serves_whole(&mut store);
         let count = |sql: &str| -> i64 {
             store
@@ -700,7 +929,7 @@ mod tests {
     /// property rather than on the bytes.
     #[test]
     fn recorded_lines_land_typed() {
-        let mut store = Sqlite::open(std::path::Path::new(":memory:")).expect("opens");
+        let mut store = Sqlite::stand().expect("opens");
         super::super::recorded_lines_land_typed_and_serve_what_the_record_reads(&mut store);
         let count = |sql: &str| -> i64 {
             store
@@ -740,7 +969,7 @@ mod tests {
 
     #[test]
     fn raw_objects_survive_the_engine_and_answers() {
-        let mut store = Sqlite::open(std::path::Path::new(":memory:")).expect("opens");
+        let mut store = Sqlite::stand().expect("opens");
         super::super::raw_objects_survive_the_engine_and_answers(&mut store);
     }
 
@@ -750,8 +979,7 @@ mod tests {
     /// joins the answer; drop the kind and the user message does.
     #[test]
     fn the_identity_ask_serves_the_seated_prefix_alone() {
-        let path = scratch();
-        let mut store = Sqlite::open(&path).expect("opens");
+        let mut store = Sqlite::stand().expect("opens");
         let land = |store: &mut Sqlite, turn: Option<&str>, kind: &str, seq: i64, text: &str| {
             store
                 .land(&Distillate {
@@ -830,84 +1058,101 @@ mod tests {
         );
     }
 
-    /// **The embedded engine's boundary is the file's owner and mode**, per
-    /// the contract's `grants` ask of 2026-09-04, and the ask parses by its
-    /// name. Perturbation: render the mode in decimal and the second
-    /// assertion fails on its spelling, which is the whole of what a
-    /// comparison across two readings rests on.
+    /// **The position is the last landing and its run's last turn**, per
+    /// `weaver-state-Spec` section 3's stamp: by landing order and never by
+    /// the sequence's size, zero where the run holds no turn, and none where
+    /// nothing has landed. **The schema leaves the elected indexes out**, so
+    /// a later load's differing election is not a schema that disagrees.
+    /// Perturbation: order the position query by `sequence` and the second
+    /// run's lower sequence stops being the position; include the elected
+    /// indexes in the schema text and the two digests differ.
     #[test]
-    fn the_grants_ask_states_the_file_boundary() {
-        let path = scratch();
-        let store = Sqlite::open(&path).expect("opens");
-        let surface = store.grants().expect("readable");
-        use std::os::unix::fs::MetadataExt;
-        let meta = std::fs::metadata(&path).expect("file");
-        assert_eq!(surface[0], format!("owner {}:{}", meta.uid(), meta.gid()));
-        assert_eq!(surface[1], format!("mode {:04o}", meta.mode() & 0o7777));
-        assert_eq!(surface.len(), 2);
-        assert!(matches!(
-            parse_ask("{\"ask\":{\"grants\":{}}}"),
-            Some(Ask::Grants)
-        ));
-        assert_eq!(
-            render_grants_answer(&surface),
-            format!(
-                "{{\"answer\":{{\"grants\":{{\"surface\":[\"{}\",\"{}\"]}}}}}}\n",
-                surface[0], surface[1]
-            )
-        );
-    }
-
-    /// The store's file inside a directory of its own, the directory and
-    /// everything in it removed when the test ends, pass or fail: the guard
-    /// drops on the unwind a failed assertion takes as on a clean return
-    /// (#690 item C2.9). It reads as the file's path.
-    struct Scratch {
-        dir: std::path::PathBuf,
-        file: std::path::PathBuf,
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.dir);
-        }
-    }
-
-    impl std::ops::Deref for Scratch {
-        type Target = std::path::Path;
-        fn deref(&self) -> &std::path::Path {
-            &self.file
-        }
-    }
-
-    impl AsRef<std::path::Path> for Scratch {
-        fn as_ref(&self) -> &std::path::Path {
-            &self.file
-        }
-    }
-
-    fn scratch() -> Scratch {
-        let dir = std::env::temp_dir().join(format!(
-            "weaver-state-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::create_dir_all(&dir).expect("scratch dir");
-        let file = dir.join("state.sql");
-        Scratch { dir, file }
-    }
-
-    /// The landing is atomic: a good distillate lands whole, and the store
-    /// reopened from disk still holds it, which is the persistence the
-    /// charter rules for runs within a session.
-    #[test]
-    fn a_distillate_lands_whole_and_survives_reopen() {
-        let path = scratch();
-        let _ = std::fs::remove_file(&path);
-        let mut store = Sqlite::open(&path).expect("opens");
+    fn the_position_is_the_last_landing_and_the_schema_omits_elections() {
+        let mut store = Sqlite::stand().expect("stands");
+        assert_eq!(store.position().expect("reads"), None, "nothing landed");
+        let before = store.schema().expect("reads");
         store
-            .index_election(&Election::default())
-            .expect("default election indexes");
+            .index_election(&Election {
+                all_kinds: true,
+                keys: vec![("turn.closed".into(), vec!["close".into()])],
+            })
+            .expect("indexes");
+        assert_eq!(
+            store.schema().expect("reads"),
+            before,
+            "an elected index is a load's and not the schema's"
+        );
+        assert!(before.contains("table event"), "{before}");
+        assert!(before.contains("index part_event"), "{before}");
+        let mut turned = landed("s", "r-1", "message.user", 7);
+        turned.turn = Some("t-3".into());
+        store.land(&turned).expect("lands");
+        store.land(&landed("s", "r-1", "flush", 9)).expect("lands");
+        let stamp = store.position().expect("reads").expect("a position");
+        assert_eq!(
+            stamp,
+            crate::save_point::Stamp {
+                run: "r-1".into(),
+                sequence: 9,
+                turn: 3
+            },
+            "the last landing's run and sequence, and that run's last turn"
+        );
+        store.land(&landed("s", "r-2", "load", 0)).expect("lands");
+        let stamp = store.position().expect("reads").expect("a position");
+        assert_eq!(
+            stamp,
+            crate::save_point::Stamp {
+                run: "r-2".into(),
+                sequence: 0,
+                turn: 0
+            },
+            "by landing order, and a run with no turn reads zero"
+        );
+        // Another session's run of the same name holds a turn; the stamp
+        // of this session's turnless run must not borrow it. Perturbation:
+        // drop `session` from the turn lookup and this reads 5.
+        let mut foreign = landed("other", "r-3", "message.user", 1);
+        foreign.turn = Some("t-5".into());
+        store.land(&foreign).expect("lands");
+        store.land(&landed("s", "r-3", "load", 0)).expect("lands");
+        let stamp = store.position().expect("reads").expect("a position");
+        assert_eq!(
+            (stamp.run.as_str(), stamp.turn),
+            ("r-3", 0),
+            "the turn is the last event's session's and never a namesake run's"
+        );
+        // **A value the stamp cannot represent refuses and never defaults**:
+        // a turn key that is not `t-<n>`, and a sequence below zero, each
+        // refuse the position. Perturbation: default either to zero and the
+        // refusal becomes a stamp.
+        let mut odd = landed("s", "r-4", "message.user", 1);
+        odd.turn = Some("turn-one".into());
+        store.land(&odd).expect("the port lands what it is handed");
+        assert!(
+            store.position().is_err(),
+            "a turn key that is not t-<n> refuses the position"
+        );
+        store.land(&landed("s", "r-5", "load", -1)).expect("lands");
+        assert!(store.position().is_err(), "a sequence below zero refuses");
+    }
+
+    /// **The holdings survive the process by image and nothing else**, per
+    /// `weaver-state-Spec` section 3: a store stood from the image a first
+    /// store gave holds its rows, the typed rows and the elected index with
+    /// them, and a failed adoption leaves the live holdings standing.
+    /// Perturbation: make `adopt` ignore its error and the poisoned image
+    /// empties the store, the last assertion failing.
+    #[test]
+    fn a_distillate_lands_whole_and_survives_by_image() {
+        let mut store = Sqlite::stand().expect("opens");
+        let election = Election {
+            all_kinds: true,
+            keys: vec![("turn.started".into(), vec!["payload.close".into()])],
+        };
+        store
+            .index_election(&election)
+            .expect("the election indexes");
         let distillate = Distillate {
             session: "alpha-1".into(),
             run: "2026-08-18T19:03:31.198Z-alpha-7d53a936e".into(),
@@ -918,14 +1163,152 @@ mod tests {
         };
         store.land(&distillate).expect("lands");
         assert_eq!(store.held().expect("held"), 1);
+        let image = store.image().expect("serializes");
         drop(store);
-        let store = Sqlite::open(&path).expect("reopens");
+        let mut restored = Sqlite::stand().expect("stands empty");
+        assert_eq!(restored.held().expect("held"), 0);
+        restored.adopt(&image, &election).expect("adopts");
         assert_eq!(
-            store.held().expect("held"),
+            restored.held().expect("held"),
             1,
-            "holdings survive the process, per the charter"
+            "holdings survive the process by save point, per the charter"
         );
-        let _ = std::fs::remove_file(&path);
+        assert_eq!(
+            restored.replay("alpha-1").expect("replays")[0].pairs,
+            distillate.pairs,
+            "served as it crossed"
+        );
+        let elected: i64 = restored
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'index' AND name LIKE 'field_elected_%'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("counts");
+        assert_eq!(
+            elected, 1,
+            "adopted under the same election, that election's index stands"
+        );
+        // The image says of itself what the store it came from says, the
+        // elected index left out of the schema. Perturbation: read the
+        // schema from the live connection in `judge_image` and the extra
+        // table below goes unseen.
+        let facts = restored.judge_image(&image, "alpha-1").expect("judged");
+        assert_eq!(facts.schema, restored.schema().expect("schema"));
+        assert_eq!(facts.position, restored.position().expect("position"));
+        assert_eq!(
+            facts.identity,
+            restored.identity("alpha-1").expect("identity"),
+            "the prefix is read from the scratch copy as the live store serves it"
+        );
+        let mut altered = Sqlite::stand().expect("stands");
+        altered.adopt(&image, &Election::default()).expect("adopts");
+        altered
+            .connection
+            .execute_batch("CREATE TABLE extra (x)")
+            .expect("alters");
+        let altered_image = altered.image().expect("serializes");
+        assert_ne!(
+            restored
+                .judge_image(&altered_image, "alpha-1")
+                .expect("judged")
+                .schema,
+            facts.schema,
+            "an image with another catalog says so"
+        );
+        assert!(
+            restored
+                .adopt(b"not an image", &Election::default())
+                .is_err(),
+            "bytes that are no database are refused"
+        );
+        assert_eq!(
+            restored.held().expect("held"),
+            1,
+            "and the holdings stand after the refusal"
+        );
+        // **The swap is a commit step**: an election whose index the engine
+        // cannot build fails before anything moves, so the holdings stand,
+        // the second image's row never arriving. Perturbation: swap the
+        // image in before building the election and the count reads two.
+        let mut second = Sqlite::stand().expect("stands");
+        second.adopt(&image, &Election::default()).expect("adopts");
+        second.land(&distillate).expect("lands a second row");
+        let two_rows = second.image().expect("serializes");
+        let poisoned = Election {
+            all_kinds: true,
+            keys: vec![("turn.started".into(), vec!["a\u{0}b".into()])],
+        };
+        assert!(
+            restored.adopt(&two_rows, &poisoned).is_err(),
+            "the poisoned election fails the build"
+        );
+        assert_eq!(
+            restored.held().expect("held"),
+            1,
+            "and the live holdings never moved"
+        );
+        // **The exemption is exact**: an index in the election's generated
+        // form is left out of the schema, and a table or a trigger under
+        // the elected prefix, or an index of another shape, is schema.
+        // Perturbation: exempt by prefix alone and the three hidden objects
+        // go unseen.
+        let standing = restored.schema().expect("schema");
+        for hidden in [
+            "CREATE TABLE field_elected_7a (x)",
+            "CREATE TRIGGER field_elected_7b BEFORE INSERT ON field BEGIN SELECT 1; END",
+            "CREATE UNIQUE INDEX field_elected_7c ON field (key)",
+        ] {
+            let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+            connection
+                .deserialize_read_exact(rusqlite::MAIN_DB, &image[..], image.len(), false)
+                .unwrap();
+            connection.execute_batch(hidden).unwrap();
+            let hiding = connection.serialize(rusqlite::MAIN_DB).unwrap().to_vec();
+            assert_ne!(
+                restored
+                    .judge_image(&hiding, "alpha-1")
+                    .expect("judged")
+                    .schema,
+                standing,
+                "{hidden} is schema"
+            );
+        }
+        assert_eq!(
+            elected_index_form(&elected_index_name("payload.close")).as_deref(),
+            Some(
+                "CREATE INDEX field_elected_7061796c6f61642e636c6f7365 ON field (key, value) \
+                 WHERE key = 'payload.close'"
+            )
+        );
+        assert_eq!(elected_index_form("field_elected_zz"), None);
+        assert_eq!(elected_index_form("other"), None);
+        // **The index set after adoption is exactly the active election's**,
+        // per the ruling of 2026-10-06: an image carrying another election's
+        // generated indexes comes out with only this load's. Perturbation:
+        // skip `drop_elected_indexes` in `adopt` and the old index stands
+        // beside the new one.
+        let other = Election {
+            all_kinds: true,
+            keys: vec![("turn.closed".into(), vec!["other.path".into()])],
+        };
+        let mut relected = Sqlite::stand().expect("stands");
+        relected.adopt(&image, &other).expect("adopts");
+        let names: Vec<String> = relected
+            .connection
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'field_elected_%' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            names,
+            vec![elected_index_name("other.path")],
+            "only the active election's index stands"
+        );
     }
 
     /// A later load's differing election builds its own index rather than
@@ -933,9 +1316,7 @@ mod tests {
     /// positional index name would allow under `IF NOT EXISTS`.
     #[test]
     fn a_changed_election_builds_its_own_indexes() {
-        let path = scratch();
-        let _ = std::fs::remove_file(&path);
-        let mut store = Sqlite::open(&path).expect("opens");
+        let mut store = Sqlite::stand().expect("opens");
         let elect = |key: &str| Election {
             all_kinds: true,
             keys: vec![("turn.closed".into(), vec![key.into()])],
@@ -952,7 +1333,6 @@ mod tests {
             )
             .expect("counts");
         assert_eq!(elected, 2, "each key path owns its index");
-        let _ = std::fs::remove_file(&path);
     }
 
     fn landed(session: &str, run: &str, kind: &str, sequence: i64) -> Distillate {
@@ -987,9 +1367,7 @@ mod tests {
     /// but the answer is wrong either way.
     #[test]
     fn the_answers_stay_inside_the_running_session() {
-        let path = scratch();
-        let _ = std::fs::remove_file(&path);
-        let mut store = Sqlite::open(&path).expect("opens");
+        let mut store = Sqlite::stand().expect("opens");
         store.index_election(&Election::default()).expect("indexes");
 
         // An earlier session's holdings, still on disk where a session cut
@@ -1063,9 +1441,7 @@ mod tests {
     /// the answer frame renders the contract's spelling.
     #[test]
     fn the_shape_orders_runs_by_first_landing() {
-        let path = scratch();
-        let _ = std::fs::remove_file(&path);
-        let mut store = Sqlite::open(&path).expect("opens");
+        let mut store = Sqlite::stand().expect("opens");
         for (run, kind, sequence) in [
             ("r-1", "load", 0),
             ("r-1", "turn.closed", 1),
@@ -1091,7 +1467,6 @@ mod tests {
             "{frame}"
         );
         assert!(frame.ends_with("}\n"), "{frame}");
-        let _ = std::fs::remove_file(&path);
     }
 
     /// The answered-against clause, in time: an ask sees every landing
@@ -1099,9 +1474,7 @@ mod tests {
     /// at its own position in the stream.
     #[test]
     fn an_ask_sees_the_holdings_at_its_position_and_no_more() {
-        let path = scratch();
-        let _ = std::fs::remove_file(&path);
-        let mut store = Sqlite::open(&path).expect("opens");
+        let mut store = Sqlite::stand().expect("opens");
         store.land(&landed("s", "r-1", "load", 0)).expect("lands");
         let before = store.shape("s").expect("shapes");
         assert_eq!(before[0].kinds, vec![("load".to_string(), 1)]);
@@ -1114,7 +1487,6 @@ mod tests {
             vec![("load".to_string(), 1), ("turn.closed".to_string(), 1)]
         );
         assert_eq!(before[0].kinds.len(), 1, "the earlier answer never grew");
-        let _ = std::fs::remove_file(&path);
     }
 
     /// The ask vocabulary is closed at two names: both are recognized,
@@ -1129,8 +1501,7 @@ mod tests {
     /// list and the inherited exchange is missing from the whole answer.
     #[test]
     fn a_restore_from_a_branch_recalls_its_inherited_conversation() {
-        let path = scratch();
-        let mut store = Sqlite::open(&path).expect("opens");
+        let mut store = Sqlite::stand().expect("opens");
         for distillate in crate::store::branch_record() {
             store.land(&distillate).expect("lands");
         }
@@ -1147,9 +1518,7 @@ mod tests {
     /// fails on the two events it would drop.
     #[test]
     fn a_replay_reads_every_kind_and_a_recall_reads_the_messages() {
-        let path = scratch();
-        let _ = std::fs::remove_file(&path);
-        let mut store = Sqlite::open(&path).expect("opens");
+        let mut store = Sqlite::stand().expect("opens");
         for (kind, sequence) in [
             ("message.user", 1),
             ("model.request", 2),
@@ -1181,7 +1550,6 @@ mod tests {
             "{frame}"
         );
         assert!(frame.ends_with("}\n"), "{frame}");
-        let _ = std::fs::remove_file(&path);
     }
 
     /// **The retirement and the opener's indexes commit together**, per the
@@ -1197,9 +1565,7 @@ mod tests {
     /// happened.
     #[test]
     fn the_retirement_and_its_index_commit_together() {
-        let path = scratch();
-        let _ = std::fs::remove_file(&path);
-        let mut store = Sqlite::open(&path).expect("opens");
+        let mut store = Sqlite::stand().expect("opens");
         store
             .land(&landed("replayed", "r", "message.user", 1))
             .expect("lands");
@@ -1245,7 +1611,6 @@ mod tests {
             )
             .expect("counts holdings");
         assert_eq!(held, 1, "the holdings survive the failed build whole");
-        let _ = std::fs::remove_file(&path);
     }
 
     /// **The retirement is bounded to the declared session**, per the Spec:
@@ -1254,9 +1619,7 @@ mod tests {
     /// either delete and the untouched session loses its events.
     #[test]
     fn the_preload_opener_retires_its_own_session_alone() {
-        let path = scratch();
-        let _ = std::fs::remove_file(&path);
-        let mut store = Sqlite::open(&path).expect("opens");
+        let mut store = Sqlite::stand().expect("opens");
         store
             .land(&landed("replayed", "r", "message.user", 1))
             .expect("lands");
@@ -1280,7 +1643,6 @@ mod tests {
             1,
             "the field rows go with them"
         );
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -1302,6 +1664,22 @@ mod tests {
         assert_eq!(parse_ask(r#"{"ask":{"replay":{}}}"#), Some(Ask::Replay));
         for not_an_ask in [
             r#"{"ask":{"summarize":{}}}"#,
+            // One ask per frame, its body exactly the contract's: a frame
+            // naming two asks, a snapshot with a body, a snapshot that is
+            // null, a bodiless shape, a restore with a second member and a
+            // recall with a stranger each answer nothing, and the snapshot
+            // cases write nothing. Perturbation: parse by the presence of a
+            // name again and the compound frame takes a save point.
+            r#"{"ask":{"snapshot":null,"restore":{"save-point":"x"}}}"#,
+            r#"{"ask":{"snapshot":{"now":true}}}"#,
+            r#"{"ask":{"snapshot":null}}"#,
+            r#"{"ask":{"shape":null}}"#,
+            r#"{"ask":{"shape":{},"grants":{}}}"#,
+            r#"{"ask":{"restore":{"save-point":"x","other":1}}}"#,
+            r#"{"ask":{"restore":{}}}"#,
+            r#"{"ask":{"recall":{"stranger":1}}}"#,
+            r#"{"ask":{"recall":{"last-turns":1,"stranger":1}}}"#,
+            r#"{"ask":[]}"#,
             r#"{"ask":{"recall":{"last-turns":-3}}}"#,
             r#"{"ask":{"recall":{"last-turns":"three"}}}"#,
             r#"{"ask":{"recall":{"last-turns":2.5}}}"#,
@@ -1318,9 +1696,7 @@ mod tests {
     /// its namesake's.
     #[test]
     fn a_bounded_recall_keeps_colliding_turn_labels_apart() {
-        let path = scratch();
-        let _ = std::fs::remove_file(&path);
-        let mut store = Sqlite::open(&path).expect("opens");
+        let mut store = Sqlite::stand().expect("opens");
         let message = |run: &str, turn: &str, text: &str, sequence: i64| Distillate {
             session: "s".into(),
             run: run.into(),
@@ -1349,7 +1725,6 @@ mod tests {
         );
         let whole = store.recall("s", None).expect("recalls");
         assert_eq!(whole.len(), 4, "the unbounded recall reads every message");
-        let _ = std::fs::remove_file(&path);
     }
 
     /// The parse demands the envelope whole: a frame missing any envelope
@@ -1363,6 +1738,8 @@ mod tests {
             .is_some()
         );
         for missing in [
+            // The canonical form never spells a sequence below zero.
+            r#"{"envelope":{"session":"s","run":"r","kind":"load","sequence":"-1"}}"#,
             r#"{"envelope":{"run":"r","kind":"load","sequence":"0"}}"#,
             r#"{"envelope":{"session":"s","kind":"load","sequence":"0"}}"#,
             r#"{"envelope":{"session":"s","run":"r","sequence":"0"}}"#,

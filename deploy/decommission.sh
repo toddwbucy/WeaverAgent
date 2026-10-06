@@ -56,8 +56,8 @@
 # operator's ruling of 2026-10-02 on #1, and its discovery here matched every
 # `weaver%` database on the box (#35), so the PostgreSQL roles and databases a
 # box from before the retirement still carries are the operator's to dump and
-# drop by hand (deploy/REDEPLOY.md section 2). The embedded store's file lives
-# in each territory and goes with it.
+# drop by hand (deploy/REDEPLOY.md section 2). The member's save points live
+# in each territory's state room and go with it.
 set -euo pipefail
 
 say()  { printf '\n== %s\n' "$*"; }

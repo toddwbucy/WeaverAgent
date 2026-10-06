@@ -317,8 +317,9 @@ its closure.
 | `recall` | an answered ask on the state seam, what was asked and the identities of the events custody answered with, never their contents |
 | `message.restored` | one message of a restored conversation, seated at a restoring load's open ahead of every turn, the message whole |
 | `score` | a task's verdict on its run at the run's close, the predicate answered and whether it held, and the ratio over the task's denominator as its two terms where one exists |
+| `save_point` | a save point taken, by digest, with the trace position it covers and the name the member wrote it under, authored after the holdings it names were taken |
 
-Twenty-four kinds. Adding one is an edit to this charter and to every contract whose
+Twenty-five kinds. Adding one is an edit to this charter and to every contract whose
 vocabulary clause names the set, because consumers key on the closure.
 **`model.field` is the nineteenth**, added 2026-08-21 on `weaver-spu-PRD`
 section 13.11's election. It is the first kind recorded per decode position
@@ -344,6 +345,10 @@ which retire the record restore it recorded, and it stays in the vocabulary so t
 records that carry it stay readable. **`score` is the twenty-fourth**, on the operator's
 rulings of 2026-09-09 and 2026-09-26 on issue #523: a task's verdict on a run is a fact
 about that run, so the record carries it, and the same section argues the shape.
+**`save_point` is the twenty-fifth**, on the operator's ruling of 2026-10-02 on #58's
+fourth question and the save-point act of 2026-10-05 that landed its emitter: where
+state came from is a fact on the record, so a save point taken is recorded by digest
+with the position it covers, and the same section argues the shape.
 
 **Every judgment the loop makes is a fact on the record**, on the operator's ruling of
 2026-10-02 on issue #1, and the kinds above are its precedents. The loop is state
@@ -365,8 +370,10 @@ point, by digest, and which trace position it covers, so a rebuild from this rec
 arrives where the store did and honours every reset. A save point the operator edited
 is marked operator-supplied on the event that restores it, its digest recorded and the
 file kept as an input. A live restore's KV flush is recorded as the `flush` it is. Each
-of these kinds is named and shaped by the act that lands its emitter, the save-point
-act, on the rule above, and added here then. **These kinds never cross the tee into
+of these kinds is named and shaped by the act that lands its emitter, on the rule
+above, and added here then: the take landed as `save_point` on 2026-10-05, and the
+restore's event with its operator-supplied mark is admin's save-point act's, the reset
+riding the `load` event per `weaver-trace-Spec` section 3. **These kinds never cross the tee into
 state**, whatever the election: they are provenance about the holdings, authored after
 the holdings they name were taken, so a save point could never hold its own event and a
 rebuild that landed them would hold what no restore holds. A rebuild reads the reset

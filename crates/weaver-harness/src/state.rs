@@ -90,6 +90,46 @@ pub struct Recalled {
     pub pairs: Vec<(String, String)>,
 }
 
+/// A save point's stamp as the member answers it, per
+/// `weaver-harness-state-contract` section 2: the save point's digest, and
+/// the trace position it covers, the run and sequence of the last distillate
+/// it holds and the last turn that run holds in it. The four members the
+/// enter compares with its lineage, and the load event names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavePointStamp {
+    pub digest: String,
+    pub run: String,
+    pub sequence: u64,
+    pub turn: u64,
+}
+
+/// The `snapshot` answer: the name the member wrote the save point under in
+/// its own room, and its stamp.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavePointTaken {
+    pub name: String,
+    pub stamp: SavePointStamp,
+}
+
+/// The `restore` answer: what the member restored, named and stamped, and
+/// the prefix the restored holdings carry, served as the identity ask serves
+/// it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SavePointRestored {
+    pub taken: SavePointTaken,
+    pub identity: Vec<Recalled>,
+}
+
+/// The `restored` answer, per the contract's eighth ask: the stamp of the
+/// save point the load restored, nothing where the member stood empty, or a
+/// refusal naming its reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RestoredAnswer {
+    Lineage(SavePointStamp),
+    Empty,
+    Refused(String),
+}
+
 /// The harness's end of the serve direction: the ask, the bounded wait, and
 /// the parse. Held on the run, granted to the seat, mintable nowhere else.
 pub struct StateSeam {
@@ -190,6 +230,83 @@ impl StateSeam {
 
     pub(crate) fn ask_recall(&mut self, last_turns: Option<u64>) -> Option<Vec<Recalled>> {
         self.ask_recall_within(last_turns, ANSWER_BOUND_MS)
+    }
+
+    /// The `restored` ask, per the contract's eighth ask of 2026-10-02: what
+    /// the load restored, asked at every serving enter after the opener and
+    /// before `load` is authored. A miss is `None`, the one ask beside the
+    /// diagnostic identity's that the dead-peer clause does not convert: the
+    /// enter refuses on it.
+    pub(crate) fn ask_restored(&mut self) -> Option<RestoredAnswer> {
+        if self.dead {
+            return None;
+        }
+        let answered = self.restored_exchange();
+        if answered.is_none() {
+            self.dead = true;
+        }
+        answered
+    }
+
+    fn restored_exchange(&mut self) -> Option<RestoredAnswer> {
+        if !self.send(b"{\"ask\":{\"restored\":{}}}\n") {
+            return None;
+        }
+        let line = self.await_line(ANSWER_BOUND_MS)?;
+        parse_restored_answer(&line)
+    }
+
+    /// The `snapshot` ask, per the contract's sixth ask of 2026-10-02: the
+    /// member writes a save point and answers where it stands. Sent once at
+    /// every serving leave after `unload`, and on the operator's demand. A
+    /// miss costs the save point and never the leave, under the dead-peer
+    /// conversion, the missed-leave election being carried on #1.
+    pub(crate) fn ask_snapshot(&mut self) -> Option<SavePointTaken> {
+        if self.dead {
+            return None;
+        }
+        let answered = self.snapshot_exchange();
+        if answered.is_none() {
+            self.dead = true;
+        }
+        answered
+    }
+
+    fn snapshot_exchange(&mut self) -> Option<SavePointTaken> {
+        if !self.send(b"{\"ask\":{\"snapshot\":{}}}\n") {
+            return None;
+        }
+        let line = self.await_line(ANSWER_BOUND_MS)?;
+        parse_snapshot_answer(&line)
+    }
+
+    /// The `restore` ask, per the contract's seventh ask of 2026-10-02: the
+    /// member replaces its holdings from a save point in its own room, named
+    /// here, and answers the stamp and the restored prefix. **The flush and
+    /// the reopen that follow are the loop's**, per `weaver-harness-Spec`
+    /// section 6, and the channel that carries the operator's demand to the
+    /// loop is the loop act's to name, so nothing in this crate sends this
+    /// ask yet: the seam speaks the contract's vocabulary whole, and the
+    /// caller arrives with that act.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn ask_restore(&mut self, save_point: &str) -> Option<SavePointRestored> {
+        if self.dead {
+            return None;
+        }
+        let answered = self.restore_exchange(save_point);
+        if answered.is_none() {
+            self.dead = true;
+        }
+        answered
+    }
+
+    fn restore_exchange(&mut self, save_point: &str) -> Option<SavePointRestored> {
+        let ask = serde_json::json!({"ask": {"restore": {"save-point": save_point}}}).to_string();
+        if !self.send(format!("{ask}\n").as_bytes()) {
+            return None;
+        }
+        let line = self.await_line(ANSWER_BOUND_MS)?;
+        parse_restore_answer(&line)
     }
 
     /// The recall ask inside a caller's bound, the parked one at the enter
@@ -357,6 +474,60 @@ fn parse_identity_answer(line: &str) -> Option<Vec<Recalled>> {
     parse_recalled_events(events)
 }
 
+/// The five stamp members off a `snapshot` or `restore` answer, whole or
+/// nothing: `save-point`, `run`, `sequence`, `turn`, `digest`.
+fn parse_stamped(body: &serde_json::Value) -> Option<SavePointTaken> {
+    Some(SavePointTaken {
+        name: body.get("save-point")?.as_str()?.to_string(),
+        stamp: SavePointStamp {
+            digest: body.get("digest")?.as_str()?.to_string(),
+            run: body.get("run")?.as_str()?.to_string(),
+            sequence: body.get("sequence")?.as_u64()?,
+            turn: body.get("turn")?.as_u64()?,
+        },
+    })
+}
+
+/// Parse the snapshot answer, per the contract:
+/// `{"answer":{"snapshot":{"save-point":..,"run":..,"sequence":..,"turn":..,"digest":..}}}`.
+fn parse_snapshot_answer(line: &str) -> Option<SavePointTaken> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    parse_stamped(value.get("answer")?.get("snapshot")?)
+}
+
+/// Parse the restore answer: the snapshot's members and `identity`.
+fn parse_restore_answer(line: &str) -> Option<SavePointRestored> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let body = value.get("answer")?.get("restore")?;
+    let taken = parse_stamped(body)?;
+    let identity = parse_recalled_events(body.get("identity")?.as_array()?)?;
+    Some(SavePointRestored { taken, identity })
+}
+
+/// Parse the restored answer: `{"answer":{"restored":{"lineage":{...}}}}`
+/// with `digest`, `run`, `sequence` and `turn`, `{"answer":{"restored":{}}}`
+/// where the member stood empty, or `{"answer":{"restored":{"refused":..}}}`.
+/// A body that is none of the three is malformed and answers nothing.
+fn parse_restored_answer(line: &str) -> Option<RestoredAnswer> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let body = value.get("answer")?.get("restored")?.as_object()?;
+    if let Some(reason) = body.get("refused") {
+        return Some(RestoredAnswer::Refused(reason.as_str()?.to_string()));
+    }
+    if let Some(lineage) = body.get("lineage") {
+        return Some(RestoredAnswer::Lineage(SavePointStamp {
+            digest: lineage.get("digest")?.as_str()?.to_string(),
+            run: lineage.get("run")?.as_str()?.to_string(),
+            sequence: lineage.get("sequence")?.as_u64()?,
+            turn: lineage.get("turn")?.as_u64()?,
+        }));
+    }
+    if body.is_empty() {
+        return Some(RestoredAnswer::Empty);
+    }
+    None
+}
+
 /// **The open's identity material, two sources and one rule**, per
 /// `weaver-harness-Spec` section 6.1 as of 2026-09-04. `None` for the answer
 /// is the ask missed: the enter refuses rather than opening a run with no
@@ -374,25 +545,6 @@ pub(crate) fn identity_material(
         return Some(seed.to_vec());
     }
     held.iter().map(prefix_message).collect()
-}
-
-/// **The restored conversation, rebuilt from the recall answer**, per
-/// `weaver-harness-Spec` section 6.1. `None` for the answer is the ask
-/// missed and refuses the enter. The turned message events rebuild as
-/// canonical messages in landing order, and so does a `message.restored`
-/// row, the conversation a branch inherited and recorded turnless at its own
-/// open, so a restore from a branch reopens with it (#697). The other
-/// turnless rows are the identity ask's, seated once by it and skipped here,
-/// so a prefix does not reach the open twice. A message that does not
-/// rebuild refuses the same way a miss does.
-pub(crate) fn restored_conversation(
-    answer: Option<Vec<Recalled>>,
-) -> Option<Vec<weaver_traits::Message>> {
-    let held = answer?;
-    held.iter()
-        .filter(|event| event.turn.is_some() || event.kind == "message.restored")
-        .map(prefix_message)
-        .collect()
 }
 
 fn prefix_message(event: &Recalled) -> Option<weaver_traits::Message> {
@@ -568,39 +720,104 @@ mod tests {
         );
     }
 
-    /// **The restored conversation is the turned messages and the prefix is
-    /// seated once**, per `weaver-harness-Spec` section 6.1: the turnless
-    /// system row is the identity ask's and is skipped, the turned user and
-    /// assistant rows rebuild in landing order, and a miss refuses.
+    /// **The three save-point asks cross and their answers parse whole or
+    /// not at all**, per `weaver-harness-state-contract` section 2 as of
+    /// 2026-10-02: `restored` answers a stamp, nothing, or a refusal, and a
+    /// body that is none of the three is malformed; `snapshot` answers the
+    /// five stamp members; `restore` answers them and the restored prefix.
+    /// Each ask is spelled as the contract spells it.
     ///
-    /// Perturbation: drop the turn filter and the system row is seated a
-    /// second time, the first assertion failing on the count. Watched under
-    /// exactly that removal.
+    /// Perturbation: drop `turn` from `parse_stamped` and the snapshot
+    /// assertion on the turn fails; accept a restored body with an unknown
+    /// member as `Empty` and the malformed case parses.
     #[test]
-    fn the_restored_conversation_is_the_turned_messages_seated_once() {
-        let recalled = |turn: Option<&str>, kind: &str, role: &str, text: &str| Recalled {
-            kind: kind.into(),
-            run: "r-1".into(),
-            turn: turn.map(str::to_string),
-            sequence: "1".into(),
-            pairs: vec![
-                ("role".into(), format!("\"{role}\"")),
-                (
-                    "content".into(),
-                    format!("[{{\"type\":\"text\",\"text\":\"{text}\"}}]"),
-                ),
-            ],
+    fn the_save_point_asks_cross_and_parse() {
+        let exchange = |answer: &str, ask: &dyn Fn(&mut StateSeam) -> Option<String>| {
+            let (ours, theirs) = UnixStream::pair().expect("pair");
+            ours.set_nonblocking(true).expect("nonblocking");
+            let mut seam = StateSeam::new(ours);
+            let mut peer = theirs;
+            peer.write_all(format!("{answer}\n").as_bytes())
+                .expect("answers in advance");
+            let parsed = ask(&mut seam);
+            let mut asked = [0u8; 256];
+            let n = peer.read(&mut asked).expect("reads the ask");
+            (parsed, String::from_utf8_lossy(&asked[..n]).into_owned())
         };
-        let answer = vec![
-            recalled(None, "message.system", "system", "You are Karl."),
-            recalled(Some("t-1"), "message.user", "user", "hello"),
-            recalled(Some("t-1"), "message.assistant", "assistant", "hi"),
-        ];
-        let messages = restored_conversation(Some(answer)).expect("rebuilds");
-        assert_eq!(messages.len(), 2, "the turnless prefix is the identity's");
-        assert!(matches!(messages[0].role, weaver_traits::Role::User));
-        assert!(matches!(messages[1].role, weaver_traits::Role::Assistant));
-        assert!(restored_conversation(None).is_none(), "a miss refuses");
+        let (parsed, asked) = exchange(
+            r#"{"answer":{"restored":{"lineage":{"digest":"ab","run":"r-1","sequence":41,"turn":2}}}}"#,
+            &|seam| seam.ask_restored().map(|a| format!("{a:?}")),
+        );
+        assert_eq!(asked, "{\"ask\":{\"restored\":{}}}\n");
+        assert_eq!(
+            parsed.as_deref(),
+            Some(
+                format!(
+                    "{:?}",
+                    RestoredAnswer::Lineage(SavePointStamp {
+                        digest: "ab".into(),
+                        run: "r-1".into(),
+                        sequence: 41,
+                        turn: 2
+                    })
+                )
+                .as_str()
+            )
+        );
+        for (answer, expected) in [
+            (r#"{"answer":{"restored":{}}}"#, Some(RestoredAnswer::Empty)),
+            (
+                r#"{"answer":{"restored":{"refused":"schema-mismatch"}}}"#,
+                Some(RestoredAnswer::Refused("schema-mismatch".into())),
+            ),
+            (r#"{"answer":{"restored":{"other":1}}}"#, None),
+            (
+                r#"{"answer":{"restored":{"lineage":{"digest":"ab"}}}}"#,
+                None,
+            ),
+            (r#"{"answer":{"shape":{"runs":[]}}}"#, None),
+        ] {
+            assert_eq!(parse_restored_answer(answer), expected, "{answer}");
+        }
+        let (parsed, asked) = exchange(
+            r#"{"answer":{"snapshot":{"save-point":"ab.save-point","run":"r-1","sequence":41,"turn":2,"digest":"ab"}}}"#,
+            &|seam| seam.ask_snapshot().map(|a| format!("{a:?}")),
+        );
+        assert_eq!(asked, "{\"ask\":{\"snapshot\":{}}}\n");
+        let taken = SavePointTaken {
+            name: "ab.save-point".into(),
+            stamp: SavePointStamp {
+                digest: "ab".into(),
+                run: "r-1".into(),
+                sequence: 41,
+                turn: 2,
+            },
+        };
+        assert_eq!(parsed, Some(format!("{taken:?}")));
+        assert!(
+            parse_snapshot_answer(
+                r#"{"answer":{"snapshot":{"save-point":"x","run":"r","sequence":1,"digest":"d"}}}"#
+            )
+            .is_none(),
+            "a stamp without its turn is malformed"
+        );
+        let (parsed, asked) = exchange(
+            concat!(
+                r#"{"answer":{"restore":{"save-point":"ab.save-point","run":"r-1","sequence":41,"turn":2,"digest":"ab","#,
+                r#""identity":[{"envelope":{"session":"s","run":"r-1","kind":"message.system","sequence":"3"},"#,
+                r#""pairs":{"role":"system","content":[]}}]}}}"#
+            ),
+            &|seam| seam.ask_restore("ab.save-point").map(|a| format!("{a:?}")),
+        );
+        assert_eq!(
+            asked,
+            "{\"ask\":{\"restore\":{\"save-point\":\"ab.save-point\"}}}\n"
+        );
+        let parsed = parsed.expect("parses");
+        assert!(
+            parsed.contains("ab.save-point") && parsed.contains("message.system"),
+            "{parsed}"
+        );
     }
 
     /// **The identity ask's three arms**, per `weaver-harness-Spec` section

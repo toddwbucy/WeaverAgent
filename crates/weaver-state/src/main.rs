@@ -22,9 +22,11 @@
 
 use std::io::Read;
 
+use weaver_state::save_point::{Room, SavePoint, schema_digest};
 use weaver_state::{
-    Ask, Election, Store, parse_ask, parse_distillate, render_grants_answer,
-    render_identity_answer, render_recall_answer, render_replay_answer, render_shape_answer,
+    Ask, Election, Restored, SavePointAnswer, Store, parse_ask, parse_distillate,
+    render_grants_answer, render_identity_answer, render_recall_answer, render_replay_answer,
+    render_restore_answer, render_restored_answer, render_shape_answer, render_snapshot_answer,
 };
 
 /// The first door's end arrives at this descriptor number, the fixed
@@ -32,6 +34,14 @@ use weaver_state::{
 /// section 2 leaves to this act: the number after the three standard
 /// streams, armed by admin's spawn path and inherited with the process.
 const FIRST_DOOR_FD: std::os::fd::RawFd = 3;
+
+/// The save point a load restores arrives at this descriptor, the fixed
+/// convention beside the first door's that `weaver-state-Spec` section 2
+/// leaves to this act: the number after the door's, armed by admin's spawn
+/// path where a save point stands and left closed where none does, which is
+/// an agent's first load. Probed before it is adopted, a regular file open
+/// for reading and nothing else.
+const SAVE_POINT_FD: std::os::fd::RawFd = 4;
 
 /// The run lock's open file description arrives at this number, the one fixed
 /// number admin's start step hands every constituent of a run, per
@@ -75,7 +85,7 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     }
-    member_entry(std::env::args().skip(1), FIRST_DOOR_FD)
+    member_entry(std::env::args().skip(1), FIRST_DOOR_FD, SAVE_POINT_FD)
 }
 
 /// Marks the inherited run lock close-on-exec and never closes it: the member
@@ -104,6 +114,7 @@ fn keep_run_lock(fd: std::os::fd::RawFd) -> std::io::Result<bool> {
 fn member_entry(
     arguments: impl Iterator<Item = String>,
     first_door: std::os::fd::RawFd,
+    save_point_fd: std::os::fd::RawFd,
 ) -> std::process::ExitCode {
     // **The preload name is a second argument and its absence is a serving
     // load**, per `weaver-state-Spec` section 4: the name reaches the
@@ -161,9 +172,40 @@ fn member_entry(
         use std::os::fd::FromRawFd;
         std::os::unix::net::UnixStream::from_raw_fd(first_door)
     };
+    // **The save point arrives as a descriptor and never as a path**, per
+    // `weaver-state-Spec` section 2, probed before it is adopted and before
+    // this process opens anything of its own, so a number left closed by the
+    // spawn is read as closed and never as the first thing the member opened:
+    // a number holding nothing is an agent's first load, and a number holding
+    // anything but a sound save point in a regular file is a fault the member
+    // refuses to start on, because admin judged the bytes at the inventory
+    // and a disagreement here is a load that did not finish standing.
+    let handed = match weaver_state::save_point::read_descriptor(save_point_fd) {
+        Ok(handed) => handed,
+        Err(fault) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({"state_fault": format!("the save point descriptor refuses: {fault}")})
+            );
+            return std::process::ExitCode::FAILURE;
+        }
+    };
 
-    let mut store: Box<dyn Store> = match open_store(&territory) {
-        Ok(store) => store,
+    // **The room is opened once by its path and held as a descriptor**, per
+    // `weaver-state-Spec` section 2: every save point is written and read
+    // through it, and the `grants` ask reads its boundary through it.
+    let room = match Room::open(std::path::Path::new(&territory)) {
+        Ok(room) => room,
+        Err(fault) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({"state_fault": format!("the room does not open: {fault}")})
+            );
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let mut store: Box<dyn Store> = match weaver_state::engine::sqlite::Sqlite::stand() {
+        Ok(store) => Box::new(store),
         Err(fault) => {
             eprintln!(
                 "{}",
@@ -195,6 +237,32 @@ fn member_entry(
         );
         return std::process::ExitCode::FAILURE;
     };
+    // **The save point is judged against the opener's schema and the
+    // outcome held**, per `weaver-state-Spec` section 3: a save point taken
+    // under the schema this standing stands is adopted whole, one under
+    // another is refused and the member stands empty, and the `restored` ask
+    // answers whichever it was, immediately and from here on. The loop's
+    // schema slot is not yet in the opener, so the schema compared is the
+    // one the store stands at open, the build's own, which is what the opener
+    // would carry.
+    let restored = match handed {
+        None => Restored::Empty,
+        Some(save_point) => match judge_save_point(store.as_ref(), &session, &save_point)
+            .and_then(|_| commit_save_point(store.as_mut(), &election, &save_point))
+        {
+            Ok(()) => Restored::Lineage {
+                digest: save_point.digest(),
+                stamp: save_point.stamp.clone(),
+            },
+            Err(reason) => {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({"state_fault": format!("the handed save point is refused: {reason}")})
+                );
+                Restored::Refused(reason)
+            }
+        },
+    };
     if let Err(fault) = store.index_election(&election) {
         eprintln!(
             "{}",
@@ -222,7 +290,79 @@ fn member_entry(
         Some(None) => return std::process::ExitCode::FAILURE,
     };
 
-    serve(lines, preload, preload_socket, store.as_mut(), &session)
+    let mut custody = Custody {
+        store: store.as_mut(),
+        room: &room,
+        session: &session,
+        election: &election,
+        restored,
+    };
+    serve(lines, preload, preload_socket, &mut custody)
+}
+
+/// **The one rule of a save point's adoption**, per `weaver-state-Spec`
+/// section 3 on the operator's rulings of 2026-10-05 and 2026-10-06 on #1:
+/// everything the member proves about an image and everything it derives
+/// from it, the schema, the position, the prefix the restore answer carries
+/// and the index set, is computed on a scratch copy; the live connection is
+/// touched exactly once, last, after the answer frame is built and sized;
+/// and a failure anywhere leaves the live holdings as they stood and the
+/// ask unanswered. `judge_save_point` is the proving half, shared by the
+/// load's restore and the live `restore` ask: the image is judged by what it
+/// says of itself and never by the stamp alone, its own catalog must be the
+/// standing schema and its own last landing the position the stamp claims,
+/// so a stamp written to agree cannot carry a foreign image past the schema
+/// rule, and a stamp that lies about its position is refused as one that
+/// disagrees. `commit_save_point` is the swap, called only once the caller
+/// has everything it will answer with.
+fn judge_save_point(
+    store: &dyn Store,
+    session: &str,
+    save_point: &SavePoint,
+) -> Result<weaver_state::ImageFacts, &'static str> {
+    let standing = store.schema().map_err(|_| "schema unreadable")?;
+    if schema_digest(&standing) != save_point.schema {
+        return Err("schema-mismatch");
+    }
+    let facts = store
+        .judge_image(&save_point.image, session)
+        .map_err(|_| "image refused by the engine")?;
+    if schema_digest(&facts.schema) != save_point.schema {
+        return Err("schema-mismatch");
+    }
+    let claimed = &save_point.stamp;
+    let empty = claimed.run.is_empty() && claimed.sequence == 0 && claimed.turn == 0;
+    match &facts.position {
+        None if empty => {}
+        Some(held) if held == claimed => {}
+        _ => return Err("stamp disagrees with the image"),
+    }
+    Ok(facts)
+}
+
+/// The commit half of the rule above: the engine builds the active election
+/// on the scratch copy and swaps the finished image in whole, the live
+/// connection's one touch.
+fn commit_save_point(
+    store: &mut dyn Store,
+    election: &Election,
+    save_point: &SavePoint,
+) -> Result<(), &'static str> {
+    store
+        .adopt(&save_point.image, election)
+        .map_err(|_| "image refused by the engine")
+}
+
+/// What one standing serves from: the store, the room its save points live
+/// in, the session the opener declared, and what the load restored.
+struct Custody<'a> {
+    store: &'a mut dyn Store,
+    room: &'a Room,
+    session: &'a str,
+    /// The opener's election, held so a live restore rebuilds this load's
+    /// indexes on the restored holdings.
+    election: &'a Election,
+    restored: Restored,
 }
 
 /// The member's vector, parsed: the territory and, under a diagnostic
@@ -249,13 +389,6 @@ impl StoreVector {
     }
 }
 
-/// The store, opened, per `weaver-state-Spec` section 3: the embedded engine
-/// at the territory's `state.sql`, the one engine this member carries.
-fn open_store(territory: &str) -> Result<Box<dyn Store>, weaver_state::CustodyFault> {
-    let path = std::path::Path::new(territory).join("state.sql");
-    Ok(Box::new(weaver_state::engine::sqlite::Sqlite::open(&path)?))
-}
-
 /// Custody until closure, across the doors this standing carries.
 ///
 /// **One store, one path, one thread.** A distillate arriving on the preload
@@ -267,8 +400,7 @@ fn serve(
     mut harness: LineReader<'_>,
     preload_listener: Option<std::os::unix::net::UnixListener>,
     preload_path: Option<String>,
-    store: &mut dyn Store,
-    session: &str,
+    custody: &mut Custody<'_>,
 ) -> std::process::ExitCode {
     use std::os::fd::AsFd;
 
@@ -294,7 +426,7 @@ fn serve(
         // run's opening, would otherwise stall until the next traffic.
         if !entry_drained {
             entry_drained = true;
-            if drain_harness_lines(&mut harness, store, session, &mut parking).is_some() {
+            if drain_harness_lines(&mut harness, custody, &mut parking).is_some() {
                 return std::process::ExitCode::SUCCESS;
             }
         }
@@ -365,7 +497,9 @@ fn serve(
                         // the diagnosis while the member stays alive for a
                         // retry. The first door prints the same fault before
                         // its startup exit.
-                        if let Err(fault) = store.retire_and_index(&preload_session, &election) {
+                        if let Err(fault) =
+                            custody.store.retire_and_index(&preload_session, &election)
+                        {
                             eprintln!(
                                 "{}",
                                 serde_json::json!({"state_fault": format!("{fault:?}")})
@@ -381,7 +515,7 @@ fn serve(
                         continue;
                     }
                     if let Some(distillate) = parse_distillate(&line) {
-                        let _ = store.land(&distillate);
+                        let _ = custody.store.land(&distillate);
                     }
                 }
                 if !live {
@@ -407,7 +541,7 @@ fn serve(
 
         if harness_ready {
             let live = harness.fill();
-            if drain_harness_lines(&mut harness, store, session, &mut parking).is_some() {
+            if drain_harness_lines(&mut harness, custody, &mut parking).is_some() {
                 return std::process::ExitCode::SUCCESS;
             }
             if !live {
@@ -423,7 +557,7 @@ fn serve(
         // the answer, which holds by construction here because the preload
         // frames of this wakeup landed above before the answer is built.
         for ask in parking.take_ready() {
-            if let Ok(frame) = answer_frame(&ask, store, session)
+            if let Ok(frame) = answer_frame(&ask, custody)
                 && frame.len() <= ANSWER_BOUND
                 && !harness.respond(frame.as_bytes())
             {
@@ -440,13 +574,12 @@ fn serve(
 /// cannot block on a peer that sent nothing since.
 fn drain_harness_lines(
     harness: &mut LineReader<'_>,
-    store: &mut dyn Store,
-    session: &str,
+    custody: &mut Custody<'_>,
     parking: &mut ReplayParking,
 ) -> Option<std::process::ExitCode> {
     while let Some(line) = harness.take_line() {
         if let Some(distillate) = parse_distillate(&line) {
-            let _ = store.land(&distillate);
+            let _ = custody.store.land(&distillate);
             continue;
         }
         let Some(ask) = parse_ask(&line) else {
@@ -464,7 +597,7 @@ fn drain_harness_lines(
         // A store that cannot answer, like an answer past the bound, is
         // silence the harness's bound converts, per the contract: custody
         // never invents an answer shape for a fault.
-        if let Ok(frame) = answer_frame(&ask, store, session)
+        if let Ok(frame) = answer_frame(&ask, custody)
             && frame.len() <= ANSWER_BOUND
             && !harness.respond(frame.as_bytes())
         {
@@ -475,27 +608,106 @@ fn drain_harness_lines(
 }
 
 /// One ask's answer frame against the holdings as they stand, the one
-/// site the five asks are answered from, so a parked ask answers at the seal
-/// through the same path an immediate one does.
+/// site the eight asks are answered from, so a parked ask answers at the
+/// seal through the same path an immediate one does. An `Err` is silence:
+/// custody never invents an answer shape for a fault, and the harness's
+/// bound converts the silence into the missing answer.
 fn answer_frame(
     ask: &Ask,
-    store: &mut dyn Store,
-    session: &str,
+    custody: &mut Custody<'_>,
 ) -> Result<String, weaver_state::CustodyFault> {
+    use weaver_state::CustodyFault;
+    let session = custody.session;
     match ask {
-        Ask::Shape => store
+        Ask::Shape => custody
+            .store
             .shape(session)
             .map(|shape| render_shape_answer(&shape)),
-        Ask::Recall { last_turns } => store
+        Ask::Recall { last_turns } => custody
+            .store
             .recall(session, *last_turns)
             .map(|events| render_recall_answer(&events)),
-        Ask::Replay => store
+        Ask::Replay => custody
+            .store
             .replay(session)
             .map(|events| render_replay_answer(&events)),
-        Ask::Grants => store.grants().map(|surface| render_grants_answer(&surface)),
-        Ask::Identity => store
+        // The boundary is the room's, read through its descriptor, per
+        // `weaver-state-Spec` section 4: with the store in memory the room is
+        // where custody meets the filesystem.
+        Ask::Grants => custody
+            .room
+            .surface()
+            .map(|surface| render_grants_answer(&surface))
+            .map_err(|e| CustodyFault::SavePoint(e.to_string())),
+        Ask::Identity => custody
+            .store
             .identity(session)
             .map(|events| render_identity_answer(&events)),
+        // **The snapshot writes a new file and answers its stamp**, per
+        // `weaver-state-Spec` section 3: the whole database serialized,
+        // stamped with the position of the last distillate landed before this
+        // ask and the schema it stands under, written under a finished name
+        // only once the write is whole. A write that fails answers nothing
+        // and leaves no file under a finished name. An empty store has no
+        // position and its stamp names no run and sequence zero.
+        Ask::Snapshot => {
+            let stamp = custody
+                .store
+                .position()?
+                .unwrap_or(weaver_state::save_point::Stamp {
+                    run: String::new(),
+                    sequence: 0,
+                    turn: 0,
+                });
+            let schema = custody.store.schema()?;
+            let image = custody.store.image()?;
+            let save_point = SavePoint::take(stamp.clone(), &schema, image);
+            let name = custody
+                .room
+                .write(&save_point)
+                .map_err(|e| CustodyFault::SavePoint(e.to_string()))?;
+            Ok(render_snapshot_answer(&SavePointAnswer {
+                name,
+                stamp,
+                digest: save_point.digest(),
+            }))
+        }
+        // **The restore reads its own room by name**, per the Spec: a name
+        // that is not a plain entry of the room, a file that fails its check
+        // or stands under another schema answers nothing and leaves the
+        // holdings as they stood; a sound one replaces them whole, and the
+        // answer carries its stamp and the prefix the restored holdings
+        // carry for the declared session. **The answer is built and sized
+        // on the scratch copy's facts before the swap**, per the one rule of
+        // `judge_save_point`: a frame past the answer ceiling refuses before
+        // anything moves, so an unanswered restore has moved nothing.
+        Ask::Restore { save_point } => {
+            let read = custody
+                .room
+                .read(save_point)
+                .map_err(|e| CustodyFault::SavePoint(e.to_string()))?;
+            let facts = judge_save_point(&*custody.store, session, &read)
+                .map_err(|reason| CustodyFault::SavePoint(reason.to_string()))?;
+            let frame = render_restore_answer(
+                &SavePointAnswer {
+                    name: save_point.clone(),
+                    stamp: read.stamp.clone(),
+                    digest: read.digest(),
+                },
+                &facts.identity,
+            );
+            if frame.len() > ANSWER_BOUND {
+                return Err(CustodyFault::SavePoint(
+                    "the restore answer exceeds the ceiling; nothing moved".into(),
+                ));
+            }
+            commit_save_point(custody.store, custody.election, &read)
+                .map_err(|reason| CustodyFault::SavePoint(reason.to_string()))?;
+            Ok(frame)
+        }
+        // What the load restored, held since the opener, per the contract's
+        // eighth ask: answered immediately and parking never.
+        Ask::Restored => Ok(render_restored_answer(&custody.restored)),
     }
 }
 

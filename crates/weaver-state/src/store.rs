@@ -57,6 +57,9 @@ pub enum CustodyFault {
     StoreUnavailable(String),
     /// A distillate failed to land. The transaction rolled back whole.
     LandingFailed(String),
+    /// A save point could not be taken, written, read or adopted. The
+    /// holdings stand as they stood, and the ask goes unanswered.
+    SavePoint(String),
 }
 
 /// **The store is a port**, per `weaver-state-Spec` section 3 and the ruling of
@@ -84,15 +87,47 @@ pub trait Store {
         session: &str,
         last_turns: Option<u64>,
     ) -> Result<Vec<RecalledEvent>, CustodyFault>;
-    /// The boundary as the engine states it, per the contract's `grants`
-    /// ask of 2026-09-04: an ordered list of lines the engine renders from
-    /// its own catalog, spelled so two readings compare and no more.
-    fn grants(&self) -> Result<Vec<String>, CustodyFault>;
     /// The session's seated prefix as custody holds it, per the contract's
     /// `identity` ask of 2026-09-04: the turnless `message.system` events
     /// in landing order with their pairs, empty where the session holds
     /// none.
     fn identity(&self, session: &str) -> Result<Vec<RecalledEvent>, CustodyFault>;
+    /// The whole database serialized, the save point's image, per
+    /// `weaver-state-Spec` section 3.
+    fn image(&self) -> Result<Vec<u8>, CustodyFault>;
+    /// Judge an image without adopting it: what its own catalog says its
+    /// schema is, what position its holdings cover, and the prefix they
+    /// carry for the session, all read from a scratch copy, so a stamp is
+    /// never trusted over the bytes it claims to stamp and an answer can be
+    /// built before anything moves. An image that is no database, fails the
+    /// engine's check or holds no event table is refused here.
+    fn judge_image(&self, image: &[u8], session: &str) -> Result<ImageFacts, CustodyFault>;
+    /// Replace the holdings whole with an image's, the load's restore and the
+    /// live `restore` ask's one mechanism, **as a commit step**, per the
+    /// operator's ruling of 2026-10-05 on #1: the election is built on a
+    /// scratch copy of the image and the finished image is swapped in whole,
+    /// so on any failure the live holdings never move.
+    fn adopt(&mut self, image: &[u8], election: &Election) -> Result<(), CustodyFault>;
+    /// The schema the holdings stand under, as text: every table, standing
+    /// index, trigger and view, and never an elected index, which is a load's
+    /// and not the schema's. The save point stamps its digest and a load
+    /// compares it.
+    fn schema(&self) -> Result<String, CustodyFault>;
+    /// The trace position the holdings cover: the run and sequence of the
+    /// last distillate landed and the last turn that run's holdings carry.
+    /// `None` where nothing has landed.
+    fn position(&self) -> Result<Option<crate::save_point::Stamp>, CustodyFault>;
+}
+
+/// What an image says of itself, read from a scratch copy before any
+/// adoption: its schema text as [`Store::schema`] renders it, the position
+/// its holdings cover as [`Store::position`] reads it, and the session's
+/// seated prefix as [`Store::identity`] serves it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageFacts {
+    pub schema: String,
+    pub position: Option<crate::save_point::Stamp>,
+    pub identity: Vec<RecalledEvent>,
 }
 
 /// One run's shape, the answer's material: the run reference and the held
@@ -103,9 +138,9 @@ pub struct RunShape {
     pub kinds: Vec<(String, i64)>,
 }
 
-/// An ask as the seam's closed vocabulary spells it: three names, per the
-/// contract's section 2 as amended 2026-08-24, and a frame carrying any
-/// other ask name is malformed and answers nothing.
+/// An ask as the seam's closed vocabulary spells it: eight names, per the
+/// contract's section 2 as of 2026-10-02, and a frame carrying any other
+/// ask name is malformed and answers nothing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Ask {
     /// The session's shape: runs in first-seen order, counts by kind.
@@ -123,30 +158,61 @@ pub enum Ask {
     /// The session's seated prefix, asked once at every enter before the
     /// decode open, per the contract as of 2026-09-04. Carries no members.
     Identity,
+    /// Write a save point and answer its stamp, per the contract's sixth
+    /// ask of 2026-10-02. Carries no members.
+    Snapshot,
+    /// Replace the holdings from a save point in the member's room, per the
+    /// contract's seventh ask of 2026-10-02. Carries the name.
+    Restore { save_point: String },
+    /// What the load restored, per the contract's eighth ask of 2026-10-02.
+    /// Carries no members.
+    Restored,
 }
 
-/// Parse a seam frame as an ask, or nothing where it is not one.
+/// Parse a seam frame as an ask, or nothing where it is not one. **An ask
+/// frame is one recognized name and no other, and its body is exactly what
+/// the contract gives that ask**: an empty object for the six asks that
+/// carry no members, exactly `save-point` as a string for `restore`, and at
+/// most `last-turns` as a count for `recall`. A frame naming two asks, or a
+/// body carrying anything else, is malformed and answers nothing, per the
+/// contract's silence rule, which matters most for `snapshot`, the one ask
+/// with a filesystem side effect: presence of its name is not an ask.
 pub fn parse_ask(frame: &str) -> Option<Ask> {
     let value: serde_json::Value = serde_json::from_str(frame).ok()?;
-    let ask = value.get("ask")?;
-    if ask.get("shape").is_some() {
-        return Some(Ask::Shape);
+    let ask = value.get("ask")?.as_object()?;
+    if ask.len() != 1 {
+        return None;
     }
-    if ask.get("replay").is_some() {
-        return Some(Ask::Replay);
+    let (name, body) = ask.iter().next()?;
+    let body = body.as_object()?;
+    let empty = || body.is_empty().then_some(());
+    match name.as_str() {
+        "shape" => empty().map(|()| Ask::Shape),
+        "replay" => empty().map(|()| Ask::Replay),
+        "grants" => empty().map(|()| Ask::Grants),
+        "identity" => empty().map(|()| Ask::Identity),
+        "snapshot" => empty().map(|()| Ask::Snapshot),
+        "restored" => empty().map(|()| Ask::Restored),
+        "restore" => {
+            if body.len() != 1 {
+                return None;
+            }
+            let save_point = body.get("save-point")?.as_str()?.to_string();
+            Some(Ask::Restore { save_point })
+        }
+        "recall" => {
+            if body.len() > 1 {
+                return None;
+            }
+            let last_turns = match body.get("last-turns") {
+                None if body.is_empty() => None,
+                None => return None,
+                Some(bound) => Some(bound.as_u64()?),
+            };
+            Some(Ask::Recall { last_turns })
+        }
+        _ => None,
     }
-    if ask.get("grants").is_some() {
-        return Some(Ask::Grants);
-    }
-    if ask.get("identity").is_some() {
-        return Some(Ask::Identity);
-    }
-    let recall = ask.get("recall")?;
-    let last_turns = match recall.get("last-turns") {
-        None => None,
-        Some(bound) => Some(bound.as_u64()?),
-    };
-    Some(Ask::Recall { last_turns })
 }
 
 /// Whether a seam frame is the shape ask, kept for the standing tests: the
@@ -229,6 +295,87 @@ pub fn render_replay_answer(events: &[RecalledEvent]) -> String {
     ) + "\n"
 }
 
+/// A save point's stamp as the `snapshot` and `restore` answers spell it,
+/// per the contract: the name the room holds it under, the position it
+/// covers, and the digest of its bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavePointAnswer {
+    pub name: String,
+    pub stamp: crate::save_point::Stamp,
+    pub digest: String,
+}
+
+fn stamp_members(answer: &SavePointAnswer) -> serde_json::Map<String, serde_json::Value> {
+    let mut members = serde_json::Map::new();
+    members.insert("save-point".into(), answer.name.clone().into());
+    members.insert("run".into(), answer.stamp.run.clone().into());
+    members.insert("sequence".into(), answer.stamp.sequence.into());
+    members.insert("turn".into(), answer.stamp.turn.into());
+    members.insert("digest".into(), answer.digest.clone().into());
+    members
+}
+
+/// The snapshot answer, per the contract:
+/// `{"answer":{"snapshot":{"save-point":..,"run":..,"sequence":..,"turn":..,"digest":..}}}`.
+pub fn render_snapshot_answer(answer: &SavePointAnswer) -> String {
+    let mut frame =
+        serde_json::json!({"answer": {"snapshot": serde_json::Value::Object(stamp_members(answer))}})
+            .to_string();
+    frame.push('\n');
+    frame
+}
+
+/// The restore answer: the snapshot's members read from the save point and
+/// `identity`, the prefix the restored holdings carry, served as the
+/// identity ask serves it.
+pub fn render_restore_answer(answer: &SavePointAnswer, identity: &[RecalledEvent]) -> String {
+    use serde_json::value::RawValue;
+    let mut members = stamp_members(answer);
+    let identity = RawValue::from_string(rendered_events(identity)).expect("events render");
+    members.insert(
+        "identity".into(),
+        serde_json::from_str(identity.get()).expect("rendered events parse"),
+    );
+    let mut frame =
+        serde_json::json!({"answer": {"restore": serde_json::Value::Object(members)}}).to_string();
+    frame.push('\n');
+    frame
+}
+
+/// What the load restored, held from the opener on and answered to the
+/// `restored` ask, per the contract's eighth ask of 2026-10-02.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Restored {
+    /// The stamp of the save point the member restored, its digest with it.
+    Lineage {
+        digest: String,
+        stamp: crate::save_point::Stamp,
+    },
+    /// No save point was handed to the member and it stood empty.
+    Empty,
+    /// A save point was handed and refused, for the reason named.
+    Refused(&'static str),
+}
+
+/// The restored answer: `{"answer":{"restored":{"lineage":{...}}}}`,
+/// `{"answer":{"restored":{}}}`, or
+/// `{"answer":{"restored":{"refused":"schema-mismatch"}}}`.
+pub fn render_restored_answer(restored: &Restored) -> String {
+    let body = match restored {
+        Restored::Lineage { digest, stamp } => serde_json::json!({"lineage": {
+            "digest": digest,
+            "run": stamp.run,
+            "sequence": stamp.sequence,
+            "turn": stamp.turn,
+        }}),
+        Restored::Empty => serde_json::json!({}),
+        Restored::Refused(reason) => serde_json::json!({"refused": reason}),
+    };
+    let mut frame = serde_json::json!({"answer": {"restored": body}}).to_string();
+    frame.push('\n');
+    frame
+}
+
 /// The grants answer: the surface's lines in the engine's order, per the
 /// contract's answer shape `{"answer":{"grants":{"surface":[...]}}}`.
 pub fn render_grants_answer(surface: &[String]) -> String {
@@ -296,7 +443,12 @@ pub fn parse_distillate(frame: &str) -> Option<Distillate> {
         // distillate carries that spelling, so the conversion to the row's
         // integer happens here, at the landing, and a spelling that does
         // not convert refuses the frame whole.
-        sequence: envelope.get("sequence")?.as_str()?.parse().ok()?,
+        sequence: envelope
+            .get("sequence")?
+            .as_str()?
+            .parse()
+            .ok()
+            .filter(|sequence: &i64| *sequence >= 0)?,
         pairs,
     })
 }

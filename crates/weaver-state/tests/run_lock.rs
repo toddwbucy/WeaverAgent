@@ -71,12 +71,14 @@ fn the_member_keeps_the_run_lock_close_on_exec() {
     let theirs = high_copy(theirs.as_raw_fd());
     let lock_raw = lock.as_raw_fd();
     let door_raw = theirs.as_raw_fd();
+    let log_path = scratch.0.join("member.log");
+    let log = std::fs::File::create(&log_path).unwrap();
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_weaver-state"));
     command
         .arg(&scratch.0)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stderr(log);
     // SAFETY: dup2 is async-signal-safe, and dup2 onto a new number clears the
     // close-on-exec flag there, so each arrives as the start step hands it.
     unsafe {
@@ -101,7 +103,8 @@ fn the_member_keeps_the_run_lock_close_on_exec() {
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "the member never marked the run lock close-on-exec"
+            "the member never marked the run lock close-on-exec: {}",
+            std::fs::read_to_string(&log_path).unwrap_or_default()
         );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
@@ -109,7 +112,8 @@ fn the_member_keeps_the_run_lock_close_on_exec() {
     std::thread::sleep(std::time::Duration::from_millis(100));
     assert!(
         fdinfo_flags(pid, RUN_LOCK_FD).is_some_and(|flags| flags & cloexec != 0),
-        "the run lock is kept, never closed"
+        "the run lock is kept, never closed: {}",
+        std::fs::read_to_string(&log_path).unwrap_or_default()
     );
     drop(ours);
 }

@@ -160,6 +160,9 @@ fn convert(event: Event) -> Result<weaver_diagnostic::Event, RecordFailure> {
         | Kind::MessageRestored
         // A replay scores nothing: the task's verdict is the serving run's.
         | Kind::Score
+        // A diagnostic binding takes no save point, per `weaver-harness-Spec`
+        // section 6.
+        | Kind::SavePoint
         | Kind::ToolCallStarted
         | Kind::ToolCallCompleted
         | Kind::ClassifyRequest

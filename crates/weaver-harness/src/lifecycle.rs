@@ -1372,17 +1372,34 @@ impl Harness {
             // `serve`. Neither is read from the deployment.
             state_member,
             declaration: payload.declaration.clone(),
-            // **The load names its lineage and its stack**, per
-            // `weaver-trace-Spec` section 3 as of 2026-09-06 and issue #432:
-            // admin's facts, copied from the enter and read from no
-            // deployment, the lineage present only where the session stands
-            // from a record.
+            // **The load names its lineage, its reset and its stack**, per
+            // `weaver-trace-Spec` section 3 on the rulings of 2026-10-02 on
+            // #58: admin's facts, copied from the enter and read from no
+            // deployment, the lineage present only where the load restored a
+            // save point and the reset only where the last run stopped
+            // unclean, the member having confirmed the lineage above.
             lineage: payload.restore.as_ref().map(|lineage| {
                 Box::new(weaver_trace::Lineage {
-                    parent: lineage.parent.0.clone(),
+                    save_point: lineage.save_point.clone(),
                     run: lineage.run.0.clone(),
-                    through: lineage.through,
+                    sequence: lineage.sequence,
+                    turn: lineage.turn,
+                    operator_supplied: lineage.operator_supplied,
+                    built_from: lineage
+                        .built_from
+                        .as_ref()
+                        .map(|branch| weaver_trace::Branch {
+                            parent: branch.parent.0.clone(),
+                            run: branch.run.0.clone(),
+                            through: branch.through,
+                        }),
                 })
+            }),
+            reset: payload.reset.as_ref().map(|reset| weaver_trace::Reset {
+                prior_run: reset.prior_run.0.clone(),
+                reason: match reset.reason {
+                    weaver_types::ResetReason::NoCleanUnload => "no-clean-unload".to_string(),
+                },
             }),
             stack: payload.stack.clone(),
             // **Boundary, cause and libraries are admin's facts**, per
@@ -1412,6 +1429,42 @@ impl Harness {
             surprisal: payload.spu_instruction.decoder.surprisal_election,
             tee: Some(tee_election),
         };
+        // **Every serving enter where the member stands asks `restored`
+        // before it authors `load`**, per `weaver-harness-Spec` section 6.1
+        // and `weaver-harness-state-contract` section 2 on the ruling of
+        // 2026-10-02 on #58's fourth review round: the answered stamp must
+        // equal the enter's lineage in its four members, or be absent where
+        // the enter names none, and a refusal, a miss or a disagreement
+        // refuses the enter before the load, the stream still clean, so no
+        // `load` event names state the member did not restore. The dead-peer
+        // clause does not convert this ask, and a member whose end arrived
+        // but whose seam did not stand cannot be asked, which is the miss.
+        if !diagnostic {
+            let answered = match (state_member, state_seam.as_mut()) {
+                (false, None) => None,
+                (true, None) => {
+                    return Err(EnterFailure::BeforeLoad(
+                        LifecycleRefusal::DescriptorsUnusable,
+                    ));
+                }
+                (_, Some(seam)) => Some(seam.ask_restored()),
+            };
+            if let Some(answered) = answered
+                && let Err(why) = restored_agrees(answered.as_ref(), payload.restore.as_ref())
+            {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "organ": "harness",
+                        "refusal": "restored-disagrees",
+                        "why": why,
+                    })
+                );
+                return Err(EnterFailure::BeforeLoad(
+                    LifecycleRefusal::DescriptorsUnusable,
+                ));
+            }
+        }
         // **The serving arm's alone**: the diagnostic record carries no
         // `load` kind and opens with `replay.opened`, which is the loop's
         // to author at the replay, per `weaver-diagnostic-Spec` section 4.
@@ -1517,10 +1570,10 @@ impl Harness {
             spu_ordinal: 0,
             gate_ordinal: 0,
             held_frames: std::collections::VecDeque::new(),
-            // **The turn ordinal starts at the cut**, per
-            // `weaver-harness-Spec` section 6.1: the first turn of a
-            // restoring run is numbered one past the turn the lineage
-            // names, so the derived seeds continue the parent's.
+            // **A restoring run numbers its turns from one**, per
+            // `weaver-harness-Spec` section 6.1 on the operator's ruling of
+            // 2026-10-02 on #59: a restore is a new branch and so a new run,
+            // and the lineage's last turn numbers nothing.
             turn_ordinal: initial_turn_ordinal(payload.restore.as_ref()),
             diagnostic: diagnostic.then(|| DiagnosticSeat {
                 reader_elected: payload.spu_instruction.decoder.residual_readout_election,
@@ -1541,110 +1594,50 @@ impl Harness {
             };
         }
 
-        // **The identity material has two sources and one rule**, per
-        // `weaver-harness-Spec` section 6.1 as of 2026-09-04. Where the
-        // member's end arrived, the store is asked for the session's
-        // seated prefix once the seam stands and before the open: a prefix
-        // answered is the open's messages, an empty answer is the first
-        // load and the declaration's field seeds it, and a miss refuses
-        // the enter, the one ask the dead-peer clause does not convert,
-        // because a run whose bounding cannot be read is not a run with no
-        // bounding. Where no end arrived the field governs alone. The
-        // refusal is carried under `DescriptorsUnusable`, the enter's own
-        // descriptor for the member having proved unusable for the one ask
-        // the enter owes it, the refusal vocabulary naming no member.
-        // **The enter's asks wait on the seal where the door stands**, per
-        // `weaver-harness-state-contract` section 2: a diagnostic binding
-        // or a restoring load names the member's preload door, the identity
-        // and recall asks park there until the driver seals, and the bound
-        // is the parked ask's rather than the two seconds a member
-        // answering from holdings at rest takes. A serving load electing no
-        // restore keeps the short bound.
-        let restoring = payload.restore.is_some();
-        let ask_bound = if diagnostic || restoring {
-            crate::state::PARKED_ASK_BOUND_MS
+        // **The identity's source is the binding's**, per `weaver-harness-Spec`
+        // section 6.1 on the operator's rulings of 2026-10-02 on #58 and #57:
+        // under a serving binding the prompt file is authoritative at every
+        // load, so the open seats the decoder instruction's identity as admin
+        // seated it and asks the member for nothing, a restoring load
+        // included, the store answering from the save point for every later
+        // turn; under a diagnostic binding the preloaded record's identity is
+        // what the open seats, asked of the member once the seam stands and
+        // before the open. **The diagnostic ask waits on the seal where the
+        // door stands**, per `weaver-harness-state-contract` section 2, under
+        // the parked ask's bound rather than the two seconds a member
+        // answering from holdings at rest takes, and what is waited on is
+        // named before the wait, so an operator who has not started the
+        // driver reads why the load stands still. A missed ask refuses the
+        // enter, the one ask beside `restored` that the dead-peer clause does
+        // not convert, because a replay whose bounding cannot be read is not
+        // a replay with no bounding. The refusal is carried under
+        // `DescriptorsUnusable`, the enter's own descriptor for the member
+        // having proved unusable for the one ask the enter owes it. **Under a
+        // diagnostic binding the enter records nothing**, as it records no
+        // load and no prefix: that record opens with `replay.opened`, and the
+        // ask that feeds the model there is the replay port's.
+        let identity = if !diagnostic {
+            payload.spu_instruction.decoder.identity.clone()
         } else {
-            crate::state::ANSWER_BOUND_MS
-        };
-        // **What is waited on is named before the wait**, per
-        // `weaver-harness-Spec` section 6.1 as of 2026-09-06: an operator who
-        // has not started the driver reads why the load stands still rather
-        // than meeting a refusal ten minutes on. This crate knows which load
-        // it holds where the member does not, and spends the bound on the
-        // diagnostic case anyway, because the member parks the identity ask
-        // under the door whatever the binding and a short bound would refuse
-        // the enter unless the driver had sealed inside it.
-        // The door stands on the member, so where no member's end arrived
-        // there is no door and no wait to name.
-        if state_member && let Some(line) = parked_ask_notice(diagnostic, restoring, ask_bound) {
-            eprintln!("{line}");
-        }
-        let identity = {
+            let ask_bound = crate::state::PARKED_ASK_BOUND_MS;
+            if state_member {
+                eprintln!("{}", parked_ask_notice(ask_bound));
+            }
             let seed = &payload.spu_instruction.decoder.identity;
             match run.state.as_mut() {
                 // The end arrived and the seam did not stand, the clone or
-                // the tee's open having failed: the ask the enter owes
+                // the opener's write having failed: the ask the enter owes
                 // cannot be made, which is the miss and not the first load.
                 None if state_member => after_load!(run, LifecycleRefusal::DescriptorsUnusable),
                 None => seed.clone(),
                 Some(seam) => {
-                    // An answered identity ask reaches the record as a
-                    // `recall` before the open is built from it, per
-                    // `weaver-trace-Spec` section 3's recall clause. A miss
-                    // records nothing here and refuses below. **Under a
-                    // diagnostic binding the enter records nothing**, as it
-                    // records no load and no prefix: that record opens with
-                    // `replay.opened`, and the ask that feeds the model there
-                    // is the replay port's, recorded inside the bracket.
                     let answered = seam.ask_identity_within(ask_bound);
-                    if !diagnostic && let Some(events) = &answered {
-                        record_enter_ask(
-                            &run.author,
-                            &mut run.recorder,
-                            weaver_trace::RecallVerb::Identity,
-                            events,
-                        );
-                    }
                     match crate::state::identity_material(answered, seed) {
                         Some(material) => material,
                         None => after_load!(run, LifecycleRefusal::DescriptorsUnusable),
                     }
                 }
             }
-        };
-        // **Under a restoring load the open carries the restored
-        // conversation beside the identity**, per `weaver-harness-Spec`
-        // section 6.1: the recall ask with no bound, parked until the
-        // driver's seal like the identity ask, its turned message events
-        // rebuilt as canonical messages in landing order, the turnless rows
-        // being the identity's and never seated twice. A miss refuses the
-        // enter on the identity ask's ground, a run whose prefix cannot be
-        // read being no run with none, and a restore with no member to ask
-        // is that miss too.
-        let restored: Vec<weaver_traits::Message> = if restoring {
-            match run.state.as_mut() {
-                None => after_load!(run, LifecycleRefusal::DescriptorsUnusable),
-                Some(seam) => {
-                    // The restoring recall reaches the record the same way,
-                    // one kind for every answered ask on the seam, and under
-                    // the same diagnostic exception.
-                    let answered = seam.ask_recall_within(None, ask_bound);
-                    if !diagnostic && let Some(events) = &answered {
-                        record_enter_ask(
-                            &run.author,
-                            &mut run.recorder,
-                            weaver_trace::RecallVerb::Recall,
-                            events,
-                        );
-                    }
-                    match crate::state::restored_conversation(answered) {
-                        Some(messages) => messages,
-                        None => after_load!(run, LifecycleRefusal::DescriptorsUnusable),
-                    }
-                }
-            }
-        } else {
-            Vec::new()
         };
         // **The seated prefix reaches the record beside the load**, per
         // `weaver-harness-Spec` section 6.1 and `weaver-trace-PRD` section 5,
@@ -1654,20 +1647,13 @@ impl Harness {
         // conforms: harness-identity-refusal-authored-not-dropped
         if !diagnostic {
             seat_identity_prefix(&run.author, &mut run.recorder, &identity);
-            // The restored conversation reaches the record turnless beside
-            // the identity, through the door that admits its roles under a
-            // restoring load, so the record of a branch is complete without
-            // its parent, per `weaver-harness-Spec` section 6.1.
-            seat_restored_prefix(&run.author, &mut run.recorder, &restored);
         }
-        // The open's messages: the identity first and the restored
-        // conversation after it, prefix material permanent for the
-        // residency, per Spec section 6.1.
-        let opening = {
-            let mut messages = identity.clone();
-            messages.extend(restored.iter().cloned());
-            messages
-        };
+        // The open's messages: the identity, prefix material permanent for
+        // the residency, per Spec section 6.1. Under a restoring load the
+        // store answers from the save point and the open carries nothing
+        // more, the record restore of issue #432 having retired on the
+        // rulings of 2026-10-02 on #58.
+        let opening = identity.clone();
         // The residency and decode pairs are created in one act before the SPU
         // fork: a socket with no address cannot be reached later by resolving
         // one, so the only moment it can reach a child is before that child
@@ -2098,6 +2084,51 @@ fn leave(run: &mut Run, cause: Option<weaver_types::Cause>) -> Result<(), Lifecy
             None,
             payload,
         );
+        // **The leave's save point is taken last**, per `weaver-harness-Spec`
+        // section 6 on the rulings of 2026-10-02 on #58: the `snapshot` ask
+        // goes out only after the `unload` event is authored and the tee has
+        // sent its distillate, which the recorder does on this thread inside
+        // `author`, and before the state channel closes with the run, so the
+        // save point holds every elected event of the run and the next load,
+        // replaying no tail, loses none. The answer is authored as the
+        // `save_point` event, per `weaver-trace-Spec` section 3, an event the
+        // tee never sends to state. A miss costs the save point and never the
+        // leave, under the dead-peer conversion every state ask takes; what
+        // a missed leave save point owes is the open item carried on #1.
+        // **A diagnostic binding takes no save point**: this arm is the
+        // serving record's alone.
+        if let Some(seam) = run.state.as_mut() {
+            match seam.ask_snapshot() {
+                Some(taken) => {
+                    let _ = run.author.author(
+                        &mut run.recorder,
+                        Kind::SavePoint,
+                        Subsystem::Harness,
+                        None,
+                        Some(weaver_trace::Payload::SavePoint(
+                            weaver_trace::SavePointTaken {
+                                save_point: taken.stamp.digest,
+                                run: taken.stamp.run,
+                                sequence: taken.stamp.sequence,
+                                turn: taken.stamp.turn,
+                                name: taken.name,
+                            },
+                        )),
+                    );
+                }
+                // The miss is said, never silent, so an operator reading
+                // the worker's log learns the leave took no save point;
+                // what it owes beyond that is A3.0's election.
+                None => eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "organ": "harness",
+                        "miss": "leave-save-point-unanswered",
+                        "run": run.run.0,
+                    })
+                ),
+            }
+        }
     }
 
     // **The drain's outcome is carried, not discarded.** `Left` means
@@ -2312,97 +2343,76 @@ fn column_ask_for(diagnostic: bool, readout_elected: bool) -> bool {
     diagnostic && readout_elected
 }
 
-/// The typed line that names what the enter waits on where the door
-/// stands, per `weaver-harness-Spec` section 6.1 as of 2026-09-06, and
-/// nothing where no door stands and the asks answer at once.
-fn parked_ask_notice(diagnostic: bool, restoring: bool, bound_ms: u64) -> Option<String> {
-    if !diagnostic && !restoring {
-        return None;
-    }
-    Some(
-        serde_json::json!({
-            "organ": "harness",
-            "waiting": "the state member's preload seal",
-            "binding": if restoring { "restore" } else { "diagnostic" },
-            "bound_ms": bound_ms,
-        })
-        .to_string(),
-    )
+/// The typed line that names what a diagnostic enter waits on, per
+/// `weaver-harness-Spec` section 6.1 as of 2026-09-06: the door stands under
+/// a diagnostic binding alone, so a serving load names no wait.
+fn parked_ask_notice(bound_ms: u64) -> String {
+    serde_json::json!({
+        "organ": "harness",
+        "waiting": "the state member's preload seal",
+        "binding": "diagnostic",
+        "bound_ms": bound_ms,
+    })
+    .to_string()
 }
 
-/// **The turn ordinal a run starts from**, per `weaver-harness-Spec` section
-/// 6.1: zero where the load stands from nothing, and the turn the lineage
-/// names where the session stands from a record, so the first minted turn is
-/// one past the cut and the derived seeds continue the parent's streams.
-fn initial_turn_ordinal(restore: Option<&weaver_types::Lineage>) -> u64 {
-    restore.map_or(0, |lineage| lineage.through)
-}
-
-/// The restored conversation reaches the record through the door that
-/// admits its roles, per `weaver-harness-Spec` section 6.1: the same miss
-/// accounting as the identity's, a message the door refuses being named in
-/// a fault rather than dropped.
-fn seat_restored_prefix(
-    author: &crate::authorship::Author,
-    recorder: &mut crate::record::Record,
-    restored: &[weaver_traits::Message],
-) {
-    for message in restored {
-        let account = match author.author_restored(recorder, message) {
-            Ok(Ok(_)) => continue,
-            Err(unlicensed) => serde_json::json!({
-                "organ": "harness",
-                "miss": "restored-door-refused",
-                "role": unlicensed.role,
-                "block": unlicensed.block,
-            }),
-            Ok(Err(failure)) => serde_json::json!({
-                "organ": "harness",
-                "miss": "restored-prefix-unrecorded",
-                "failure": format!("{failure:?}"),
-            }),
-        };
-        let _ = author.author_fault(
-            recorder,
-            Subsystem::Harness,
-            None,
-            &crate::authorship::harness_report(
-                weaver_types::FaultCase::IdentityPrefixUnrecorded,
-                &account.to_string(),
-            ),
-        );
+/// **Whether the member's answer to `restored` agrees with the enter's
+/// lineage**, per `weaver-harness-Spec` section 6.1: a miss or a refusal
+/// disagrees, an empty answer agrees with an enter naming no save point and
+/// with nothing else, and a stamp agrees where its digest, run, sequence and
+/// turn equal the lineage's four, `operator_supplied` and `built_from` being
+/// admin's resolution and never the member's to answer. The reason names
+/// what disagreed, for the diagnostic stream.
+fn restored_agrees(
+    answered: Option<&crate::state::RestoredAnswer>,
+    lineage: Option<&weaver_types::Lineage>,
+) -> Result<(), String> {
+    use crate::state::RestoredAnswer;
+    match (answered, lineage) {
+        (None, _) => Err("the restored ask was not answered".into()),
+        (Some(RestoredAnswer::Refused(reason)), _) => {
+            Err(format!("the member refused the save point: {reason}"))
+        }
+        (Some(RestoredAnswer::Empty), None) => Ok(()),
+        (Some(RestoredAnswer::Empty), Some(lineage)) => Err(format!(
+            "the member stood empty where the enter names save point {}",
+            lineage.save_point
+        )),
+        (Some(RestoredAnswer::Lineage(stamp)), None) => Err(format!(
+            "the member restored save point {} where the enter names none",
+            stamp.digest
+        )),
+        (Some(RestoredAnswer::Lineage(stamp)), Some(lineage)) => {
+            if stamp.digest == lineage.save_point
+                && stamp.run == lineage.run.0
+                && stamp.sequence == lineage.sequence
+                && stamp.turn == lineage.turn
+            {
+                Ok(())
+            } else {
+                Err(format!(
+                    "the member restored {}:{}:{}:{} where the enter names {}:{}:{}:{}",
+                    stamp.digest,
+                    stamp.run,
+                    stamp.sequence,
+                    stamp.turn,
+                    lineage.save_point,
+                    lineage.run.0,
+                    lineage.sequence,
+                    lineage.turn
+                ))
+            }
+        }
     }
 }
 
-/// The enter's answered state-seam asks reach the record as `recall`
-/// events, per `weaver-trace-Spec` section 3's recall clause, before the open
-/// is built from them. **A recall the recorder will not take is named in a
-/// fault rather than refusing the enter**, the miss accounting the seated
-/// prefix already runs on: the answer is good and the load can stand, and
-/// what went unrecorded is the provenance of the prefix the run opens under,
-/// which is the case that fault names.
-fn record_enter_ask(
-    author: &crate::authorship::Author,
-    recorder: &mut crate::record::Record,
-    verb: weaver_trace::RecallVerb,
-    answered: &[crate::state::Recalled],
-) {
-    if let Err(failure) = author.author_recall(recorder, verb, None, answered) {
-        let account = serde_json::json!({
-            "organ": "harness",
-            "miss": "recall-unrecorded",
-            "failure": format!("{failure:?}"),
-        });
-        let _ = author.author_fault(
-            recorder,
-            Subsystem::Harness,
-            None,
-            &crate::authorship::harness_report(
-                weaver_types::FaultCase::IdentityPrefixUnrecorded,
-                &account.to_string(),
-            ),
-        );
-    }
+/// **A restoring run numbers its turns from one**, per `weaver-harness-Spec`
+/// section 6.1 on the operator's ruling of 2026-10-02 on #59: the ordinal a
+/// run starts from is zero whatever the lineage carries, its last turn being
+/// a recorded fact that numbers nothing, so the first minted turn is one and
+/// the derived seeds draw the new run's own streams.
+fn initial_turn_ordinal(_restore: Option<&weaver_types::Lineage>) -> u64 {
+    0
 }
 
 fn seat_identity_prefix(
@@ -2455,41 +2465,95 @@ mod tests {
 
     use super::*;
 
-    /// **The turn ordinal starts at the cut**, per `weaver-harness-Spec`
-    /// section 6.1: zero where the load stands from nothing, the lineage's
-    /// turn where it stands from a record, so the first minted turn is one
-    /// past the cut.
-    ///
-    /// Perturbation: return zero from `initial_turn_ordinal` whatever the
-    /// lineage and the second assertion fails. Watched under exactly that
-    /// change.
-    /// **What the enter waits on is named where the door stands and not
-    /// otherwise**, per `weaver-harness-Spec` section 6.1 as of 2026-09-06.
-    ///
-    /// Perturbation: return the line for every load and the first
-    /// assertion fails, a serving load electing no restore announcing a
-    /// wait it does not make. Watched under exactly that change.
+    /// **What a diagnostic enter waits on is named**, per
+    /// `weaver-harness-Spec` section 6.1 as of 2026-09-06: one typed line
+    /// naming the seal and the bound.
     #[test]
     fn the_wait_is_named_where_the_door_stands() {
-        assert!(parked_ask_notice(false, false, 2_000).is_none());
-        let line = parked_ask_notice(true, false, 600_000).expect("a diagnostic load waits");
+        let line = parked_ask_notice(600_000);
         let parsed: serde_json::Value = serde_json::from_str(&line).expect("one typed line");
         assert_eq!(parsed["binding"], "diagnostic");
         assert_eq!(parsed["bound_ms"], 600_000);
         assert_eq!(parsed["waiting"], "the state member's preload seal");
-        let line = parked_ask_notice(false, true, 600_000).expect("a restoring load waits");
-        assert!(line.contains("\"binding\":\"restore\""));
     }
 
+    fn lineage(save_point: &str, run: &str, sequence: u64, turn: u64) -> weaver_types::Lineage {
+        weaver_types::Lineage {
+            save_point: save_point.into(),
+            run: weaver_types::RunId(run.into()),
+            sequence,
+            turn,
+            operator_supplied: false,
+            built_from: None,
+        }
+    }
+
+    /// **A restoring run numbers its turns from one**, per `weaver-harness-Spec`
+    /// section 6.1 on the operator's ruling of 2026-10-02 on #59: the ordinal
+    /// a run starts from is zero whatever the lineage's last turn is.
+    ///
+    /// Perturbation: take the ordinal from the lineage's `turn` and the
+    /// second assertion fails. Watched under exactly that change.
     #[test]
-    fn the_turn_ordinal_starts_at_the_cut() {
+    fn a_restoring_run_numbers_its_turns_from_one() {
         assert_eq!(initial_turn_ordinal(None), 0);
-        let lineage = weaver_types::Lineage {
-            parent: weaver_types::SessionId("s-1".into()),
-            run: weaver_types::RunId("r-a".into()),
-            through: 7,
+        assert_eq!(initial_turn_ordinal(Some(&lineage("ab", "r-a", 41, 7))), 0);
+    }
+
+    /// **The restored answer agrees with the enter's lineage in four members
+    /// and in no other way**, per `weaver-harness-Spec` section 6.1: a miss
+    /// and a refusal disagree, an empty answer agrees only with an enter
+    /// naming no save point, and a stamp agrees only where its digest, run,
+    /// sequence and turn all equal the lineage's, `operator_supplied` being
+    /// admin's and never compared.
+    ///
+    /// Perturbation: drop the `turn` comparison from `restored_agrees` and
+    /// the turn case agrees. Watched under exactly that removal.
+    #[test]
+    fn the_restored_answer_agrees_in_four_members() {
+        use crate::state::{RestoredAnswer, SavePointStamp};
+        let stamp = |digest: &str, run: &str, sequence: u64, turn: u64| {
+            RestoredAnswer::Lineage(SavePointStamp {
+                digest: digest.into(),
+                run: run.into(),
+                sequence,
+                turn,
+            })
         };
-        assert_eq!(initial_turn_ordinal(Some(&lineage)), 7);
+        let named = lineage("ab", "r-a", 41, 7);
+        assert!(restored_agrees(None, None).is_err(), "a miss");
+        assert!(
+            restored_agrees(None, Some(&named)).is_err(),
+            "a miss under a lineage"
+        );
+        assert!(
+            restored_agrees(
+                Some(&RestoredAnswer::Refused("schema-mismatch".into())),
+                Some(&named)
+            )
+            .is_err()
+        );
+        assert!(restored_agrees(Some(&RestoredAnswer::Empty), None).is_ok());
+        assert!(restored_agrees(Some(&RestoredAnswer::Empty), Some(&named)).is_err());
+        assert!(restored_agrees(Some(&stamp("ab", "r-a", 41, 7)), None).is_err());
+        assert!(restored_agrees(Some(&stamp("ab", "r-a", 41, 7)), Some(&named)).is_ok());
+        let mut supplied = named.clone();
+        supplied.operator_supplied = true;
+        assert!(
+            restored_agrees(Some(&stamp("ab", "r-a", 41, 7)), Some(&supplied)).is_ok(),
+            "operator_supplied is admin's and never compared"
+        );
+        for (digest, run, sequence, turn) in [
+            ("zz", "r-a", 41, 7),
+            ("ab", "r-b", 41, 7),
+            ("ab", "r-a", 40, 7),
+            ("ab", "r-a", 41, 6),
+        ] {
+            assert!(
+                restored_agrees(Some(&stamp(digest, run, sequence, turn)), Some(&named)).is_err(),
+                "{digest} {run} {sequence} {turn}"
+            );
+        }
     }
     use std::fs::File;
     use weaver_trace::Kind;
@@ -2654,6 +2718,7 @@ mod tests {
                     state_member: false,
                     declaration: Default::default(),
                     lineage: None,
+                    reset: None,
                     stack: Default::default(),
                     boundary: String::new(),
                     cause: weaver_trace::Cause { uid: 0 },
@@ -2749,17 +2814,15 @@ mod tests {
 
         // The fake member: the far end of the pair the enter would carry,
         // per the ruling of 2026-08-26 - no name, no dial, the end handed
-        // in. Hand back every line that arrives until the peer closes.
+        // in. Hand back every line that arrives until the peer closes, and
+        // answer the enter's `restored` ask as a member that stood empty,
+        // so the load is authored.
         let (state_end, member_end) =
             std::os::unix::net::UnixStream::pair().expect("the member's pair");
         let (send, receive) = std::sync::mpsc::channel::<String>();
         let reader = std::thread::spawn(move || {
-            use std::io::Read;
-            let mut channel = member_end;
-            let mut held = String::new();
-            let _ = channel.read_to_string(&mut held);
-            for line in held.lines() {
-                let _ = send.send(line.to_string());
+            for line in member_lines(member_end) {
+                let _ = send.send(line);
             }
         });
 
@@ -2807,6 +2870,7 @@ mod tests {
             state_store: weaver_types::StateStore::default(),
             declaration: String::new(),
             restore: None,
+            reset: None,
             stack: Default::default(),
             boundary: String::new(),
             cause: weaver_types::Cause { uid: 0 },
@@ -2849,6 +2913,10 @@ mod tests {
         assert_eq!(election["keys"][0]["kind"], "load");
         assert_eq!(election["keys"][0]["paths"][0], "origin");
 
+        // The restored ask follows the opener and precedes the load's
+        // distillate, per `weaver-harness-Spec` section 6.1.
+        let restored = receive.recv().expect("the restored ask arrived second");
+        assert!(restored.starts_with(r#"{"ask":{"restored""#), "{restored}");
         let distilled = receive.recv().expect("the load event distilled");
         let frame: serde_json::Value = serde_json::from_str(&distilled).expect("frame parses");
         assert_eq!(frame["envelope"]["kind"], "load");
@@ -2932,6 +3000,7 @@ mod tests {
             state_store: weaver_types::StateStore::default(),
             declaration: String::new(),
             restore: None,
+            reset: None,
             stack: Default::default(),
             boundary: String::new(),
             cause: weaver_types::Cause { uid: 0 },
@@ -3078,6 +3147,7 @@ mod tests {
                 state_store: weaver_types::StateStore::default(),
                 declaration: String::new(),
                 restore: None,
+                reset: None,
                 stack: Default::default(),
                 boundary: String::new(),
                 cause: weaver_types::Cause { uid: 0 },
@@ -3088,14 +3158,17 @@ mod tests {
                 },
             };
             // The member's end, where it stands: one half of a pair the test
-            // holds, the way admin's spawn hands the harness its half.
+            // holds, the way admin's spawn hands the harness its half, its
+            // far end answering the enter's `restored` ask as a member that
+            // stood empty.
             let held_end = standing.then(|| {
-                let (near, _far) = std::os::unix::net::UnixStream::pair().expect("pair");
-                (OwnedFd::from(near), _far)
+                let (near, far) = std::os::unix::net::UnixStream::pair().expect("pair");
+                std::thread::spawn(move || member_lines(far).count());
+                OwnedFd::from(near)
             });
             let state_end = held_end
                 .as_ref()
-                .map(|(near, _)| near.try_clone().expect("clone"));
+                .map(|near| near.try_clone().expect("clone"));
             let mut run = match harness.enter(payload, Some(sink), state_end) {
                 Err(EnterFailure::AfterLoad(run, _)) => run,
                 Ok(_) => panic!("the bogus fan-out cannot succeed"),
@@ -3121,38 +3194,63 @@ mod tests {
         }
     }
 
+    /// A scripted member's far end that stood empty: every line the harness
+    /// writes is yielded in order, the `restored` ask answered as empty and
+    /// the `grants` ask with an empty surface, until the harness closes the
+    /// channel.
+    fn member_lines(far: std::os::unix::net::UnixStream) -> impl Iterator<Item = String> {
+        use std::io::{BufRead, BufReader, Write};
+        let mut answers = far.try_clone().expect("clone");
+        BufReader::new(far).lines().map_while(move |line| {
+            let line = line.ok()?;
+            let answer = if line.starts_with(r#"{"ask":{"restored""#) {
+                Some(EMPTY_RESTORED)
+            } else if line.starts_with(r#"{"ask":{"grants""#) {
+                Some(r#"{"answer":{"grants":{"surface":[]}}}"#)
+            } else {
+                None
+            };
+            if let Some(answer) = answer {
+                let _ = answers.write_all(format!("{answer}\n").as_bytes());
+            }
+            Some(line)
+        })
+    }
+
     /// Enters a serving run against a scripted state member, one half of a
     /// socket pair the way admin's spawn hands the harness its end, and
-    /// returns the record the enter left. The member answers the grants ask
-    /// with an empty surface, the identity ask with one seated prefix event and, under a restoring load, the
-    /// recall ask with one turned exchange, and drains the tee's traffic
-    /// otherwise. The fan-out fails past the load, as every enter test's
-    /// bogus organ paths make it.
+    /// returns the record the enter left and, where the enter refused before
+    /// the load, that refusal. The member answers the grants ask with an
+    /// empty surface, the identity ask with one seated prefix event, the
+    /// restored ask with the answer given, the snapshot ask with one stamp,
+    /// and drains the tee's traffic otherwise, logging every line it reads in
+    /// order so a test can read the asks against the distillates. The fan-out
+    /// fails past the load, as every enter test's bogus organ paths make it.
     fn enter_against_a_member(
         restore: Option<weaver_types::Lineage>,
         diagnostic: bool,
     ) -> Vec<serde_json::Value> {
-        enter_against_a_member_recalling(restore, diagnostic, PARENT_RECALL)
+        let (events, refusal, _) =
+            enter_against_a_member_answering(restore, diagnostic, EMPTY_RESTORED);
+        assert!(
+            refusal.is_none(),
+            "the enter stood past the load: {refusal:?}"
+        );
+        events
     }
 
-    /// The parent's recall answer: one turn, the user's message and the
-    /// assistant's, as custody holds a record that was never itself a
-    /// branch.
-    const PARENT_RECALL: &str = concat!(
-        r#"{"answer":{"recall":{"events":["#,
-        r#"{"envelope":{"session":"s-0","run":"r-0","turn":"t-1","#,
-        r#""kind":"message.user","sequence":"5"},"pairs":{"role":"user","#,
-        r#""content":[{"type":"text","text":"hello"}]}},"#,
-        r#"{"envelope":{"session":"s-0","run":"r-0","turn":"t-1","#,
-        r#""kind":"message.assistant","sequence":"9"},"pairs":{"role":"assistant","#,
-        r#""content":[{"type":"text","text":"hi"}]}}]}}}"#
-    );
+    /// The restored answer of a member that stood empty.
+    const EMPTY_RESTORED: &str = r#"{"answer":{"restored":{}}}"#;
 
-    fn enter_against_a_member_recalling(
+    fn enter_against_a_member_answering(
         restore: Option<weaver_types::Lineage>,
         diagnostic: bool,
-        recall_answer: &'static str,
-    ) -> Vec<serde_json::Value> {
+        restored_answer: &'static str,
+    ) -> (
+        Vec<serde_json::Value>,
+        Option<LifecycleRefusal>,
+        Vec<String>,
+    ) {
         use std::io::{BufRead, BufReader, Write};
 
         let dir = crate::scratch::dir(format!(
@@ -3190,7 +3288,18 @@ mod tests {
                     surprisal_election: false,
                     refeed_permission: false,
                     column_permission: false,
-                    identity: Vec::new(),
+                    // The prompt file's text as admin seated it, which a
+                    // serving open seats and a diagnostic one leaves empty.
+                    identity: if diagnostic {
+                        Vec::new()
+                    } else {
+                        vec![weaver_traits::Message {
+                            role: weaver_traits::Role::System,
+                            content: vec![weaver_traits::ContentBlock::Text {
+                                text: "You are the prompt file.".into(),
+                            }],
+                        }]
+                    },
                     tunable_values: Default::default(),
                 },
             },
@@ -3210,20 +3319,25 @@ mod tests {
             state_store: weaver_types::StateStore::default(),
             declaration: String::new(),
             restore,
+            reset: None,
             stack: Default::default(),
             boundary: String::new(),
             cause: weaver_types::Cause { uid: 0 },
             library_path: None,
+            // Every kind crosses, so the member's log shows the unload's
+            // distillate beside the asks.
             state_election: weaver_types::StateElection {
-                all_kinds: false,
+                all_kinds: true,
                 keys: Vec::new(),
             },
         };
         let (near, far) = std::os::unix::net::UnixStream::pair().expect("pair");
         let member = std::thread::spawn(move || {
             let mut answers = far.try_clone().expect("clone");
+            let mut read: Vec<String> = Vec::new();
             for line in BufReader::new(far).lines() {
                 let Ok(line) = line else { break };
+                read.push(line.clone());
                 let answer = if line.starts_with(r#"{"ask":{"grants""#) {
                     r#"{"answer":{"grants":{"surface":[]}}}"#
                 } else if line.starts_with(r#"{"ask":{"identity""#) {
@@ -3233,8 +3347,13 @@ mod tests {
                         r#""pairs":{"role":"system","content":[{"type":"text","#,
                         r#""text":"You are Karl."}]}}]}}}"#
                     )
-                } else if line.starts_with(r#"{"ask":{"recall""#) {
-                    recall_answer
+                } else if line.starts_with(r#"{"ask":{"restored""#) {
+                    restored_answer
+                } else if line.starts_with(r#"{"ask":{"snapshot""#) {
+                    concat!(
+                        r#"{"answer":{"snapshot":{"save-point":"ab.save-point","run":"r-1","#,
+                        r#""sequence":5,"turn":1,"digest":"ab"}}}"#
+                    )
                 } else {
                     continue;
                 };
@@ -3242,226 +3361,201 @@ mod tests {
                     break;
                 }
             }
+            read
         });
-        let mut run = match harness.enter(payload, Some(sink), Some(OwnedFd::from(near))) {
-            Err(EnterFailure::AfterLoad(run, _)) => run,
-            Ok(_) => panic!("the bogus fan-out cannot succeed"),
-            Err(EnterFailure::BeforeLoad(refusal)) => {
-                panic!("failed before the load: {refusal:?}")
+        let refusal = match harness.enter(payload, Some(sink), Some(OwnedFd::from(near))) {
+            Err(EnterFailure::AfterLoad(run, _)) => {
+                let mut run = *run;
+                let _ = leave(&mut run, None);
+                drop(run);
+                None
             }
+            Ok(_) => panic!("the bogus fan-out cannot succeed"),
+            Err(EnterFailure::BeforeLoad(refusal)) => Some(refusal),
         };
-        let _ = leave(&mut run, None);
-        drop(run);
-        member
+        let read = member
             .join()
             .expect("the member finishes when the channel closes");
         let held = std::fs::read_to_string(&sink_path).expect("the sink reads back");
         let _ = std::fs::remove_dir_all(&dir);
-        held.lines()
+        let events = held
+            .lines()
             .map(|line| serde_json::from_str(line).expect("each line parses"))
-            .collect()
+            .collect();
+        (events, refusal, read)
     }
 
-    /// **The enter's answered identity ask reaches the record as a `recall`
-    /// before the prefix it seats**, per `weaver-trace-Spec` section 3's
-    /// recall clause: the prefix the run opens under is drawn from this
-    /// answer, so the record names the ask and the identity of each event it
-    /// returned, turnless, ahead of the `message.system` it becomes.
+    /// **A serving enter asks `restored` before it authors `load`, asks no
+    /// identity, and seats the prompt file**, per `weaver-harness-Spec`
+    /// section 6.1 and `weaver-harness-state-contract` section 2 on the
+    /// rulings of 2026-10-02: the member reads the restored ask before any
+    /// distillate of the load event, the record holds no `recall`, and the
+    /// prefix it seats is the prompt file's and never the store's.
     ///
-    /// Perturbation: drop the `record_enter_ask` call from the identity ask
-    /// and the recall assertion fails. Watched under exactly that removal.
-    ///
-    /// conforms: trace-recall-records-the-ask-and-its-identities
+    /// Perturbations: author `load` before the restored ask and the first
+    /// assertion fails; send the identity ask under a serving binding again
+    /// and the store's prefix is seated, the third assertion failing. Watched
+    /// under each.
     #[test]
-    fn the_enter_records_its_identity_ask_before_the_prefix() {
-        let events = enter_against_a_member(None, false);
-        let kinds: Vec<&str> = events.iter().map(|e| e["kind"].as_str().unwrap()).collect();
-        assert_eq!(kinds[0], "load", "the load opens the run");
-        assert_eq!(kinds[1], "recall", "the identity ask follows it: {kinds:?}");
-        assert_eq!(
-            kinds[2], "message.system",
-            "and the prefix it seats after that"
-        );
-        let recall = &events[1];
-        assert!(recall.get("turn").is_none(), "before any turn");
-        assert_eq!(recall["payload"]["ask"]["verb"], "identity");
-        assert!(
-            recall["payload"]["ask"].get("last_turns").is_none(),
-            "the identity ask carries no bound"
-        );
-        assert_eq!(
-            recall["payload"]["returned"],
-            serde_json::json!([{"run": "r-0", "sequence": "3", "kind": "message.system"}]),
-            "the returned event by identity alone"
-        );
-        assert_eq!(
-            events.iter().filter(|e| e["kind"] == "recall").count(),
-            1,
-            "and a load electing no restore asks nothing else"
-        );
-    }
-
-    /// **Under a restoring load the recall ask is recorded too, beside the
-    /// identity's**, one kind for every answered ask on the seam, each ahead
-    /// of what it seats, **and the restored exchange lands** as
-    /// `message.restored`, turnless, one event per message in landing order
-    /// after the identity, with no fault accounting a miss (#690 item C2.7).
-    ///
-    /// Perturbations: drop the `record_enter_ask` call from the restoring
-    /// recall and the second assertion fails; author the restored messages
-    /// under their turned kinds again and the writer refuses each, so no
-    /// `message.restored` lands and two faults do. Watched under each.
-    ///
-    /// conforms: trace-restored-message-is-turnless-and-whole
-    #[test]
-    fn a_restoring_enter_records_its_recall_ask_too() {
-        let events = enter_against_a_member(
-            Some(weaver_types::Lineage {
-                parent: SessionId("s-0".into()),
-                run: weaver_types::RunId("r-0".into()),
-                through: 1,
-            }),
-            false,
-        );
-        let recalls: Vec<&serde_json::Value> =
-            events.iter().filter(|e| e["kind"] == "recall").collect();
-        assert_eq!(
-            recalls.len(),
-            2,
-            "the identity ask and the recall ask: {events:?}"
-        );
-        assert_eq!(recalls[1]["payload"]["ask"]["verb"], "recall");
-        assert!(
-            recalls[1]["payload"]["ask"].get("last_turns").is_none(),
-            "the restoring recall is unbounded"
-        );
-        assert_eq!(
-            recalls[1]["payload"]["returned"],
-            serde_json::json!([
-                {"run": "r-0", "turn": "t-1", "sequence": "5", "kind": "message.user"},
-                {"run": "r-0", "turn": "t-1", "sequence": "9", "kind": "message.assistant"}
-            ])
-        );
-        // Both asks are answered before anything is seated, so both recalls
-        // precede the seated prefix, and the restored exchange follows the
-        // identity it was opened under.
-        let at = |kind: &str, text: &str| {
-            events
-                .iter()
-                .position(|e| e["kind"] == kind && e.to_string().contains(text))
-                .unwrap_or_else(|| panic!("{kind} {text} is in the record: {events:?}"))
+    fn a_serving_enter_asks_restored_before_load_and_seats_the_prompt_file() {
+        let (events, refusal, read) = enter_against_a_member_answering(None, false, EMPTY_RESTORED);
+        assert!(refusal.is_none(), "{refusal:?}");
+        let at = |needle: &str| {
+            read.iter()
+                .position(|line| line.contains(needle))
+                .unwrap_or_else(|| panic!("{needle} reached the member: {read:?}"))
         };
         assert!(
-            at("recall", r#""verb":"recall""#) < at("message.system", "You are Karl."),
-            "the recall precedes what the open seats"
-        );
-        let restored: Vec<&serde_json::Value> = events
-            .iter()
-            .filter(|e| e["kind"] == "message.restored")
-            .collect();
-        assert_eq!(
-            restored.len(),
-            2,
-            "one event per restored message: {events:?}"
-        );
-        assert_eq!(
-            restored[0]["payload"],
-            serde_json::json!({"role": "user", "content": [{"type": "text", "text": "hello"}]})
-        );
-        assert_eq!(
-            restored[1]["payload"],
-            serde_json::json!({"role": "assistant", "content": [{"type": "text", "text": "hi"}]})
+            at(r#"{"ask":{"restored""#) < at(r#""kind":"load""#),
+            "the restored ask precedes the load's distillate: {read:?}"
         );
         assert!(
-            restored.iter().all(|e| e.get("turn").is_none()),
-            "belonging to no turn: {restored:?}"
+            !read
+                .iter()
+                .any(|line| line.starts_with(r#"{"ask":{"identity""#)),
+            "a serving load sends no identity ask: {read:?}"
+        );
+        let kinds: Vec<&str> = events.iter().map(|e| e["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds[0], "load", "the load opens the run");
+        assert_eq!(
+            kinds[1], "message.system",
+            "and the prefix follows it: {kinds:?}"
         );
         assert!(
-            at("message.system", "You are Karl.") < at("message.restored", r#""text":"hello""#)
-                && at("message.restored", r#""text":"hello""#)
-                    < at("message.restored", r#""text":"hi""#),
-            "after the identity, in landing order: {events:?}"
+            events[1].to_string().contains("You are the prompt file."),
+            "the prompt file's prefix: {}",
+            events[1]
         );
         assert!(
-            events.iter().all(|e| e["kind"] != "fault"),
-            "no miss is accounted: {events:?}"
+            !events
+                .iter()
+                .any(|e| e.to_string().contains("You are Karl.")),
+            "and never the store's: {events:?}"
+        );
+        assert!(
+            !kinds.contains(&"recall") && !kinds.contains(&"message.restored"),
+            "no recall and no restored conversation: {kinds:?}"
+        );
+        assert!(
+            events[0]["payload"].get("lineage").is_none(),
+            "a load from nothing names no lineage: {}",
+            events[0]
         );
     }
 
-    /// **A restore from a branch reopens with the branch's inherited
-    /// conversation** (#697, answering Codex's finding on #702). The parent
-    /// here is itself a branch, so custody's recall answers its identity,
-    /// the conversation it inherited as `message.restored` rows, and then
-    /// its own turn. The new run's open carries the inherited exchange ahead
-    /// of the branch's own, all of it landing as `message.restored` in
-    /// landing order, and the identity row is not restored a second time.
+    /// **A restored answer that disagrees refuses the enter before the load,
+    /// and one that agrees lands the lineage on the load event**, per
+    /// `weaver-harness-Spec` section 6.1: a miss, a refusal, an empty answer
+    /// under a lineage, and a stamp that differs in any of its four members
+    /// each refuse with the stream still clean, and the agreeing stamp's
+    /// enter authors `load` naming the lineage's six members.
     ///
-    /// Perturbation: filter `restored_conversation` back to turned rows
-    /// alone and the inherited exchange is lost, two restored messages
-    /// landing where four are asserted.
-    ///
-    /// conforms: harness-restoring-open-seats-the-record
+    /// Perturbation: author `load` whatever `restored_agrees` answers and the
+    /// refused records hold a load line. Watched under exactly that change.
     #[test]
-    fn a_restore_from_a_branch_reopens_with_its_inherited_conversation() {
-        const BRANCH_RECALL: &str = concat!(
-            r#"{"answer":{"recall":{"events":["#,
-            r#"{"envelope":{"session":"s-0","run":"r-0","#,
-            r#""kind":"message.system","sequence":"3"},"pairs":{"role":"system","#,
-            r#""content":[{"type":"text","text":"You are Karl."}]}},"#,
-            r#"{"envelope":{"session":"s-0","run":"r-0","#,
-            r#""kind":"message.restored","sequence":"4"},"pairs":{"role":"user","#,
-            r#""content":[{"type":"text","text":"inherited question"}]}},"#,
-            r#"{"envelope":{"session":"s-0","run":"r-0","#,
-            r#""kind":"message.restored","sequence":"5"},"pairs":{"role":"assistant","#,
-            r#""content":[{"type":"text","text":"inherited answer"}]}},"#,
-            r#"{"envelope":{"session":"s-0","run":"r-0","turn":"t-2","#,
-            r#""kind":"message.user","sequence":"9"},"pairs":{"role":"user","#,
-            r#""content":[{"type":"text","text":"hello"}]}},"#,
-            r#"{"envelope":{"session":"s-0","run":"r-0","turn":"t-2","#,
-            r#""kind":"message.assistant","sequence":"12"},"pairs":{"role":"assistant","#,
-            r#""content":[{"type":"text","text":"hi"}]}}]}}}"#
-        );
-        let events = enter_against_a_member_recalling(
-            Some(weaver_types::Lineage {
-                parent: SessionId("s-0".into()),
-                run: weaver_types::RunId("r-0".into()),
-                through: 2,
-            }),
+    fn a_restored_disagreement_refuses_before_the_load() {
+        let named = || Some(lineage("ab", "r-0", 5, 1));
+        for (answer, why) in [
+            (
+                r#"{"answer":{"restored":{"refused":"schema-mismatch"}}}"#,
+                "a refusal",
+            ),
+            (EMPTY_RESTORED, "an empty answer under a lineage"),
+            (
+                r#"{"answer":{"restored":{"lineage":{"digest":"zz","run":"r-0","sequence":5,"turn":1}}}}"#,
+                "another digest",
+            ),
+            (
+                r#"{"answer":{"restored":{"lineage":{"digest":"ab","run":"r-0","sequence":6,"turn":1}}}}"#,
+                "another sequence",
+            ),
+            (
+                r#"{"answer":{"shape":{"runs":[]}}}"#,
+                "a malformed answer, the miss",
+            ),
+        ] {
+            let (events, refusal, _) = enter_against_a_member_answering(named(), false, answer);
+            assert!(
+                matches!(refusal, Some(LifecycleRefusal::DescriptorsUnusable)),
+                "{why} refuses: {refusal:?}"
+            );
+            assert!(
+                events.is_empty(),
+                "{why} leaves the stream clean: {events:?}"
+            );
+        }
+        let (events, refusal, _) = enter_against_a_member_answering(
+            Some(lineage("ab", "r-0", 5, 1)),
             false,
-            BRANCH_RECALL,
+            r#"{"answer":{"restored":{"lineage":{"digest":"ab","run":"r-0","sequence":5,"turn":1}}}}"#,
         );
-        let restored: Vec<String> = events
-            .iter()
-            .filter(|e| e["kind"] == "message.restored")
-            .map(|e| {
-                format!(
-                    "{}:{}",
-                    e["payload"]["role"].as_str().unwrap_or("?"),
-                    e["payload"]["content"][0]["text"].as_str().unwrap_or("?")
-                )
-            })
-            .collect();
+        assert!(refusal.is_none(), "an agreeing stamp admits: {refusal:?}");
+        assert_eq!(events[0]["kind"], "load");
         assert_eq!(
-            restored,
-            [
-                "user:inherited question",
-                "assistant:inherited answer",
-                "user:hello",
-                "assistant:hi"
-            ],
-            "the inherited exchange ahead of the branch's own, in landing order: {events:?}"
+            events[0]["payload"]["lineage"],
+            serde_json::json!({
+                "save_point": "ab", "run": "r-0", "sequence": 5, "turn": 1,
+                "operator_supplied": false
+            }),
+            "the load names the lineage: {}",
+            events[0]
+        );
+        let (_, refusal, _) = enter_against_a_member_answering(
+            None,
+            false,
+            r#"{"answer":{"restored":{"lineage":{"digest":"ab","run":"r-0","sequence":5,"turn":1}}}}"#,
         );
         assert!(
-            events.iter().all(|e| e["kind"] != "fault"),
-            "no miss is accounted: {events:?}"
+            matches!(refusal, Some(LifecycleRefusal::DescriptorsUnusable)),
+            "a restored save point the enter does not name refuses: {refusal:?}"
         );
+    }
+
+    /// **The leave takes the save point last and records it**, per
+    /// `weaver-harness-Spec` section 6 and `weaver-trace-Spec` section 3:
+    /// the member reads the snapshot ask after the unload's distillate, the
+    /// record carries `save_point` after `unload` with the stamp the member
+    /// answered, and the tee never sends that event to state.
+    ///
+    /// Perturbations: send the snapshot ask before authoring `unload` and the
+    /// first assertion fails; drop the kind check from the tee's `distill`
+    /// and the member reads the save point's distillate, the last assertion
+    /// failing. Watched under each.
+    #[test]
+    fn the_leave_takes_the_save_point_after_unload_and_records_it() {
+        let (events, refusal, read) = enter_against_a_member_answering(None, false, EMPTY_RESTORED);
+        assert!(refusal.is_none(), "{refusal:?}");
+        let at = |needle: &str| {
+            read.iter()
+                .position(|line| line.contains(needle))
+                .unwrap_or_else(|| panic!("{needle} reached the member: {read:?}"))
+        };
+        assert!(
+            at(r#""kind":"unload""#) < at(r#"{"ask":{"snapshot""#),
+            "the snapshot ask follows the unload's distillate: {read:?}"
+        );
+        let kinds: Vec<&str> = events.iter().map(|e| e["kind"].as_str().unwrap()).collect();
+        let unload = kinds
+            .iter()
+            .position(|k| *k == "unload")
+            .expect("an unload");
+        let save_point = kinds
+            .iter()
+            .position(|k| *k == "save_point")
+            .expect("a save point");
+        assert!(unload < save_point, "{kinds:?}");
+        assert!(events[save_point].get("turn").is_none(), "turnless");
         assert_eq!(
-            events
+            events[save_point]["payload"],
+            serde_json::json!({
+                "save_point": "ab", "run": "r-1", "sequence": 5, "turn": 1, "name": "ab.save-point"
+            })
+        );
+        assert!(
+            !read
                 .iter()
-                .filter(|e| e["kind"] == "message.system")
-                .count(),
-            1,
-            "the identity is seated once, by the identity ask: {events:?}"
+                .any(|line| line.contains(r#""kind":"save_point""#)),
+            "the save point's event never crosses the tee: {read:?}"
         );
     }
 
@@ -3549,6 +3643,7 @@ mod tests {
             state_store: weaver_types::StateStore::default(),
             declaration: String::new(),
             restore: None,
+            reset: None,
             stack: Default::default(),
             boundary: String::new(),
             cause: weaver_types::Cause { uid: 0 },
@@ -3658,6 +3753,7 @@ mod tests {
                 state_store: weaver_types::StateStore::default(),
                 declaration: String::new(),
                 restore: None,
+                reset: None,
                 stack: Default::default(),
                 boundary: "b0b0".to_string(),
                 cause: weaver_types::Cause { uid: 1000 },
@@ -3813,6 +3909,7 @@ mod tests {
             state_store: weaver_types::StateStore::default(),
             declaration: String::new(),
             restore: None,
+            reset: None,
             stack: Default::default(),
             boundary: String::new(),
             cause: weaver_types::Cause { uid: 0 },
@@ -3938,6 +4035,7 @@ mod tests {
             state_store: weaver_types::StateStore::default(),
             declaration: String::new(),
             restore: None,
+            reset: None,
             stack: Default::default(),
             boundary: String::new(),
             cause: weaver_types::Cause { uid: 0 },

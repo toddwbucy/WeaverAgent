@@ -96,6 +96,7 @@ fn the_boxed_payloads_cross_as_the_payloads_do() {
             state_store: weaver_types::StateStore::default(),
             declaration: String::new(),
             restore: None,
+            reset: None,
             stack: Default::default(),
             boundary: String::new(),
             cause: weaver_types::Cause { uid: 0 },

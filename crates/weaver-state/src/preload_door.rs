@@ -21,7 +21,9 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json, value::RawValue};
 use weaver_trace::{ElectedKind, Election, Tee};
 
+use weaver_state::Store;
 use weaver_state::engine::sqlite::Sqlite;
+use weaver_state::save_point::SavePoint;
 
 // This spelling is independent of the distiller. A changed projection must
 // fail against it. The message/identity labels describe the asks, not a second kind list.
@@ -542,7 +544,11 @@ fn child_entry() {
             .unwrap()
             .parse()
             .unwrap();
-        let result = super::member_entry(args.into_iter(), fd);
+        let save_point_fd = std::env::var("WEAVER_W5B_SAVE_POINT_FD")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let result = super::member_entry(args.into_iter(), fd, save_point_fd);
         std::process::exit(if result == ExitCode::SUCCESS { 0 } else { 1 });
     }
     assert!(
@@ -555,14 +561,23 @@ struct Member {
     tee: Option<Tee>,
     wire: UnixStream,
     buffer: Vec<u8>,
-    // The store file lives in the directory, removed with it after Drop
-    // stops and reaps the member.
+    // The member's room, removed with it after Drop stops and reaps the
+    // member: its save points live here and nothing else of the store does.
     directory: Directory,
-    store: PathBuf,
 }
 impl Member {
     fn new(election: Election, diagnostic: bool, destination: &str) -> Self {
-        let mut member = Self::spawn(diagnostic);
+        Self::new_with(election, diagnostic, destination, None)
+    }
+    /// A member handed a save point at its spawn, the way admin hands one,
+    /// at the fixed descriptor the production entry reads.
+    fn new_with(
+        election: Election,
+        diagnostic: bool,
+        destination: &str,
+        save_point: Option<&std::path::Path>,
+    ) -> Self {
+        let mut member = Self::spawn_with(diagnostic, save_point);
         member.tee = Some(
             Tee::open(
                 member.wire.try_clone().unwrap(),
@@ -571,8 +586,12 @@ impl Member {
             )
             .unwrap(),
         );
-        // A shape answer proves the production entry reached serve.
-        assert!(answer_shape(&member.ask("shape", None)).is_empty());
+        // A shape answer proves the production entry reached serve, and an
+        // empty one that nothing was restored.
+        let shape = answer_shape(&member.ask("shape", None));
+        if save_point.is_none() {
+            assert!(shape.is_empty());
+        }
         assert_eq!(
             member.door().exists(),
             diagnostic,
@@ -581,18 +600,18 @@ impl Member {
         member
     }
     // Raw-open tests must reach the same entry before a tee supplies its opener.
-    fn spawn(diagnostic: bool) -> Self {
+    fn spawn_with(diagnostic: bool, save_point: Option<&std::path::Path>) -> Self {
         let thread = std::thread::current();
         let test = thread.name().expect("named test thread");
         let directory = Directory::new();
-        // The member's store is the embedded engine's file in its territory.
-        // Stand the schema before the child and a seeding observer open it,
-        // so neither races the other's first creation.
-        let store = directory.0.join("state.sql");
-        drop(Sqlite::open(&store).expect("the embedded store stands"));
         let door = directory.0.join("preload.sock");
         let (wire, child) = UnixStream::pair().unwrap();
         let fd = child.as_raw_fd();
+        // The save point's descriptor where one is handed, and a number
+        // holding nothing where none is, which is an agent's first load.
+        let handed =
+            save_point.map(|path| std::fs::File::open(path).expect("the save point opens"));
+        let save_point_fd = handed.as_ref().map_or(900, |file| file.as_raw_fd());
         let mut args: Vec<String> = vec![directory.0.to_str().unwrap().into()];
         if diagnostic {
             args.push(door.to_str().unwrap().into());
@@ -606,30 +625,40 @@ impl Member {
                 serde_json::to_string(&args).unwrap(),
             )
             .env("WEAVER_W5B_MEMBER_FD", fd.to_string())
+            .env("WEAVER_W5B_SAVE_POINT_FD", save_point_fd.to_string())
             .stdout(log.try_clone().unwrap())
             .stderr(log);
-        // SAFETY: the child owns this socket. Only a descriptor flag is set
-        // between fork and exec, and the test entry adopts it exactly once.
+        let inherit = handed.is_some();
+        // SAFETY: the child owns this socket and, where one is handed, the
+        // save point's descriptor. Only descriptor flags are set between
+        // fork and exec, and the test entry adopts each exactly once.
         unsafe {
             command.pre_exec(move || {
-                let borrowed = std::os::fd::BorrowedFd::borrow_raw(fd);
-                nix::fcntl::fcntl(
-                    borrowed,
-                    nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty()),
-                )
-                .map(|_| ())
-                .map_err(std::io::Error::from)
+                let clear = |raw| {
+                    let borrowed = std::os::fd::BorrowedFd::borrow_raw(raw);
+                    nix::fcntl::fcntl(
+                        borrowed,
+                        nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty()),
+                    )
+                    .map(|_| ())
+                    .map_err(std::io::Error::from)
+                };
+                clear(fd)?;
+                if inherit {
+                    clear(save_point_fd)?;
+                }
+                Ok(())
             });
         }
         let process = Process(command.spawn().unwrap());
         drop(child);
+        drop(handed);
         Self {
             process,
             tee: None,
             wire,
             buffer: Vec::new(),
             directory,
-            store,
         }
     }
     fn log(&self) -> String {
@@ -716,6 +745,39 @@ impl Member {
         self.receive(WAIT)
             .unwrap_or_else(|| panic!("missing {ask} answer: {}", self.log()))
     }
+    /// The live `restore` ask, naming a save point in the member's room.
+    fn ask_restore(&mut self, name: &str) -> String {
+        self.send(&format!(
+            "{}\n",
+            json!({"ask":{"restore":{"save-point":name}}})
+        ));
+        self.receive(WAIT)
+            .unwrap_or_else(|| panic!("missing restore answer: {}", self.log()))
+    }
+    /// The holdings as rows, table by table: a `snapshot` ask writes the
+    /// member's save point into its room, and the image is read back here
+    /// through the engine's own deserialize into a fresh connection. The
+    /// elected indexes are read too, by name.
+    fn tables(&mut self) -> Vec<Vec<String>> {
+        let answer = stamp_of(&self.ask("snapshot", None), "snapshot");
+        let bytes = std::fs::read(self.directory.0.join(&answer.name)).expect("the save point");
+        let save_point = SavePoint::parse(&bytes).expect("a sound save point");
+        assert_eq!(
+            save_point.digest(),
+            answer.digest,
+            "the digest names the bytes"
+        );
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .deserialize_read_exact(
+                rusqlite::MAIN_DB,
+                &save_point.image[..],
+                save_point.image.len(),
+                true,
+            )
+            .expect("the image deserializes");
+        custody_snapshot(&mut connection)
+    }
     fn feed(&mut self, lines: &[String]) {
         for line in lines {
             assert!(self.tee.as_mut().unwrap().feed(line), "live tee detached");
@@ -738,12 +800,20 @@ impl Member {
         } else {
             record.lines.len()
         };
+        self.preload_lines(
+            &record.destination_lines(destination)[..length],
+            rule,
+            destination,
+        )
+    }
+    /// The same client over an explicit list of canonical lines.
+    fn preload_lines(&mut self, lines: &[String], rule: &Election, destination: &str) -> usize {
         let mut driver = self.connect_preload();
         driver
             .write_all(weaver_trace::opener(destination, rule).as_bytes())
             .unwrap();
         let mut crossed = 0;
-        for line in &record.destination_lines(destination)[..length] {
+        for line in lines {
             if let Some(frame) = weaver_trace::distill(line, rule) {
                 driver.write_all(frame.as_bytes()).unwrap();
                 crossed += 1;
@@ -929,18 +999,18 @@ fn recorded_rule_three_way_at_matched_cuts() {
     matched_cuts(&empty, &empty.rule(), false, "recorded-empty");
 }
 
-// Seed both the addressed session and a neighbor before a malformed opener.
-// Observe rows and index definitions directly: a rejected opener must not even
-// build indexes from the valid entries surrounding an invalid entry.
-fn seeded_custody(member: &Member) -> rusqlite::Connection {
-    use weaver_state::Store;
-    let mut store = Sqlite::open(&member.store).expect("open the member's store to seed it");
-    store
-        .index_election(&weaver_state::Election {
-            all_kinds: true,
-            keys: vec![("load".into(), vec!["existing".into()])],
-        })
-        .unwrap();
+// Seed both the addressed session and a neighbor into a save point the
+// member is handed at its spawn, the way admin hands one, so a malformed
+// opener is judged against holdings that stand. The rows and index
+// definitions are then observed through the member's own save points: a
+// rejected opener must not even build indexes from the valid entries
+// surrounding an invalid entry.
+fn seed_save_point(directory: &std::path::Path) -> PathBuf {
+    // Seeded under no election: adoption stands the opener's election's
+    // index set and nothing else, per the ruling of 2026-10-06, so a seed
+    // carrying an index of its own would read as changed custody at the
+    // spawn rather than at the refused opener this watches.
+    let mut store = Sqlite::stand().expect("the seed store stands");
     for session in ["target", "neighbor"] {
         store
             .land(&weaver_state::Distillate {
@@ -953,17 +1023,29 @@ fn seeded_custody(member: &Member) -> rusqlite::Connection {
             })
             .unwrap();
     }
-    drop(store);
-    // An observer of its own, read-only, waiting out the member's writes.
-    let observer = rusqlite::Connection::open_with_flags(
-        &member.store,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .expect("observe the member's store");
-    observer
-        .busy_timeout(WAIT)
-        .expect("the observer waits out a write");
-    observer
+    let save_point = SavePoint::take(
+        store.position().unwrap().expect("a position"),
+        &store.schema().unwrap(),
+        store.image().unwrap(),
+    );
+    let path = directory.join("seed.save-point");
+    std::fs::write(&path, save_point.bytes()).expect("the seed writes");
+    path
+}
+/// The seed's holdings as the member would snapshot them, for a member that
+/// exits before it can be asked.
+fn seed_tables(path: &std::path::Path) -> Vec<Vec<String>> {
+    let save_point = SavePoint::parse(&std::fs::read(path).unwrap()).unwrap();
+    let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+    connection
+        .deserialize_read_exact(
+            rusqlite::MAIN_DB,
+            &save_point.image[..],
+            save_point.image.len(),
+            true,
+        )
+        .unwrap();
+    custody_snapshot(&mut connection)
 }
 fn custody_snapshot(client: &mut rusqlite::Connection) -> Vec<Vec<String>> {
     [
@@ -972,6 +1054,15 @@ fn custody_snapshot(client: &mut rusqlite::Connection) -> Vec<Vec<String>> {
         "SELECT json_object('event_id', event_id, 'key', key, 'value', value) \
          FROM field ORDER BY event_id, key",
         "SELECT sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL ORDER BY name",
+        "SELECT json_object('event_id', event_id, 'role', role, 'parts', parts) \
+         FROM message ORDER BY event_id",
+        "SELECT json_object('event_id', event_id, 'ordinal', ordinal, 'block', block, \
+         'text', text, 'name', name, 'arguments', arguments, 'content', content) \
+         FROM part ORDER BY event_id, ordinal",
+        "SELECT json_object('event_id', event_id, 'perplexity', perplexity, \
+         'entropies', entropies, 'surprisals', surprisals) FROM measurement ORDER BY event_id",
+        "SELECT json_object('event_id', event_id, 'member', member, 'ordinal', ordinal, \
+         'value', value) FROM series ORDER BY event_id, member, ordinal",
     ]
     .iter()
     .map(|query| {
@@ -990,19 +1081,24 @@ fn custody_snapshot(client: &mut rusqlite::Connection) -> Vec<Vec<String>> {
 fn malformed_first_door_elections_leave_custody_untouched() {
     child_entry();
     for opener in super::tests::malformed_openers() {
-        let mut member = Member::spawn(true);
-        let mut client = seeded_custody(&member);
-        let before = custody_snapshot(&mut client);
+        let seed_dir = Directory::new();
+        let seed = seed_save_point(&seed_dir.0);
+        let before = seed_tables(&seed);
+        let mut member = Member::spawn_with(true, Some(&seed));
         member.send(&(opener.clone() + "\n"));
         // Closing the sender also bounds a mutant that silently defaults and
         // begins serving: it exits successfully, which is itself a failure.
         member.wire.shutdown(std::net::Shutdown::Write).unwrap();
         let status = member.process.wait();
-        assert_eq!(
-            custody_snapshot(&mut client),
-            before,
-            "changed custody: {opener}"
-        );
+        // The handed save point is never written, and a member that refused
+        // its opener wrote nothing of its own into its room.
+        assert_eq!(seed_tables(&seed), before, "changed custody: {opener}");
+        let written: Vec<_> = std::fs::read_dir(&member.directory.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.contains("save-point"))
+            .collect();
+        assert!(written.is_empty(), "a refused opener wrote {written:?}");
         assert!(!status.success(), "accepted {opener}");
         assert!(
             member
@@ -1046,16 +1142,23 @@ fn malformed_preload_elections_leave_custody_untouched() {
         .to_string(),
     );
     for opener in cases {
-        let mut member = Member::new(
+        let seed_dir = Directory::new();
+        let seed = seed_save_point(&seed_dir.0);
+        let mut member = Member::new_with(
             Election {
                 all_kinds: true,
                 keys: vec![],
             },
             true,
             "target",
+            Some(&seed),
         );
-        let mut client = seeded_custody(&member);
-        let before = custody_snapshot(&mut client);
+        let before = member.tables();
+        assert_eq!(
+            before,
+            seed_tables(&seed),
+            "the seed was restored at the spawn"
+        );
         // Shape is a barrier proving the prior replay ask reached parking.
         member.send("{\"ask\":{\"replay\":{}}}\n");
         member.ask("shape", None);
@@ -1089,11 +1192,7 @@ fn malformed_preload_elections_leave_custody_untouched() {
             "refusal killed member: {}",
             member.log()
         );
-        assert_eq!(
-            custody_snapshot(&mut client),
-            before,
-            "changed custody: {opener}"
-        );
+        assert_eq!(member.tables(), before, "changed custody: {opener}");
         let fault = if super::parse_session(&opener).is_none_or(|s| s.is_empty()) {
             "missing nonempty session in preload opener"
         } else if super::parse_election(&opener).is_none() {
@@ -1125,7 +1224,7 @@ fn malformed_preload_elections_leave_custody_untouched() {
             member.receive(Duration::from_millis(25)).is_none(),
             "duplicate parked answer"
         );
-        let after = custody_snapshot(&mut client);
+        let after = member.tables();
         assert_eq!(
             after[2], before[2],
             "no new indexes from refused attempt or empty retry"
@@ -1152,28 +1251,512 @@ fn explicit_empty_elections_open_both_doors() {
                 json!({"session":"target", "election":{
                 "all_kinds":all_kinds, "keys":keys}})
             );
-            let mut member = Member::spawn(true);
-            let mut client = seeded_custody(&member);
-            let before = custody_snapshot(&mut client);
+            let seed_dir = Directory::new();
+            let seed = seed_save_point(&seed_dir.0);
+            let before = seed_tables(&seed);
+            let mut member = Member::spawn_with(true, Some(&seed));
             member.send(&opener);
             assert!(!answer_shape(&member.ask("shape", None)).is_empty());
-            assert_eq!(
-                custody_snapshot(&mut client),
-                before,
-                "first door preserves holdings"
-            );
+            assert_eq!(member.tables(), before, "first door preserves holdings");
             let mut preload = member.connect_preload();
             preload.write_all(opener.as_bytes()).unwrap();
             preload.write_all(b"{}\n").unwrap();
             drop(preload);
             assert!(answer_events(&member.ask("replay", None), "replay").is_empty());
-            let after = custody_snapshot(&mut client);
+            let after = member.tables();
             assert_eq!(after[2], before[2], "no paths means no new indexes");
             assert_eq!(after[0].len(), 1, "only the addressed session retires");
             assert!(after[0][0].contains("neighbor"));
             assert_eq!(after[1].len(), 1, "neighbor's field remains");
         }
     }
+}
+
+/// The stamp members off a `snapshot` or `restore` answer.
+struct Stamped {
+    name: String,
+    run: String,
+    sequence: u64,
+    turn: u64,
+    digest: String,
+}
+fn stamp_of(frame: &str, ask: &str) -> Stamped {
+    let value: Value = serde_json::from_str(frame).unwrap();
+    let body = &value["answer"][ask];
+    assert!(body.is_object(), "{ask} answered: {frame}");
+    Stamped {
+        name: body["save-point"].as_str().unwrap().into(),
+        run: body["run"].as_str().unwrap().into(),
+        sequence: body["sequence"].as_u64().unwrap(),
+        turn: body["turn"].as_u64().unwrap(),
+        digest: body["digest"].as_str().unwrap().into(),
+    }
+}
+
+/// The offline builder's rule in miniature, per `weaver-state-Spec` section
+/// 3 and `weaver-trace-PRD` section 3: a rebuild reads every `load` event's
+/// `reset` and lands nothing of the prior run past the save point the load
+/// reset to, or nothing of it at all where the load stood empty, so the
+/// rebuild arrives where the store did. Everything else lands in record
+/// order.
+fn rebuild_plan(lines: &[String]) -> Vec<String> {
+    let mut planned: Vec<String> = Vec::new();
+    for line in lines {
+        let row: Value = serde_json::from_str(line).unwrap();
+        if row["kind"] == "load"
+            && let Some(reset) = row["payload"].get("reset")
+        {
+            let prior = reset["prior_run"].as_str().unwrap().to_string();
+            let lineage = row["payload"].get("lineage").cloned();
+            planned.retain(|held| {
+                let held: Value = serde_json::from_str(held).unwrap();
+                if held["run"] != prior.as_str() {
+                    return true;
+                }
+                match &lineage {
+                    Some(lineage) if lineage["run"] == prior.as_str() => {
+                        let sequence: u64 = held["sequence"].as_str().unwrap().parse().unwrap();
+                        sequence <= lineage["sequence"].as_u64().unwrap()
+                    }
+                    _ => false,
+                }
+            });
+        }
+        planned.push(line.clone());
+    }
+    planned
+}
+
+/// **A reloaded store equals a full replay**, the store primitive's
+/// instrument, per `weaver-state-Spec` section 5 on the rulings of
+/// 2026-10-02 on #1 and #58, and the contract's section 8. A live member
+/// lands a recorded run part way and takes a save point; a second member is
+/// handed that save point at its spawn and answers `restored` with its stamp;
+/// a live restore of the same save point on the first member holds what the
+/// second held at its restore; the second then lands the next run, whose
+/// `load` names the lineage and a reset of the prior run; and a third member
+/// rebuilds the whole record through the preload door, honouring the reset,
+/// to the same holdings, ask for ask and table by table, the typed tables
+/// and the elected index included. Two `snapshot` asks on unchanged holdings
+/// give two files.
+///
+/// Perturbations: stamp the save point one position late or one early in
+/// `Sqlite::position` and the stamp no longer names the last event the
+/// replay serves, the first assertion failing; make `rebuild_plan` ignore
+/// the reset and the rebuilt member holds the prior run's lost tail where
+/// the restored one does not, the table comparison failing.
+#[test]
+#[ignore = "needs the preload credential; run inside a user namespace by the watch below"]
+fn a_reloaded_store_equals_a_full_replay() {
+    child_entry();
+    let record = Record::new();
+    let rule = election();
+    let lines = record.destination_lines(SESSION);
+    let at = |run: &str, turn: &str, kind: &str| {
+        lines
+            .iter()
+            .position(|line| {
+                let row: Value = serde_json::from_str(line).unwrap();
+                row["run"] == run && row["turn"] == turn && row["kind"] == kind
+            })
+            .unwrap()
+    };
+    // The save point falls after the first run's first turn; the first run's
+    // second turn is the tail an unclean stop loses.
+    let cut = at("r-one", "t-1", "turn.closed") + 1;
+    let r_two = lines
+        .iter()
+        .position(|line| serde_json::from_str::<Value>(line).unwrap()["run"] == "r-two")
+        .unwrap();
+
+    let mut live = Member::new(rule.clone(), false, SESSION);
+    live.feed(&lines[..cut]);
+    let taken = stamp_of(&live.ask("snapshot", None), "snapshot");
+    let replayed = answer_events(&live.ask("replay", None), "replay");
+    let last = replayed.last().expect("holdings");
+    assert_eq!(
+        (
+            last.envelope["run"].as_str(),
+            last.envelope["sequence"].parse::<u64>().unwrap()
+        ),
+        (taken.run.as_str(), taken.sequence),
+        "the stamp names the last event the holdings cover"
+    );
+    assert_eq!(taken.turn, 1, "and that run's last turn");
+    let again = stamp_of(&live.ask("snapshot", None), "snapshot");
+    assert_ne!(again.name, taken.name, "two asks give two files");
+    assert_eq!(
+        (&again.run, again.sequence, again.turn),
+        (&taken.run, taken.sequence, taken.turn)
+    );
+    for name in [&taken.name, &again.name] {
+        assert!(live.directory.0.join(name).is_file(), "{name} stands");
+    }
+    live.feed(&lines[cut..r_two]);
+
+    // The second load restores through the descriptor and says so.
+    let save_point = live.directory.0.join(&taken.name);
+    let mut restored = Member::new_with(rule.clone(), false, SESSION, Some(&save_point));
+    let answered: Value = serde_json::from_str(&restored.ask("restored", None)).unwrap();
+    assert_eq!(
+        answered["answer"]["restored"]["lineage"],
+        json!({"digest": taken.digest, "run": taken.run, "sequence": taken.sequence, "turn": taken.turn}),
+        "the restored ask answers the stamp the load restored"
+    );
+    let at_restore = restored.tables();
+
+    // A live restore of the same save point on the first member holds the
+    // same, its tail gone.
+    let back = stamp_of(&live.ask_restore(&taken.name), "restore");
+    assert_eq!(
+        (&back.run, back.sequence, back.turn, &back.digest),
+        (&taken.run, taken.sequence, taken.turn, &taken.digest)
+    );
+    assert_eq!(
+        live.tables(),
+        at_restore,
+        "a live restore holds what the load restored"
+    );
+
+    // The next run's load names the lineage and the reset of the prior run.
+    let mut next: Vec<String> = lines[r_two..].to_vec();
+    {
+        let mut load: Value = serde_json::from_str(&next[0]).unwrap();
+        assert_eq!(load["kind"], "load");
+        load["payload"]["lineage"] = json!({
+            "save_point": taken.digest, "run": taken.run, "sequence": taken.sequence,
+            "turn": taken.turn, "operator_supplied": false,
+        });
+        load["payload"]["reset"] = json!({"prior_run": "r-one", "reason": "no-clean-unload"});
+        next[0] = serde_json::to_string(&load).unwrap() + "\n";
+    }
+    restored.feed(&next);
+
+    // The rebuild through the door, honouring the reset.
+    let whole: Vec<String> = lines[..r_two]
+        .iter()
+        .cloned()
+        .chain(next.iter().cloned())
+        .collect();
+    let plan = rebuild_plan(&whole);
+    let stamped = lines
+        .iter()
+        .position(|line| {
+            let row: Value = serde_json::from_str(line).unwrap();
+            row["run"] == taken.run.as_str()
+                && row["sequence"].as_str().and_then(|n| n.parse::<u64>().ok())
+                    == Some(taken.sequence)
+        })
+        .expect("the stamp names a recorded line");
+    assert!(stamped < cut, "and one before the cut");
+    let through_the_stamp: Vec<String> = lines[..=stamped]
+        .iter()
+        .cloned()
+        .chain(next.iter().cloned())
+        .collect();
+    assert_eq!(
+        plan, through_the_stamp,
+        "the plan is the record through the stamped position and the next run, the lost tail left out"
+    );
+    let mut rebuilt = Member::new(rule.clone(), true, SESSION);
+    rebuilt.preload_lines(&plan, &rule, SESSION);
+    let expected = expected(&plan, &rule, SESSION);
+    compare("restore/rebuild", &mut restored, &mut rebuilt, &expected);
+    assert_eq!(
+        restored.tables(),
+        rebuilt.tables(),
+        "the restored store and the rebuilt one hold the same rows, table by table"
+    );
+}
+
+/// **A save point that fails its check never reaches the holdings, and one
+/// under another schema is refused on `restored`**, per `weaver-state-Spec`
+/// sections 3 and 5: at a load, a save point taken under a schema the
+/// member does not stand answers `refused` naming the mismatch and the
+/// member stands empty; at a live restore, a save point truncated part way
+/// and one with a byte flipped each go unanswered and leave the holdings
+/// standing, and so does a name that is not a plain entry of the room. A
+/// torn save point handed at the spawn refuses the member's start, the
+/// bytes being admin's to judge at the inventory and a disagreement here a
+/// load that did not finish standing.
+///
+/// Perturbations: skip the schema comparison in `adopt_judged` and the
+/// foreign save point restores, the first assertion failing; skip the check
+/// in `SavePoint::parse` and the flipped file restores, the holdings moving.
+#[test]
+#[ignore = "needs the preload credential; run inside a user namespace by the watch below"]
+fn a_damaged_or_foreign_save_point_never_reaches_the_holdings() {
+    child_entry();
+    let rule = election();
+    let record = Record::new();
+    let lines = record.destination_lines(SESSION);
+
+    // A save point taken under another schema.
+    let foreign_dir = Directory::new();
+    let foreign = {
+        let mut store = Sqlite::stand().expect("stands");
+        store
+            .land(&weaver_state::Distillate {
+                session: SESSION.into(),
+                run: "r-foreign".into(),
+                turn: None,
+                kind: "load".into(),
+                sequence: 0,
+                pairs: vec![],
+            })
+            .unwrap();
+        let schema = format!(
+            "{}\ntable extra\nCREATE TABLE extra (x)\n",
+            store.schema().unwrap()
+        );
+        let save_point = SavePoint::take(
+            store.position().unwrap().unwrap(),
+            &schema,
+            store.image().unwrap(),
+        );
+        let path = foreign_dir.0.join("foreign.save-point");
+        std::fs::write(&path, save_point.bytes()).unwrap();
+        path
+    };
+    let mut member = Member::new_with(rule.clone(), false, SESSION, Some(&foreign));
+    let answered: Value = serde_json::from_str(&member.ask("restored", None)).unwrap();
+    assert_eq!(
+        answered["answer"]["restored"],
+        json!({"refused": "schema-mismatch"}),
+        "a save point under another schema is refused on restored"
+    );
+    assert!(
+        answer_shape(&member.ask("shape", None)).is_empty(),
+        "and the member stands empty"
+    );
+    // A stamp written to agree cannot carry a foreign image past the rule:
+    // the image's own catalog has the extra table, whatever the stamp names.
+    // Perturbation: drop the image's schema comparison in `adopt_judged`
+    // and this restores.
+    let lying = {
+        let mut store = Sqlite::stand().expect("stands");
+        let standing = store.schema().unwrap();
+        store
+            .land(&weaver_state::Distillate {
+                session: SESSION.into(),
+                run: "r-lying".into(),
+                turn: None,
+                kind: "load".into(),
+                sequence: 0,
+                pairs: vec![],
+            })
+            .unwrap();
+        let image = store.image().unwrap();
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .deserialize_read_exact(rusqlite::MAIN_DB, &image[..], image.len(), false)
+            .unwrap();
+        connection.execute_batch("CREATE TABLE extra (x)").unwrap();
+        let extra = connection.serialize(rusqlite::MAIN_DB).unwrap().to_vec();
+        let save_point = SavePoint::take(store.position().unwrap().unwrap(), &standing, extra);
+        let path = foreign_dir.0.join("lying.save-point");
+        std::fs::write(&path, save_point.bytes()).unwrap();
+        path
+    };
+    let mut member = Member::new_with(rule.clone(), false, SESSION, Some(&lying));
+    let answered: Value = serde_json::from_str(&member.ask("restored", None)).unwrap();
+    assert_eq!(
+        answered["answer"]["restored"],
+        json!({"refused": "schema-mismatch"}),
+        "a stamp naming the standing schema over a foreign image is refused"
+    );
+    // **The exemption is exact**, per the operator's ruling of 2026-10-05 on
+    // #1: a table or a trigger hidden under the elected prefix is schema and
+    // refuses, whatever the stamp names. Perturbation: exempt by prefix
+    // alone in `schema_of` and both restore.
+    for (label, hidden) in [
+        ("table", "CREATE TABLE field_elected_7a (x)"),
+        (
+            "trigger",
+            "CREATE TRIGGER field_elected_7b BEFORE INSERT ON field BEGIN SELECT 1; END",
+        ),
+    ] {
+        let mut store = Sqlite::stand().expect("stands");
+        let standing = store.schema().unwrap();
+        store
+            .land(&weaver_state::Distillate {
+                session: SESSION.into(),
+                run: format!("r-{label}"),
+                turn: None,
+                kind: "load".into(),
+                sequence: 0,
+                pairs: vec![],
+            })
+            .unwrap();
+        let image = store.image().unwrap();
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .deserialize_read_exact(rusqlite::MAIN_DB, &image[..], image.len(), false)
+            .unwrap();
+        connection.execute_batch(hidden).unwrap();
+        let hiding = connection.serialize(rusqlite::MAIN_DB).unwrap().to_vec();
+        let save_point = SavePoint::take(store.position().unwrap().unwrap(), &standing, hiding);
+        let path = foreign_dir.0.join(format!("hidden-{label}.save-point"));
+        std::fs::write(&path, save_point.bytes()).unwrap();
+        let mut member = Member::new_with(rule.clone(), false, SESSION, Some(&path));
+        let answered: Value = serde_json::from_str(&member.ask("restored", None)).unwrap();
+        assert_eq!(
+            answered["answer"]["restored"],
+            json!({"refused": "schema-mismatch"}),
+            "a {label} hidden under the elected prefix is schema"
+        );
+        assert!(answer_shape(&member.ask("shape", None)).is_empty());
+    }
+    // A stamp that lies about its position is refused as one that disagrees.
+    let misstamped = {
+        let mut store = Sqlite::stand().expect("stands");
+        store
+            .land(&weaver_state::Distillate {
+                session: SESSION.into(),
+                run: "r-stamped".into(),
+                turn: None,
+                kind: "load".into(),
+                sequence: 3,
+                pairs: vec![],
+            })
+            .unwrap();
+        let mut stamp = store.position().unwrap().unwrap();
+        stamp.sequence += 1;
+        let save_point = SavePoint::take(stamp, &store.schema().unwrap(), store.image().unwrap());
+        let path = foreign_dir.0.join("misstamped.save-point");
+        std::fs::write(&path, save_point.bytes()).unwrap();
+        path
+    };
+    let mut member = Member::new_with(rule.clone(), false, SESSION, Some(&misstamped));
+    let answered: Value = serde_json::from_str(&member.ask("restored", None)).unwrap();
+    assert_eq!(
+        answered["answer"]["restored"],
+        json!({"refused": "stamp disagrees with the image"}),
+        "a stamp that lies about its position is refused"
+    );
+
+    // A live restore of a damaged save point leaves the holdings standing.
+    member.feed(&lines[..record.cut]);
+    let taken = stamp_of(&member.ask("snapshot", None), "snapshot");
+    let before = member.tables();
+    let sound = std::fs::read(member.directory.0.join(&taken.name)).unwrap();
+    let mut flipped = sound.clone();
+    let last = flipped.len() - 1;
+    flipped[last] ^= 0x01;
+    std::fs::write(member.directory.0.join("flipped"), &flipped).unwrap();
+    std::fs::write(member.directory.0.join("torn"), &sound[..sound.len() / 2]).unwrap();
+    for name in ["flipped", "torn", "../flipped", ".part-x", "absent"] {
+        member.send(&format!(
+            "{}\n",
+            json!({"ask":{"restore":{"save-point":name}}})
+        ));
+        assert!(
+            member.receive(Duration::from_millis(250)).is_none(),
+            "{name} restored: {}",
+            member.log()
+        );
+    }
+    // A save point whose prefix would put the restore answer past the
+    // ceiling answers nothing and moves nothing, per the one rule: the
+    // frame is built and sized on the scratch copy before the swap.
+    // Perturbation: build the frame after the swap and the holdings move.
+    let oversized = {
+        let mut store = Sqlite::stand().expect("stands");
+        let text = "x".repeat(1_100_000);
+        store
+            .land(&weaver_state::Distillate {
+                session: SESSION.into(),
+                run: "r-wide".into(),
+                turn: None,
+                kind: "message.system".into(),
+                sequence: 0,
+                pairs: vec![
+                    ("role".into(), "\"system\"".into()),
+                    (
+                        "content".into(),
+                        format!("[{{\"type\":\"text\",\"text\":\"{text}\"}}]"),
+                    ),
+                ],
+            })
+            .unwrap();
+        SavePoint::take(
+            store.position().unwrap().unwrap(),
+            &store.schema().unwrap(),
+            store.image().unwrap(),
+        )
+    };
+    std::fs::write(member.directory.0.join(oversized.name()), oversized.bytes()).unwrap();
+    member.send(&format!(
+        "{}\n",
+        json!({"ask":{"restore":{"save-point":oversized.name()}}})
+    ));
+    assert!(
+        member.receive(Duration::from_millis(500)).is_none(),
+        "a restore past the ceiling answers nothing: {}",
+        member.log()
+    );
+    assert_eq!(
+        member.tables(),
+        before,
+        "the holdings stand after every refusal"
+    );
+    let back = stamp_of(&member.ask_restore(&taken.name), "restore");
+    assert_eq!(back.digest, taken.digest, "the sound one still restores");
+    // A live restore of a save point taken under another election stands
+    // this load's election on the restored holdings. Perturbation: drop the
+    // `index_election` from `adopt_judged` and the elected index is gone.
+    let unelected = {
+        let mut store = Sqlite::stand().expect("stands");
+        store
+            .land(&weaver_state::Distillate {
+                session: SESSION.into(),
+                run: "r-unelected".into(),
+                turn: None,
+                kind: "load".into(),
+                sequence: 0,
+                pairs: vec![],
+            })
+            .unwrap();
+        SavePoint::take(
+            store.position().unwrap().unwrap(),
+            &store.schema().unwrap(),
+            store.image().unwrap(),
+        )
+    };
+    std::fs::write(member.directory.0.join(unelected.name()), unelected.bytes()).unwrap();
+    stamp_of(&member.ask_restore(&unelected.name()), "restore");
+    // And the same bytes under another plain name are an alias, refused.
+    std::fs::write(member.directory.0.join("alias"), unelected.bytes()).unwrap();
+    member.send(&format!(
+        "{}\n",
+        json!({"ask":{"restore":{"save-point":"alias"}}})
+    ));
+    assert!(
+        member.receive(Duration::from_millis(250)).is_none(),
+        "an alias restores nothing: {}",
+        member.log()
+    );
+    let after = member.tables();
+    assert!(
+        after[2].iter().any(|sql| sql.contains("field_elected_")),
+        "the active election's indexes stand on the restored holdings: {:?}",
+        after[2]
+    );
+
+    // A torn save point handed at the spawn refuses the start.
+    let torn = foreign_dir.0.join("torn.save-point");
+    std::fs::write(&torn, &sound[..sound.len() / 2]).unwrap();
+    let mut refused = Member::spawn_with(false, Some(&torn));
+    let status = refused.process.wait();
+    assert!(
+        !status.success(),
+        "a torn save point at the descriptor refuses the start"
+    );
+    assert!(
+        refused.log().contains("the save point descriptor refuses"),
+        "{}",
+        refused.log()
+    );
 }
 
 /// **The watch for this module's instruments**: re-executes this test binary
@@ -1213,7 +1796,7 @@ fn the_preload_door_instruments_are_watched_inside_a_user_namespace() {
         return;
     }
     assert!(
-        output.status.success() && stdout.contains("test result: ok. 6 passed"),
+        output.status.success() && stdout.contains("test result: ok. 8 passed"),
         "the preload door instruments failed inside the namespace\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
 }
