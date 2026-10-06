@@ -382,7 +382,14 @@ with either fact, drops every index in the election's generated form from the sc
 copy and builds the active election's in their place, so the index set after adoption
 is exactly this load's at a load and at a live restore alike, and only then swaps the
 finished image in whole. A `restore` whose answer would exceed the ceiling refuses
-before anything moves. What the harness owes a restore, the flush before and the
+before anything moves. **A value the stamp cannot represent refuses the image and
+never defaults**: a sequence below zero, which the ingest refuses at the landing as the
+canonical form never spells one, or a turn key that is not `t-<n>`, is holdings this
+member never landed, and a stamp reading zero over them would pass with a false lineage.
+**One save point has one name**: the room reads a save point only under its own name,
+the digest with the suffix, and the same bytes under another name are an alias and
+refused, so the name an answer or the `save_point` event carries is the digest's by
+construction. What the harness owes a restore, the flush before and the
 rebuild after, and a restore whose answer is lost failing closed as a reload that did
 not complete, is the loop act's under the ruling of 2026-10-06. **An empty store has no position**,
 and what a save point taken of one is stamped with is the save-point act's provisional

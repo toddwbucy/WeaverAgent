@@ -283,9 +283,13 @@ impl Store for Sqlite {
                     )
                     .map_err(fault)?;
                 let turns: Vec<(String, String, String)> = turns_query
-                    .query_map(rusqlite::params![session, count as i64], |row| {
-                        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-                    })
+                    // A bound past the engine's integer bounds nothing less
+                    // than everything, so it saturates rather than wrapping
+                    // into a negative limit the engine reads as none.
+                    .query_map(
+                        rusqlite::params![session, i64::try_from(count).unwrap_or(i64::MAX)],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
                     .map_err(fault)?
                     .collect::<Result<_, _>>()
                     .map_err(fault)?;
@@ -496,14 +500,23 @@ fn position_of(connection: &Connection) -> Result<Option<crate::save_point::Stam
         .query_row([&session, &run], |row| row.get(0))
         .optional()
         .map_err(fault)?;
-    let turn = turn
-        .as_deref()
-        .and_then(|t| t.strip_prefix("t-"))
-        .and_then(|n| n.parse::<u64>().ok())
-        .unwrap_or(0);
+    // **A value the stamp cannot represent refuses the position and never
+    // defaults**: a sequence below zero, or a turn key that is not `t-<n>`,
+    // is holdings this member never landed from the canonical form, and a
+    // stamp reading zero over them would pass the judgment with a false
+    // lineage. Zero is the reading only where the run holds no turn.
+    let turn = match turn.as_deref() {
+        None => 0,
+        Some(key) => key
+            .strip_prefix("t-")
+            .and_then(|n| n.parse::<u64>().ok())
+            .ok_or_else(|| CustodyFault::SavePoint(format!("turn key {key:?} is not t-<n>")))?,
+    };
+    let sequence = u64::try_from(sequence)
+        .map_err(|_| CustodyFault::SavePoint(format!("sequence {sequence} is below zero")))?;
     Ok(Some(crate::save_point::Stamp {
         run,
-        sequence: u64::try_from(sequence).unwrap_or(0),
+        sequence,
         turn,
     }))
 }
@@ -1109,6 +1122,19 @@ mod tests {
             ("r-3", 0),
             "the turn is the last event's session's and never a namesake run's"
         );
+        // **A value the stamp cannot represent refuses and never defaults**:
+        // a turn key that is not `t-<n>`, and a sequence below zero, each
+        // refuse the position. Perturbation: default either to zero and the
+        // refusal becomes a stamp.
+        let mut odd = landed("s", "r-4", "message.user", 1);
+        odd.turn = Some("turn-one".into());
+        store.land(&odd).expect("the port lands what it is handed");
+        assert!(
+            store.position().is_err(),
+            "a turn key that is not t-<n> refuses the position"
+        );
+        store.land(&landed("s", "r-5", "load", -1)).expect("lands");
+        assert!(store.position().is_err(), "a sequence below zero refuses");
     }
 
     /// **The holdings survive the process by image and nothing else**, per
@@ -1696,6 +1722,8 @@ mod tests {
             .is_some()
         );
         for missing in [
+            // The canonical form never spells a sequence below zero.
+            r#"{"envelope":{"session":"s","run":"r","kind":"load","sequence":"-1"}}"#,
             r#"{"envelope":{"run":"r","kind":"load","sequence":"0"}}"#,
             r#"{"envelope":{"session":"s","kind":"load","sequence":"0"}}"#,
             r#"{"envelope":{"session":"s","run":"r","sequence":"0"}}"#,

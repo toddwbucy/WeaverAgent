@@ -1685,10 +1685,10 @@ fn a_damaged_or_foreign_save_point_never_reaches_the_holdings() {
             store.image().unwrap(),
         )
     };
-    std::fs::write(member.directory.0.join("oversized"), oversized.bytes()).unwrap();
+    std::fs::write(member.directory.0.join(oversized.name()), oversized.bytes()).unwrap();
     member.send(&format!(
         "{}\n",
-        json!({"ask":{"restore":{"save-point":"oversized"}}})
+        json!({"ask":{"restore":{"save-point":oversized.name()}}})
     ));
     assert!(
         member.receive(Duration::from_millis(500)).is_none(),
@@ -1723,8 +1723,19 @@ fn a_damaged_or_foreign_save_point_never_reaches_the_holdings() {
             store.image().unwrap(),
         )
     };
-    std::fs::write(member.directory.0.join("unelected"), unelected.bytes()).unwrap();
-    stamp_of(&member.ask_restore("unelected"), "restore");
+    std::fs::write(member.directory.0.join(unelected.name()), unelected.bytes()).unwrap();
+    stamp_of(&member.ask_restore(&unelected.name()), "restore");
+    // And the same bytes under another plain name are an alias, refused.
+    std::fs::write(member.directory.0.join("alias"), unelected.bytes()).unwrap();
+    member.send(&format!(
+        "{}\n",
+        json!({"ask":{"restore":{"save-point":"alias"}}})
+    ));
+    assert!(
+        member.receive(Duration::from_millis(250)).is_none(),
+        "an alias restores nothing: {}",
+        member.log()
+    );
     let after = member.tables();
     assert!(
         after[2].iter().any(|sql| sql.contains("field_elected_")),

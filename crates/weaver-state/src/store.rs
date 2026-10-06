@@ -433,7 +433,12 @@ pub fn parse_distillate(frame: &str) -> Option<Distillate> {
         // distillate carries that spelling, so the conversion to the row's
         // integer happens here, at the landing, and a spelling that does
         // not convert refuses the frame whole.
-        sequence: envelope.get("sequence")?.as_str()?.parse().ok()?,
+        sequence: envelope
+            .get("sequence")?
+            .as_str()?
+            .parse()
+            .ok()
+            .filter(|sequence: &i64| *sequence >= 0)?,
         pairs,
     })
 }

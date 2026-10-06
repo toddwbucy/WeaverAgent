@@ -62,6 +62,9 @@ pub enum SavePointFault {
     Io(String),
     /// A name that is not a plain entry of the room.
     NotAPlainName,
+    /// The bytes under the name are a sound save point whose own name,
+    /// its digest, is another: an alias, which is not this save point.
+    NameDisagrees,
 }
 
 impl std::fmt::Display for SavePointFault {
@@ -71,6 +74,9 @@ impl std::fmt::Display for SavePointFault {
             SavePointFault::CheckFailed => write!(f, "save point fails its check"),
             SavePointFault::Io(why) => write!(f, "save point io: {why}"),
             SavePointFault::NotAPlainName => write!(f, "save point name is not a plain entry"),
+            SavePointFault::NameDisagrees => {
+                write!(f, "save point name is not the digest's, an alias")
+            }
         }
     }
 }
@@ -323,8 +329,12 @@ impl Room {
     }
 
     /// Read a save point by name from the room and nowhere else: the name
-    /// must be a plain entry, the open follows no link, and the bytes are
-    /// judged before anything is answered.
+    /// must be a plain entry, the open follows no link, the bytes are judged
+    /// before anything is answered, **and the name must be the save point's
+    /// own**, the digest with the suffix, so one save point has one name and
+    /// a copy under another is refused as an alias; the name an answer or
+    /// the `save_point` event carries is thereby the digest's by
+    /// construction.
     pub fn read(&self, name: &str) -> Result<SavePoint, SavePointFault> {
         use nix::fcntl::OFlag;
         if !is_plain_name(name) {
@@ -337,7 +347,11 @@ impl Room {
             nix::sys::stat::Mode::empty(),
         )
         .map_err(|e| SavePointFault::Io(format!("open {name}: {e}")))?;
-        read_regular(fd)
+        let save_point = read_regular(fd)?;
+        if save_point.name() != name {
+            return Err(SavePointFault::NameDisagrees);
+        }
+        Ok(save_point)
     }
 }
 
@@ -535,6 +549,13 @@ mod tests {
             room.read("absent.save-point"),
             Err(SavePointFault::Io(_))
         ));
+        // **One save point has one name**: the same bytes under another
+        // plain name are an alias and refused, the digest's name still
+        // reading. Perturbation: drop the name check from `read` and the
+        // copy restores under its alias.
+        std::fs::copy(dir.join(&name), dir.join("copy")).expect("copies");
+        assert_eq!(room.read("copy").err(), Some(SavePointFault::NameDisagrees));
+        assert_eq!(room.read(&name).expect("reads"), save_point);
         let surface = room.surface().expect("surface");
         assert_eq!(surface.len(), 2);
         assert!(surface[0].starts_with("owner "));
