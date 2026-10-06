@@ -32,6 +32,15 @@
 //! bytes go to a part name created exclusively, are synced, and are linked
 //! under the finished name, a link refusing an existing entry where a rename
 //! would replace it, so no path through this module overwrites a file.
+//!
+//! **What the write guarantees**: no finished name is answered that the room
+//! has not durably held, the part having been synced before the link and
+//! the room after it. A room sync that fails removes the finished name and
+//! syncs the room again, and where that removal or its sync fails the name
+//! is said on standard error, never silent, the ask still unanswered. A
+//! crash between the link and its sync can leave a name the answer never
+//! gave; its bytes are whole, the part having been synced first, so the
+//! next load's judgment treats it as a save point like any other.
 
 use std::io::{Read, Write};
 use std::os::fd::{AsFd, OwnedFd};
@@ -318,14 +327,31 @@ impl Room {
         );
         outcome?;
         if let Err(e) = nix::unistd::fsync(self.dir.as_fd()) {
-            let _ = nix::unistd::unlinkat(
-                self.dir.as_fd(),
-                name.as_str(),
-                nix::unistd::UnlinkatFlags::NoRemoveDir,
-            );
+            if let Err(why) = self.remove_finished(&name) {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "state_fault": format!("a finished save point name could not be removed after a failed room sync: {why}"),
+                        "name": name,
+                    })
+                );
+            }
             return Err(io("sync room", e));
         }
         Ok(name)
+    }
+
+    /// Remove a finished name and sync the room so the removal is durable,
+    /// naming the file in the reason where either fails.
+    fn remove_finished(&self, name: &str) -> Result<(), String> {
+        nix::unistd::unlinkat(
+            self.dir.as_fd(),
+            name,
+            nix::unistd::UnlinkatFlags::NoRemoveDir,
+        )
+        .map_err(|e| format!("unlink {name}: {e}"))?;
+        nix::unistd::fsync(self.dir.as_fd())
+            .map_err(|e| format!("sync room after unlink {name}: {e}"))
     }
 
     /// Read a save point by name from the room and nowhere else: the name
@@ -556,6 +582,17 @@ mod tests {
         std::fs::copy(dir.join(&name), dir.join("copy")).expect("copies");
         assert_eq!(room.read("copy").err(), Some(SavePointFault::NameDisagrees));
         assert_eq!(room.read(&name).expect("reads"), save_point);
+        // The failed-sync cleanup is checked and names the file: a removal
+        // of a name the room does not hold reports which name. Perturbation:
+        // ignore the unlink's result in `remove_finished` and the absent
+        // name reports success.
+        let why = room
+            .remove_finished("absent.save-point")
+            .expect_err("an absent finished name cannot be removed");
+        assert!(why.contains("unlink absent.save-point"), "{why}");
+        room.remove_finished(&name)
+            .expect("the finished name is removed and the room synced");
+        assert!(!dir.join(&name).exists());
         let surface = room.surface().expect("surface");
         assert_eq!(surface.len(), 2);
         assert!(surface[0].starts_with("owner "));

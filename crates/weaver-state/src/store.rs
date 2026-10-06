@@ -169,40 +169,50 @@ pub enum Ask {
     Restored,
 }
 
-/// Parse a seam frame as an ask, or nothing where it is not one.
+/// Parse a seam frame as an ask, or nothing where it is not one. **An ask
+/// frame is one recognized name and no other, and its body is exactly what
+/// the contract gives that ask**: an empty object for the six asks that
+/// carry no members, exactly `save-point` as a string for `restore`, and at
+/// most `last-turns` as a count for `recall`. A frame naming two asks, or a
+/// body carrying anything else, is malformed and answers nothing, per the
+/// contract's silence rule, which matters most for `snapshot`, the one ask
+/// with a filesystem side effect: presence of its name is not an ask.
 pub fn parse_ask(frame: &str) -> Option<Ask> {
     let value: serde_json::Value = serde_json::from_str(frame).ok()?;
-    let ask = value.get("ask")?;
-    if ask.get("shape").is_some() {
-        return Some(Ask::Shape);
+    let ask = value.get("ask")?.as_object()?;
+    if ask.len() != 1 {
+        return None;
     }
-    if ask.get("replay").is_some() {
-        return Some(Ask::Replay);
+    let (name, body) = ask.iter().next()?;
+    let body = body.as_object()?;
+    let empty = || body.is_empty().then_some(());
+    match name.as_str() {
+        "shape" => empty().map(|()| Ask::Shape),
+        "replay" => empty().map(|()| Ask::Replay),
+        "grants" => empty().map(|()| Ask::Grants),
+        "identity" => empty().map(|()| Ask::Identity),
+        "snapshot" => empty().map(|()| Ask::Snapshot),
+        "restored" => empty().map(|()| Ask::Restored),
+        "restore" => {
+            if body.len() != 1 {
+                return None;
+            }
+            let save_point = body.get("save-point")?.as_str()?.to_string();
+            Some(Ask::Restore { save_point })
+        }
+        "recall" => {
+            if body.len() > 1 {
+                return None;
+            }
+            let last_turns = match body.get("last-turns") {
+                None if body.is_empty() => None,
+                None => return None,
+                Some(bound) => Some(bound.as_u64()?),
+            };
+            Some(Ask::Recall { last_turns })
+        }
+        _ => None,
     }
-    if ask.get("grants").is_some() {
-        return Some(Ask::Grants);
-    }
-    if ask.get("identity").is_some() {
-        return Some(Ask::Identity);
-    }
-    if ask.get("snapshot").is_some() {
-        return Some(Ask::Snapshot);
-    }
-    if ask.get("restored").is_some() {
-        return Some(Ask::Restored);
-    }
-    if let Some(restore) = ask.get("restore") {
-        // The one member is required and a string: a restore naming no
-        // save point, or naming it as anything else, is not an ask.
-        let save_point = restore.get("save-point")?.as_str()?.to_string();
-        return Some(Ask::Restore { save_point });
-    }
-    let recall = ask.get("recall")?;
-    let last_turns = match recall.get("last-turns") {
-        None => None,
-        Some(bound) => Some(bound.as_u64()?),
-    };
-    Some(Ask::Recall { last_turns })
 }
 
 /// Whether a seam frame is the shape ask, kept for the standing tests: the

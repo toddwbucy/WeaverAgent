@@ -1664,6 +1664,22 @@ mod tests {
         assert_eq!(parse_ask(r#"{"ask":{"replay":{}}}"#), Some(Ask::Replay));
         for not_an_ask in [
             r#"{"ask":{"summarize":{}}}"#,
+            // One ask per frame, its body exactly the contract's: a frame
+            // naming two asks, a snapshot with a body, a snapshot that is
+            // null, a bodiless shape, a restore with a second member and a
+            // recall with a stranger each answer nothing, and the snapshot
+            // cases write nothing. Perturbation: parse by the presence of a
+            // name again and the compound frame takes a save point.
+            r#"{"ask":{"snapshot":null,"restore":{"save-point":"x"}}}"#,
+            r#"{"ask":{"snapshot":{"now":true}}}"#,
+            r#"{"ask":{"snapshot":null}}"#,
+            r#"{"ask":{"shape":null}}"#,
+            r#"{"ask":{"shape":{},"grants":{}}}"#,
+            r#"{"ask":{"restore":{"save-point":"x","other":1}}}"#,
+            r#"{"ask":{"restore":{}}}"#,
+            r#"{"ask":{"recall":{"stranger":1}}}"#,
+            r#"{"ask":{"recall":{"last-turns":1,"stranger":1}}}"#,
+            r#"{"ask":[]}"#,
             r#"{"ask":{"recall":{"last-turns":-3}}}"#,
             r#"{"ask":{"recall":{"last-turns":"three"}}}"#,
             r#"{"ask":{"recall":{"last-turns":2.5}}}"#,
