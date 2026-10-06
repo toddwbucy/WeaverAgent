@@ -34,11 +34,33 @@ pub(crate) const ANSWER_BOUND_MS: u64 = 2_000;
 /// holdings at rest takes.
 pub(crate) const PARKED_ASK_BOUND_MS: u64 = 600_000;
 
-/// The bound on the answer's size, matched by the member's own cap on
-/// what it renders: an answer still unframed past this many octets is not
-/// the seam's traffic, and the seam retires rather than growing the turn
-/// path's memory on a peer's behavior.
-const ANSWER_BOUND_BYTES: usize = 1024 * 1024;
+/// The bound on the answer's size, one mebibyte per
+/// `weaver-harness-state-contract` section 3, the one number both ends
+/// hold: the member renders no answer frame past it and this end reads none
+/// past it, an answer still unframed past this many octets being not the
+/// seam's traffic, so the seam retires rather than growing the turn path's
+/// memory on a peer's behavior. **The seeding path spends it at the
+/// sender**, per `weaver-harness-Spec` section 6.1: a seeding whose addition
+/// to the residency's prefix would carry the identity answer past it refuses
+/// as a turn, since a prefix the member cannot answer is a prefix the next
+/// load cannot seat.
+pub(crate) const ANSWER_BOUND_BYTES: usize = 1024 * 1024;
+
+/// What one seeded message costs in the identity answer as the member
+/// renders it, per `weaver-harness-state-contract` section 2: the message's
+/// canonical rendering as the `pairs`, the envelope naming the session, the
+/// run, the kind and the sequence, and the frame's own text around the
+/// list, each bounded above by a constant so the sum is never under the
+/// member's count. `ANSWER_FRAME_BYTES` covers `{"answer":{"identity":
+/// {"messages":[]}}}` and the delimiter; `ENVELOPE_BYTES` covers one entry's
+/// envelope text, its kind and a sequence of up to twenty digits, beside the
+/// session and run names it carries.
+pub(crate) const ANSWER_FRAME_BYTES: usize = 64;
+pub(crate) const ENVELOPE_BYTES: usize = 128;
+
+pub(crate) fn identity_entry_cost(rendered_message: usize, session: &str, run: &str) -> usize {
+    rendered_message + session.len() + run.len() + ENVELOPE_BYTES
+}
 
 /// What one `poll` can be armed for, the system call taking milliseconds in
 /// a `u16`. **It bounds one poll and never the wait**: a bound past it is
@@ -617,6 +639,27 @@ fn parse_recalled_events(events: &[serde_json::Value]) -> Option<Vec<Recalled>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The answer bound is the contract's one number**, per
+    /// `weaver-harness-state-contract` section 3: one mebibyte, which the
+    /// member's `ANSWER_BOUND` in `weaver-state` holds as the same number
+    /// under its own watch, the two crates seeing neither's constant. A
+    /// change to either without the other is the defect this pins.
+    #[test]
+    fn the_answer_bound_is_the_contracts_mebibyte() {
+        assert_eq!(ANSWER_BOUND_BYTES, 1024 * 1024);
+        // One entry's cost is never under what the member renders for it:
+        // the envelope's fixed text with the kind and a twenty-digit
+        // sequence fits the allowance beside the names.
+        let envelope = r#"{"envelope":{"session":"","run":"","kind":"message.system","sequence":"12345678901234567890"},"pairs":},"#;
+        assert!(envelope.len() <= ENVELOPE_BYTES, "{}", envelope.len());
+        // The frame's own text and its delimiter fit the allowance.
+        assert!(r#"{"answer":{"identity":{"messages":[]}}}"#.len() < ANSWER_FRAME_BYTES);
+        assert_eq!(
+            identity_entry_cost(10, "s-1", "r-1"),
+            10 + 3 + 3 + ENVELOPE_BYTES
+        );
+    }
 
     /// The answer's wire spelling parses to the shape, and a frame missing
     /// any member of it answers nothing.

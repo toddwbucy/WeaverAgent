@@ -327,6 +327,12 @@ struct Run {
     /// `system` line the frame path admits as the seeding turn, per
     /// `weaver-harness-Spec` section 6.1.
     operator: u32,
+    /// The rendered size of this residency's seedings so far, as the state
+    /// seam's `identity` answer would carry them, per `weaver-harness-Spec`
+    /// section 6.1: the seam's answer bound spent at the sender, so a
+    /// seeding whose addition would carry that answer past the bound
+    /// refuses rather than seating a prefix the next load cannot read.
+    seeded_bytes: usize,
     /// The run's own reference, retained so a close can name the run a turn
     /// belongs to, per `weaver-gate-world-contract` section 3. The author
     /// holds its own converted copy for the record, and this is the floor's,
@@ -929,9 +935,33 @@ impl Harness {
                     role: weaver_traits::Role::System,
                     content: vec![weaver_traits::ContentBlock::Text { text: text.clone() }],
                 });
+                // **The seam's answer bound, spent at the sender**, per Spec
+                // 6.1 and `weaver-harness-state-contract` section 3: the
+                // identity answer carries every seeding of the newest run,
+                // so a seeding whose addition would carry it past the frame
+                // bound refuses before anything is authored or appended.
+                let cost = seeding.as_ref().map(|message| {
+                    let rendered = serde_json::to_string(message).map_or(0, |json| json.len());
+                    crate::state::identity_entry_cost(rendered, &run.session.0, &run_ref.0)
+                });
+                if let Some(cost) = cost
+                    && run.seeded_bytes + cost + crate::state::ANSWER_FRAME_BYTES
+                        > crate::state::ANSWER_BOUND_BYTES
+                {
+                    break 'turn render_close(
+                        "refused",
+                        "reason",
+                        &format!(
+                            "the seeding would carry this residency's prefix to {} octets in the state seam's identity answer, past its bound of {} octets",
+                            run.seeded_bytes + cost + crate::state::ANSWER_FRAME_BYTES,
+                            crate::state::ANSWER_BOUND_BYTES
+                        ),
+                        None,
+                    );
+                }
                 if let Some(message) = seeding.as_ref() {
                     match run.author.author_identity(&mut run.recorder, message) {
-                        Ok(Ok(_)) => {}
+                        Ok(Ok(_)) => run.seeded_bytes += cost.unwrap_or(0),
                         Err(unlicensed) => {
                             break 'turn render_close(
                                 "refused",
@@ -1599,6 +1629,7 @@ impl Harness {
             author,
             session,
             operator: payload.operator,
+            seeded_bytes: 0,
             run: payload.run.clone(),
             spu: None,
             gate: None,
@@ -2689,6 +2720,7 @@ mod tests {
                 author,
                 session,
                 operator: 1000,
+                seeded_bytes: 0,
                 run: weaver_types::RunId("r-1".into()),
                 spu: Some(SpuChannels {
                     lifecycle,
@@ -5041,6 +5073,159 @@ mod tests {
             .map(|r| r.kind)
             .collect();
         assert_eq!(kinds, vec![Kind::Load], "nothing was authored: {kinds:?}");
+    }
+
+    /// **A seeding that would carry the residency's prefix past the state
+    /// seam's answer bound refuses, and one that fits seats**, per
+    /// `weaver-harness-Spec` section 6.1 and `weaver-harness-state-contract`
+    /// section 3: the run's count stands just under the bound, the n-th
+    /// seeding, whose cost would pass it, answers `refused` naming the bound
+    /// and the size with nothing authored, and the (n-1)-th, which fits,
+    /// seats and grows the count by its cost. The count is set rather than
+    /// grown by a mebibyte of seedings, each costing the same rendering.
+    /// Perturbation: drop the check and the n-th seeds, the record carrying
+    /// its `message.system`, which the member would then fail to answer at
+    /// the next load.
+    #[test]
+    fn a_seeding_past_the_answer_bound_refuses_and_one_that_fits_seats() {
+        use std::os::fd::AsRawFd;
+
+        use nix::sys::socket::{
+            AddressFamily, MsgFlags, SockFlag, SockType, recv as sock_recv, send as sock_send,
+            socketpair,
+        };
+
+        let (mut run, _spare, _sink) = entered_run(None);
+        let line = b"{\"role\":\"system\",\"text\":\"You are Karl.\"}";
+        let message = weaver_traits::Message {
+            role: weaver_traits::Role::System,
+            content: vec![weaver_traits::ContentBlock::Text {
+                text: "You are Karl.".into(),
+            }],
+        };
+        let cost = crate::state::identity_entry_cost(
+            serde_json::to_string(&message).expect("renders").len(),
+            &run.session.0,
+            &run.run.0,
+        );
+        // Room for exactly one more seeding of this cost and not two.
+        run.seeded_bytes =
+            crate::state::ANSWER_BOUND_BYTES - crate::state::ANSWER_FRAME_BYTES - cost;
+        let (near, far) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("socketpair");
+        run.spu.as_mut().expect("the arm stands").decode = crate::channel::decode_from_owned(near);
+        let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+        run.gate = Some(GateChannel {
+            channel: gate_end,
+            pid: nix::unistd::Pid::from_raw(1),
+            last_word: crate::spawn::LastWord::quiet(),
+        });
+        let gate_peer = gate_peer.into_channel();
+        let decode_peer = std::thread::spawn(move || {
+            let mut buf = vec![0u8; 65536];
+            let n = sock_recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("recv append");
+            let directive: weaver_types::TokenDirective =
+                serde_json::from_slice(&buf[..n]).expect("append parses");
+            assert!(matches!(
+                directive,
+                weaver_types::TokenDirective::AppendAndGenerate { .. }
+            ));
+            let request = serde_json::value::RawValue::from_string(
+                r#"{"rendered":"system: You are Karl.","template":"qwen2","sampling":{}}"#
+                    .to_string(),
+            )
+            .unwrap();
+            let measurement = serde_json::value::RawValue::from_string(
+                r#"{"model":"m","weights_hash":"h","input_tokens":[1],"output_tokens":[2],"blocks":[],"timings":{"prefill_ns":"1","decode_ns":"2"}}"#
+                    .to_string(),
+            )
+            .unwrap();
+            let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+                content: vec![],
+                emission: "I am Karl.".into(),
+                finish: weaver_types::Finish::Completed,
+                request,
+                measurement,
+                resident: 64,
+                capacity: 4096,
+            });
+            let bytes = serde_json::to_vec(&answer).expect("answer renders");
+            sock_send(far.as_raw_fd(), &bytes, MsgFlags::empty()).expect("send answer");
+        });
+        let (coordination, _coordination_dir) = test_listener();
+        let mut harness = Harness {
+            coordination,
+            organs: OrganBinaries {
+                classify: None,
+                spu: "/nonexistent".into(),
+                gate: "/nonexistent".into(),
+            },
+            parameters: OrganParameters::default(),
+            state: ChannelState::Entered(Box::new(run)),
+            composer: Some(weaver_trace::LoopIdentity::compiled("test")),
+        };
+        let mut entry = |_: &mut crate::engine::Ports<'_>,
+                         _: &str|
+         -> Result<crate::engine::TurnOutcome, crate::engine::TurnError> {
+            panic!("the seeding never enters the loop")
+        };
+        let mut verb_slot = None;
+        let mut answer_of = |ordinal: u64, harness: &mut Harness| {
+            gate_peer
+                .send(&OrganEnvelope {
+                    exchange: ExchangeId {
+                        opener: Opener::Gate,
+                        ordinal,
+                    },
+                    position: Position::Open,
+                    payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry_from(
+                        line, 1000,
+                    )),
+                })
+                .expect("frame sends");
+            harness
+                .serve_gate_wake("identity", &[], &mut entry, &mut verb_slot)
+                .expect("the wake serves");
+            let answer = gate_peer.recv().expect("the response returns");
+            let weaver_types::Payload::Frame(frame) = answer.payload else {
+                panic!("a frame answers a frame");
+            };
+            String::from_utf8(frame.octets().expect("canonical")).expect("utf8")
+        };
+        // The (n-1)-th fits: seated and turned, the count grown by its cost.
+        let first = answer_of(1, &mut harness);
+        decode_peer.join().expect("the decode peer finishes");
+        assert!(first.starts_with(r#"{"kind":"answered""#), "{first}");
+        let ChannelState::Entered(run) = &harness.state else {
+            panic!("entered");
+        };
+        assert_eq!(
+            run.seeded_bytes,
+            crate::state::ANSWER_BOUND_BYTES - crate::state::ANSWER_FRAME_BYTES
+        );
+        // The n-th would pass the bound: refused naming it, nothing authored.
+        let second = answer_of(2, &mut harness);
+        assert!(second.starts_with(r#"{"kind":"refused""#), "{second}");
+        assert!(
+            second.contains("past its bound of 1048576 octets"),
+            "names the bound: {second}"
+        );
+        let ChannelState::Entered(run) = &harness.state else {
+            panic!("entered");
+        };
+        let prefixes = run
+            .recorder
+            .structure()
+            .expect("serving")
+            .iter()
+            .filter(|r| r.kind == Kind::MessageSystem)
+            .count();
+        assert_eq!(prefixes, 1, "the first seeding alone is on the record");
     }
 
     /// **The operator's `system` line seats the prompt and turns**, per
