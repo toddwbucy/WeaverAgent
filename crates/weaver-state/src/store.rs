@@ -102,8 +102,11 @@ pub trait Store {
     /// event table is refused here.
     fn judge_image(&self, image: &[u8]) -> Result<ImageFacts, CustodyFault>;
     /// Replace the holdings whole with an image's, the load's restore and the
-    /// live `restore` ask's one mechanism. On a failure the holdings stand.
-    fn adopt(&mut self, image: &[u8]) -> Result<(), CustodyFault>;
+    /// live `restore` ask's one mechanism, **as a commit step**, per the
+    /// operator's ruling of 2026-10-05 on #1: the election is built on a
+    /// scratch copy of the image and the finished image is swapped in whole,
+    /// so on any failure the live holdings never move.
+    fn adopt(&mut self, image: &[u8], election: &Election) -> Result<(), CustodyFault>;
     /// The schema the holdings stand under, as text: every table, standing
     /// index, trigger and view, and never an elected index, which is a load's
     /// and not the schema's. The save point stamps its digest and a load

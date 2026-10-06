@@ -359,15 +359,22 @@ construction. A whole write earns its finished name by a link: the bytes go to a
 name created exclusively, are synced, and are linked under the finished name, a link
 refusing an existing entry where a rename would replace it, so no path writes over a
 file; a failed write removes the part and leaves no file under a finished name. **The
-schema the stamp names is the store's own**: every table, standing index, trigger and
-view of the catalog with its statement, in a fixed order, and never an elected index,
-which is a load's and not the schema's, so a later load's differing election is not a
-save point that disagrees. The loop's schema slot is not yet in the opener, so the
+schema the stamp names is the store's own**: every object of the catalog with its
+statement, in a fixed order, exempting only an object of type index whose statement is
+exactly the election's generated form, `CREATE INDEX field_elected_<hex of the key path>
+ON field (key, value) WHERE key = '<the key path>'`, because a load's election is the
+load's and not the schema's, so a later load's differing election is not a save point
+that disagrees; anything else under that prefix, a table, a trigger or an index of
+another shape, and any other object, is schema and must match, on the operator's ruling
+of 2026-10-05 on #1. The loop's schema slot is not yet in the opener, so the
 schema compared at a load is the one the store stands at open, the build's own. **An
-image is judged before it is adopted**: the engine adopts lazily and faults on first
-use, so the member deserializes the image on a scratch connection, requires the
-engine's own check to pass and the event table to stand, and only then swaps it in,
-so a failed adoption leaves the holdings standing. **An empty store has no position**,
+image is judged by what it says of itself and adopted as a commit step**, on the same
+ruling: the engine adopts lazily and faults on first use, so the member deserializes
+the image on a scratch connection, requires the engine's own check to pass and the
+event table to stand, reads the image's own catalog and last landing and refuses a
+stamp that disagrees with either, builds the active election's indexes on that scratch
+copy, and only then swaps the finished image in whole, so on any failure the live
+holdings never move and the ask goes unanswered. **An empty store has no position**,
 and what a save point taken of one is stamped with is the save-point act's provisional
 election, no run and sequence zero, pending the operator's ruling on the carried item
 r4170886146 in A3.0, the member learning no run until a distillate lands.

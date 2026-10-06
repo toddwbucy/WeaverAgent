@@ -307,9 +307,10 @@ fn member_entry(
 /// and its own last landing must be the position the stamp claims, so a
 /// stamp written to agree cannot carry a foreign image past the schema
 /// rule, and a stamp that lies about its position is refused as one that
-/// disagrees. The active election's indexes are rebuilt on the adopted
-/// holdings, since the image carries the election of the load that took
-/// it and the indexes are this load's.
+/// disagrees. **The adoption is a commit step**, per the operator's ruling
+/// of 2026-10-05 on #1: the active election is built on a scratch copy of
+/// the image and the finished image swapped in whole, so on any failure the
+/// live holdings never move and the ask goes unanswered.
 fn adopt_judged(
     store: &mut dyn Store,
     election: &Election,
@@ -333,11 +334,8 @@ fn adopt_judged(
         _ => return Err("stamp disagrees with the image"),
     }
     store
-        .adopt(&save_point.image)
+        .adopt(&save_point.image, election)
         .map_err(|_| "image refused by the engine")?;
-    store
-        .index_election(election)
-        .map_err(|_| "election could not be rebuilt on the restored holdings")?;
     Ok(save_point.stamp.clone())
 }
 

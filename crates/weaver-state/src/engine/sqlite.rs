@@ -427,15 +427,31 @@ impl Store for Sqlite {
         })
     }
 
-    /// Replace the holdings whole with the image's, judged first by
-    /// [`Store::judge_image`] so a failure leaves the holdings standing. The
-    /// statement cache is dropped after the swap because every cached
-    /// statement was prepared against the holdings that left.
-    fn adopt(&mut self, image: &[u8]) -> Result<(), CustodyFault> {
+    /// Replace the holdings whole with the image's, **as a commit step**, per
+    /// the operator's ruling of 2026-10-05 on #1: the image is judged on a
+    /// scratch copy, the election's indexes are built on that copy, and the
+    /// finished copy is serialized and swapped into the live connection
+    /// whole, so a failure anywhere before the swap leaves the live holdings
+    /// standing and the swap itself takes an image already proven to
+    /// deserialize. The statement cache is dropped after the swap because
+    /// every cached statement was prepared against the holdings that left.
+    fn adopt(&mut self, image: &[u8], election: &Election) -> Result<(), CustodyFault> {
+        let fault =
+            |what: &str, e: rusqlite::Error| CustodyFault::SavePoint(format!("{what}: {e}"));
         self.judge_image(image)?;
-        self.connection
+        let mut scratch = Connection::open_in_memory().map_err(|e| fault("scratch", e))?;
+        scratch
             .deserialize_read_exact(rusqlite::MAIN_DB, image, image.len(), false)
-            .map_err(|e| CustodyFault::SavePoint(format!("deserialize: {e}")))?;
+            .map_err(|e| fault("deserialize", e))?;
+        build_indexes(&scratch, election)?;
+        let finished = scratch
+            .serialize(rusqlite::MAIN_DB)
+            .map_err(|e| fault("serialize finished", e))?
+            .to_vec();
+        drop(scratch);
+        self.connection
+            .deserialize_read_exact(rusqlite::MAIN_DB, &finished[..], finished.len(), false)
+            .map_err(|e| fault("swap", e))?;
         self.connection.flush_prepared_statement_cache();
         Ok(())
     }
@@ -452,15 +468,18 @@ impl Store for Sqlite {
 }
 
 /// The schema as text: every object the catalog holds with its statement, in
-/// a fixed order, the elected indexes left out because a load's election is
-/// the load's and never the schema's. Read on the live connection and on a
-/// scratch copy of an image alike, so the two compare.
+/// a fixed order, **exempting only an index whose statement is exactly the
+/// election's generated form**, per the operator's ruling of 2026-10-05 on
+/// #1, because a load's election is the load's and never the schema's, and
+/// anything else under the elected prefix, a table, a trigger or an index of
+/// another shape, is schema and must match. Read on the live connection and
+/// on a scratch copy of an image alike, so the two compare.
 fn schema_of(connection: &Connection) -> Result<String, CustodyFault> {
     let fault = |e: rusqlite::Error| CustodyFault::StoreUnavailable(e.to_string());
     let mut query = connection
         .prepare_cached(
             "SELECT type, name, sql FROM sqlite_master
-             WHERE sql IS NOT NULL AND name NOT LIKE 'field_elected_%'
+             WHERE sql IS NOT NULL
              ORDER BY type, name",
         )
         .map_err(fault)?;
@@ -471,6 +490,9 @@ fn schema_of(connection: &Connection) -> Result<String, CustodyFault> {
         .map_err(fault)?;
     let mut text = String::new();
     for (kind, name, sql) in rows {
+        if kind == "index" && elected_index_form(&name).as_deref() == Some(sql.as_str()) {
+            continue;
+        }
         text.push_str(&kind);
         text.push(' ');
         text.push_str(&name);
@@ -703,14 +725,10 @@ fn build_indexes(
 ) -> Result<(), CustodyFault> {
     for (_kind, keys) in &election.keys {
         for key in keys {
-            use std::fmt::Write;
-            let mut name = String::with_capacity(key.len() * 2);
-            for byte in key.bytes() {
-                let _ = write!(name, "{byte:02x}");
-            }
-            let statement = format!(
-                "CREATE INDEX IF NOT EXISTS field_elected_{name} ON field (key, value) WHERE key = {}",
-                quoted(key)
+            let statement = elected_index_statement(key).replacen(
+                "CREATE INDEX ",
+                "CREATE INDEX IF NOT EXISTS ",
+                1,
             );
             connection
                 .execute(&statement, [])
@@ -718,6 +736,46 @@ fn build_indexes(
         }
     }
     Ok(())
+}
+
+/// An elected index's name: the key path, hex-encoded, under the prefix.
+fn elected_index_name(key: &str) -> String {
+    use std::fmt::Write;
+    let mut name = String::with_capacity(ELECTED_PREFIX.len() + key.len() * 2);
+    name.push_str(ELECTED_PREFIX);
+    for byte in key.bytes() {
+        let _ = write!(name, "{byte:02x}");
+    }
+    name
+}
+
+const ELECTED_PREFIX: &str = "field_elected_";
+
+/// The election's generated statement for one key path, as the catalog
+/// stores it: the engine keeps the statement text and drops the `IF NOT
+/// EXISTS` clause, so this is the one form an exempt index may carry.
+fn elected_index_statement(key: &str) -> String {
+    format!(
+        "CREATE INDEX {} ON field (key, value) WHERE key = {}",
+        elected_index_name(key),
+        quoted(key)
+    )
+}
+
+/// The generated form an index of this name would carry, derived from the
+/// name alone, or nothing where the name is not an elected index's: the
+/// prefix, then the key path in hex that decodes to UTF-8.
+fn elected_index_form(name: &str) -> Option<String> {
+    let hex = name.strip_prefix(ELECTED_PREFIX)?;
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    let bytes: Option<Vec<u8>> = (0..hex.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).ok())
+        .collect();
+    let key = String::from_utf8(bytes?).ok()?;
+    Some(elected_index_statement(&key))
 }
 
 /// A string as a single-quoted SQL literal, sqlite's own doubling rule.
@@ -1039,7 +1097,9 @@ mod tests {
         drop(store);
         let mut restored = Sqlite::stand().expect("stands empty");
         assert_eq!(restored.held().expect("held"), 0);
-        restored.adopt(&image).expect("adopts");
+        restored
+            .adopt(&image, &Election::default())
+            .expect("adopts");
         assert_eq!(
             restored.held().expect("held"),
             1,
@@ -1068,7 +1128,7 @@ mod tests {
         assert_eq!(facts.schema, restored.schema().expect("schema"));
         assert_eq!(facts.position, restored.position().expect("position"));
         let mut altered = Sqlite::stand().expect("stands");
-        altered.adopt(&image).expect("adopts");
+        altered.adopt(&image, &Election::default()).expect("adopts");
         altered
             .connection
             .execute_batch("CREATE TABLE extra (x)")
@@ -1080,7 +1140,9 @@ mod tests {
             "an image with another catalog says so"
         );
         assert!(
-            restored.adopt(b"not an image").is_err(),
+            restored
+                .adopt(b"not an image", &Election::default())
+                .is_err(),
             "bytes that are no database are refused"
         );
         assert_eq!(
@@ -1088,6 +1150,59 @@ mod tests {
             1,
             "and the holdings stand after the refusal"
         );
+        // **The swap is a commit step**: an election whose index the engine
+        // cannot build fails before anything moves, so the holdings stand,
+        // the second image's row never arriving. Perturbation: swap the
+        // image in before building the election and the count reads two.
+        let mut second = Sqlite::stand().expect("stands");
+        second.adopt(&image, &Election::default()).expect("adopts");
+        second.land(&distillate).expect("lands a second row");
+        let two_rows = second.image().expect("serializes");
+        let poisoned = Election {
+            all_kinds: true,
+            keys: vec![("turn.started".into(), vec!["a\u{0}b".into()])],
+        };
+        assert!(
+            restored.adopt(&two_rows, &poisoned).is_err(),
+            "the poisoned election fails the build"
+        );
+        assert_eq!(
+            restored.held().expect("held"),
+            1,
+            "and the live holdings never moved"
+        );
+        // **The exemption is exact**: an index in the election's generated
+        // form is left out of the schema, and a table or a trigger under
+        // the elected prefix, or an index of another shape, is schema.
+        // Perturbation: exempt by prefix alone and the three hidden objects
+        // go unseen.
+        let standing = restored.schema().expect("schema");
+        for hidden in [
+            "CREATE TABLE field_elected_7a (x)",
+            "CREATE TRIGGER field_elected_7b BEFORE INSERT ON field BEGIN SELECT 1; END",
+            "CREATE UNIQUE INDEX field_elected_7c ON field (key)",
+        ] {
+            let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+            connection
+                .deserialize_read_exact(rusqlite::MAIN_DB, &image[..], image.len(), false)
+                .unwrap();
+            connection.execute_batch(hidden).unwrap();
+            let hiding = connection.serialize(rusqlite::MAIN_DB).unwrap().to_vec();
+            assert_ne!(
+                restored.judge_image(&hiding).expect("judged").schema,
+                standing,
+                "{hidden} is schema"
+            );
+        }
+        assert_eq!(
+            elected_index_form(&elected_index_name("payload.close")).as_deref(),
+            Some(
+                "CREATE INDEX field_elected_7061796c6f61642e636c6f7365 ON field (key, value) \
+                 WHERE key = 'payload.close'"
+            )
+        );
+        assert_eq!(elected_index_form("field_elected_zz"), None);
+        assert_eq!(elected_index_form("other"), None);
     }
 
     /// A later load's differing election builds its own index rather than

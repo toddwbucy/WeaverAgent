@@ -1567,6 +1567,48 @@ fn a_damaged_or_foreign_save_point_never_reaches_the_holdings() {
         json!({"refused": "schema-mismatch"}),
         "a stamp naming the standing schema over a foreign image is refused"
     );
+    // **The exemption is exact**, per the operator's ruling of 2026-10-05 on
+    // #1: a table or a trigger hidden under the elected prefix is schema and
+    // refuses, whatever the stamp names. Perturbation: exempt by prefix
+    // alone in `schema_of` and both restore.
+    for (label, hidden) in [
+        ("table", "CREATE TABLE field_elected_7a (x)"),
+        (
+            "trigger",
+            "CREATE TRIGGER field_elected_7b BEFORE INSERT ON field BEGIN SELECT 1; END",
+        ),
+    ] {
+        let mut store = Sqlite::stand().expect("stands");
+        let standing = store.schema().unwrap();
+        store
+            .land(&weaver_state::Distillate {
+                session: SESSION.into(),
+                run: format!("r-{label}"),
+                turn: None,
+                kind: "load".into(),
+                sequence: 0,
+                pairs: vec![],
+            })
+            .unwrap();
+        let image = store.image().unwrap();
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .deserialize_read_exact(rusqlite::MAIN_DB, &image[..], image.len(), false)
+            .unwrap();
+        connection.execute_batch(hidden).unwrap();
+        let hiding = connection.serialize(rusqlite::MAIN_DB).unwrap().to_vec();
+        let save_point = SavePoint::take(store.position().unwrap().unwrap(), &standing, hiding);
+        let path = foreign_dir.0.join(format!("hidden-{label}.save-point"));
+        std::fs::write(&path, save_point.bytes()).unwrap();
+        let mut member = Member::new_with(rule.clone(), false, SESSION, Some(&path));
+        let answered: Value = serde_json::from_str(&member.ask("restored", None)).unwrap();
+        assert_eq!(
+            answered["answer"]["restored"],
+            json!({"refused": "schema-mismatch"}),
+            "a {label} hidden under the elected prefix is schema"
+        );
+        assert!(answer_shape(&member.ask("shape", None)).is_empty());
+    }
     // A stamp that lies about its position is refused as one that disagrees.
     let misstamped = {
         let mut store = Sqlite::stand().expect("stands");
