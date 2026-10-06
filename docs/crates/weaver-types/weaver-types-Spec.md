@@ -1113,11 +1113,30 @@ the measurement the earlier deferral waited on is not needed.**
 ```rust
 pub struct TurnFrame {
     pub octets: String,
+    pub dialer: Option<u32>,
+}
+
+pub struct TurnRequest {
+    pub text: String,
+    pub role: Option<serde_json::Value>,
 }
 ```
 
-The member is the line's octets encoded base64, both directions, one
-definition per the charter. The encoding is RFC 4648 section 4's standard
+`octets` is the line's octets encoded base64, both directions, one
+definition per the charter. **`dialer` is the peer uid the gate read at accept**, as
+of the operator's ruling of 2026-10-06 (#1): present on every frame the gate carries
+inward, absent on a response, and absent from a line written without it so a frame
+of before the member still parses, per `weaver-harness-gate-contract` section 2; the
+harness admits the seeding line by it. **`TurnRequest` is the request line as the
+harness parses it**, per `weaver-gate-world-contract` section 2: `text`, a string, and
+at most `role` beside it, each member once, decoded typed rather than read as a value
+because a value's map collapses a repeated member to its last spelling and would read
+`{"text":"x","role":"user","role":"system"}` as the seeding line; a repeated member,
+an unknown member and a missing `text` refuse by name, and `role` crosses as whatever
+the line wrote, `null` included, for the harness to refuse every value but the string
+`system`, naming it. The parse is `TurnRequest::parse`, which refuses a line that does
+not open an object before the typed decode, since serde reads a struct from an array
+by position and `["x","system"]` would otherwise read as the seeding line. The encoding is RFC 4648 section 4's standard
 alphabet, padded, with no line breaks and no interior whitespace, and the
 decode refuses input the encode would not produce, so one octet sequence has
 exactly one carried form. The encoding's implementation rides with the type,
