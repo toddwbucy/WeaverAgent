@@ -548,8 +548,8 @@ fn check_declared_paths(config: &AgentConfig) -> Result<(), ConfigError> {
 /// carrying nothing, no text block carrying no text. No declaration reaches
 /// them since the operator's ruling of 2026-10-06 that the system prompt is
 /// state, so the harness's identity door applies them where a prefix is
-/// written, at the load's seating and the seeding line, and the watches
-/// below call this check over messages directly.
+/// written, the seeding line, and the watches below call this check over
+/// messages directly.
 pub fn check_identity_roles(identity: &[weaver_traits::Message]) -> Result<(), ConfigError> {
     for (at, message) in identity.iter().enumerate() {
         if !matches!(message.role, weaver_traits::Role::System) {
@@ -575,10 +575,9 @@ pub fn check_identity_roles(identity: &[weaver_traits::Message]) -> Result<(), C
         // **The block is judged beside the role**, the door refusing both.
         // `weaver-traits-Spec` section 3 licenses a `System` message to carry
         // `Text` and nothing else, so a declaration naming the right role with
-        // a `tool_call` in it parsed cleanly, authored an
-        // `IdentityPrefixUnrecorded` fault without aborting the load, and was
-        // refused at the SPU's `Open` - leaving the operator to meet in a
-        // running agent what this check exists to answer at the load.
+        // a `tool_call` in it once parsed cleanly and was refused at the SPU's
+        // `Open` - leaving the operator to meet in a running agent what this
+        // check exists to answer first.
         for (block_at, block) in message.content.iter().enumerate() {
             match block {
                 // **A block carrying no text is an empty turn by another

@@ -1166,15 +1166,12 @@ pub enum FaultCase {
     MessageRecordUndecodable,
     /// The record cannot account for a seated identity prefix, per
     /// `weaver-harness-PRD` section 5. The prefix is seated at the session's
-    /// open whether the identity door wrote it or not, so without this case
-    /// the record reads as an agent that seated nothing.
-    ///
-    /// **One case rather than one per cause**, on the custody rule's own
-    /// criterion: the case is what the harness consumes, and a refused role,
-    /// an unlicensed content block, an unrenderable message, and a recorder
-    /// that would not take the write all mean the same thing for the turn and
-    /// the residency - nothing, the load standing either way. Which of them
-    /// happened is the account's to carry, that being the reporting organ's
-    /// own rendering by construction.
+    /// open whether the record took the `recall` of the identity ask or not,
+    /// so without this case the record reads as an agent that seated nothing.
+    /// Since the operator's ruling of 2026-10-06 (later, #1) a load authors
+    /// no prefix, so the recall the recorder would not take is the case's one
+    /// cause; which it was is the account's to carry, that being the
+    /// reporting organ's own rendering by construction, and the load stands
+    /// either way.
     IdentityPrefixUnrecorded,
 }
