@@ -244,6 +244,12 @@ load asks the member for it and seats what the member holds, and the draft on di
 only what the next seeding would send. Seeding again in a later residency replaces the
 prompt; seeding twice in one residency seats both, in order.
 
+**An agent without a store (section 3) is seeded in every residency instead**, as its
+first turn: with no member, nothing holds the prompt across loads, the load seats
+nothing, and a save point and unload would carry nothing, so the seeding is the first
+turn of each residency and the agent is otherwise unbounded. That is the storeless
+election's meaning and not a fault.
+
 **Load, seed, save point, unload; production is the next load.** Within the seeding
 residency the prompt is appended context, not the decode session's prefix, so a flush
 there would drop it from the context; the leave's snapshot is the save point until the

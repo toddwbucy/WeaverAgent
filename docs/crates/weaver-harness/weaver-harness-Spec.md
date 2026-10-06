@@ -2115,7 +2115,11 @@ open, and the open seats the answer: the turnless `message.system` events of the
 run the restored holdings carry, in order and with their boundaries, byte for byte,
 which is the prompt the seeding turn entered or a later seeding replaced, carried by
 the save point the load restored. An empty answer is an agent not yet seeded, which
-opens with no prefix and is seeded by its first turn, per the seeding clause below. The
+opens with no prefix and is seeded by its first turn, per the seeding clause below. **A
+serving load with no member elected asks nothing and seats nothing**: a store of
+`none` is the operator's election that nothing holds state across loads, the prompt
+included, so such an agent is seeded in every residency, as its first turn, and the
+seeding turn is admitted there as anywhere, since it is the one way the prompt enters. The
 declaration carries no identity and the enter no prompt, per `weaver-types-Spec`
 sections 2 and 4, so this crate holds no file, no path and no handle into the
 operator's directory. **The load writes none of what it seats to the record**, on
