@@ -112,11 +112,13 @@ def main() -> int:
                           f"seeded through the gate; shorten it by hand (deploy/HowToDeployANewAgent.md "
                           f"section 3) before the install")
     if text is not None and os.path.lexists(draft):
+        # Read as bytes and decoded strictly, so no newline is translated and
+        # no byte is replaced before the comparison (Codex on #92, round 4).
         try:
-            with open(draft, encoding="utf-8") as fh:
-                standing = fh.read()
+            with open(draft, "rb") as fh:
+                standing = fh.read().decode("utf-8")
         except (OSError, UnicodeDecodeError) as e:
-            return refuse(f"{draft} already stands and does not read: {e}")
+            return refuse(f"{draft} already stands and does not read as UTF-8: {e}")
         if standing != text:
             return refuse(f"{draft} already stands with other text than the declaration's identity; "
                           f"reconcile them by hand (deploy/HowToDeployANewAgent.md section 3)")
@@ -140,9 +142,11 @@ def main() -> int:
         return 0
     if text is not None and not os.path.lexists(draft):
         fd = os.open(draft, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        # Written with no newline translation, the text's own line endings
+        # landing as the declaration carried them.
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
             fh.write(text)
-    with open(path, "w", encoding="utf-8") as fh:
+    with open(path, "w", encoding="utf-8", newline="") as fh:
         fh.write(rewritten)
     return 0
 

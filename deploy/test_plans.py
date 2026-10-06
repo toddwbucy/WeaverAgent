@@ -1044,6 +1044,64 @@ esac
         result = subprocess.run(turn + ["extra text"], env=self.env, text=True, capture_output=True, timeout=20)
         self.assertEqual(result.returncode, 2)
         self.assertIn("takes no text", result.stderr)
+        # A draft that is not UTF-8 refuses before the dial, naming the file
+        # (Codex on #92, round 4): the harness's identity door judges UTF-8
+        # and a replacement character would be a silent change of the bytes.
+        draft.write_bytes(b"You are \xff.\n")
+        result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("is not UTF-8", result.stderr)
+        self.assertIn(str(draft), result.stderr)
+        self.assertNotIn("no gate at", result.stderr)
+
+    def test_turn_system_sends_the_drafts_bytes_verbatim(self):
+        # The draft's line endings reach the gate as they stand: a CRLF draft
+        # and a lone-CR draft each arrive with their bytes, read binary and
+        # not through text mode's newline translation (Codex on #92, round
+        # 4). A stand-in gate accepts the dial, keeps the line, and answers.
+        # Perturbation: read the draft in text mode and the CRLF text arrives
+        # with LF alone.
+        import socket, threading
+        root = self.config / "m1"
+        root.mkdir()
+        (root / "declaration-directory").write_text(str(self.decl) + "\n")
+        coordination = self.root / "coordination"
+        (coordination / "weaver-m1").mkdir(parents=True)
+        (root / "coordination-root").write_text(str(coordination) + "\n")
+        self.decl.mkdir(parents=True)
+        draft = self.decl / "system-prompt.md"
+        turn = [sys.executable, str(self.repo / "deploy" / "turn.py"), "m1", "--system", "--raw"]
+        for text in ("one\r\ntwo\r\n", "one\rtwo", "one\ntwo\n"):
+            with self.subTest(text=text):
+                draft.write_bytes(text.encode())
+                path = coordination / "weaver-m1" / "gate.sock"
+                path.unlink(missing_ok=True)
+                gate = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                gate.bind(str(path))
+                gate.listen(1)
+                received = {}
+
+                def serve():
+                    conn, _ = gate.accept()
+                    with conn:
+                        line = b""
+                        while not line.endswith(b"\n"):
+                            chunk = conn.recv(65536)
+                            if not chunk:
+                                break
+                            line += chunk
+                        received["line"] = line
+                        conn.sendall(b'{"kind":"answered","run":"r-1","text":"ok","turn":"t-1"}\n')
+                server = threading.Thread(target=serve)
+                server.start()
+                try:
+                    result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
+                finally:
+                    server.join(timeout=10)
+                    gate.close()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(received["line"]), {"role": "system", "text": text})
+                self.assertIn('"kind":"answered"', result.stdout)
 
     def test_turn_names_a_coordination_root_it_cannot_read(self):
         # Codex on #45, round 12: an unreadable `coordination-root` fell back to
@@ -1327,6 +1385,25 @@ esac
                 self.assertNotIn("identity", decl.read_text())
                 result = self.migrate(decl, "--apply")
                 self.assertEqual((result.returncode, result.stdout), (0, ""), "nothing left to move")
+        # The identity's line endings round-trip byte for byte: a text the
+        # declaration wrote with CRLF escapes lands in the draft as CRLF, and
+        # the standing draft then compares equal on a second run (Codex on
+        # #92, round 4). Perturbation: read the standing draft in text mode
+        # and the second run refuses, CRLF having read as LF; the write's
+        # newline="" is symmetry, which Linux's text mode does not need.
+        decl.write_text(self.KARL.replace(
+            'text = """\nYou are Karl, a small local agent.\nAnswer plainly."""',
+            'text = "one\\r\\ntwo\\rthree"'))
+        draft.unlink(missing_ok=True)
+        result = self.migrate(decl, "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(draft.read_bytes(), b"one\r\ntwo\rthree")
+        decl.write_text(self.KARL.replace(
+            'text = """\nYou are Karl, a small local agent.\nAnswer plainly."""',
+            'text = "one\\r\\ntwo\\rthree"'))
+        result = self.migrate(decl, "--apply")
+        self.assertEqual(result.returncode, 0, "the standing draft compares equal as bytes: " + result.stderr)
+        self.assertEqual(draft.read_bytes(), b"one\r\ntwo\rthree")
 
     def test_migrate_identity_refuses_what_it_cannot_move_losslessly(self):
         # Two messages, a non-text block, a draft already standing with other

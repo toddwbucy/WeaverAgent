@@ -80,11 +80,20 @@ def main() -> int:
         if directory is None:
             return 1
         draft = os.path.join(directory, "system-prompt.md")
+        # **The draft's bytes, as they stand**: read binary so no newline is
+        # translated (a text-mode read turns CRLF and a lone CR into LF), and
+        # decoded as strict UTF-8, refusing anything else by name, since the
+        # harness's identity door judges UTF-8 and a replacement character
+        # would be a silent change of the bytes (Codex on #92, round 4).
         try:
-            with open(draft, encoding="utf-8") as f:
-                text = f.read()
+            with open(draft, "rb") as f:
+                text = f.read().decode("utf-8")
         except OSError as e:
             print(f"cannot read the prompt draft {draft}: {e.strerror or e}", file=sys.stderr)
+            return 1
+        except UnicodeDecodeError as e:
+            print(f"the prompt draft {draft} is not UTF-8 ({e}), and the gate's line is UTF-8 by the world "
+                  f"contract; fix the file", file=sys.stderr)
             return 1
         if not text.strip():
             print(f"the prompt draft {draft} is empty, and an empty prompt seeds nothing", file=sys.stderr)
