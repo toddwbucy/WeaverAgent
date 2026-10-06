@@ -32,6 +32,12 @@ import socket
 import sys
 import time
 
+# The gate's line bound, per weaver-gate-Spec section 4: a line of more than
+# this many octets before the delimiter closes the connection unanswered, so a
+# request is measured here, as the bytes it will send, and refused with its
+# size rather than met as a closed socket.
+LINE_BOUND = 32 * 1024
+
 
 def read_key(base: str, agent: str, key: str) -> str | None:
     """One key of the agent's root, stripped, or None after naming what refused."""
@@ -86,6 +92,12 @@ def main() -> int:
         request = {"role": "system", "text": text}
     else:
         request = {"text": args[1]}
+    line = json.dumps(request).encode()
+    if len(line) > LINE_BOUND:
+        what = "the seeding line" if system else "the request line"
+        print(f"{what} is {len(line)} octets, past the gate's bound of {LINE_BOUND} octets before the "
+              f"delimiter (weaver-gate-Spec section 4); shorten it", file=sys.stderr)
+        return 1
     # **`coordination-root` is required, so there is no default to fall back
     # to.** Admin refuses every verb on a root without it. A key this user
     # cannot read once fell back to /run, which sent the turn to a gate that is
@@ -110,7 +122,7 @@ def main() -> int:
                   f"or this shell is not yet in group weaver-{agent} (newgrp, or sg weaver-{agent} -c ...)",
                   file=sys.stderr)
             return 1
-        s.sendall((json.dumps(request) + "\n").encode())
+        s.sendall(line + b"\n")
         line = s.makefile("r", encoding="utf-8").readline()
     elapsed = time.monotonic() - started
     if not line:

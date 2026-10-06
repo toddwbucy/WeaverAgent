@@ -556,6 +556,53 @@ pub enum AgentState {
     Active,
 }
 
+/// A request line as the harness parses it, per `weaver-gate-world-contract`
+/// section 2 and `weaver-gate-Spec` section 4: one JSON object carrying `text`,
+/// a string, and at most `role` beside it, each member once. **Typed rather
+/// than read as a value**, because a value's map collapses a repeated member
+/// to its last spelling, so `{"text":"x","role":"user","role":"system"}` would
+/// read as the seeding line; the typed decode refuses a repeated member, an
+/// unknown member and a missing `text` by name. `role` is carried as whatever
+/// the line wrote, `null` included, so the harness refuses every value but the
+/// string `system` naming it, per `weaver-harness-Spec` section 6.1.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TurnRequest {
+    pub text: String,
+    #[serde(default, deserialize_with = "present_as_written")]
+    pub role: Option<serde_json::Value>,
+}
+
+impl TurnRequest {
+    /// The one parse of a request line: **an object and nothing else**, then
+    /// the typed decode. serde reads a struct from a JSON array as well as
+    /// from an object, by position, so `["x","system"]` would otherwise read
+    /// as the seeding line; the line's first byte past whitespace must open an
+    /// object. The error is the refused turn's reason, as text.
+    pub fn parse(octets: &[u8]) -> Result<TurnRequest, String> {
+        match octets.iter().find(|byte| !byte.is_ascii_whitespace()) {
+            Some(b'{') => {}
+            _ => return Err("a request is one JSON object".into()),
+        }
+        serde_json::from_slice::<TurnRequest>(octets).map_err(|error| {
+            format!(
+                "a request is one JSON object carrying the text member, a string, and at most the role member beside it, each once: {error}"
+            )
+        })
+    }
+}
+
+/// A member that is present reads as `Some` of whatever it wrote, `null`
+/// included: serde's own `Option` reads a written `null` as absent, and the
+/// harness is owed the difference between a line that named no role and one
+/// that named `null`.
+fn present_as_written<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_json::Value::deserialize(deserializer).map(Some)
+}
+
 /// A turn frame, opaque to the gate: whatever the client sent, and the
 /// answer going back, one definition for both directions per the charter.
 ///

@@ -21,10 +21,17 @@ what cannot move, which is the operator's to do by hand per
 deploy/HowToDeployANewAgent.md section 3. Run as the operator: the
 declaration and the draft are the operator's own files.
 """
+import json
 import os
 import re
 import sys
 import tomllib
+
+# The gate's line bound, per weaver-gate-Spec section 4, measured as
+# deploy/turn.py --system will send the draft: a prompt whose seeding line
+# would pass it cannot be seeded, so it does not move, and the declaration is
+# left for the operator to shorten by hand.
+LINE_BOUND = 32 * 1024
 
 HEADER = re.compile(r"^\s*\[\[\s*spu-instruction\.decoder\.identity(\.content)?\s*\]\]\s*$")
 ANY_HEADER = re.compile(r"^\s*\[")
@@ -97,6 +104,13 @@ def main() -> int:
         return refuse(f"{path}: the identity is not one system message of one text block, which is "
                       f"the only shape that moves losslessly into {draft}; move it by hand "
                       f"(deploy/HowToDeployANewAgent.md section 3)")
+    if text is not None:
+        line = json.dumps({"role": "system", "text": text}).encode()
+        if len(line) > LINE_BOUND:
+            return refuse(f"{path}: its identity's text would seed as a line of {len(line)} octets, past the "
+                          f"gate's bound of {LINE_BOUND} octets (weaver-gate-Spec section 4), so it cannot be "
+                          f"seeded through the gate; shorten it by hand (deploy/HowToDeployANewAgent.md "
+                          f"section 3) before the install")
     if text is not None and os.path.lexists(draft):
         try:
             with open(draft, encoding="utf-8") as fh:

@@ -73,31 +73,20 @@ struct Request {
 /// The request's parse, per `weaver-gate-Spec` section 4 and the seeding
 /// clause of `weaver-harness-Spec` section 6.1: one JSON object, one `text`
 /// member, a string, and beside it at most `role` with the one value
-/// `system`; an unknown member and any other role refuse, the refusal naming
-/// the role. Who may send a `system` line is the frame path's judgment,
-/// made against the frame's dialer and not here. Every failure is the
-/// refused turn's reason, content the harness authors, never a channel
+/// `system`; an unknown member, a repeated member and any other role refuse,
+/// the refusal naming the role. **The line decodes typed**, as the floor's
+/// `TurnRequest`, because a value's map collapses a repeated member to its
+/// last spelling and would read `{"text":"x","role":"user","role":"system"}`
+/// as the seeding line. Who may send a `system` line is the frame path's
+/// judgment, made against the frame's dialer and not here. Every failure is
+/// the refused turn's reason, content the harness authors, never a channel
 /// fault, which is the layer split the frame election bought.
 fn parse_request(frame: &weaver_types::TurnFrame) -> Result<Request, String> {
     let Some(octets) = frame.octets() else {
         return Err("the frame's carriage is not the canonical encoding".into());
     };
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&octets) else {
-        return Err("the line does not parse as one JSON value".into());
-    };
-    let Some(object) = value.as_object() else {
-        return Err("a request is one JSON object".into());
-    };
-    if object.keys().any(|key| key != "text" && key != "role") {
-        return Err(
-            "a request carries the text member, at most the role member beside it, and nothing else"
-                .into(),
-        );
-    }
-    let Some(text) = object.get("text").and_then(|value| value.as_str()) else {
-        return Err("a request carries the text member, a string".into());
-    };
-    let system = match object.get("role") {
+    let request = weaver_types::TurnRequest::parse(&octets)?;
+    let system = match request.role {
         None => false,
         Some(serde_json::Value::String(role)) if role == "system" => true,
         Some(role) => {
@@ -107,7 +96,7 @@ fn parse_request(frame: &weaver_types::TurnFrame) -> Result<Request, String> {
         }
     };
     Ok(Request {
-        text: text.to_string(),
+        text: request.text,
         system,
     })
 }
@@ -4915,11 +4904,15 @@ mod tests {
     }
 
     /// **The request parse admits `role` with the one value `system` and
-    /// nothing else beside `text`**, per `weaver-gate-Spec` section 4 and the
-    /// seeding clause of `weaver-harness-Spec` section 6.1: a bare line is
-    /// the user's, the seeding line is marked, any other role refuses naming
-    /// it, and an unknown member refuses as before. Perturbation: admit any
-    /// string under `role` and the third case parses.
+    /// nothing else beside `text`, each member once**, per `weaver-gate-Spec`
+    /// section 4 and the seeding clause of `weaver-harness-Spec` section 6.1:
+    /// a bare line is the user's, the seeding line is marked, any other role
+    /// refuses naming it, `null` among them, an unknown member refuses as
+    /// before, and a repeated member refuses, since a value's map would read
+    /// the last spelling and admit `{"role":"user","role":"system"}` as the
+    /// seeding line. Perturbations: admit any string under `role` and the
+    /// third case parses; read the line as a `serde_json::Value` again and
+    /// the repeated-role case parses as the seeding line.
     #[test]
     fn the_request_parse_admits_the_system_role_alone() {
         let parsed = |line: &[u8]| parse_request(&weaver_types::TurnFrame::carry(line));
@@ -4938,6 +4931,20 @@ mod tests {
         assert!(
             parsed(b"{\"role\":\"system\"}").is_err(),
             "the text is owed"
+        );
+        let null = parsed(b"{\"role\":null,\"text\":\"hi\"}").expect_err("null is not absent");
+        assert!(null.contains("null"), "names the role: {null}");
+        for line in [
+            &b"{\"text\":\"x\",\"role\":\"user\",\"role\":\"system\"}"[..],
+            b"{\"text\":\"x\",\"role\":\"system\",\"role\":\"system\"}",
+            b"{\"text\":\"a\",\"text\":\"b\"}",
+        ] {
+            let repeated = parsed(line).expect_err("a repeated member refuses");
+            assert!(repeated.contains("duplicate field"), "{repeated}");
+        }
+        assert!(
+            parsed(b"[\"x\",\"system\"]").is_err(),
+            "an array is not a request, whatever serde would read by position"
         );
     }
 

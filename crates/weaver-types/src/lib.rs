@@ -108,5 +108,5 @@ pub use wire::{
     LifecycleRefusal, Lineage, LoadFacts, MAX_ENVELOPE_BYTES, Opener, OrganEnvelope, Payload,
     Position, RefusalRecord, RefusingOrgan, Reset, ResetReason, RunId, ScoredLabel,
     SegmentPreamble, SessionId, TokenAnswer, TokenAsk, TokenDirective, TokenRefusal, ToolExecution,
-    ToolOutcome, TurnFrame, TurnKey,
+    ToolOutcome, TurnFrame, TurnKey, TurnRequest,
 };

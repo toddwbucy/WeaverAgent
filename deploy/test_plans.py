@@ -1014,6 +1014,37 @@ esac
         self.assertIn("admin does not validate m1, so its root is not read: " + str(real / "weaver-admin"),
                       result.stderr)
 
+    def test_turn_system_reads_the_draft_and_measures_it_against_the_gates_bound(self):
+        # --system reads the operator's draft from the root's declaration
+        # directory and sends it as the system role; a draft whose line would
+        # pass the gate's 32 KiB bound refuses before dialing, naming the size
+        # (Codex on #92, round 3), and an empty draft refuses too. A draft
+        # that fits reaches the dial, which finds no gate. Perturbation: drop
+        # the measure and the oversize draft reaches the dial.
+        root = self.config / "m1"
+        root.mkdir()
+        (root / "declaration-directory").write_text(str(self.decl) + "\n")
+        (root / "coordination-root").write_text(str(self.root / "nowhere") + "\n")
+        self.decl.mkdir(parents=True)
+        draft = self.decl / "system-prompt.md"
+        turn = [sys.executable, str(self.repo / "deploy" / "turn.py"), "m1", "--system"]
+        draft.write_text("x" * (32 * 1024))
+        result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("past the gate's bound of 32768 octets", result.stderr)
+        self.assertNotIn("no gate at", result.stderr)
+        draft.write_text("   \n")
+        result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("is empty", result.stderr)
+        draft.write_text("You are Karl.\n")
+        result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no gate at", result.stderr)
+        result = subprocess.run(turn + ["extra text"], env=self.env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("takes no text", result.stderr)
+
     def test_turn_names_a_coordination_root_it_cannot_read(self):
         # Codex on #45, round 12: an unreadable `coordination-root` fell back to
         # /run, so the turn dialled a gate that is not this agent's and reported
@@ -1319,6 +1350,17 @@ esac
                     self.assertEqual(decl.read_text(), text, "nothing was written")
                     if standing is not None:
                         self.assertEqual(draft.read_text(), standing)
+        # A prompt whose seeding line would pass the gate's bound cannot be
+        # seeded, so it does not move (Codex on #92, round 3). Perturbation:
+        # drop the measure and the declaration is rewritten.
+        draft.unlink(missing_ok=True)
+        decl.write_text(self.KARL.replace("You are Karl, a small local agent.", "x" * (32 * 1024)))
+        for args in ((), ("--apply",)):
+            result = self.migrate(decl, *args)
+            self.assertEqual(result.returncode, 2, result.stdout)
+            self.assertIn("past the gate's bound of 32768 octets", result.stderr)
+            self.assertIn("identity", decl.read_text(), "nothing was written")
+            self.assertFalse(draft.exists())
         draft.unlink(missing_ok=True)
         decl.write_text(self.KARL.replace(
             '[[spu-instruction.decoder.identity]]\nrole = "system"\n\n'

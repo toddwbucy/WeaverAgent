@@ -326,6 +326,43 @@ fn the_decode_refuses_the_noncanonical_forms() {
     assert_eq!(canonical.octets().expect("canonical"), b"AB");
 }
 
+/// **A request line decodes typed, each member once**, per
+/// `weaver-gate-world-contract` section 2: a repeated `role` or `text` refuses,
+/// an unknown member refuses, a missing `text` refuses, a bare line carries no
+/// role, and a `role` of any value crosses as written for the harness to judge,
+/// `null` among them, and an array refuses, which serde alone would read by
+/// position. Perturbations: read the line as a `serde_json::Value` instead and
+/// the repeated role reads as its last spelling, `system`; drop the opening
+/// byte's check and `["x","system"]` reads as the seeding line.
+#[test]
+fn a_request_line_decodes_typed_with_each_member_once() {
+    let parse = |line: &str| weaver_types::TurnRequest::parse(line.as_bytes());
+    let bare = parse(r#"{"text":"hi"}"#).expect("a bare line");
+    assert_eq!((bare.text.as_str(), bare.role), ("hi", None));
+    let seeding = parse(r#"{"role":"system","text":"You are Karl."}"#).expect("the seeding line");
+    assert_eq!(
+        seeding.role,
+        Some(serde_json::Value::String("system".into()))
+    );
+    let null = parse(r#"{"role":null,"text":"hi"}"#).expect("null crosses as written");
+    assert_eq!(null.role, Some(serde_json::Value::Null));
+    for (line, why) in [
+        (
+            r#"{"text":"x","role":"user","role":"system"}"#,
+            "a repeated role",
+        ),
+        (r#"{"text":"a","text":"b"}"#, "a repeated text"),
+        (r#"{"text":"x","kind":"answered"}"#, "an unknown member"),
+        (r#"{"role":"system"}"#, "a missing text"),
+        (r#"{"text":5}"#, "a text that is not a string"),
+        (r#"["text"]"#, "not an object"),
+        (r#"["x","system"]"#, "an array read by position"),
+        (r#""text""#, "a string"),
+    ] {
+        assert!(parse(line).is_err(), "{why} refuses: {line}");
+    }
+}
+
 /// **The dialer rides an inbound frame and is absent from a response**, per
 /// `weaver-harness-gate-contract` section 2 on the ruling of 2026-10-06: a
 /// frame carried from a dialer serializes the member, a frame carried with
