@@ -1239,6 +1239,117 @@ esac
         self.assertNotIn("cannot ask systemd", result.stderr)
         self.assertFalse(any(c[:2] == ["systemctl", "list-units"] for c in self.calls()))
 
+    KARL = (
+        'session = "s-karl-1"\ntool-set = []\npermission-mode = "ask"\n\n'
+        '[spu-instruction.decoder]\nresidual-readout-election = false\nsurprisal-election = true\n'
+        'tunable-values = { seed = 1, context-capacity = 16384, max-tokens-per-turn = 1024 }\n\n'
+        '[spu-instruction.decoder.model-binding]\nartifact = "/opt/weaver/models/x.gguf"\ndevices = [0]\n\n'
+        '[[spu-instruction.decoder.identity]]\nrole = "system"\n\n'
+        '[[spu-instruction.decoder.identity.content]]\ntype = "text"\ntext = """\n'
+        'You are Karl, a small local agent.\nAnswer plainly."""\n\n'
+        '[gate-instruction.access-rule]\nallowed-uids = [1000]\nallowed-gids = []\ndenied-uids = []\n\n'
+        '[state-store]\nengine = "none"\n'
+    )
+
+    def migrate(self, decl, *args):
+        return subprocess.run([sys.executable, str(self.repo / "deploy" / "migrate-identity.py"), str(decl), *args],
+                              env=self.env, text=True, capture_output=True, timeout=20)
+
+    def test_migrate_identity_moves_one_system_text_into_the_draft(self):
+        # The one shape that moves losslessly: one system message of one text
+        # block. The check names the move and changes nothing; the apply
+        # writes the draft 0600 with the text and its trailing newline,
+        # removes the tables, and the declaration re-parses as itself minus
+        # the identity. A second run finds nothing to do. Perturbation: drop
+        # the strip of the content header and the re-parse refuses.
+        import tomllib
+        self.decl.mkdir(parents=True)
+        decl = self.decl / "agent.toml"
+        draft = self.decl / "system-prompt.md"
+        for form in ("tables", "inline"):
+            with self.subTest(form=form):
+                text = self.KARL
+                if form == "inline":
+                    text = text.replace(
+                        '[[spu-instruction.decoder.identity]]\nrole = "system"\n\n'
+                        '[[spu-instruction.decoder.identity.content]]\ntype = "text"\ntext = """\n'
+                        'You are Karl, a small local agent.\nAnswer plainly."""\n\n', "").replace(
+                        "surprisal-election = true\n",
+                        'surprisal-election = true\nidentity = [{ role = "system", content = [{ type = "text", text = "You are Karl, a small local agent.\\nAnswer plainly." }] }]\n')
+                decl.write_text(text)
+                draft.unlink(missing_ok=True)
+                before = tomllib.loads(text)
+                result = self.migrate(decl)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("moves into " + str(draft), result.stdout)
+                self.assertEqual(decl.read_text(), text, "the check changes nothing")
+                self.assertFalse(draft.exists())
+                result = self.migrate(decl, "--apply")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(draft.read_text(), "You are Karl, a small local agent.\nAnswer plainly.\n")
+                self.assertEqual(draft.stat().st_mode & 0o077, 0)
+                after = tomllib.loads(decl.read_text())
+                del before["spu-instruction"]["decoder"]["identity"]
+                self.assertEqual(after, before)
+                self.assertNotIn("identity", decl.read_text())
+                result = self.migrate(decl, "--apply")
+                self.assertEqual((result.returncode, result.stdout), (0, ""), "nothing left to move")
+
+    def test_migrate_identity_refuses_what_it_cannot_move_losslessly(self):
+        # Two messages, a non-text block, a draft already standing with other
+        # text: each refuses naming the runbook, and nothing is written. An
+        # empty identity is removed with no draft to write.
+        self.decl.mkdir(parents=True)
+        decl = self.decl / "agent.toml"
+        draft = self.decl / "system-prompt.md"
+        two = self.KARL.replace('[gate-instruction', '[[spu-instruction.decoder.identity]]\nrole = "system"\n\n'
+                                '[[spu-instruction.decoder.identity.content]]\ntype = "text"\ntext = "second"\n\n[gate-instruction')
+        for text, standing in ((two, None), (self.KARL, "another prompt\n")):
+            with self.subTest(text=text[:40], standing=standing):
+                decl.write_text(text)
+                draft.unlink(missing_ok=True)
+                if standing is not None:
+                    draft.write_text(standing)
+                for args in ((), ("--apply",)):
+                    result = self.migrate(decl, *args)
+                    self.assertEqual(result.returncode, 2, result.stdout)
+                    self.assertIn("HowToDeployANewAgent.md section 3", result.stderr)
+                    self.assertEqual(decl.read_text(), text, "nothing was written")
+                    if standing is not None:
+                        self.assertEqual(draft.read_text(), standing)
+        draft.unlink(missing_ok=True)
+        decl.write_text(self.KARL.replace(
+            '[[spu-instruction.decoder.identity]]\nrole = "system"\n\n'
+            '[[spu-instruction.decoder.identity.content]]\ntype = "text"\ntext = """\n'
+            'You are Karl, a small local agent.\nAnswer plainly."""\n\n', "").replace(
+            "surprisal-election = true\n", "surprisal-election = true\nidentity = []\n"))
+        result = self.migrate(decl, "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("empty identity is removed", result.stdout)
+        self.assertFalse(draft.exists())
+        self.assertNotIn("identity", decl.read_text())
+
+    def test_stack_plan_names_the_identity_migration_and_refuses_what_cannot_move(self):
+        # The plan names each declaration whose identity would move, before
+        # the build; one that cannot move losslessly refuses before the build,
+        # naming the runbook step. Perturbation: drop the preflight and the
+        # plan runs to the build in both cases.
+        decl = self.operator_home / ".weaveragent" / "existing" / "agent.toml"
+        decl.write_text(self.KARL)
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("existing     the identity's text moves into " + str(decl.parent / "system-prompt.md"), result.stdout)
+        self.assertNotIn("no declaration carries the inline identity", result.stdout)
+        self.assertEqual(decl.read_text(), self.KARL, "a plan moves nothing")
+        self.assertFalse((decl.parent / "system-prompt.md").exists())
+        decl.write_text(self.KARL.replace('[gate-instruction', '[[spu-instruction.decoder.identity]]\nrole = "system"\n\n'
+                                          '[[spu-instruction.decoder.identity.content]]\ntype = "text"\ntext = "second"\n\n[gate-instruction'))
+        self.log.unlink(missing_ok=True)
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("deploy/REDEPLOY.md section 8, step 2", result.stderr)
+        self.assertFalse(any(c[:2] == ["cargo", "build"] for c in self.calls()))
+
     def test_stack_refuses_a_trace_the_old_admin_recreated(self):
         # Codex on #82: an admin before #62 recreated a lost trace root:root,
         # which the new admin refuses at load and validate never sees, so the

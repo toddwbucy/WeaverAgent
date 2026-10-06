@@ -187,7 +187,12 @@ impl Author {
     /// **Every role but system refuses here**, on the reasoning
     /// `author_message` refuses a tool result: a door that writes what it was
     /// not built for launders a bad declaration into a record that looks well
-    /// formed.
+    /// formed. **A message carrying nothing, and a text block carrying no
+    /// text, refuse here too**, the identity door's four rules of
+    /// `weaver-types-Spec` section 5 judged at the one door that writes the
+    /// prefix, since 2026-10-06 the seeding line's door as much as the
+    /// load's: an empty prefix is the empty turn by another route, and the
+    /// door writes no turn for it.
     ///
     /// conforms: harness-identity-door-writes-system-only
     pub fn author_identity(
@@ -202,6 +207,22 @@ impl Author {
             });
         }
         licensed(message)?;
+        if message.content.is_empty() {
+            return Err(UnlicensedMessage {
+                role: "system",
+                block: "identity-door-empty-message",
+            });
+        }
+        if message
+            .content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Text { text } if text.is_empty()))
+        {
+            return Err(UnlicensedMessage {
+                role: "system",
+                block: "identity-door-empty-text",
+            });
+        }
         let rendered = serde_json::to_string(message).map_err(|_| UnlicensedMessage {
             role: "system",
             block: "unrenderable",

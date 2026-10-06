@@ -180,7 +180,9 @@ Top-level keys first, then each table, since TOML reads a bare key after a table
 as that table's. The inline `[[spu-instruction.decoder.identity]]` table of a
 declaration written before 2026-10-06, and the `identity-file` key of the days between,
 each refuse by name: take the text out into `system-prompt.md` beside the declaration and
-seed it through the gate (section 4). `allowed-uids` is who may dial the gate, the
+seed it through the gate (section 4). `update-stack.sh --install` makes that move for a
+declaration carrying one system text message (`deploy/migrate-identity.py` is what it
+runs, and says why when it cannot move a shape losslessly); the seeding stays yours. `allowed-uids` is who may dial the gate, the
 operator's uid here, and the one uid the harness takes a seeding line from. Check it
 parses before installing it:
 `python3 -c 'import tomllib,sys; tomllib.load(open(sys.argv[1],"rb"))' <name>.toml`.

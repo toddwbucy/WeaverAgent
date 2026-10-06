@@ -316,6 +316,19 @@ install prefix, `/opt/weaver` by default.
    starts with no save point, as an agent's first load does, and the old PostgreSQL
    database and role are the operator's to drop by hand (section 2).
 
+   **A declaration carrying `[[spu-instruction.decoder.identity]]` loses it here**,
+   since the system prompt is state (the operator's ruling of 2026-10-06) and the admin
+   installed from that date refuses the table by name. `update-stack.sh --install`
+   moves it for you, before the binaries: one system text message becomes
+   `$D/system-prompt.md`, the draft, and the table is removed, the declaration backed
+   up beside itself. A shape it cannot move losslessly (several messages, several
+   blocks, a draft already standing with other text) refuses at plan time, and the
+   move is then by hand: `deploy/migrate-identity.py $D/agent.toml` says why, and
+   `HowToDeployANewAgent.md` section 3 shows the result. Either way the prompt is not
+   in the agent until it is seeded after the first load under the new stack,
+   `deploy/turn.py <a> --system` (`HowToDeployANewAgent.md` section 4), and the save
+   point taken after that seeding is the agent's starting state.
+
 3. **Provision the relay, the access group and the connector**, as `create-agent.sh`
    makes them:
 

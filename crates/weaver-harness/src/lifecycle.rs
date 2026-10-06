@@ -931,10 +931,11 @@ impl Harness {
                 // `system` message of the line's text verbatim, authored
                 // turnless through the identity door before the turn that
                 // appends it, so the record and the tee carry it as the
-                // prefix the next load seats. The door's refusal, the empty
-                // text it writes no turn for, is the turn's refusal; a
-                // recorder that would not take it ends service, the record
-                // being untrustworthy.
+                // prefix the next load seats. The door judges the four rules
+                // of `weaver-types-Spec` section 5, the empty text it writes
+                // no turn for among them, and its refusal is the turn's,
+                // naming the rule; a recorder that would not take it ends
+                // service, the record being untrustworthy.
                 let seeding = system.then(|| weaver_traits::Message {
                     role: weaver_traits::Role::System,
                     content: vec![weaver_traits::ContentBlock::Text { text: text.clone() }],
@@ -5119,15 +5120,20 @@ mod tests {
         );
     }
 
-    /// **A `system` line from any dialer but the operator refuses, and the
-    /// channel stands**, per `weaver-harness-Spec` section 6.1's seeding
-    /// clause: a frame carrying no dialer, and a frame carrying another uid,
-    /// the connector's service user's say, each answer `refused` naming the
-    /// role, no seat is granted, nothing is authored, and the next frame is
-    /// served. Perturbations: carry the frame without its dialer at the gate
-    /// and every seeding line is the first case; skip the dialer's comparison
+    /// **A `system` line from any dialer but the operator refuses, and so
+    /// does the operator's line carrying no text, and the channel stands**,
+    /// per `weaver-harness-Spec` section 6.1's seeding clause and
+    /// `weaver-types-Spec` section 5: a frame carrying no dialer, a frame
+    /// carrying another uid, the connector's service user's say, and the
+    /// operator's frame whose text is empty each answer `refused`, the first
+    /// two naming the role and the third the door's rule, no seat is
+    /// granted, nothing is authored, and the next frame is served.
+    /// Perturbations: carry the frame without its dialer at the gate and
+    /// every seeding line is the first case; skip the dialer's comparison
     /// here and the second case seats a prefix from the connector's uid, the
-    /// seat granted and the record carrying a `message.system`.
+    /// seat granted and the record carrying a `message.system`; drop the
+    /// empty-text rule from `author_identity` and the third case authors an
+    /// empty prefix and turns on it.
     #[test]
     fn a_system_line_from_any_other_dialer_refuses_and_the_channel_stands() {
         let (mut run, _spare, _sink) = entered_run(None);
@@ -5158,10 +5164,20 @@ mod tests {
             })
         };
         let line = b"{\"role\":\"system\",\"text\":\"You are Karl.\"}";
+        let empty = b"{\"role\":\"system\",\"text\":\"\"}";
         let mut verb_slot = None;
-        for (ordinal, frame) in [
-            (1, weaver_types::TurnFrame::carry(line)),
-            (2, weaver_types::TurnFrame::carry_from(line, 1001)),
+        for (ordinal, frame, names) in [
+            (1, weaver_types::TurnFrame::carry(line), "role system"),
+            (
+                2,
+                weaver_types::TurnFrame::carry_from(line, 1001),
+                "role system",
+            ),
+            (
+                3,
+                weaver_types::TurnFrame::carry_from(empty, 1000),
+                "identity-door-empty-text",
+            ),
         ] {
             gate_peer
                 .send(&OrganEnvelope {
@@ -5183,7 +5199,7 @@ mod tests {
             };
             let line = String::from_utf8(frame.octets().expect("canonical")).expect("utf8");
             assert!(line.contains(r#""kind":"refused""#), "{line}");
-            assert!(line.contains("role system"), "names the role: {line}");
+            assert!(line.contains(names), "names its reason: {line}");
         }
         assert!(!entered, "no seat was granted for a refused seeding line");
         let ChannelState::Entered(run) = &harness.state else {

@@ -409,6 +409,27 @@ for agent in $AGENTS; do
 done
 printf '  traces        every file sink stands as the territory lays it out\n'
 
+# **A declaration carrying the inline identity of before 2026-10-06 is
+# migrated, not refused**, on the operator's ruling that the system prompt is
+# state (weaver-types-Spec section 2): the admin this installs refuses the
+# table by name, and every agent the create-agent.sh of before that date made
+# carries it. The plan says what would move; the install moves it, as the
+# operator and before the binaries, through deploy/migrate-identity.py, which
+# moves one system text message into `system-prompt.md` beside the
+# declaration and removes the table, verifying by re-parse. A shape it cannot
+# move losslessly refuses here, before the build, naming the runbook step.
+MIGRATE=()
+for agent in $AGENTS; do
+  decl=$(declaration_of "$agent") || exit 1
+  [ -f "$decl" ] || continue
+  plan=$(python3 "$REPO/deploy/migrate-identity.py" "$decl") \
+    || die "$agent: its declaration carries an identity this run cannot move into system-prompt.md; see above and deploy/REDEPLOY.md section 8, step 2"
+  [ -n "$plan" ] || continue
+  printf '  %-12s %s\n' "$agent" "${plan#"$decl": }"
+  MIGRATE+=("$decl")
+done
+[ ${#MIGRATE[@]} -gt 0 ] || printf '  identity      no declaration carries the inline identity of before 2026-10-06\n'
+
 # --------------------------------------------------------------- 2. update main
 say "tree"
 # **A failed refresh is not a stale-but-fine refresh.** Suppressing it would
@@ -657,6 +678,21 @@ on_exit() {
   fi
 }
 trap on_exit EXIT
+
+# **The identity moves before the binaries**, as the operator, each
+# declaration backed up and registered so a rollback puts it back under the
+# old admin, which requires the table the new one refuses.
+if [ ${#MIGRATE[@]} -gt 0 ]; then
+  say "migrate identities"
+  for decl in "${MIGRATE[@]}"; do
+    cp -a "$decl" "$decl.pre-$AFTER-bak"
+    PATCHED+=("$decl|$decl.pre-$AFTER-bak")
+    python3 "$REPO/deploy/migrate-identity.py" "$decl" --apply >/dev/null \
+      || rollback "the identity of $decl did not move; see above"
+    printf '  %s: identity moved into system-prompt.md beside it (backup %s); seed it after the load with deploy/turn.py <agent> --system\n' \
+      "$decl" "$(basename "$decl.pre-$AFTER-bak")"
+  done
+fi
 
 if [ ${#CHANGED[@]} -gt 0 ]; then
   say "install"

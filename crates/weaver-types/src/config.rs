@@ -547,8 +547,9 @@ fn check_declared_paths(config: &AgentConfig) -> Result<(), ConfigError> {
 /// message `role: system`, every block one the role is licensed for, no message
 /// carrying nothing, no text block carrying no text. No declaration reaches
 /// them since the operator's ruling of 2026-10-06 that the system prompt is
-/// state, so the harness applies them where a prefix is seated, and the
-/// watches below call the check over messages directly.
+/// state, so the harness's identity door applies them where a prefix is
+/// written, at the load's seating and the seeding line, and the watches
+/// below call this check over messages directly.
 pub fn check_identity_roles(identity: &[weaver_traits::Message]) -> Result<(), ConfigError> {
     for (at, message) in identity.iter().enumerate() {
         if !matches!(message.role, weaver_traits::Role::System) {
