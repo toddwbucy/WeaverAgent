@@ -50,16 +50,25 @@ pub(crate) const ANSWER_BOUND_BYTES: usize = 1024 * 1024;
 /// renders it, per `weaver-harness-state-contract` section 2: the message's
 /// canonical rendering as the `pairs`, the envelope naming the session, the
 /// run, the kind and the sequence, and the frame's own text around the
-/// list, each bounded above by a constant so the sum is never under the
-/// member's count. `ANSWER_FRAME_BYTES` covers `{"answer":{"identity":
-/// {"messages":[]}}}` and the delimiter; `ENVELOPE_BYTES` covers one entry's
-/// envelope text, its kind and a sequence of up to twenty digits, beside the
-/// session and run names it carries.
+/// list. **Every member the envelope carries is costed as its canonical
+/// rendering**, the names as the JSON strings the member writes, escapes
+/// included, so the sum is exact and not an estimate; the kind and the
+/// sequence are fixed ASCII and ride in `ENVELOPE_BYTES` with the envelope's
+/// own text, a sequence of up to twenty digits inside it, and
+/// `ANSWER_FRAME_BYTES` covers `{"answer":{"identity":{"messages":[]}}}`
+/// and the delimiter.
 pub(crate) const ANSWER_FRAME_BYTES: usize = 64;
 pub(crate) const ENVELOPE_BYTES: usize = 128;
 
 pub(crate) fn identity_entry_cost(rendered_message: usize, session: &str, run: &str) -> usize {
-    rendered_message + session.len() + run.len() + ENVELOPE_BYTES
+    rendered_message + rendered_name(session) + rendered_name(run) + ENVELOPE_BYTES
+}
+
+/// A name's length as the member renders it inside its quotes: the JSON
+/// string's escapes counted, the two quotes themselves being the envelope's
+/// text.
+fn rendered_name(name: &str) -> usize {
+    serde_json::to_string(name).map_or(name.len(), |json| json.len() - 2)
 }
 
 /// What one `poll` can be armed for, the system call taking milliseconds in
@@ -659,6 +668,15 @@ mod tests {
             identity_entry_cost(10, "s-1", "r-1"),
             10 + 3 + 3 + ENVELOPE_BYTES
         );
+        // **The names cost what the member writes, escapes included**: a
+        // quote and a backslash each render as two bytes, so a name of one
+        // costs one more than its length (Codex on #92, round 6).
+        // Perturbation: count `name.len()` again and this fails by two.
+        assert_eq!(
+            identity_entry_cost(10, "s\"1", "r\\1"),
+            10 + 4 + 4 + ENVELOPE_BYTES
+        );
+        assert_eq!(rendered_name("s\"\\\n"), 7, "three escapes, two bytes each");
     }
 
     /// The answer's wire spelling parses to the shape, and a frame missing
