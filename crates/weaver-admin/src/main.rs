@@ -1130,7 +1130,12 @@ fn select_save_point(
         }
         return Ok(None);
     }
-    save_points::select(&config.declaration_directory, config.operator, restore)
+    save_points::select(
+        &config.declaration_directory,
+        config.operator,
+        restore,
+        save_points::ROOT,
+    )
 }
 
 /// **A save point on demand**, the `save-point` verb, per Spec sections 2
@@ -1201,6 +1206,7 @@ fn restore(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer,
         &config.declaration_directory,
         config.operator,
         &named.save_point,
+        save_points::ROOT,
     )?;
     Ok(LifecycleAnswer::RestoreNamed {
         save_point: line.digest,
@@ -1530,6 +1536,7 @@ fn publish_from_room(
         member.uid,
         &config.declaration_directory,
         config.operator_owner(),
+        save_points::ROOT,
         reports,
     ) {
         Ok(lines) => {

@@ -1573,8 +1573,25 @@ wall clock; `position`, the trace position of the `save_point` event that named 
 run and sequence the harness reported in its `Left` or `SavePointTaken` answer, or
 absent where the file was recovered from the room after an unclean stop and no answer
 carried it; and `arrived`, one of `leave`, `demand`, `recovered`, or `restore` for a
-line the `restore` verb appended for a file it judged. **The manifest is the record of
-what is loadable, and the latest is read from it**: the highest ordinal whose file still
+line the `restore` verb appended for a file it judged. **The manifest is this crate's own file and is judged on its descriptor before a byte
+is read or written**: opened `O_NOFOLLOW` and close-on-exec, read-only or append-only,
+and judged by `fstat` as a regular file, uid 0, gid 0, mode `0644` exactly, link count
+one; anything else refuses `BoundaryUnverified` naming what was found, so a manifest the
+operator pre-created or replaced refuses by uid, a second link refuses by count, and a
+link never opens. It is created only where no entry stands, exclusively as root at mode
+`0644`, and the directory is synced so the entry is durable before its first line. The
+directory is the operator's: the operator can remove the manifest, which fails closed
+per section 9, and cannot replace or write one, which refuses. **Every other file this
+crate touches at a publication goes the same way**: the room is listed by path for names
+alone and every entry opened and removed through the room's descriptor; the operator's
+copy is created exclusively under a temporary name, its owner and mode verified on the
+open file, and renamed with `RENAME_NOREPLACE`, so an entry the operator put under the
+published name refuses the rename rather than being replaced or followed; the marker
+stands in the root this crate owns. **A save point past one gibibyte
+is not read**, this act's election: in the room it is left in place and named, in the
+directory it is not the latest and a restore naming it refuses, so no file a member or
+an operator wrote is read whole into this crate's memory past that bound. **The
+manifest is the record of what is loadable, and the latest is read from it**: the highest ordinal whose file still
 stands under its name and whose bytes digest to the line's digest, per section 4, and a
 file no line names is not loadable. The directory stays `0700` to the operator, so a
 save point on demand lands with the operator at once and a live restore of one the
@@ -2167,7 +2184,9 @@ crate alone writes, per section 6. **The operator owns the directory and can rem
 manifest**, and doing so makes every published save point unloadable, a file no line
 names being not loadable, until a `restore` names one, which appends the line that
 makes it loadable again; the recovery is the verb and never a hand edit of a root-owned
-file. A declaration directory holding no
+file. **The operator cannot replace or write one**: a manifest that is not root's own,
+by uid, gid, mode, link count or kind, refuses at the inventory and at every
+publication, per section 6, so a planted line never names a loadable file. A declaration directory holding no
 `agent.toml` answers
 `NoSuchAgent`, as a root holding none did. **`operator` names the operator's uid**, on
 the operator's ruling of 2026-10-02 on this act's first question: a root-owned key
