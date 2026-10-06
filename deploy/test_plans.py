@@ -348,7 +348,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
 
     def test_agent_plan_refuses_visible_collisions(self):
         for collision in ("account", "relay account", "connector account", "access group",
-                          "agent root", "staged root", "sudo rule", "declaration"):
+                          "agent root", "staged root", "sudo rule", "declaration", "prompt draft"):
             with self.subTest(collision=collision):
                 self.env.pop("COLLISION", None)
                 for path in (self.config / "m1", self.config / ".m1.partial"):
@@ -362,6 +362,10 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
                 elif collision == "agent root": (self.config / "m1").mkdir()
                 elif collision == "staged root": (self.config / ".m1.partial").mkdir()
                 elif collision == "sudo rule": self.rule.write_text("")
+                elif collision == "prompt draft":
+                    self.decl.mkdir(parents=True)
+                    self.decl.chmod(0o700)
+                    (self.decl / "system-prompt.md").write_text("")
                 else:
                     self.decl.mkdir(parents=True)
                     self.decl.chmod(0o700)
@@ -512,7 +516,20 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertEqual(self.decl.stat().st_mode & 0o777, 0o700)
         self.assertEqual((self.decl / "agent.toml").stat().st_mode & 0o077, 0)
         import tomllib
-        store = tomllib.loads((self.decl / "agent.toml").read_text())["state-store"]
+        declaration = tomllib.loads((self.decl / "agent.toml").read_text())
+        # The declaration carries no identity in either of its earlier forms
+        # (weaver-types-Spec section 2, the ruling of 2026-10-06 that the
+        # system prompt is state), and the draft the seeding turn reads stands
+        # beside it, the operator's alone. Perturbation: write either key
+        # again and the parse of a made agent refuses it by name.
+        decoder = declaration["spu-instruction"]["decoder"]
+        self.assertNotIn("identity", decoder)
+        self.assertNotIn("identity-file", decoder)
+        prompt = self.decl / "system-prompt.md"
+        self.assertEqual(prompt.stat().st_mode & 0o077, 0)
+        self.assertTrue(prompt.read_text().startswith("You are a careful assistant."))
+        self.assertTrue(prompt.read_text().endswith("question allows.\n"))
+        store = declaration["state-store"]
         self.assertEqual(store["engine"], engine)
         return store
 
@@ -557,6 +574,18 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertTrue(any(c[:4] == ["sudo", "-u", "weaver-m1", "test"] for c in calls))
         self.assert_rule(["show", "validate", "load", "unload", "stop"])
         self.assertIn("validate it before loading, with the validate verb of", result.stdout)
+        # The seeding is named as the operator's next step and never done
+        # here: create-agent makes an agent that is not loaded, and the
+        # seeding is a turn against a loaded one. Perturbation: dial the gate
+        # from the script and the second assertion fails.
+        self.assertIn("deploy/turn.py m1 --system reads " + str(self.decl / "system-prompt.md"),
+                      result.stdout)
+        script = (self.repo / "deploy" / "create-agent.sh").read_text()
+        dialing = [line for line in script.splitlines()
+                   if not line.lstrip().startswith(("#", "printf", "plan "))
+                   and any(needle in line for needle in ("turn.py", "gate.sock", "socat", "/dev/tcp", "python3 -c 'import socket"))]
+        self.assertEqual(dialing, [], "create-agent.sh never opens the gate")
+        self.assertFalse(any("turn.py" in " ".join(c) or "gate.sock" in " ".join(c) for c in calls), calls)
         self.assert_no_printed_root_command(result)
 
     def test_the_connector_role_chooses_the_rules_lines(self):
@@ -985,6 +1014,104 @@ esac
         self.assertIn("admin does not validate m1, so its root is not read: " + str(real / "weaver-admin"),
                       result.stderr)
 
+    def test_turn_system_reads_the_draft_and_measures_it_against_the_gates_bound(self):
+        # --system reads the operator's draft from the root's declaration
+        # directory and sends it as the system role; a draft whose line would
+        # pass the gate's 32 KiB bound refuses before dialing, naming the size
+        # (Codex on #92, round 3), and an empty draft refuses too. A draft
+        # that fits reaches the dial, which finds no gate. Perturbation: drop
+        # the measure and the oversize draft reaches the dial.
+        root = self.config / "m1"
+        root.mkdir()
+        (root / "declaration-directory").write_text(str(self.decl) + "\n")
+        (root / "coordination-root").write_text(str(self.root / "nowhere") + "\n")
+        self.decl.mkdir(parents=True)
+        draft = self.decl / "system-prompt.md"
+        turn = [sys.executable, str(self.repo / "deploy" / "turn.py"), "m1", "--system"]
+        draft.write_text("x" * (32 * 1024))
+        result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("past the gate's bound of 32768 octets", result.stderr)
+        self.assertNotIn("no gate at", result.stderr)
+        # The empty draft refuses by the identity door's own rule, and a
+        # draft of whitespace alone is a prompt the door admits, so it reaches
+        # the dial (Codex on #92, round 7). Perturbation: strip before the
+        # check and the blank draft refuses as empty.
+        draft.write_text("")
+        result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("is empty", result.stderr)
+        self.assertNotIn("no gate at", result.stderr)
+        draft.write_text("   \n")
+        result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no gate at", result.stderr)
+        draft.write_text("You are Karl.\n")
+        result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no gate at", result.stderr)
+        result = subprocess.run(turn + ["extra text"], env=self.env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("takes no text", result.stderr)
+        # A draft that is not UTF-8 refuses before the dial, naming the file
+        # (Codex on #92, round 4): the harness's identity door judges UTF-8
+        # and a replacement character would be a silent change of the bytes.
+        draft.write_bytes(b"You are \xff.\n")
+        result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("is not UTF-8", result.stderr)
+        self.assertIn(str(draft), result.stderr)
+        self.assertNotIn("no gate at", result.stderr)
+
+    def test_turn_system_sends_the_drafts_bytes_verbatim(self):
+        # The draft's line endings reach the gate as they stand: a CRLF draft
+        # and a lone-CR draft each arrive with their bytes, read binary and
+        # not through text mode's newline translation (Codex on #92, round
+        # 4). A stand-in gate accepts the dial, keeps the line, and answers.
+        # Perturbation: read the draft in text mode and the CRLF text arrives
+        # with LF alone.
+        import socket, threading
+        root = self.config / "m1"
+        root.mkdir()
+        (root / "declaration-directory").write_text(str(self.decl) + "\n")
+        coordination = self.root / "coordination"
+        (coordination / "weaver-m1").mkdir(parents=True)
+        (root / "coordination-root").write_text(str(coordination) + "\n")
+        self.decl.mkdir(parents=True)
+        draft = self.decl / "system-prompt.md"
+        turn = [sys.executable, str(self.repo / "deploy" / "turn.py"), "m1", "--system", "--raw"]
+        for text in ("one\r\ntwo\r\n", "one\rtwo", "one\ntwo\n"):
+            with self.subTest(text=text):
+                draft.write_bytes(text.encode())
+                path = coordination / "weaver-m1" / "gate.sock"
+                path.unlink(missing_ok=True)
+                gate = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                gate.bind(str(path))
+                gate.listen(1)
+                received = {}
+
+                def serve():
+                    conn, _ = gate.accept()
+                    with conn:
+                        line = b""
+                        while not line.endswith(b"\n"):
+                            chunk = conn.recv(65536)
+                            if not chunk:
+                                break
+                            line += chunk
+                        received["line"] = line
+                        conn.sendall(b'{"kind":"answered","run":"r-1","text":"ok","turn":"t-1"}\n')
+                server = threading.Thread(target=serve)
+                server.start()
+                try:
+                    result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
+                finally:
+                    server.join(timeout=10)
+                    gate.close()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(received["line"]), {"role": "system", "text": text})
+                self.assertIn('"kind":"answered"', result.stdout)
+
     def test_turn_names_a_coordination_root_it_cannot_read(self):
         # Codex on #45, round 12: an unreadable `coordination-root` fell back to
         # /run, so the turn dialled a gate that is not this agent's and reported
@@ -1209,6 +1336,149 @@ esac
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("cannot ask systemd", result.stderr)
         self.assertFalse(any(c[:2] == ["systemctl", "list-units"] for c in self.calls()))
+
+    KARL = (
+        'session = "s-karl-1"\ntool-set = []\npermission-mode = "ask"\n\n'
+        '[spu-instruction.decoder]\nresidual-readout-election = false\nsurprisal-election = true\n'
+        'tunable-values = { seed = 1, context-capacity = 16384, max-tokens-per-turn = 1024 }\n\n'
+        '[spu-instruction.decoder.model-binding]\nartifact = "/opt/weaver/models/x.gguf"\ndevices = [0]\n\n'
+        '[[spu-instruction.decoder.identity]]\nrole = "system"\n\n'
+        '[[spu-instruction.decoder.identity.content]]\ntype = "text"\ntext = """\n'
+        'You are Karl, a small local agent.\nAnswer plainly."""\n\n'
+        '[gate-instruction.access-rule]\nallowed-uids = [1000]\nallowed-gids = []\ndenied-uids = []\n\n'
+        '[state-store]\nengine = "none"\n'
+    )
+
+    def migrate(self, decl, *args):
+        return subprocess.run([sys.executable, str(self.repo / "deploy" / "migrate-identity.py"), str(decl), *args],
+                              env=self.env, text=True, capture_output=True, timeout=20)
+
+    def test_migrate_identity_moves_one_system_text_into_the_draft(self):
+        # The one shape that moves losslessly: one system message of one text
+        # block. The check names the move and changes nothing; the apply
+        # writes the draft 0600 with the text byte for byte (no newline
+        # added: the seeding sends the file verbatim, Codex on #92), removes
+        # the tables, and the declaration re-parses as itself minus the
+        # identity. A second run finds nothing to do. Perturbations: drop the
+        # strip of the content header and the re-parse refuses; append a
+        # newline to the text and the draft assertion fails.
+        import tomllib
+        self.decl.mkdir(parents=True)
+        decl = self.decl / "agent.toml"
+        draft = self.decl / "system-prompt.md"
+        for form in ("tables", "inline"):
+            with self.subTest(form=form):
+                text = self.KARL
+                if form == "inline":
+                    text = text.replace(
+                        '[[spu-instruction.decoder.identity]]\nrole = "system"\n\n'
+                        '[[spu-instruction.decoder.identity.content]]\ntype = "text"\ntext = """\n'
+                        'You are Karl, a small local agent.\nAnswer plainly."""\n\n', "").replace(
+                        "surprisal-election = true\n",
+                        'surprisal-election = true\nidentity = [{ role = "system", content = [{ type = "text", text = "You are Karl, a small local agent.\\nAnswer plainly." }] }]\n')
+                decl.write_text(text)
+                draft.unlink(missing_ok=True)
+                before = tomllib.loads(text)
+                result = self.migrate(decl)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("moves into " + str(draft), result.stdout)
+                self.assertEqual(decl.read_text(), text, "the check changes nothing")
+                self.assertFalse(draft.exists())
+                result = self.migrate(decl, "--apply")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(draft.read_text(), "You are Karl, a small local agent.\nAnswer plainly.")
+                self.assertEqual(draft.stat().st_mode & 0o077, 0)
+                after = tomllib.loads(decl.read_text())
+                del before["spu-instruction"]["decoder"]["identity"]
+                self.assertEqual(after, before)
+                self.assertNotIn("identity", decl.read_text())
+                result = self.migrate(decl, "--apply")
+                self.assertEqual((result.returncode, result.stdout), (0, ""), "nothing left to move")
+        # The identity's line endings round-trip byte for byte: a text the
+        # declaration wrote with CRLF escapes lands in the draft as CRLF, and
+        # the standing draft then compares equal on a second run (Codex on
+        # #92, round 4). Perturbation: read the standing draft in text mode
+        # and the second run refuses, CRLF having read as LF; the write's
+        # newline="" is symmetry, which Linux's text mode does not need.
+        decl.write_text(self.KARL.replace(
+            'text = """\nYou are Karl, a small local agent.\nAnswer plainly."""',
+            'text = "one\\r\\ntwo\\rthree"'))
+        draft.unlink(missing_ok=True)
+        result = self.migrate(decl, "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(draft.read_bytes(), b"one\r\ntwo\rthree")
+        decl.write_text(self.KARL.replace(
+            'text = """\nYou are Karl, a small local agent.\nAnswer plainly."""',
+            'text = "one\\r\\ntwo\\rthree"'))
+        result = self.migrate(decl, "--apply")
+        self.assertEqual(result.returncode, 0, "the standing draft compares equal as bytes: " + result.stderr)
+        self.assertEqual(draft.read_bytes(), b"one\r\ntwo\rthree")
+
+    def test_migrate_identity_refuses_what_it_cannot_move_losslessly(self):
+        # Two messages, a non-text block, a draft already standing with other
+        # text: each refuses naming the runbook, and nothing is written. An
+        # empty identity is removed with no draft to write.
+        self.decl.mkdir(parents=True)
+        decl = self.decl / "agent.toml"
+        draft = self.decl / "system-prompt.md"
+        two = self.KARL.replace('[gate-instruction', '[[spu-instruction.decoder.identity]]\nrole = "system"\n\n'
+                                '[[spu-instruction.decoder.identity.content]]\ntype = "text"\ntext = "second"\n\n[gate-instruction')
+        for text, standing in ((two, None), (self.KARL, "another prompt\n")):
+            with self.subTest(text=text[:40], standing=standing):
+                decl.write_text(text)
+                draft.unlink(missing_ok=True)
+                if standing is not None:
+                    draft.write_text(standing)
+                for args in ((), ("--apply",)):
+                    result = self.migrate(decl, *args)
+                    self.assertEqual(result.returncode, 2, result.stdout)
+                    self.assertIn("HowToDeployANewAgent.md section 3", result.stderr)
+                    self.assertEqual(decl.read_text(), text, "nothing was written")
+                    if standing is not None:
+                        self.assertEqual(draft.read_text(), standing)
+        # A prompt whose seeding line would pass the gate's bound cannot be
+        # seeded, so it does not move (Codex on #92, round 3). Perturbation:
+        # drop the measure and the declaration is rewritten.
+        draft.unlink(missing_ok=True)
+        decl.write_text(self.KARL.replace("You are Karl, a small local agent.", "x" * (32 * 1024)))
+        for args in ((), ("--apply",)):
+            result = self.migrate(decl, *args)
+            self.assertEqual(result.returncode, 2, result.stdout)
+            self.assertIn("past the gate's bound of 32768 octets", result.stderr)
+            self.assertIn("identity", decl.read_text(), "nothing was written")
+            self.assertFalse(draft.exists())
+        draft.unlink(missing_ok=True)
+        decl.write_text(self.KARL.replace(
+            '[[spu-instruction.decoder.identity]]\nrole = "system"\n\n'
+            '[[spu-instruction.decoder.identity.content]]\ntype = "text"\ntext = """\n'
+            'You are Karl, a small local agent.\nAnswer plainly."""\n\n', "").replace(
+            "surprisal-election = true\n", "surprisal-election = true\nidentity = []\n"))
+        result = self.migrate(decl, "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("empty identity is removed", result.stdout)
+        self.assertFalse(draft.exists())
+        self.assertNotIn("identity", decl.read_text())
+
+    def test_stack_plan_names_the_identity_migration_and_refuses_what_cannot_move(self):
+        # The plan names each declaration whose identity would move, before
+        # the build; one that cannot move losslessly refuses before the build,
+        # naming the runbook step. Perturbation: drop the preflight and the
+        # plan runs to the build in both cases.
+        decl = self.operator_home / ".weaveragent" / "existing" / "agent.toml"
+        decl.write_text(self.KARL)
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("existing     the identity's text moves into " + str(decl.parent / "system-prompt.md"), result.stdout)
+        self.assertNotIn("no declaration carries the inline identity", result.stdout)
+        self.assertEqual(decl.read_text(), self.KARL, "a plan moves nothing")
+        self.assertFalse((decl.parent / "system-prompt.md").exists())
+        decl.write_text(self.KARL.replace('[gate-instruction', '[[spu-instruction.decoder.identity]]\nrole = "system"\n\n'
+                                          '[[spu-instruction.decoder.identity.content]]\ntype = "text"\ntext = "second"\n\n[gate-instruction'))
+        self.log.unlink(missing_ok=True)
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("deploy/REDEPLOY.md section 8, step 2", result.stderr)
+        self.assertFalse(any(c[:2] == ["cargo", "build"] for c in self.calls()))
 
     def test_stack_refuses_a_trace_the_old_admin_recreated(self):
         # Codex on #82: an admin before #62 recreated a lost trace root:root,

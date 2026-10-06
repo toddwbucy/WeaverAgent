@@ -181,10 +181,11 @@ gets trusted wrongly later.
 
 **Prompt assembly's deterministic floor, with the family render across the seam.** The
 harness composes the canonical conversation: the identity prefix, which is the system
-prompt together with the agent's fixed identity material, seated from the prompt file
-the declaration names at every serving load, a state member standing or not, on the
-operator's ruling of 2026-10-02 on #58's fifth question, and from the preloaded record
-under a diagnostic binding, per `weaver-harness-Spec` section 6.1, then the session's
+prompt together with the agent's fixed identity material, seated at every load from
+what the state member answers, the prompt the seeding turn entered under a serving
+binding and the preloaded record's under a diagnostic one, on the operator's ruling of
+2026-10-06 that the system prompt is state (#1), per `weaver-harness-Spec` section 6.1,
+then the session's
 message sequence read from the working structure, then the tool schemas, in that order,
 always. What moved on the framing ruling of 2026-08-02, ratified with the token
 workflow's act, is the per-model half: the family template's application, the phrasing
@@ -667,7 +668,7 @@ a live process, an organ's death observed as channel closure after the
 enter aggregate was answered, and a message-kind record of its own working
 structure that does not decode at assembly, the hole authored as the fault it
 is rather than handed to the model as context, and a seated identity prefix
-the record cannot account for. The third is why this enumeration cannot be
+whose `recall` the record cannot account for. The third is why this enumeration cannot be
 derived from the organs' own: a dead party is exactly
 the one that cannot report, so the SPU's cases at `weaver-spu-PRD` sections
 13.10 and 15.6, one set per submodule since the classify submodule raises its
@@ -680,39 +681,22 @@ three covered it, so the charter records the condition its crate already
 raises rather than leaving the record's one unclassified fault standing.
 
 **The fifth is the enumeration read against the seated prefix, and it is
-named for the same reason the fourth was.** The identity door writes
-`message.system` and refuses every other role, per `weaver-harness-Spec`
-section 6, because a door that writes what it was not built for launders a bad
-declaration into a record that looks well formed. That refusal is this crate's
-own observation and it has nowhere to go: the declaration crossed admin's
-parse, the prefix is seated at the session's open regardless, and the organ
-that would report is the operator's file rather than a party on a seam. So a
-dropped refusal leaves the record with no account of a prefix the model
-received - which launders the declaration by omission, the door's stated
-purpose defeated by the caller rather than by the door. A reader cannot
-distinguish an agent that seated no prefix from one that seated an unrecorded
-one, and a replay seats nothing and reports a divergence against the model for
-a prefix the record never held.
-
-**The case is the hole and not its cause**, which is why it is one case rather
-than a family. The door refuses on three conditions - a role it does not
-write, a system message carrying a block the licensing rule does not admit,
-and a message that will not render - and past the door the recorder may
-decline the write outright. All four end the same way, a prefix seated into
-the decode context and a record that cannot show it, and all four mean the
-same thing for the turn and the residency, which is nothing: the load stands.
-The custody rule of apex section 5.2 puts exactly that judgment in the case
-and leaves the rest to the account, so which of the four happened is the
-account's to carry, and splitting the case would move an organ's descriptive
-vocabulary into the floor.
-
-**The load is not refused on any of them.** The seated prefix is the
-operator's declaration and a run that has already bracketed does not die on a
-record it could not write, so what is owed is the account rather than the
-abort. The account is best-effort for the same reason it is owed: where the
-recorder is what failed the account may fail with it, and a miss nobody could
-write down is still not a miss worth aborting a run over. Where the rule that
-judges a declaration lands is `weaver-types`' to say and not this section's.
+named for the same reason the fourth was.** The enter asks the member for the
+prefix it seats and records the answer as a `recall` before the open is built
+from it, per `weaver-trace-Spec` section 3, and a recall the recorder will not
+take is this crate's own observation with nowhere to go: the prefix is seated
+at the session's open regardless, and a dropped miss leaves the record with no
+account of what the model received, which a replay reads as a divergence it
+then blames on the model. So the miss is the fault `identity_prefix_unrecorded`,
+one case for the hole and not its cause, and the load is not refused on it: a
+run that has already bracketed does not die on a record it could not write,
+so what is owed is the account rather than the abort, best-effort where the
+recorder is what failed. Until the operator's ruling of 2026-10-06 (later,
+#1) the case also named a load's own authoring of the prefix it seated, and
+the identity door's refusals on that authoring; a load authors no prefix
+since that ruling, the prefix's text standing on the trace at its seeding
+turn and in the save point the load's lineage names, and the door's refusal
+at the seeding is the turn's refusal, per `weaver-harness-Spec` section 6.
 
 With these five named the corpus-wide case set closes across all three
 organs, and the payload's shape is the trace act's to elect against it.

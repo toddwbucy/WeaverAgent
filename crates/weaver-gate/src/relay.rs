@@ -117,6 +117,12 @@ pub struct Served {
     input: Vec<u8>,
     outbound: Vec<u8>,
     exchange: Option<u64>,
+    /// The dialer's uid, read at accept from the kernel's `SO_PEERCRED`
+    /// answer and carried on every frame this connection sends inward, per
+    /// `weaver-harness-gate-contract` section 2: the harness admits a
+    /// `system` line from the operator alone, and the gate is the one
+    /// process that knows who dialed.
+    dialer: u32,
     /// The peer closed its writing half. A half-closed connection is a
     /// client that said its piece and awaits the answer, so the read side
     /// ends while everything owed still delivers, and the connection leaves
@@ -158,6 +164,7 @@ impl Served {
     pub fn admit(admitted: Admitted) -> std::io::Result<Served> {
         admitted.stream.set_nonblocking(true)?;
         Ok(Served {
+            dialer: admitted.peer.uid,
             stream: admitted.stream,
             input: Vec::new(),
             outbound: Vec::new(),
@@ -250,7 +257,7 @@ impl Served {
                         ordinal: *next_ordinal,
                     },
                     position: Position::Open,
-                    payload: Payload::Frame(TurnFrame::carry(&line)),
+                    payload: Payload::Frame(TurnFrame::carry_from(&line, self.dialer)),
                 })))
             }
             // The connection closes when more than the bound stands
@@ -339,6 +346,11 @@ mod tests {
             b"first line, plain text",
             "the frame carries the line's octets, unread"
         );
+        // The dialer rides the frame, the uid the accept read, per
+        // `weaver-harness-gate-contract` section 2. Perturbation: carry the
+        // frame without it and every seeding line refuses at the harness,
+        // whoever dialed.
+        assert_eq!(frame.dialer, Some(12345), "the frame names its dialer");
 
         // The cap: the second line stands in the residual and no second
         // exchange opens while the first is unanswered.

@@ -34,11 +34,44 @@ pub(crate) const ANSWER_BOUND_MS: u64 = 2_000;
 /// holdings at rest takes.
 pub(crate) const PARKED_ASK_BOUND_MS: u64 = 600_000;
 
-/// The bound on the answer's size, matched by the member's own cap on
-/// what it renders: an answer still unframed past this many octets is not
-/// the seam's traffic, and the seam retires rather than growing the turn
-/// path's memory on a peer's behavior.
-const ANSWER_BOUND_BYTES: usize = 1024 * 1024;
+/// The bound on the answer's size, one mebibyte per
+/// `weaver-harness-state-contract` section 3, the one number both ends
+/// hold: the member renders no answer frame past it and this end reads none
+/// past it, an answer still unframed past this many octets being not the
+/// seam's traffic, so the seam retires rather than growing the turn path's
+/// memory on a peer's behavior. **The seeding path spends it at the
+/// sender**, per `weaver-harness-Spec` section 6.1: a seeding whose addition
+/// to the residency's prefix would carry the identity answer past it refuses
+/// as a turn, since a prefix the member cannot answer is a prefix the next
+/// load cannot seat.
+pub(crate) const ANSWER_BOUND_BYTES: usize = 1024 * 1024;
+
+/// What one seeded message costs in the identity answer as the member
+/// renders it, per `weaver-harness-state-contract` section 2: the message's
+/// canonical rendering as the `pairs`, the envelope naming the session, the
+/// run, the kind and the sequence, and the frame's own text around the
+/// list. **Every member the envelope carries is costed as its canonical
+/// rendering**, the names as the JSON strings the member writes, escapes
+/// included, so the sum is never under the custodian's count, the variable
+/// members exact; the kind and the sequence are fixed ASCII and ride in
+/// `ENVELOPE_BYTES` with the envelope's own text, a sequence of up to twenty
+/// digits inside it, and `ANSWER_FRAME_BYTES` covers
+/// `{"answer":{"identity":{"messages":[]}}}` and the delimiter, each allowed
+/// for above so the bound refuses before the seam would and never after
+/// (#93 holds the exact measure as a cost with no correctness bearing).
+pub(crate) const ANSWER_FRAME_BYTES: usize = 64;
+pub(crate) const ENVELOPE_BYTES: usize = 128;
+
+pub(crate) fn identity_entry_cost(rendered_message: usize, session: &str, run: &str) -> usize {
+    rendered_message + rendered_name(session) + rendered_name(run) + ENVELOPE_BYTES
+}
+
+/// A name's length as the member renders it inside its quotes: the JSON
+/// string's escapes counted, the two quotes themselves being the envelope's
+/// text.
+fn rendered_name(name: &str) -> usize {
+    serde_json::to_string(name).map_or(name.len(), |json| json.len() - 2)
+}
 
 /// What one `poll` can be armed for, the system call taking milliseconds in
 /// a `u16`. **It bounds one poll and never the wait**: a bound past it is
@@ -528,22 +561,15 @@ fn parse_restored_answer(line: &str) -> Option<RestoredAnswer> {
     None
 }
 
-/// **The open's identity material, two sources and one rule**, per
-/// `weaver-harness-Spec` section 6.1 as of 2026-09-04. `None` for the answer
-/// is the ask missed: the enter refuses rather than opening a run with no
-/// bounding. An empty answer is the first load of the session, so the
-/// declaration's field seeds the open. A prefix answered is the open's
+/// **The open's identity material, one source and one rule**, per
+/// `weaver-harness-Spec` section 6.1 on the operator's ruling of 2026-10-06
+/// that the system prompt is state. The member's answer is the open's
 /// messages, each rebuilt from the pairs the tee carried whole, `role` and
-/// `content`, and a prefix that does not rebuild refuses the same way a
-/// miss does, because a half-read bounding is no bounding.
-pub(crate) fn identity_material(
-    answer: Option<Vec<Recalled>>,
-    seed: &[weaver_traits::Message],
-) -> Option<Vec<weaver_traits::Message>> {
-    let held = answer?;
-    if held.is_empty() {
-        return Some(seed.to_vec());
-    }
+/// `content`; an empty answer is an agent not yet seeded and opens with no
+/// prefix; and a prefix that does not rebuild refuses the same way a miss
+/// does, because a half-read bounding is no bounding. The miss itself is
+/// the caller's to refuse, before this is reached.
+pub(crate) fn identity_material(held: &[Recalled]) -> Option<Vec<weaver_traits::Message>> {
     held.iter().map(prefix_message).collect()
 }
 
@@ -624,6 +650,36 @@ fn parse_recalled_events(events: &[serde_json::Value]) -> Option<Vec<Recalled>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The answer bound is the contract's one number**, per
+    /// `weaver-harness-state-contract` section 3: one mebibyte, which the
+    /// member's `ANSWER_BOUND` in `weaver-state` holds as the same number
+    /// under its own watch, the two crates seeing neither's constant. A
+    /// change to either without the other is the defect this pins.
+    #[test]
+    fn the_answer_bound_is_the_contracts_mebibyte() {
+        assert_eq!(ANSWER_BOUND_BYTES, 1024 * 1024);
+        // One entry's cost is never under what the member renders for it:
+        // the envelope's fixed text with the kind and a twenty-digit
+        // sequence fits the allowance beside the names.
+        let envelope = r#"{"envelope":{"session":"","run":"","kind":"message.system","sequence":"12345678901234567890"},"pairs":},"#;
+        assert!(envelope.len() <= ENVELOPE_BYTES, "{}", envelope.len());
+        // The frame's own text and its delimiter fit the allowance.
+        assert!(r#"{"answer":{"identity":{"messages":[]}}}"#.len() < ANSWER_FRAME_BYTES);
+        assert_eq!(
+            identity_entry_cost(10, "s-1", "r-1"),
+            10 + 3 + 3 + ENVELOPE_BYTES
+        );
+        // **The names cost what the member writes, escapes included**: a
+        // quote and a backslash each render as two bytes, so a name of one
+        // costs one more than its length (Codex on #92, round 6).
+        // Perturbation: count `name.len()` again and this fails by two.
+        assert_eq!(
+            identity_entry_cost(10, "s\"1", "r\\1"),
+            10 + 4 + 4 + ENVELOPE_BYTES
+        );
+        assert_eq!(rendered_name("s\"\\\n"), 7, "three escapes, two bytes each");
+    }
 
     /// The answer's wire spelling parses to the shape, and a frame missing
     /// any member of it answers nothing.
@@ -820,24 +876,17 @@ mod tests {
         );
     }
 
-    /// **The identity ask's three arms**, per `weaver-harness-Spec` section
-    /// 6.1 as of 2026-09-04: a miss is `None` and refuses, an empty answer
-    /// seeds, and a prefix rebuilds from its pairs. Perturbation: return
-    /// the seed on a miss and the first assertion fails; skip the rebuild's
-    /// `content` and the third.
+    /// **The identity material's one source**, per `weaver-harness-Spec`
+    /// section 6.1 on the ruling of 2026-10-06: an empty answer is an agent
+    /// not yet seeded and opens with no prefix, a prefix rebuilds from its
+    /// pairs, and a half-read one refuses. Perturbation: skip the rebuild's
+    /// `content` and the rebuilt prefix carries no text.
     #[test]
-    fn the_identity_material_has_two_sources_and_one_rule() {
-        let seed = vec![weaver_traits::Message {
-            role: weaver_traits::Role::System,
-            content: vec![weaver_traits::ContentBlock::Text {
-                text: "seed".into(),
-            }],
-        }];
-        assert!(identity_material(None, &seed).is_none(), "a miss refuses");
+    fn the_identity_material_has_one_source_and_one_rule() {
         assert_eq!(
-            identity_material(Some(vec![]), &seed),
-            Some(seed.clone()),
-            "an empty answer is the first load and seeds"
+            identity_material(&[]),
+            Some(Vec::new()),
+            "an empty answer is an unseeded agent, which opens with no prefix"
         );
         let (ours, theirs) = UnixStream::pair().expect("pair");
         ours.set_nonblocking(true).expect("nonblocking");
@@ -854,7 +903,7 @@ mod tests {
         )
         .expect("answers in advance");
         let held = seam.ask_identity_within(ANSWER_BOUND_MS).expect("answered");
-        let material = identity_material(Some(held), &seed).expect("rebuilds");
+        let material = identity_material(&held).expect("rebuilds");
         assert_eq!(material.len(), 1);
         assert!(matches!(material[0].role, weaver_traits::Role::System));
         assert!(
@@ -871,7 +920,7 @@ mod tests {
             pairs: vec![("role".into(), "\"system\"".into())],
         }];
         assert!(
-            identity_material(Some(half), &seed).is_none(),
+            identity_material(&half).is_none(),
             "a prefix without content refuses"
         );
     }

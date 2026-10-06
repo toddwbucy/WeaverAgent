@@ -49,10 +49,14 @@ const SAVE_POINT_FD: std::os::fd::RawFd = 4;
 /// holding it is what lets the next load find a member a killed load left.
 const RUN_LOCK_FD: std::os::fd::RawFd = 9;
 
-/// The bound on one answer frame, matched by the harness's own cap on
-/// what it reads: an answer past this size is a fault answered with
-/// silence, per the contract's clause that custody never invents an
-/// answer shape for a fault.
+/// The bound on one answer frame, one mebibyte per
+/// `weaver-harness-state-contract` section 3, the one number both ends
+/// hold, matched by the harness's `ANSWER_BOUND_BYTES` on what it reads: an
+/// answer past this size is a fault answered with silence, per the
+/// contract's clause that custody never invents an answer shape for a
+/// fault. The harness spends it at the sender for the seeding, per
+/// `weaver-harness-Spec` section 6.1, so the identity answer stays under
+/// it by construction.
 const ANSWER_BOUND: usize = 1024 * 1024;
 
 /// The bound on the answer's write: a peer that takes nothing for this
@@ -1147,6 +1151,15 @@ mod run_lock_tests {
 
 #[cfg(test)]
 mod tests {
+    /// **The answer bound is the contract's one number**, per
+    /// `weaver-harness-state-contract` section 3: one mebibyte, which the
+    /// harness's `ANSWER_BOUND_BYTES` holds as the same number under its own
+    /// watch, the two crates seeing neither's constant.
+    #[test]
+    fn the_answer_bound_is_the_contracts_mebibyte() {
+        assert_eq!(super::ANSWER_BOUND, 1024 * 1024);
+    }
+
     /// A path under the temp directory, removed when the test ends, pass or
     /// fail: the guard drops on the unwind a failed assertion takes as on a
     /// clean return (#690 item C2.9).

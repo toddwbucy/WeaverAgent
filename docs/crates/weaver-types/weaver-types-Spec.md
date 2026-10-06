@@ -144,8 +144,8 @@ only 1.1 has, a multiline inline table or a `\e` escape among it, is outside wha
 program guarantees. **A path in a declaration carries no control character**, on the
 operator's ruling of 2026-09-28: the restore's `record`, the `loop-file` (retiring with
 the pyworker lane, the compiled path's state-management loop being compiled into the
-worker on the operator's ruling of 2026-10-02 on #1), the trace sink's `path` and the
-decoder's `identity-file` are refused by name where one does,
+worker on the operator's ruling of 2026-10-02 on #1) and the trace sink's `path` are
+refused by name where one does,
 because every reader in the suite, admin's parser, the deploy script's shell and the
 harness, must agree on what a path is, and a control character is where they part.
 JSON stays rejected on the criterion's comments clause: it has none, and a
@@ -179,17 +179,20 @@ are identifiers rather than numbers, which is what lets a run reference carry a
 stamp that distinguishes without anything being remembered between invocations,
 per the identity ruling of 2026-08-14.
 
-**One declaration per agent and the prompt file it names, both in the operator's
-directory, on the operator's ruling of 2026-10-02.** Admin resolves an agent's
-declaration as `agent.toml` in the directory the agent's root names as its
-`declaration-directory`, `~/.weaveragent/<agent>/` by convention, per
-`weaver-admin-Spec` section 9, and the system prompt as the file the declaration's
-`identity-file` names in that same directory. Both are the operator's to edit and are
-owned by the operator, and neither is ever readable by the agent: the directory is
-closed to the agent's uids, and what the model receives at load is the prompt's text
-seated as its identity prefix, never the file, its path, or a handle to it. The
-directory's place stays operator provisioning, outside what this program governs, per
-`weaver-admin-PRD` section 1. Admin resolves an agent name to exactly one declaration
+**One declaration per agent, in the operator's directory, on the operator's ruling of
+2026-10-02, and the system prompt is not in it**, on the operator's ruling of
+2026-10-06 (#1). Admin resolves an agent's declaration as `agent.toml` in the directory
+the agent's root names as its `declaration-directory`, `~/.weaveragent/<agent>/` by
+convention, per `weaver-admin-Spec` section 9. It is the operator's to edit and owned
+by the operator, and never readable by the agent, the directory being closed to the
+agent's uids. **The declaration says how the agent is built; state says who it is**:
+the system prompt is an entry in state management, entered through the gate as the
+agent's first turn and carried by its save points, per `weaver-harness-Spec` section
+6.1 and `weaver-gate-world-contract` section 2, and `system-prompt.md` beside the
+declaration is the operator's draft of it, read once by the seeding step and never by
+admin or by any organ. The directory's place stays operator provisioning, outside what
+this program governs, per `weaver-admin-PRD` section 1. Admin resolves an agent name to
+exactly one declaration
 and refuses a load where it resolves to none. **The keys that name the programs admin
 starts stay in the root**, root-owned, and never in this directory, per
 `weaver-admin-Spec` section 9: the declaration is data the operator edits, and which
@@ -270,10 +273,7 @@ pub enum TraceSink {
     Socket { path: PathBuf },
 }
 
-pub fn parse(
-    source: &str,
-    identity_file: impl FnOnce(&str) -> Option<String>,
-) -> Result<AgentConfig, ConfigError>
+pub fn parse(source: &str) -> Result<AgentConfig, ConfigError>
 
 pub struct ConfigError {
     pub field: Option<FieldName>,
@@ -288,14 +288,14 @@ pub enum ConfigErrorKind {
 }
 ```
 
-**`identity` is what every load seats**, on the operator's ruling of 2026-10-02 on #58's
-fifth question, which revises the ruling of 2026-09-04 on issue #422 that the store
-governed a session's later loads. The field keeps its shape and its refusals: canonical
-messages, every one `role: system`, required with an empty list legitimate. **The
-prompt file is authoritative at every load**: an edit to it takes effect at the next
-load, its digest recorded, and where a state member stands the store keeps the history
-of what the loads seated, under the turnless `message.system` events at each run's
-opening, per `weaver-state-PRD` section 4, deciding none of them.
+**The identity is the state member's to serve at every load**, on the operator's
+ruling of 2026-10-06 (#1), which supersedes the ruling of 2026-10-02 on #58's fifth
+question that the prompt file was authoritative: the declaration carries no identity,
+the enter carries none, and the open seats what the member answers to the `identity`
+ask of `weaver-harness-state-contract` section 2, the turnless `message.system` events
+of the newest run the holdings carry, which a save point carries across loads. The
+store keeps the history of what the loads seated and decides none of them, per
+`weaver-state-PRD` section 4.
 
 **`[state-management]` is the declaration's table for the compiled loop's settings**,
 and its grammar is this crate's, on the operator's ruling of 2026-10-02 on #58's sixth
@@ -305,42 +305,29 @@ arrive with the act that compiles the loop, each a typed key this section then n
 and until then the table carries no key, so any member refuses `UnknownField` under the
 unknown-key rule below, as every key no organ registered does.
 
-**The operator writes the seed as a file, and the field is what the parse seats from
-it**, on the operator's ruling of 2026-10-02. On disk the decoder's section carries
-`identity-file`, a bare file name, `identity-file = "system-prompt.md"`, and never the
-messages: the system prompt is a markdown file the operator edits as prose, beside the
-declaration in the operator's directory, and a prompt written as a TOML string inside a
-table of tables was the ceremony an operator paid on every edit of the one field most
-edited. `identity` stays the type's member and the wire's, so `SpuInstruction` crosses
-the enter exactly as it did and no seam downstream of the parse moves: the harness, the
-identity door, the SPU's open and the decode contract all meet canonical messages as
-before. **The mechanism holds no opinion about the prompt's content**, on the operator's
-rulings of 2026-10-02 on this act's second and third questions: the operator is assumed
-competent, and the file and the trace show what the model was given. **The file seats
-one message**: `role: system`, one `Text` block, its text the file's bytes exactly,
-seated verbatim with no trailing-newline stripping and no normalization, so the trailing
-newline an editor writes is part of the prompt and of the tokens it renders to, and for
-such a file the recorded `identity_file` digest and the text the model receives are the
-same bytes. Carried agents see their file's newline from this change on. **A file that
-is empty, or holds whitespace alone, is accepted** and seats the empty list, the agent
-with no identity prefix that was always legitimate, rather than a message of an empty or
-blank block: admin judges the file's presence, never its quality. **`identity_file` is
-always the digest of the file's bytes as read**, the operator's file and not the seated
-prefix: for a whitespace-only file it digests bytes the model never receives, and the
-seated prefix is the empty list, which the `message.system` events the load authors
-record as none. A provenance reader takes the digest as the file's and the events as
-what was seated. A file that is not UTF-8
-refuses `BadValue` naming `spu-instruction.decoder.identity-file`.
+**The declaration carries no identity**, on the operator's ruling of 2026-10-06 (#1).
+The decoder's section carries neither the inline `[[spu-instruction.decoder.identity]]`
+table of before 2026-10-02 nor the `identity-file` key of #57, and each is a key no
+organ registers, refusing `UnknownField` by name under the unknown-key rule below, so a
+declaration written under either form fails its parse at the first load rather than
+seating a prefix that state does not hold. The system prompt was a string inside the
+declaration, then a file the declaration named; both were a reading of the prompt as
+configuration, and it is state: the prompt enters state management through the gate as
+the agent's first turn, the seeding turn of `weaver-harness-Spec` section 6.1, from the
+operator's draft `system-prompt.md` beside the declaration, and from then on it is held
+and served by the state member and carried by the agent's save points, the declaration
+saying how the agent is built and state saying who it is. **The mechanism holds no
+opinion about the prompt's content**, on the operator's rulings of 2026-10-02: the
+operator is assumed competent, and the trace's `message.system` event of the seeding
+turn shows, byte for byte, what the model was given. `DecoderInstruction` loses its
+`identity` member with this ruling, per section 4, the open's prefix being the state
+member's answer under either binding.
 
-**A derived declaration names an empty prompt file**, on the operator's ruling of
-2026-10-02 on this act's sixth question. `weaver-analysis derive`, writing a diagnostic
-declaration, writes an empty prompt file, which the rule above admits, and the derived
-declaration states that its identity comes from the preloaded record. The replay's
-identity is not that file: the declaration's identity is the seed, per the ruling of
-2026-09-04 above, and a diagnostic replay always stands a member preloaded from the
+**A diagnostic declaration carries no identity either**, the ruling of 2026-10-02 on
+this act's sixth question being unchanged in substance: the replay's identity is the
+preloaded record's own, a diagnostic replay always standing a member preloaded from the
 record, so the open seats the record's own `message.system` events, in order and with
-their boundaries, byte for byte, and certification is unaffected. The analysis side's
-edit is toddwbucy/WeaverAnalysis#7.
+their boundaries, byte for byte, and certification is unaffected.
 
 **The name is a bare file name, resolved in the declaration's own directory and
 nowhere else.** It carries no `/`, is not `.` or `..`, is not empty and carries no
@@ -351,33 +338,21 @@ worth only as much as the reads that stay inside it. The name is the operator's,
 `system-prompt.md` is the convention the deploy scripts write.
 
 **The parse stays total and reads nothing.** This crate holds no I/O, per section 5's
-manifest clause, so the read is the caller's: `parse` takes, beside the declaration's
-text, a reader it calls once with the judged name, and the reader answers one of three
-things. **The file's text**, which is seated. **Nothing**, for a file that is absent or
-does not read, which refuses `BadValue` naming the field. **A refusal of the reader's
-own**, which the parse returns unchanged beside its typed errors and does not type or
-interpret, so the caller's boundary keeps its own category: admin's reader refuses a
-prompt file that fails section 9's judgment, a link, a wrong owner or a group- or
-other-writable entry, and admin answers that `BoundaryUnverified`, per
-`weaver-admin-Spec` section 4, where an absence the parse turned into `BadValue` maps to
-`ConfigInvalid`. The parse yields the whole `AgentConfig` with the identity seated, a
-typed error, or the reader's refusal, never a declaration with its identity pending.
-The reader is admin's, opening the name inside the directory it judged, per
-`weaver-admin-Spec` section 4, and a test's reader is a closure over a string. The shape the enter carries is the resolved one, the same pattern the state
-election takes, admin filling at inventory what the worker never re-derives.
+manifest clause, so the read is the caller's: `parse` takes the declaration's text
+alone, on the operator's ruling of 2026-10-06 (#1): no reader, no file, the whole
+`AgentConfig` or a typed error. The shape the enter carries is the resolved one, the
+same pattern the state election takes, admin filling at inventory what the worker never
+re-derives.
 
-**The embedded form is retired rather than kept beside the file, and the grammar's own
-rules decide it.** Two spellings of one field would need a cross-field rule the parse
-cannot see, both present or neither being malformed, and every reader of a declaration
-in the suite would carry both. Retired, the old `[[spu-instruction.decoder.identity]]`
-table is a key no organ registered, so it refuses `UnknownField` naming it under the
-unknown-key rule below, and a declaration written before 2026-10-02 fails its parse by
-name at the first load rather than seating a prefix the operator did not expect. The
-remedy is mechanical: the text moves into the file byte for byte, and the table is
-replaced by the one key. **`identity-file` is required like every field**, its absence
-refusing `MissingField`, and the agent with no prefix is a declaration of an empty file
-rather than an absent key, on the same reading that kept an empty list a declaration
-and an absent field a file unfinished.
+**Both earlier forms of the identity refuse by name, and the grammar's own rules
+decide it.** The `[[spu-instruction.decoder.identity]]` table of before 2026-10-02 and
+the `identity-file` key of #57 are each a key no organ registers, so each refuses
+`UnknownField` naming it under the unknown-key rule below, and a declaration written
+under either fails its parse by name at the first load rather than seating a prefix
+state does not hold. The remedy is the seeding turn: the prompt's text goes into
+`system-prompt.md` beside the declaration, the key or the table is removed, and the
+seeding step sends the draft through the gate after the load, per
+`weaver-harness-Spec` section 6.1.
 
 **`surprisal_election` is a bare `bool` and `field_election` is an
 `Option`, which is a difference in what each has to say rather than an
@@ -463,12 +438,12 @@ at which a field sits changes nothing about what its absence means.
 
 **The identity material rides the decoder's section**, resolving the open
 exchange's source per the harness handoff's first question: the canonical
-messages the identity prefix is rendered from are configuration rather than
-history, the working structure being empty at enter by construction, so the
-operator writes them, in the prompt file the section names since 2026-10-02,
-admin reads that file and validates the messages as part of the whole parse, the
-harness carries them uninterpreted, and the SPU consumes them at the
-session's open. The key is required like every field and an empty file is
+messages the identity prefix is rendered from are state rather than
+configuration since the operator's ruling of 2026-10-06 (#1): the operator enters
+them through the gate as the seeding turn, the state member holds them, the
+harness seats what the member answers at every load and carries them
+uninterpreted, and the SPU consumes them at the session's open. The declaration
+names none, and an agent not yet seeded opens with no prefix, which is
 a declaration the operator made, an agent with no identity prefix being a
 legitimate agent, where an absent key is a file unfinished. The messages
 are `weaver-traits`' `Message`, drawn rather than restated, and the field is
@@ -632,8 +607,8 @@ rebuilt from the trace offline. **Restoring needs a member to restore into**: wh
 declaration's store engine is `none`, no save point is selected, by name or by default,
 and a `restore` member present beside that engine refuses `ConfigInvalid` naming
 `restore`, so no load names holdings that no member restored. Present, `save-point` is a
-bare file name in the declaration's own directory, judged as `identity-file` is,
-carrying no `/`, not `.` or `..`, not empty and with no control character, refusing
+bare file name in the declaration's own directory, carrying no `/`, not `.` or `..`,
+not empty and with no control character, refusing
 `BadValue` naming `restore.save-point` otherwise. Admin opens it under its own custody,
 per `weaver-admin-Spec` section 4, and the harness never sees it. A save point the
 operator built offline from a record names that record and cut inside itself, not here,
@@ -1138,11 +1113,30 @@ the measurement the earlier deferral waited on is not needed.**
 ```rust
 pub struct TurnFrame {
     pub octets: String,
+    pub dialer: Option<u32>,
+}
+
+pub struct TurnRequest {
+    pub text: String,
+    pub role: Option<serde_json::Value>,
 }
 ```
 
-The member is the line's octets encoded base64, both directions, one
-definition per the charter. The encoding is RFC 4648 section 4's standard
+`octets` is the line's octets encoded base64, both directions, one
+definition per the charter. **`dialer` is the peer uid the gate read at accept**, as
+of the operator's ruling of 2026-10-06 (#1): present on every frame the gate carries
+inward, absent on a response, and absent from a line written without it so a frame
+of before the member still parses, per `weaver-harness-gate-contract` section 2; the
+harness admits the seeding line by it. **`TurnRequest` is the request line as the
+harness parses it**, per `weaver-gate-world-contract` section 2: `text`, a string, and
+at most `role` beside it, each member once, decoded typed rather than read as a value
+because a value's map collapses a repeated member to its last spelling and would read
+`{"text":"x","role":"user","role":"system"}` as the seeding line; a repeated member,
+an unknown member and a missing `text` refuse by name, and `role` crosses as whatever
+the line wrote, `null` included, for the harness to refuse every value but the string
+`system`, naming it. The parse is `TurnRequest::parse`, which refuses a line that does
+not open an object before the typed decode, since serde reads a struct from an array
+by position and `["x","system"]` would otherwise read as the seeding line. The encoding is RFC 4648 section 4's standard
 alphabet, padded, with no line breaks and no interior whitespace, and the
 decode refuses input the encode would not produce, so one octet sequence has
 exactly one carried form. The encoding's implementation rides with the type,
@@ -1352,9 +1346,9 @@ pub struct EnterPayload {
     pub reset: Option<Reset>,
     pub stack: BTreeMap<String, String>,
     pub declaration: String,
-    pub identity_file: String,
     pub boundary: String,
     pub cause: Cause,
+    pub operator: u32,
     pub library_path: Option<String>,
 }
 
@@ -1448,22 +1442,16 @@ event as a member marked boundary and never constitution, so each run's record d
 who could read it without the boundary file joining the tuple or the declaration's
 digest. `cause` is section 3.1's `Cause`, which the harness records on the load event,
 as the `Leave` and `Stop` directives' own causes are recorded on the unload and stop
-events. **`identity_file` rides beside them as of 2026-10-02**, the digest of the prompt
-file the declaration names, sha256 hex of the bytes admin read at the inventory and
-seated, per section 2: the declaration's digest covered the prompt while the prompt was
-a string inside it, and stopped covering it the day the prompt became its own file, so
-the second digest is what keeps the load event able to say which prompt the operator's
-files held. It is additive, a member the harness copies onto the load event and reads
-nowhere else. **`LoadFacts` does not take it**: `LoadFacts` is the shape `show` answers
-the operator with under `weaver-admin-operator-contract`, which this act does not move,
-so the record carries the prompt's digest and the observation does not, and the
-observation's answer is widened only in an act that moves that contract. **The digest
-joins `show` in the later act that reworks `show` as a whole**, on the operator's ruling
-of 2026-10-02 on this act's fifth question, once the admin freeze lifts: bundled with
-#52's observation time and the load confirmation, each organ listed and confirmed up
-with what it runs, as one change to `weaver-admin-operator-contract` and one WeaverWeb
-adjustment. Until then the digest rides on the load event, which WeaverWeb already
-receives.
+events. **No prompt rides the enter, in bytes or by digest**, on the operator's ruling
+of 2026-10-06 (#1): the system prompt is state, entered through the gate and held by
+the member, so the enter names no file and admin reads none, and the record of which
+prompt was in force is the `message.system` event the seeding turn authors, per
+`weaver-trace-Spec` section 3. **`operator` rides the enter as of 2026-10-06**, the uid
+the root's `operator` key names, per `weaver-admin-Spec` section 9, so the harness can
+admit the seeding line from the operator's peer identity alone and refuse it from every
+other dialer, per `weaver-gate-world-contract` section 2 and `weaver-harness-Spec`
+section 6.1; it is admin's fact, copied from the root and read from no deployment by
+the harness.
 
 **`EnterBinding` is the kind resolved, and a directive disagreeing with its
 kind is unrepresentable rather than refused.** The config holds the kind as
@@ -2415,30 +2403,14 @@ already discharged.
   nothing today" from 2026-08-26 to 2026-08-28**, carrying its date and the
   experimental reason the instrument was withheld. It is recorded rather than
   quietly overwritten: an unenforced rule that no section admits is
-  indistinguishable from an enforced one. **Since 2026-10-02 no declaration
-  reaches the four**, the file seating one `system` message or none, so the
-  watches call the check over the messages directly and keep their
-  perturbations unchanged.
-- In this crate: the prompt file the declaration names is seated or refused,
-  per section 2 as of 2026-10-02, and each arm is watched:
-    - the retired `[[spu-instruction.decoder.identity]]` table refuses
-      `UnknownField` naming it, confirmed by watching it parse when the
-      member is restored to the on-disk shape
-    - a name that carries `/` or a control character, or is `.`, `..` or
-      empty, refuses `BadValue` naming `spu-instruction.decoder.identity-file`,
-      confirmed by watching `../agent.toml` reach the reader when the name
-      check is removed
-    - a reader's own refusal comes back from the parse unchanged and not as
-      `BadValue`, confirmed by watching it arrive as `BadValue` when the arm
-      maps the refusal to nothing
-    - a reader answering nothing refuses `BadValue` naming the same field,
-      confirmed by watching the parse yield an empty identity when the arm
-      maps nothing to the empty list
-    - the seated message is the file's bytes verbatim, confirmed by watching a
-      trailing newline vanish when the text is trimmed, and a file that is empty
-      or holds whitespace alone seats the empty list, confirmed by watching each
-      refuse at the empty-text check, or seat a blank message, when its arm is
-      removed
+  indistinguishable from an enforced one. **Since 2026-10-06 no declaration
+  carries an identity at all**, so the watches call the check over the messages
+  directly, as the harness's identity door and the seeding turn apply it, and
+  keep their perturbations unchanged.
+- In this crate: the declaration carries no identity, per section 2 on the ruling of
+  2026-10-06, and both earlier forms refuse `UnknownField` by name, the
+  `[[spu-instruction.decoder.identity]]` table and the `identity-file` key, each
+  confirmed by watching it parse when its name is registered again
 - In this crate: the config's field names are kebab-case on disk and snake_case
   in Rust, per section 2, confirmed by watching `rename_all` dropped from
   `AgentConfig` and `deny_unknown_fields` refuse the operator's own spellings.

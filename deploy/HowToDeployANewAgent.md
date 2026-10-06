@@ -95,13 +95,18 @@ only after all of it does the root move to `/etc/weaver/admin/<name>/`, which is
 admission. The last step runs one line through the rule as the connector's user
 (`validate` for the operator role, `show` for the observer), the way admin-con will.
 
-The declaration the script writes is a working default: the artifact, `devices = [0]`, a
-plain system identity, `permission-mode = "deny"`, an empty tool set, surprisal on, the
-sink in the territory, and the store's engine. Edit `~/.weaveragent/<name>/agent.toml`
-as yourself before validating if the agent wants another prompt, a wider context, or
-`ask`. No sudo is needed: the file is yours. The fields are in
-`docs/technical/weaver-agent/agent-declaration.md`, and nothing defaults, so an absent
-or misspelled key refuses the parse by name.
+The declaration the script writes is a working default: the artifact, `devices = [0]`,
+`permission-mode = "deny"`, an empty tool set, surprisal on, the sink in the territory,
+and the store's engine. It carries no system prompt: the prompt is state, on the
+operator's ruling of 2026-10-06, and enters the agent through its gate as the seeding
+turn of section 4, after the first load. Beside the declaration the script writes the
+draft that turn sends, `~/.weaveragent/<name>/system-prompt.md`, a plain prompt that is
+yours to edit before seeding; edit `agent.toml` for a wider context or `ask`, as
+yourself, before validating. No sudo is needed: both files are yours. The fields are in
+`docs/technical/weaver-agent/agent-declaration.md`, a snapshot of 2026-08-25 that still
+shows an identity table, and `docs/crates/weaver-types/weaver-types-Spec.md` section 2
+is the authority. Nothing defaults, so an absent or misspelled key refuses the parse by
+name.
 
 ## 3. An agent without a store
 
@@ -140,7 +145,8 @@ sudo chmod 0644 "$R"/*
 sudo mv -T "$R" /etc/weaver/admin/$N
 ```
 
-The declaration is written by hand. karl's, which loaded on 2026-09-30, is the shape:
+The declaration is written by hand. karl's, which loaded on 2026-09-30, is the shape,
+in the grammar of 2026-10-06, its prompt no longer in it:
 
 ```toml
 session = "s-karl-1"
@@ -155,16 +161,6 @@ tunable-values = { seed = 451234785645, context-capacity = 16384, max-tokens-per
 [spu-instruction.decoder.model-binding]
 artifact = "/opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf"
 devices = [0]
-
-[[spu-instruction.decoder.identity]]
-role = "system"
-
-[[spu-instruction.decoder.identity.content]]
-type = "text"
-text = """
-You are Karl, a small local agent running on this laptop.
-You have no tools in this session. Answer plainly and
-briefly, and say so when you do not know something."""
 
 [gate-instruction.access-rule]
 allowed-uids = [1000]
@@ -181,13 +177,30 @@ engine = "none"
 ```
 
 Top-level keys first, then each table, since TOML reads a bare key after a table header
-as that table's. Every identity message is `role = "system"`. `allowed-uids` is who may
-dial the gate, the operator's uid here. Check it parses before installing it:
+as that table's. The inline `[[spu-instruction.decoder.identity]]` table of a
+declaration written before 2026-10-06, and the `identity-file` key of the days between,
+each refuse by name: take the text out into `system-prompt.md` beside the declaration and
+seed it through the gate (section 4). `update-stack.sh --install` makes that move for a
+declaration carrying one system text message (`deploy/migrate-identity.py` is what it
+runs, and says why when it cannot move a shape losslessly); the seeding stays yours. `allowed-uids` is who may dial the gate, the
+operator's uid here, and the one uid the harness takes a seeding line from. Check it
+parses before installing it:
 `python3 -c 'import tomllib,sys; tomllib.load(open(sys.argv[1],"rb"))' <name>.toml`.
 
-An agent carried between boxes keeps its declaration byte for byte, prompt included,
-with only the paths changed: the determinism runs compare against it, and the load
-event records the declaration's sha256.
+Karl's prompt, the draft beside the declaration:
+
+```text
+You are Karl, a small local agent running on this laptop.
+You have no tools in this session. Answer plainly and
+briefly, and say so when you do not know something.
+```
+
+An agent carried between boxes keeps its declaration byte for byte, with only the paths
+changed, and its prompt is seeded on the new box from the same draft: the determinism
+runs compare against both, and the load event records the declaration's sha256. **An
+agent without a store holds no state across loads, its prompt included**: with no
+member there is nothing to ask at the load and nothing carries the seeding to the next
+one, so a storeless agent is seeded again in every residency, as its first turn.
 
 ## 4. Validate and prove the load
 
@@ -201,8 +214,9 @@ piece. `verify-load.sh` validates, loads, counts the events that arrive in the s
 prints their kinds and the load event, then reads `show`'s constituents and checks each:
 it runs as the agent's, the member's or the relay's account, it sits in the invoker's own
 cgroup, and a relay stands among them for a file sink. It then unloads, and checks that
-every constituent is gone and `show` reads unloaded. A healthy first load writes `load`
-and `message.system`, plus `recall` where a store member stands. The load event's
+every constituent is gone and `show` reads unloaded. A healthy first load writes `load`,
+plus `recall` where a store member stands and the agent has been seeded; a load writes
+no `message.system`, the prompt being on the trace only at its seeding turn. The load event's
 payload names the session, the run, the store, the declaration's hash, the composer
 (`worker`), and the `stack` hashes of the installed members. A load that answers `idle`
 and writes nothing is the failure this step exists to catch, and the worker's own words
@@ -211,6 +225,46 @@ are in `<declaration directory>/worker.log`, the state member's in
 
 `load` never ends a run that stands: it answers `agent_running` and leaves the decision
 to its caller, who reads `show` and issues `unload`.
+
+**Then seed the prompt**, the last step, as yourself and with the agent loaded (so
+`verify-load.sh <name> --keep`, or a plain `load`):
+
+```sh
+deploy/turn.py <name> --system
+```
+
+This reads `~/.weaveragent/<name>/system-prompt.md` and sends it through the gate as
+the one line `{"role": "system", "text": ...}`. The harness takes a system line from
+the operator's uid alone, the one `allowed-uids` names and admin's `operator` key
+records: it writes the prompt into the record as the session's prefix, the tee carries
+it to the state member, and the model answers it as a turn, so what prints is the
+model's first answer under its prompt and the seeding has exercised the whole loop
+(gate, harness, model, trace, tee, state). The prompt is state from here: every later
+load asks the member for it and seats what the member holds, and the draft on disk is
+only what the next seeding would send. Seeding again in a later residency replaces the
+prompt; seeding twice in one residency seats both, in order.
+
+**An agent without a store (section 3) is seeded in every residency instead**, as its
+first turn: with no member, nothing holds the prompt across loads, the load seats
+nothing, and a save point and unload would carry nothing, so the seeding is the first
+turn of each residency and the agent is otherwise unbounded. That is the storeless
+election's meaning and not a fault.
+
+**Load, seed, save point, unload; production is the next load.** Within the seeding
+residency the prompt is appended context, not the decode session's prefix, so a flush
+there would drop it from the context; the leave's snapshot is the save point until the
+`save-point` verb lands (A3.2 on #1), so end the seeding residency with `unload` and the
+first save point taken after the seeding is the agent's starting state, holding the
+prompt and the model's first answer beside it. A healthy seeding leaves a turnless
+`message.system` in the sink followed by the turn's bracket with no `message.user` in
+it. A seeding line from any other uid, or a frame the gate carried without its
+dialer, answers `{"kind":"refused", ...}` naming the role, and the agent stands.
+
+The compiled worker loop still carries its own `SYSTEM_PROMPT` constant
+(`crates/weaver-harness/src/bin/worker/dev_loop/mod.rs`) and prepends it on a
+residency's first turn and after a flush, so a seeded agent's first user turn in each
+residency reads both, the seeded prefix and the loop's constant. Retiring the constant
+is the loop act's, not this runbook's.
 
 ## 5. Serving, stopping, unloading, and the connector's rule
 
@@ -267,10 +321,10 @@ its run directory `<coordination-root>/weaver.run/<name>/`. `userdel -r` the age
 account and `userdel` the member's, the relay's and the connector's, then delete the
 groups, which `userdel` leaves while a member remains and which a later `useradd
 --user-group` of the same name would refuse on. Archive the territory and remove it. The
-declaration directory is yours and stays: it holds the declaration, the prompt and the
-two logs, the one record of what was done to the agent, and create-agent refuses to
-write over its `agent.toml`, so move it aside before making an agent of the same name
-again.
+declaration directory is yours and stays: it holds the declaration, the prompt draft and
+the two logs, the one record of what was done to the agent, and create-agent refuses to
+write over its `agent.toml` or its `system-prompt.md`, so move them aside before making
+an agent of the same name again.
 
 The groups, once the accounts are gone:
 

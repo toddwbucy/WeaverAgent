@@ -87,7 +87,6 @@ fn instruction() -> SpuInstruction {
             surprisal_election: false,
             refeed_permission: false,
             column_permission: false,
-            identity: vec![],
             tunable_values: [
                 ("max-tokens-per-turn".to_string(), 4096.0),
                 ("context-capacity".to_string(), 4096.0),

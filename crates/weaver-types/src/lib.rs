@@ -96,7 +96,7 @@ pub use config::{
     ToolName, TraceSink,
 };
 #[cfg(feature = "config")]
-pub use config::{parse, parse_boundary};
+pub use config::{check_identity_roles, parse, parse_boundary};
 pub use identity::{
     AccessRule, BoundaryFile, Cause, PeerIdentity, TraceControl, TraceHeader, TraceLine,
     TraceRequest, authorized,
@@ -108,5 +108,5 @@ pub use wire::{
     LifecycleRefusal, Lineage, LoadFacts, MAX_ENVELOPE_BYTES, Opener, OrganEnvelope, Payload,
     Position, RefusalRecord, RefusingOrgan, Reset, ResetReason, RunId, ScoredLabel,
     SegmentPreamble, SessionId, TokenAnswer, TokenAsk, TokenDirective, TokenRefusal, ToolExecution,
-    ToolOutcome, TurnFrame, TurnKey,
+    ToolOutcome, TurnFrame, TurnKey, TurnRequest,
 };

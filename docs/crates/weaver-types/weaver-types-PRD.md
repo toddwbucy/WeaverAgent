@@ -66,17 +66,16 @@ because creating an agent is an operator act and the file is its declaration, pe
 `weaver-admin-PRD` section 1. Admin validates it before a process exists and the harness
 consumes the elections it carries.
 
-**The system prompt is a file the declaration names and not text inside it, on the
-operator's ruling of 2026-10-02.** The operator edits the prompt as a markdown file,
-and the declaration and the prompt file both live in the operator's own directory for
-the agent, owned by the operator. Neither is ever readable by the agent: the operator's
-home is closed to the agent's uids, and the model receives the prompt's text at load as
-its identity prefix, which is what a system prompt is and gives the agent process no
-read of the file and no way to change it. Admin reads the file as data and the type it
-seats is the one the wire already carries, so the ruling moves the declaration's
-surface and where admin reads it from, and of the seams only adds the prompt file's
-digest to the enter and the `load` event. `weaver-types-Spec` section 2 carries the key
-and its refusals.
+**The system prompt is state and not a declaration's text or a file it names, on the
+operator's ruling of 2026-10-06 (#1)**, which supersedes the ruling of 2026-10-02 that
+made it a file. The declaration says how the agent is built and state says who it is:
+the operator drafts the prompt as a markdown file beside the declaration, the seeding
+step sends it through the gate as the agent's first turn, the state member holds it,
+and every later load seats what the member answers. Admin reads no prompt, the enter
+carries none in bytes or by digest, and the agent process never reads the draft. The
+declaration's grammar carries no identity key, both earlier forms refusing by name, per
+`weaver-types-Spec` section 2, and the wire carries the operator's uid so the harness
+admits the seeding line from the operator alone, per section 4.
 
 **Validation divides by binding time, per the operator's ruling of 2026-08-02.** The
 compiler verifies the frozen half at build, an immutable binary needing no load-time

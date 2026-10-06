@@ -262,9 +262,10 @@ the enter parks the same way**, per `weaver-state-PRD` section 3: the replay sta
 holdings the driver has yet to seal, so the enter waits on the seal rather than reading
 a store that is empty for a moment, and the identity ask's refusal of the dead-peer
 conversion is unchanged, a channel closed unsealed converting to the missed answer that
-refuses the enter. A serving load stands no preload door and sends no identity ask,
-restoring or not, on the operator's rulings of 2026-10-02 on #58, which retire the
-record restore of issue #432 and the parked `recall` it sent. The replay ask was the one
+refuses the enter. A serving load stands no preload door, so its identity ask of
+section 2 answers immediately, parking never, on the operator's ruling of 2026-10-06
+that the system prompt is state; the record restore of issue #432 and the parked
+`recall` it sent retired on the rulings of 2026-10-02 on #58. The replay ask was the one
 ask whose answer may wait, and this one joins it under that binding alone, the waiting
 is not the custodian initiating, and one answer still follows one ask. **The parked ask
 steps out of the arrival order, and that is this clause's stated exception to section
@@ -303,17 +304,18 @@ carries the comparison, and custody states the surface and never judges it, per 
 like `shape`.
 
 **The `identity` ask returns the session's seated prefix as custody holds it**, added
-2026-09-04 and narrowed on the operator's ruling of 2026-10-02 on #58's fifth question:
-the prompt file is authoritative at every serving load, so the harness seats it and
-asks nothing for it, and **the ask governs a diagnostic load alone**, where the
-preloaded record's identity is what the open seats, per `weaver-harness-Spec` section
-6.1 and the ruling of 2026-10-02 on #57's sixth question. There the harness asks once at
-the enter, after this seam stands and before the decode session opens. The ask
-carries no members. The answer carries one member, `messages`, the turnless
+2026-09-04, and **it governs every load under both bindings** on the operator's ruling
+of 2026-10-06 (#1) that the system prompt is state, which supersedes the narrowing of
+2026-10-02 to the diagnostic load: the harness asks once at every enter, after this seam
+stands, after `restored` at a serving enter, and before the decode session opens, and
+seats what custody answers, the prompt the seeding turn entered and a save point
+carried, per `weaver-harness-Spec` section 6.1. The ask carries no members. The answer carries one member, `messages`, the turnless
 `message.system` events of the declared session's most recent run that holds any, in
-landing order, because every load seats the prefix and the prefix door records it again,
-so the session holds one prefix per run and the one in force is the newest run's, each
-served as the distillate's own shape, envelope and pairs, the pairs being the prefix's
+landing order, because the seeding turn writes the prefix and a load writes none, on
+the operator's ruling of 2026-10-06 (later, #1), so the newest run holding any is the
+last residency that seeded and its prefix is the one in force, a later residency's
+seeding replacing it and two seedings in one residency served both, each served as the
+distillate's own shape, envelope and pairs, the pairs being the prefix's
 payload whole because that kind crosses the tee whole under every election. An empty
 list is an answer and not a miss: it says the preloaded record holds no prefix for the
 session, and the open seats the empty identity. **Under a diagnostic load this is one
@@ -353,8 +355,8 @@ point and which position on the trace before it acts, and a sixth, `identity`, t
 prefix the save point holds: the turnless `message.system` events of its newest run that
 holds any, in landing order, served as the `identity` ask serves them, an empty list
 where it holds none. The live restore is the one serving path that reads a prefix from
-the store, because the save point's state was built under its prefix and a live restore
-is not a load, so the prompt file's authority at every load does not reach it. Every
+the store between loads, because the save point's state was built under its prefix and
+a live restore is not a load. Every
 distillate the stream carries after the ask lands on the restored holdings. The ask
 parks never, and a restore that fails is not answered, the asker's bound converting the
 silence into the missing answer of section 5: the harness then flushes nothing, records
@@ -411,6 +413,26 @@ A further ask name is a change under section 7 and does not exist until it merge
   unboundedly for an answer: an answer that has not arrived inside the
   harness's own bound is a missing answer, treated as the dead peer of
   section 5, and the turn proceeds without the fact.
+- **One answer frame is bounded at one mebibyte, 1048576 octets, at both
+  ends.** The custodian renders no answer frame past it and answers nothing
+  in its place, per section 4, and the harness reads none past it, retiring
+  the seam, so an answer that would pass it is the missing answer at both
+  ends by the same number. Each end holds the number as its own constant
+  (`weaver-state`'s `ANSWER_BOUND`, `weaver-harness`'s `ANSWER_BOUND_BYTES`),
+  each under a watch naming this clause, since neither crate sees the
+  other's. **The harness spends the bound where an answer would grow past it
+  at the harness's own hand**: the `identity` answer carries every seeding of
+  the newest run, so a seeding whose addition would carry that answer past
+  the bound refuses as a turn before anything is authored, per
+  `weaver-harness-Spec` section 6.1, the accounting being the canonical rendering of
+  every member the envelope carries, the session and run names as the JSON strings
+  the custodian writes with their escapes, so the sum is never under the custodian's
+  count, the variable members exact and the envelope's fixed text and the frame's own
+  allowed for above (#93 holds the exact measure as a cost with no correctness bearing);
+  the other asks are bounded by their
+  own definitions, `recall` by `last-turns`, `shape`, `grants`, `snapshot`
+  and `restored` by their shapes, and `restore`'s answer carries the save
+  point's prefix, which the same seeding bound kept under it.
 
 ## 4. What state owes
 

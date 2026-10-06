@@ -783,6 +783,29 @@ fn the_identity_door_writes_system_only() {
         refused.is_err(),
         "a role that is not system is refused at the identity door"
     );
+    // **A message carrying nothing and a text block carrying no text refuse
+    // too**, per `weaver-types-Spec` section 5's four rules, judged at this
+    // door since the seeding line of 2026-10-06 reaches it from the gate.
+    // Perturbation: drop either rule from `author_identity` and its case
+    // records an empty prefix.
+    for (empty, rule) in [
+        (vec![], "identity-door-empty-message"),
+        (
+            vec![ContentBlock::Text {
+                text: String::new(),
+            }],
+            "identity-door-empty-text",
+        ),
+    ] {
+        let hollow = Message {
+            role: Role::System,
+            content: empty,
+        };
+        let refused = author
+            .author_identity(&mut recorder, &hollow)
+            .expect_err("an empty prefix is refused at the identity door");
+        assert_eq!(refused.block, rule);
+    }
 
     let lines: Vec<&weaver_trace::Record> = recorder
         .structure()

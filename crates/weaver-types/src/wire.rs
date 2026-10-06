@@ -441,6 +441,11 @@ pub struct EnterPayload {
     /// Who asked for this load, section 3.1's `Cause`, recorded on the load
     /// event.
     pub cause: crate::Cause,
+    /// The operator's uid, the value the agent root's `operator` key names,
+    /// per `weaver-types-Spec` section 4 on the operator's ruling of
+    /// 2026-10-06: what the harness admits the seeding line from, and the
+    /// only uid it does.
+    pub operator: u32,
     /// The engine libraries' directory where the agent's root names one,
     /// judged by admin and recorded on the load event beside the stack.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -551,6 +556,53 @@ pub enum AgentState {
     Active,
 }
 
+/// A request line as the harness parses it, per `weaver-gate-world-contract`
+/// section 2 and `weaver-gate-Spec` section 4: one JSON object carrying `text`,
+/// a string, and at most `role` beside it, each member once. **Typed rather
+/// than read as a value**, because a value's map collapses a repeated member
+/// to its last spelling, so `{"text":"x","role":"user","role":"system"}` would
+/// read as the seeding line; the typed decode refuses a repeated member, an
+/// unknown member and a missing `text` by name. `role` is carried as whatever
+/// the line wrote, `null` included, so the harness refuses every value but the
+/// string `system` naming it, per `weaver-harness-Spec` section 6.1.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TurnRequest {
+    pub text: String,
+    #[serde(default, deserialize_with = "present_as_written")]
+    pub role: Option<serde_json::Value>,
+}
+
+impl TurnRequest {
+    /// The one parse of a request line: **an object and nothing else**, then
+    /// the typed decode. serde reads a struct from a JSON array as well as
+    /// from an object, by position, so `["x","system"]` would otherwise read
+    /// as the seeding line; the line's first byte past whitespace must open an
+    /// object. The error is the refused turn's reason, as text.
+    pub fn parse(octets: &[u8]) -> Result<TurnRequest, String> {
+        match octets.iter().find(|byte| !byte.is_ascii_whitespace()) {
+            Some(b'{') => {}
+            _ => return Err("a request is one JSON object".into()),
+        }
+        serde_json::from_slice::<TurnRequest>(octets).map_err(|error| {
+            format!(
+                "a request is one JSON object carrying the text member, a string, and at most the role member beside it, each once: {error}"
+            )
+        })
+    }
+}
+
+/// A member that is present reads as `Some` of whatever it wrote, `null`
+/// included: serde's own `Option` reads a written `null` as absent, and the
+/// harness is owed the difference between a line that named no role and one
+/// that named `null`.
+fn present_as_written<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_json::Value::deserialize(deserializer).map(Some)
+}
+
 /// A turn frame, opaque to the gate: whatever the client sent, and the
 /// answer going back, one definition for both directions per the charter.
 ///
@@ -564,13 +616,29 @@ pub enum AgentState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TurnFrame {
     pub octets: String,
+    /// The dialer's peer uid, the kernel credential the gate judged at
+    /// accept, on every inbound frame and absent on a response, per
+    /// `weaver-harness-gate-contract` section 2 on the operator's ruling of
+    /// 2026-10-06: what the harness judges the seeding line's admission by.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dialer: Option<u32>,
 }
 
 impl TurnFrame {
-    /// Carries octets as a frame, encoded to the one canonical form.
+    /// Carries octets as a frame, encoded to the one canonical form, naming
+    /// no dialer: a response, or a frame a test carries inward.
     pub fn carry(octets: &[u8]) -> TurnFrame {
         TurnFrame {
             octets: encode_base64(octets),
+            dialer: None,
+        }
+    }
+
+    /// Carries a client's line inward with the dialer the gate read.
+    pub fn carry_from(octets: &[u8], dialer: u32) -> TurnFrame {
+        TurnFrame {
+            octets: encode_base64(octets),
+            dialer: Some(dialer),
         }
     }
 
@@ -1145,15 +1213,12 @@ pub enum FaultCase {
     MessageRecordUndecodable,
     /// The record cannot account for a seated identity prefix, per
     /// `weaver-harness-PRD` section 5. The prefix is seated at the session's
-    /// open whether the identity door wrote it or not, so without this case
-    /// the record reads as an agent that seated nothing.
-    ///
-    /// **One case rather than one per cause**, on the custody rule's own
-    /// criterion: the case is what the harness consumes, and a refused role,
-    /// an unlicensed content block, an unrenderable message, and a recorder
-    /// that would not take the write all mean the same thing for the turn and
-    /// the residency - nothing, the load standing either way. Which of them
-    /// happened is the account's to carry, that being the reporting organ's
-    /// own rendering by construction.
+    /// open whether the record took the `recall` of the identity ask or not,
+    /// so without this case the record reads as an agent that seated nothing.
+    /// Since the operator's ruling of 2026-10-06 (later, #1) a load authors
+    /// no prefix, so the recall the recorder would not take is the case's one
+    /// cause; which it was is the account's to carry, that being the
+    /// reporting organ's own rendering by construction, and the load stands
+    /// either way.
     IdentityPrefixUnrecorded,
 }

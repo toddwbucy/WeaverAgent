@@ -178,8 +178,7 @@ published by default, and none where no save point stands, beside it and apart f
 the reset, where the agent's last run did not end in a clean unload, that run and the
 reason, whether or not a save point stands, the digests of the organ binaries admin
 started and of the two it hands the worker to fork, the agent's SPU and the gate, the
-digests of the declaration and, as of 2026-10-02, of the prompt file it names, and as of
-2026-10-03 the digest of the agent's boundary file, `roles.toml`, marked boundary and
+digest of the declaration, as of 2026-10-03 the digest of the agent's boundary file, `roles.toml`, marked boundary and
 never constitution, and the cause, the uid sudo reports, on the operator's rulings on
 #50. The state channel's end is the harness half of the socketpair admin created at the
 member's spawn, per the operator's ruling of 2026-08-26 carried at
@@ -245,10 +244,7 @@ any enter, `Unloaded` and no load. Entered, `Idle` where no turn is in flight an
 declaration's digest as admin read it at the enter, the artifact, the elections the load
 stands under, the store the member stands on and whether its end arrived, and the
 composing loop by binary and, where it is a file, path and digest, the same facts the
-`load` event carries and read from the run rather than the record, the prompt file's
-digest excepted: the record carries it and the observation does not, the answer's
-shape being what `show` relays under `weaver-admin-operator-contract`, which the act of
-2026-10-02 did not move. After a leave,
+`load` event carries and read from the run rather than the record. After a leave,
 `Unloaded` and no load, the position being terminal. The answer is the harness's own
 word and never a read of the deployment, it touches no bracket and authors no event, and
 an observation arriving during a turn is answered from inside it, between tokens, as
@@ -342,10 +338,10 @@ point stands, on the operator's rulings of 2026-10-02 on #58, so the harness nam
 its state came from without opening anything, the digests of the organ binaries admin
 started and of the agent's SPU and the gate it hands the worker, keyed by name, the
 declaration's digest as this crate read the file at the inventory, so the run and the
-record can both name what they were built from, the prompt file's digest as this crate
-read the file the declaration names, as of 2026-10-02, so the record can say which
-prompt the agent was given now that the declaration's digest no longer covers it, the
-boundary file's digest, so the record declares who could read the run without that file
+record can both name what they were built from, the operator's uid as the root's
+`operator` key names it, as of 2026-10-06, so the harness admits the seeding line of
+`weaver-gate-world-contract` section 2 from the operator alone, the boundary file's
+digest, so the record declares who could read the run without that file
 joining the tuple, the cause of every load, unload and stop, the uid sudo reports, and
 the intent to stop. Admin never writes the trace: it hands these facts to the harness,
 the single writer, as it hands the declaration's digest.

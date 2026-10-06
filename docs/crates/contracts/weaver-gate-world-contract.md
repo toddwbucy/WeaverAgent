@@ -110,6 +110,21 @@ and the gate relays octets in order, per its charter's opacity rule. A line that
 not parse as one JSON value is a refused turn, and the refusal returns by the path
 the line took.
 
+**The seeding line, as of the operator's ruling of 2026-10-06 (#1) that the system
+prompt is state.** A request may carry `role` with the one value `"system"` beside its
+`text`, and such a line is the operator entering or replacing the agent's system
+prompt as a turn: the harness seats the text as the agent's identity prefix, records
+it, and answers the turn as any other, per `weaver-harness-Spec` section 6.1. **It is
+admitted from the operator's uid alone**, the uid the box's root names as the operator
+and the enter carries, judged by the harness on the dialer's peer identity, which the
+gate relays as it relays every line, parsing nothing; from any other dialer, the
+connector's service user among them, or with any other `role` value, it is a refused
+turn by section 3's path, the refusal naming the role. The seeding is the last step of
+creating an agent, run by the operator after the load with the draft
+`system-prompt.md` beside the declaration, and the first save point after it is the
+agent's starting state. A seeding line is bounded as every line is, 32 kibibytes of
+octets before the delimiter per `weaver-gate-Spec` section 4.
+
 ## 3. What crosses out, and its format
 
 The turn's close: one JSON line per turn, carrying the response, or carrying the

@@ -153,9 +153,15 @@ the listener, holding nothing that needs finishing.
 
 **Carry a turn.** Opened by the gate, one exchange per client request, from
 the token workflow's act of 2026-08-02. The gate relays the client's line
-inward as a `turn-frame`, opaque octets it has not read, and the exchange's
-identity, the opening party and its ordinal per the channel's own mechanics,
-is the correlation the response returns on. The harness interprets the line,
+inward as a `turn-frame`, opaque octets it has not read, **and, as of the
+operator's ruling of 2026-10-06 (#1), the dialer**: the frame's `dialer`
+member is the peer uid the gate read from the kernel at accept, the same
+credential its predicate judged, set on every inbound frame and absent on a
+response, so the harness can admit the seeding line of
+`weaver-gate-world-contract` section 2 from the operator's uid alone and refuse
+it from every other dialer, judging nothing the gate did not read. The
+exchange's identity, the opening party and its ordinal per the channel's own
+mechanics, is the correlation the response returns on. The harness interprets the line,
 runs the turn, and answers with the response frame, which the gate relays to
 the client by the path the request took. The gate carries no `turn_key`
 inward and mints nothing, the turn not existing until the harness opens it,

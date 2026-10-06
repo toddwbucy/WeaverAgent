@@ -1003,6 +1003,10 @@ fn run_load(
                 // 2026-10-03, which the harness records on the load event.
                 boundary: config.require_boundary()?.digest.clone(),
                 cause: invocation_cause(),
+                // The operator's uid, the root's key, so the harness admits
+                // the seeding line from the operator alone, per
+                // `weaver-types-Spec` section 4 on the ruling of 2026-10-06.
+                operator: config.operator,
                 library_path: config
                     .library_path
                     .as_ref()
@@ -3229,7 +3233,6 @@ mod tests {
                 "\n",
                 "[spu-instruction.decoder]\n",
                 "residual-readout-election = false\n",
-                "identity = []\n",
                 "tunable-values = {{}}\n",
                 "\n",
                 "[spu-instruction.decoder.model-binding]\n",
