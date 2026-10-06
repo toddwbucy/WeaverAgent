@@ -10,8 +10,8 @@ declaration written by the create-agent.sh of before that date, which carried
 the prompt as `[[spu-instruction.decoder.identity]]`, refuses its parse by
 name under the admin that reads the new grammar. This moves the one thing
 that can move losslessly: exactly one `system` message of exactly one text
-block, whose text becomes `system-prompt.md` beside the declaration, the
-draft `deploy/turn.py <agent> --system` sends after the first load. The
+block, whose text becomes `system-prompt.md` beside the declaration byte for
+byte, the draft `deploy/turn.py <agent> --system` sends after the first load. The
 identity's lines are then removed from the declaration, and the result is
 re-parsed and compared to the original minus the identity, so a declaration
 whose shape this script did not foresee is refused rather than mangled.
@@ -89,9 +89,10 @@ def main() -> int:
           and isinstance(identity[0]["content"][0], dict)
           and identity[0]["content"][0].get("type") == "text"
           and isinstance(identity[0]["content"][0].get("text"), str)):
+        # The text exactly as the declaration carried it, no newline added:
+        # the seeding turn sends the file's bytes verbatim, and a prompt that
+        # ended without a newline in the declaration seeds without one.
         text = identity[0]["content"][0]["text"]
-        if not text.endswith("\n"):
-            text += "\n"
     else:
         return refuse(f"{path}: the identity is not one system message of one text block, which is "
                       f"the only shape that moves losslessly into {draft}; move it by hand "

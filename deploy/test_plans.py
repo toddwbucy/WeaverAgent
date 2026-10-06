@@ -1258,10 +1258,12 @@ esac
     def test_migrate_identity_moves_one_system_text_into_the_draft(self):
         # The one shape that moves losslessly: one system message of one text
         # block. The check names the move and changes nothing; the apply
-        # writes the draft 0600 with the text and its trailing newline,
-        # removes the tables, and the declaration re-parses as itself minus
-        # the identity. A second run finds nothing to do. Perturbation: drop
-        # the strip of the content header and the re-parse refuses.
+        # writes the draft 0600 with the text byte for byte (no newline
+        # added: the seeding sends the file verbatim, Codex on #92), removes
+        # the tables, and the declaration re-parses as itself minus the
+        # identity. A second run finds nothing to do. Perturbations: drop the
+        # strip of the content header and the re-parse refuses; append a
+        # newline to the text and the draft assertion fails.
         import tomllib
         self.decl.mkdir(parents=True)
         decl = self.decl / "agent.toml"
@@ -1286,7 +1288,7 @@ esac
                 self.assertFalse(draft.exists())
                 result = self.migrate(decl, "--apply")
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(draft.read_text(), "You are Karl, a small local agent.\nAnswer plainly.\n")
+                self.assertEqual(draft.read_text(), "You are Karl, a small local agent.\nAnswer plainly.")
                 self.assertEqual(draft.stat().st_mode & 0o077, 0)
                 after = tomllib.loads(decl.read_text())
                 del before["spu-instruction"]["decoder"]["identity"]
