@@ -1712,8 +1712,9 @@ conversation blocks stay serde records, because the decode seam carries
 `Vec<Message>` and the SPU must deserialize a block to render it - the
 round-trip hurdle the boundary document registered, resolved by splitting
 the record from the grant rather than by sealing the record. The world mints
-nothing: the turn ingress parses one `text` member and refuses everything
-else, verified at the parse.
+nothing: the turn ingress parses one `text` member and, from the operator
+alone, the seeding line's `role` of section 6.1, and refuses everything else,
+verified at the parse.
 
 **The grant is `ToolResult`, a type on this crate's surface with three
 negatives, each pinned the way the floor pins `PeerIdentity`:** no
@@ -2084,7 +2085,10 @@ rather than reloading the model, per `weaver-spu-PRD`: the `restore` answer carr
 save point's prefix, this crate compares it with the prefix seated, and where they
 differ it closes the session and opens it on the answered prefix, authoring that prefix
 through the identity door as an open does, so the record names the prefix the model runs
-under from that point. The channel that carries the operator's demand to the loop is the
+under from that point. **The decode seam has no close or reopen today**, its directives
+being `Open`, `AppendAndGenerate`, `ReFeed`, `Cancel` and `Flush`, so this reopen is
+owed by the loop act that lands the live restore, as a `Reopen` of
+`weaver-harness-spu-decode-contract` and the SPU, and nothing here is implemented. The channel that carries the operator's demand to the loop is the
 loop act's to name.
 
 ### 6.1 The decode surface, chartered
@@ -2099,39 +2103,66 @@ loop that composes them, which stays the builder's.
 ruling of 2026-08-11 answering the handoff's first question. Loop 0 opens the decode
 session as the last step of standing the interior up, after the SPU's admit confirms
 residency, so the surface loop 0 grants at loaded-and-idle is already a session at rest.
-The identity material the open carries has two sources, one per binding. **Under a
-serving binding the prompt file is authoritative at every load**, on the operator's
-ruling of 2026-10-02 on #58's fifth question, which revises the ruling of 2026-09-04 on
-issue #422 that the store governed every load after a session's first: the open seats
-the decoder instruction's `identity`, an edit to the file takes effect at the next load,
-and where the state member's end arrived the tee lands what the open seated, the store
-keeping the history of the identities the loads seated and deciding none of them.
-**Under a diagnostic binding the identity is the preloaded store's**, on the operator's
-ruling of 2026-10-02 on #57's sixth question: the harness asks the store for it, the
-`identity` ask of `weaver-harness-state-contract` section 2, once the seam stands and
-before the open, and the record's own `message.system` events seat, in order and with
-their boundaries, byte for byte, the derived declaration's prompt file being empty. **A
-missed ask there refuses the enter**, the dead-peer conversion of every other ask
-notwithstanding: a replay whose bounding cannot be read is not a replay with no
-bounding, so the enter fails closed through the same after-load failure a refused open
-uses, per ruling 2 of issue #422. **This is the one site where the identity's source is
-read**, and the prefix the open seats comes from nowhere else. The seed it reads is the
-decoder instruction's `identity` as the enter carried it, which since the operator's
-ruling of 2026-10-02 admin seated at the inventory from the prompt file the declaration
-names, per `weaver-types-Spec` section 2, so this crate holds the file's text and never
-the file, its path or a handle into the operator's directory. **The operator's
-long-range direction moves the source here and not elsewhere**: state management
-supplying the identity, a semantic-graph store that sleep-cycle consolidation keeps
-current, in place of a file the operator edits. That is the memory leg, out of scope per
-`weaver-agent-PRD` section 9 and not built here, and nothing in this crate is shaped for
-it: the choice stays two-way by binding, the seed or the preloaded store's answer, and a
-new source arrives as that leg's own act. The run's session identity is the open's
-`session` in every case. A refused open is a refused enter, returned through the
+The identity material the open carries has one source under both bindings, the state
+member, on the operator's ruling of 2026-10-06 (#1) that the system prompt is state,
+which supersedes the ruling of 2026-10-02 on #58's fifth question that the prompt file
+was authoritative. **Under a serving binding the enter asks the member for `identity`**,
+the ask of `weaver-harness-state-contract` section 2, after `restored` and before the
+open, and the open seats the answer: the turnless `message.system` events of the newest
+run the restored holdings carry, in order and with their boundaries, byte for byte,
+which is the prompt the seeding turn entered or a later seeding replaced, carried by
+the save point the load restored. An empty answer is an agent not yet seeded, which
+opens with no prefix and is seeded by its first turn, per the seeding clause below. The
+declaration carries no identity and the enter no prompt, per `weaver-types-Spec`
+sections 2 and 4, so this crate holds no file, no path and no handle into the
+operator's directory. **Under a diagnostic binding the identity is the preloaded
+store's**, on the operator's ruling of 2026-10-02 on #57's sixth question: the same
+ask, once the seam stands and before the open, parked on the driver's seal, and the
+record's own `message.system` events seat. **A missed ask under either binding refuses
+the enter**, the dead-peer conversion of every other ask notwithstanding: a run whose
+bounding cannot be read is not a run with no bounding, so the enter fails closed
+through the same after-load failure a refused open uses, per ruling 2 of issue #422.
+**This is the one site where the identity's source is read**, and the prefix the open
+seats comes from nowhere else. State supplying the identity was the operator's
+long-range direction, and this ruling is its first step; the semantic-graph store that
+sleep-cycle consolidation keeps current is the memory leg, out of scope per
+`weaver-agent-PRD` section 9 and not built here. The run's session identity is the
+open's `session` in every case.
+
+**The seeding turn enters the prompt**, on the same ruling. A request line of
+`weaver-gate-world-contract` section 2 may carry `role` with the one value `"system"`
+beside its `text`, and such a line is admitted only where the frame's `dialer`, the
+peer uid the gate read at accept and carries inward per
+`weaver-harness-gate-contract` section 2, is the operator's uid the enter carries,
+`operator` of `weaver-types-Spec` section 4; a line whose dialer is absent or is any
+other uid, the connector's service user among them, or whose `role` is any other
+value, is a refused turn, the response frame's `refused` kind naming the role, and the
+channel stands. An admitted seeding line is one turn in the residency that seeds: this
+crate authors the prompt, one `system` message of the line's text verbatim, turnless
+through the identity door so the record and the tee carry it, then appends it as the
+session's context, `AppendAndGenerate` with that one message and no user message, and
+the model's answer closes the turn, so the seeding exercises the whole loop (gate,
+harness, model, trace, tee, state) with the one prompt that matters, which is the
+operator's last test before the agent goes into production. **The prefix the next load
+seats is the member's `identity` answer**, every turnless `message.system` of the
+newest run in order: a seeding in a later residency therefore replaces the prefix, the
+newest run's being served, and two seedings in one residency are served both, in order.
+Within the seeding residency the prompt is appended context and not the session's
+prefix, so a flush there would drop it from the context, which is why the runbook ends
+that residency at the save point: load, seed, save point, unload, and the production
+session is the next load. The first save point taken after the seeding is the agent's
+starting state, per `weaver-state-PRD` section 4, taken on the operator's demand once
+A3.2's `save-point` verb lands and by the first leave's snapshot until then. **Because the seeding turn generates, the agent's starting state
+holds the model's first answer beside the prompt**: that answer is on the record as
+every `message.assistant` is, the tee lands it, and a save point taken after the
+seeding carries both, by design and not by leak. The line's bound is the gate's, 32 kibibytes of octets before the
+delimiter per `weaver-gate-Spec` section 4, which a prompt written as prose sits well
+inside. A refused open is a refused enter, returned through the
 fan-out's after-load failure so the authored bracket stands for the leave to unwind, the
 aggregate naming the decode seam as where the fan-out stopped. **Under a restoring load
 the store answers from the save point**, per the operator's rulings of 2026-10-02 on
 #58: admin hands the member the save point at spawn, per `weaver-admin-Spec`, the member
-holds what it held, and the open carries the identity the prompt file seats and nothing
+holds what it held, and the open carries the identity the member answers and nothing
 more, the loop composing each turn's context from the restored state as it composes it
 from any held state. The record restore of issue #432, which seated a session's
 conversation as prefix and wrote it as `message.restored`, retires with those rulings: a
@@ -2266,18 +2297,19 @@ and no one else does. Neither is read from the deployment, so the record cannot 
 with what ran. A third member that is not an election joins on 2026-09-04: the
 declaration's digest, which admin computed at the inventory and the enter carries, so
 the record names what the run was built from without this crate reading a file, per
-issue #435. A fourth joins on 2026-10-02 by the same route: the digest of the prompt
-file the declaration names, `identity_file` on the enter and on the load event, with the
-boundary file's digest and the load's cause beside it as of 2026-10-03 (#50), each
-copied from the enter and the boundary's marked boundary and never constitution, per
-`weaver-trace-Spec` section 3, which this crate copies and does not compute, the file
-being admin's to read and never this crate's.
+issue #435. The boundary file's digest and the load's cause join as of 2026-10-03
+(#50) by the same route, each copied from the enter and the boundary's marked boundary
+and never constitution, per `weaver-trace-Spec` section 3, which this crate copies and
+does not compute. **No prompt digest joins them**, on the operator's ruling of
+2026-10-06 (#1): the prompt is state, and the record of it is the `message.system`
+events this crate authors, at the seeding turn and at every load's seating.
 
 **The seated identity prefix is authored beside the load, one `message.system` per
-message**, per `weaver-trace-PRD` section 5. The harness is again the party that holds
-it, whichever source the open read it from, the store's answer or the declaration's
-seed, so the write is one read of what the open carried and the record names the prefix
-the session ran under and never the seed alone. The events carry no turn, a prefix
+message**, per `weaver-trace-PRD` section 5, and **the seeding turn's prefix is
+authored through the same door** when it enters, per section 6.1. The harness is again
+the party that holds it, the member's answer at a load or the gate's line at the
+seeding, so the write is one read of what the open or the seeding carried and the
+record names the prefix the session ran under. The events carry no turn, a prefix
 preceding every turn of the run, and they are authored after the load event so the run's
 bracket stands over them.
 
@@ -2547,8 +2579,10 @@ interval is closed.
 rather than faults.** A frame's member decodes per the election of
 `weaver-types-Spec` section 4.1, and the octets parse as one JSON value
 against the request shape `weaver-gate-Spec` section 4 fixes: one object,
-one `text` member. What parses becomes the turn's content, the text as the
-user message, roles never the client's to name. What does not parse, the
+one `text` member and, from the operator alone, the seeding line's `role` member
+of section 6.1, whose one value is `system`. What parses becomes the turn's content,
+the text as the user message, or as the new prefix where the line is the operator's
+seeding line, roles otherwise never the client's to name. What does not parse, the
 transport decode included, answers as a refused turn on the frame's
 exchange, the response frame's `refused` kind with its reason, and the
 channel stands: the failure is the content's and never the channel's, which

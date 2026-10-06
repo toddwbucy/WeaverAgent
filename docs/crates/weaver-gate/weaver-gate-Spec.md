@@ -747,9 +747,14 @@ the closes return, per charter section 13.3 and the ordering the lifecycle
 half already pins. No turn is in flight at a lower, leave refusing while
 one is, so what the closes drop is deliveries at most and never turns.
 
-**A frame is bounded at the delimiter, and the scan reads nothing.** The
-world contract fixes the framing as delimiter and octets, never fields, so
-this crate scans an accepted connection's bytes for the delimiter and what
+**A frame carries the dialer beside its octets**, as of the operator's ruling of
+2026-10-06 (#1): the `turn-frame` this crate opens inward names the connection's
+peer uid, the kernel credential the predicate judged at accept, as its `dialer`, on
+every inbound frame and never on a response, so the harness can admit a seeding line
+from the operator alone, per `weaver-harness-gate-contract` section 2; the line's
+octets are as opaque as before. **A frame is bounded at the delimiter, and the scan
+reads nothing.** The world contract fixes the framing as delimiter and octets, never
+fields, so this crate scans an accepted connection's bytes for the delimiter and what
 stands before it is the line. The scan is carriage rather than reading, a
 byte comparison against the delimiter parsing no field, which is the same
 distinction the frame election drew for the encoding. Bytes after a

@@ -745,20 +745,18 @@ carried. That the parse is total and exposes no partial value is
 `weaver-types-Spec` section 2's claim and asserted there, so what this crate
 adds is the mapping and not a second statement of the parse.
 
-**The prompt file is read through the parse and by this crate**, as of the operator's
-ruling of 2026-10-02. The parse takes the declaration's text and a reader, and the
-reader is this crate's: it opens the name the declaration's `identity-file` carries
-inside the declaration directory section 9 judged, through the directory as opened at
-that judgment and never by a pathname re-resolved after it, judges the file as that
-section judges the entries it reads, and answers its bytes. A prompt file that fails
-that judgment is the reader's own refusal, which the parse returns unchanged per
-`weaver-types-Spec` section 2, and it refuses `BoundaryUnverified`, naming the file on
-stderr, as a failed entry of the root does. One that is absent, does not read, or is not UTF-8 refuses
-`ConfigInvalid` naming `spu-instruction.decoder.identity-file`, the omission being the
-declaration's. **Both digests are this crate's**: sha256 of the declaration's bytes
-and of the prompt file's, each as read here, ride the enter as `declaration` and
-`identity_file`, per `weaver-admin-harness-contract` section 5, so the record names
-what the agent was given without a second reader of either file.
+**This crate reads no prompt**, on the operator's ruling of 2026-10-06 (#1), which
+supersedes #57's reader of 2026-10-02: the system prompt is state, entered through the
+gate by the seeding step as the agent's first turn and held by the member, so no root
+is in the prompt's path, the parse takes the declaration's text alone, and the enter
+carries no prompt in bytes or by digest. The one digest this crate computes is the
+declaration's, `declaration` on the enter, per `weaver-admin-harness-contract` section
+5. **The enter carries the operator's uid**, `operator`, the value the root's `operator`
+key names per section 9, so the harness admits a seeding line from the operator's peer
+identity alone, per `weaver-gate-world-contract` section 2; this crate names the
+operator and judges no line. `system-prompt.md` beside the declaration is the
+operator's draft, which the seeding step of the deploy runbook reads as the operator
+and sends through the gate after this crate's load, and which this crate never opens.
 
 **The existence checks are admin's where admin holds custody, and an ask where
 another organ does, per charter section 4.3 as ruled 2026-09-05 on issue #456.**
@@ -845,11 +843,12 @@ selects no save point and resolves no lineage, and a declaration naming `restore
 that engine refuses `ConfigInvalid` naming `restore`, per `weaver-types-Spec` section 2.
 A declaration electing one names a save point by its bare file name in the declaration
 directory of section 9, and the walk reads it under this crate's own custody: the name
-is judged as `identity-file`'s is, a save point absent from the directory refuses
+is a bare file name per `weaver-types-Spec` section 2, a save point absent from the
+directory refuses
 `ConfigInvalid` naming `restore`, and one that fails section 9's judgment of the entries
 it reads, a link, a wrong owner, or a group- or other-writable file, refuses
-`BoundaryUnverified`. A save point the operator edited is an input like a prompt file,
-admitted the same way. **The save point's bytes are judged here too**, before any
+`BoundaryUnverified`. A save point the operator edited is an input, admitted the same
+way. **The save point's bytes are judged here too**, before any
 process exists, on the Planner's ruling of 2026-10-02 on #58's fourth review round: the
 save point this load restores, the one `restore` names or the latest published, is read
 under this crate's custody, and a torn file, a check over its bytes that fails, or a
@@ -1952,8 +1951,8 @@ structural rather than disciplined.
 
 **The format is NDJSON, one act per line, and it shares no schema with the trace.** **It
 is one per agent, at `admin.log` in the agent's declaration directory**,
-`~/.weaveragent/<agent>/admin.log` by default, beside `agent.toml`, the prompt file and
-the save points, on the operator's ruling of 2026-10-03 on #63's sixth question, carried
+`~/.weaveragent/<agent>/admin.log` by default, beside `agent.toml`, the operator's
+prompt draft and the save points, on the operator's ruling of 2026-10-03 on #63's sixth question, carried
 forward on #50, which moves it from the root's `log-path` of #45. The agent's uids never
 reach it, that directory being closed to them by section 9's judgment, and the operator
 can read it: it is owned by the operator's uid and the declaration directory's group,
@@ -2097,8 +2096,8 @@ ran sudo from and two invocations of one root always name the same files. **The 
 declaration stands in the operator's directory and not in the root**, on the operator's
 ruling of 2026-10-02: `declaration-directory` names it, absolute,
 `~/.weaveragent/<agent>/` by convention, and it holds `agent.toml`, which this crate
-parses per `weaver-types-Spec` section 2, beside the prompt file the declaration's
-`identity-file` names. A declaration directory holding no `agent.toml` answers
+parses per `weaver-types-Spec` section 2. A declaration directory holding no
+`agent.toml` answers
 `NoSuchAgent`, as a root holding none did. **`operator` names the operator's uid**, on
 the operator's ruling of 2026-10-02 on this act's first question: a root-owned key
 `create-agent.sh` writes once, the box's own fact, set by root, about whose data defines
@@ -2147,9 +2146,8 @@ stays in the root**, on the operator's ruling of 2026-10-02. The split follows w
 value is to a root process. The keys that name the programs this crate starts or hands
 the worker to start, `worker-binary`, `spu-binary` and `gate-binary`, are the agent's
 authority, so they stay where the admission is, in the
-root, root-owned and judged as above. The declaration and the prompt file are data the
-operator edits by hand, and a file under root's ownership taxed every edit with a
-privileged write. **Their place is the operator's choice and the line above holds it**:
+root, root-owned and judged as above. The declaration is data the operator edits by
+hand, and a file under root's ownership taxed every edit with a privileged write. **Their place is the operator's choice and the line above holds it**:
 a directory under the operator's own home is a value the operator supplies, and the
 defect would be another principal able to choose what admin reads there. So the
 declaration directory is judged before any value in it is read, and the judgment is the
@@ -2168,13 +2166,15 @@ and never chooses the box's operator uid, which is the box's to name and never t
 from a server ("the box decides", toddwbucy/WeaverTools#6). The directory grants no
 permission to group or other and carries no access-control entry beyond its mode, so
 neither of the agent's uids, whatever passage the territory's provisioning opened
-through the directories above, can list it, enter it or read a file in it. **The entries
-this crate reads are held closed**: `agent.toml` and the prompt file are each a regular
-file and never a link, owned by that uid or by uid 0, and writable by no group or other.
-Their read bits are not judged, the closed directory already denying every other
-principal the path, so a file an editor writes under an ordinary umask passes. Other
-entries are the operator's and are not read, save `admin.log` and `worker.log`, the two
-this crate creates and appends to, without following a link, per section 8. **Every
+through the directories above, can list it, enter it or read a file in it. **The one entry
+this crate reads is held closed**: `agent.toml` is a regular file and never a link,
+owned by that uid or by uid 0, and writable by no group or other. Its read bits are not
+judged, the closed directory already denying every other principal the path, so a file
+an editor writes under an ordinary umask passes. Other entries are the operator's and
+are not read, `system-prompt.md`, the operator's draft of the prompt that the seeding
+step reads as the operator and this crate never opens, among them, save `admin.log` and
+`worker.log`, the two this crate creates and appends to, without following a link, per
+section 8. **Every
 directory above it is held closed as the root's ancestors are**, each owned by uid 0 or
 by the operator and writable by no group or other unless its sticky bit is set, since a
 directory another principal could write would let it rename the judged directory away.
@@ -2625,11 +2625,9 @@ directive is asserted where the run happens.
   member's among them), an `operator` key absent or naming no uid, an entry read that is a link or
   writable by group or other, and an ancestor another principal can write each refuse
   `BoundaryUnverified` before a value is read, confirmed by watching each pass and its
-  declaration parse when its arm of the judgment is removed. The prompt file absent
-  refuses `ConfigInvalid` naming `spu-instruction.decoder.identity-file`, and the
-  enter's `identity_file` is the prompt's digest and not the declaration's, confirmed
-  by watching the two digests come out equal when the declaration's bytes are
-  digested in the prompt's place.
+  declaration parse when its arm of the judgment is removed. The enter's `operator` is
+  the root's `operator` key and never the caller's uid, confirmed by watching the two
+  come out equal when the cause is copied in its place.
 - The answer and the exit status agree: a refusal exits non-zero and an answer
   exits zero, confirmed by watching a refusal exit zero when the status is
   taken from the wrong branch.

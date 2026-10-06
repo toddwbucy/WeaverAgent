@@ -262,9 +262,10 @@ the enter parks the same way**, per `weaver-state-PRD` section 3: the replay sta
 holdings the driver has yet to seal, so the enter waits on the seal rather than reading
 a store that is empty for a moment, and the identity ask's refusal of the dead-peer
 conversion is unchanged, a channel closed unsealed converting to the missed answer that
-refuses the enter. A serving load stands no preload door and sends no identity ask,
-restoring or not, on the operator's rulings of 2026-10-02 on #58, which retire the
-record restore of issue #432 and the parked `recall` it sent. The replay ask was the one
+refuses the enter. A serving load stands no preload door, so its identity ask of
+section 2 answers immediately, parking never, on the operator's ruling of 2026-10-06
+that the system prompt is state; the record restore of issue #432 and the parked
+`recall` it sent retired on the rulings of 2026-10-02 on #58. The replay ask was the one
 ask whose answer may wait, and this one joins it under that binding alone, the waiting
 is not the custodian initiating, and one answer still follows one ask. **The parked ask
 steps out of the arrival order, and that is this clause's stated exception to section
@@ -303,13 +304,12 @@ carries the comparison, and custody states the surface and never judges it, per 
 like `shape`.
 
 **The `identity` ask returns the session's seated prefix as custody holds it**, added
-2026-09-04 and narrowed on the operator's ruling of 2026-10-02 on #58's fifth question:
-the prompt file is authoritative at every serving load, so the harness seats it and
-asks nothing for it, and **the ask governs a diagnostic load alone**, where the
-preloaded record's identity is what the open seats, per `weaver-harness-Spec` section
-6.1 and the ruling of 2026-10-02 on #57's sixth question. There the harness asks once at
-the enter, after this seam stands and before the decode session opens. The ask
-carries no members. The answer carries one member, `messages`, the turnless
+2026-09-04, and **it governs every load under both bindings** on the operator's ruling
+of 2026-10-06 (#1) that the system prompt is state, which supersedes the narrowing of
+2026-10-02 to the diagnostic load: the harness asks once at every enter, after this seam
+stands, after `restored` at a serving enter, and before the decode session opens, and
+seats what custody answers, the prompt the seeding turn entered and a save point
+carried, per `weaver-harness-Spec` section 6.1. The ask carries no members. The answer carries one member, `messages`, the turnless
 `message.system` events of the declared session's most recent run that holds any, in
 landing order, because every load seats the prefix and the prefix door records it again,
 so the session holds one prefix per run and the one in force is the newest run's, each
@@ -353,8 +353,8 @@ point and which position on the trace before it acts, and a sixth, `identity`, t
 prefix the save point holds: the turnless `message.system` events of its newest run that
 holds any, in landing order, served as the `identity` ask serves them, an empty list
 where it holds none. The live restore is the one serving path that reads a prefix from
-the store, because the save point's state was built under its prefix and a live restore
-is not a load, so the prompt file's authority at every load does not reach it. Every
+the store between loads, because the save point's state was built under its prefix and
+a live restore is not a load. Every
 distillate the stream carries after the ask lands on the restored holdings. The ask
 parks never, and a restore that fails is not answered, the asker's bound converting the
 silence into the missing answer of section 5: the harness then flushes nothing, records

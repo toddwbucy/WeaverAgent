@@ -277,16 +277,18 @@ identifies itself in that stream since the ruling of 2026-08-14, admin's run ref
 having replaced the ordinal, so what state receives is attributable to the run that
 produced it without this crate minting any identity of its own.
 
-**The identity is held here and seated from the prompt file at every load**, on the
-operator's ruling of 2026-10-02 on this act's fifth question, which revises the ruling
-of 2026-09-04 on issue #422. The system prompt is the first bounding of the possibility
-space the decoder samples from, which is to say it is context, and context is this
-crate's material: each load seats the declaration's identity, the text of the prompt
-file it names, and the tee lands it here as the turnless `message.system` events at the
-run's opening. **The prompt file is authoritative at every load**: editing
-`system-prompt.md` takes effect at the next load, its digest recorded on the load event,
-and what this crate holds under that kind is the history of the identities the loads
-seated, never an authority over the next one. **The identity's kind cannot be elected
+**The identity is held here and served from here at every load**, on the operator's
+ruling of 2026-10-06 (#1) that the system prompt is state, which supersedes the ruling
+of 2026-10-02 that the prompt file was authoritative. The system prompt is the first
+bounding of the possibility space the decoder samples from, which is to say it is
+context, and context is this crate's material: the prompt enters through the gate as
+the agent's first turn, the harness authors it as the turnless `message.system` event
+of that turn and the tee lands it here, every later load asks this crate for it and
+seats the answer, authoring it again as that run's opening prefix, and a save point
+carries it across loads, the first save point after the seeding turn being the agent's
+starting state, which holds the model's first answer beside the prompt, because the
+seeding turn generates and every event of it lands here like any other. What this crate holds under that kind is the history of the identities
+entered and seated, and the newest run's is the one in force; it decides none of them. **The identity's kind cannot be elected
 out**: the seated prefix crosses the tee whole under every election, per
 `weaver-trace-PRD` section 11, the one exception to the key-based rule, so no election
 produces a load whose identity this crate never held. Within a residency the prefix is
@@ -374,7 +376,7 @@ the loop is later work.
 
 **An edited save point is an input, not derived state.** A save point the operator edits
 offline holds what the trace never recorded, so loading one records its digest, marked
-operator-supplied, and the file is kept as an input, as a prompt file is. Rebuildable
+operator-supplied, and the file is kept as an input. Rebuildable
 from the trace then holds from the latest recorded save-point load onward.
 
 **The store is a port, and one engine stands behind it.** This crate's custody holds no

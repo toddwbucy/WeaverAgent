@@ -264,7 +264,6 @@ pub struct Elections {
     pub state_store: StoreIdentity,
     pub composer: LoopIdentity,
     pub declaration: String,
-    pub identity_file: String,
     pub lineage: Option<Lineage>,
     pub reset: Option<Reset>,
     pub stack: BTreeMap<String, String>,
@@ -838,26 +837,16 @@ it and every other stop reason carries none. The harness authors all three from 
 admin handed it, admin never writing this record. A read or a refusal changes nothing in
 the agent and is admin's operations log's, never the trace's.
 
-**The `load` event names its declaration and its prompt file by digest**, the first as
-of 2026-09-04 per issue #435 and the second as of 2026-10-02, per the charter's section
-3.1 on the operator's ruling of that date. `declaration` is sha256 hex of the
-declaration's bytes and `identity_file` of the prompt file's, each as admin read it at
-the inventory, copied from the enter and never a path, which admin alone holds. Both
-ride the `Elections` payload on the drift reason above. **The second exists because the
-first stopped covering the prompt**: while the prompt was a string inside the
-declaration one digest named both, and once it is its own file an edit to the prompt
-leaves the declaration's digest unchanged. The seated prefix the record already carries
-does not stand in for it: at every serving load the prompt file is authoritative, on
-the operator's ruling of 2026-10-02 on #58, and the store keeps earlier runs' prefixes
-without supplying one, so the digest is the record's account of the file's bytes as
-admin read them at that load, and a seat that diverged from the file is visible as the
-two disagreeing. **The member is additive**: a record older
-than this act lacks it, which reads as the prompt file's digest being unrecorded and
-never as a default, and every consumer of the `load` event sees one new member and no
-other change, WeaverWeb's ingest, `weaver-analysis`, and the deployment tuple's harness
-among them. The deployment tuple's `sampler and seed` member, whose provenance names
-the declaration, holds the prompt file's digest beside the declaration's from this act,
-a provenance naming the declaration alone no longer naming what the model was told.
+**The `load` event names its declaration by digest**, as of 2026-09-04 per issue #435,
+per the charter's section 3.1: `declaration` is sha256 hex of the declaration's bytes
+as admin read them at the inventory, copied from the enter and never a path, which
+admin alone holds, riding the `Elections` payload on the drift reason above. **It names
+no prompt**, on the operator's ruling of 2026-10-06 (#1): the system prompt is state,
+not a file the load was given, so the record of which prompt was in force is the
+turnless `message.system` events the harness authors, at the seeding turn from the
+gate's line and at every load's seating of what the member answered, per
+`weaver-harness-Spec` section 6.1, and a save point carries them. The `identity_file`
+digest of #57 (2026-10-02) never reached a merged build and is not a member.
 
 **`elision` carries its coordinates and `flush` does not need to.** An
 earlier draft of this section gave the elision `FlushCounts` on the reading

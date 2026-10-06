@@ -188,8 +188,7 @@ default or the one the declaration's `restore` names, and with no save point sta
 rebuilt from the trace by the offline builder, whose save point the next load restores.
 An unclean stop resets to the latest known-good save point, the reset recorded on the
 trace, so a rebuild from the record arrives where the reset did. A save point the
-operator edits is an input like a prompt file, recorded by digest, per
-`weaver-state-PRD` section 4.
+operator edits is an input, recorded by digest, per `weaver-state-PRD` section 4.
 
 ## 3. One turn, end to end
 

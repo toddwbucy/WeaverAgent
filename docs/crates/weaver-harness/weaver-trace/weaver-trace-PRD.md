@@ -601,15 +601,15 @@ record and never this one. The harness writes all of it from facts admin hands o
 boundary activity that changes nothing in the agent stays in admin's operations log.
 `weaver-trace-Spec` section 3 carries the members.
 
-**The prompt file the load was given is one more such fact, as of 2026-10-02.** On the
-operator's ruling of that date the system prompt is a file the declaration names rather
-than text inside it, so the declaration's digest the `load` event carries stopped
-covering the prompt, and a record holding only that digest could not say which prompt
-the agent's operator had written. **From this act the `load` event names the prompt
-file's digest beside the declaration's**, as admin read both at the inventory, and never
-a path. The seated prefix the record carries is what the session ran under, which at a
-serving load is the file's, seated at every load on the operator's ruling of 2026-10-02
-on #58, and the digest is the file's bytes as admin read them, so the two answer
+**The prompt is not such a fact, because it is state**, on the operator's ruling of
+2026-10-06 (#1), which supersedes the ruling of 2026-10-02 that made it a file the load
+was given. The system prompt enters state management through the gate as the agent's
+first turn and is held by the member, so the record of which prompt was in force is the
+turnless `message.system` events the harness authors, at the seeding turn and at every
+load's seating of what the member answered, and a save point carries them; the `load`
+event names the declaration by digest and no prompt. The seated prefix the record
+carries is what the session ran under, which at every load is the member's answer, so
+the events and the state answer
 different questions and both are kept. Absence means a record older than the act and is
 read as the digest being unrecoverable, never as a default. `weaver-trace-Spec` section
 3 carries the member.

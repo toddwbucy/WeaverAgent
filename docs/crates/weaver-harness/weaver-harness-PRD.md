@@ -181,10 +181,11 @@ gets trusted wrongly later.
 
 **Prompt assembly's deterministic floor, with the family render across the seam.** The
 harness composes the canonical conversation: the identity prefix, which is the system
-prompt together with the agent's fixed identity material, seated from the prompt file
-the declaration names at every serving load, a state member standing or not, on the
-operator's ruling of 2026-10-02 on #58's fifth question, and from the preloaded record
-under a diagnostic binding, per `weaver-harness-Spec` section 6.1, then the session's
+prompt together with the agent's fixed identity material, seated at every load from
+what the state member answers, the prompt the seeding turn entered under a serving
+binding and the preloaded record's under a diagnostic one, on the operator's ruling of
+2026-10-06 that the system prompt is state (#1), per `weaver-harness-Spec` section 6.1,
+then the session's
 message sequence read from the working structure, then the tool schemas, in that order,
 always. What moved on the framing ruling of 2026-08-02, ratified with the token
 workflow's act, is the per-model half: the family template's application, the phrasing
