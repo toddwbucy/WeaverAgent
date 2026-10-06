@@ -214,8 +214,9 @@ piece. `verify-load.sh` validates, loads, counts the events that arrive in the s
 prints their kinds and the load event, then reads `show`'s constituents and checks each:
 it runs as the agent's, the member's or the relay's account, it sits in the invoker's own
 cgroup, and a relay stands among them for a file sink. It then unloads, and checks that
-every constituent is gone and `show` reads unloaded. A healthy first load writes `load`
-and `message.system`, plus `recall` where a store member stands. The load event's
+every constituent is gone and `show` reads unloaded. A healthy first load writes `load`,
+plus `recall` where a store member stands and the agent has been seeded; a load writes
+no `message.system`, the prompt being on the trace only at its seeding turn. The load event's
 payload names the session, the run, the store, the declaration's hash, the composer
 (`worker`), and the `stack` hashes of the installed members. A load that answers `idle`
 and writes nothing is the failure this step exists to catch, and the worker's own words

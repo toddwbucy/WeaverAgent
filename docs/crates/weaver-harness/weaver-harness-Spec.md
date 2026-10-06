@@ -2083,9 +2083,12 @@ turn feeds the model, so no cached context outlives the state it was built from.
 save point whose identity differs from the one seated reopens the decode session**
 rather than reloading the model, per `weaver-spu-PRD`: the `restore` answer carries the
 save point's prefix, this crate compares it with the prefix seated, and where they
-differ it closes the session and opens it on the answered prefix, authoring that prefix
-through the identity door as an open does, so the record names the prefix the model runs
-under from that point. **The decode seam has no close or reopen today**, its directives
+differ it closes the session and opens it on the answered prefix, authoring nothing
+through the identity door, as an open authors nothing: the `restore` ask's `recall`
+names what was seated, and the prefix's text is on the trace at its seeding turn. **The
+rebuild at a restore is the prefix alone, as at a load**, on the operator's
+clarification of 2026-10-06 (#1): the reopened session holds the save point's prefix
+and nothing else is replayed into it, the rest being the operator's turn by turn. **The decode seam has no close or reopen today**, its directives
 being `Open`, `AppendAndGenerate`, `ReFeed`, `Cancel` and `Flush`, so this reopen is
 owed by the loop act that lands the live restore, as a `Reopen` of
 `weaver-harness-spu-decode-contract` and the SPU, and nothing here is implemented. The channel that carries the operator's demand to the loop is the
@@ -2115,7 +2118,18 @@ the save point the load restored. An empty answer is an agent not yet seeded, wh
 opens with no prefix and is seeded by its first turn, per the seeding clause below. The
 declaration carries no identity and the enter no prompt, per `weaver-types-Spec`
 sections 2 and 4, so this crate holds no file, no path and no handle into the
-operator's directory. **Under a diagnostic binding the identity is the preloaded
+operator's directory. **The load writes none of what it seats to the record**, on
+the operator's ruling of 2026-10-06 (later, #1) that a session's trace and the state it loaded from are not tied together once the agent is unloaded: the `load` event's lineage names the save point the session started from, the
+`recall` of the identity ask names the events the member handed back for seating, and
+the prompt's text is on the trace where it was entered, at the seeding turn, and
+nowhere else. This retires the rule of 2026-09-04 that each run's record carries its own
+prefix text; a reader of one run reaches the prefix through the save point its lineage
+names, which is where the operator says it lives. **The rebuild at a load is the prefix
+alone, the member's identity answer; nothing else is replayed**, on the operator's
+clarification of 2026-10-06 (#1): state loads from the save point, the decode session
+opens on the seated prefix with its cache clear, and nothing further from the holdings
+or the record reaches the model unasked, the rest being the operator's turn by turn,
+with recall on demand. **Under a diagnostic binding the identity is the preloaded
 store's**, on the operator's ruling of 2026-10-02 on #57's sixth question: the same
 ask, once the seam stands and before the open, parked on the driver's seal, and the
 record's own `message.system` events seat. **A missed ask under either binding refuses
@@ -2145,8 +2159,9 @@ the model's answer closes the turn, so the seeding exercises the whole loop (gat
 harness, model, trace, tee, state) with the one prompt that matters, which is the
 operator's last test before the agent goes into production. **The prefix the next load
 seats is the member's `identity` answer**, every turnless `message.system` of the
-newest run in order: a seeding in a later residency therefore replaces the prefix, the
-newest run's being served, and two seedings in one residency are served both, in order.
+newest run that holds any, in order, and the load writes none: a seeding in a later
+residency therefore replaces the prefix, the newest run's being served, and two seedings
+in one residency are served both, in order.
 Within the seeding residency the prompt is appended context and not the session's
 prefix, so a flush there would drop it from the context, which is why the runbook ends
 that residency at the save point: load, seed, save point, unload, and the production
@@ -2301,27 +2316,31 @@ issue #435. The boundary file's digest and the load's cause join as of 2026-10-0
 (#50) by the same route, each copied from the enter and the boundary's marked boundary
 and never constitution, per `weaver-trace-Spec` section 3, which this crate copies and
 does not compute. **No prompt digest joins them**, on the operator's ruling of
-2026-10-06 (#1): the prompt is state, and the record of it is the `message.system`
-events this crate authors, at the seeding turn and at every load's seating.
+2026-10-06 (#1): the prompt is state, and the record of it is the turnless
+`message.system` event the seeding turn authors, the `recall` of the identity ask at
+each load, and the lineage the `load` event names.
 
-**The seated identity prefix is authored beside the load, one `message.system` per
-message**, per `weaver-trace-PRD` section 5, and **the seeding turn's prefix is
-authored through the same door** when it enters, per section 6.1. The harness is again
-the party that holds it, the member's answer at a load or the gate's line at the
-seeding, so the write is one read of what the open or the seeding carried and the
-record names the prefix the session ran under. The events carry no turn, a prefix
-preceding every turn of the run, and they are authored after the load event so the run's
-bracket stands over them.
+**The seeding turn's prefix is authored through the identity door, one turnless
+`message.system` of the line's text**, per section 6.1 and `weaver-trace-PRD` section
+5, before the turn that appends it, so the record and the tee carry the prompt where it
+entered. **A load authors no prefix**, on the operator's ruling of 2026-10-06 (later, #1) that a session's trace and the state it loaded from are not tied together once the agent is unloaded: what it seats it was
+handed by the member, the `recall` names that answer by its events' identities, and
+the prompt's text stands on the trace at its seeding turn and in the save point the
+load's lineage names. The event carries no turn, a prefix preceding every turn of the
+residency it seeds.
 
 **The door is `author_identity` and not `author_message`.** The message door takes a
 turn key and applies the licensing rule to it, so admitting a turnless message there
 would put a path with no turn inside the door every turn message uses. The second door
 authors the same kind with the turn member absent, applies the same licensing rule to
 the message itself, and refuses every role but system, because the only thing it exists
-to write is a prefix. **A role reaching it that is not system is a defect in the
-declaration rather than a message to record**, and it refuses on the same reasoning the
+to write is a prefix. **A role reaching it that is not system is a defect in its
+caller rather than a message to record**, and it refuses on the same reasoning the
 tool-result door refuses in the message door: a door that writes what it was not built
-for launders a bad declaration into a record that looks well formed. **The system-only
+for launders a bad line into a record that looks well formed. **It judges the four rules
+of `weaver-types-Spec` section 5 itself**, the role, each block's licence, a message
+carrying nothing and a text block carrying no text, since 2026-10-06 the seeding line's
+door as much as any: an empty prefix is the empty turn by another route. **The system-only
 rule has no exception**: the record restore of issue #432, which wrote a restored
 conversation through this door as `message.restored`, retires with the operator's
 rulings of 2026-10-02 on #58, and a restoring load seats the identity alone, per section
@@ -2337,43 +2356,14 @@ from: weaver-harness
 to: harness-identity-door-writes-system-only
 ```
 
-**The miss is authored and not dropped**, per `weaver-harness-PRD` section
-5's fifth case. The door's refusal is this crate's own observation with
-nowhere else to go: the declaration already crossed admin's parse, and the
-prefix is seated at the session's open whether the door wrote it or not, so a
-refusal that goes nowhere leaves the record saying an agent seated no prefix
-when it seated one the reader cannot see. That is the door's stated purpose
-defeated by its caller - laundering by omission rather than by a wrong record
-- and it is the shape a certification then reads as a divergence, blaming the
-model for a prefix the record never carried. So the enter authors a `fault`
-of `identity_prefix_unrecorded`, one per declared message the record does not
-end up carrying.
-
-**Both arms of the door's answer are read**, because both leave that same
-hole. The outer arm is the refusal and is itself three conditions: a role the
-door does not write, a system message carrying a block the licensing rule
-does not admit, and a message that will not render. The inner arm is the
-recorder declining the write on a message the door passed. The case does not
-distinguish them, per the charter's reasoning that the case carries what the
-harness consumes and all four mean the same thing for the turn and the
-residency. The account does, naming the refused role and block on the first
-arm and the recorder's own failure on the second. **The load is not refused
-on any of them**, the seated prefix being the operator's declaration and a
-run that has already bracketed not dying on a record it could not write, and
-the account is best-effort because where the recorder is what failed the
-account may fail with it. Where the rule that judges a declaration lands is
-`weaver-types`' to say and not this section's, and until it does this fault is
-the record's only account of the condition.
-
-```graph
-node: harness-identity-refusal-authored-not-dropped
-kind: assertion
-tag: perturbation
-
-edge: asserts
-from: weaver-harness
-to: harness-identity-refusal-authored-not-dropped
-```
+**The door's refusal at the seeding is the turn's refusal**, the response frame's
+`refused` kind naming the rule, per section 6.1, and nothing is authored: the line never
+reached the decode session, so there is no seated prefix the record cannot show. The
+`identity_prefix_unrecorded` fault of `weaver-harness-PRD` section 5 keeps its one case,
+the enter's `recall` the recorder would not take, per `weaver-trace-Spec` section 3; the
+load authors no prefix since the operator's ruling of 2026-10-06 (later, #1) that a session's trace and the state it loaded from are not tied together once the agent is unloaded, so the hole that case once named at a
+load, a prefix seated into the decode context with no event to show it, no longer exists
+there.
 
 **The stop is heard mid-stream by `poll`, which is why it joined the surface.**
 While a generation streams token by token, loop 0 waits against two descriptors at

@@ -311,9 +311,11 @@ stands, after `restored` at a serving enter, and before the decode session opens
 seats what custody answers, the prompt the seeding turn entered and a save point
 carried, per `weaver-harness-Spec` section 6.1. The ask carries no members. The answer carries one member, `messages`, the turnless
 `message.system` events of the declared session's most recent run that holds any, in
-landing order, because every load seats the prefix and the prefix door records it again,
-so the session holds one prefix per run and the one in force is the newest run's, each
-served as the distillate's own shape, envelope and pairs, the pairs being the prefix's
+landing order, because the seeding turn writes the prefix and a load writes none, on
+the operator's ruling of 2026-10-06 (later, #1), so the newest run holding any is the
+last residency that seeded and its prefix is the one in force, a later residency's
+seeding replacing it and two seedings in one residency served both, each served as the
+distillate's own shape, envelope and pairs, the pairs being the prefix's
 payload whole because that kind crosses the tee whole under every election. An empty
 list is an answer and not a miss: it says the preloaded record holds no prefix for the
 session, and the open seats the empty identity. **Under a diagnostic load this is one

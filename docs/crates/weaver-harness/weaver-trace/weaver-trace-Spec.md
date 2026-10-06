@@ -843,9 +843,10 @@ as admin read them at the inventory, copied from the enter and never a path, whi
 admin alone holds, riding the `Elections` payload on the drift reason above. **It names
 no prompt**, on the operator's ruling of 2026-10-06 (#1): the system prompt is state,
 not a file the load was given, so the record of which prompt was in force is the
-turnless `message.system` events the harness authors, at the seeding turn from the
-gate's line and at every load's seating of what the member answered, per
-`weaver-harness-Spec` section 6.1, and a save point carries them. The `identity_file`
+turnless `message.system` event the harness authors at the seeding turn from the gate's
+line, per `weaver-harness-Spec` section 6.1, the `recall` of the identity ask at each
+load, and the save point the load's `lineage` names, which carries the prefix; a load
+authors no prefix, on the operator's ruling of 2026-10-06 (later, #1) that a session's trace and the state it loaded from are not tied together once the agent is unloaded. The `identity_file`
 digest of #57 (2026-10-02) never reached a merged build and is not a member.
 
 **`elision` carries its coordinates and `flush` does not need to.** An

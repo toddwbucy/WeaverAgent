@@ -605,12 +605,11 @@ boundary activity that changes nothing in the agent stays in admin's operations 
 2026-10-06 (#1), which supersedes the ruling of 2026-10-02 that made it a file the load
 was given. The system prompt enters state management through the gate as the agent's
 first turn and is held by the member, so the record of which prompt was in force is the
-turnless `message.system` events the harness authors, at the seeding turn and at every
-load's seating of what the member answered, and a save point carries them; the `load`
-event names the declaration by digest and no prompt. The seated prefix the record
-carries is what the session ran under, which at every load is the member's answer, so
-the events and the state answer
-different questions and both are kept. Absence means a record older than the act and is
+turnless `message.system` event the harness authors at the seeding turn, where the
+prompt entered, and a save point carries it; a load authors no prefix, on the operator's ruling of 2026-10-06 (later, #1) that a session's trace and the state it loaded from are not tied together once the agent is unloaded, and records its seating as the `recall` of the identity ask beside the
+lineage the `load` event names, so a reader of one run reaches the prefix through the
+save point the run started from. The `load` event names the declaration by digest and
+no prompt. Absence means a record older than the act and is
 read as the digest being unrecoverable, never as a default. `weaver-trace-Spec` section
 3 carries the member.
 
@@ -771,7 +770,8 @@ disposition rule of `weaver-spu-PRD` section 13.8. The seam is append-only, so w
 model received grows each turn while only the delta crosses, and the full effective
 context is what the record determines rather than what any one event stores: the
 accumulation of the recorded contributions under their recorded template identities,
-from the identity prefix the run's opening records, per section 5. Recording the full
+from the identity prefix the run opened under, which the seeding turn recorded and the
+load's lineage and `recall` name, per section 5. Recording the full
 effective prompt per turn would store a derived quantity the record already determines,
 one fact in two places, and would grow the account by the square of the conversation,
 the resend pathology the append-only seam exists to kill returning as record bloat. The
@@ -1104,30 +1104,27 @@ can begin. Decode timings sit in the tier for a different reason: a splice
 win is priced by paired timings across two arms, and a member that could be
 absent from one arm prices nothing.
 
-**The identity prefix is recorded at the run's opening, as the messages it
-is.** Section 3.2 determines the full effective context by accumulating the
-recorded contributions from the identity prefix, and before this act that
-prefix lived in the configuration alone. A consumer handed the record and not
-the configuration could therefore not perform the accumulation this charter
-promises, which left the replayability claim above resting on a fact outside
-the record. **The remedy is a contribution rather than a new shape.** The
-prefix is a system message and section 3.1 already carries
-`message.system`, so what closes the rule is writing the prefix as the kind
-it is rather than inventing a member to hold the same text under another
-name. **The kind is reachable today and the prefix does not reach it**: a
-system message submitted inside a turn is licensed and authored, while the
-prefix is seated through the declaration at open and passes no door at all,
-which is why the gap reads as an empty kind in a record rather than as a
-missing kind in the set.
-
-**Three properties make this the cheap fix rather than a convenient one.**
-This crate holds the prefix already, arriving in the enter's SPU instruction,
-so the write costs one read of what is in hand and moves no seam. The
-assembled structure re-reads the three turn-bearing message kinds and takes
-the prefix from the declaration, so a recorded prefix enters no later prompt
-and the record gains a fact without the loop gaining a message. And the event
-belongs to no turn, on the precedent the classify pair set, because a prefix
-seated at open precedes every turn there is.
+**The identity prefix is recorded where it enters, as the message it is.**
+Section 3.2 determines the full effective context by accumulating the
+recorded contributions from the identity prefix, and before the act of
+2026-09-04 that prefix lived in the configuration alone, so a consumer handed
+the record could not perform the accumulation this charter promises. **The
+remedy is a contribution rather than a new shape.** The prefix is a system
+message and section 3.1 already carries `message.system`, so the prefix is
+written as the kind it is, turnless, through the harness's identity door: on
+the operator's ruling of 2026-10-06 (#1) the prompt enters the agent through
+the gate as the seeding turn, and that turn's `message.system` is the prefix's
+one appearance on the trace. **A load records its seating and not the text**,
+on the operator's ruling of 2026-10-06 (later, #1) that a session's trace and the state it loaded from are not tied together once the agent is unloaded: the `load` event's lineage names the save point the
+session started from, the `recall` of the identity ask names the events the
+member handed back, and the text stands in that save point and at its seeding
+turn. This retires the rule of 2026-09-04 that each run's record carries its
+own prefix text; the accumulation for a run that seated a prefix starts from
+what the lineage and the recall name, reached through the save point. The
+event belongs to no turn, on the precedent the classify pair set, because a
+prefix precedes every turn of the residency it seeds, and the assembled
+structure takes it from the record as the prefix and never as a message, so
+a recorded prefix enters no later prompt twice.
 
 **It is recorded as text rather than as token identifiers.** Apex section 8
 asks for tokenization reproducible from what is recorded rather than for the
@@ -1389,8 +1386,8 @@ event and is not electable, session, run, turn, kind, and sequence, so no electi
 produce an unattributable row, and the election ranges over payload keys alone, named as
 paths into the canonical JSON. An elected kind with no payload keys is a meaningful
 election, presence itself being state. **Two events cross whole under every election:
-the seated identity prefix**, the turnless `message.system` at the run's opening, per
-the operator's ruling of 2026-09-04 on issue #422, **and a restored message**, the
+the identity prefix**, the turnless `message.system` the seeding turn authors, per
+the operator's rulings of 2026-09-04 on issue #422 and of 2026-10-06 (#1), **and a restored message**, the
 conversation a branch's run opened under, as of 2026-09-26 (#697). The prefix is the
 session's first bounding and the store is its custodian from that ruling on, so an
 election that could drop its payload could produce a session whose identity the store

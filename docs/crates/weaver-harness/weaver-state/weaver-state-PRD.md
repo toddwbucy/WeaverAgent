@@ -284,8 +284,13 @@ bounding of the possibility space the decoder samples from, which is to say it i
 context, and context is this crate's material: the prompt enters through the gate as
 the agent's first turn, the harness authors it as the turnless `message.system` event
 of that turn and the tee lands it here, every later load asks this crate for it and
-seats the answer, authoring it again as that run's opening prefix, and a save point
-carries it across loads, the first save point after the seeding turn being the agent's
+seats the answer, authoring nothing, the run's `load` event naming its save point and
+the ask's `recall` naming the answer, on the operator's ruling of 2026-10-06 (later, #1)
+that a session's trace and the state it loaded from are not tied together once the agent
+is unloaded, and a save point carries it across loads; **the rebuild at a load is the
+prefix alone, this crate's identity answer, and nothing else is replayed**, on the
+operator's clarification of the same day, the rest of the context being the operator's
+turn by turn with recall on demand, the first save point after the seeding turn being the agent's
 starting state, which holds the model's first answer beside the prompt, because the
 seeding turn generates and every event of it lands here like any other. What this crate holds under that kind is the history of the identities
 entered and seated, and the newest run's is the one in force; it decides none of them. **The identity's kind cannot be elected
