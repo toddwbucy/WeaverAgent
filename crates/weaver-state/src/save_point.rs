@@ -7,7 +7,9 @@
 //!
 //! **The layout, the name, the check and the digest are this act's
 //! elections**, under the Spec's section 6. A save point is three parts in
-//! one file: a stamp line, a check line, and the engine's image.
+//! one file: a stamp line carrying exactly the seven members below, its
+//! `taken` nonce exactly the process, the process's own count and the wall
+//! clock, a check line, and the engine's image.
 //!
 //! ```text
 //! {"weaver-save-point":1,"run":"r-1","sequence":41,"turn":2,"schema":"<hex>","image":<n>,"taken":{"pid":<p>,"ordinal":<k>,"wall_ns":"<t>"}}
@@ -194,8 +196,47 @@ impl SavePoint {
         let image = &rest[second + 1..];
         let header: serde_json::Value = serde_json::from_str(&header_line)
             .map_err(|e| malformed(&format!("stamp line: {e}")))?;
+        // **The stamp line carries exactly the format's seven members and
+        // `taken` exactly its three, each of its type**: anything absent,
+        // extra or of another type is not this format, so the digest and
+        // the name are computable only for a file that follows it, and a
+        // stamp without its nonce cannot make two save points of one
+        // holding share bytes.
+        let members = header
+            .as_object()
+            .ok_or_else(|| malformed("stamp line is not an object"))?;
+        const STAMP: [&str; 7] = [
+            "weaver-save-point",
+            "run",
+            "sequence",
+            "turn",
+            "schema",
+            "image",
+            "taken",
+        ];
+        if members.len() != STAMP.len() || STAMP.iter().any(|name| !members.contains_key(*name)) {
+            return Err(malformed(
+                "stamp line does not carry exactly the format's members",
+            ));
+        }
         if header.get("weaver-save-point").and_then(|v| v.as_u64()) != Some(1) {
             return Err(malformed("version this build does not read"));
+        }
+        let taken = header
+            .get("taken")
+            .and_then(|t| t.as_object())
+            .ok_or_else(|| malformed("taken is not an object"))?;
+        let nonce_sound = taken.len() == 3
+            && taken.get("pid").is_some_and(|v| v.as_u64().is_some())
+            && taken.get("ordinal").is_some_and(|v| v.as_u64().is_some())
+            && taken.get("wall_ns").is_some_and(|v| {
+                v.as_str()
+                    .is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+            });
+        if !nonce_sound {
+            return Err(malformed(
+                "taken does not carry exactly pid, ordinal and wall_ns",
+            ));
         }
         let member = |name: &str| {
             header
@@ -520,6 +561,62 @@ mod tests {
         assert_eq!(
             SavePoint::parse(&respelled),
             Err(SavePointFault::CheckFailed)
+        );
+        // **The stamp line is exactly the format's**: a stamp without its
+        // nonce, with a malformed nonce, with an extra member, or missing
+        // one, is not this format even with a check written to match.
+        // Perturbation: read the members by name without the count and
+        // the extra-member and absent-nonce stamps parse.
+        let restamped = |edit: &dyn Fn(&mut serde_json::Map<String, serde_json::Value>)| {
+            let mut stamp: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&sound.header).unwrap();
+            edit(&mut stamp);
+            let header = serde_json::Value::Object(stamp).to_string();
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(header.as_bytes());
+            hasher.update(b"\n");
+            hasher.update(&sound.image);
+            let check = serde_json::json!({"check": hex(&hasher.finalize())}).to_string();
+            let mut bytes = header.into_bytes();
+            bytes.push(b'\n');
+            bytes.extend_from_slice(check.as_bytes());
+            bytes.push(b'\n');
+            bytes.extend_from_slice(&sound.image);
+            bytes
+        };
+        type Edit<'a> = &'a dyn Fn(&mut serde_json::Map<String, serde_json::Value>);
+        let cases: [(&str, Edit); 5] = [
+            ("no taken", &|m| {
+                m.remove("taken");
+            }),
+            ("malformed taken", &|m| {
+                m.insert("taken".into(), serde_json::json!({"pid": 1}));
+            }),
+            ("wall_ns not digits", &|m| {
+                m.insert(
+                    "taken".into(),
+                    serde_json::json!({"pid": 1, "ordinal": 0, "wall_ns": "soon"}),
+                );
+            }),
+            ("extra member", &|m| {
+                m.insert("note".into(), serde_json::json!("x"));
+            }),
+            ("no schema", &|m| {
+                m.remove("schema");
+            }),
+        ];
+        for (label, edit) in cases {
+            assert!(
+                matches!(
+                    SavePoint::parse(&restamped(edit)),
+                    Err(SavePointFault::Malformed(_))
+                ),
+                "{label} is not this format"
+            );
+        }
+        assert_eq!(
+            SavePoint::parse(&restamped(&|_| {})).expect("the unedited stamp still parses"),
+            sound
         );
         assert_eq!(
             SavePoint::parse(&bytes).expect("sound").digest(),

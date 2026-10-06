@@ -346,11 +346,13 @@ finished name is given only once the write is whole, so a torn write leaves no f
 under a finished name. **The layout, the name, the check and the digest are the
 save-point act's elections of 2026-10-05**, closing section 6's cell. A save point is
 three parts in one file: a stamp line, a check line, and the engine's image. The stamp
-line is one JSON object naming the format's version, the run, sequence and turn, the
-digest of the schema text the image stands under, the image's length, and a `taken`
-member, the writing process, that process's own count of save points taken, which it
-never repeats, and the wall clock, which together tell two save points of one position
-apart whatever the clock does. The check line names sha256 over the stamp line, its newline and the
+line is one JSON object carrying exactly seven members, the format's version, the run,
+sequence and turn, the digest of the schema text the image stands under, the image's
+length, and `taken`, which carries exactly three, the writing process, that process's
+own count of save points taken, which it never repeats, and the wall clock, which
+together tell two save points of one position apart whatever the clock does; a stamp
+line with a member absent, extra or of another type is not this format and is refused
+before any digest or name is computed from it. The check line names sha256 over the stamp line, its newline and the
 image, so a stamp altered, an image flipped or a file torn short all read as corrupt.
 The digest is sha256 over the whole file and the name is the digest with the suffix
 `.save-point`, so two save points with different bytes never share a name and two
