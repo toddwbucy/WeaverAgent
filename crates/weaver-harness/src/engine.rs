@@ -792,6 +792,30 @@ impl<'a> Ports<'a> {
     /// the SPU rendered, the request and the measurement carried opaque and the
     /// output shaped from the emission and finish this crate consumes.
     pub fn turn(&mut self, delta: Vec<Message>) -> Result<TurnOutcome, TurnError> {
+        self.bracketed(delta, true)
+    }
+
+    /// **The seeding turn**, per `weaver-harness-Spec` section 6.1 on the
+    /// operator's ruling of 2026-10-06 that the system prompt is state: the
+    /// operator's prompt, already authored turnless through the identity
+    /// door by the frame path, is appended as the session's context,
+    /// `AppendAndGenerate` with that one `system` message and no user
+    /// message, and the model's answer closes the turn. The bracket, the
+    /// three model events and the assistant's message author as in every
+    /// turn; the delta does not, the record holding the prompt once, as the
+    /// prefix the next load seats.
+    pub fn seed(&mut self, prompt: Message) -> Result<TurnOutcome, TurnError> {
+        self.bracketed(vec![prompt], false)
+    }
+
+    /// One bracketed turn: the delta appended and generated against, authored
+    /// as the turn's messages where `author_delta` says so and carried
+    /// unauthored where the frame path already authored it turnless.
+    fn bracketed(
+        &mut self,
+        delta: Vec<Message>,
+        author_delta: bool,
+    ) -> Result<TurnOutcome, TurnError> {
         // **Clear-only, before this turn authors anything.** The flag is
         // lowered by a reading that finds the depth under the mark, and
         // without a reading here a queue that drained and crossed again
@@ -831,7 +855,7 @@ impl<'a> Ports<'a> {
         // died of a refusal keeps serving, so a dropped exchange would hold
         // that dialer forever.
         let mut stop: StopSlot = None;
-        let ran = self.run_turn(&turn, delta, &mut stop);
+        let ran = self.run_turn(&turn, delta, &mut stop, author_delta);
         let answered = match ran {
             Ok(outcome) => Ok(outcome),
             Err(error) => {
@@ -939,6 +963,7 @@ impl<'a> Ports<'a> {
         turn: &TurnKey,
         delta: Vec<Message>,
         stop: &mut StopSlot,
+        author_delta: bool,
     ) -> Result<TurnOutcome, TurnError> {
         // **A tool-result message in loop 1's delta refuses before anything
         // is authored**, per `weaver-harness-Spec` section 6: the role's one
@@ -952,12 +977,16 @@ impl<'a> Ports<'a> {
         }
 
         // The delta is authored as the turn's user messages, before the
-        // exchange so the record reads the ask before the answer.
-        for message in &delta {
-            self.author
-                .author_message(self.recorder, message, turn)
-                .map_err(|_| TurnError::Unlicensed { turn: turn.clone() })?
-                .map_err(|_| TurnError::ChannelLost)?;
+        // exchange so the record reads the ask before the answer. The
+        // seeding turn's delta was authored turnless at the identity door,
+        // per `weaver-harness-Spec` section 6.1, and is not authored again.
+        if author_delta {
+            for message in &delta {
+                self.author
+                    .author_message(self.recorder, message, turn)
+                    .map_err(|_| TurnError::Unlicensed { turn: turn.clone() })?
+                    .map_err(|_| TurnError::ChannelLost)?;
+            }
         }
 
         // **The execution loop**, per the tool workflow's opening act: each

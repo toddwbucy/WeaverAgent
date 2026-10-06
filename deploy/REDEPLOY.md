@@ -206,7 +206,9 @@ apply (`newgrp` selects one group in one shell).
 An agent electing no store (`[state-store] engine = "none"`) is made by hand, since
 there is no member or store to provision or probe: `HowToDeployANewAgent.md` section 3.
 Karl on the thinkpad is this case, and its declaration is carried byte for byte between
-boxes, system prompt included, because the determinism runs compare against it.
+boxes, with its prompt draft beside it and seeded through the gate on the new box
+(`HowToDeployANewAgent.md` section 4), because the determinism runs compare against
+both.
 
 Then, for each:
 

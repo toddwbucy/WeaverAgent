@@ -528,22 +528,15 @@ fn parse_restored_answer(line: &str) -> Option<RestoredAnswer> {
     None
 }
 
-/// **The open's identity material, two sources and one rule**, per
-/// `weaver-harness-Spec` section 6.1 as of 2026-09-04. `None` for the answer
-/// is the ask missed: the enter refuses rather than opening a run with no
-/// bounding. An empty answer is the first load of the session, so the
-/// declaration's field seeds the open. A prefix answered is the open's
+/// **The open's identity material, one source and one rule**, per
+/// `weaver-harness-Spec` section 6.1 on the operator's ruling of 2026-10-06
+/// that the system prompt is state. The member's answer is the open's
 /// messages, each rebuilt from the pairs the tee carried whole, `role` and
-/// `content`, and a prefix that does not rebuild refuses the same way a
-/// miss does, because a half-read bounding is no bounding.
-pub(crate) fn identity_material(
-    answer: Option<Vec<Recalled>>,
-    seed: &[weaver_traits::Message],
-) -> Option<Vec<weaver_traits::Message>> {
-    let held = answer?;
-    if held.is_empty() {
-        return Some(seed.to_vec());
-    }
+/// `content`; an empty answer is an agent not yet seeded and opens with no
+/// prefix; and a prefix that does not rebuild refuses the same way a miss
+/// does, because a half-read bounding is no bounding. The miss itself is
+/// the caller's to refuse, before this is reached.
+pub(crate) fn identity_material(held: &[Recalled]) -> Option<Vec<weaver_traits::Message>> {
     held.iter().map(prefix_message).collect()
 }
 
@@ -820,24 +813,17 @@ mod tests {
         );
     }
 
-    /// **The identity ask's three arms**, per `weaver-harness-Spec` section
-    /// 6.1 as of 2026-09-04: a miss is `None` and refuses, an empty answer
-    /// seeds, and a prefix rebuilds from its pairs. Perturbation: return
-    /// the seed on a miss and the first assertion fails; skip the rebuild's
-    /// `content` and the third.
+    /// **The identity material's one source**, per `weaver-harness-Spec`
+    /// section 6.1 on the ruling of 2026-10-06: an empty answer is an agent
+    /// not yet seeded and opens with no prefix, a prefix rebuilds from its
+    /// pairs, and a half-read one refuses. Perturbation: skip the rebuild's
+    /// `content` and the rebuilt prefix carries no text.
     #[test]
-    fn the_identity_material_has_two_sources_and_one_rule() {
-        let seed = vec![weaver_traits::Message {
-            role: weaver_traits::Role::System,
-            content: vec![weaver_traits::ContentBlock::Text {
-                text: "seed".into(),
-            }],
-        }];
-        assert!(identity_material(None, &seed).is_none(), "a miss refuses");
+    fn the_identity_material_has_one_source_and_one_rule() {
         assert_eq!(
-            identity_material(Some(vec![]), &seed),
-            Some(seed.clone()),
-            "an empty answer is the first load and seeds"
+            identity_material(&[]),
+            Some(Vec::new()),
+            "an empty answer is an unseeded agent, which opens with no prefix"
         );
         let (ours, theirs) = UnixStream::pair().expect("pair");
         ours.set_nonblocking(true).expect("nonblocking");
@@ -854,7 +840,7 @@ mod tests {
         )
         .expect("answers in advance");
         let held = seam.ask_identity_within(ANSWER_BOUND_MS).expect("answered");
-        let material = identity_material(Some(held), &seed).expect("rebuilds");
+        let material = identity_material(&held).expect("rebuilds");
         assert_eq!(material.len(), 1);
         assert!(matches!(material[0].role, weaver_traits::Role::System));
         assert!(
@@ -871,7 +857,7 @@ mod tests {
             pairs: vec![("role".into(), "\"system\"".into())],
         }];
         assert!(
-            identity_material(Some(half), &seed).is_none(),
+            identity_material(&half).is_none(),
             "a prefix without content refuses"
         );
     }

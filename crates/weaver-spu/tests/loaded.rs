@@ -263,7 +263,6 @@ mod seam_success {
                         surprisal_election: false,
                         refeed_permission: false,
                         column_permission: false,
-                        identity: vec![],
                         tunable_values: [
                             ("max-tokens-per-turn".to_string(), 4096.0),
                             ("context-capacity".to_string(), 4096.0),
@@ -353,7 +352,6 @@ mod seam_success {
                         surprisal_election: false,
                         refeed_permission: false,
                         column_permission: false,
-                        identity: vec![],
                         tunable_values: [
                             ("max-tokens-per-turn".to_string(), 4096.0),
                             ("context-capacity".to_string(), 4096.0),
@@ -463,7 +461,6 @@ mod seam_success {
                         surprisal_election: false,
                         refeed_permission: false,
                         column_permission: false,
-                        identity: vec![],
                         tunable_values: [
                             ("max-tokens-per-turn".to_string(), 9.0),
                             ("context-capacity".to_string(), 4096.0),
@@ -598,7 +595,6 @@ mod seam_success {
                         surprisal_election: true,
                         refeed_permission: false,
                         column_permission: false,
-                        identity: vec![],
                         tunable_values: [
                             ("max-tokens-per-turn".to_string(), 9.0),
                             ("context-capacity".to_string(), 4096.0),
@@ -735,7 +731,6 @@ mod seam_success {
                         surprisal_election: false,
                         refeed_permission: false,
                         column_permission: false,
-                        identity: vec![],
                         tunable_values: [
                             ("max-tokens-per-turn".to_string(), 4096.0),
                             ("context-capacity".to_string(), 4096.0),
@@ -973,7 +968,6 @@ mod seam_success {
                         surprisal_election: false,
                         refeed_permission: false,
                         column_permission: false,
-                        identity: vec![],
                         tunable_values: [
                             ("max-tokens-per-turn".to_string(), 64.0),
                             ("context-capacity".to_string(), 1024.0),
@@ -1121,7 +1115,6 @@ mod seam_success {
                         surprisal_election: false,
                         refeed_permission: true,
                         column_permission: false,
-                        identity: vec![],
                         tunable_values: [
                             ("max-tokens-per-turn".to_string(), 64.0),
                             ("context-capacity".to_string(), 1024.0),
@@ -1256,7 +1249,6 @@ mod seam_success {
                 surprisal_election: false,
                 refeed_permission,
                 column_permission: false,
-                identity: vec![],
                 tunable_values: [
                     ("max-tokens-per-turn".to_string(), 64.0),
                     ("context-capacity".to_string(), 1024.0),
@@ -1561,7 +1553,6 @@ mod seam_success {
                         surprisal_election: false,
                         refeed_permission: false,
                         column_permission: true,
-                        identity: vec![],
                         tunable_values: [
                             ("max-tokens-per-turn".to_string(), 24.0),
                             ("context-capacity".to_string(), 1024.0),
@@ -1702,7 +1693,6 @@ mod seam_success {
                 surprisal_election: false,
                 refeed_permission: false,
                 column_permission: permission,
-                identity: vec![],
                 tunable_values: [
                     ("max-tokens-per-turn".to_string(), 16.0),
                     ("context-capacity".to_string(), 1024.0),

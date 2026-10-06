@@ -1128,7 +1128,6 @@ mod tests {
                 "\n",
                 "[spu-instruction.decoder]\n",
                 "residual-readout-election = false\n",
-                "identity = []\n",
                 "tunable-values = {{}}\n",
                 "\n",
                 "[spu-instruction.decoder.model-binding]\n",

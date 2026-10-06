@@ -187,14 +187,11 @@ cargo fmt --all -- --check
 means the gate could not run (cold cache, network needed, unreadable manifest), so the
 lock is unchecked rather than clean. Its header carries the measurements.
 
-**Workspace-wide `cargo test --workspace --locked` compiles and passes** (since #37). One
-test meets `weaver-analysis`, the crate that left, from its own repository, until C5
-(#76) removes it:
-
-- `crates/weaver-types/tests/config.rs` includes a pinned copy of WeaverAnalysis's
-  `derived-surrogate.toml` (`crates/weaver-types/tests/fixtures/`), with the
-  WeaverAnalysis commit it came from named in the const's doc. A drift test compares it
-  against the checkout below and skips, saying so, when there is none.
+**Workspace-wide `cargo test --workspace --locked` compiles and passes** (since #37), and
+no test here reads WeaverAnalysis's checkout: `crates/weaver-types/tests/fixtures/`
+holds this tree's own diagnostic declaration, carrying no identity, in the declaration
+grammar of 2026-10-06, on the operator's ruling of 2026-10-05 that WeaverAnalysis
+conforms to the trace this repository produces and not the other way around.
 
 The state member's preload-door suites (`crates/weaver-state/src/preload_door.rs`) drive
 the door with an in-tree client and run as `#[ignore]` instruments under a watch that
@@ -238,12 +235,17 @@ not provide. `create-agent.sh` lays each territory out by group,
 with the trace in its own group (#56); small fixes are #39. The scripts are
 `bootstrap-stack.sh`, `update-stack.sh`, `create-agent.sh`, `verify-load.sh`,
 `decommission.sh`, and `deploy/turn.py <agent> "<text>"` sends one turn through a
-loaded agent's gate as the operator's uid with no sudo. The installed stack lives under
+loaded agent's gate as the operator's uid with no sudo; `deploy/turn.py <agent>
+--system` is the seeding turn, sending the operator's prompt draft as the `system`
+role, which the harness takes from the operator's uid alone. **The system prompt is
+state** (the operator's ruling of 2026-10-06, #76): the declaration carries no identity,
+admin reads no prompt, the seeding turn enters it, and every later load seats what the
+state member holds. The installed stack lives under
 `/etc/weaver/admin/<agent>/` (each agent's config root), `/etc/weaver/stack/` (the
 scripts' record of the install, which admin never reads) and `<prefix>/bin`. Each
-agent's declaration, `admin.log` and `worker.log` (and its prompt, once #76 lands) live
-in the directory the root's `declaration-directory` names, by default the operator's
-`~/.weaveragent/<agent>/`. Each agent runs under its own OS user, started by admin's
+agent's declaration, its prompt draft `system-prompt.md`, `admin.log` and `worker.log`
+live in the directory the root's `declaration-directory` names, by default the
+operator's `~/.weaveragent/<agent>/`. Each agent runs under its own OS user, started by admin's
 start step, with no systemd unit. `create-agent.sh` writes the connector's strict sudo
 rule. Taking down a single agent is still by hand (#35). A box installed before #50
 migrates by `REDEPLOY.md` section 8, which is the thinkpad's case, since it runs a stack

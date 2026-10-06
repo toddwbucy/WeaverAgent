@@ -1201,7 +1201,7 @@ mod undecodable_tests {
         // this build never registered, refused by deny_unknown_fields.
         let alien = r#"{"model-binding":{"artifact":"a","devices":[0]},
             "residual-readout-election":false,"surprisal-election":false,
-            "identity":[],"tunable-values":{},
+            "tunable-values":{},
             "a-member-from-a-newer-floor":{"x":1}}"#;
         let error = serde_json::from_str::<weaver_types::DecoderInstruction>(alien)
             .expect_err("the alien member refuses");

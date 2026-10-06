@@ -80,7 +80,6 @@ fn the_boxed_payloads_cross_as_the_payloads_do() {
                     surprisal_election: false,
                     refeed_permission: false,
                     column_permission: false,
-                    identity: Vec::new(),
                     tunable_values: Default::default(),
                 },
             },
@@ -100,6 +99,7 @@ fn the_boxed_payloads_cross_as_the_payloads_do() {
             stack: Default::default(),
             boundary: String::new(),
             cause: weaver_types::Cause { uid: 0 },
+            operator: 1000,
             library_path: None,
             state_election: weaver_types::StateElection {
                 all_kinds: false,
@@ -315,13 +315,38 @@ fn the_decode_refuses_the_noncanonical_forms() {
     ] {
         let frame = weaver_types::TurnFrame {
             octets: bad.to_string(),
+            dialer: None,
         };
         assert!(frame.octets().is_none(), "{bad:?} decoded as canonical");
     }
     let canonical = weaver_types::TurnFrame {
         octets: "QUI=".to_string(),
+        dialer: None,
     };
     assert_eq!(canonical.octets().expect("canonical"), b"AB");
+}
+
+/// **The dialer rides an inbound frame and is absent from a response**, per
+/// `weaver-harness-gate-contract` section 2 on the ruling of 2026-10-06: a
+/// frame carried from a dialer serializes the member, a frame carried with
+/// none omits it, and a line without the member reads as none, so a gate
+/// built before the member still parses. Perturbation: drop the serde
+/// default and the member-less line refuses.
+#[test]
+fn the_dialer_rides_inbound_frames_only() {
+    let inbound = weaver_types::TurnFrame::carry_from(b"AB", 1000);
+    let bytes = serde_json::to_string(&inbound).expect("serializes");
+    assert_eq!(bytes, r#"{"octets":"QUI=","dialer":1000}"#);
+    let back: weaver_types::TurnFrame = serde_json::from_str(&bytes).expect("returns");
+    assert_eq!(back, inbound);
+    let response = weaver_types::TurnFrame::carry(b"AB");
+    assert_eq!(
+        serde_json::to_string(&response).expect("serializes"),
+        r#"{"octets":"QUI="}"#
+    );
+    let bare: weaver_types::TurnFrame =
+        serde_json::from_str(r#"{"octets":"QUI="}"#).expect("a member-less line reads");
+    assert_eq!(bare.dialer, None);
 }
 
 /// The label trio round-trips through bytes, per `weaver-types-Spec` section

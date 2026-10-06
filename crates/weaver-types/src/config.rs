@@ -296,12 +296,6 @@ pub struct DecoderInstruction {
     /// `weaver-admin-Spec` section 7.
     #[serde(default)]
     pub column_permission: bool,
-    /// The session's identity material: the canonical messages the identity
-    /// prefix is rendered from, configuration rather than history, per
-    /// `weaver-types-Spec` section 2. Required like every field, and an
-    /// empty list is a declaration the operator made where an absent field
-    /// is a file unfinished.
-    pub identity: Vec<weaver_traits::Message>,
     /// Values for whatever parameters this deployment's SPU left tunable, per
     /// `weaver-types-Spec` section 2 and `weaver-spu-Spec` section 8. This is
     /// the route `Disposition::OperatorTunable` names, keyed by the
@@ -465,7 +459,6 @@ pub fn parse(source: &str) -> Result<AgentConfig, ConfigError> {
         });
     }
     check_tunable_values(&config.spu_instruction.decoder.tunable_values)?;
-    check_identity_roles(&config.spu_instruction.decoder.identity)?;
     check_trace_sink_surface(source, &config.trace_sink)?;
     check_declared_paths(&config)?;
     Ok(config)
@@ -550,7 +543,13 @@ fn check_declared_paths(config: &AgentConfig) -> Result<(), ConfigError> {
 ///
 /// conforms: types-identity-role-is-system
 #[cfg(feature = "config")]
-fn check_identity_roles(identity: &[weaver_traits::Message]) -> Result<(), ConfigError> {
+/// **The identity door's four rules**, per `weaver-types-Spec` section 5: every
+/// message `role: system`, every block one the role is licensed for, no message
+/// carrying nothing, no text block carrying no text. No declaration reaches
+/// them since the operator's ruling of 2026-10-06 that the system prompt is
+/// state, so the harness applies them where a prefix is seated, and the
+/// watches below call the check over messages directly.
+pub fn check_identity_roles(identity: &[weaver_traits::Message]) -> Result<(), ConfigError> {
     for (at, message) in identity.iter().enumerate() {
         if !matches!(message.role, weaver_traits::Role::System) {
             return Err(ConfigError {
@@ -699,5 +698,80 @@ fn classify_toml_error(message: &str) -> ConfigError {
             field: None,
             kind: ConfigErrorKind::Malformed,
         }
+    }
+}
+
+/// **The identity door's four rules, watched on the messages directly**, per
+/// `weaver-types-Spec` section 5: since 2026-10-06 no declaration carries an
+/// identity, so each watch calls `check_identity_roles` over the messages it
+/// names.
+#[cfg(all(test, feature = "config"))]
+mod identity_tests {
+    use super::check_identity_roles;
+    use weaver_traits::{ContentBlock, Message, Role, ToolCall};
+
+    fn text(text: &str) -> ContentBlock {
+        ContentBlock::Text {
+            text: text.to_string(),
+        }
+    }
+
+    fn refused_at(identity: &[Message]) -> String {
+        check_identity_roles(identity)
+            .expect_err("refuses")
+            .field
+            .expect("names its field")
+            .0
+    }
+
+    /// **A role the door does not write refuses, naming its index.**
+    /// Perturbation: drop the role arm and all three roles pass.
+    #[test]
+    fn a_non_system_identity_role_refuses() {
+        for role in [Role::User, Role::Assistant, Role::ToolResult] {
+            let identity = [Message {
+                role: role.clone(),
+                content: vec![text("You answer briefly.")],
+            }];
+            assert_eq!(refused_at(&identity), "identity.0.role", "{role:?}");
+        }
+    }
+
+    /// **A `system` message carrying a block it may not carry refuses**, per
+    /// `weaver-traits-Spec` section 3, which licenses `Text` alone there.
+    /// Perturbation: drop the block loop and a `tool_call` passes.
+    #[test]
+    fn an_unlicensed_identity_block_refuses() {
+        let identity = [Message {
+            role: Role::System,
+            content: vec![ContentBlock::ToolCall(ToolCall {
+                name: "calculator".into(),
+                arguments: "{}".into(),
+            })],
+        }];
+        assert_eq!(refused_at(&identity), "identity.0.content.0");
+    }
+
+    /// **A message carrying nothing refuses**, though an empty list does not.
+    /// Perturbation: drop the empty-content check and it passes.
+    #[test]
+    fn an_identity_message_carrying_nothing_refuses() {
+        let identity = [Message {
+            role: Role::System,
+            content: vec![],
+        }];
+        assert_eq!(refused_at(&identity), "identity.0.content");
+        assert!(check_identity_roles(&[]).is_ok(), "an empty list is lawful");
+    }
+
+    /// **A text block carrying no text refuses**, the empty turn by a second
+    /// route. Perturbation: drop the empty-text arm and it passes.
+    #[test]
+    fn an_identity_text_block_carrying_no_text_refuses() {
+        let identity = [Message {
+            role: Role::System,
+            content: vec![text("")],
+        }];
+        assert_eq!(refused_at(&identity), "identity.0.content.0.text");
     }
 }

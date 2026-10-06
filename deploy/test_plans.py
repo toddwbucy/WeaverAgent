@@ -348,7 +348,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
 
     def test_agent_plan_refuses_visible_collisions(self):
         for collision in ("account", "relay account", "connector account", "access group",
-                          "agent root", "staged root", "sudo rule", "declaration"):
+                          "agent root", "staged root", "sudo rule", "declaration", "prompt draft"):
             with self.subTest(collision=collision):
                 self.env.pop("COLLISION", None)
                 for path in (self.config / "m1", self.config / ".m1.partial"):
@@ -362,6 +362,10 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
                 elif collision == "agent root": (self.config / "m1").mkdir()
                 elif collision == "staged root": (self.config / ".m1.partial").mkdir()
                 elif collision == "sudo rule": self.rule.write_text("")
+                elif collision == "prompt draft":
+                    self.decl.mkdir(parents=True)
+                    self.decl.chmod(0o700)
+                    (self.decl / "system-prompt.md").write_text("")
                 else:
                     self.decl.mkdir(parents=True)
                     self.decl.chmod(0o700)
@@ -512,7 +516,20 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertEqual(self.decl.stat().st_mode & 0o777, 0o700)
         self.assertEqual((self.decl / "agent.toml").stat().st_mode & 0o077, 0)
         import tomllib
-        store = tomllib.loads((self.decl / "agent.toml").read_text())["state-store"]
+        declaration = tomllib.loads((self.decl / "agent.toml").read_text())
+        # The declaration carries no identity in either of its earlier forms
+        # (weaver-types-Spec section 2, the ruling of 2026-10-06 that the
+        # system prompt is state), and the draft the seeding turn reads stands
+        # beside it, the operator's alone. Perturbation: write either key
+        # again and the parse of a made agent refuses it by name.
+        decoder = declaration["spu-instruction"]["decoder"]
+        self.assertNotIn("identity", decoder)
+        self.assertNotIn("identity-file", decoder)
+        prompt = self.decl / "system-prompt.md"
+        self.assertEqual(prompt.stat().st_mode & 0o077, 0)
+        self.assertTrue(prompt.read_text().startswith("You are a careful assistant."))
+        self.assertTrue(prompt.read_text().endswith("question allows.\n"))
+        store = declaration["state-store"]
         self.assertEqual(store["engine"], engine)
         return store
 
@@ -557,6 +574,18 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertTrue(any(c[:4] == ["sudo", "-u", "weaver-m1", "test"] for c in calls))
         self.assert_rule(["show", "validate", "load", "unload", "stop"])
         self.assertIn("validate it before loading, with the validate verb of", result.stdout)
+        # The seeding is named as the operator's next step and never done
+        # here: create-agent makes an agent that is not loaded, and the
+        # seeding is a turn against a loaded one. Perturbation: dial the gate
+        # from the script and the second assertion fails.
+        self.assertIn("deploy/turn.py m1 --system reads " + str(self.decl / "system-prompt.md"),
+                      result.stdout)
+        script = (self.repo / "deploy" / "create-agent.sh").read_text()
+        dialing = [line for line in script.splitlines()
+                   if not line.lstrip().startswith(("#", "printf", "plan "))
+                   and any(needle in line for needle in ("turn.py", "gate.sock", "socat", "/dev/tcp", "python3 -c 'import socket"))]
+        self.assertEqual(dialing, [], "create-agent.sh never opens the gate")
+        self.assertFalse(any("turn.py" in " ".join(c) or "gate.sock" in " ".join(c) for c in calls), calls)
         self.assert_no_printed_root_command(result)
 
     def test_the_connector_role_chooses_the_rules_lines(self):

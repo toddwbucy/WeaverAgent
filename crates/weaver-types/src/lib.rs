@@ -96,7 +96,7 @@ pub use config::{
     ToolName, TraceSink,
 };
 #[cfg(feature = "config")]
-pub use config::{parse, parse_boundary};
+pub use config::{check_identity_roles, parse, parse_boundary};
 pub use identity::{
     AccessRule, BoundaryFile, Cause, PeerIdentity, TraceControl, TraceHeader, TraceLine,
     TraceRequest, authorized,

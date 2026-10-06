@@ -441,6 +441,11 @@ pub struct EnterPayload {
     /// Who asked for this load, section 3.1's `Cause`, recorded on the load
     /// event.
     pub cause: crate::Cause,
+    /// The operator's uid, the value the agent root's `operator` key names,
+    /// per `weaver-types-Spec` section 4 on the operator's ruling of
+    /// 2026-10-06: what the harness admits the seeding line from, and the
+    /// only uid it does.
+    pub operator: u32,
     /// The engine libraries' directory where the agent's root names one,
     /// judged by admin and recorded on the load event beside the stack.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -564,13 +569,29 @@ pub enum AgentState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TurnFrame {
     pub octets: String,
+    /// The dialer's peer uid, the kernel credential the gate judged at
+    /// accept, on every inbound frame and absent on a response, per
+    /// `weaver-harness-gate-contract` section 2 on the operator's ruling of
+    /// 2026-10-06: what the harness judges the seeding line's admission by.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dialer: Option<u32>,
 }
 
 impl TurnFrame {
-    /// Carries octets as a frame, encoded to the one canonical form.
+    /// Carries octets as a frame, encoded to the one canonical form, naming
+    /// no dialer: a response, or a frame a test carries inward.
     pub fn carry(octets: &[u8]) -> TurnFrame {
         TurnFrame {
             octets: encode_base64(octets),
+            dialer: None,
+        }
+    }
+
+    /// Carries a client's line inward with the dialer the gate read.
+    pub fn carry_from(octets: &[u8], dialer: u32) -> TurnFrame {
+        TurnFrame {
+            octets: encode_base64(octets),
+            dialer: Some(dialer),
         }
     }
 

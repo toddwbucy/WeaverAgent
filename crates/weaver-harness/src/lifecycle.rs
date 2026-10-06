@@ -60,27 +60,56 @@ enum Wake {
     Decode,
 }
 
-/// The request's parse, per `weaver-gate-Spec` section 4: one JSON object,
-/// one `text` member, a string, unknown members refused. Every failure is
-/// the refused turn's reason, content the harness authors, never a channel
+/// What a request line parsed to, per `weaver-gate-Spec` section 4 and the
+/// seeding clause of `weaver-harness-Spec` section 6.1: the text, and whether
+/// the line named the `system` role, which makes it the operator's seeding
+/// line where the dialer is the operator.
+#[derive(Debug)]
+struct Request {
+    text: String,
+    system: bool,
+}
+
+/// The request's parse, per `weaver-gate-Spec` section 4 and the seeding
+/// clause of `weaver-harness-Spec` section 6.1: one JSON object, one `text`
+/// member, a string, and beside it at most `role` with the one value
+/// `system`; an unknown member and any other role refuse, the refusal naming
+/// the role. Who may send a `system` line is the frame path's judgment,
+/// made against the frame's dialer and not here. Every failure is the
+/// refused turn's reason, content the harness authors, never a channel
 /// fault, which is the layer split the frame election bought.
-fn parse_request(frame: &weaver_types::TurnFrame) -> Result<String, &'static str> {
+fn parse_request(frame: &weaver_types::TurnFrame) -> Result<Request, String> {
     let Some(octets) = frame.octets() else {
-        return Err("the frame's carriage is not the canonical encoding");
+        return Err("the frame's carriage is not the canonical encoding".into());
     };
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(&octets) else {
-        return Err("the line does not parse as one JSON value");
+        return Err("the line does not parse as one JSON value".into());
     };
     let Some(object) = value.as_object() else {
-        return Err("a request is one JSON object");
+        return Err("a request is one JSON object".into());
     };
-    if object.len() != 1 {
-        return Err("a request carries the text member and nothing else");
+    if object.keys().any(|key| key != "text" && key != "role") {
+        return Err(
+            "a request carries the text member, at most the role member beside it, and nothing else"
+                .into(),
+        );
     }
     let Some(text) = object.get("text").and_then(|value| value.as_str()) else {
-        return Err("a request carries the text member, a string");
+        return Err("a request carries the text member, a string".into());
     };
-    Ok(text.to_string())
+    let system = match object.get("role") {
+        None => false,
+        Some(serde_json::Value::String(role)) if role == "system" => true,
+        Some(role) => {
+            return Err(format!(
+                "a request's role is system or absent, and {role} is neither"
+            ));
+        }
+    };
+    Ok(Request {
+        text: text.to_string(),
+        system,
+    })
 }
 
 /// One response line, the kind-named close of `weaver-gate-Spec` section 4:
@@ -304,6 +333,11 @@ struct Run {
     recorder: crate::record::Record,
     author: Author,
     session: SessionId,
+    /// The operator's uid as the enter carried it, per `weaver-types-Spec`
+    /// section 4 on the operator's ruling of 2026-10-06: the one dialer whose
+    /// `system` line the frame path admits as the seeding turn, per
+    /// `weaver-harness-Spec` section 6.1.
+    operator: u32,
     /// The run's own reference, retained so a close can name the run a turn
     /// belongs to, per `weaver-gate-world-contract` section 3. The author
     /// holds its own converted copy for the record, and this is the floor's,
@@ -842,8 +876,21 @@ impl Harness {
         // without holding the run across the grant.
         let run_ref = run.run.clone();
         let response = match parse_request(&frame) {
-            Err(reason) => render_close("refused", "reason", reason, None),
-            Ok(text) => {
+            Err(reason) => render_close("refused", "reason", &reason, None),
+            // **A `system` line is the operator's alone**, per Spec 6.1's
+            // seeding clause: admitted only where the frame's dialer, the
+            // peer uid the gate read at accept and carries inward per
+            // `weaver-harness-gate-contract` section 2, is the operator's
+            // uid the enter carried. No dialer, or any other uid, the
+            // connector's service user among them, is a refused turn naming
+            // the role, and the channel stands.
+            Ok(Request { system: true, .. }) if frame.dialer != Some(run.operator) => render_close(
+                "refused",
+                "reason",
+                "a line of role system is admitted from the operator alone",
+                None,
+            ),
+            Ok(Request { text, system }) => 'turn: {
                 // The seat, granted at loaded-and-idle: the assembly read,
                 // the grant across the dev boundary, and the take-back at
                 // the entry's return.
@@ -868,90 +915,125 @@ impl Harness {
                             &account,
                         ),
                     );
-                    render_close(
+                    break 'turn render_close(
                         "stopped",
                         "reason",
                         "the working structure holds a hole",
                         None,
-                    )
-                } else {
-                    let Some(spu) = run.spu.as_ref() else {
-                        // A run with no SPU is not loaded, and nothing can
-                        // turn against it.
-                        return Err(ChannelFault::Undecodable);
-                    };
-                    let gate_port = run.gate.as_ref().map(|gate| crate::engine::GatePort {
-                        channel: &gate.channel,
-                        ordinal: &mut run.gate_ordinal,
-                        held: &mut run.held_frames,
-                    });
-                    let mut ports = crate::engine::Ports::grant(
-                        &spu.decode,
-                        &run.author,
-                        &mut run.recorder,
-                        &mut run.turn_ordinal,
-                        &mut run.turn_in_flight,
-                        &run.load,
-                        Some(prompt),
-                        &self.coordination,
-                        Some(pending),
-                        gate_port,
-                        run.state.as_mut(),
-                        run.classify.as_ref().map(|arm| &arm.channel),
-                        &mut run.fullness,
-                        &mut run.pressure_reported,
                     );
-                    match entry(&mut ports, &text) {
-                        // A turn the operator's stop aborted answers the
-                        // stopped close, the partial standing in the record.
-                        Ok(outcome) if outcome.aborted => render_close(
-                            "stopped",
-                            "reason",
-                            "the operator stopped the turn",
-                            Some((&outcome.turn, &run_ref)),
-                        ),
-                        // A model-side stop is a completed turn whose
-                        // truncation the record holds, so the client is
-                        // answered with what stands.
-                        Ok(outcome) => render_close_with_finish(
-                            "answered",
-                            "text",
-                            &outcome.emission,
-                            Some((&outcome.turn, &run_ref)),
-                            outcome.truncated,
-                        ),
-                        Err(crate::engine::TurnError::Refused { turn, refusal }) => render_close(
-                            "stopped",
-                            "reason",
-                            refusal_reason(&refusal),
-                            Some((&turn, &run_ref)),
-                        ),
-                        // The emission arrived mid-stream. **The engine
-                        // already authored the report inside the turn's
-                        // bracket**, before the close its error path lands,
-                        // so this arm renders the client's close and authors
-                        // nothing: a second authoring here would file one
-                        // fact twice, and filing it here at all would put it
-                        // after `turn.closed`. Service continues, the fault
-                        // being one the worker survives by definition of the
-                        // case set.
-                        Err(crate::engine::TurnError::Faulted { turn, report: _ }) => render_close(
-                            "stopped",
-                            "reason",
-                            "the model organ reported a fault",
-                            Some((&turn, &run_ref)),
-                        ),
-                        Err(crate::engine::TurnError::Unlicensed { turn }) => render_close(
-                            "stopped",
-                            "reason",
-                            "a message was not licensed for its role",
-                            Some((&turn, &run_ref)),
-                        ),
-                        // The decode channel or the record is gone, and the
-                        // record is untrustworthy either way: service ends.
-                        Err(crate::engine::TurnError::ChannelLost) => {
-                            return Err(ChannelFault::Closed);
+                }
+                let Some(spu) = run.spu.as_ref() else {
+                    // A run with no SPU is not loaded, and nothing can
+                    // turn against it.
+                    return Err(ChannelFault::Undecodable);
+                };
+                // **The seeding line enters the prompt**, per Spec 6.1: one
+                // `system` message of the line's text verbatim, authored
+                // turnless through the identity door before the turn that
+                // appends it, so the record and the tee carry it as the
+                // prefix the next load seats. The door's refusal, the empty
+                // text it writes no turn for, is the turn's refusal; a
+                // recorder that would not take it ends service, the record
+                // being untrustworthy.
+                let seeding = system.then(|| weaver_traits::Message {
+                    role: weaver_traits::Role::System,
+                    content: vec![weaver_traits::ContentBlock::Text { text: text.clone() }],
+                });
+                if let Some(message) = seeding.as_ref() {
+                    match run.author.author_identity(&mut run.recorder, message) {
+                        Ok(Ok(_)) => {}
+                        Err(unlicensed) => {
+                            break 'turn render_close(
+                                "refused",
+                                "reason",
+                                &format!(
+                                    "the identity door refused the system line: {} {}",
+                                    unlicensed.role, unlicensed.block
+                                ),
+                                None,
+                            );
                         }
+                        Ok(Err(_)) => return Err(ChannelFault::Closed),
+                    }
+                }
+                let gate_port = run.gate.as_ref().map(|gate| crate::engine::GatePort {
+                    channel: &gate.channel,
+                    ordinal: &mut run.gate_ordinal,
+                    held: &mut run.held_frames,
+                });
+                let mut ports = crate::engine::Ports::grant(
+                    &spu.decode,
+                    &run.author,
+                    &mut run.recorder,
+                    &mut run.turn_ordinal,
+                    &mut run.turn_in_flight,
+                    &run.load,
+                    Some(prompt),
+                    &self.coordination,
+                    Some(pending),
+                    gate_port,
+                    run.state.as_mut(),
+                    run.classify.as_ref().map(|arm| &arm.channel),
+                    &mut run.fullness,
+                    &mut run.pressure_reported,
+                );
+                // The seeding turn is loop 0's own and crosses the dev
+                // boundary nowhere: the prompt is appended and the model
+                // answers, per Spec 6.1. Every other line is the loop's.
+                let ran = match seeding {
+                    Some(message) => ports.seed(message),
+                    None => entry(&mut ports, &text),
+                };
+                match ran {
+                    // A turn the operator's stop aborted answers the
+                    // stopped close, the partial standing in the record.
+                    Ok(outcome) if outcome.aborted => render_close(
+                        "stopped",
+                        "reason",
+                        "the operator stopped the turn",
+                        Some((&outcome.turn, &run_ref)),
+                    ),
+                    // A model-side stop is a completed turn whose
+                    // truncation the record holds, so the client is
+                    // answered with what stands.
+                    Ok(outcome) => render_close_with_finish(
+                        "answered",
+                        "text",
+                        &outcome.emission,
+                        Some((&outcome.turn, &run_ref)),
+                        outcome.truncated,
+                    ),
+                    Err(crate::engine::TurnError::Refused { turn, refusal }) => render_close(
+                        "stopped",
+                        "reason",
+                        refusal_reason(&refusal),
+                        Some((&turn, &run_ref)),
+                    ),
+                    // The emission arrived mid-stream. **The engine
+                    // already authored the report inside the turn's
+                    // bracket**, before the close its error path lands,
+                    // so this arm renders the client's close and authors
+                    // nothing: a second authoring here would file one
+                    // fact twice, and filing it here at all would put it
+                    // after `turn.closed`. Service continues, the fault
+                    // being one the worker survives by definition of the
+                    // case set.
+                    Err(crate::engine::TurnError::Faulted { turn, report: _ }) => render_close(
+                        "stopped",
+                        "reason",
+                        "the model organ reported a fault",
+                        Some((&turn, &run_ref)),
+                    ),
+                    Err(crate::engine::TurnError::Unlicensed { turn }) => render_close(
+                        "stopped",
+                        "reason",
+                        "a message was not licensed for its role",
+                        Some((&turn, &run_ref)),
+                    ),
+                    // The decode channel or the record is gone, and the
+                    // record is untrustworthy either way: service ends.
+                    Err(crate::engine::TurnError::ChannelLost) => {
+                        return Err(ChannelFault::Closed);
                     }
                 }
             }
@@ -1526,6 +1608,7 @@ impl Harness {
             recorder,
             author,
             session,
+            operator: payload.operator,
             run: payload.run.clone(),
             spu: None,
             gate: None,
@@ -1594,55 +1677,69 @@ impl Harness {
             };
         }
 
-        // **The identity's source is the binding's**, per `weaver-harness-Spec`
-        // section 6.1 on the operator's rulings of 2026-10-02 on #58 and #57:
-        // under a serving binding the prompt file is authoritative at every
-        // load, so the open seats the decoder instruction's identity as admin
-        // seated it and asks the member for nothing, a restoring load
-        // included, the store answering from the save point for every later
-        // turn; under a diagnostic binding the preloaded record's identity is
-        // what the open seats, asked of the member once the seam stands and
-        // before the open. **The diagnostic ask waits on the seal where the
-        // door stands**, per `weaver-harness-state-contract` section 2, under
-        // the parked ask's bound rather than the two seconds a member
-        // answering from holdings at rest takes, and what is waited on is
-        // named before the wait, so an operator who has not started the
-        // driver reads why the load stands still. A missed ask refuses the
-        // enter, the one ask beside `restored` that the dead-peer clause does
-        // not convert, because a replay whose bounding cannot be read is not
-        // a replay with no bounding. The refusal is carried under
-        // `DescriptorsUnusable`, the enter's own descriptor for the member
-        // having proved unusable for the one ask the enter owes it. **Under a
-        // diagnostic binding the enter records nothing**, as it records no
-        // load and no prefix: that record opens with `replay.opened`, and the
-        // ask that feeds the model there is the replay port's.
-        let identity = if !diagnostic {
-            payload.spu_instruction.decoder.identity.clone()
+        // **The identity's one source is the member, under both bindings**,
+        // per `weaver-harness-Spec` section 6.1 on the operator's ruling of
+        // 2026-10-06 (#1) that the system prompt is state: the open seats the
+        // member's `identity` answer, the turnless `message.system` events of
+        // the newest run the holdings carry, which under a serving binding is
+        // the prompt the seeding turn entered, carried by the save point the
+        // load restored, and under a diagnostic binding the preloaded
+        // record's own. An empty answer is an agent not yet seeded, which
+        // opens with no prefix. The serving ask runs under the bound a member
+        // answering from holdings at rest takes; **the diagnostic ask waits
+        // on the seal where the door stands**, per
+        // `weaver-harness-state-contract` section 2, under the parked ask's
+        // bound, and what is waited on is named before the wait, so an
+        // operator who has not started the driver reads why the load stands
+        // still. A missed ask refuses the enter under either binding, the one
+        // ask beside `restored` that the dead-peer clause does not convert,
+        // because a run whose bounding cannot be read is not a run with no
+        // bounding; the refusal is carried under `DescriptorsUnusable`, the
+        // enter's own descriptor for the member having proved unusable for
+        // the one ask the enter owes it. A serving enter with no member
+        // elected has nothing to ask and seats nothing. **Under a serving
+        // binding an answer that returned events is recorded as a `recall`**
+        // before the open is built from it, per `weaver-trace-Spec` section
+        // 3's recall clause; **under a diagnostic binding the enter records
+        // nothing**, as it records no load and no prefix: that record opens
+        // with `replay.opened`, and the ask that feeds the model there is the
+        // replay port's.
+        let ask_bound = if diagnostic {
+            crate::state::PARKED_ASK_BOUND_MS
         } else {
-            let ask_bound = crate::state::PARKED_ASK_BOUND_MS;
-            if state_member {
-                eprintln!("{}", parked_ask_notice(ask_bound));
-            }
-            let seed = &payload.spu_instruction.decoder.identity;
-            match run.state.as_mut() {
-                // The end arrived and the seam did not stand, the clone or
-                // the opener's write having failed: the ask the enter owes
-                // cannot be made, which is the miss and not the first load.
-                None if state_member => after_load!(run, LifecycleRefusal::DescriptorsUnusable),
-                None => seed.clone(),
-                Some(seam) => {
-                    let answered = seam.ask_identity_within(ask_bound);
-                    match crate::state::identity_material(answered, seed) {
+            crate::state::ANSWER_BOUND_MS
+        };
+        if diagnostic && state_member {
+            eprintln!("{}", parked_ask_notice(ask_bound));
+        }
+        let identity = match run.state.as_mut() {
+            // The end arrived and the seam did not stand, the clone or the
+            // opener's write having failed: the ask the enter owes cannot be
+            // made, which is the miss and not the first load.
+            None if state_member => after_load!(run, LifecycleRefusal::DescriptorsUnusable),
+            None => Vec::new(),
+            Some(seam) => match seam.ask_identity_within(ask_bound) {
+                None => after_load!(run, LifecycleRefusal::DescriptorsUnusable),
+                Some(answered) => {
+                    if !diagnostic && !answered.is_empty() {
+                        record_enter_ask(
+                            &run.author,
+                            &mut run.recorder,
+                            weaver_trace::RecallVerb::Identity,
+                            &answered,
+                        );
+                    }
+                    match crate::state::identity_material(&answered) {
                         Some(material) => material,
                         None => after_load!(run, LifecycleRefusal::DescriptorsUnusable),
                     }
                 }
-            }
+            },
         };
         // **The seated prefix reaches the record beside the load**, per
         // `weaver-harness-Spec` section 6.1 and `weaver-trace-PRD` section 5,
-        // authored from what the open carries, whichever source it came
-        // from, so the record names the prefix the session ran under.
+        // authored from what the open carries, so the record names the
+        // prefix the session ran under.
         //
         // conforms: harness-identity-refusal-authored-not-dropped
         if !diagnostic {
@@ -1651,8 +1748,7 @@ impl Harness {
         // The open's messages: the identity, prefix material permanent for
         // the residency, per Spec section 6.1. Under a restoring load the
         // store answers from the save point and the open carries nothing
-        // more, the record restore of issue #432 having retired on the
-        // rulings of 2026-10-02 on #58.
+        // more.
         let opening = identity.clone();
         // The residency and decode pairs are created in one act before the SPU
         // fork: a socket with no address cannot be reached later by resolving
@@ -2415,6 +2511,37 @@ fn initial_turn_ordinal(_restore: Option<&weaver_types::Lineage>) -> u64 {
     0
 }
 
+/// The enter's answered identity ask reaches the record as a `recall`
+/// event, per `weaver-trace-Spec` section 3's recall clause, before the open
+/// is built from it. **A recall the recorder will not take is named in a
+/// fault rather than refusing the enter**, the miss accounting the seated
+/// prefix already runs on: the answer is good and the load can stand, and
+/// what went unrecorded is the provenance of the prefix the run opens under,
+/// which is the case that fault names.
+fn record_enter_ask(
+    author: &crate::authorship::Author,
+    recorder: &mut crate::record::Record,
+    verb: weaver_trace::RecallVerb,
+    answered: &[crate::state::Recalled],
+) {
+    if let Err(failure) = author.author_recall(recorder, verb, None, answered) {
+        let account = serde_json::json!({
+            "organ": "harness",
+            "miss": "recall-unrecorded",
+            "failure": format!("{failure:?}"),
+        });
+        let _ = author.author_fault(
+            recorder,
+            Subsystem::Harness,
+            None,
+            &crate::authorship::harness_report(
+                weaver_types::FaultCase::IdentityPrefixUnrecorded,
+                &account.to_string(),
+            ),
+        );
+    }
+}
+
 fn seat_identity_prefix(
     author: &crate::authorship::Author,
     recorder: &mut crate::record::Record,
@@ -2752,6 +2879,7 @@ mod tests {
                 recorder,
                 author,
                 session,
+                operator: 1000,
                 run: weaver_types::RunId("r-1".into()),
                 spu: Some(SpuChannels {
                     lifecycle,
@@ -2854,7 +2982,6 @@ mod tests {
                     surprisal_election: false,
                     refeed_permission: false,
                     column_permission: false,
-                    identity: Vec::new(),
                     tunable_values: Default::default(),
                 },
             },
@@ -2874,6 +3001,7 @@ mod tests {
             stack: Default::default(),
             boundary: String::new(),
             cause: weaver_types::Cause { uid: 0 },
+            operator: 1000,
             library_path: None,
             state_election: weaver_types::StateElection {
                 all_kinds: false,
@@ -2984,7 +3112,6 @@ mod tests {
                     surprisal_election: false,
                     refeed_permission: false,
                     column_permission: false,
-                    identity: Vec::new(),
                     tunable_values: Default::default(),
                 },
             },
@@ -3004,6 +3131,7 @@ mod tests {
             stack: Default::default(),
             boundary: String::new(),
             cause: weaver_types::Cause { uid: 0 },
+            operator: 1000,
             library_path: None,
             state_election: weaver_types::StateElection {
                 all_kinds: false,
@@ -3131,7 +3259,6 @@ mod tests {
                         surprisal_election: false,
                         refeed_permission: false,
                         column_permission: false,
-                        identity: Vec::new(),
                         tunable_values: Default::default(),
                     },
                 },
@@ -3151,6 +3278,7 @@ mod tests {
                 stack: Default::default(),
                 boundary: String::new(),
                 cause: weaver_types::Cause { uid: 0 },
+                operator: 1000,
                 library_path: None,
                 state_election: weaver_types::StateElection {
                     all_kinds: false,
@@ -3288,18 +3416,6 @@ mod tests {
                     surprisal_election: false,
                     refeed_permission: false,
                     column_permission: false,
-                    // The prompt file's text as admin seated it, which a
-                    // serving open seats and a diagnostic one leaves empty.
-                    identity: if diagnostic {
-                        Vec::new()
-                    } else {
-                        vec![weaver_traits::Message {
-                            role: weaver_traits::Role::System,
-                            content: vec![weaver_traits::ContentBlock::Text {
-                                text: "You are the prompt file.".into(),
-                            }],
-                        }]
-                    },
                     tunable_values: Default::default(),
                 },
             },
@@ -3323,6 +3439,7 @@ mod tests {
             stack: Default::default(),
             boundary: String::new(),
             cause: weaver_types::Cause { uid: 0 },
+            operator: 1000,
             library_path: None,
             // Every kind crosses, so the member's log shows the unload's
             // distillate beside the asks.
@@ -3385,19 +3502,21 @@ mod tests {
         (events, refusal, read)
     }
 
-    /// **A serving enter asks `restored` before it authors `load`, asks no
-    /// identity, and seats the prompt file**, per `weaver-harness-Spec`
+    /// **A serving enter asks `restored` before it authors `load`, then asks
+    /// `identity` and seats the member's answer**, per `weaver-harness-Spec`
     /// section 6.1 and `weaver-harness-state-contract` section 2 on the
-    /// rulings of 2026-10-02: the member reads the restored ask before any
-    /// distillate of the load event, the record holds no `recall`, and the
-    /// prefix it seats is the prompt file's and never the store's.
+    /// operator's ruling of 2026-10-06 that the system prompt is state: the
+    /// member reads the restored ask before any distillate of the load event,
+    /// the identity ask follows, the answer is recorded as a `recall` and the
+    /// prefix the open seats is the member's, the enter carrying none.
     ///
     /// Perturbations: author `load` before the restored ask and the first
-    /// assertion fails; send the identity ask under a serving binding again
-    /// and the store's prefix is seated, the third assertion failing. Watched
-    /// under each.
+    /// assertion fails; skip the identity ask under a serving binding and the
+    /// second fails, the record then carrying no `message.system`; drop the
+    /// `record_enter_ask` call and the recall assertion fails. Watched under
+    /// each.
     #[test]
-    fn a_serving_enter_asks_restored_before_load_and_seats_the_prompt_file() {
+    fn a_serving_enter_asks_restored_before_load_and_seats_the_members_answer() {
         let (events, refusal, read) = enter_against_a_member_answering(None, false, EMPTY_RESTORED);
         assert!(refusal.is_none(), "{refusal:?}");
         let at = |needle: &str| {
@@ -3410,31 +3529,37 @@ mod tests {
             "the restored ask precedes the load's distillate: {read:?}"
         );
         assert!(
-            !read
-                .iter()
-                .any(|line| line.starts_with(r#"{"ask":{"identity""#)),
-            "a serving load sends no identity ask: {read:?}"
+            at(r#""kind":"load""#) < at(r#"{"ask":{"identity""#),
+            "the identity ask follows the load, before the open: {read:?}"
         );
         let kinds: Vec<&str> = events.iter().map(|e| e["kind"].as_str().unwrap()).collect();
         assert_eq!(kinds[0], "load", "the load opens the run");
         assert_eq!(
-            kinds[1], "message.system",
-            "and the prefix follows it: {kinds:?}"
+            kinds[1], "recall",
+            "the answered ask is recorded before the open is built from it: {kinds:?}"
         );
-        assert!(
-            events[1].to_string().contains("You are the prompt file."),
-            "the prompt file's prefix: {}",
+        assert_eq!(
+            events[1]["payload"]["ask"]["verb"], "identity",
+            "the recall names its verb: {}",
             events[1]
         );
-        assert!(
-            !events
-                .iter()
-                .any(|e| e.to_string().contains("You are Karl.")),
-            "and never the store's: {events:?}"
+        assert_eq!(
+            kinds[2], "message.system",
+            "and the prefix follows: {kinds:?}"
         );
         assert!(
-            !kinds.contains(&"recall") && !kinds.contains(&"message.restored"),
-            "no recall and no restored conversation: {kinds:?}"
+            events[2].to_string().contains("You are Karl."),
+            "the member's prefix: {}",
+            events[2]
+        );
+        assert!(
+            events[2]["turn"].is_null(),
+            "seated turnless: {}",
+            events[2]
+        );
+        assert!(
+            !kinds.contains(&"message.restored"),
+            "no restored conversation: {kinds:?}"
         );
         assert!(
             events[0]["payload"].get("lineage").is_none(),
@@ -3585,8 +3710,17 @@ mod tests {
         }
     }
 
+    /// **An enter with no member seats no prefix**, per `weaver-harness-Spec`
+    /// section 6.1 on the operator's ruling of 2026-10-06: the member is the
+    /// identity's one source, the enter carries no prompt, and a serving load
+    /// with no member elected has nothing to ask, so the record opens with
+    /// the load and the next event is the leave's. The member's answer
+    /// seating is watched in
+    /// `a_serving_enter_asks_restored_before_load_and_seats_the_members_answer`.
+    /// Perturbation: seat a message from the enter's instruction again and
+    /// the second event is a `message.system`.
     #[test]
-    fn the_entered_identity_reaches_the_record() {
+    fn an_enter_with_no_member_seats_no_prefix() {
         let dir = crate::scratch::dir(format!(
             "weaver-identity-{}-{:?}",
             std::process::id(),
@@ -3622,12 +3756,6 @@ mod tests {
                     surprisal_election: false,
                     refeed_permission: false,
                     column_permission: false,
-                    identity: vec![weaver_traits::Message {
-                        role: weaver_traits::Role::System,
-                        content: vec![weaver_traits::ContentBlock::Text {
-                            text: "You are a careful assistant.".into(),
-                        }],
-                    }],
                     tunable_values: Default::default(),
                 },
             },
@@ -3647,6 +3775,7 @@ mod tests {
             stack: Default::default(),
             boundary: String::new(),
             cause: weaver_types::Cause { uid: 0 },
+            operator: 1000,
             library_path: None,
             state_election: weaver_types::StateElection {
                 all_kinds: false,
@@ -3669,20 +3798,11 @@ mod tests {
             .map(|line| serde_json::from_str(line).expect("each line parses"))
             .collect();
         assert_eq!(events[0]["kind"], "load", "the load opens the run");
-        assert_eq!(
-            events[1]["kind"], "message.system",
-            "and the seated prefix follows it"
-        );
         assert!(
-            events[1].get("turn").is_none(),
-            "carrying no turn, a prefix preceding every turn there is"
-        );
-        let payload_text = events[1]["payload"]["content"][0]["text"]
-            .as_str()
-            .expect("the prefix carries its text");
-        assert_eq!(
-            payload_text, "You are a careful assistant.",
-            "and the text is the one the instruction declared"
+            events
+                .iter()
+                .all(|e| e["kind"] != "message.system" && e["kind"] != "recall"),
+            "no prefix and no recall, the enter carrying no prompt and asking no one: {events:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3737,7 +3857,6 @@ mod tests {
                         surprisal_election: elected,
                         refeed_permission: false,
                         column_permission: false,
-                        identity: Vec::new(),
                         tunable_values: Default::default(),
                     },
                 },
@@ -3757,6 +3876,7 @@ mod tests {
                 stack: Default::default(),
                 boundary: "b0b0".to_string(),
                 cause: weaver_types::Cause { uid: 1000 },
+                operator: 1000,
                 library_path: Some("/opt/weaver/lib".to_string()),
                 state_election: weaver_types::StateElection {
                     all_kinds: false,
@@ -3895,7 +4015,6 @@ mod tests {
                     surprisal_election: false,
                     refeed_permission: false,
                     column_permission: false,
-                    identity: Vec::new(),
                     tunable_values: [
                         ("max-tokens-per-turn".to_string(), 4096.0),
                         ("context-capacity".to_string(), 4096.0),
@@ -3913,6 +4032,7 @@ mod tests {
             stack: Default::default(),
             boundary: String::new(),
             cause: weaver_types::Cause { uid: 0 },
+            operator: 1000,
             library_path: None,
             state_election: weaver_types::StateElection::default(),
         };
@@ -4009,7 +4129,6 @@ mod tests {
                     surprisal_election: false,
                     refeed_permission: false,
                     column_permission: false,
-                    identity: Vec::new(),
                     // The deployed root's three operator-tunables, required
                     // at admit since the seed act of 2026-08-19. The empty
                     // map this carried predates that election and refused
@@ -4039,6 +4158,7 @@ mod tests {
             stack: Default::default(),
             boundary: String::new(),
             cause: weaver_types::Cause { uid: 0 },
+            operator: 1000,
             library_path: None,
             state_election: weaver_types::StateElection::default(),
         };
@@ -4927,6 +5047,7 @@ mod tests {
                 position: Position::Open,
                 payload: weaver_types::Payload::Frame(weaver_types::TurnFrame {
                     octets: "not base64!".into(),
+                    dialer: None,
                 }),
             })
             .expect("frame sends");
@@ -4951,7 +5072,7 @@ mod tests {
                 },
                 position: Position::Open,
                 payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry(
-                    b"{\"text\":\"hi\",\"role\":\"system\"}",
+                    b"{\"text\":\"hi\",\"kind\":\"answered\"}",
                 )),
             })
             .expect("frame sends");
@@ -4968,6 +5089,286 @@ mod tests {
         assert!(
             !entered,
             "no seat was granted for a line that did not parse"
+        );
+    }
+
+    /// **The request parse admits `role` with the one value `system` and
+    /// nothing else beside `text`**, per `weaver-gate-Spec` section 4 and the
+    /// seeding clause of `weaver-harness-Spec` section 6.1: a bare line is
+    /// the user's, the seeding line is marked, any other role refuses naming
+    /// it, and an unknown member refuses as before. Perturbation: admit any
+    /// string under `role` and the third case parses.
+    #[test]
+    fn the_request_parse_admits_the_system_role_alone() {
+        let parsed = |line: &[u8]| parse_request(&weaver_types::TurnFrame::carry(line));
+        let bare = parsed(b"{\"text\":\"hi\"}").expect("a bare line parses");
+        assert!(!bare.system && bare.text == "hi");
+        let seeding = parsed(b"{\"role\":\"system\",\"text\":\"You are Karl.\"}")
+            .expect("the seeding line parses");
+        assert!(seeding.system && seeding.text == "You are Karl.");
+        let other =
+            parsed(b"{\"role\":\"assistant\",\"text\":\"hi\"}").expect_err("another role refuses");
+        assert!(other.contains("\"assistant\""), "names the role: {other}");
+        assert!(
+            parsed(b"{\"role\":\"system\",\"text\":\"hi\",\"kind\":\"x\"}").is_err(),
+            "an unknown member still refuses"
+        );
+        assert!(
+            parsed(b"{\"role\":\"system\"}").is_err(),
+            "the text is owed"
+        );
+    }
+
+    /// **A `system` line from any dialer but the operator refuses, and the
+    /// channel stands**, per `weaver-harness-Spec` section 6.1's seeding
+    /// clause: a frame carrying no dialer, and a frame carrying another uid,
+    /// the connector's service user's say, each answer `refused` naming the
+    /// role, no seat is granted, nothing is authored, and the next frame is
+    /// served. Perturbations: carry the frame without its dialer at the gate
+    /// and every seeding line is the first case; skip the dialer's comparison
+    /// here and the second case seats a prefix from the connector's uid, the
+    /// seat granted and the record carrying a `message.system`.
+    #[test]
+    fn a_system_line_from_any_other_dialer_refuses_and_the_channel_stands() {
+        let (mut run, _spare, _sink) = entered_run(None);
+        let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+        run.gate = Some(GateChannel {
+            channel: gate_end,
+            pid: nix::unistd::Pid::from_raw(1),
+            last_word: crate::spawn::LastWord::quiet(),
+        });
+        let gate_peer = gate_peer.into_channel();
+        let (coordination, _coordination_dir) = test_listener();
+        let mut harness = Harness {
+            coordination,
+            organs: OrganBinaries {
+                classify: None,
+                spu: "/nonexistent".into(),
+                gate: "/nonexistent".into(),
+            },
+            parameters: OrganParameters::default(),
+            state: ChannelState::Entered(Box::new(run)),
+            composer: Some(weaver_trace::LoopIdentity::compiled("test")),
+        };
+        let mut entered = false;
+        let mut entry = |_: &mut crate::engine::Ports<'_>, _: &str| {
+            entered = true;
+            Err(crate::engine::TurnError::Unlicensed {
+                turn: TurnKey("t-0".into()),
+            })
+        };
+        let line = b"{\"role\":\"system\",\"text\":\"You are Karl.\"}";
+        let mut verb_slot = None;
+        for (ordinal, frame) in [
+            (1, weaver_types::TurnFrame::carry(line)),
+            (2, weaver_types::TurnFrame::carry_from(line, 1001)),
+        ] {
+            gate_peer
+                .send(&OrganEnvelope {
+                    exchange: ExchangeId {
+                        opener: Opener::Gate,
+                        ordinal,
+                    },
+                    position: Position::Open,
+                    payload: weaver_types::Payload::Frame(frame),
+                })
+                .expect("frame sends");
+            harness
+                .serve_gate_wake("", &[], &mut entry, &mut verb_slot)
+                .expect("the channel stands");
+            let answer = gate_peer.recv().expect("the refusal returns");
+            assert_eq!(answer.exchange.ordinal, ordinal);
+            let weaver_types::Payload::Frame(frame) = answer.payload else {
+                panic!("a frame answers a frame");
+            };
+            let line = String::from_utf8(frame.octets().expect("canonical")).expect("utf8");
+            assert!(line.contains(r#""kind":"refused""#), "{line}");
+            assert!(line.contains("role system"), "names the role: {line}");
+        }
+        assert!(!entered, "no seat was granted for a refused seeding line");
+        let ChannelState::Entered(run) = &harness.state else {
+            panic!("the position stays entered");
+        };
+        let kinds: Vec<Kind> = run
+            .recorder
+            .structure()
+            .expect("the serving record")
+            .iter()
+            .map(|r| r.kind)
+            .collect();
+        assert_eq!(kinds, vec![Kind::Load], "nothing was authored: {kinds:?}");
+    }
+
+    /// **The operator's `system` line seats the prompt and turns**, per
+    /// `weaver-harness-Spec` section 6.1's seeding clause and
+    /// `weaver-trace-Spec` section 3: the frame whose dialer is the enter's
+    /// operator authors one turnless `message.system` of the line's text
+    /// through the identity door, which the tee carries to the member, then
+    /// a turn whose `AppendAndGenerate` carries that one system message and
+    /// no user message, the loop never entered, and the model's answer is
+    /// the response frame's. Perturbations: skip the identity door and the
+    /// turnless `message.system` is absent from the record and the tee;
+    /// author the delta inside the turn as well and the record carries the
+    /// prompt twice, the second one turned; route the seeding through the
+    /// entry and the closure panics.
+    #[test]
+    fn the_operators_system_line_seats_the_prompt_and_turns() {
+        use std::os::fd::AsRawFd;
+
+        use nix::sys::socket::{
+            AddressFamily, MsgFlags, SockFlag, SockType, recv as sock_recv, send as sock_send,
+            socketpair,
+        };
+
+        let (mut run, _spare, _sink) = entered_run(None);
+        // The tee, attached as the enter attaches it, with a member reading
+        // its lines to closure.
+        let (state_end, member_end) =
+            std::os::unix::net::UnixStream::pair().expect("the member's pair");
+        run.recorder.serving_mut().expect("serving").attach_tee(
+            weaver_trace::Tee::open(
+                state_end,
+                "s-1".into(),
+                weaver_trace::Election {
+                    all_kinds: true,
+                    keys: Vec::new(),
+                },
+            )
+            .expect("the tee opens"),
+        );
+        let member = std::thread::spawn(move || member_lines(member_end).collect::<Vec<_>>());
+        let (near, far) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("socketpair");
+        run.spu.as_mut().expect("the arm stands").decode = crate::channel::decode_from_owned(near);
+        let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+        run.gate = Some(GateChannel {
+            channel: gate_end,
+            pid: nix::unistd::Pid::from_raw(1),
+            last_word: crate::spawn::LastWord::quiet(),
+        });
+        let gate_peer = gate_peer.into_channel();
+        let decode_peer = std::thread::spawn(move || {
+            let mut buf = vec![0u8; 65536];
+            let n = sock_recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("recv append");
+            let directive: weaver_types::TokenDirective =
+                serde_json::from_slice(&buf[..n]).expect("append parses");
+            let weaver_types::TokenDirective::AppendAndGenerate { delta, .. } = directive else {
+                panic!("the seeding appends and generates: {directive:?}");
+            };
+            assert_eq!(delta.len(), 1, "the one system message and no user message");
+            assert!(matches!(delta[0].role, weaver_traits::Role::System));
+            assert!(matches!(
+                &delta[0].content[..],
+                [weaver_traits::ContentBlock::Text { text }] if text == "You are Karl."
+            ));
+            let request = serde_json::value::RawValue::from_string(
+                r#"{"rendered":"system: You are Karl.","template":"qwen2","sampling":{}}"#
+                    .to_string(),
+            )
+            .unwrap();
+            let measurement = serde_json::value::RawValue::from_string(
+                r#"{"model":"m","weights_hash":"h","input_tokens":[1],"output_tokens":[2],"blocks":[],"timings":{"prefill_ns":"1","decode_ns":"2"}}"#
+                    .to_string(),
+            )
+            .unwrap();
+            let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+                content: vec![],
+                emission: "I am Karl.".into(),
+                finish: weaver_types::Finish::Completed,
+                request,
+                measurement,
+                resident: 64,
+                capacity: 4096,
+            });
+            let bytes = serde_json::to_vec(&answer).expect("answer renders");
+            sock_send(far.as_raw_fd(), &bytes, MsgFlags::empty()).expect("send answer");
+        });
+
+        let (coordination, _coordination_dir) = test_listener();
+        let mut harness = Harness {
+            coordination,
+            organs: OrganBinaries {
+                classify: None,
+                spu: "/nonexistent".into(),
+                gate: "/nonexistent".into(),
+            },
+            parameters: OrganParameters::default(),
+            state: ChannelState::Entered(Box::new(run)),
+            composer: Some(weaver_trace::LoopIdentity::compiled("test")),
+        };
+        gate_peer
+            .send(&OrganEnvelope {
+                exchange: ExchangeId {
+                    opener: Opener::Gate,
+                    ordinal: 1,
+                },
+                position: Position::Open,
+                payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry_from(
+                    b"{\"role\":\"system\",\"text\":\"You are Karl.\"}",
+                    1000,
+                )),
+            })
+            .expect("frame sends");
+        harness
+            .serve_gate_wake(
+                "identity",
+                &[],
+                &mut |_: &mut crate::engine::Ports<'_>, _: &str| {
+                    panic!("the seeding turn is loop 0's own and never enters the loop")
+                },
+                &mut None,
+            )
+            .expect("the wake serves");
+        decode_peer.join().expect("the decode peer finishes");
+
+        let answer = gate_peer.recv().expect("the response frame returns");
+        let weaver_types::Payload::Frame(frame) = answer.payload else {
+            panic!("a frame answers a frame");
+        };
+        let line = String::from_utf8(frame.octets().expect("canonical")).expect("utf8");
+        assert_eq!(
+            line,
+            r#"{"kind":"answered","run":"r-1","text":"I am Karl.","turn":"t-1"}"#
+        );
+
+        let ChannelState::Entered(run) = &harness.state else {
+            panic!("the position stays entered");
+        };
+        let records: Vec<(Kind, bool)> = run
+            .recorder
+            .structure()
+            .expect("the serving record")
+            .iter()
+            .map(|r| (r.kind, r.turn.is_some()))
+            .collect();
+        assert_eq!(
+            records,
+            vec![
+                (Kind::Load, false),
+                (Kind::MessageSystem, false),
+                (Kind::TurnStarted, true),
+                (Kind::ModelRequest, true),
+                (Kind::ModelOutput, true),
+                (Kind::ModelMeasurement, true),
+                (Kind::MessageAssistant, true),
+                (Kind::TurnClosed, true),
+            ],
+            "the prompt once, turnless, then the turn with no user message"
+        );
+        // The tee carried the prompt to the member, which is how it reaches
+        // the save point the next load restores.
+        drop(harness);
+        let read = member.join().expect("the member read to closure");
+        assert!(
+            read.iter()
+                .any(|line| line.contains(r#""kind":"message.system""#)
+                    && line.contains("You are Karl.")),
+            "the seeding crossed the tee: {read:?}"
         );
     }
 
