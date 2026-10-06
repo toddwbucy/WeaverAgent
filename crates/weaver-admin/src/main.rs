@@ -1632,10 +1632,14 @@ fn judge_declaration_directory(
 /// symbolic link: an operator-placed link to a root-owned file elsewhere
 /// would otherwise pass, and admin, as root, would read that file's bytes
 /// and seat them as the prompt (the question on #76, answered as its option
-/// (a) pending the operator's word). A failed judgment refuses
-/// `BoundaryUnverified` naming the file on stderr. An absent or unreadable
-/// file answers nothing, which the parse refuses `ConfigInvalid` naming the
-/// field, the omission being the declaration's.
+/// (a) pending the operator's word). **The read is bounded**: a file past
+/// `PROMPT_CEILING` refuses on its size before any byte is read, and the
+/// read takes no more than the ceiling, so a declaration naming a large
+/// file never has it read whole into the enter. A failed judgment refuses
+/// `BoundaryUnverified` naming the file on stderr. **Only an absent file
+/// answers nothing**, which the parse refuses `ConfigInvalid` naming the
+/// field, the omission being the declaration's; every other failure to
+/// open or to read is the boundary's fault and refuses `BoundaryUnverified`.
 fn read_prompt(
     directory: &std::path::Path,
     operator: u32,
@@ -1676,13 +1680,7 @@ fn read_prompt(
         Err(nix::errno::Errno::ELOOP) => {
             return Err(refuse("is a link, and admin reads no link as the prompt"));
         }
-        Err(e) => {
-            diag!(
-                "weaver-admin: the prompt file {} does not open: {e}",
-                path.display()
-            );
-            return Ok(None);
-        }
+        Err(e) => return Err(refuse(&format!("does not open: {e}"))),
     };
     let stat = nix::sys::stat::fstat(&file).map_err(|e| refuse(&format!("does not stat: {e}")))?;
     if stat.st_mode & nix::libc::S_IFMT != nix::libc::S_IFREG
@@ -1696,16 +1694,31 @@ fn read_prompt(
             "carries a second link, and admin reads no linked file as the prompt",
         ));
     }
+    let size = u64::try_from(stat.st_size).unwrap_or(u64::MAX);
+    if size > PROMPT_CEILING {
+        return Err(refuse(&format!(
+            "is {size} bytes, past the prompt ceiling of {PROMPT_CEILING}"
+        )));
+    }
     let mut bytes = Vec::new();
-    if let Err(e) = std::fs::File::from(file).read_to_end(&mut bytes) {
-        diag!(
-            "weaver-admin: the prompt file {} does not read: {e}",
-            path.display()
-        );
-        return Ok(None);
+    std::fs::File::from(file)
+        .take(PROMPT_CEILING + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| refuse(&format!("does not read: {e}")))?;
+    if bytes.len() as u64 > PROMPT_CEILING {
+        return Err(refuse(&format!(
+            "grew past the prompt ceiling of {PROMPT_CEILING} while read"
+        )));
     }
     Ok(Some(bytes))
 }
+
+/// The most a prompt file may hold, one mebibyte, this act's election per
+/// Spec section 4 pending the operator's word: the same order as the state
+/// seam's answer ceiling, far past any prompt an operator writes as prose,
+/// and small enough that a declaration pointing at the wrong file costs
+/// admin, reading as root, one bounded read and never a whole file.
+const PROMPT_CEILING: u64 = 1024 * 1024;
 
 /// Whether a path carries a POSIX access-control list, access or default,
 /// read without following a link.
@@ -2429,7 +2442,10 @@ mod tests {
     /// the write-bit test and the group-writable file reads; drop the
     /// directory's re-judgment and the opened directory reads; drop the
     /// regular-file test and the FIFO answers empty bytes; drop the link
-    /// count and the hard-linked file reads.
+    /// count and the hard-linked file reads; drop the size judgment and the
+    /// file one byte past the ceiling reads. A failure to open for any
+    /// reason but absence refuses the boundary, which no honest case can
+    /// make as the operator, so the arms carry it.
     #[test]
     fn the_prompt_file_is_read_through_the_judged_directory() {
         use std::os::unix::fs::PermissionsExt;
@@ -2482,6 +2498,24 @@ mod tests {
             read_prompt(&base, me, "system-prompt.md"),
             Ok(Some(b"You are Karl.\n".to_vec())),
             "the link gone, the file reads again"
+        );
+        // **The read is bounded**: a file at the ceiling reads, one byte
+        // past it refuses on its size before any byte is read.
+        let at = base.join("at.md");
+        std::fs::write(&at, vec![b'x'; PROMPT_CEILING as usize]).unwrap();
+        std::fs::set_permissions(&at, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            read_prompt(&base, me, "at.md").map(|b| b.map(|v| v.len())),
+            Ok(Some(PROMPT_CEILING as usize)),
+            "a file at the ceiling reads"
+        );
+        let past = base.join("past.md");
+        std::fs::write(&past, vec![b'x'; PROMPT_CEILING as usize + 1]).unwrap();
+        std::fs::set_permissions(&past, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            read_prompt(&base, me, "past.md"),
+            refused,
+            "one byte past the ceiling refuses"
         );
         std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o750)).unwrap();
         assert_eq!(

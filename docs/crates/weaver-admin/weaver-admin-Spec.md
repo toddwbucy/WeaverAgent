@@ -758,12 +758,19 @@ file that is the operator's own with link count one and writable by no group or 
 and answers its bytes. **The uid-0 admission section 9 gives `agent.toml` is not
 extended to the prompt, and a second link refuses**: a hard link is not a symbolic
 link, and an operator-placed link to a root-owned file elsewhere would otherwise pass
-the judgment and be read, as root, and seated as the prompt. This is the save-point
+the judgment and be read, as root, and seated as the prompt. This is the prompt-file
 act's election of option (a) on the question raised on #76 on 2026-10-05, pending the
-operator's word. A prompt file that fails
+operator's word. **The read is bounded at one mebibyte**, the same act's election
+pending the operator: a file past it refuses on its size, judged on the descriptor
+before any byte is read, and the read takes no more than the ceiling, so a declaration
+naming a large file costs admin, reading as root, one bounded read and never a whole
+file; the number is the same order as the state seam's answer ceiling and far past any
+prompt an operator writes as prose. **Only an absent file is the declaration's
+omission**; a file that fails to open or to read for any other reason is the
+boundary's fault. A prompt file that fails
 that judgment is the reader's own refusal, which the parse returns unchanged per
 `weaver-types-Spec` section 2, and it refuses `BoundaryUnverified`, naming the file on
-stderr, as a failed entry of the root does. One that is absent, does not read, or is not UTF-8 refuses
+stderr, as a failed entry of the root does. One that is absent, or is not UTF-8, refuses
 `ConfigInvalid` naming `spu-instruction.decoder.identity-file`, the omission being the
 declaration's. **Both digests are this crate's**: sha256 of the declaration's bytes
 and of the prompt file's, each as read here, ride the enter as `declaration` and
