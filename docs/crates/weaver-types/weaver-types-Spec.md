@@ -362,8 +362,8 @@ things. **The file's bytes**, which the parse judges as UTF-8 and seats. **Nothi
 does not read, which refuses `BadValue` naming the field. **A refusal of the reader's
 own**, which the parse returns unchanged as `ParseRefusal::Reader`, apart from its
 typed errors in `ParseRefusal::Config`, and does not type or interpret, so the caller's boundary keeps its own category: admin's reader refuses a
-prompt file that fails section 9's judgment, a link, a wrong owner or a group- or
-other-writable entry, and admin answers that `BoundaryUnverified`, per
+prompt file that fails section 9's judgment, a link, a second link, a wrong owner or
+a group- or other-writable entry, and admin answers that `BoundaryUnverified`, per
 `weaver-admin-Spec` section 4, where an absence the parse turned into `BadValue` maps to
 `ConfigInvalid`. The parse yields the whole `AgentConfig` with the identity seated, a
 typed error, or the reader's refusal, never a declaration with its identity pending.

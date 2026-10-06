@@ -187,14 +187,12 @@ cargo fmt --all -- --check
 means the gate could not run (cold cache, network needed, unreadable manifest), so the
 lock is unchecked rather than clean. Its header carries the measurements.
 
-**Workspace-wide `cargo test --workspace --locked` compiles and passes** (since #37). One
-test meets `weaver-analysis`, the crate that left, from its own repository, until C5
-(#76) removes it:
-
-- `crates/weaver-types/tests/config.rs` includes a pinned copy of WeaverAnalysis's
-  `derived-surrogate.toml` (`crates/weaver-types/tests/fixtures/`), with the
-  WeaverAnalysis commit it came from named in the const's doc. A drift test compares it
-  against the checkout below and skips, saying so, when there is none.
+**Workspace-wide `cargo test --workspace --locked` compiles and passes** (since #37), and
+no test here reads WeaverAnalysis's checkout: `crates/weaver-types/tests/fixtures/`
+holds this tree's own diagnostic declaration and its empty prompt file, in the
+declaration grammar of 2026-10-02, on the operator's ruling of 2026-10-05 that
+WeaverAnalysis conforms to the trace this repository produces and not the other way
+around.
 
 The state member's preload-door suites (`crates/weaver-state/src/preload_door.rs`) drive
 the door with an in-tree client and run as `#[ignore]` instruments under a watch that
@@ -241,8 +239,8 @@ with the trace in its own group (#56); small fixes are #39. The scripts are
 loaded agent's gate as the operator's uid with no sudo. The installed stack lives under
 `/etc/weaver/admin/<agent>/` (each agent's config root), `/etc/weaver/stack/` (the
 scripts' record of the install, which admin never reads) and `<prefix>/bin`. Each
-agent's declaration, `admin.log` and `worker.log` (and its prompt, once #76 lands) live
-in the directory the root's `declaration-directory` names, by default the operator's
+agent's declaration, its prompt file `system-prompt.md`, `admin.log` and `worker.log`
+live in the directory the root's `declaration-directory` names, by default the operator's
 `~/.weaveragent/<agent>/`. Each agent runs under its own OS user, started by admin's
 start step, with no systemd unit. `create-agent.sh` writes the connector's strict sudo
 rule. Taking down a single agent is still by hand (#35). A box installed before #50

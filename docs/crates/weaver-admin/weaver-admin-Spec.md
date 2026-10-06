@@ -753,9 +753,14 @@ directory and never by a pathname built for the file. The descriptor is the judg
 canonical directory opened without following a link at its own name and judged again
 on the descriptor, the operator's and closed to group and other, the ancestors above
 it being closed by section 9's rule so no other principal can move them, and the file
-is opened through it without following a link, judged on its own descriptor as that
-section judges the entries it reads, a regular file owned by the operator or uid 0 and
-writable by no group or other, and answers its bytes. A prompt file that fails
+is opened through it without following a link, judged on its own descriptor, a regular
+file that is the operator's own with link count one and writable by no group or other,
+and answers its bytes. **The uid-0 admission section 9 gives `agent.toml` is not
+extended to the prompt, and a second link refuses**: a hard link is not a symbolic
+link, and an operator-placed link to a root-owned file elsewhere would otherwise pass
+the judgment and be read, as root, and seated as the prompt. This is the save-point
+act's election of option (a) on the question raised on #76 on 2026-10-05, pending the
+operator's word. A prompt file that fails
 that judgment is the reader's own refusal, which the parse returns unchanged per
 `weaver-types-Spec` section 2, and it refuses `BoundaryUnverified`, naming the file on
 stderr, as a failed entry of the root does. One that is absent, does not read, or is not UTF-8 refuses
