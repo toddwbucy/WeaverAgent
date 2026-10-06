@@ -2165,7 +2165,14 @@ operator's last test before the agent goes into production. **The prefix the nex
 seats is the member's `identity` answer**, every turnless `message.system` of the
 newest run that holds any, in order, and the load writes none: a seeding in a later
 residency therefore replaces the prefix, the newest run's being served, and two seedings
-in one residency are served both, in order.
+in one residency are served both, in order. **The residency's seedings are bounded by
+the state seam's answer bound, spent here at the sender**: this crate keeps the
+rendered size of the residency's seedings so far, as the `identity` answer of
+`weaver-harness-state-contract` section 2 would carry them, and a seeding whose addition
+would carry that answer past the one-mebibyte frame bound of that contract's section 3
+refuses as a turn, the response naming the bound and the size, nothing authored and
+nothing appended, the channel standing, because a prefix the member cannot answer is a
+prefix the next load cannot seat.
 Within the seeding residency the prompt is appended context and not the session's
 prefix, so a flush there would drop it from the context, which is why the runbook ends
 that residency at the save point: load, seed, save point, unload, and the production

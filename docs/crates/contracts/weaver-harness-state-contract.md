@@ -413,6 +413,21 @@ A further ask name is a change under section 7 and does not exist until it merge
   unboundedly for an answer: an answer that has not arrived inside the
   harness's own bound is a missing answer, treated as the dead peer of
   section 5, and the turn proceeds without the fact.
+- **One answer frame is bounded at one mebibyte, 1048576 octets, at both
+  ends.** The custodian renders no answer frame past it and answers nothing
+  in its place, per section 4, and the harness reads none past it, retiring
+  the seam, so an answer that would pass it is the missing answer at both
+  ends by the same number. Each end holds the number as its own constant
+  (`weaver-state`'s `ANSWER_BOUND`, `weaver-harness`'s `ANSWER_BOUND_BYTES`),
+  each under a watch naming this clause, since neither crate sees the
+  other's. **The harness spends the bound where an answer would grow past it
+  at the harness's own hand**: the `identity` answer carries every seeding of
+  the newest run, so a seeding whose addition would carry that answer past
+  the bound refuses as a turn before anything is authored, per
+  `weaver-harness-Spec` section 6.1; the other asks are bounded by their
+  own definitions, `recall` by `last-turns`, `shape`, `grants`, `snapshot`
+  and `restored` by their shapes, and `restore`'s answer carries the save
+  point's prefix, which the same seeding bound kept under it.
 
 ## 4. What state owes
 
