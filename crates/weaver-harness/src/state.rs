@@ -52,11 +52,13 @@ pub(crate) const ANSWER_BOUND_BYTES: usize = 1024 * 1024;
 /// run, the kind and the sequence, and the frame's own text around the
 /// list. **Every member the envelope carries is costed as its canonical
 /// rendering**, the names as the JSON strings the member writes, escapes
-/// included, so the sum is exact and not an estimate; the kind and the
-/// sequence are fixed ASCII and ride in `ENVELOPE_BYTES` with the envelope's
-/// own text, a sequence of up to twenty digits inside it, and
-/// `ANSWER_FRAME_BYTES` covers `{"answer":{"identity":{"messages":[]}}}`
-/// and the delimiter.
+/// included, so the sum is never under the custodian's count, the variable
+/// members exact; the kind and the sequence are fixed ASCII and ride in
+/// `ENVELOPE_BYTES` with the envelope's own text, a sequence of up to twenty
+/// digits inside it, and `ANSWER_FRAME_BYTES` covers
+/// `{"answer":{"identity":{"messages":[]}}}` and the delimiter, each allowed
+/// for above so the bound refuses before the seam would and never after
+/// (#93 holds the exact measure as a cost with no correctness bearing).
 pub(crate) const ANSWER_FRAME_BYTES: usize = 64;
 pub(crate) const ENVELOPE_BYTES: usize = 128;
 

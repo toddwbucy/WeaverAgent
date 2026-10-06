@@ -426,7 +426,9 @@ A further ask name is a change under section 7 and does not exist until it merge
   the bound refuses as a turn before anything is authored, per
   `weaver-harness-Spec` section 6.1, the accounting being the canonical rendering of
   every member the envelope carries, the session and run names as the JSON strings
-  the custodian writes with their escapes, so the sum is exact and not an estimate;
+  the custodian writes with their escapes, so the sum is never under the custodian's
+  count, the variable members exact and the envelope's fixed text and the frame's own
+  allowed for above (#93 holds the exact measure as a cost with no correctness bearing);
   the other asks are bounded by their
   own definitions, `recall` by `last-turns`, `shape`, `grants`, `snapshot`
   and `restored` by their shapes, and `restore`'s answer carries the save
