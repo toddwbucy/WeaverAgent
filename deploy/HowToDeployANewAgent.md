@@ -250,12 +250,22 @@ nothing, and a save point and unload would carry nothing, so the seeding is the 
 turn of each residency and the agent is otherwise unbounded. That is the storeless
 election's meaning and not a fault.
 
-**Load, seed, save point, unload; production is the next load.** Within the seeding
-residency the prompt is appended context, not the decode session's prefix, so a flush
-there would drop it from the context; the leave's snapshot is the save point until the
-`save-point` verb lands (A3.2 on #1), so end the seeding residency with `unload` and the
-first save point taken after the seeding is the agent's starting state, holding the
-prompt and the model's first answer beside it. A healthy seeding leaves a turnless
+**Create, load, seed, save-point, unload; production is the next load.** Within the
+seeding residency the prompt is appended context, not the decode session's prefix, so a
+flush there would drop it from the context. Take the save point on demand once the
+seeding has answered, as root or through the connector's rule:
+
+```sh
+sudo /opt/weaver/bin/weaver-admin save-point <name>   # answers {"kind":"save_point_taken",...}
+sudo /opt/weaver/bin/weaver-admin unload <name>
+```
+
+The first save point taken after the seeding is the agent's starting state, holding the
+prompt and the model's first answer beside it; `save-point` publishes it at once into
+`~/.weaveragent/<name>/` as `<YYYYMMDDTHHMMSSZ>-<digest>.save-point` beside the
+declaration, named on one line of `save-points.manifest` there, which is root's and
+which you do not edit (section 5). The unload takes one more at the leave, and every
+later load restores the latest the manifest names. A healthy seeding leaves a turnless
 `message.system` in the sink followed by the turn's bracket with no `message.user` in
 it. A seeding line from any other uid, or a frame the gate carried without its
 dialer, answers `{"kind":"refused", ...}` naming the role, and the agent stands.
@@ -269,10 +279,33 @@ is the loop act's, not this runbook's.
 ## 5. Serving, stopping, unloading, and the connector's rule
 
 ```sh
-sudo /opt/weaver/bin/weaver-admin load <name>     # answers {"kind":"state","state":"idle"}
-sudo /opt/weaver/bin/weaver-admin show <name>     # the state and the run's constituent pids
-sudo /opt/weaver/bin/weaver-admin unload <name>   # answers {"kind":"state","state":"unloaded"}
+sudo /opt/weaver/bin/weaver-admin load <name>         # answers {"kind":"state","state":"idle"}
+sudo /opt/weaver/bin/weaver-admin show <name>         # the state and the run's constituent pids
+sudo /opt/weaver/bin/weaver-admin save-point <name>   # a save point now, published at once
+sudo /opt/weaver/bin/weaver-admin unload <name>       # answers {"kind":"state","state":"unloaded"}
+sudo /opt/weaver/bin/weaver-admin restore <name>      # name the save point the next load restores
+sudo /opt/weaver/bin/weaver-admin force-unload <name> # unload without the leave's save point
 ```
+
+**The save points and the manifest.** Every unload takes a save point at the leave and
+`save-point` takes one on demand; admin publishes each into `~/.weaveragent/<name>/`
+under a name computed from its own bytes, `<YYYYMMDDTHHMMSSZ>-<digest>.save-point`, and
+names it on one line of `save-points.manifest` there: the ordinal, the digest, the
+position it covers, where the trace names it, and how it arrived. The next load
+restores the latest the manifest names whose file still stands and digests to its line.
+A file the manifest does not name is not loadable: to start from another state, put the
+file in the directory (its name must be the one its bytes compute), name it in
+`agent.toml` as `[restore] save-point = "<name or digest>"`, run `restore <name>`,
+which judges it and adds its manifest line, then `load`. The manifest is root's; the
+one way a file enters it is the `restore` verb, and removing the manifest makes every
+published save point unloadable until a restore names one again.
+
+**An unload that cannot take its save point does not complete.** It answers
+`{"kind":"save_point_not_taken","missed":...}` naming the leg that missed, the run stays
+loaded with its lock, and nothing is lost: retry with `save-point` and `unload` if the
+member is alive, or `force-unload` if it is dead, which leaves without the save point
+and records on the trace that it was not taken; the next load then restores the latest
+published save point with the reset recorded. The loss is your recorded choice.
 
 Or `sudo deploy/verify-load.sh <name> --keep` to load with the read-back and leave it
 serving. No unit and no init system is involved. The worker, the state member and the
@@ -287,7 +320,7 @@ this agent are in `<declaration directory>/admin.log`, and the worker's output i
 
 ```text
 Defaults:weaver-<name>-admincon !pam_session
-weaver-<name>-admincon ALL=(root) NOPASSWD: /opt/weaver/bin/weaver-admin show <name>, /opt/weaver/bin/weaver-admin validate <name>, /opt/weaver/bin/weaver-admin load <name>, /opt/weaver/bin/weaver-admin unload <name>, /opt/weaver/bin/weaver-admin stop <name>
+weaver-<name>-admincon ALL=(root) NOPASSWD: /opt/weaver/bin/weaver-admin show <name>, /opt/weaver/bin/weaver-admin validate <name>, /opt/weaver/bin/weaver-admin load <name>, /opt/weaver/bin/weaver-admin unload <name>, /opt/weaver/bin/weaver-admin stop <name>, /opt/weaver/bin/weaver-admin save-point <name>, /opt/weaver/bin/weaver-admin restore <name>, /opt/weaver/bin/weaver-admin force-unload <name>
 ```
 
 The observer role's rule grants the `show` line alone. Each grant is one fixed command

@@ -167,6 +167,12 @@ pub enum Ask {
     /// What the load restored, per the contract's eighth ask of 2026-10-02.
     /// Carries no members.
     Restored,
+    /// **The harness's acknowledgement of a `snapshot` answer**, the one
+    /// message on the seam that is not an ask, per the contract as of A3.2
+    /// (the operator's ruling of 2026-10-06 on #1): names the digest it was
+    /// answered, and the member gives the part its finished name and answers
+    /// `finished`.
+    Acknowledge { digest: String },
 }
 
 /// Parse a seam frame as an ask, or nothing where it is not one. **An ask
@@ -179,6 +185,19 @@ pub enum Ask {
 /// with a filesystem side effect: presence of its name is not an ask.
 pub fn parse_ask(frame: &str) -> Option<Ask> {
     let value: serde_json::Value = serde_json::from_str(frame).ok()?;
+    if let Some(acknowledge) = value.get("acknowledge") {
+        // `{"acknowledge":{"snapshot":{"digest":"..."}}}` and nothing else.
+        let acknowledge = acknowledge.as_object()?;
+        if acknowledge.len() != 1 || value.as_object()?.len() != 1 {
+            return None;
+        }
+        let body = acknowledge.get("snapshot")?.as_object()?;
+        if body.len() != 1 {
+            return None;
+        }
+        let digest = body.get("digest")?.as_str()?.to_string();
+        return Some(Ask::Acknowledge { digest });
+    }
     let ask = value.get("ask")?.as_object()?;
     if ask.len() != 1 {
         return None;
@@ -317,6 +336,14 @@ fn stamp_members(answer: &SavePointAnswer) -> serde_json::Map<String, serde_json
 
 /// The snapshot answer, per the contract:
 /// `{"answer":{"snapshot":{"save-point":..,"run":..,"sequence":..,"turn":..,"digest":..}}}`.
+/// The `finished` answer to the harness's acknowledgement, per the contract as
+/// of A3.2: `{"answer":{"finished":{"save-point":"<name>"}}}`.
+pub fn render_finished_answer(name: &str) -> String {
+    let mut frame = serde_json::json!({"answer": {"finished": {"save-point": name}}}).to_string();
+    frame.push('\n');
+    frame
+}
+
 pub fn render_snapshot_answer(answer: &SavePointAnswer) -> String {
     let mut frame =
         serde_json::json!({"answer": {"snapshot": serde_json::Value::Object(stamp_members(answer))}})

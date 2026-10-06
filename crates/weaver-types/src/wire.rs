@@ -213,8 +213,20 @@ pub enum LifecycleDirective {
         payload: Box<EnterPayload>,
     },
     /// The cause rides each change, per `weaver-types-Spec` section 3.1, and
-    /// the harness records it on the unload event.
+    /// the harness records it on the unload event. **`forced` is admin's
+    /// `force-unload`**, as of A3.2 on the operator's ruling of 2026-10-06 on
+    /// #1: the harness then leaves without its leave save point and records
+    /// on the `unload` event that it was not taken; false, the leave does not
+    /// complete without one.
     Leave {
+        cause: crate::Cause,
+        #[serde(default)]
+        forced: bool,
+    },
+    /// **A save point on demand**, admin's `save-point` verb, as of A3.2: the
+    /// harness, at rest, takes one through the state seam's four legs,
+    /// authors the `save_point` event and answers `SavePointTaken`.
+    SavePoint {
         cause: crate::Cause,
     },
     /// The harness records the cause on a stopped turn's close.
@@ -253,6 +265,45 @@ pub enum LifecycleDirective {
     Show {
         agent: AgentName,
     },
+    /// The three verbs of A3.2 as the command line mirrors them, the first
+    /// named apart from the directive the worker receives.
+    SavePointVerb {
+        agent: AgentName,
+    },
+    Restore {
+        agent: AgentName,
+    },
+    ForceUnload {
+        agent: AgentName,
+    },
+}
+
+/// What the harness reports of a finished save point, as of A3.2 on the
+/// operator's rulings of 2026-10-06 on #1: its digest, the finished name the
+/// member gave it, the position it covers, and the trace position of the
+/// `save_point` event, so admin's manifest records the event's position
+/// without reading the record.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavePointReport {
+    pub save_point: String,
+    pub name: String,
+    pub run: RunId,
+    pub sequence: u64,
+    pub turn: u64,
+    pub position: u64,
+}
+
+/// Which leg of the state seam's four-leg save point missed, per
+/// `weaver-harness-state-contract` section 2: the write, the answer, the
+/// `finished` answer to the harness's acknowledgement, or the member being
+/// dead before the ask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SavePointLeg {
+    Write,
+    Answer,
+    Finished,
+    MemberDead,
 }
 
 /// Every directive receives exactly one answer: `Enter` answers `Ready`,
@@ -266,7 +317,23 @@ pub enum LifecycleDirective {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LifecycleAnswer {
     Ready,
-    Left,
+    /// **`Left` names the leave's save point**, as of A3.2, so admin publishes
+    /// it with its trace position; none where the leave was forced or the
+    /// binding diagnostic.
+    Left {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        save_point: Option<SavePointReport>,
+    },
+    /// The `SavePoint` directive's answer.
+    SavePointTaken {
+        report: SavePointReport,
+    },
+    /// The `restore` verb's answer: the save point it judged and entered in
+    /// the manifest as named at a restore.
+    RestoreNamed {
+        save_point: String,
+        name: String,
+    },
     TurnAborted {
         turn: TurnKey,
     },
@@ -388,6 +455,12 @@ pub enum LifecycleRefusal {
         reason: Box<LifecycleRefusal>,
     },
     ActivityNotAtRest,
+    /// **The leave or the save point on demand did not finish its save
+    /// point**, as of A3.2 on the operator's ruling of 2026-10-06 on #1 (A3.0
+    /// item 6): the run stays open and the leg that missed is named.
+    SavePointNotTaken {
+        missed: SavePointLeg,
+    },
 }
 
 /// What admin supplies in the enter directive, per
@@ -464,7 +537,11 @@ pub struct Lineage {
     pub run: RunId,
     pub sequence: u64,
     pub turn: u64,
-    pub operator_supplied: bool,
+    /// Whether the operator named it through admin's `restore` verb rather
+    /// than the inventory selecting the latest published, as of A3.2 on the
+    /// operator's ruling of 2026-10-06 on #1 that there is no
+    /// operator-supplied save point, which `operator_supplied` named.
+    pub named_at_restore: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub built_from: Option<Branch>,
 }
@@ -493,6 +570,9 @@ pub struct Reset {
 #[serde(rename_all = "kebab-case")]
 pub enum ResetReason {
     NoCleanUnload,
+    /// Admin's `force-unload` ended the prior run without its leave save
+    /// point, as of A3.2.
+    ForcedUnload,
 }
 
 /// The binding kind as admin resolved it, per `weaver-types-Spec` section 4:

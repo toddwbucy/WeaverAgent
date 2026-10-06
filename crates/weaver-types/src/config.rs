@@ -87,24 +87,15 @@ pub struct AgentConfig {
     pub restore: Option<Restore>,
 }
 
-/// The restore election, per `weaver-types-Spec` section 2: the record's
-/// path and, where the session stands on a prefix of it, the cut.
+/// The restore election, per `weaver-types-Spec` section 2 as of A3.2 on the
+/// operator's rulings of 2026-10-06 on #1: the save point the next load
+/// restores, by its published name in the declaration's own directory or by
+/// its digest, which admin resolves through its manifest. The record-and-cut
+/// form of before A3.2 retired with the record restore.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Restore {
-    pub record: PathBuf,
-    #[serde(default)]
-    pub through: Option<Cut>,
-}
-
-/// A cut in a record: a run by its reference and a turn within it, the run
-/// carried because a turn's number recurs across a session's runs and a cut
-/// naming the turn alone would name several.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub struct Cut {
-    pub run: crate::wire::RunId,
-    pub turn: u64,
+    pub save_point: String,
 }
 
 /// The store election, per `weaver-types-Spec` section 2: which port the
@@ -461,6 +452,7 @@ pub fn parse(source: &str) -> Result<AgentConfig, ConfigError> {
     check_tunable_values(&config.spu_instruction.decoder.tunable_values)?;
     check_trace_sink_surface(source, &config.trace_sink)?;
     check_declared_paths(&config)?;
+    check_restore_name(&config)?;
     Ok(config)
 }
 
@@ -494,8 +486,9 @@ fn check_provided_engine(source: &str) -> Result<(), ConfigError> {
 /// every reader in the suite, this parser, the deploy script's shell and the
 /// experiment harness, must agree on what a path is, and a control character
 /// is where they part, a shell's command substitution dropping a trailing
-/// newline this parser keeps. The three path fields are the restore's record,
-/// the loop file and the trace sink's path, each refused by its own name.
+/// newline this parser keeps. The two path fields are the loop file and the
+/// trace sink's path, each refused by its own name; the restore's save point
+/// is a bare name and has its own check below.
 #[cfg(feature = "config")]
 fn check_declared_paths(config: &AgentConfig) -> Result<(), ConfigError> {
     let sink = match &config.trace_sink {
@@ -506,7 +499,6 @@ fn check_declared_paths(config: &AgentConfig) -> Result<(), ConfigError> {
     let declared = [
         ("trace-sink.path", Some(sink)),
         ("loop-file", config.loop_file.as_ref()),
-        ("restore.record", config.restore.as_ref().map(|r| &r.record)),
     ];
     for (field, path) in declared {
         if path.is_some_and(|p| p.to_string_lossy().chars().any(char::is_control)) {
@@ -543,6 +535,33 @@ fn check_declared_paths(config: &AgentConfig) -> Result<(), ConfigError> {
 ///
 /// conforms: types-identity-role-is-system
 #[cfg(feature = "config")]
+/// **A restore names a save point by a bare name**, per `weaver-types-Spec`
+/// section 2 as of A3.2: the published name in the declaration's own
+/// directory or the digest, carrying no `/`, not `.` or `..`, not empty and
+/// with no control character, refusing `BadValue` naming `restore.save-point`
+/// otherwise, so admin resolves it through its manifest and never walks a
+/// path the declaration composed.
+#[cfg(feature = "config")]
+fn check_restore_name(config: &AgentConfig) -> Result<(), ConfigError> {
+    let Some(restore) = config.restore.as_ref() else {
+        return Ok(());
+    };
+    let name = restore.save_point.as_str();
+    let bare = !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.chars().any(char::is_control);
+    if bare {
+        Ok(())
+    } else {
+        Err(ConfigError {
+            field: Some(FieldName("restore.save-point".to_string())),
+            kind: ConfigErrorKind::BadValue,
+        })
+    }
+}
+
 /// **The identity door's four rules**, per `weaver-types-Spec` section 5: every
 /// message `role: system`, every block one the role is licensed for, no message
 /// carrying nothing, no text block carrying no text. No declaration reaches
@@ -550,6 +569,7 @@ fn check_declared_paths(config: &AgentConfig) -> Result<(), ConfigError> {
 /// state, so the harness's identity door applies them where a prefix is
 /// written, the seeding line, and the watches below call this check over
 /// messages directly.
+#[cfg(feature = "config")]
 pub fn check_identity_roles(identity: &[weaver_traits::Message]) -> Result<(), ConfigError> {
     for (at, message) in identity.iter().enumerate() {
         if !matches!(message.role, weaver_traits::Role::System) {

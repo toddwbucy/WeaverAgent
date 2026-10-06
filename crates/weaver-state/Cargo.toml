@@ -27,7 +27,7 @@ rusqlite = { version = "0.37", features = ["bundled", "serialize"], optional = t
 # fast parse misrounds, the rendered value differs, and the landing's
 # exactness rule sends the reading to `field` verbatim.
 serde_json = { version = "1", features = ["raw_value", "float_roundtrip"] }
-nix = { version = "0.31", features = ["socket", "fs", "uio", "user", "poll"] }
+nix = { version = "0.31", features = ["socket", "fs", "uio", "user", "poll", "dir"] }
 # The save point's check and digest, sha256 over its bytes, per
 # `weaver-state-Spec` section 3 under section 6's election.
 sha2 = "0.10"

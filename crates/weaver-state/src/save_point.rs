@@ -312,7 +312,9 @@ impl Room {
             nix::sys::stat::Mode::empty(),
         )
         .map_err(|e| SavePointFault::Io(format!("open room: {e}")))?;
-        Ok(Room { dir })
+        let room = Room { dir };
+        room.clear_parts();
+        Ok(room)
     }
 
     /// The boundary as the room states it, per the contract's `grants` ask:
@@ -327,15 +329,25 @@ impl Room {
         ])
     }
 
-    /// Write a save point as a new file and answer its finished name. The
-    /// bytes go to a part name created exclusively, are synced, and are linked
-    /// under the finished name; the link refuses an existing entry, so nothing
-    /// here overwrites; and the room is synced so the entry is durable before
-    /// the name is answered. Every failure removes the part, a failed room
-    /// sync removes the finished name too, and no file stands under a
-    /// finished name the answer did not give.
+    /// Write a save point as a new file and answer its finished name: the
+    /// part written and finished in one call, for a writer that needs no
+    /// acknowledgement, the offline builder's case.
     pub fn write(&self, save_point: &SavePoint) -> Result<String, SavePointFault> {
+        let name = self.write_part(save_point)?;
+        self.finish(&name)?;
+        Ok(name)
+    }
+
+    /// **Write a save point as a part and answer the finished name it will
+    /// take**, per `weaver-state-Spec` section 3 on the operator's ruling of
+    /// 2026-10-06 on #1 (A3.0 item 4): the bytes go to a part name created
+    /// exclusively, dotted so publication never reads it, and are synced;
+    /// the finished name is given by [`Room::finish`] on the harness's
+    /// acknowledgement alone. Any part standing before this write is
+    /// removed first, so the room holds at most one.
+    pub fn write_part(&self, save_point: &SavePoint) -> Result<String, SavePointFault> {
         use nix::fcntl::OFlag;
+        self.clear_parts();
         let name = save_point.name();
         let part = format!(".part-{name}");
         let io = |what: &str, e: nix::errno::Errno| SavePointFault::Io(format!("{what}: {e}"));
@@ -351,22 +363,40 @@ impl Room {
             file.write_all(&save_point.bytes())
                 .map_err(|e| SavePointFault::Io(format!("write part: {e}")))?;
             file.sync_all()
-                .map_err(|e| SavePointFault::Io(format!("sync part: {e}")))?;
-            nix::unistd::linkat(
-                self.dir.as_fd(),
-                part.as_str(),
-                self.dir.as_fd(),
-                name.as_str(),
-                nix::fcntl::AtFlags::empty(),
-            )
-            .map_err(|e| io("link finished name", e))
+                .map_err(|e| SavePointFault::Io(format!("sync part: {e}")))
         })();
+        if outcome.is_err() {
+            self.discard_part(&name);
+        }
+        outcome?;
+        Ok(name)
+    }
+
+    /// **Give a part its finished name**, on the harness's acknowledgement:
+    /// the part is linked under the finished name, the link refusing an
+    /// existing entry so nothing here overwrites, the part is unlinked, and
+    /// the room is synced so the entry is durable before the name is
+    /// answered. A failed link removes the part, a failed room sync removes
+    /// the finished name too, and no file stands under a finished name the
+    /// answer did not give.
+    pub fn finish(&self, name: &str) -> Result<(), SavePointFault> {
+        let part = format!(".part-{name}");
+        let io = |what: &str, e: nix::errno::Errno| SavePointFault::Io(format!("{what}: {e}"));
+        let linked = nix::unistd::linkat(
+            self.dir.as_fd(),
+            part.as_str(),
+            self.dir.as_fd(),
+            name,
+            nix::fcntl::AtFlags::empty(),
+        )
+        .map_err(|e| io("link finished name", e));
         let _ = nix::unistd::unlinkat(
             self.dir.as_fd(),
             part.as_str(),
             nix::unistd::UnlinkatFlags::NoRemoveDir,
         );
-        outcome?;
+        linked?;
+        let name = name.to_string();
         if let Err(e) = nix::unistd::fsync(self.dir.as_fd()) {
             if let Err(why) = self.remove_finished(&name) {
                 eprintln!(
@@ -379,7 +409,47 @@ impl Room {
             }
             return Err(io("sync room", e));
         }
-        Ok(name)
+        Ok(())
+    }
+
+    /// Remove a part that will not be finished: a failed write, an
+    /// acknowledgement that never came, or a part a dead member left.
+    pub fn discard_part(&self, name: &str) {
+        let part = format!(".part-{name}");
+        let _ = nix::unistd::unlinkat(
+            self.dir.as_fd(),
+            part.as_str(),
+            nix::unistd::UnlinkatFlags::NoRemoveDir,
+        );
+    }
+
+    /// Remove every part standing in the room, read through the room's own
+    /// descriptor: at the open, so a dead member's part does not outlive it,
+    /// and before each write, so the room holds at most one.
+    pub fn clear_parts(&self) {
+        let Ok(mut listing) = nix::dir::Dir::openat(
+            self.dir.as_fd(),
+            ".",
+            nix::fcntl::OFlag::O_RDONLY
+                | nix::fcntl::OFlag::O_DIRECTORY
+                | nix::fcntl::OFlag::O_CLOEXEC,
+            nix::sys::stat::Mode::empty(),
+        ) else {
+            return;
+        };
+        let parts: Vec<String> = listing
+            .iter()
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| entry.file_name().to_str().ok().map(str::to_string))
+            .filter(|entry| entry.starts_with(".part-"))
+            .collect();
+        for part in parts {
+            let _ = nix::unistd::unlinkat(
+                self.dir.as_fd(),
+                part.as_str(),
+                nix::unistd::UnlinkatFlags::NoRemoveDir,
+            );
+        }
     }
 
     /// Remove a finished name and sync the room so the removal is durable,

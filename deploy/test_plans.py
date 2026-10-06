@@ -572,7 +572,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         calls = self.calls()
         self.assertFalse(any("psql" in c or "systemctl" in c for c in calls), calls)
         self.assertTrue(any(c[:4] == ["sudo", "-u", "weaver-m1", "test"] for c in calls))
-        self.assert_rule(["show", "validate", "load", "unload", "stop"])
+        self.assert_rule(["show", "validate", "load", "unload", "stop", "save-point", "restore", "force-unload"])
         self.assertIn("validate it before loading, with the validate verb of", result.stdout)
         # The seeding is named as the operator's next step and never done
         # here: create-agent makes an agent that is not loaded, and the

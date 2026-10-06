@@ -154,7 +154,7 @@ if [ -n "$SPU_OVERRIDE" ]; then
   [[ "$SPU_OVERRIDE" =~ [[:cntrl:]] ]] && die "--spu carries a control character, which a key file cannot hold as one line"
 fi
 case "$CONNECTOR_ROLE" in
-  operator) VERBS="show validate load unload stop" ;;
+  operator) VERBS="show validate load unload stop save-point restore force-unload" ;;
   observer) VERBS="show" ;;
   *) die "--connector-role is operator or observer: '$CONNECTOR_ROLE'" ;;
 esac

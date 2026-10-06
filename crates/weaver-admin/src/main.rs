@@ -40,6 +40,7 @@ macro_rules! diag {
 mod channel;
 mod inventory;
 mod log;
+mod save_points;
 mod sink;
 mod stack;
 mod start;
@@ -80,7 +81,7 @@ mod scratch {
 
 use std::path::PathBuf;
 
-use weaver_types::{AgentName, LifecycleAnswer, LifecycleDirective, LifecycleRefusal};
+use weaver_types::{AgentName, FieldName, LifecycleAnswer, LifecycleDirective, LifecycleRefusal};
 
 /// One agent's operator-installed configuration, read from that agent's own
 /// root, per Spec section 9: the coordination root, the agent's binaries, the
@@ -116,6 +117,9 @@ struct ServiceConfig {
     /// `stop` or `show` from a running agent, whose log lines then carry no
     /// digest.
     boundary: Result<BoundaryRead, String>,
+    /// The agent's config root as judged, where the clean-unload marker is
+    /// written under this crate's own custody, per Spec section 4.
+    root: PathBuf,
 }
 
 /// A boundary file that read and parsed.
@@ -280,6 +284,9 @@ fn dispatch(
         surface::Request::Unload(_) => ("unload", unload(config)),
         surface::Request::Stop(_) => ("stop", stop(config)),
         surface::Request::Show(_) => ("show", show(config)),
+        surface::Request::SavePoint(agent) => ("save-point", save_point(config, &agent)),
+        surface::Request::Restore(agent) => ("restore", restore(config, &agent)),
+        surface::Request::ForceUnload(_) => ("force-unload", force_unload(config)),
     };
     record(
         config,
@@ -380,10 +387,15 @@ fn well_formed(agent: &str) -> bool {
 /// deployment without it simply has no leg. Every failure here is absorbed:
 /// the leg is optional by presence, a load is never refused over its
 /// derivative, and a `None` return is the leg not standing.
+/// The save point's descriptor in the member, per `weaver-state-Spec`
+/// section 2: a fixed convention between this crate and the member.
+const SAVE_POINT_FD: std::os::fd::RawFd = 4;
+
 fn stand_state_member(
     config: &ServiceConfig,
     inventory: &inventory::Inventory,
     run_lock: &start::RunLock,
+    save_point: Option<std::os::fd::OwnedFd>,
 ) -> Option<std::os::fd::OwnedFd> {
     // `none` declines the member, per `weaver-state-PRD` section 4 as of
     // 2026-09-04: nothing is stood, no territory is made, and the harness's
@@ -421,11 +433,7 @@ fn stand_state_member(
     let log = log::open_append(&territory.join("state.log"), None);
     let mut member = std::process::Command::new(&binary);
     member
-        .args(member_vector(
-            &territory,
-            &inventory.binding,
-            inventory.lineage.is_some(),
-        ))
+        .args(member_vector(&territory, &inventory.binding))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null());
     if let Ok(log) = log {
@@ -444,9 +452,27 @@ fn stand_state_member(
     })
     .ok()?;
     let lock = start::high(run_lock.raw()).ok()?;
-    let (raw_member_end, raw_lock) = {
+    // **The save point the load restores rides at descriptor 4**, per Spec
+    // section 6 and `weaver-state-Spec` section 2, copied high like the
+    // others and placed at the spawn alone; absent, the number holds
+    // nothing and the member stands empty.
+    let save_point = match save_point {
+        Some(fd) => Some(
+            start::high({
+                use std::os::fd::AsRawFd;
+                fd.as_raw_fd()
+            })
+            .ok()?,
+        ),
+        None => None,
+    };
+    let (raw_member_end, raw_lock, raw_save_point) = {
         use std::os::fd::AsRawFd;
-        (member_end.as_raw_fd(), lock.as_raw_fd())
+        (
+            member_end.as_raw_fd(),
+            lock.as_raw_fd(),
+            save_point.as_ref().map(|fd| fd.as_raw_fd()),
+        )
     };
     // SAFETY: every call below is async-signal-safe, run in the child
     // between fork and exec.
@@ -457,9 +483,12 @@ fn stand_state_member(
             // ignored signals**, per Spec section 6, and holds the run lock's
             // description for its life, per section 3.
             start::place(raw_lock, start::RUN_LOCK_FD)?;
+            if let Some(raw) = raw_save_point {
+                start::place(raw, SAVE_POINT_FD)?;
+            }
             // The member's allowlist: its first door's end at 3, armed below,
-            // and the run lock at 9.
-            start::seal_except(&[3, start::RUN_LOCK_FD])?;
+            // the save point at 4 where one is handed, and the run lock at 9.
+            start::seal_except(&[3, SAVE_POINT_FD, start::RUN_LOCK_FD])?;
             start::detach_and_reset()?;
             become_member(member_account)?;
             arm_member_end(raw_member_end)
@@ -574,17 +603,17 @@ fn arm_member_end(raw_member_end: std::os::fd::RawFd) -> std::io::Result<()> {
 fn member_vector(
     territory: &std::path::Path,
     binding: &weaver_types::EnterBinding,
-    restoring: bool,
 ) -> Vec<std::ffi::OsString> {
     // **The territory leads and no flag rides**, per Spec section 6: the one
     // engine is the embedded one, so the engine flag left the vector with
     // the service engine on the operator's ruling of 2026-10-02 on #1.
     let mut vector: Vec<std::ffi::OsString> = vec![territory.as_os_str().to_owned()];
-    // The door's name rides the vector under a diagnostic binding and,
-    // since 2026-09-04, under a serving load that elects a restore, per Spec
-    // section 6 and issue #432: the member binds the name only where this
-    // value is there, and this crate names the door and dials it never.
-    if matches!(binding, weaver_types::EnterBinding::Diagnostic) || restoring {
+    // The door's name rides the vector under a diagnostic binding alone,
+    // per Spec section 6: a serving load restores through descriptor 4
+    // since A3.2 and binds no door, the record restore of issue #432 having
+    // retired; the member binds the name only where this value is there,
+    // and this crate names the door and dials it never.
+    if matches!(binding, weaver_types::EnterBinding::Diagnostic) {
         vector.push(territory.join("preload.sock").into_os_string());
     }
     vector
@@ -847,6 +876,9 @@ struct Standing {
     forked: bool,
     entered: bool,
     sink_opened: bool,
+    /// The marker as it stood before this load wrote it open, once it did:
+    /// restored by the rollback, per Spec section 4.
+    marker_before: Option<Option<save_points::Marker>>,
 }
 
 /// **`load` keeps one promise**, per Spec section 3 and the operator's ruling
@@ -890,7 +922,29 @@ fn run_load(
             _ => LifecycleRefusal::AgentRunning,
         });
     };
-    let inventory = take_inventory(config, agent)?;
+    let mut inventory = take_inventory(config, agent)?;
+    // **The publication opens the validate step, under the run lock**, per
+    // Spec sections 3 and 6: what an unclean stop left in the room is
+    // published now and selectable below.
+    publish_from_room(config, &[]);
+    // **The selection**, per Spec section 4: the save point `restore` names
+    // or the latest the manifest names, judged through the descriptor the
+    // member will inherit; no member elected selects nothing, and a restore
+    // named beside the `none` engine refuses.
+    let selected = select_save_point(config, &inventory)?;
+    if let Some(selected) = selected.as_ref() {
+        record(
+            config,
+            "load",
+            &format!(
+                "restoring {} ordinal {} {}",
+                selected.line.name,
+                selected.line.ordinal,
+                line_arrival(&selected.line)
+            ),
+        );
+    }
+    inventory.lineage = selected.as_ref().map(|selected| selected.lineage.clone());
     let custody = sink::FileCustody {
         owners: vec![0, nix::unistd::geteuid().as_raw()],
         trace_group: format!("{}-trace", inventory::identity_for(agent)),
@@ -920,7 +974,12 @@ fn run_load(
         }
         _ => None,
     };
-    let state_end = stand_state_member(config, &inventory, &run_lock);
+    let state_end = stand_state_member(
+        config,
+        &inventory,
+        &run_lock,
+        selected.map(|selected| selected.descriptor),
+    );
     standing.forked |= state_end.is_some();
     let classify = config
         .worker
@@ -976,7 +1035,7 @@ fn run_load(
         payload: weaver_types::Payload::Directive(LifecycleDirective::Enter {
             payload: Box::new(weaver_types::EnterPayload {
                 session: inventory.config.session.clone(),
-                run: run_reference,
+                run: run_reference.clone(),
                 // The permission member is written from the resolved kind,
                 // per `weaver-admin-Spec` section 7: granted under a
                 // diagnostic enter and cleared under a serving one, never
@@ -994,9 +1053,10 @@ fn run_load(
                 state_store: inventory.config.state_store.clone().unwrap_or_default(),
                 declaration: inventory.declaration.clone(),
                 restore: inventory.lineage.clone(),
-                // No reset until admin's clean-unload marker lands with its
-                // save-point act (A3.2), per `weaver-admin-Spec` section 4.
-                reset: None,
+                // **The reset is the marker's**, per Spec section 4: the
+                // prior run still open, or forced closed without its save
+                // point, rides the enter beside the lineage.
+                reset: save_points::reset_from(save_points::read_marker(&config.root).as_ref()),
                 stack,
                 // The boundary file's digest, the cause and the judged
                 // libraries, per `weaver-types-Spec` section 4 as of
@@ -1025,12 +1085,127 @@ fn run_load(
     standing.entered = true;
     match coordination.recv_within(config.load_bound) {
         Ok(answer) => match answer.payload {
-            weaver_types::Payload::Answer(LifecycleAnswer::Ready) => Ok(()),
+            weaver_types::Payload::Answer(LifecycleAnswer::Ready) => {
+                // **The marker is written only once the run stands**, per
+                // Spec section 4 on A3.0 item 5: after the enter answers,
+                // its prior state kept for the rollback of any later step,
+                // so a load that never authored `load` never opened a run.
+                standing.marker_before = Some(save_points::read_marker(&config.root));
+                let marker = save_points::Marker::Open {
+                    run: run_reference.0.clone(),
+                };
+                if let Err(e) = save_points::write_marker(&config.root, Some(&marker)) {
+                    record(config, "marker", &format!("not written: {e}"));
+                }
+                Ok(())
+            }
             weaver_types::Payload::Refusal(refusal) => Err(refusal),
             _ => Err(LifecycleRefusal::Malformed),
         },
         Err(_) => Err(LifecycleRefusal::NoResidency),
     }
+}
+
+/// **Select the save point this load restores**, per Spec section 4: nothing
+/// where no member stands, a `restore` named beside the `none` engine
+/// refusing `ConfigInvalid` naming `restore`; otherwise the manifest's
+/// answer, the named one or the latest.
+fn select_save_point(
+    config: &ServiceConfig,
+    inventory: &inventory::Inventory,
+) -> Result<Option<save_points::Selected>, LifecycleRefusal> {
+    let restore = inventory
+        .config
+        .restore
+        .as_ref()
+        .map(|restore| restore.save_point.as_str());
+    if inventory.member_account.is_none() {
+        if restore.is_some() {
+            diag!(
+                "weaver-admin: config invalid: restore names a save point and the store engine is none, so no member would restore it"
+            );
+            return Err(LifecycleRefusal::ConfigInvalid {
+                field: Some(FieldName("restore".into())),
+            });
+        }
+        return Ok(None);
+    }
+    save_points::select(&config.declaration_directory, config.operator, restore)
+}
+
+/// **A save point on demand**, the `save-point` verb, per Spec sections 2
+/// and 6: valid while the run stands, one directive and one answer on the
+/// coordination channel, the finished save point published at once with the
+/// event's position the harness reported.
+fn save_point(
+    config: &ServiceConfig,
+    agent: &AgentName,
+) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    let run_directory = config.run_directory();
+    let _invocation = start::take_invocation_lock(&run_directory)?;
+    if !start::run_lock_held(&run_directory)? {
+        diag!("weaver-admin: no run stands, and a save point is taken of a running agent alone");
+        return Err(LifecycleRefusal::OutOfOrder);
+    }
+    let mut coordination =
+        channel::dial(&config.coordination_socket()).map_err(|_| LifecycleRefusal::Unanswered)?;
+    let ordinal = coordination.next_ordinal();
+    coordination
+        .send_directive(
+            ordinal,
+            LifecycleDirective::SavePoint {
+                cause: invocation_cause(),
+            },
+        )
+        .map_err(|_| LifecycleRefusal::Unanswered)?;
+    let report = match coordination.recv_within(LEAVE_BOUND) {
+        Ok(answer) => match answer.payload {
+            weaver_types::Payload::Answer(LifecycleAnswer::SavePointTaken { report }) => report,
+            weaver_types::Payload::Refusal(refusal) => return Err(refusal),
+            _ => return Err(LifecycleRefusal::Malformed),
+        },
+        Err(_) => return Err(LifecycleRefusal::Unanswered),
+    };
+    let _ = agent;
+    publish_from_room(config, &[(report.clone(), save_points::Arrival::Demand)]);
+    Ok(LifecycleAnswer::SavePointTaken { report })
+}
+
+/// **Name the save point the next load restores**, the `restore` verb, per
+/// Spec sections 2 and 4: the one the declaration's `[restore]` names, never
+/// the caller's, judged as a load judges one and entered in the manifest as
+/// named at a restore, so a file that arrived by no publication becomes
+/// loadable by this verb alone. The live restore of a running agent waits on
+/// the loop act's `Reopen`; until then a restore is this verb and then a
+/// load.
+fn restore(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    let _invocation = start::take_invocation_lock(&config.run_directory())?;
+    let inventory = take_inventory(config, agent)?;
+    let Some(named) = inventory.config.restore.as_ref() else {
+        diag!(
+            "weaver-admin: config invalid: the declaration names no restore, and this verb names what the declaration names"
+        );
+        return Err(LifecycleRefusal::ConfigInvalid {
+            field: Some(FieldName("restore".into())),
+        });
+    };
+    if inventory.member_account.is_none() {
+        diag!(
+            "weaver-admin: config invalid: restore names a save point and the store engine is none"
+        );
+        return Err(LifecycleRefusal::ConfigInvalid {
+            field: Some(FieldName("restore".into())),
+        });
+    }
+    let line = save_points::name_at_restore(
+        &config.declaration_directory,
+        config.operator,
+        &named.save_point,
+    )?;
+    Ok(LifecycleAnswer::RestoreNamed {
+        save_point: line.digest,
+        name: line.name,
+    })
 }
 
 /// **Stands the trace relay for a file sink**, per Spec section 6: the relay
@@ -1120,6 +1295,13 @@ fn refusal_from_worker(worker: &mut std::process::Child) -> LifecycleRefusal {
 /// Answers the account, empty where nothing stood.
 fn roll_back(config: &ServiceConfig, standing: &mut Standing) -> String {
     let mut account = Vec::new();
+    if let Some(prior) = standing.marker_before.take() {
+        let restored = save_points::write_marker(&config.root, prior.as_ref()).is_ok();
+        account.push(format!(
+            "marker {}",
+            if restored { "restored" } else { "not restored" }
+        ));
+    }
     if standing.entered {
         let left = direct_leave(config).is_ok();
         account.push(format!("leave {}", if left { "undone" } else { "held" }));
@@ -1219,7 +1401,17 @@ fn constituents(run_directory: &std::path::Path) -> Vec<u32> {
 /// was entered and it goes straight to the escalation. It answers
 /// provisioned-and-unloaded only once the lock is free.
 fn unload(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
-    unload_within(config, UNLOAD_BOUNDS)
+    unload_within(config, UNLOAD_BOUNDS, false)
+}
+
+/// **The forced unload**, per Spec section 3 on the operator's ruling of
+/// 2026-10-06 on #1 (A3.0 item 6): `unload` in every respect but one, the
+/// leave directed with `forced`, so the harness leaves without its save
+/// point and records that it was not taken, and the marker stays open under
+/// `ForcedUnload` for the next load's reset. The loss is the operator's
+/// recorded choice.
+fn force_unload(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    unload_within(config, UNLOAD_BOUNDS, true)
 }
 
 /// The unload's four waits, fixed in production by Spec section 3 and
@@ -1245,6 +1437,7 @@ const UNLOAD_BOUNDS: UnloadBounds = UnloadBounds {
 fn unload_within(
     config: &ServiceConfig,
     bounds: UnloadBounds,
+    forced: bool,
 ) -> Result<LifecycleAnswer, LifecycleRefusal> {
     let run_directory = config.run_directory();
     let _invocation = start::take_invocation_lock(&run_directory)?;
@@ -1269,14 +1462,28 @@ fn unload_within(
         Observation::State(..) | Observation::Silent => true,
     };
     if entered {
-        match direct_leave_within(config, leave_deadline) {
-            Ok(()) => {
+        match direct_leave_within(config, leave_deadline, forced) {
+            Ok(report) => {
                 if start::wait_free(&run_directory, bounds.after_left) {
+                    // **The member has stopped: publish, then close the
+                    // marker**, per Spec sections 3 and 6: the leave's save
+                    // point carries its event's position, anything else the
+                    // room still held is recovered, and the marker closes
+                    // on a clean unload or stays open under `ForcedUnload`.
+                    let reports: Vec<_> = report
+                        .into_iter()
+                        .map(|report| (report, save_points::Arrival::Leave))
+                        .collect();
+                    publish_from_room(config, &reports);
+                    close_marker(config, forced);
                     return unloaded;
                 }
             }
-            // A refusal on leave, `ActivityNotAtRest` above all, returns to
-            // the operator unchanged and answers nothing further.
+            // A refusal on leave returns to the operator unchanged and
+            // answers nothing further: `ActivityNotAtRest` above all, and
+            // since A3.2 `SavePointNotTaken`, on which the unload does not
+            // complete, the run staying open with its lock, per Spec section
+            // 3 on A3.0 item 6, so the operator retries or forces.
             Err(LeaveFault::Refused(refusal)) => return Err(refusal),
             // The leave went unanswered inside its bound: a worker that
             // would not exit, so the escalation follows.
@@ -1284,7 +1491,93 @@ fn unload_within(
         }
     }
     start::escalate_within(&run_directory, bounds.term, bounds.kill)?;
+    // A run that had to be ended by force took no leave save point: the
+    // room's finished files are recovered at the next load, and the marker
+    // stays open, which the next load reads as `NoCleanUnload`.
     unloaded
+}
+
+/// **Publish the member's finished save points into the operator's
+/// directory**, per Spec section 6, from the room the declaration's
+/// territory holds: the member's uid and the room are the inventory's, and
+/// an inventory that does not read leaves the files for the next load,
+/// said in the log. The lines appended are logged.
+fn publish_from_room(
+    config: &ServiceConfig,
+    reports: &[(weaver_types::SavePointReport, save_points::Arrival)],
+) {
+    let agent = AgentName(config.agent.clone());
+    let inventory = match take_inventory(config, &agent) {
+        Ok(inventory) => inventory,
+        Err(refusal) => {
+            record(
+                config,
+                "publish",
+                &format!(
+                    "skipped: the inventory refuses {}; the room's save points are published at the next load",
+                    surface::render_refusal(&refusal)
+                ),
+            );
+            return;
+        }
+    };
+    let Some(member) = inventory.member_account else {
+        return;
+    };
+    let room = save_points::room_of(inventory::sink_directory(&inventory.config.trace_sink));
+    match save_points::publish(
+        &room,
+        member.uid,
+        &config.declaration_directory,
+        config.operator_owner(),
+        reports,
+    ) {
+        Ok(lines) => {
+            for line in lines {
+                record(
+                    config,
+                    "publish",
+                    &format!(
+                        "{} ordinal {} {}",
+                        line.name,
+                        line.ordinal,
+                        line_arrival(&line)
+                    ),
+                );
+            }
+        }
+        Err(refusal) => record(
+            config,
+            "publish",
+            &format!("refused: {}", surface::render_refusal(&refusal)),
+        ),
+    }
+}
+
+fn line_arrival(line: &save_points::ManifestLine) -> &'static str {
+    match line.arrived {
+        save_points::Arrival::Leave => "at the leave",
+        save_points::Arrival::Demand => "on demand",
+        save_points::Arrival::Recovered => "recovered from the room",
+        save_points::Arrival::Restore => "named at a restore",
+    }
+}
+
+/// Close the marker on a clean unload, or leave it open under `ForcedUnload`
+/// where the leave was forced, per Spec section 4.
+fn close_marker(config: &ServiceConfig, forced: bool) {
+    let run = match save_points::read_marker(&config.root) {
+        Some(save_points::Marker::Open { run }) | Some(save_points::Marker::Forced { run }) => run,
+        Some(save_points::Marker::Closed { .. }) | None => return,
+    };
+    let marker = if forced {
+        save_points::Marker::Forced { run }
+    } else {
+        save_points::Marker::Closed { run }
+    };
+    if let Err(e) = save_points::write_marker(&config.root, Some(&marker)) {
+        record(config, "marker", &format!("not written: {e}"));
+    }
 }
 
 /// Why a directed leave did not answer `Left`.
@@ -1294,16 +1587,22 @@ enum LeaveFault {
 }
 
 /// **Directs leave under the leave's own bound**, per Spec section 3.
-fn direct_leave(config: &ServiceConfig) -> Result<(), LeaveFault> {
-    direct_leave_within(config, std::time::Instant::now() + LEAVE_BOUND)
+fn direct_leave(
+    config: &ServiceConfig,
+) -> Result<Option<weaver_types::SavePointReport>, LeaveFault> {
+    direct_leave_within(config, std::time::Instant::now() + LEAVE_BOUND, false)
 }
 
-/// Directs leave and waits for its answer until `deadline`, the dial spending
-/// the same budget.
+/// Directs leave, forced or not, and waits for its answer until `deadline`,
+/// the dial spending nothing of the bound. **The answer names the leave's
+/// save point**, per `weaver-admin-harness-contract` section 3 as of A3.2,
+/// none where the leave was forced or the binding diagnostic, so the
+/// publication that follows carries the event's position.
 fn direct_leave_within(
     config: &ServiceConfig,
     deadline: std::time::Instant,
-) -> Result<(), LeaveFault> {
+    forced: bool,
+) -> Result<Option<weaver_types::SavePointReport>, LeaveFault> {
     let Ok(mut coordination) = channel::dial(&config.coordination_socket()) else {
         return Err(LeaveFault::Unanswered);
     };
@@ -1313,12 +1612,13 @@ fn direct_leave_within(
             ordinal,
             LifecycleDirective::Leave {
                 cause: invocation_cause(),
+                forced,
             },
         )
         .map_err(|_| LeaveFault::Unanswered)?;
     match coordination.recv_within(deadline.saturating_duration_since(std::time::Instant::now())) {
         Ok(answer) => match answer.payload {
-            weaver_types::Payload::Answer(LifecycleAnswer::Left) => Ok(()),
+            weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point }) => Ok(save_point),
             weaver_types::Payload::Refusal(refusal) => Err(LeaveFault::Refused(refusal)),
             _ => Err(LeaveFault::Refused(LifecycleRefusal::Malformed)),
         },
@@ -1773,6 +2073,7 @@ fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<Servi
         operator,
         operator_gid: 0,
         boundary,
+        root: root.to_path_buf(),
     })
 }
 
@@ -1973,14 +2274,14 @@ mod tests {
                 },
             },
         };
-        let serving = member_vector(territory, &serving_binding, false);
+        let serving = member_vector(territory, &serving_binding);
         assert_eq!(
             serving.len(),
             1,
             "a serving load carries the territory alone"
         );
         assert_eq!(serving[0], territory.as_os_str());
-        let diagnostic = member_vector(territory, &weaver_types::EnterBinding::Diagnostic, false);
+        let diagnostic = member_vector(territory, &weaver_types::EnterBinding::Diagnostic);
         assert_eq!(
             diagnostic.len(),
             2,
@@ -1992,18 +2293,10 @@ mod tests {
             territory.join("preload.sock").into_os_string(),
             "the territory with the fixed leaf, no invocation input composing it"
         );
-        // **A serving load that elects a restore names the door too**, per
-        // Spec section 6 as of 2026-09-04 and issue #432, the same arm.
-        let restoring = member_vector(territory, &serving_binding, true);
-        assert_eq!(
-            restoring.len(),
-            2,
-            "a restoring serving load carries the preload path"
-        );
-        assert_eq!(
-            restoring[1],
-            territory.join("preload.sock").into_os_string()
-        );
+        // **A serving load that elects a restore names no door**, per Spec
+        // section 6 as of A3.2: it restores through descriptor 4, so the
+        // vector is the territory alone whatever the lineage.
+        assert_eq!(member_vector(territory, &serving_binding).len(), 1);
     }
 
     /// **The stack names the binaries this crate started and handed the
@@ -2548,6 +2841,7 @@ mod tests {
                 digest: "0".repeat(64),
                 reader: "weaver-alpha-admincon".into(),
             }),
+            root: PathBuf::from("/nonexistent/root"),
         }
     }
 
@@ -2644,6 +2938,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         let mut config = unread_config();
         config.coordination_root = base.clone();
+        config.root = base.join("root");
+        std::fs::create_dir_all(&config.root).unwrap();
         std::fs::create_dir_all(config.run_directory()).unwrap();
         (config, crate::scratch::Scratch(base))
     }
@@ -2814,6 +3110,193 @@ mod tests {
     }
 
     /// Short bounds for the unload path, the production values being fixed.
+    /// A worker that answers as `answering_worker` does and keeps every
+    /// directive it was sent, so a test reads what admin directed.
+    fn recording_worker(
+        config: &ServiceConfig,
+        answers: Vec<weaver_types::Payload>,
+    ) -> std::thread::JoinHandle<Vec<weaver_types::Payload>> {
+        let listener = silent_worker(config);
+        std::thread::spawn(move || {
+            let mut directed = Vec::new();
+            for payload in answers {
+                let Ok(raw) = nix::sys::socket::accept(std::os::fd::AsRawFd::as_raw_fd(&listener))
+                else {
+                    break;
+                };
+                let fd =
+                    unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(raw) };
+                let peer = channel::Coordination::adopt(fd);
+                let Ok(request) = peer.recv() else { break };
+                directed.push(request.payload);
+                let _ = peer.send(&weaver_types::OrganEnvelope {
+                    exchange: request.exchange,
+                    position: weaver_types::Position::Close,
+                    payload,
+                });
+            }
+            directed
+        })
+    }
+
+    fn report() -> weaver_types::SavePointReport {
+        weaver_types::SavePointReport {
+            save_point: "ab".into(),
+            name: "ab.save-point".into(),
+            run: weaver_types::RunId("r-1".into()),
+            sequence: 5,
+            turn: 1,
+            position: 7,
+        }
+    }
+
+    /// **An unload whose leave save point is not taken does not complete**,
+    /// per Spec section 3 on the operator's ruling of 2026-10-06 on #1 (A3.0
+    /// item 6): the harness's `SavePointNotTaken` returns as the verb's
+    /// refusal, no escalation ends the run, and the holder keeps the run
+    /// lock; **`force-unload` directs the leave with `forced`** and completes,
+    /// the escalation ending what still holds the lock. Perturbations: treat
+    /// the refusal as silence and the first case escalates, the holder
+    /// ending; send `forced: false` from `force_unload` and the second
+    /// assertion fails.
+    #[test]
+    fn an_unload_without_its_save_point_stops_and_a_forced_one_completes() {
+        let (config, _scratch) = scratch_config("unload-stops");
+        let mut holder = stand_in_holder(&config);
+        let worker = recording_worker(
+            &config,
+            vec![
+                weaver_types::Payload::Answer(LifecycleAnswer::State {
+                    state: weaver_types::AgentState::Idle,
+                    load: None,
+                    constituents: Vec::new(),
+                }),
+                weaver_types::Payload::Refusal(LifecycleRefusal::SavePointNotTaken {
+                    missed: weaver_types::SavePointLeg::Finished,
+                }),
+            ],
+        );
+        assert_eq!(
+            unload_within(&config, TEST_UNLOAD_BOUNDS, false),
+            Err(LifecycleRefusal::SavePointNotTaken {
+                missed: weaver_types::SavePointLeg::Finished,
+            })
+        );
+        let directed = worker.join().unwrap();
+        assert!(matches!(
+            directed[1],
+            weaver_types::Payload::Directive(LifecycleDirective::Leave { forced: false, .. })
+        ));
+        assert!(
+            start::run_lock_held(&config.run_directory()).unwrap(),
+            "the run stays open, its lock held"
+        );
+        assert!(
+            holder.try_wait().unwrap().is_none(),
+            "the holder was not ended"
+        );
+
+        // The first worker's name goes before the second binds it.
+        let _ = std::fs::remove_file(config.coordination_socket());
+        let worker = recording_worker(
+            &config,
+            vec![
+                weaver_types::Payload::Answer(LifecycleAnswer::State {
+                    state: weaver_types::AgentState::Idle,
+                    load: None,
+                    constituents: Vec::new(),
+                }),
+                weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point: None }),
+            ],
+        );
+        assert_eq!(
+            unload_within(&config, TEST_UNLOAD_BOUNDS, true),
+            Ok(LifecycleAnswer::State {
+                state: weaver_types::AgentState::Unloaded,
+                load: None,
+                constituents: Vec::new(),
+            })
+        );
+        let directed = worker.join().unwrap();
+        assert!(
+            matches!(
+                directed[1],
+                weaver_types::Payload::Directive(LifecycleDirective::Leave { forced: true, .. })
+            ),
+            "the forced unload directs a forced leave: {directed:?}"
+        );
+        let _ = holder.wait();
+        assert!(!start::run_lock_held(&config.run_directory()).unwrap());
+    }
+
+    /// **The `save-point` verb asks the running worker and answers the
+    /// report**, per Spec sections 2 and 6: one directive, one answer, and
+    /// out of order where no run stands. Perturbation: drop the run-lock
+    /// check and the second case dials an absent worker and answers
+    /// `Unanswered` instead.
+    #[test]
+    fn the_save_point_verb_answers_the_report_and_is_out_of_order_without_a_run() {
+        let (config, _scratch) = scratch_config("save-point-verb");
+        let agent = AgentName("alpha".into());
+        assert_eq!(
+            save_point(&config, &agent),
+            Err(LifecycleRefusal::OutOfOrder),
+            "no run, no save point"
+        );
+        let mut holder = stand_in_holder(&config);
+        let worker = recording_worker(
+            &config,
+            vec![weaver_types::Payload::Answer(
+                LifecycleAnswer::SavePointTaken { report: report() },
+            )],
+        );
+        assert_eq!(
+            save_point(&config, &agent),
+            Ok(LifecycleAnswer::SavePointTaken { report: report() })
+        );
+        let directed = worker.join().unwrap();
+        assert!(matches!(
+            directed[0],
+            weaver_types::Payload::Directive(LifecycleDirective::SavePoint { .. })
+        ));
+        let _ = holder.kill();
+        let _ = holder.wait();
+    }
+
+    /// **The marker is restored by the rollback**, per Spec section 4 on
+    /// A3.0 item 5: a load that wrote the marker open and then failed puts
+    /// back what stood before, a closed marker or none. Perturbation: skip
+    /// the marker in `roll_back` and the open marker survives the failure.
+    #[test]
+    fn the_rollback_restores_the_marker_it_found() {
+        let (config, _scratch) = scratch_config("marker-rollback");
+        let closed = save_points::Marker::Closed { run: "r-0".into() };
+        save_points::write_marker(&config.root, Some(&closed)).unwrap();
+        let mut standing = Standing {
+            marker_before: Some(Some(closed.clone())),
+            ..Standing::default()
+        };
+        save_points::write_marker(
+            &config.root,
+            Some(&save_points::Marker::Open { run: "r-1".into() }),
+        )
+        .unwrap();
+        let account = roll_back(&config, &mut standing);
+        assert!(account.contains("marker restored"), "{account}");
+        assert_eq!(save_points::read_marker(&config.root), Some(closed));
+        let mut standing = Standing {
+            marker_before: Some(None),
+            ..Standing::default()
+        };
+        save_points::write_marker(
+            &config.root,
+            Some(&save_points::Marker::Open { run: "r-1".into() }),
+        )
+        .unwrap();
+        roll_back(&config, &mut standing);
+        assert_eq!(save_points::read_marker(&config.root), None);
+    }
+
     const TEST_UNLOAD_BOUNDS: UnloadBounds = UnloadBounds {
         leave: std::time::Duration::from_secs(2),
         after_left: std::time::Duration::from_millis(300),
@@ -2851,11 +3334,11 @@ mod tests {
                 &config,
                 vec![
                     observed,
-                    weaver_types::Payload::Answer(LifecycleAnswer::Left),
+                    weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point: None }),
                 ],
             );
             assert_eq!(
-                unload_within(&config, TEST_UNLOAD_BOUNDS),
+                unload_within(&config, TEST_UNLOAD_BOUNDS, false),
                 Ok(LifecycleAnswer::State {
                     state: weaver_types::AgentState::Unloaded,
                     load: None,
@@ -2914,7 +3397,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            unload_within(&config, TEST_UNLOAD_BOUNDS),
+            unload_within(&config, TEST_UNLOAD_BOUNDS, false),
             Err(LifecycleRefusal::ActivityNotAtRest)
         );
         assert!(holder.try_wait().unwrap().is_none(), "the busy run stands");
@@ -3279,7 +3762,7 @@ mod tests {
             .unwrap()
             .expect("a free run lock");
 
-        let harness_end = stand_state_member(&service, &inventory, &run_lock);
+        let harness_end = stand_state_member(&service, &inventory, &run_lock, None);
         assert!(harness_end.is_some(), "the member stands");
         let territory = sink.join("state");
         let status = territory.join("status");

@@ -579,7 +579,11 @@ fn dispatch(state: &mut HookState, envelope: &OrganEnvelope) -> Payload {
             | LifecycleDirective::Load { .. }
             | LifecycleDirective::Unload { .. }
             | LifecycleDirective::Validate { .. }
-            | LifecycleDirective::Show { .. },
+            | LifecycleDirective::Show { .. }
+            | LifecycleDirective::SavePoint { .. }
+            | LifecycleDirective::SavePointVerb { .. }
+            | LifecycleDirective::Restore { .. }
+            | LifecycleDirective::ForceUnload { .. },
         ) => Payload::Refusal(LifecycleRefusal::OutOfOrder),
     }
 }
@@ -886,6 +890,7 @@ mod tests {
         for case in [
             LifecycleDirective::Leave {
                 cause: weaver_types::Cause { uid: 0 },
+                forced: false,
             },
             LifecycleDirective::Stop {
                 cause: weaver_types::Cause { uid: 0 },

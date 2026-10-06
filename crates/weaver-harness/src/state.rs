@@ -173,6 +173,11 @@ pub struct StateSeam {
     /// one ask answers no later one. The ingest direction is the tee's
     /// and is unaffected.
     dead: bool,
+    /// Bytes read past the last answered line, kept for the next await: an
+    /// answer that arrived in the same read as the one before it is the next
+    /// exchange's, never dropped, which the four-leg save point of A3.2
+    /// depends on where the member answers ahead.
+    residual: Vec<u8>,
 }
 
 impl StateSeam {
@@ -182,6 +187,7 @@ impl StateSeam {
         StateSeam {
             channel,
             dead: false,
+            residual: Vec::new(),
         }
     }
 
@@ -289,28 +295,53 @@ impl StateSeam {
         parse_restored_answer(&line)
     }
 
-    /// The `snapshot` ask, per the contract's sixth ask of 2026-10-02: the
-    /// member writes a save point and answers where it stands. Sent once at
-    /// every serving leave after `unload`, and on the operator's demand. A
-    /// miss costs the save point and never the leave, under the dead-peer
-    /// conversion, the missed-leave election being carried on #1.
-    pub(crate) fn ask_snapshot(&mut self) -> Option<SavePointTaken> {
+    /// **The `snapshot` ask's four legs**, per the contract's sixth ask of
+    /// 2026-10-02 as amended on the operator's ruling of 2026-10-06 on #1
+    /// (A3.0 item 4): the ask, the answer naming the finished name the part
+    /// will take and its stamp, this end's `acknowledge` of the digest, and
+    /// the member's `finished` answer, on which the caller authors the
+    /// `save_point` event. Sent at every serving leave before `unload`, and
+    /// on the operator's demand. **A missed leg names itself**, since the
+    /// leave does not complete without its save point and the operator reads
+    /// which leg missed: the member dead before the ask, the answer, or the
+    /// `finished` answer; the write's own failure reaches this end as the
+    /// answer missing, the member answering nothing for it.
+    pub(crate) fn ask_snapshot(&mut self) -> Result<SavePointTaken, weaver_types::SavePointLeg> {
+        use weaver_types::SavePointLeg;
         if self.dead {
-            return None;
+            return Err(SavePointLeg::MemberDead);
         }
-        let answered = self.snapshot_exchange();
-        if answered.is_none() {
-            self.dead = true;
-        }
-        answered
-    }
-
-    fn snapshot_exchange(&mut self) -> Option<SavePointTaken> {
         if !self.send(b"{\"ask\":{\"snapshot\":{}}}\n") {
-            return None;
+            self.dead = true;
+            return Err(SavePointLeg::MemberDead);
         }
-        let line = self.await_line(ANSWER_BOUND_MS)?;
-        parse_snapshot_answer(&line)
+        let Some(answered) = self
+            .await_line(ANSWER_BOUND_MS)
+            .and_then(|line| parse_snapshot_answer(&line))
+        else {
+            self.dead = true;
+            return Err(SavePointLeg::Answer);
+        };
+        let acknowledge = format!(
+            "{}\n",
+            serde_json::json!({"acknowledge": {"snapshot": {"digest": answered.stamp.digest}}})
+        );
+        if !self.send(acknowledge.as_bytes()) {
+            self.dead = true;
+            return Err(SavePointLeg::MemberDead);
+        }
+        let Some(finished) = self
+            .await_line(ANSWER_BOUND_MS)
+            .and_then(|line| parse_finished_answer(&line))
+        else {
+            self.dead = true;
+            return Err(SavePointLeg::Finished);
+        };
+        if finished != answered.name {
+            self.dead = true;
+            return Err(SavePointLeg::Finished);
+        }
+        Ok(answered)
     }
 
     /// The `restore` ask, per the contract's seventh ask of 2026-10-02: the
@@ -425,10 +456,12 @@ impl StateSeam {
     /// timeout.
     fn await_line(&mut self, bound_ms: u64) -> Option<String> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(bound_ms);
-        let mut buffer: Vec<u8> = Vec::new();
+        let mut buffer: Vec<u8> = std::mem::take(&mut self.residual);
         loop {
             if let Some(position) = buffer.iter().position(|&b| b == b'\n') {
-                return Some(String::from_utf8_lossy(&buffer[..position]).into_owned());
+                let line = String::from_utf8_lossy(&buffer[..position]).into_owned();
+                self.residual = buffer[position + 1..].to_vec();
+                return Some(line);
             }
             if buffer.len() > ANSWER_BOUND_BYTES {
                 return None;
@@ -526,6 +559,20 @@ fn parse_stamped(body: &serde_json::Value) -> Option<SavePointTaken> {
 fn parse_snapshot_answer(line: &str) -> Option<SavePointTaken> {
     let value: serde_json::Value = serde_json::from_str(line).ok()?;
     parse_stamped(value.get("answer")?.get("snapshot")?)
+}
+
+/// Parse the finished answer, the fourth leg:
+/// `{"answer":{"finished":{"save-point":"<name>"}}}`.
+fn parse_finished_answer(line: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    Some(
+        value
+            .get("answer")?
+            .get("finished")?
+            .get("save-point")?
+            .as_str()?
+            .to_string(),
+    )
 }
 
 /// Parse the restore answer: the snapshot's members and `identity`.
@@ -835,11 +882,40 @@ mod tests {
         ] {
             assert_eq!(parse_restored_answer(answer), expected, "{answer}");
         }
+        // The four legs: both answers stand in advance, and what was asked
+        // is the snapshot ask followed by the acknowledgement of the digest.
         let (parsed, asked) = exchange(
-            r#"{"answer":{"snapshot":{"save-point":"ab.save-point","run":"r-1","sequence":41,"turn":2,"digest":"ab"}}}"#,
-            &|seam| seam.ask_snapshot().map(|a| format!("{a:?}")),
+            concat!(
+                r#"{"answer":{"snapshot":{"save-point":"ab.save-point","run":"r-1","sequence":41,"turn":2,"digest":"ab"}}}"#,
+                "\n",
+                r#"{"answer":{"finished":{"save-point":"ab.save-point"}}}"#
+            ),
+            &|seam| seam.ask_snapshot().ok().map(|a| format!("{a:?}")),
         );
-        assert_eq!(asked, "{\"ask\":{\"snapshot\":{}}}\n");
+        assert_eq!(
+            asked,
+            concat!(
+                "{\"ask\":{\"snapshot\":{}}}\n",
+                "{\"acknowledge\":{\"snapshot\":{\"digest\":\"ab\"}}}\n"
+            )
+        );
+        // A finished answer naming another file, or none, is the finished
+        // leg missed. Perturbation: skip the name's comparison and the first
+        // case parses.
+        let (parsed_other, _) = exchange(
+            concat!(
+                r#"{"answer":{"snapshot":{"save-point":"ab.save-point","run":"r-1","sequence":41,"turn":2,"digest":"ab"}}}"#,
+                "\n",
+                r#"{"answer":{"finished":{"save-point":"other.save-point"}}}"#
+            ),
+            &|seam| seam.ask_snapshot().err().map(|leg| format!("{leg:?}")),
+        );
+        assert_eq!(parsed_other.as_deref(), Some("Finished"));
+        let (parsed_none, _) = exchange(
+            r#"{"answer":{"snapshot":{"save-point":"ab.save-point","run":"r-1","sequence":41,"turn":2,"digest":"ab"}}}"#,
+            &|seam| seam.ask_snapshot().err().map(|leg| format!("{leg:?}")),
+        );
+        assert_eq!(parsed_none.as_deref(), Some("Finished"));
         let taken = SavePointTaken {
             name: "ab.save-point".into(),
             stamp: SavePointStamp {

@@ -27,6 +27,13 @@ pub enum Request {
     Validate(AgentName),
     Stop(AgentName),
     Show(AgentName),
+    /// A save point of the running agent on demand, published at once, as
+    /// of A3.2 on the operator's rulings of 2026-10-06 on #1.
+    SavePoint(AgentName),
+    /// Name the save point the next load restores, the declaration's.
+    Restore(AgentName),
+    /// The unload that completes without its leave save point.
+    ForceUnload(AgentName),
 }
 
 impl Request {
@@ -37,7 +44,10 @@ impl Request {
             | Request::Unload(agent)
             | Request::Validate(agent)
             | Request::Stop(agent)
-            | Request::Show(agent) => agent,
+            | Request::Show(agent)
+            | Request::SavePoint(agent)
+            | Request::Restore(agent)
+            | Request::ForceUnload(agent) => agent,
         }
     }
 }
@@ -69,6 +79,9 @@ where
         "validate" => Ok(Request::Validate(named(rest)?)),
         "stop" => Ok(Request::Stop(named(rest)?)),
         "show" => Ok(Request::Show(named(rest)?)),
+        "save-point" => Ok(Request::SavePoint(named(rest)?)),
+        "restore" => Ok(Request::Restore(named(rest)?)),
+        "force-unload" => Ok(Request::ForceUnload(named(rest)?)),
         _ => Err(LifecycleRefusal::Malformed),
     }
 }
@@ -140,6 +153,25 @@ mod tests {
     fn the_verb_and_its_agent_arrive_as_arguments() {
         let parsed = parse_arguments(["load".to_string(), "alpha".to_string()]);
         assert_eq!(parsed, Ok(Request::Load(AgentName("alpha".into()))));
+        // The three verbs of A3.2, each one fixed command line.
+        for (verb, request) in [
+            ("save-point", Request::SavePoint(AgentName("alpha".into()))),
+            ("restore", Request::Restore(AgentName("alpha".into()))),
+            (
+                "force-unload",
+                Request::ForceUnload(AgentName("alpha".into())),
+            ),
+        ] {
+            assert_eq!(
+                parse_arguments([verb.to_string(), "alpha".to_string()]),
+                Ok(request)
+            );
+            assert_eq!(
+                parse_arguments([verb.to_string(), "alpha".to_string(), "x".to_string()]),
+                Err(LifecycleRefusal::Malformed),
+                "{verb} takes no argument"
+            );
+        }
 
         for bad in [
             vec![],

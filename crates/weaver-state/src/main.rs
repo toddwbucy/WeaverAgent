@@ -25,8 +25,9 @@ use std::io::Read;
 use weaver_state::save_point::{Room, SavePoint, schema_digest};
 use weaver_state::{
     Ask, Election, Restored, SavePointAnswer, Store, parse_ask, parse_distillate,
-    render_grants_answer, render_identity_answer, render_recall_answer, render_replay_answer,
-    render_restore_answer, render_restored_answer, render_shape_answer, render_snapshot_answer,
+    render_finished_answer, render_grants_answer, render_identity_answer, render_recall_answer,
+    render_replay_answer, render_restore_answer, render_restored_answer, render_shape_answer,
+    render_snapshot_answer,
 };
 
 /// The first door's end arrives at this descriptor number, the fixed
@@ -300,8 +301,15 @@ fn member_entry(
         session: &session,
         election: &election,
         restored,
+        pending: None,
     };
-    serve(lines, preload, preload_socket, &mut custody)
+    let code = serve(lines, preload, preload_socket, &mut custody);
+    // **An unacknowledged part does not outlive the member**, per
+    // `weaver-state-Spec` section 3: whatever part still stands at the exit
+    // is removed, so a save point whose acknowledgement never came is never
+    // published.
+    room.clear_parts();
+    code
 }
 
 /// **The one rule of a save point's adoption**, per `weaver-state-Spec`
@@ -367,6 +375,15 @@ struct Custody<'a> {
     /// indexes on the restored holdings.
     election: &'a Election,
     restored: Restored,
+    /// The part the last `snapshot` wrote and the harness has not yet
+    /// acknowledged: its finished name and its digest. At most one stands,
+    /// per `weaver-state-Spec` section 3.
+    pending: Option<PendingSavePoint>,
+}
+
+struct PendingSavePoint {
+    name: String,
+    digest: String,
 }
 
 /// The member's vector, parsed: the territory and, under a diagnostic
@@ -666,15 +683,49 @@ fn answer_frame(
             let schema = custody.store.schema()?;
             let image = custody.store.image()?;
             let save_point = SavePoint::take(stamp.clone(), &schema, image);
+            // **Written as a part, the finished name given on the
+            // acknowledgement alone**, per `weaver-state-Spec` section 3 on
+            // the operator's ruling of 2026-10-06 on #1 (A3.0 item 4): the
+            // answer names the finished name the file will take, and a part
+            // whose acknowledgement never comes is never published.
+            custody.pending = None;
             let name = custody
                 .room
-                .write(&save_point)
+                .write_part(&save_point)
                 .map_err(|e| CustodyFault::SavePoint(e.to_string()))?;
+            let digest = save_point.digest();
+            custody.pending = Some(PendingSavePoint {
+                name: name.clone(),
+                digest: digest.clone(),
+            });
             Ok(render_snapshot_answer(&SavePointAnswer {
                 name,
                 stamp,
-                digest: save_point.digest(),
+                digest,
             }))
+        }
+        // **The acknowledgement gives the part its finished name**: one
+        // naming the pending part's digest finishes it and answers the
+        // name; any other is answered by nothing and the part is removed,
+        // so a finished name is given only once.
+        Ask::Acknowledge { digest } => {
+            let Some(pending) = custody.pending.take() else {
+                return Err(CustodyFault::SavePoint(
+                    "an acknowledgement names no part this member holds".into(),
+                ));
+            };
+            if pending.digest != *digest {
+                custody.room.discard_part(&pending.name);
+                return Err(CustodyFault::SavePoint(format!(
+                    "the acknowledgement names {digest} and the part is {}",
+                    pending.digest
+                )));
+            }
+            custody
+                .room
+                .finish(&pending.name)
+                .map_err(|e| CustodyFault::SavePoint(e.to_string()))?;
+            Ok(render_finished_answer(&pending.name))
         }
         // **The restore reads its own room by name**, per the Spec: a name
         // that is not a plain entry of the room, a file that fails its check

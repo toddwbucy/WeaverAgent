@@ -555,6 +555,7 @@ fn the_unload_always_carries_its_close() {
         Some(Payload::Unload(weaver_trace::UnloadClose {
             grant_surface: Some(weaver_trace::GrantSurface::Varied),
             cause: Some(weaver_trace::Cause { uid: 1000 }),
+            forced: false,
         }))
     };
     let bare = r.submit(event(Kind::Unload, None, None)).unwrap_err();
@@ -578,19 +579,22 @@ fn the_unload_always_carries_its_close() {
     let rendered = serde_json::to_value(weaver_trace::UnloadClose {
         grant_surface: Some(weaver_trace::GrantSurface::Unreadable),
         cause: Some(weaver_trace::Cause { uid: 1000 }),
+        forced: false,
     })
     .expect("renders");
     assert_eq!(
         rendered,
-        serde_json::json!({"grant_surface": "unreadable", "cause": {"uid": 1000}})
+        serde_json::json!({"grant_surface": "unreadable", "cause": {"uid": 1000}, "forced": false})
     );
-    // No member stood and the worker unwound itself: both absent, never null.
+    // No member stood and the worker unwound itself: both absent, never null;
+    // `forced` is a fact and always written (A3.2).
     let bare = serde_json::to_value(weaver_trace::UnloadClose {
         grant_surface: None,
         cause: None,
+        forced: false,
     })
     .expect("renders");
-    assert_eq!(bare, serde_json::json!({}));
+    assert_eq!(bare, serde_json::json!({"forced": false}));
 }
 
 /// A run-level kind carrying a turn refuses: a join key the work never held
