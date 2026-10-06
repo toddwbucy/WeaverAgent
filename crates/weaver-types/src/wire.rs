@@ -414,6 +414,12 @@ pub struct EnterPayload {
     /// record both name what they were built from and the harness holds no
     /// file.
     pub declaration: String,
+    /// The prompt file's digest, sha256 hex of the bytes admin read at the
+    /// inventory and seated, per `weaver-types-Spec` section 4 as of
+    /// 2026-10-02: the declaration's digest stopped covering the prompt the
+    /// day the prompt became its own file. The harness copies it onto the
+    /// load event and reads it nowhere else.
+    pub identity_file: String,
     /// The lineage of the save point the load restores, resolved by admin
     /// from the save point's stamp and never its path, per `weaver-types-Spec`
     /// section 4 on the operator's rulings of 2026-10-02 on #58: the harness

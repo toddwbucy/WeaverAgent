@@ -697,7 +697,12 @@ fn take_inventory(
                 gid: user.gid.as_raw(),
             }),
     };
-    inventory::take_inventory(agent, &source, &boundary)
+    inventory::take_inventory(
+        agent,
+        &source,
+        |name| read_prompt(&config.declaration_directory, config.operator, name),
+        &boundary,
+    )
 }
 
 /// Every gid the worker may run under: the group the unit sets, the passwd
@@ -993,6 +998,7 @@ fn run_load(
                 state_election: inventory.config.state_election.clone().unwrap_or_default(),
                 state_store: inventory.config.state_store.clone().unwrap_or_default(),
                 declaration: inventory.declaration.clone(),
+                identity_file: inventory.identity_file.clone(),
                 restore: inventory.lineage.clone(),
                 // No reset until admin's clean-unload marker lands with its
                 // save-point act (A3.2), per `weaver-admin-Spec` section 4.
@@ -1610,6 +1616,95 @@ fn judge_declaration_directory(
         }
     }
     Ok(canonical)
+}
+
+/// **The prompt file's reader**, per Spec section 4 as of 2026-10-02: the
+/// bare name the declaration's `identity-file` carries, opened inside the
+/// declaration directory section 9 judged and never by a pathname
+/// re-resolved after it. The directory is held by a descriptor opened
+/// without following a link and judged again on that descriptor, the
+/// operator's and closed to group and other, and the name is opened through
+/// it, so no path component can move between the judgment and the read. The
+/// file is judged on its own descriptor: a regular file, never a symbolic
+/// link, **the operator's own and with link count one**, writable by no
+/// group or other. The uid-0 admission `agent.toml` carries is not extended
+/// to the prompt and a second link refuses, because a hard link is not a
+/// symbolic link: an operator-placed link to a root-owned file elsewhere
+/// would otherwise pass, and admin, as root, would read that file's bytes
+/// and seat them as the prompt (the question on #76, answered as its option
+/// (a) pending the operator's word). A failed judgment refuses
+/// `BoundaryUnverified` naming the file on stderr. An absent or unreadable
+/// file answers nothing, which the parse refuses `ConfigInvalid` naming the
+/// field, the omission being the declaration's.
+fn read_prompt(
+    directory: &std::path::Path,
+    operator: u32,
+    name: &str,
+) -> Result<Option<Vec<u8>>, LifecycleRefusal> {
+    use nix::fcntl::OFlag;
+    use nix::sys::stat::Mode;
+    use std::io::Read;
+    let path = directory.join(name);
+    let refuse = |what: &str| {
+        diag!("weaver-admin: the prompt file {} {what}", path.display());
+        LifecycleRefusal::BoundaryUnverified
+    };
+    let held = nix::fcntl::open(
+        directory,
+        OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|e| refuse(&format!("sits in a directory admin cannot hold: {e}")))?;
+    let directory_stat = nix::sys::stat::fstat(&held)
+        .map_err(|e| refuse(&format!("sits in a directory that does not stat: {e}")))?;
+    if directory_stat.st_uid != operator || directory_stat.st_mode & 0o077 != 0 {
+        return Err(refuse(
+            "sits in a directory no longer as section 9 judged it",
+        ));
+    }
+    let file = match nix::fcntl::openat(
+        &held,
+        name,
+        OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC | OFlag::O_NONBLOCK,
+        Mode::empty(),
+    ) {
+        Ok(file) => file,
+        Err(nix::errno::Errno::ENOENT) => {
+            diag!("weaver-admin: the prompt file {} is absent", path.display());
+            return Ok(None);
+        }
+        Err(nix::errno::Errno::ELOOP) => {
+            return Err(refuse("is a link, and admin reads no link as the prompt"));
+        }
+        Err(e) => {
+            diag!(
+                "weaver-admin: the prompt file {} does not open: {e}",
+                path.display()
+            );
+            return Ok(None);
+        }
+    };
+    let stat = nix::sys::stat::fstat(&file).map_err(|e| refuse(&format!("does not stat: {e}")))?;
+    if stat.st_mode & nix::libc::S_IFMT != nix::libc::S_IFREG
+        || stat.st_uid != operator
+        || stat.st_mode & 0o022 != 0
+    {
+        return Err(refuse("is not a closed regular file of the operator's own"));
+    }
+    if stat.st_nlink != 1 {
+        return Err(refuse(
+            "carries a second link, and admin reads no linked file as the prompt",
+        ));
+    }
+    let mut bytes = Vec::new();
+    if let Err(e) = std::fs::File::from(file).read_to_end(&mut bytes) {
+        diag!(
+            "weaver-admin: the prompt file {} does not read: {e}",
+            path.display()
+        );
+        return Ok(None);
+    }
+    Ok(Some(bytes))
 }
 
 /// Whether a path carries a POSIX access-control list, access or default,
@@ -2316,6 +2411,83 @@ mod tests {
             load_service_config_at(&base, "alpha", me).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
             "a link at the directory's own name"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **The prompt file is read through the judged directory and judged as
+    /// `agent.toml` is**, per Spec section 4 as of 2026-10-02: a regular
+    /// file the operator owns, writable by no group or other, answers its
+    /// bytes. An absent one answers nothing, which the parse refuses as the
+    /// declaration's omission. A link, a group-writable file, a FIFO, or a
+    /// directory no longer closed refuses `BoundaryUnverified`, the
+    /// boundary's fault and never the declaration's.
+    /// A hard link is not a symbolic link, so a file carrying a second
+    /// link refuses on its link count, judged on the opened descriptor,
+    /// and reads again once the link is gone.
+    /// Perturbations: drop `O_NOFOLLOW` and the link reads its target; drop
+    /// the write-bit test and the group-writable file reads; drop the
+    /// directory's re-judgment and the opened directory reads; drop the
+    /// regular-file test and the FIFO answers empty bytes; drop the link
+    /// count and the hard-linked file reads.
+    #[test]
+    fn the_prompt_file_is_read_through_the_judged_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let me = nix::unistd::getuid().as_raw();
+        let base = std::env::temp_dir().join(format!("weaver-admin-prompt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let prompt = base.join("system-prompt.md");
+        std::fs::write(&prompt, "You are Karl.\n").unwrap();
+        std::fs::set_permissions(&prompt, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            read_prompt(&base, me, "system-prompt.md"),
+            Ok(Some(b"You are Karl.\n".to_vec()))
+        );
+        assert_eq!(
+            read_prompt(&base, me, "absent.md"),
+            Ok(None),
+            "absent answers nothing"
+        );
+        let refused = Err(LifecycleRefusal::BoundaryUnverified);
+        std::os::unix::fs::symlink(&prompt, base.join("linked.md")).unwrap();
+        assert_eq!(read_prompt(&base, me, "linked.md"), refused, "a link");
+        std::fs::set_permissions(&prompt, std::fs::Permissions::from_mode(0o620)).unwrap();
+        assert_eq!(
+            read_prompt(&base, me, "system-prompt.md"),
+            refused,
+            "group-writable"
+        );
+        std::fs::set_permissions(&prompt, std::fs::Permissions::from_mode(0o600)).unwrap();
+        nix::unistd::mkfifo(
+            &base.join("fifo.md"),
+            nix::sys::stat::Mode::from_bits_truncate(0o600),
+        )
+        .unwrap();
+        assert_eq!(read_prompt(&base, me, "fifo.md"), refused, "a FIFO");
+        std::fs::hard_link(&prompt, base.join("hard.md")).unwrap();
+        assert_eq!(
+            read_prompt(&base, me, "system-prompt.md"),
+            refused,
+            "a file carrying a second link"
+        );
+        assert_eq!(
+            read_prompt(&base, me, "hard.md"),
+            refused,
+            "and the link itself"
+        );
+        std::fs::remove_file(base.join("hard.md")).unwrap();
+        assert_eq!(
+            read_prompt(&base, me, "system-prompt.md"),
+            Ok(Some(b"You are Karl.\n".to_vec())),
+            "the link gone, the file reads again"
+        );
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o750)).unwrap();
+        assert_eq!(
+            read_prompt(&base, me, "system-prompt.md"),
+            refused,
+            "a directory opened since its judgment"
         );
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -3229,7 +3401,7 @@ mod tests {
                 "\n",
                 "[spu-instruction.decoder]\n",
                 "residual-readout-election = false\n",
-                "identity = []\n",
+                "identity-file = \"system-prompt.md\"\n",
                 "tunable-values = {{}}\n",
                 "\n",
                 "[spu-instruction.decoder.model-binding]\n",
@@ -3251,7 +3423,8 @@ mod tests {
             ),
             sink.display()
         );
-        let config = weaver_types::parse(&source).expect("the declaration parses");
+        let config = weaver_types::parse(&source, |_| Ok::<_, ()>(Some(Vec::new())))
+            .expect("the declaration parses");
         let gate_instruction = config
             .gate_instruction
             .clone()
@@ -3264,6 +3437,7 @@ mod tests {
             config,
             identity: "weaver-alpha".into(),
             declaration: String::new(),
+            identity_file: String::new(),
             binding: weaver_types::EnterBinding::Serving { gate_instruction },
             lineage: None,
             member_account: Some(member),

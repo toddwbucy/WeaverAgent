@@ -1372,6 +1372,9 @@ impl Harness {
             // `serve`. Neither is read from the deployment.
             state_member,
             declaration: payload.declaration.clone(),
+            // The prompt's digest beside the declaration's, admin's fact
+            // copied from the enter, per `weaver-trace-Spec` section 3.
+            identity_file: payload.identity_file.clone(),
             // **The load names its lineage, its reset and its stack**, per
             // `weaver-trace-Spec` section 3 on the rulings of 2026-10-02 on
             // #58: admin's facts, copied from the enter and read from no
@@ -2717,6 +2720,7 @@ mod tests {
                     tee: Some(weaver_trace::Election::default()),
                     state_member: false,
                     declaration: Default::default(),
+                    identity_file: Default::default(),
                     lineage: None,
                     reset: None,
                     stack: Default::default(),
@@ -2869,6 +2873,7 @@ mod tests {
             },
             state_store: weaver_types::StateStore::default(),
             declaration: String::new(),
+            identity_file: String::new(),
             restore: None,
             reset: None,
             stack: Default::default(),
@@ -2999,6 +3004,7 @@ mod tests {
             },
             state_store: weaver_types::StateStore::default(),
             declaration: String::new(),
+            identity_file: String::new(),
             restore: None,
             reset: None,
             stack: Default::default(),
@@ -3146,6 +3152,7 @@ mod tests {
                 },
                 state_store: weaver_types::StateStore::default(),
                 declaration: String::new(),
+                identity_file: String::new(),
                 restore: None,
                 reset: None,
                 stack: Default::default(),
@@ -3318,6 +3325,7 @@ mod tests {
             },
             state_store: weaver_types::StateStore::default(),
             declaration: String::new(),
+            identity_file: String::new(),
             restore,
             reset: None,
             stack: Default::default(),
@@ -3642,6 +3650,7 @@ mod tests {
             },
             state_store: weaver_types::StateStore::default(),
             declaration: String::new(),
+            identity_file: String::new(),
             restore: None,
             reset: None,
             stack: Default::default(),
@@ -3751,7 +3760,8 @@ mod tests {
                     },
                 },
                 state_store: weaver_types::StateStore::default(),
-                declaration: String::new(),
+                declaration: "d0d0".to_string(),
+                identity_file: "f0f0".to_string(),
                 restore: None,
                 reset: None,
                 stack: Default::default(),
@@ -3787,6 +3797,13 @@ mod tests {
             // on the unload. Perturbation: author the load's cause as uid 0
             // or the unload's as absent and the matching assertion fails.
             assert_eq!(load["payload"]["boundary"], "b0b0");
+            // **The two digests land apart**, the declaration's and the
+            // prompt file's, each copied from the enter, per
+            // `weaver-trace-Spec` section 3 as of 2026-10-02. Perturbation:
+            // copy the declaration's digest into the prompt's member and the
+            // second assertion fails.
+            assert_eq!(load["payload"]["declaration"], "d0d0");
+            assert_eq!(load["payload"]["identity_file"], "f0f0");
             assert_eq!(load["payload"]["cause"], serde_json::json!({"uid": 1000}));
             assert_eq!(load["payload"]["library_path"], "/opt/weaver/lib");
             let unload: serde_json::Value = serde_json::from_str(
@@ -3908,6 +3925,7 @@ mod tests {
             binding: weaver_types::EnterBinding::Diagnostic,
             state_store: weaver_types::StateStore::default(),
             declaration: String::new(),
+            identity_file: String::new(),
             restore: None,
             reset: None,
             stack: Default::default(),
@@ -4034,6 +4052,7 @@ mod tests {
             },
             state_store: weaver_types::StateStore::default(),
             declaration: String::new(),
+            identity_file: String::new(),
             restore: None,
             reset: None,
             stack: Default::default(),

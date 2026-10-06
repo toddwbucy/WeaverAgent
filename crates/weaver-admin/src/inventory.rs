@@ -16,7 +16,7 @@ use std::path::Path;
 
 use weaver_types::{
     AgentConfig, AgentName, BindingKind, ConfigErrorKind, EnterBinding, FieldName,
-    LifecycleRefusal, StoreEngine, TraceSink,
+    LifecycleRefusal, ParseRefusal, StoreEngine, TraceSink,
 };
 
 /// What the boundary check needs to know about the host, supplied by the
@@ -90,6 +90,10 @@ pub struct Inventory {
     /// on the enter so the run and the record name what they were built
     /// from, and this crate is the file's one reader.
     pub declaration: String,
+    /// The prompt file's digest, sha256 hex of the bytes the inventory read
+    /// and the parse seated, per `weaver-admin-Spec` section 4 as of
+    /// 2026-10-02: supplied on the enter beside the declaration's.
+    pub identity_file: String,
     /// The binding kind resolved, per `weaver-admin-Spec` section 7: the one
     /// inventory function resolves it, so the verb and the load cannot
     /// resolve differently, and what the enter carries is this value.
@@ -110,7 +114,11 @@ pub struct Inventory {
 ///
 /// The name was admitted by the agent's root before this runs, per
 /// `weaver-admin-Spec` section 9. The parse is the floor's - `weaver_types::parse` yields a whole config or a typed error,
-/// and this crate adds no partial reader. The existence checks are admin's,
+/// and this crate adds no partial reader. **`prompt` is the prompt file's
+/// reader**, called by the parse once with the bare name the declaration's
+/// `identity-file` carries, per section 4: the file's bytes, nothing for one
+/// absent or unreadable, or this crate's own refusal, which comes back
+/// unchanged. The existence checks are admin's,
 /// and **each is a look rather than an ask**: nothing is repaired and nothing
 /// is built.
 ///
@@ -122,9 +130,10 @@ pub struct Inventory {
 pub fn take_inventory(
     name: &AgentName,
     source: &str,
+    prompt: impl FnOnce(&str) -> Result<Option<Vec<u8>>, LifecycleRefusal>,
     boundary: &Boundary,
 ) -> Result<Inventory, LifecycleRefusal> {
-    take_inventory_against(name, source, boundary, None)
+    take_inventory_against(name, source, prompt, boundary, None)
 }
 
 /// The whole of `take_inventory` with the host's answer about the agent's
@@ -143,16 +152,37 @@ pub fn take_inventory(
 fn take_inventory_against(
     name: &AgentName,
     source: &str,
+    prompt: impl FnOnce(&str) -> Result<Option<Vec<u8>>, LifecycleRefusal>,
     boundary: &Boundary,
     group: Option<&ResolvedGroup>,
 ) -> Result<Inventory, LifecycleRefusal> {
     let identity = identity_for(name);
 
-    let config = weaver_types::parse(source).map_err(|e| match e.kind {
-        ConfigErrorKind::MissingField
-        | ConfigErrorKind::UnknownField
-        | ConfigErrorKind::BadValue
-        | ConfigErrorKind::Malformed => LifecycleRefusal::ConfigInvalid { field: e.field },
+    // **Both digests are this crate's**, per `weaver-admin-Spec` section 4:
+    // the prompt's is taken over the bytes the parse seated, as read here,
+    // so the record names what the agent was given without a second read.
+    let mut identity_file = None;
+    let config = weaver_types::parse(source, |judged| {
+        let read = prompt(judged)?;
+        identity_file = read.as_deref().map(file_bytes_digest);
+        Ok(read)
+    })
+    .map_err(|refusal| match refusal {
+        ParseRefusal::Config(e) => match e.kind {
+            ConfigErrorKind::MissingField
+            | ConfigErrorKind::UnknownField
+            | ConfigErrorKind::BadValue
+            | ConfigErrorKind::Malformed => LifecycleRefusal::ConfigInvalid { field: e.field },
+        },
+        // The reader's own refusal keeps its category: a prompt file that
+        // failed section 9's judgment is the boundary's, never the
+        // declaration's.
+        ParseRefusal::Reader(refusal) => refusal,
+    })?;
+    // A parse that seated an identity read the prompt, so this holds a
+    // digest, and the refusal is for a parse that ever did otherwise.
+    let identity_file = identity_file.ok_or(LifecycleRefusal::ConfigInvalid {
+        field: Some(FieldName("spu-instruction.decoder.identity-file".into())),
     })?;
 
     // The kind conditions the gate instruction's presence, per
@@ -395,6 +425,7 @@ fn take_inventory_against(
         config,
         identity,
         declaration: declaration_digest(source),
+        identity_file,
         binding,
         lineage,
         member_account: boundary.member_account,
@@ -483,8 +514,14 @@ pub fn drop_to(uid: u32, gids: &[nix::libc::gid_t]) -> std::io::Result<()> {
 
 /// The declaration's digest, sha256 of the file's bytes as read, hex.
 pub fn declaration_digest(source: &str) -> String {
+    file_bytes_digest(source.as_bytes())
+}
+
+/// sha256 of a file's bytes as read, hex: the declaration's and the prompt
+/// file's digests alike.
+pub fn file_bytes_digest(bytes: &[u8]) -> String {
     use sha2::Digest;
-    let digest = sha2::Sha256::digest(source.as_bytes());
+    let digest = sha2::Sha256::digest(bytes);
     let mut hex = String::with_capacity(64);
     for byte in digest {
         use std::fmt::Write;
@@ -755,6 +792,12 @@ mod tests {
 
     use super::*;
 
+    /// A prompt reader answering an empty file, for every case not about
+    /// the prompt.
+    fn empty_prompt(_: &str) -> Result<Option<Vec<u8>>, LifecycleRefusal> {
+        Ok(Some(Vec::new()))
+    }
+
     /// **A rule admitting a peer the socket's mode turns away is named.**
     ///
     /// The gate binds `0770` owned by the agent's group, so a uid outside it
@@ -994,6 +1037,7 @@ mod tests {
         let refused = take_inventory_against(
             &name,
             &source,
+            empty_prompt,
             &bound,
             Some(&ResolvedGroup::UserWithoutGroup),
         );
@@ -1004,7 +1048,14 @@ mod tests {
 
         // And a box that provisioned no agent at all is refused on nothing.
         assert!(
-            take_inventory_against(&name, &source, &bound, Some(&ResolvedGroup::NoAgent)).is_ok(),
+            take_inventory_against(
+                &name,
+                &source,
+                empty_prompt,
+                &bound,
+                Some(&ResolvedGroup::NoAgent)
+            )
+            .is_ok(),
             "an unprovisioned box is refused on no fact about an agent"
         );
     }
@@ -1049,7 +1100,7 @@ mod tests {
         };
         let source = config_source(&sink_dir)
             .replace("allowed-uids = [0]\n", &format!("allowed-uids = [{me}]\n"));
-        let refused = take_inventory_against(&name, &source, &bound, Some(&group));
+        let refused = take_inventory_against(&name, &source, empty_prompt, &bound, Some(&group));
         assert!(
             matches!(refused, Err(LifecycleRefusal::BoundaryUnverified)),
             "the unreachable uid refuses as a boundary fault: {refused:?}"
@@ -1068,7 +1119,7 @@ mod tests {
             ],
         };
         assert!(
-            take_inventory_against(&name, &source, &bound, Some(&reachable)).is_ok(),
+            take_inventory_against(&name, &source, empty_prompt, &bound, Some(&reachable)).is_ok(),
             "a uid inside the group passes the same walk"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -1128,7 +1179,7 @@ mod tests {
                 "\n",
                 "[spu-instruction.decoder]\n",
                 "residual-readout-election = false\n",
-                "identity = []\n",
+                "identity-file = \"system-prompt.md\"\n",
                 "tunable-values = {{}}\n",
                 "\n",
                 "[spu-instruction.decoder.model-binding]\n",
@@ -1185,7 +1236,7 @@ mod tests {
         ];
         for (store, field) in cases {
             let source = config_source_electing(&home, store);
-            let refused = take_inventory(&name, &source, &boundary);
+            let refused = take_inventory(&name, &source, empty_prompt, &boundary);
             match refused {
                 Err(LifecycleRefusal::ConfigInvalid { field: Some(ref f) }) if f.0 == field => {}
                 other => panic!("{store:?} should refuse naming {field}, got {other:?}"),
@@ -1218,14 +1269,14 @@ mod tests {
         let embedded = config_source(&sink_dir);
         assert!(
             matches!(
-                take_inventory(&name, &embedded, &without_binary),
+                take_inventory(&name, &embedded, empty_prompt, &without_binary),
                 Err(LifecycleRefusal::BoundaryUnverified)
             ),
             "an absent election is the embedded engine and requires the member"
         );
         let declined = config_source_electing(&sink_dir, "engine = \"none\"\n");
         assert!(
-            take_inventory(&name, &declined, &without_binary).is_ok(),
+            take_inventory(&name, &declined, empty_prompt, &without_binary).is_ok(),
             "none declines the member and requires nothing"
         );
 
@@ -1269,18 +1320,18 @@ mod tests {
         let embedded = config_source(&sink_dir);
         assert!(
             matches!(
-                take_inventory(&name, &embedded, &unprovisioned),
+                take_inventory(&name, &embedded, empty_prompt, &unprovisioned),
                 Err(LifecycleRefusal::BoundaryUnverified)
             ),
             "an absent election is the embedded engine and requires the account"
         );
         let declined = config_source_electing(&sink_dir, "engine = \"none\"\n");
         assert!(
-            take_inventory(&name, &declined, &unprovisioned).is_ok(),
+            take_inventory(&name, &declined, empty_prompt, &unprovisioned).is_ok(),
             "none declines the member and requires nothing"
         );
         assert!(
-            take_inventory(&name, &embedded, &boundary(&sink_dir, 65533)).is_ok(),
+            take_inventory(&name, &embedded, empty_prompt, &boundary(&sink_dir, 65533)).is_ok(),
             "and a box carrying the account passes, so the refusal is the account's"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -1460,7 +1511,7 @@ mod tests {
 
         // Diagnostic, carrying the instruction its kind excludes.
         let source = format!("binding-kind = \"diagnostic\"\n{}", config_source(&root));
-        let refused = take_inventory(&name, &source, &bound);
+        let refused = take_inventory(&name, &source, empty_prompt, &bound);
         assert!(
             matches!(
                 refused,
@@ -1479,7 +1530,7 @@ mod tests {
             ),
             "",
         );
-        let refused = take_inventory(&name, &source, &bound);
+        let refused = take_inventory(&name, &source, empty_prompt, &bound);
         assert!(
             matches!(
                 refused,
@@ -1515,7 +1566,7 @@ mod tests {
             config_source(&root),
             "the grant landed in the source"
         );
-        let refused = take_inventory(&name, &source, &bound);
+        let refused = take_inventory(&name, &source, empty_prompt, &bound);
         assert!(
             matches!(
                 refused,
@@ -1529,7 +1580,7 @@ mod tests {
             "residual-readout-election = false\n",
             "residual-readout-election = false\ncolumn-permission = true\n",
         );
-        let refused = take_inventory(&name, &source, &bound);
+        let refused = take_inventory(&name, &source, empty_prompt, &bound);
         assert!(
             matches!(
                 refused,
@@ -1560,7 +1611,7 @@ mod tests {
 
         // World-searchable: the kernel would let the agent traverse.
         std::fs::set_permissions(&sink_dir, std::fs::Permissions::from_mode(0o755)).expect("mode");
-        let refused = take_inventory(&name, &config_source(&sink_dir), &bound);
+        let refused = take_inventory(&name, &config_source(&sink_dir), empty_prompt, &bound);
         assert!(
             matches!(refused, Err(LifecycleRefusal::BoundaryUnverified)),
             "a traversable sink directory refuses, got {refused:?}"
@@ -1569,7 +1620,7 @@ mod tests {
         // Admin-owned and unsearchable by anyone else: the boundary the
         // operator is required to draw.
         std::fs::set_permissions(&sink_dir, std::fs::Permissions::from_mode(0o750)).expect("mode");
-        let admitted = take_inventory(&name, &config_source(&sink_dir), &bound);
+        let admitted = take_inventory(&name, &config_source(&sink_dir), empty_prompt, &bound);
         assert!(
             admitted.is_ok(),
             "an unsearchable boundary admits: {admitted:?}"
@@ -1638,7 +1689,7 @@ mod tests {
         // is admitted: the denial half already passes at 0750.
         let held = boundary(&home, 65533);
         assert!(
-            take_inventory(&name, &config_source(&sink_dir), &held).is_ok(),
+            take_inventory(&name, &config_source(&sink_dir), empty_prompt, &held).is_ok(),
             "an admin-owned directory holds custody"
         );
 
@@ -1661,7 +1712,7 @@ mod tests {
             !agent_can_traverse(&sink_dir, &third_party),
             "the denial half still passes, which is what makes this case reachable"
         );
-        let refused = take_inventory(&name, &config_source(&sink_dir), &third_party);
+        let refused = take_inventory(&name, &config_source(&sink_dir), empty_prompt, &third_party);
         assert!(
             matches!(refused, Err(LifecycleRefusal::BoundaryUnverified)),
             "a directory a third principal owns refuses the load, got {refused:?}"
@@ -1695,12 +1746,13 @@ mod tests {
             config_source(&sink_dir),
             root.join("s-1.ndjson").display()
         );
-        let refused = take_inventory(&name, &source, &bound);
+        let refused = take_inventory(&name, &source, empty_prompt, &bound);
         assert!(
             matches!(refused, Err(LifecycleRefusal::ConfigInvalid { field: Some(ref f) }) if f.0 == "restore"),
             "a restore refuses naming the field, got {refused:?}"
         );
-        let taken = take_inventory(&name, &config_source(&sink_dir), &bound).expect("admits");
+        let taken =
+            take_inventory(&name, &config_source(&sink_dir), empty_prompt, &bound).expect("admits");
         assert!(taken.lineage.is_none(), "no restore, no lineage");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1726,10 +1778,80 @@ mod tests {
         let refused = take_inventory(
             &AgentName("alpha".into()),
             &config_source(&sink_dir),
+            empty_prompt,
             &bound,
         );
         assert!(matches!(refused, Err(LifecycleRefusal::BoundaryUnverified)));
         assert!(!absent_home.exists(), "nothing was built");
+    }
+
+    /// **The enter's prompt digest is the prompt file's, and the reader
+    /// decides the refusal**, per `weaver-admin-Spec` section 4 as of
+    /// 2026-10-02: the digest is sha256 of the bytes the reader answered and
+    /// the parse seated, never the declaration's, and the declaration's
+    /// stands beside it. A reader answering nothing refuses `ConfigInvalid`
+    /// naming `spu-instruction.decoder.identity-file`, and a reader's own
+    /// refusal comes back as it was, `BoundaryUnverified` staying the
+    /// boundary's.
+    ///
+    /// Perturbation: digest the declaration's bytes in the prompt's place and
+    /// the two digests come out equal; map the reader's refusal to nothing
+    /// and it arrives as `ConfigInvalid`. Watched under both.
+    #[test]
+    fn the_prompt_digest_is_the_prompts_and_the_reader_decides_the_refusal() {
+        let root = scratch("prompt");
+        let sink_dir = root.join("sink");
+        std::fs::create_dir_all(&sink_dir).expect("sink dir");
+        std::fs::set_permissions(&sink_dir, std::fs::Permissions::from_mode(0o750)).expect("mode");
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).expect("home");
+        let name = AgentName("alpha".to_string());
+        let bound = boundary(&home, 65533);
+        let source = config_source(&sink_dir);
+        let prompt = b"You are Karl.\n".to_vec();
+        let mut asked = Vec::new();
+        let taken = take_inventory(
+            &name,
+            &source,
+            |judged| {
+                asked.push(judged.to_string());
+                Ok(Some(prompt.clone()))
+            },
+            &bound,
+        )
+        .expect("admits");
+        assert_eq!(
+            asked,
+            ["system-prompt.md"],
+            "the reader is asked once, by name"
+        );
+        assert_eq!(taken.identity_file, file_bytes_digest(&prompt));
+        assert_eq!(taken.declaration, declaration_digest(&source));
+        assert_ne!(taken.identity_file, taken.declaration);
+        assert_eq!(
+            taken.config.spu_instruction.decoder.identity.len(),
+            1,
+            "the prompt is seated"
+        );
+        let absent = take_inventory(&name, &source, |_| Ok(None), &bound);
+        assert!(
+            matches!(
+                &absent,
+                Err(LifecycleRefusal::ConfigInvalid { field: Some(FieldName(field)) })
+                    if field == "spu-instruction.decoder.identity-file"
+            ),
+            "an absent prompt is the declaration's omission, got {absent:?}"
+        );
+        let judged = take_inventory(
+            &name,
+            &source,
+            |_| Err(LifecycleRefusal::BoundaryUnverified),
+            &bound,
+        );
+        assert!(
+            matches!(judged, Err(LifecycleRefusal::BoundaryUnverified)),
+            "the reader's refusal keeps its category, got {judged:?}"
+        );
     }
 
     /// **The artifact is named here and resolved at admission**, per
@@ -1757,7 +1879,7 @@ mod tests {
             "artifact = \"qwen3-4b-instruct\"",
             "artifact = \"/no/such/directory/model.gguf\"",
         );
-        let admitted = take_inventory(&name, &absent, &bound);
+        let admitted = take_inventory(&name, &absent, empty_prompt, &bound);
         assert!(
             admitted.is_ok(),
             "an absent artifact path is the SPU's to refuse, got {admitted:?}"
@@ -1765,7 +1887,7 @@ mod tests {
 
         let unnamed =
             config_source(&sink_dir).replace("artifact = \"qwen3-4b-instruct\"", "artifact = \"\"");
-        let refused = take_inventory(&name, &unnamed, &bound);
+        let refused = take_inventory(&name, &unnamed, empty_prompt, &bound);
         match refused {
             Err(LifecycleRefusal::ConfigInvalid { field: Some(ref f) })
                 if f.0 == "spu-instruction.decoder.model-binding.artifact" => {}

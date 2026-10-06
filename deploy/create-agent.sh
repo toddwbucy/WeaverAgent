@@ -28,10 +28,11 @@
 # would admit.
 #
 # **The declaration stands in the operator's directory and not in the root**
-# (operator's ruling of 2026-10-02): `agent.toml` is written there, as the
-# operator, in a directory only the operator can enter, and admin reads it as
-# root through the judgment of weaver-admin-Spec section 9. Admin's own
-# `admin.log` and `worker.log` land beside it at the first verb.
+# (operator's ruling of 2026-10-02): `agent.toml` and the system prompt it
+# names, `system-prompt.md`, are written there, as the operator, in a directory
+# only the operator can enter, and admin reads both as root through the
+# judgment of weaver-admin-Spec section 9. Admin's own `admin.log` and
+# `worker.log` land beside them at the first verb.
 #
 # **Three accounts and two groups beyond the agent's own**, per
 # weaver-admin-Spec sections 4, 6 and 9 (the operator's rulings of 2026-10-03
@@ -186,6 +187,7 @@ STACK=${WEAVER_STACK_RECORD:-/etc/weaver/stack}
 AGENT_ROOT="$ADMIN_BASE/$NAME"
 STAGE="$ADMIN_BASE/.$NAME.partial"
 DECLARATION="$DECL_DIR/agent.toml"
+PROMPT="$DECL_DIR/system-prompt.md"
 
 # **held_closed PATH: admin's rule for what a root process may trust**, per
 # weaver-admin-Spec section 9 (`judge_ancestors`). PATH, resolved to its
@@ -340,6 +342,7 @@ if [ -e "$DECL_DIR" ] || [ -L "$DECL_DIR" ]; then
   [ "$d_owner" = "$OPERATOR_UID" ] || die "the declaration directory $DECL_DIR is not $OPERATOR's"
   (( 8#$d_mode & 8#077 )) && die "the declaration directory $DECL_DIR grants group or other access (mode $d_mode), and admin requires it closed to everyone but its owner"
   { [ ! -e "$DECLARATION" ] && [ ! -L "$DECLARATION" ]; } || die "a declaration already stands at $DECLARATION"
+  { [ ! -e "$PROMPT" ] && [ ! -L "$PROMPT" ]; } || die "a prompt file already stands at $PROMPT"
 fi
 
 # **The declaration is rendered once, here, and parse-checked before anything
@@ -363,25 +366,18 @@ permission-mode = "deny"
 # rather than left to a default a reader cannot see.
 binding-kind = "serving"
 
+# **The system prompt is its own file beside this one**, per weaver-types-Spec
+# section 2: a markdown file the operator edits as prose, seated verbatim at
+# every load, its digest on the load event.
 [spu-instruction.decoder]
 residual-readout-election = false
 surprisal-election = true
+identity-file = "system-prompt.md"
 tunable-values = { context-capacity = 32768, max-tokens-per-turn = 4096, seed = 451234785645 }
 
 [spu-instruction.decoder.model-binding]
 artifact = "$ARTIFACT"
 devices = [0]
-
-[[spu-instruction.decoder.identity]]
-role = "system"
-
-[[spu-instruction.decoder.identity.content]]
-type = "text"
-text = """
-You are a careful assistant. Answer from what you know, say
-plainly when you do not know, and keep answers as short as the
-question allows.
-"""
 
 [gate-instruction.access-rule]
 allowed-uids = [$(id -u "$OPERATOR")]
@@ -408,6 +404,13 @@ engine = "$ENGINE"
 TOML
 }
 DECLARATION_TEXT=$(render_declaration)
+# **The prompt's bytes are the model's**, seated with no trimming, so the file
+# ends in the newline an editor would write and the text is the one this
+# script wrote into every declaration before 2026-10-02.
+PROMPT_TEXT='You are a careful assistant. Answer from what you know, say
+plainly when you do not know, and keep answers as short as the
+question allows.
+'
 command -v python3 >/dev/null || die "python3 is not on PATH, and the declaration is parse-checked with its tomllib before anything is made"
 printf '%s\n' "$DECLARATION_TEXT" | python3 -c 'import sys, tomllib; tomllib.loads(sys.stdin.read())' 2>/dev/null \
   || die "the rendered declaration does not parse as TOML, so nothing was made. Check --session and --artifact"
@@ -478,6 +481,7 @@ plan "operator key    $OPERATOR_UID ($OPERATOR)"
 plan "roles.toml      trace-reader = $CONNECTOR_USER"
 plan "declaration dir $DECL_DIR      $OPERATOR 0700, where admin.log and worker.log land"
 plan "declaration     $DECLARATION     session $SESSION, artifact $ARTIFACT"
+plan "system prompt   $PROMPT     $OPERATOR 0600, the operator's to edit, seated at every load"
 plan "sudo rule       $SUDO_RULE      $CONNECTOR_USER, $CONNECTOR_ROLE: $VERBS, !pam_session"
 plan "store engine    $ENGINE         which the deployed member must carry"
 
@@ -566,7 +570,8 @@ say "declaration"
 ( umask 077; mkdir -p -- "$DECL_DIR" )
 chmod 0700 -- "$DECL_DIR"
 ( umask 077; printf '%s\n' "$DECLARATION_TEXT" > "$DECLARATION" )
-printf '   %s written, %s 0700\n' "$DECLARATION" "$DECL_DIR"
+( umask 077; printf '%s' "$PROMPT_TEXT" > "$PROMPT" )
+printf '   %s and %s written, %s 0700\n' "$DECLARATION" "$PROMPT" "$DECL_DIR"
 
 say "agent root, staged"
 # **Root-owned and not group- or world-writable, or admin refuses it**, so it

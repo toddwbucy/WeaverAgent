@@ -656,6 +656,11 @@ pub struct Elections {
     /// section 3.1 as of 2026-09-04: a record names its own declaration
     /// rather than leaning on a deposit beside it.
     pub declaration: String,
+    /// The prompt file's digest, as admin read it at the inventory and the
+    /// enter carried it, per `weaver-trace-PRD` section 3.1 as of
+    /// 2026-10-02: once the prompt is its own file, an edit to it leaves the
+    /// declaration's digest unchanged, so the record names both.
+    pub identity_file: String,
     /// The loop that assembled this run's prompts, per `weaver-trace-Spec`
     /// section 3: the binary that ran it, and the file and its digest at
     /// the load where the loop is a file. Two loops assemble different
@@ -759,6 +764,7 @@ mod lineage_tests {
             },
             composer: LoopIdentity::compiled("test"),
             declaration: "d".into(),
+            identity_file: "p".into(),
             tee: None,
             lineage,
             reset: None,

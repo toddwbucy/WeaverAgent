@@ -298,9 +298,12 @@ pub struct DecoderInstruction {
     pub column_permission: bool,
     /// The session's identity material: the canonical messages the identity
     /// prefix is rendered from, configuration rather than history, per
-    /// `weaver-types-Spec` section 2. Required like every field, and an
-    /// empty list is a declaration the operator made where an absent field
-    /// is a file unfinished.
+    /// `weaver-types-Spec` section 2. **On disk the declaration carries
+    /// `identity-file` instead**, naming the prompt file beside it, and
+    /// [`parse`] seats this member from that file's text: one `system`
+    /// message of the bytes verbatim, or the empty list for a file empty or
+    /// blank. The member stays the type's and the wire's, so the enter
+    /// carries canonical messages as it always did.
     pub identity: Vec<weaver_traits::Message>,
     /// Values for whatever parameters this deployment's SPU left tunable, per
     /// `weaver-types-Spec` section 2 and `weaver-spu-Spec` section 8. This is
@@ -436,22 +439,161 @@ pub fn parse_boundary(source: &str) -> Result<crate::BoundaryFile, ConfigError> 
     toml::from_str(source).map_err(|e| classify_toml_error(e.message()))
 }
 
-/// A total parse into a typed value: the whole config or a typed refusal, and
+/// What a parse answers where it does not answer a whole config, per
+/// `weaver-types-Spec` section 2: a typed refusal of its own, or the prompt
+/// reader's refusal returned unchanged, so the caller's boundary keeps its
+/// own category for it.
+#[cfg(feature = "config")]
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParseRefusal<E> {
+    Config(ConfigError),
+    Reader(E),
+}
+
+#[cfg(feature = "config")]
+impl<E> From<ConfigError> for ParseRefusal<E> {
+    fn from(error: ConfigError) -> Self {
+        ParseRefusal::Config(error)
+    }
+}
+
+/// The field the prompt file is named by, on disk.
+#[cfg(feature = "config")]
+const IDENTITY_FILE: &str = "spu-instruction.decoder.identity-file";
+
+/// A total parse into a typed value: the whole config or a refusal, and
 /// nothing partial, so a half-valid config is unrepresentable rather than
 /// merely refused.
+///
+/// **The prompt file is read by the caller**, per `weaver-types-Spec`
+/// section 2: this crate holds no I/O, so `identity_file` is called once
+/// with the judged bare name the declaration's `identity-file` carries and
+/// answers the file's bytes, nothing for a file that is absent or does not
+/// read, or a refusal of its own. The bytes are seated as the decoder's
+/// `identity`, never a declaration with its identity pending.
 ///
 /// The signature is the pin (`types-config-parse-total`): the crate exposes
 /// this and no builder and no field-by-field accessor.
 ///
 /// ```
-/// let _: fn(&str) -> Result<weaver_types::AgentConfig, weaver_types::ConfigError> =
-///     weaver_types::parse;
+/// fn reader(_: &str) -> Result<Option<Vec<u8>>, ()> {
+///     Ok(None)
+/// }
+/// let _: fn(&str, fn(&str) -> Result<Option<Vec<u8>>, ()>)
+///     -> Result<weaver_types::AgentConfig, weaver_types::ParseRefusal<()>> =
+///     weaver_types::parse::<(), fn(&str) -> Result<Option<Vec<u8>>, ()>>;
+/// let _ = reader;
 /// ```
 #[cfg(feature = "config")]
-pub fn parse(source: &str) -> Result<AgentConfig, ConfigError> {
+pub fn parse<E, R>(source: &str, identity_file: R) -> Result<AgentConfig, ParseRefusal<E>>
+where
+    R: FnOnce(&str) -> Result<Option<Vec<u8>>, E>,
+{
     check_provided_engine(source)?;
-    let config: AgentConfig =
-        toml::from_str(source).map_err(|e| classify_toml_error(e.message()))?;
+    let (mut config, name) = parse_declaration(source)?;
+    check_identity_name(&name)?;
+    let bytes = identity_file(&name)
+        .map_err(ParseRefusal::Reader)?
+        .ok_or_else(identity_file_invalid)?;
+    config.spu_instruction.decoder.identity = seat_identity(bytes)?;
+    check_declaration(source, &config)?;
+    Ok(config)
+}
+
+/// The declaration's own text into the typed config, the prompt not yet
+/// read: the on-disk `identity-file` taken out and answered beside the
+/// config, the retired inline `identity` refused by name, and the decoder's
+/// `identity` stood empty for the seat [`parse`] fills. A document whose
+/// decoder is not a table is left to the deserializer, which names its fault.
+#[cfg(feature = "config")]
+fn parse_declaration(source: &str) -> Result<(AgentConfig, String), ConfigError> {
+    let mut table: toml::Table = source
+        .parse()
+        .map_err(|e: toml::de::Error| classify_toml_error(e.message()))?;
+    let decoder = table
+        .get_mut("spu-instruction")
+        .and_then(|spu| spu.get_mut("decoder"))
+        .and_then(toml::Value::as_table_mut);
+    let name = match decoder {
+        Some(decoder) => {
+            // **The embedded form is retired**, per `weaver-types-Spec`
+            // section 2: a key no organ registers on disk, refused by name
+            // so a declaration from before 2026-10-02 fails at its first
+            // load rather than seating a prefix the operator did not expect.
+            if decoder.contains_key("identity") {
+                return Err(ConfigError {
+                    field: Some(FieldName("spu-instruction.decoder.identity".to_string())),
+                    kind: ConfigErrorKind::UnknownField,
+                });
+            }
+            let name = match decoder.remove("identity-file") {
+                None => {
+                    return Err(ConfigError {
+                        field: Some(FieldName(IDENTITY_FILE.to_string())),
+                        kind: ConfigErrorKind::MissingField,
+                    });
+                }
+                Some(toml::Value::String(name)) => name,
+                Some(_) => return Err(identity_file_invalid()),
+            };
+            decoder.insert("identity".to_string(), toml::Value::Array(Vec::new()));
+            Some(name)
+        }
+        None => None,
+    };
+    let config: AgentConfig = toml::Value::Table(table)
+        .try_into()
+        .map_err(|e: toml::de::Error| classify_toml_error(e.message()))?;
+    // A decoder that is not a table fails the deserializer above, so a
+    // config that parsed had its name taken.
+    Ok((config, name.unwrap_or_default()))
+}
+
+/// **The prompt file's name is a bare file name**, per `weaver-types-Spec`
+/// section 2: no `/`, not `.` or `..`, not empty, no control character, so
+/// the caller's read cannot leave the directory it judged.
+#[cfg(feature = "config")]
+fn check_identity_name(name: &str) -> Result<(), ConfigError> {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.chars().any(char::is_control)
+    {
+        return Err(identity_file_invalid());
+    }
+    Ok(())
+}
+
+/// **The file seats one message, verbatim**, per `weaver-types-Spec` section
+/// 2: `role: system`, one `Text` block of the file's bytes exactly, with no
+/// trailing-newline stripping and no normalization. A file empty or blank
+/// seats the empty list, admin judging the file's presence and never its
+/// quality. Bytes that are not UTF-8 refuse naming the field.
+#[cfg(feature = "config")]
+fn seat_identity(bytes: Vec<u8>) -> Result<Vec<weaver_traits::Message>, ConfigError> {
+    let text = String::from_utf8(bytes).map_err(|_| identity_file_invalid())?;
+    if text.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(vec![weaver_traits::Message {
+        role: weaver_traits::Role::System,
+        content: vec![weaver_traits::ContentBlock::Text { text }],
+    }])
+}
+
+#[cfg(feature = "config")]
+fn identity_file_invalid() -> ConfigError {
+    ConfigError {
+        field: Some(FieldName(IDENTITY_FILE.to_string())),
+        kind: ConfigErrorKind::BadValue,
+    }
+}
+
+/// The declaration's checks past the deserializer, run on the config with
+/// its identity seated.
+#[cfg(feature = "config")]
+fn check_declaration(source: &str, config: &AgentConfig) -> Result<(), ConfigError> {
     if config
         .spu_instruction
         .decoder
@@ -467,8 +609,8 @@ pub fn parse(source: &str) -> Result<AgentConfig, ConfigError> {
     check_tunable_values(&config.spu_instruction.decoder.tunable_values)?;
     check_identity_roles(&config.spu_instruction.decoder.identity)?;
     check_trace_sink_surface(source, &config.trace_sink)?;
-    check_declared_paths(&config)?;
-    Ok(config)
+    check_declared_paths(config)?;
+    Ok(())
 }
 
 /// **An engine this build does not provide refuses naming the field**, per
@@ -699,5 +841,84 @@ fn classify_toml_error(message: &str) -> ConfigError {
             field: None,
             kind: ConfigErrorKind::Malformed,
         }
+    }
+}
+
+/// **The identity door's four rules, watched on the messages directly**, per
+/// `weaver-types-Spec` section 5: since 2026-10-02 the prompt file seats one
+/// `system` text message or none, so no declaration reaches these, and each
+/// watch calls `check_identity_roles` over the messages it names.
+///
+/// conforms: types-identity-role-is-system
+#[cfg(all(test, feature = "config"))]
+mod tests {
+    use super::check_identity_roles;
+    use weaver_traits::{ContentBlock, Message, Role, ToolCall};
+
+    fn text(text: &str) -> ContentBlock {
+        ContentBlock::Text {
+            text: text.to_string(),
+        }
+    }
+
+    fn refused_at(identity: &[Message]) -> String {
+        check_identity_roles(identity)
+            .expect_err("refuses")
+            .field
+            .expect("names its field")
+            .0
+    }
+
+    /// **A role the door does not write refuses, naming its index.**
+    /// Perturbation: drop the role arm and all three roles pass, the state
+    /// that produced the cross-precision deposit of 2026-08-25, a run whose
+    /// prefix named the agent and whose record never said so.
+    #[test]
+    fn a_non_system_identity_role_refuses() {
+        for role in [Role::User, Role::Assistant, Role::ToolResult] {
+            let identity = [Message {
+                role: role.clone(),
+                content: vec![text("You answer briefly.")],
+            }];
+            assert_eq!(refused_at(&identity), "identity.0.role", "{role:?}");
+        }
+    }
+
+    /// **A `system` message carrying a block it may not carry refuses**, per
+    /// `weaver-traits-Spec` section 3, which licenses `Text` alone there.
+    /// Perturbation: drop the block loop and a `tool_call` passes.
+    #[test]
+    fn an_unlicensed_identity_block_refuses() {
+        let identity = [Message {
+            role: Role::System,
+            content: vec![ContentBlock::ToolCall(ToolCall {
+                name: "calculator".into(),
+                arguments: "{}".into(),
+            })],
+        }];
+        assert_eq!(refused_at(&identity), "identity.0.content.0");
+    }
+
+    /// **A message carrying nothing refuses**, though an empty list does not.
+    /// Perturbation: drop the empty-content check and it passes.
+    #[test]
+    fn an_identity_message_carrying_nothing_refuses() {
+        let identity = [Message {
+            role: Role::System,
+            content: vec![],
+        }];
+        assert_eq!(refused_at(&identity), "identity.0.content");
+        assert!(check_identity_roles(&[]).is_ok(), "an empty list is lawful");
+    }
+
+    /// **A text block carrying no text refuses**, the empty turn by a second
+    /// route. Perturbation: drop the empty-text arm and it passes.
+    #[test]
+    fn an_identity_text_block_carrying_no_text_refuses() {
+        let identity = [Message {
+            role: Role::System,
+            content: vec![text("")],
+        }];
+        assert_eq!(refused_at(&identity), "identity.0.content.0.text");
     }
 }

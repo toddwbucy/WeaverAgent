@@ -95,12 +95,16 @@ only after all of it does the root move to `/etc/weaver/admin/<name>/`, which is
 admission. The last step runs one line through the rule as the connector's user
 (`validate` for the operator role, `show` for the observer), the way admin-con will.
 
-The declaration the script writes is a working default: the artifact, `devices = [0]`, a
-plain system identity, `permission-mode = "deny"`, an empty tool set, surprisal on, the
-sink in the territory, and the store's engine. Edit `~/.weaveragent/<name>/agent.toml`
-as yourself before validating if the agent wants another prompt, a wider context, or
-`ask`. No sudo is needed: the file is yours. The fields are in
-`docs/technical/weaver-agent/agent-declaration.md`, and nothing defaults, so an absent
+The declaration the script writes is a working default: the artifact, `devices = [0]`,
+`permission-mode = "deny"`, an empty tool set, surprisal on, the sink in the territory,
+and the store's engine. Beside it the script writes `system-prompt.md`, a plain system
+prompt the declaration names as its `identity-file`. Edit
+`~/.weaveragent/<name>/system-prompt.md` for another prompt, and `agent.toml` for a
+wider context or `ask`, as yourself, before validating. The prompt is seated byte for
+byte at every load, its trailing newline included, and its sha256 rides the load event. No sudo is needed: the file is yours. The fields are in
+`docs/technical/weaver-agent/agent-declaration.md`, a snapshot of 2026-08-25 that
+predates the prompt file, and `docs/crates/weaver-types/weaver-types-Spec.md` section 2
+is the authority. Nothing defaults, so an absent
 or misspelled key refuses the parse by name.
 
 ## 3. An agent without a store
@@ -140,7 +144,8 @@ sudo chmod 0644 "$R"/*
 sudo mv -T "$R" /etc/weaver/admin/$N
 ```
 
-The declaration is written by hand. karl's, which loaded on 2026-09-30, is the shape:
+The declaration and its prompt are written by hand. karl's, which loaded on 2026-09-30,
+is the shape, in the grammar of 2026-10-02:
 
 ```toml
 session = "s-karl-1"
@@ -150,21 +155,12 @@ permission-mode = "ask"
 [spu-instruction.decoder]
 residual-readout-election = false
 surprisal-election = true
+identity-file = "system-prompt.md"
 tunable-values = { seed = 451234785645, context-capacity = 16384, max-tokens-per-turn = 1024 }
 
 [spu-instruction.decoder.model-binding]
 artifact = "/opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf"
 devices = [0]
-
-[[spu-instruction.decoder.identity]]
-role = "system"
-
-[[spu-instruction.decoder.identity.content]]
-type = "text"
-text = """
-You are Karl, a small local agent running on this laptop.
-You have no tools in this session. Answer plainly and
-briefly, and say so when you do not know something."""
 
 [gate-instruction.access-rule]
 allowed-uids = [1000]
@@ -180,14 +176,26 @@ create = true
 engine = "none"
 ```
 
+and `system-prompt.md` beside it, the operator's, 0600:
+
+```text
+You are Karl, a small local agent running on this laptop.
+You have no tools in this session. Answer plainly and
+briefly, and say so when you do not know something.
+```
+
 Top-level keys first, then each table, since TOML reads a bare key after a table header
-as that table's. Every identity message is `role = "system"`. `allowed-uids` is who may
-dial the gate, the operator's uid here. Check it parses before installing it:
+as that table's. The prompt file seats one `system` message of its bytes, or none where
+it is empty or blank, and `identity-file` is a bare file name in the declaration's own
+directory. The inline `[[spu-instruction.decoder.identity]]` table of a declaration
+written before 2026-10-02 refuses by name: move its text into the file byte for byte and
+replace the table with the one key. `allowed-uids` is who may dial the gate, the
+operator's uid here. Check it parses before installing it:
 `python3 -c 'import tomllib,sys; tomllib.load(open(sys.argv[1],"rb"))' <name>.toml`.
 
-An agent carried between boxes keeps its declaration byte for byte, prompt included,
-with only the paths changed: the determinism runs compare against it, and the load
-event records the declaration's sha256.
+An agent carried between boxes keeps its declaration and its prompt byte for byte, with
+only the paths changed: the determinism runs compare against them, and the load event
+records the sha256 of each.
 
 ## 4. Validate and prove the load
 
@@ -269,7 +277,7 @@ groups, which `userdel` leaves while a member remains and which a later `useradd
 --user-group` of the same name would refuse on. Archive the territory and remove it. The
 declaration directory is yours and stays: it holds the declaration, the prompt and the
 two logs, the one record of what was done to the agent, and create-agent refuses to
-write over its `agent.toml`, so move it aside before making an agent of the same name
+write over its `agent.toml` or its `system-prompt.md`, so move them aside before making an agent of the same name
 again.
 
 The groups, once the accounts are gone:

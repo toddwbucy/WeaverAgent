@@ -270,10 +270,15 @@ pub enum TraceSink {
     Socket { path: PathBuf },
 }
 
-pub fn parse(
+pub fn parse<E>(
     source: &str,
-    identity_file: impl FnOnce(&str) -> Option<String>,
-) -> Result<AgentConfig, ConfigError>
+    identity_file: impl FnOnce(&str) -> Result<Option<Vec<u8>>, E>,
+) -> Result<AgentConfig, ParseRefusal<E>>
+
+pub enum ParseRefusal<E> {
+    Config(ConfigError),
+    Reader(E),
+}
 
 pub struct ConfigError {
     pub field: Option<FieldName>,
@@ -332,15 +337,15 @@ record as none. A provenance reader takes the digest as the file's and the event
 what was seated. A file that is not UTF-8
 refuses `BadValue` naming `spu-instruction.decoder.identity-file`.
 
-**A derived declaration names an empty prompt file**, on the operator's ruling of
-2026-10-02 on this act's sixth question. `weaver-analysis derive`, writing a diagnostic
-declaration, writes an empty prompt file, which the rule above admits, and the derived
-declaration states that its identity comes from the preloaded record. The replay's
-identity is not that file: the declaration's identity is the seed, per the ruling of
+**A diagnostic declaration names an empty prompt file**, on the operator's ruling of
+2026-10-02 on this act's sixth question. A diagnostic declaration names an empty prompt
+file, which the rule above admits, and states that its identity comes from the
+preloaded record. The replay's identity is not that file: the declaration's identity is the seed, per the ruling of
 2026-09-04 above, and a diagnostic replay always stands a member preloaded from the
 record, so the open seats the record's own `message.system` events, in order and with
-their boundaries, byte for byte, and certification is unaffected. The analysis side's
-edit is toddwbucy/WeaverAnalysis#7.
+their boundaries, byte for byte, and certification is unaffected. This tree's own
+diagnostic fixture, `crates/weaver-types/tests/fixtures/derived-surrogate.toml`, is
+written so.
 
 **The name is a bare file name, resolved in the declaration's own directory and
 nowhere else.** It carries no `/`, is not `.` or `..`, is not empty and carries no
@@ -353,17 +358,17 @@ worth only as much as the reads that stay inside it. The name is the operator's,
 **The parse stays total and reads nothing.** This crate holds no I/O, per section 5's
 manifest clause, so the read is the caller's: `parse` takes, beside the declaration's
 text, a reader it calls once with the judged name, and the reader answers one of three
-things. **The file's text**, which is seated. **Nothing**, for a file that is absent or
+things. **The file's bytes**, which the parse judges as UTF-8 and seats. **Nothing**, for a file that is absent or
 does not read, which refuses `BadValue` naming the field. **A refusal of the reader's
-own**, which the parse returns unchanged beside its typed errors and does not type or
-interpret, so the caller's boundary keeps its own category: admin's reader refuses a
+own**, which the parse returns unchanged as `ParseRefusal::Reader`, apart from its
+typed errors in `ParseRefusal::Config`, and does not type or interpret, so the caller's boundary keeps its own category: admin's reader refuses a
 prompt file that fails section 9's judgment, a link, a wrong owner or a group- or
 other-writable entry, and admin answers that `BoundaryUnverified`, per
 `weaver-admin-Spec` section 4, where an absence the parse turned into `BadValue` maps to
 `ConfigInvalid`. The parse yields the whole `AgentConfig` with the identity seated, a
 typed error, or the reader's refusal, never a declaration with its identity pending.
 The reader is admin's, opening the name inside the directory it judged, per
-`weaver-admin-Spec` section 4, and a test's reader is a closure over a string. The shape the enter carries is the resolved one, the same pattern the state
+`weaver-admin-Spec` section 4, and a test's reader is a closure over bytes. The shape the enter carries is the resolved one, the same pattern the state
 election takes, admin filling at inventory what the worker never re-derives.
 
 **The embedded form is retired rather than kept beside the file, and the grammar's own

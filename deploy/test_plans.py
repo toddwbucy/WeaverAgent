@@ -348,7 +348,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
 
     def test_agent_plan_refuses_visible_collisions(self):
         for collision in ("account", "relay account", "connector account", "access group",
-                          "agent root", "staged root", "sudo rule", "declaration"):
+                          "agent root", "staged root", "sudo rule", "declaration", "prompt"):
             with self.subTest(collision=collision):
                 self.env.pop("COLLISION", None)
                 for path in (self.config / "m1", self.config / ".m1.partial"):
@@ -362,6 +362,10 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
                 elif collision == "agent root": (self.config / "m1").mkdir()
                 elif collision == "staged root": (self.config / ".m1.partial").mkdir()
                 elif collision == "sudo rule": self.rule.write_text("")
+                elif collision == "prompt":
+                    self.decl.mkdir(parents=True)
+                    self.decl.chmod(0o700)
+                    (self.decl / "system-prompt.md").write_text("")
                 else:
                     self.decl.mkdir(parents=True)
                     self.decl.chmod(0o700)
@@ -512,7 +516,17 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertEqual(self.decl.stat().st_mode & 0o777, 0o700)
         self.assertEqual((self.decl / "agent.toml").stat().st_mode & 0o077, 0)
         import tomllib
-        store = tomllib.loads((self.decl / "agent.toml").read_text())["state-store"]
+        declaration = tomllib.loads((self.decl / "agent.toml").read_text())
+        # The prompt is its own file beside the declaration, named by it, and
+        # the retired inline identity is gone (weaver-types-Spec section 2).
+        decoder = declaration["spu-instruction"]["decoder"]
+        self.assertEqual(decoder["identity-file"], "system-prompt.md")
+        self.assertNotIn("identity", decoder)
+        prompt = self.decl / "system-prompt.md"
+        self.assertEqual(prompt.stat().st_mode & 0o077, 0)
+        self.assertTrue(prompt.read_text().startswith("You are a careful assistant."))
+        self.assertTrue(prompt.read_text().endswith("question allows.\n"))
+        store = declaration["state-store"]
         self.assertEqual(store["engine"], engine)
         return store
 

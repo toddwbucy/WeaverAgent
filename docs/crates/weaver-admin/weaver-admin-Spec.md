@@ -748,9 +748,14 @@ adds is the mapping and not a second statement of the parse.
 **The prompt file is read through the parse and by this crate**, as of the operator's
 ruling of 2026-10-02. The parse takes the declaration's text and a reader, and the
 reader is this crate's: it opens the name the declaration's `identity-file` carries
-inside the declaration directory section 9 judged, through the directory as opened at
-that judgment and never by a pathname re-resolved after it, judges the file as that
-section judges the entries it reads, and answers its bytes. A prompt file that fails
+inside the declaration directory section 9 judged, through a descriptor on that
+directory and never by a pathname built for the file. The descriptor is the judged
+canonical directory opened without following a link at its own name and judged again
+on the descriptor, the operator's and closed to group and other, the ancestors above
+it being closed by section 9's rule so no other principal can move them, and the file
+is opened through it without following a link, judged on its own descriptor as that
+section judges the entries it reads, a regular file owned by the operator or uid 0 and
+writable by no group or other, and answers its bytes. A prompt file that fails
 that judgment is the reader's own refusal, which the parse returns unchanged per
 `weaver-types-Spec` section 2, and it refuses `BoundaryUnverified`, naming the file on
 stderr, as a failed entry of the root does. One that is absent, does not read, or is not UTF-8 refuses

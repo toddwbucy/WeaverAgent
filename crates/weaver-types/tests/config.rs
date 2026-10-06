@@ -6,7 +6,28 @@
 //! with the `config` feature, which is the parser's whole surface.
 #![cfg(feature = "config")]
 
-use weaver_types::{ConfigErrorKind, FieldName, parse};
+use weaver_types::{AgentConfig, ConfigError, ConfigErrorKind, FieldName, ParseRefusal};
+
+/// The prompt every case below seats unless it names its own.
+const PROMPT: &str = "You answer briefly.";
+
+/// The parse with a reader answering [`PROMPT`], for every case that is not
+/// about the prompt file.
+fn parse(source: &str) -> Result<AgentConfig, ConfigError> {
+    parse_prompt(source, PROMPT.as_bytes())
+}
+
+/// The parse with a reader answering `prompt`'s bytes. Its own refusal is
+/// unreachable, so every refusal is the parse's.
+fn parse_prompt(source: &str, prompt: &[u8]) -> Result<AgentConfig, ConfigError> {
+    weaver_types::parse(source, |_| {
+        Ok::<_, std::convert::Infallible>(Some(prompt.to_vec()))
+    })
+    .map_err(|refusal| match refusal {
+        ParseRefusal::Config(error) => error,
+        ParseRefusal::Reader(never) => match never {},
+    })
+}
 
 fn full_config() -> String {
     // Top-level keys first, then one table per section: TOML reads a bare key
@@ -19,7 +40,7 @@ fn full_config() -> String {
         "\n",
         "[spu-instruction.decoder]\n",
         "residual-readout-election = false\n",
-        "identity = [{ role = \"system\", content = [{ type = \"text\", text = \"You answer briefly.\" }] }]\n",
+        "identity-file = \"system-prompt.md\"\n",
         "tunable-values = {}\n",
         "\n",
         "[spu-instruction.decoder.model-binding]\n",
@@ -56,11 +77,8 @@ fn a_complete_config_parses() {
     assert_eq!(decoder.model_binding.devices.len(), 1);
     assert_eq!(config.permission_mode, weaver_traits::PermissionMode::Ask);
     assert!(!decoder.residual_readout_election);
-    // The identity material parses to its canonical messages: one system
-    // message with a single text block, per the full_config fixture. The
-    // fixture said `user` until 2026-08-28 and this assertion pinned it,
-    // so the corpus held the role the identity door refuses as the role a
-    // complete config carries, per issue #369 item 2.
+    // The prompt file seats one system message with a single text block,
+    // the file's bytes, per `weaver-types-Spec` section 2.
     assert_eq!(decoder.identity.len(), 1);
     assert_eq!(decoder.identity[0].role, weaver_traits::Role::System);
     assert!(matches!(
@@ -69,149 +87,150 @@ fn a_complete_config_parses() {
     ));
 }
 
-/// **A declaration whose identity is not `system` refuses the parse**, per
-/// `weaver-types-Spec` section 2. The identity door writes `message.system`
-/// and refuses every other role, so such a declaration seats a prefix into
-/// the decode context that the record cannot show - the condition of issue
-/// #369, which reached the field because nothing judged the declaration.
+/// **The prompt file is seated verbatim, and an empty or blank one seats no
+/// prefix**, per `weaver-types-Spec` section 2: the message's text is the
+/// file's bytes exactly, the trailing newline an editor writes included, and
+/// a file empty or holding whitespace alone seats the empty list, the agent
+/// with no prefix that was always legitimate, rather than a blank message.
 ///
-/// The door is the last place this can be caught rather than the first. A
-/// rule enforced only there is one the operator meets as a fault in an
-/// already-running agent instead of as a refusal to load.
-///
-/// Perturbation: remove the `check_identity_roles` call from `parse` and this
-/// declaration parses, which is the state that produced the cross-precision
-/// deposit of 2026-08-25 - a run whose prefix named the agent and whose
-/// record never said so. Watched under exactly that removal.
-///
-/// conforms: types-identity-role-is-system
+/// Perturbation: trim the text, and the trailing newline vanishes; drop the
+/// blank arm, and the whitespace file seats a blank message. Watched under
+/// each.
 #[test]
-fn a_non_system_identity_role_refuses() {
-    for role in ["user", "assistant", "tool_result"] {
-        let source = full_config().replace("role = \"system\"", &format!("role = \"{role}\""));
-        let err = parse(&source).expect_err("refuses");
-        assert_eq!(err.kind, ConfigErrorKind::BadValue, "role {role}");
-        // The index rides the name, an operator with several messages
-        // needing to know which one is at fault.
-        assert_eq!(
-            err.field.as_ref().map(|f| f.0.as_str()),
-            Some("identity.0.role"),
-            "role {role}"
+fn the_prompt_file_is_seated_verbatim_and_a_blank_one_seats_nothing() {
+    let written = "You are Karl \u{1F600}.\nAnswer briefly.\n";
+    let config = parse_prompt(&full_config(), written.as_bytes()).expect("parses");
+    match config.spu_instruction.decoder.identity.as_slice() {
+        [message] => {
+            assert_eq!(message.role, weaver_traits::Role::System);
+            assert!(matches!(
+                message.content.as_slice(),
+                [weaver_traits::ContentBlock::Text { text }] if text == written
+            ));
+        }
+        other => panic!("one system message, got {other:?}"),
+    }
+    for blank in ["", " \n\t\n"] {
+        let config = parse_prompt(&full_config(), blank.as_bytes()).expect("a blank file parses");
+        assert!(
+            config.spu_instruction.decoder.identity.is_empty(),
+            "{blank:?} seats no prefix"
         );
     }
 }
 
-/// **A `System` identity message carrying a block it may not carry refuses
-/// the parse**, per `weaver-traits-Spec` section 3, which licenses `Text`
-/// and nothing else there.
-///
-/// The identity door refuses the role and the block both. Judging only the
-/// role left the other half at runtime: such a declaration parsed cleanly,
-/// authored an `IdentityPrefixUnrecorded` fault without aborting the load,
-/// and was refused at the SPU's open, so the operator met in a running agent
-/// what the parse exists to answer at the load.
-///
-/// Perturbation: remove the block loop from `check_identity_roles` and this
-/// parses. Watched under exactly that removal.
-///
-/// conforms: types-identity-role-is-system
+/// **The retired inline identity refuses by name**, per `weaver-types-Spec`
+/// section 2: the `[[spu-instruction.decoder.identity]]` table is a key no
+/// organ registers on disk, so a declaration written before 2026-10-02 fails
+/// its parse naming it rather than seating a prefix the operator did not
+/// expect. Perturbation: restore the member to the on-disk shape (accept the
+/// table) and it parses.
 #[test]
-fn an_unlicensed_identity_block_refuses() {
+fn the_retired_inline_identity_refuses_by_name() {
     let source = full_config().replace(
-        "content = [{ type = \"text\", text = \"You answer briefly.\" }]",
-        "content = [{ type = \"tool_call\", name = \"calculator\", arguments = \"{}\" }]",
+        "identity-file = \"system-prompt.md\"\n",
+        "identity-file = \"system-prompt.md\"\nidentity = [{ role = \"system\", content = [{ type = \"text\", text = \"old\" }] }]\n",
     );
     let err = parse(&source).expect_err("refuses");
-    assert_eq!(err.kind, ConfigErrorKind::BadValue);
+    assert_eq!(err.kind, ConfigErrorKind::UnknownField);
     assert_eq!(
-        err.field.as_ref().map(|f| f.0.as_str()),
-        Some("identity.0.content.0")
+        err.field,
+        Some(FieldName("spu-instruction.decoder.identity".into()))
+    );
+    let missing = full_config().replace("identity-file = \"system-prompt.md\"\n", "");
+    let err = parse(&missing).expect_err("refuses");
+    assert_eq!(err.kind, ConfigErrorKind::MissingField);
+    assert_eq!(
+        err.field,
+        Some(FieldName("spu-instruction.decoder.identity-file".into()))
     );
 }
 
-/// **An identity message carrying nothing refuses**, though an empty
-/// identity list does not.
-///
-/// A message with `content: []` parses as a message and renders as an empty
-/// turn seated into every session for the life of the agent. An empty list is
-/// a different thing: an agent with no prefix, which the Spec calls a
-/// legitimate agent.
-///
-/// Perturbation: remove the `content.is_empty()` check and the first parse
-/// below succeeds. Watched under exactly that removal.
-///
-/// conforms: types-identity-role-is-system
+/// **The prompt file's name is a bare file name**, per `weaver-types-Spec`
+/// section 2, so the caller's read cannot leave the directory it judged: a
+/// name carrying `/` or a control character, or `.`, `..` or empty, refuses
+/// `BadValue` naming the field, and the reader is never called.
+/// Perturbation: remove the name check, and `../agent.toml` reaches the
+/// reader.
 #[test]
-fn an_identity_message_carrying_nothing_refuses() {
-    let source = full_config().replace(
-        "content = [{ type = \"text\", text = \"You answer briefly.\" }]",
-        "content = []",
-    );
-    let err = parse(&source).expect_err("refuses");
-    assert_eq!(err.kind, ConfigErrorKind::BadValue);
-    assert_eq!(
-        err.field.as_ref().map(|f| f.0.as_str()),
-        Some("identity.0.content")
-    );
+fn a_prompt_name_that_could_climb_refuses_before_the_reader() {
+    for name in [
+        "../agent.toml",
+        "/etc/passwd",
+        "a/b.md",
+        ".",
+        "..",
+        "",
+        "prompt\\n.md",
+    ] {
+        let source = full_config().replace(
+            "identity-file = \"system-prompt.md\"",
+            &format!("identity-file = \"{name}\""),
+        );
+        let mut asked = None;
+        let refused = weaver_types::parse(&source, |judged| {
+            asked = Some(judged.to_string());
+            Ok::<_, ()>(Some(Vec::new()))
+        })
+        .expect_err("refuses");
+        assert_eq!(asked, None, "{name:?} never reaches the reader");
+        assert_eq!(
+            refused,
+            ParseRefusal::Config(ConfigError {
+                field: Some(FieldName("spu-instruction.decoder.identity-file".into())),
+                kind: ConfigErrorKind::BadValue,
+            }),
+            "{name:?}"
+        );
+    }
 }
 
-/// **A text block carrying no text refuses**, the empty turn arriving by a
-/// second route.
-///
-/// The content list is non-empty and the block is licensed, so the two checks
-/// beside this one both pass while what reaches the model is the same seated
-/// nothing an empty list would have given it.
-///
-/// Perturbation: drop the `text.is_empty()` arm and this parses. Watched
-/// under exactly that removal.
-///
-/// conforms: types-identity-role-is-system
+/// **What the reader answers decides the refusal**, per `weaver-types-Spec`
+/// section 2: its own refusal comes back unchanged, never typed as the
+/// parse's, so the caller keeps its category; nothing (absent, or did not
+/// read) and bytes that are not UTF-8 refuse `BadValue` naming the field.
+/// The reader is called once, with the judged name.
+/// Perturbation: map the reader's refusal to nothing, and it arrives as
+/// `BadValue`; map nothing to the empty list, and the parse yields an empty
+/// identity.
 #[test]
-fn an_identity_text_block_carrying_no_text_refuses() {
-    let source = full_config().replace("text = \"You answer briefly.\"", "text = \"\"");
-    let err = parse(&source).expect_err("refuses");
-    assert_eq!(err.kind, ConfigErrorKind::BadValue);
-    assert_eq!(
-        err.field.as_ref().map(|f| f.0.as_str()),
-        Some("identity.0.content.0.text")
-    );
-}
-
-/// An empty identity is a declaration the operator made, per
-/// `weaver-types-Spec` section 2: an agent with no prefix is a legitimate
-/// agent, so the role rule judges the messages present and does not require
-/// one to be.
-#[test]
-fn an_empty_identity_still_parses() {
-    let source = full_config().replace(
-        "identity = [{ role = \"system\", content = [{ type = \"text\", text = \"You answer briefly.\" }] }]\n",
-        "identity = []\n",
-    );
-    let config = parse(&source).expect("an empty identity parses");
-    assert!(config.spu_instruction.decoder.identity.is_empty());
+fn the_readers_answer_decides_the_refusal() {
+    let mut calls = Vec::new();
+    let refused = weaver_types::parse(&full_config(), |judged| {
+        calls.push(judged.to_string());
+        Err::<Option<Vec<u8>>, _>("the link is refused")
+    })
+    .expect_err("refuses");
+    assert_eq!(refused, ParseRefusal::Reader("the link is refused"));
+    assert_eq!(calls, ["system-prompt.md"]);
+    let invalid = ParseRefusal::Config(ConfigError {
+        field: Some(FieldName("spu-instruction.decoder.identity-file".into())),
+        kind: ConfigErrorKind::BadValue,
+    });
+    let nothing = weaver_types::parse(&full_config(), |_| Ok::<_, ()>(None));
+    assert_eq!(nothing.expect_err("refuses"), invalid);
+    let not_utf8 = weaver_types::parse(&full_config(), |_| Ok::<_, ()>(Some(vec![0xff, 0xfe])));
+    assert_eq!(not_utf8.expect_err("refuses"), invalid);
 }
 
 /// **A refusal names the field the parser met, never text the operator wrote.**
-/// The parse sorts the error by its message, and the error's display also
-/// quotes the offending lines of the declaration, so an identity text that
-/// itself reads like a refusal would otherwise be read as one.
+/// The parse sorts the error by its message, and a syntax error's display
+/// also quotes the offending line of the declaration, so a value that itself
+/// reads like a refusal would otherwise be read as one.
 ///
 /// Perturbation: classify the error's display instead of its bare message and
-/// the decoy in the identity text is named in place of the missing field.
-/// Watched under exactly that change.
+/// the decoy is named as a missing field in place of a malformed document.
 #[test]
 fn a_refusal_names_the_parsers_field_and_not_the_operators_text() {
-    // The missing field and the decoy share one line, so the display quotes
-    // the decoy ahead of the message it sorts.
-    let source = full_config()
-        .replace(
-            "text = \"You answer briefly.\"",
-            "text = \"missing field `decoy`\"",
-        )
-        .replace("{ role = \"system\", content", "{ content");
+    // The decoy and the syntax error share one line, so the display quotes
+    // the decoy beside the message it sorts.
+    let source = full_config().replace(
+        "session = \"s-1\"\n",
+        "session = \"missing field `decoy`\" stray\n",
+    );
     let err = parse(&source).expect_err("refuses");
-    assert_eq!(err.kind, ConfigErrorKind::MissingField);
-    assert_eq!(err.field, Some(FieldName("role".into())));
+    assert_eq!(err.kind, ConfigErrorKind::Malformed);
+    assert_eq!(err.field, None);
 }
 
 /// A missing required field refuses the parse, run separately for the
@@ -665,66 +684,27 @@ fn a_misspelled_surprisal_election_refuses() {
     );
 }
 
-/// The analysis crate's pinned derivation, copied byte for byte into this tree
-/// from WeaverAnalysis `tests/fixtures/derived-surrogate.toml` at commit
-/// `10535e7` (2026-09-30), the commit that last changed it there. It is a copy
-/// rather than a path, because `include_str!` resolves at compile time and
-/// cannot follow `WEAVER_ANALYSIS_DIR` or a sibling checkout, and a workspace
-/// test must compile without one. When the fixture moves in WeaverAnalysis,
-/// the copy is replaced and this line names the new commit;
-/// `the_pinned_derivation_is_weaver_analysis_own` holds the two equal wherever
-/// the sibling stands.
+/// A diagnostic declaration and the empty prompt file beside it, this
+/// tree's own data in the grammar of `weaver-types-Spec` section 2.
 const DERIVED_SURROGATE: &str = include_str!("fixtures/derived-surrogate.toml");
+const DERIVED_PROMPT: &[u8] = include_bytes!("fixtures/system-prompt.md");
 
-/// **The declaration `weaver-analysis derive` writes loads here**, per
-/// `weaver-analysis-Spec` section 3: the derived declaration is the one the
-/// operator loads. The file is the analysis crate's own pinned output, which
-/// its driver test holds byte for byte, so this parse and that derivation
-/// read one text. It carries an identity character the record escaped as a
-/// surrogate pair, which crosses as the character.
+/// **A diagnostic declaration naming an empty prompt file parses**, per
+/// `weaver-types-Spec` section 2: a diagnostic replay's identity is the
+/// record's own, seated from the preloaded member, so the declaration's
+/// prompt file is empty and seats no prefix.
 #[test]
-fn the_declaration_weaver_analysis_derives_parses() {
-    let config = parse(DERIVED_SURROGATE).expect("the derived declaration parses");
+fn a_diagnostic_declaration_with_an_empty_prompt_parses() {
+    let config = weaver_types::parse(DERIVED_SURROGATE, |name| {
+        assert_eq!(name, "system-prompt.md");
+        Ok::<_, ()>(Some(DERIVED_PROMPT.to_vec()))
+    })
+    .expect("the diagnostic declaration parses");
     assert_eq!(
         config.binding_kind,
         Some(weaver_types::BindingKind::Diagnostic)
     );
-    match config.spu_instruction.decoder.identity[0]
-        .content
-        .as_slice()
-    {
-        [weaver_traits::ContentBlock::Text { text }] => {
-            assert!(text.starts_with("You are Karl \u{1F600}"), "{text}")
-        }
-        other => panic!("one text block, got {other:?}"),
-    }
-}
-
-/// **The pinned copy is WeaverAnalysis's own text**, wherever that repository is
-/// checked out: `WEAVER_ANALYSIS_DIR`, or the sibling `../WeaverAnalysis` of the
-/// suite workshop. Where neither stands, there is nothing to compare, and the
-/// test says so on stderr rather than passing in silence. Where one stands and
-/// its fixture differs from the copy, the copy is stale and the test fails,
-/// naming the file to copy. Perturbation: change one byte of the copy, and with
-/// the sibling present it fails.
-#[test]
-fn the_pinned_derivation_is_weaver_analysis_own() {
-    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let analysis = std::env::var_os("WEAVER_ANALYSIS_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| workspace.join("../WeaverAnalysis"));
-    let source = analysis.join("tests/fixtures/derived-surrogate.toml");
-    match std::fs::read_to_string(&source) {
-        Ok(theirs) => assert!(
-            theirs == DERIVED_SURROGATE,
-            "the pinned crates/weaver-types/tests/fixtures/derived-surrogate.toml differs from {}: copy it over and name the WeaverAnalysis commit in config.rs",
-            source.display()
-        ),
-        Err(e) => eprintln!(
-            "SKIP the_pinned_derivation_is_weaver_analysis_own: no WeaverAnalysis fixture at {} ({e}); set WEAVER_ANALYSIS_DIR to compare",
-            source.display()
-        ),
-    }
+    assert!(config.spu_instruction.decoder.identity.is_empty());
 }
 
 /// **A path carrying a control character refuses, naming its field**, per

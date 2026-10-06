@@ -6,19 +6,10 @@ tool-set = []
 [spu-instruction.decoder]
 residual-readout-election = false
 surprisal-election = false
-
-[[spu-instruction.decoder.identity]]
-role = "system"
-
-[[spu-instruction.decoder.identity.content]]
-text = """
-You are Karl 😀, a small local agent running on this laptop.
-You have no tools in this session. Answer plainly and
-briefly, and say so when you do not know something."""
-type = "text"
+identity-file = "system-prompt.md"
 
 [spu-instruction.decoder.model-binding]
-artifact = "/bulk-store/weaver-testing/cross-precision-repro/qwen2.5-0.5b-instruct-q8_0.gguf"
+artifact = "/opt/weaver/models/qwen2.5-0.5b-instruct-q8_0.gguf"
 devices = [0]
 
 [spu-instruction.decoder.tunable-values]

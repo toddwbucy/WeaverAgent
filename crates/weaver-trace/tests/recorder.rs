@@ -101,6 +101,7 @@ fn elections() -> Payload {
         tee: Some(weaver_trace::Election::default()),
         state_member: false,
         declaration: Default::default(),
+        identity_file: Default::default(),
         lineage: None,
         reset: None,
         stack: Default::default(),
@@ -891,6 +892,7 @@ fn the_load_carries_the_tee_election() {
             }),
             state_member: false,
             declaration: Default::default(),
+            identity_file: Default::default(),
             lineage: None,
             reset: None,
             stack: Default::default(),
@@ -942,6 +944,7 @@ fn a_declined_surprisal_election_is_written_down() {
             tee: Some(weaver_trace::Election::default()),
             state_member: false,
             declaration: Default::default(),
+            identity_file: Default::default(),
             lineage: None,
             reset: None,
             stack: Default::default(),
@@ -1358,6 +1361,7 @@ fn the_load_names_its_loop_and_its_member() {
         tee: Some(weaver_trace::Election::default()),
         state_member: true,
         declaration: "ab".repeat(32),
+        identity_file: "cd".repeat(32),
         lineage: None,
         reset: None,
         stack: Default::default(),
@@ -1379,6 +1383,12 @@ fn the_load_names_its_loop_and_its_member() {
         rendered["state_store"],
         serde_json::json!({"engine": "sqlite"}),
         "the load names the store the member stands on by its engine alone"
+    );
+    assert_eq!(rendered["declaration"], serde_json::json!("ab".repeat(32)));
+    assert_eq!(
+        rendered["identity_file"],
+        serde_json::json!("cd".repeat(32)),
+        "the prompt file's digest rides beside the declaration's"
     );
     assert_eq!(
         rendered["composer"]["binary"],
@@ -1407,6 +1417,7 @@ fn the_load_names_its_loop_and_its_member() {
         tee: None,
         state_member: false,
         declaration: Default::default(),
+        identity_file: Default::default(),
         lineage: None,
         reset: None,
         stack: Default::default(),
