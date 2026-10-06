@@ -96,11 +96,12 @@ pub trait Store {
     /// `weaver-state-Spec` section 3.
     fn image(&self) -> Result<Vec<u8>, CustodyFault>;
     /// Judge an image without adopting it: what its own catalog says its
-    /// schema is and what position its holdings cover, read from a scratch
-    /// copy, so a stamp is never trusted over the bytes it claims to stamp.
-    /// An image that is no database, fails the engine's check or holds no
-    /// event table is refused here.
-    fn judge_image(&self, image: &[u8]) -> Result<ImageFacts, CustodyFault>;
+    /// schema is, what position its holdings cover, and the prefix they
+    /// carry for the session, all read from a scratch copy, so a stamp is
+    /// never trusted over the bytes it claims to stamp and an answer can be
+    /// built before anything moves. An image that is no database, fails the
+    /// engine's check or holds no event table is refused here.
+    fn judge_image(&self, image: &[u8], session: &str) -> Result<ImageFacts, CustodyFault>;
     /// Replace the holdings whole with an image's, the load's restore and the
     /// live `restore` ask's one mechanism, **as a commit step**, per the
     /// operator's ruling of 2026-10-05 on #1: the election is built on a
@@ -119,12 +120,14 @@ pub trait Store {
 }
 
 /// What an image says of itself, read from a scratch copy before any
-/// adoption: its schema text as [`Store::schema`] renders it, and the
-/// position its holdings cover as [`Store::position`] reads it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// adoption: its schema text as [`Store::schema`] renders it, the position
+/// its holdings cover as [`Store::position`] reads it, and the session's
+/// seated prefix as [`Store::identity`] serves it.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ImageFacts {
     pub schema: String,
     pub position: Option<crate::save_point::Stamp>,
+    pub identity: Vec<RecalledEvent>,
 }
 
 /// One run's shape, the answer's material: the run reference and the held

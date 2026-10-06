@@ -1006,13 +1006,11 @@ fn recorded_rule_three_way_at_matched_cuts() {
 // rejected opener must not even build indexes from the valid entries
 // surrounding an invalid entry.
 fn seed_save_point(directory: &std::path::Path) -> PathBuf {
+    // Seeded under no election: adoption stands the opener's election's
+    // index set and nothing else, per the ruling of 2026-10-06, so a seed
+    // carrying an index of its own would read as changed custody at the
+    // spawn rather than at the refused opener this watches.
     let mut store = Sqlite::stand().expect("the seed store stands");
-    store
-        .index_election(&weaver_state::Election {
-            all_kinds: true,
-            keys: vec![("load".into(), vec!["existing".into()])],
-        })
-        .unwrap();
     for session in ["target", "neighbor"] {
         store
             .land(&weaver_state::Distillate {
@@ -1658,6 +1656,45 @@ fn a_damaged_or_foreign_save_point_never_reaches_the_holdings() {
             member.log()
         );
     }
+    // A save point whose prefix would put the restore answer past the
+    // ceiling answers nothing and moves nothing, per the one rule: the
+    // frame is built and sized on the scratch copy before the swap.
+    // Perturbation: build the frame after the swap and the holdings move.
+    let oversized = {
+        let mut store = Sqlite::stand().expect("stands");
+        let text = "x".repeat(1_100_000);
+        store
+            .land(&weaver_state::Distillate {
+                session: SESSION.into(),
+                run: "r-wide".into(),
+                turn: None,
+                kind: "message.system".into(),
+                sequence: 0,
+                pairs: vec![
+                    ("role".into(), "\"system\"".into()),
+                    (
+                        "content".into(),
+                        format!("[{{\"type\":\"text\",\"text\":\"{text}\"}}]"),
+                    ),
+                ],
+            })
+            .unwrap();
+        SavePoint::take(
+            store.position().unwrap().unwrap(),
+            &store.schema().unwrap(),
+            store.image().unwrap(),
+        )
+    };
+    std::fs::write(member.directory.0.join("oversized"), oversized.bytes()).unwrap();
+    member.send(&format!(
+        "{}\n",
+        json!({"ask":{"restore":{"save-point":"oversized"}}})
+    ));
+    assert!(
+        member.receive(Duration::from_millis(500)).is_none(),
+        "a restore past the ceiling answers nothing: {}",
+        member.log()
+    );
     assert_eq!(
         member.tables(),
         before,

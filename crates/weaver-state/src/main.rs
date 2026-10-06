@@ -247,10 +247,12 @@ fn member_entry(
     // would carry.
     let restored = match handed {
         None => Restored::Empty,
-        Some(save_point) => match adopt_judged(store.as_mut(), &election, &save_point) {
-            Ok(stamp) => Restored::Lineage {
+        Some(save_point) => match judge_save_point(store.as_ref(), &session, &save_point)
+            .and_then(|_| commit_save_point(store.as_mut(), &election, &save_point))
+        {
+            Ok(()) => Restored::Lineage {
                 digest: save_point.digest(),
-                stamp,
+                stamp: save_point.stamp.clone(),
             },
             Err(reason) => {
                 eprintln!(
@@ -298,30 +300,32 @@ fn member_entry(
     serve(lines, preload, preload_socket, &mut custody)
 }
 
-/// Adopt a save point into the store where its schema is the store's, per
-/// `weaver-state-Spec` section 3, answering the stamp it carries, or the
-/// reason it is refused with the holdings as they stood. The one judgment
-/// the member makes of a save point, shared by the load's restore and the
-/// live `restore` ask. **The image is judged by what it says of itself and
-/// never by the stamp alone**: its own catalog must be the standing schema
-/// and its own last landing must be the position the stamp claims, so a
-/// stamp written to agree cannot carry a foreign image past the schema
+/// **The one rule of a save point's adoption**, per `weaver-state-Spec`
+/// section 3 on the operator's rulings of 2026-10-05 and 2026-10-06 on #1:
+/// everything the member proves about an image and everything it derives
+/// from it, the schema, the position, the prefix the restore answer carries
+/// and the index set, is computed on a scratch copy; the live connection is
+/// touched exactly once, last, after the answer frame is built and sized;
+/// and a failure anywhere leaves the live holdings as they stood and the
+/// ask unanswered. `judge_save_point` is the proving half, shared by the
+/// load's restore and the live `restore` ask: the image is judged by what it
+/// says of itself and never by the stamp alone, its own catalog must be the
+/// standing schema and its own last landing the position the stamp claims,
+/// so a stamp written to agree cannot carry a foreign image past the schema
 /// rule, and a stamp that lies about its position is refused as one that
-/// disagrees. **The adoption is a commit step**, per the operator's ruling
-/// of 2026-10-05 on #1: the active election is built on a scratch copy of
-/// the image and the finished image swapped in whole, so on any failure the
-/// live holdings never move and the ask goes unanswered.
-fn adopt_judged(
-    store: &mut dyn Store,
-    election: &Election,
+/// disagrees. `commit_save_point` is the swap, called only once the caller
+/// has everything it will answer with.
+fn judge_save_point(
+    store: &dyn Store,
+    session: &str,
     save_point: &SavePoint,
-) -> Result<weaver_state::save_point::Stamp, &'static str> {
+) -> Result<weaver_state::ImageFacts, &'static str> {
     let standing = store.schema().map_err(|_| "schema unreadable")?;
     if schema_digest(&standing) != save_point.schema {
         return Err("schema-mismatch");
     }
     let facts = store
-        .judge_image(&save_point.image)
+        .judge_image(&save_point.image, session)
         .map_err(|_| "image refused by the engine")?;
     if schema_digest(&facts.schema) != save_point.schema {
         return Err("schema-mismatch");
@@ -333,10 +337,20 @@ fn adopt_judged(
         Some(held) if held == claimed => {}
         _ => return Err("stamp disagrees with the image"),
     }
+    Ok(facts)
+}
+
+/// The commit half of the rule above: the engine builds the active election
+/// on the scratch copy and swaps the finished image in whole, the live
+/// connection's one touch.
+fn commit_save_point(
+    store: &mut dyn Store,
+    election: &Election,
+    save_point: &SavePoint,
+) -> Result<(), &'static str> {
     store
         .adopt(&save_point.image, election)
-        .map_err(|_| "image refused by the engine")?;
-    Ok(save_point.stamp.clone())
+        .map_err(|_| "image refused by the engine")
 }
 
 /// What one standing serves from: the store, the room its save points live
@@ -663,23 +677,33 @@ fn answer_frame(
         // or stands under another schema answers nothing and leaves the
         // holdings as they stood; a sound one replaces them whole, and the
         // answer carries its stamp and the prefix the restored holdings
-        // carry for the declared session.
+        // carry for the declared session. **The answer is built and sized
+        // on the scratch copy's facts before the swap**, per the one rule of
+        // `judge_save_point`: a frame past the answer ceiling refuses before
+        // anything moves, so an unanswered restore has moved nothing.
         Ask::Restore { save_point } => {
             let read = custody
                 .room
                 .read(save_point)
                 .map_err(|e| CustodyFault::SavePoint(e.to_string()))?;
-            let stamp = adopt_judged(custody.store, custody.election, &read)
+            let facts = judge_save_point(&*custody.store, session, &read)
                 .map_err(|reason| CustodyFault::SavePoint(reason.to_string()))?;
-            let identity = custody.store.identity(session)?;
-            Ok(render_restore_answer(
+            let frame = render_restore_answer(
                 &SavePointAnswer {
                     name: save_point.clone(),
-                    stamp,
+                    stamp: read.stamp.clone(),
                     digest: read.digest(),
                 },
-                &identity,
-            ))
+                &facts.identity,
+            );
+            if frame.len() > ANSWER_BOUND {
+                return Err(CustodyFault::SavePoint(
+                    "the restore answer exceeds the ceiling; nothing moved".into(),
+                ));
+            }
+            commit_save_point(custody.store, custody.election, &read)
+                .map_err(|reason| CustodyFault::SavePoint(reason.to_string()))?;
+            Ok(frame)
         }
         // What the load restored, held since the opener, per the contract's
         // eighth ask: answered immediately and parking never.

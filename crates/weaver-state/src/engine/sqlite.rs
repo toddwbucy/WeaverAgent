@@ -347,48 +347,8 @@ impl Store for Sqlite {
     /// section 4's identity ask: every load records the prefix it seated,
     /// so the one in force is the newest run's.
     fn identity(&self, session: &str) -> Result<Vec<RecalledEvent>, CustodyFault> {
-        let fault = |e: rusqlite::Error| CustodyFault::StoreUnavailable(e.to_string());
-        let mut events_query = self
-            .connection
-            .prepare_cached(
-                "SELECT id, session, run, turn, kind, sequence FROM event
-                 WHERE session = ?1 AND kind = 'message.system' AND turn IS NULL
-                   AND run = (SELECT run FROM event
-                              WHERE session = ?1 AND kind = 'message.system'
-                                AND turn IS NULL
-                              ORDER BY id DESC LIMIT 1)
-                 ORDER BY id",
-            )
-            .map_err(fault)?;
-        let rows: Vec<(i64, String, String, Option<String>, String, i64)> = events_query
-            .query_map([session], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                ))
-            })
-            .map_err(fault)?
-            .collect::<Result<_, _>>()
-            .map_err(fault)?;
-        let mut held = Vec::with_capacity(rows.len());
-        for (id, session, run, turn, kind, sequence) in rows {
-            let pairs = pairs_of(&self.connection, id)?;
-            held.push(RecalledEvent {
-                session,
-                run,
-                turn,
-                kind,
-                sequence,
-                pairs,
-            });
-        }
-        Ok(held)
+        identity_of(&self.connection, session)
     }
-
     /// The whole database through the engine's serialization interface,
     /// per `weaver-state-Spec` sections 1 and 3.
     fn image(&self) -> Result<Vec<u8>, CustodyFault> {
@@ -405,7 +365,7 @@ impl Store for Sqlite {
     /// hold the event table, and then its catalog and its last landing are
     /// read exactly as the live store's are, so the facts a stamp claims
     /// can be held against the bytes before anything is adopted.
-    fn judge_image(&self, image: &[u8]) -> Result<ImageFacts, CustodyFault> {
+    fn judge_image(&self, image: &[u8], session: &str) -> Result<ImageFacts, CustodyFault> {
         let fault =
             |what: &str, e: rusqlite::Error| CustodyFault::SavePoint(format!("{what}: {e}"));
         let mut probe = Connection::open_in_memory().map_err(|e| fault("probe", e))?;
@@ -424,25 +384,30 @@ impl Store for Sqlite {
         Ok(ImageFacts {
             schema: schema_of(&probe)?,
             position: position_of(&probe)?,
+            identity: identity_of(&probe, session)?,
         })
     }
 
     /// Replace the holdings whole with the image's, **as a commit step**, per
-    /// the operator's ruling of 2026-10-05 on #1: the image is judged on a
-    /// scratch copy, the election's indexes are built on that copy, and the
-    /// finished copy is serialized and swapped into the live connection
-    /// whole, so a failure anywhere before the swap leaves the live holdings
-    /// standing and the swap itself takes an image already proven to
-    /// deserialize. The statement cache is dropped after the swap because
-    /// every cached statement was prepared against the holdings that left.
+    /// the operator's rulings of 2026-10-05 and 2026-10-06 on #1: the image
+    /// is judged on a scratch copy, every index in the election's generated
+    /// form is dropped from that copy and the active election's are built in
+    /// their place, so the index set after adoption is exactly this load's,
+    /// and the finished copy is serialized and swapped into the live
+    /// connection whole, so a failure anywhere before the swap leaves the
+    /// live holdings standing and the swap itself takes an image already
+    /// proven to deserialize. The statement cache is dropped after the swap
+    /// because every cached statement was prepared against the holdings that
+    /// left.
     fn adopt(&mut self, image: &[u8], election: &Election) -> Result<(), CustodyFault> {
         let fault =
             |what: &str, e: rusqlite::Error| CustodyFault::SavePoint(format!("{what}: {e}"));
-        self.judge_image(image)?;
+        self.judge_image(image, "")?;
         let mut scratch = Connection::open_in_memory().map_err(|e| fault("scratch", e))?;
         scratch
             .deserialize_read_exact(rusqlite::MAIN_DB, image, image.len(), false)
             .map_err(|e| fault("deserialize", e))?;
+        drop_elected_indexes(&scratch)?;
         build_indexes(&scratch, election)?;
         let finished = scratch
             .serialize(rusqlite::MAIN_DB)
@@ -541,6 +506,52 @@ fn position_of(connection: &Connection) -> Result<Option<crate::save_point::Stam
         sequence: u64::try_from(sequence).unwrap_or(0),
         turn,
     }))
+}
+
+/// The session's seated prefix as the `identity` ask serves it, read on the
+/// live connection and on a scratch copy of an image alike.
+fn identity_of(connection: &Connection, session: &str) -> Result<Vec<RecalledEvent>, CustodyFault> {
+    {
+        let fault = |e: rusqlite::Error| CustodyFault::StoreUnavailable(e.to_string());
+        let mut events_query = connection
+            .prepare_cached(
+                "SELECT id, session, run, turn, kind, sequence FROM event
+                 WHERE session = ?1 AND kind = 'message.system' AND turn IS NULL
+                   AND run = (SELECT run FROM event
+                              WHERE session = ?1 AND kind = 'message.system'
+                                AND turn IS NULL
+                              ORDER BY id DESC LIMIT 1)
+                 ORDER BY id",
+            )
+            .map_err(fault)?;
+        let rows: Vec<(i64, String, String, Option<String>, String, i64)> = events_query
+            .query_map([session], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            })
+            .map_err(fault)?
+            .collect::<Result<_, _>>()
+            .map_err(fault)?;
+        let mut held = Vec::with_capacity(rows.len());
+        for (id, session, run, turn, kind, sequence) in rows {
+            let pairs = pairs_of(connection, id)?;
+            held.push(RecalledEvent {
+                session,
+                run,
+                turn,
+                kind,
+                sequence,
+                pairs,
+            });
+        }
+        Ok(held)
+    }
 }
 
 /// The typed landing's tables, per `weaver-state-Spec` section 3: a message's
@@ -736,6 +747,38 @@ fn build_indexes(
         }
     }
     Ok(())
+}
+
+/// Drop every index whose statement is exactly the election's generated
+/// form, the exemption's own test, so what stands after the build is the
+/// active election's set and never a union with the election of the load
+/// that took the image.
+fn drop_elected_indexes(connection: &rusqlite::Connection) -> Result<(), CustodyFault> {
+    let fault = |e: rusqlite::Error| CustodyFault::SavePoint(e.to_string());
+    let generated: Vec<String> = connection
+        .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL")
+        .map_err(fault)?
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(fault)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(fault)?
+        .into_iter()
+        .filter(|(name, sql)| elected_index_form(name).as_deref() == Some(sql.as_str()))
+        .map(|(name, _)| name)
+        .collect();
+    for name in generated {
+        connection
+            .execute(&format!("DROP INDEX {}", quoted_identifier(&name)), [])
+            .map_err(fault)?;
+    }
+    Ok(())
+}
+
+/// A name as a double-quoted SQL identifier, sqlite's own doubling rule.
+fn quoted_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
 }
 
 /// An elected index's name: the key path, hex-encoded, under the prefix.
@@ -1077,11 +1120,12 @@ mod tests {
     #[test]
     fn a_distillate_lands_whole_and_survives_by_image() {
         let mut store = Sqlite::stand().expect("opens");
+        let election = Election {
+            all_kinds: true,
+            keys: vec![("turn.started".into(), vec!["payload.close".into()])],
+        };
         store
-            .index_election(&Election {
-                all_kinds: true,
-                keys: vec![("turn.started".into(), vec!["payload.close".into()])],
-            })
+            .index_election(&election)
             .expect("the election indexes");
         let distillate = Distillate {
             session: "alpha-1".into(),
@@ -1097,9 +1141,7 @@ mod tests {
         drop(store);
         let mut restored = Sqlite::stand().expect("stands empty");
         assert_eq!(restored.held().expect("held"), 0);
-        restored
-            .adopt(&image, &Election::default())
-            .expect("adopts");
+        restored.adopt(&image, &election).expect("adopts");
         assert_eq!(
             restored.held().expect("held"),
             1,
@@ -1119,14 +1161,22 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("counts");
-        assert_eq!(elected, 1, "the image carries the election's index too");
+        assert_eq!(
+            elected, 1,
+            "adopted under the same election, that election's index stands"
+        );
         // The image says of itself what the store it came from says, the
         // elected index left out of the schema. Perturbation: read the
         // schema from the live connection in `judge_image` and the extra
         // table below goes unseen.
-        let facts = restored.judge_image(&image).expect("judged");
+        let facts = restored.judge_image(&image, "alpha-1").expect("judged");
         assert_eq!(facts.schema, restored.schema().expect("schema"));
         assert_eq!(facts.position, restored.position().expect("position"));
+        assert_eq!(
+            facts.identity,
+            restored.identity("alpha-1").expect("identity"),
+            "the prefix is read from the scratch copy as the live store serves it"
+        );
         let mut altered = Sqlite::stand().expect("stands");
         altered.adopt(&image, &Election::default()).expect("adopts");
         altered
@@ -1135,7 +1185,10 @@ mod tests {
             .expect("alters");
         let altered_image = altered.image().expect("serializes");
         assert_ne!(
-            restored.judge_image(&altered_image).expect("judged").schema,
+            restored
+                .judge_image(&altered_image, "alpha-1")
+                .expect("judged")
+                .schema,
             facts.schema,
             "an image with another catalog says so"
         );
@@ -1189,7 +1242,10 @@ mod tests {
             connection.execute_batch(hidden).unwrap();
             let hiding = connection.serialize(rusqlite::MAIN_DB).unwrap().to_vec();
             assert_ne!(
-                restored.judge_image(&hiding).expect("judged").schema,
+                restored
+                    .judge_image(&hiding, "alpha-1")
+                    .expect("judged")
+                    .schema,
                 standing,
                 "{hidden} is schema"
             );
@@ -1203,6 +1259,30 @@ mod tests {
         );
         assert_eq!(elected_index_form("field_elected_zz"), None);
         assert_eq!(elected_index_form("other"), None);
+        // **The index set after adoption is exactly the active election's**,
+        // per the ruling of 2026-10-06: an image carrying another election's
+        // generated indexes comes out with only this load's. Perturbation:
+        // skip `drop_elected_indexes` in `adopt` and the old index stands
+        // beside the new one.
+        let other = Election {
+            all_kinds: true,
+            keys: vec![("turn.closed".into(), vec!["other.path".into()])],
+        };
+        let mut relected = Sqlite::stand().expect("stands");
+        relected.adopt(&image, &other).expect("adopts");
+        let names: Vec<String> = relected
+            .connection
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'field_elected_%' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            names,
+            vec![elected_index_name("other.path")],
+            "only the active election's index stands"
+        );
     }
 
     /// A later load's differing election builds its own index rather than

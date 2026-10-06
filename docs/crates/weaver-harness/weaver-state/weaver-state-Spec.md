@@ -367,14 +367,24 @@ load's and not the schema's, so a later load's differing election is not a save 
 that disagrees; anything else under that prefix, a table, a trigger or an index of
 another shape, and any other object, is schema and must match, on the operator's ruling
 of 2026-10-05 on #1. The loop's schema slot is not yet in the opener, so the
-schema compared at a load is the one the store stands at open, the build's own. **An
-image is judged by what it says of itself and adopted as a commit step**, on the same
-ruling: the engine adopts lazily and faults on first use, so the member deserializes
-the image on a scratch connection, requires the engine's own check to pass and the
-event table to stand, reads the image's own catalog and last landing and refuses a
-stamp that disagrees with either, builds the active election's indexes on that scratch
-copy, and only then swaps the finished image in whole, so on any failure the live
-holdings never move and the ask goes unanswered. **An empty store has no position**,
+schema compared at a load is the one the store stands at open, the build's own. **The
+one rule of adoption**, on that ruling and the operator's ruling of 2026-10-06 on #1
+that a restore is a reload of the agent's state and never a patch into a running
+session: everything the member proves about an image and everything it derives from
+it, the schema, the position, the prefix the `restore` answer carries and the index
+set, is computed on a scratch copy; the live connection is touched exactly once, last,
+after the answer frame is built and sized against the answer ceiling; and a failure
+anywhere leaves the live holdings as they stood and the ask unanswered. So the engine,
+which adopts lazily and faults on first use, deserializes the image on a scratch
+connection, requires its own check to pass and the event table to stand, reads the
+image's own catalog, last landing and seated prefix and refuses a stamp that disagrees
+with either fact, drops every index in the election's generated form from the scratch
+copy and builds the active election's in their place, so the index set after adoption
+is exactly this load's at a load and at a live restore alike, and only then swaps the
+finished image in whole. A `restore` whose answer would exceed the ceiling refuses
+before anything moves. What the harness owes a restore, the flush before and the
+rebuild after, and a restore whose answer is lost failing closed as a reload that did
+not complete, is the loop act's under the ruling of 2026-10-06. **An empty store has no position**,
 and what a save point taken of one is stamped with is the save-point act's provisional
 election, no run and sequence zero, pending the operator's ruling on the carried item
 r4170886146 in A3.0, the member learning no run until a distillate lands.
