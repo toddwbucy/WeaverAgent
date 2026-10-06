@@ -190,19 +190,25 @@ service account, and what replaces it is the process boundary the operating
 system already draws around an executed program.
 
 **The verb and its agent arrive as arguments.** One verb per invocation, `load`,
-`unload`, `validate`, `stop`, or `show`, with the agent name as the one further
-argument, which every verb takes. **The verbs are the application layer's primitives,
+`unload`, `validate`, `stop`, `show`, and, since A3.2 on the operator's rulings of 2026-10-06 on #1 (the A3.0 items), `save-point`,
+`restore` and `force-unload`, with the agent name as the one further argument, which
+every verb takes. **The verbs are the application layer's primitives,
 and their orchestration is interior**, on the operator's ruling of 2026-10-03 on #72:
 each verb keeps one promise and does inside the agent only what that promise needs, and
 a choice between outcomes that its caller should make is left to the caller, admin-con,
-which reads `show` and issues the next verb. **Two running-agent verbs are owed and not
-granted yet**: `save-point`, asking the running worker for a save point on demand, and
-`restore`, a live restore, over the coordination channel of section 7, on the operator's
-ruling of 2026-10-03 on #50. Neither has a directive or an exchange in this act, so both
-are owed to #58's code act (A3), which shapes the save points and their asks, and no
-sudo rule grants them until it lands. A live restore of a named save point would need a
-caller-chosen argument, which the rule forbids, so that one stays an act at a root shell
-when A3 gives it a form. Arguments rather than a parsed request line, because the kernel
+which reads `show` and issues the next verb. **Three verbs joined with A3.2**, on the operator's rulings of 2026-10-06 on #1 (the A3.0 items): `save-point`, asking the running
+worker for a save point on demand over section 7's channel and publishing it at once,
+per section 6; `restore`, naming the save point the next load restores, which is the one
+the declaration's `[restore]` names, judged and entered in the manifest as named at a
+restore, per section 4, so a file that arrived by no publication becomes loadable only by
+this verb; and `force-unload`, the unload that completes without its leave save point,
+per section 3. Each is one fixed command line with no argument: the save point `restore`
+names is the declaration's and never the caller's, which is why the verb takes none, and
+the operator's rule grants all three, the observer's none. **The live restore of a
+running agent waits on the decode seam's `Reopen`**, the loop act's (A5): a restore is a
+reload of the agent's state at a turn boundary, the decode cache flushed and the prefix
+re-presented from the restored holdings, on the operator's ruling of 2026-10-06 on #1,
+and until A5 lands a restore is `restore`, then `load`, which restores what was named. Arguments rather than a parsed request line, because the kernel
 already delivered them as a vector and re-encoding them into a wire format would be
 inventing a wire where no seam crosses. The base the agent's root stands under is the
 one environment variable read, per section 9.
@@ -217,8 +223,7 @@ case is added to `LifecycleAnswer` and to the operator contract's case list, so 
 breaks a consumer loudly under `weaver-types-Spec`'s exhaustive-enum rule. Its outcome
 is written to `admin.log`, and any change it makes to the agent is recorded on the trace
 with its cause. Any value it needs is taken from the declaration, recorded or pinned
-under #71, and never from the caller. `save-point` and `restore` are the first two to
-follow it, in A3.
+under #71, and never from the caller. `save-point`, `restore` and `force-unload` followed it in A3.2.
 
 **Authorization is the kernel's, and what this crate checks is the name.** The
 invocation runs as root or performs nothing, so no predicate, no allow set, and
@@ -548,11 +553,13 @@ inventory, verify the boundary in the same inventory, resolve the session and
 open the sink per section 5, run the start step per section 6, dial the worker's
 socket and direct enter per section 7, publish. Seven actions, the charter's
 own, the bind-and-listen act the earlier form interleaved here having moved to
-the worker with the inversion. **The save-point publication of section 6 opens the
-validate step**, before the inventory selects the save point to restore, so a save
-point an unclean stop left in the member's room is published and selectable by the
-load that follows it. It adds no step to the seven, being the inventory's first read
-of what the load restores. Each step's failure returns a typed
+the worker with the inversion. **The run lock is taken before `validate`, and the save-point publication of section
+6 runs under it, opening the validate step** before the inventory selects the save point
+to restore, on the operator's rulings of 2026-10-06 on #1 (the A3.0 items) (item 7): a save point an unclean stop left in the member's
+room is published and selectable by the load that follows it, and a concurrent `load`
+against an active or a stopped-unload agent refuses at the lock with
+`InvocationInFlight` and touches nothing. The publication adds no step to the seven,
+being the inventory's first read of what the load restores. Each step's failure returns a typed
 `lifecycle-refusal` and enters the rollback below carrying the step's name.
 
 **`validate` stays the load's front half, and it is left room to grow.** WeaverWeb's
@@ -598,10 +605,25 @@ to: admin-validate-starts-no-process
 leave and await the aggregate, then await the run's exit, the worker's after it answers
 left and the member's and the relay's with it, read as the run lock's release,
 publishing the member's finished save points per section 6 once the member has stopped,
-and answer provisioned-and-unloaded **only once the lock is free**. The publication adds
-no step to the three, being the second step's tail. A refusal on leave,
-`ActivityNotAtRest` above all, returns to the operator unchanged and answers nothing
-further.
+the leave's own among them, which the harness's `Left` answer names, and answer
+provisioned-and-unloaded **only once the lock is free**. The publication adds no step to
+the three, being the second step's tail. A refusal on leave, `ActivityNotAtRest` above
+all, returns to the operator unchanged and answers nothing further.
+
+**An unload whose leave save point is not finished does not complete**, on the operator's rulings of 2026-10-06 on #1 (the A3.0 items)
+(item 6). The harness takes the leave's save point before it authors `unload`, per
+`weaver-harness-Spec` section 6, and where that save point is not finished, the write
+having failed, the answer or the acknowledgement having missed its bound, or the member
+being dead, it answers `SavePointNotTaken` naming which, authors no `unload`, and stays
+entered at rest: the run stays open, the constituents keep the run lock, this verb prints
+the refusal and exits non-zero, and nothing silent happens. If the member is alive the
+operator retries, `save-point` and then `unload`; if it is dead the operator issues
+`force-unload`, which directs the leave with `forced` set, so the harness leaves without
+the save point and records on the `unload` event that the leave's save point was not
+taken, and this crate leaves the clean-unload marker open under `ForcedUnload`, so the
+next load restores the latest published save point with that reset recorded. The loss is
+the operator's recorded choice, never this crate's. `force-unload` is `unload` in every
+other respect, the same waits and the same escalation.
 
 **The leave has a bound of its own, sixty seconds from the verb's start**, once the
 invocation lock is held: the observation and both dials spend it, so `unload` holds the
@@ -837,43 +859,67 @@ to: admin-member-account-required-at-inventory
 ```
 
 **A restore is judged here too, and it names a save point**, on the operator's ruling of
-2026-10-02 on #58, which retires the record restore of 2026-09-04 (issue #432). **It is
-judged only where a state member stands**: under the `none` store engine the inventory
-selects no save point and resolves no lineage, and a declaration naming `restore` beside
-that engine refuses `ConfigInvalid` naming `restore`, per `weaver-types-Spec` section 2.
-A declaration electing one names a save point by its bare file name in the declaration
-directory of section 9, and the walk reads it under this crate's own custody: the name
-is a bare file name per `weaver-types-Spec` section 2, a save point absent from the
-directory refuses
-`ConfigInvalid` naming `restore`, and one that fails section 9's judgment of the entries
-it reads, a link, a wrong owner, or a group- or other-writable file, refuses
-`BoundaryUnverified`. A save point the operator edited is an input, admitted the same
-way. **The save point's bytes are judged here too**, before any
-process exists, on the Planner's ruling of 2026-10-02 on #58's fourth review round: the
-save point this load restores, the one `restore` names or the latest published, is read
-under this crate's custody, and a torn file, a check over its bytes that fails, or a
-stamp that disagrees with the name it was published under refuses `ConfigInvalid` naming
-the save point, so a damaged save point never reaches the member and the operator names
-another. What the member alone can judge, the save point's schema against the loop's, it
-answers on the enter's `restored` ask of `weaver-harness-state-contract` section 2.
-**The clean-unload marker is this crate's**: at every load it writes, in the agent's
-config root under its own custody, a marker naming the run it mints as open, and a clean
-unload marks that run closed. A load that finds a marker naming a run still open
-resolves the enter's `reset`, which rides apart from the lineage and whether or not a
-save point stands, to that run with `NoCleanUnload`, per `weaver-types-Spec` section 4.
-An agent's first load finds no marker and resolves no reset. The lineage that crosses
-the enter is resolved here from the save point's stamp: the run, the sequence and the
-last turn it covers, and, where the operator's offline builder made it from a record,
-the record and the cut it names. The save point is never handed to the agent and never
-named to the worker, on the same descriptor discipline as the sink: what the member
-receives is a descriptor this crate opened, per section 6. Branching from a record is
-the builder's, outside the agent, and this crate never reads a record for a load. **The
-judgment is this crate's because the save point is**, per charter section 4.3's custody
-rule: a look at a thing admin holds, taken at the load's cheapest moment before any
-process exists, and an ask of nobody. **The instrument is perturbation**: a `restore`
-naming an absent save point refuses naming `restore`, watched to fail when the presence
-check is dropped, and a linked save point refuses `BoundaryUnverified`, watched to fail
-when the entry judgment is dropped.
+2026-10-02 on #58, which retires the record restore of 2026-09-04 (issue #432), and on
+the operator's rulings of 2026-10-06 on #1 (the A3.0 items) (items 1, 3 and 5), which shape the selection. **It is judged only where a
+state member stands**: under the `none` store engine the inventory selects no save point
+and resolves no lineage, and a declaration naming `restore` beside that engine refuses
+`ConfigInvalid` naming `restore`, per `weaver-types-Spec` section 2. **The manifest of
+section 6 is the record of what is loadable**: the inventory reads it, root-owned in
+section 9's `declaration-directory`, one line per published or named save point, and
+selects either the save point the declaration's `[restore]` names, by its published name
+or its digest, or the latest, the line of highest ordinal whose file still stands under
+its name and whose bytes digest to the line's digest. **A file no line names is not
+loadable**, whatever stands in the directory: a declaration naming one refuses
+`ConfigInvalid` naming `restore`, and the way such a file becomes loadable is the
+`restore` verb, which judges it as below and appends the line that names it, marked as
+named at a restore, so the manifest records what this crate published and what the
+operator named and nothing else; there is no operator-supplied save point, only a save
+point named at a restore, on item 3. A manifest that stands beside published files and
+does not read, or a named line whose file is absent, refuses `BoundaryUnverified` naming
+the manifest, and no manifest and no file is an agent's first load. **The selected save
+point's bytes are judged here**, before any process exists, under this crate's custody
+through the descriptor it opens and never by path: the entry judgment of section 9 (a
+regular file, not a link, owned by the operator, closed to group and other), a stamp line
+of the format's seven members, a check over the bytes that holds, a digest equal to the
+manifest's and a published name computable from the stamp per `weaver-state-Spec`
+section 3, and any of these failing refuses `ConfigInvalid` naming the save point, so a
+damaged save point never reaches the member and the operator names another. **The
+schema is the member's to judge**, at the opener and answered on the enter's `restored`
+ask of `weaver-harness-state-contract` section 2: this crate links no engine and the
+member's vector carries no flag, so the one party that can read the schema a save point
+stands under against the one it runs is the member, and a mismatch refuses the enter
+there, before `load` is authored. **The lineage that crosses the enter is resolved here
+from the stamp and the manifest line**: the digest, the run, the sequence and the last
+turn the stamp covers, and `named_at_restore`, true where the line arrived by the
+`restore` verb; `built_from` stays absent until the offline builder's runner lands, which
+is `weaver-state-Spec` section 6's cell and not this act's. **The descriptor is opened
+at the selection and placed at the spawn**: the save point is opened for reading,
+close-on-exec, at the inventory, and placed at its fixed number in the member's process
+at the spawn alone, per section 6 and `weaver-state-Spec` section 2, so no path rides
+the vector and the agent, whose worker never holds the descriptor, never reaches the
+save point. No save point selected is an absent descriptor and no refusal, the member
+standing empty.
+
+**The clean-unload marker is this crate's, and it is written only once a run stands**,
+on the operator's rulings of 2026-10-06 on #1 (the A3.0 items) (item 5): at every load, after the enter answers `Ready`, this crate
+writes, in the agent's config root under its own custody, a marker naming the run it
+minted as open, and a clean unload marks that run closed; a load that fails at any later
+step restores the marker's prior state in its rollback, and a load that never authored
+`load` never opened a run and leaves the marker as it found it. A load that finds a
+marker naming a run still open resolves the enter's `reset`, which rides apart from the
+lineage and whether or not a save point stands, to that run with `NoCleanUnload`, or
+with `ForcedUnload` where `force-unload` closed that run without its save point, per
+`weaver-types-Spec` section 4. An agent's first load finds no marker and resolves no
+reset. Branching from a record is the builder's, outside the agent, and this crate never
+reads a record for a load. **The judgment is this crate's because the save point is**,
+per charter section 4.3's custody rule: a look at a thing admin holds, taken at the
+load's cheapest moment before any process exists, and an ask of nobody. **The
+instrument is perturbation**: a `restore` naming an absent or unlisted save point
+refuses naming `restore`, watched to fail when the manifest check is dropped; a file
+whose digest is not its line's is not the latest, watched to fail when the digest
+comparison is dropped; a damaged save point refuses naming it, watched to fail when the
+check is dropped; and a load failing after the enter leaves the marker as it found it,
+watched to fail when the rollback's restore is dropped.
 
 ```graph
 node: admin-restore-save-point-judged-at-the-inventory
@@ -1495,28 +1541,46 @@ end, per `weaver-state-Spec` section 2. No path rides the vector, and the agent,
 worker never holds the descriptor, never reaches the save point. No save point in the
 directory is an absent descriptor and no refusal, the member standing empty and a
 rebuild from the trace being the offline builder's, per `weaver-state-Spec` section 3.
-**At every load and unload, this crate publishes**: as root, at the opening of a load's
-validate step before the inventory selects what to restore, per section 3, and after the
-member has stopped at an unload, it copies each finished save point from the member's
-room into the declaration directory and never moves one, because a move keeps the
-member's uid and the inventory's entry judgment would refuse the file as wrongly owned.
-**Every source is a value the member's account chose, so it is judged before root reads
-it**, per section 9: this crate holds the member's room open as a directory, opens each
-entry beneath that descriptor without following links, requires a regular file owned by
-the member's uid that carries the save-point format and a finished name, refuses and
-leaves in place any entry that fails, naming it, and copies only from the descriptor it
-judged, so a link or a planted file in the room cannot make a root step read a path the
-member chose.
-The copy is written under a temporary name, owned by the uid the root's `operator` key
-names and mode `0600`, its owner and mode verified through the open file, then renamed
-to a new name stamped with the run and sequence it covers, overwriting nothing. Only
-then is the member's copy removed, so a publication cut short leaves the member's copy
-standing and is retried at the next verb. One an unclean stop left behind is
-published at the next load. That directory stays `0700` to the operator, so a save
-point on demand lands with the operator at the next verb, and a live restore of one the
-member still holds reads the member's own room with no part of this crate. **This is
-interior to this crate**: the verbs, their arguments and their answers are unchanged,
-and the operator contract carries nothing new.
+**At every load, every unload and every `save-point`, this crate publishes, under the
+lock**, on the operator's rulings of 2026-10-06 on #1 (the A3.0 items) (items 1, 3 and 7): as root, at the opening of a load's validate
+step under the run lock it took first, after the member has stopped at an unload, and at
+once at the `save-point` verb under the invocation lock with the run standing, it copies
+each finished save point from the member's room into the declaration directory and
+never moves one, because a move keeps the member's uid and the inventory's entry
+judgment would refuse the file as wrongly owned. **Every source is a value the member's
+account chose, so it is judged before root reads it**, per section 9: this crate holds
+the member's room open as a directory, opens each entry beneath that descriptor without
+following links, requires a regular file owned by the member's uid that carries the
+save-point format and a finished name, a part name being an unacknowledged save point
+that is never published, refuses and leaves in place any entry that fails, naming it,
+and copies only from the descriptor it judged, so a link or a planted file in the room
+cannot make a root step read a path the member chose. The copy is written under a
+temporary name, owned by the uid the root's `operator` key names and mode `0600`, its
+owner and mode verified through the open file, then renamed to its published name,
+overwriting nothing. **The published name is computable from the file's own bytes**:
+`<YYYYMMDDTHHMMSSZ>-<digest>.save-point`, the time the stamp line's `taken.wall_ns`
+rendered in UTC to the second and the digest the file's, which extends the room's name
+rule of `weaver-state-Spec` section 3 to the published form, so a renamed file reads as
+not the file its name claims. Only then is the member's copy removed, so a publication
+cut short leaves the member's copy standing and is retried at the next verb, and one an
+unclean stop left behind is published at the next load. **Each publication appends one
+line to the manifest**, `save-points.manifest` in the declaration directory, a file this
+crate creates root-owned and mode `0644` and opens for appending alone, never rewriting
+it: one JSON object per line carrying `ordinal`, a monotonic integer minted under the
+lock as one past the highest line standing; `digest`; `name`, the published name;
+`stamp`, the run, sequence, turn and schema digest the stamp line carries; `taken`, its
+wall clock; `position`, the trace position of the `save_point` event that named it, the
+run and sequence the harness reported in its `Left` or `SavePointTaken` answer, or
+absent where the file was recovered from the room after an unclean stop and no answer
+carried it; and `arrived`, one of `leave`, `demand`, `recovered`, or `restore` for a
+line the `restore` verb appended for a file it judged. **The manifest is the record of
+what is loadable, and the latest is read from it**: the highest ordinal whose file still
+stands under its name and whose bytes digest to the line's digest, per section 4, and a
+file no line names is not loadable. The directory stays `0700` to the operator, so a
+save point on demand lands with the operator at once and a live restore of one the
+member still holds reads the member's own room with no part of this crate. **The verbs
+`save-point`, `restore` and `force-unload` are the operator contract's**, per section 2,
+and the publication itself carries nothing across it.
 
 **The one name left stands under the member's territory, and it is derived
 rather than told.** Per the operator's ruling of 2026-08-26 the preload name
@@ -2096,7 +2160,14 @@ ran sudo from and two invocations of one root always name the same files. **The 
 declaration stands in the operator's directory and not in the root**, on the operator's
 ruling of 2026-10-02: `declaration-directory` names it, absolute,
 `~/.weaveragent/<agent>/` by convention, and it holds `agent.toml`, which this crate
-parses per `weaver-types-Spec` section 2. A declaration directory holding no
+parses per `weaver-types-Spec` section 2, the operator's prompt draft `system-prompt.md`,
+which this crate never reads, and, since A3.2, the published save points and
+`save-points.manifest`, the one root-owned file in the operator's directory, which this
+crate alone writes, per section 6. **The operator owns the directory and can remove the
+manifest**, and doing so makes every published save point unloadable, a file no line
+names being not loadable, until a `restore` names one, which appends the line that
+makes it loadable again; the recovery is the verb and never a hand edit of a root-owned
+file. A declaration directory holding no
 `agent.toml` answers
 `NoSuchAgent`, as a root holding none did. **`operator` names the operator's uid**, on
 the operator's ruling of 2026-10-02 on this act's first question: a root-owned key

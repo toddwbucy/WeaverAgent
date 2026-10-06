@@ -379,10 +379,13 @@ of 2026-10-02 on #58, through the `restore` ask of `weaver-harness-state-contrac
 section 2, and flushes on its answer. The channel that carries the operator's demand to
 the loop is later work.
 
-**An edited save point is an input, not derived state.** A save point the operator edits
-offline holds what the trace never recorded, so loading one records its digest, marked
-operator-supplied, and the file is kept as an input. Rebuildable
-from the trace then holds from the latest recorded save-point load onward.
+**A save point named at a restore is an input, not derived state.** There is no
+operator-supplied save point, on the operator's ruling of 2026-10-06 on #1 (A3.0 item
+3): a state the trace never recorded enters only as a restore the operator names through
+admin's `restore` verb, judged as any load's save point is, entered in admin's manifest
+as named at a restore and marked so on the `load` event's lineage, and the file is kept
+as an input. Rebuildable from the trace then holds from the latest recorded save-point
+load onward.
 
 **The store is a port, and one engine stands behind it.** This crate's custody holds no
 opinion about a query language, and the seam to the harness names asks and never a
@@ -420,13 +423,13 @@ which the agent's uid cannot enter, on the operator's ruling of 2026-10-02 on #5
 new file per save point, never one rewritten, so the write needs no handle from admin
 and no admin resident. **Admin, as root, publishes each finished save point into the
 operator's declaration directory**, `~/.weaveragent/<agent>/` by default, beside the
-declaration and the system prompt, at the next load or unload, per `weaver-admin-Spec`
-section 6, so a save point taken on demand lands with the operator at the next verb, and
+declaration and the system prompt, at the next load or unload or at once on the
+operator's `save-point`, per `weaver-admin-Spec` section 6, so a save point taken on demand lands with the operator at the next verb, and
 one that survived an unclean stop is published at the next load. That directory stays
 `0700` to the operator, so the member cannot open it by path and does not try. **A load
 restores through a descriptor**: admin, as root, opens the chosen save point in the
-operator's directory, the latest by default or the one `restore` names, an edited one
-included, and hands the member the open descriptor at spawn, exactly as it opens the
+operator's directory, the latest by admin's manifest or the one `restore` names, one
+named at a restore included, and hands the member the open descriptor at spawn, exactly as it opens the
 trace sink and hands it down, and for the same reasons. **A live restore reads the
 member's own room**, the save point the member itself wrote and still holds, with no
 admin. A save point that is only in the operator's directory restores at a load. The

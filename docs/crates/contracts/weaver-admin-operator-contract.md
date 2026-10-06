@@ -77,12 +77,14 @@ none breaches anything Gate holds, on the grounds `weaver-admin-PRD` section 3 s
 
 **A granted command line, and nothing else from the caller.** The verbs are `show`,
 `validate`, `load`, `unload` and `stop`, each with the agent's name, on the operator's
-rulings of 2026-10-03 on #50. Two more, `save-point` and `restore` against a running
-agent, are owed to #58's code act (A3), which shapes their exchange, and no rule grants
-them until it lands.
+rulings of 2026-10-03 on #50, and, as of A3.2 on the operator's rulings of 2026-10-06 on
+#1, `save-point`, which takes a save point of the running agent and publishes it at
+once, `restore`, which names the save point the next load restores, the one the
+declaration's `[restore]` names and never one the caller chooses, and `force-unload`,
+the unload that completes without its leave save point and records the loss.
 **Which lines a caller may run is the rule the operator installs**: an observer's rule
-grants `show`, and an operator's adds `validate`, `load`, `unload` and `stop`, the role
-split of #50 mapped onto command lines. Nothing else crosses in:
+grants `show`, and an operator's adds `validate`, `load`, `unload`, `stop`, `save-point`,
+`restore` and `force-unload`, the role split of #50 mapped onto command lines. Nothing else crosses in:
 no argument the caller chooses, no standard input, which the program never reads, and no
 claim of who asked. **The cause the record carries is the uid sudo reports**, and which
 person asked is WeaverWeb's record and never the agent's. **The rule opens no login

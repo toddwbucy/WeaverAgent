@@ -281,7 +281,7 @@ pub struct Lineage {
     pub run: String,
     pub sequence: u64,
     pub turn: u64,
-    pub operator_supplied: bool,
+    pub named_at_restore: bool,
     pub built_from: Option<Branch>,
 }
 
@@ -309,6 +309,7 @@ pub struct StoreIdentity {
 pub struct UnloadClose {
     pub grant_surface: Option<GrantSurface>,
     pub cause: Option<Cause>,
+    pub forced: bool,
 }
 
 pub enum GrantSurface {
@@ -655,7 +656,10 @@ to: trace-turn-close-internally-tagged
 the payload-free case counting as one of them. `refusal` carries `Refusal`, spliced, the
 organ's own account of what it turned away. `session.closed` and `turn.started` carry
 `None`, and `unload` carries `UnloadClose`, its grant surface present where a member
-stood and its cause where a leave directive asked. `load` carries `Elections`. The five
+stood, its cause where a leave directive asked, and, as of A3.2 on the operator's
+ruling of 2026-10-06 on #1 (A3.0 item 6), `forced`, true where admin's `force-unload`
+ended the run without its leave save point, so the record says the loss was the
+operator's choice. `load` carries `Elections`. The five
 message kinds carry `Message`. `turn.closed` carries `TurnClosed`. `fault` carries
 `Fault`. `flush` carries `FlushCounts`, the resident token counts before and after, both
 plain integers. **`elision` carries `ElisionSpan` and not those counts**: an elision
@@ -807,13 +811,17 @@ to: trace-load-names-its-loop-and-its-member
 reshaped on the operator's rulings of 2026-10-02 on #58, per the charter's section 3.1.
 `lineage` is present where the load restores a save point and absent otherwise, never
 null: `save_point` is the save point's digest, `run` and `sequence` the position it
-covers, `turn` the last turn that run holds in it, `operator_supplied` whether the
-operator supplied it, and `built_from`, present only where the offline builder made it
-from a record, carries that record's session as `parent`, the run the cut falls in as
-`run`, and the turn the holdings stop at as `through`. `reset` stands beside `lineage`
-and apart from it, present only where the agent's last run did not end in a clean
-unload, whether or not a save point stands, and carries that run as `prior_run` and the
-reason as admin resolved it. Both are copied from the enter per `weaver-types-Spec`
+covers, `turn` the last turn that run holds in it, `named_at_restore` whether the
+operator named it through admin's `restore` verb rather than the inventory selecting
+the latest published, on the operator's ruling of 2026-10-06 on #1 that there is no
+operator-supplied save point (`operator_supplied` retired with A3.2), and `built_from`,
+present only where the offline builder made it from a record, carries that record's
+session as `parent`, the run the cut falls in as `run`, and the turn the holdings stop
+at as `through`. `reset` stands beside `lineage` and apart from it, present only where
+the agent's last run did not end in a clean unload, whether or not a save point stands,
+and carries that run as `prior_run` and the reason as admin resolved it,
+`no_clean_unload` or, as of A3.2, `forced_unload` where the operator's `force-unload`
+closed that run without its leave save point. Both are copied from the enter per `weaver-types-Spec`
 section 4 and never the save point's path, which the
 harness does not hold. `stack` is the digests of the organ binaries admin started and of
 the agent's SPU and the gate it hands the worker to fork, keyed by the binary's name,
@@ -1053,9 +1061,11 @@ to: trace-score-records-the-verdict-and-its-terms
 **`save_point` records a save point taken, the twenty-fifth kind**, on the operator's
 ruling of 2026-10-02 on #58's fourth question that where state came from is a fact on
 the record, landed by the save-point act of 2026-10-05 with its emitter. The harness
-authors it from the state seam's `snapshot` answer, at every serving leave after
-`unload` and, with admin's save-point act, on the operator's demand, per
-`weaver-harness-Spec` section 6. **The payload is `SavePointTaken`**: `save_point`,
+authors it from the state seam's `finished` answer, the fourth leg of the `snapshot`
+exchange, so the record names only a file that has its finished name, at every serving
+leave before `unload` and on the operator's demand through admin's `save-point` verb,
+as of A3.2 on the operator's rulings of 2026-10-06 on #1, per `weaver-harness-Spec`
+section 6. **The payload is `SavePointTaken`**: `save_point`,
 the digest of the save point's bytes, which is its identity in the operator's directory
 and the `save_point` a later load's lineage names; `run` and `sequence`, the trace
 position of the last distillate it holds; `turn`, the last turn that run holds in it,
@@ -1067,9 +1077,10 @@ the charter's section 3: it is provenance about the holdings, authored after the
 holdings it names were taken, so a save point could never hold its own event and a
 rebuild that landed it would hold what no restore holds, and `distill` refuses the kind
 before the election is consulted. The diagnostic record carries no save point, a
-diagnostic binding taking none. The restore's event and its operator-supplied mark are
-admin's save-point act's to name, and the reset rides the `load` event's `reset`
-member above.
+diagnostic binding taking none. A restore at a load rides the `load` event's lineage, marked `named_at_restore`, and a
+forced unload rides the `unload` event's `forced`, no kind being named ahead of its
+emitter; the live restore's own event is the loop act's (A5), and the reset rides the
+`load` event's `reset` member above.
 
 **`score` and the classify pair are the precedents for every loop judgment**, per the
 charter's section 3.1 on the operator's ruling of 2026-10-02: a judgment the loop makes,

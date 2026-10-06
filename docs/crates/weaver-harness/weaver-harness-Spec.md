@@ -2063,19 +2063,38 @@ and a save point of them would be published and could be selected by a later ser
 load as production state. The offline builder's save point is the builder's write, per
 `weaver-state-PRD` section 3, and never a diagnostic load's. The asks go under the
 dead-peer conversion every state ask takes, per the operator's rulings of 2026-10-02 on
-#58. **The leave's save point is taken last**: this crate sends the leave's `snapshot`
-ask only after it has authored the `unload` event and the tee has sent that event's
-distillate where the election names it, and before it closes the state channel, so the
-ask, answered against the holdings the stream carried before it, holds every elected
-event of the run and the next load, replaying no tail, loses none. **A leave whose save
-point is not answered is an open design item**, carried on #1 to the save-point code
-act: under the dead-peer conversion the unload would still finish clean and the next
-load would restore an older save point with no reset recorded, so whether a missed leave
-save point refuses the leave or keeps the run marked unclean is that act's to elect. A
-save point is never overwritten, so each answer names a new one, and this crate authors
-the `save_point` event that records it, per `weaver-trace-Spec` section 3, the save
-point by digest and the position it covers, an event the tee never sends to state under
-any election, so the save point and a rebuild to its position hold the same. **A
+#58. **The leave's save point is taken at rest, before the `unload` event, and the leave
+does not complete without it**, on the operator's rulings of 2026-10-06 on #1 (A3.0
+items 4 and 6), which close the open item that stood here. This crate sends the leave's
+`snapshot` ask after the last turn and before it authors `unload`, so the save point
+holds every elected event of the run but the `unload` event's own distillate, which is
+lifecycle provenance the record keeps and no holding needs, and the next load replays no
+tail; the holdings restored at a load therefore never carry the prior run's `unload`
+event, and a rebuild through the preload door to the stamp stops before it too, so the
+member's restore-equals-rebuild instrument, `a_reloaded_store_equals_a_full_replay`,
+stays equal by construction. **A save point has four legs**, per `weaver-harness-state-contract` section 2:
+the ask, the answer naming the finished name and the digest, this crate's `acknowledge`
+of that digest, and the member's `finished` answer, on which this crate authors the
+`save_point` event, per `weaver-trace-Spec` section 3, the save point by digest and the
+position it covers, an event the tee never sends to state under any election, so the
+save point and a rebuild to its position hold the same; a save point is never
+overwritten, so each answer names a new one. **Where any leg misses, the leave does not
+complete**: this crate authors no `unload`, answers admin `SavePointNotTaken` naming
+which leg, the write, the answer, the acknowledgement's answer, or the member being
+dead, and stays entered at rest with the run open, so the operator retries with
+`save-point` and `unload` or, where the member is dead, forces the unload; nothing is
+silent and the dead-peer conversion does not apply to this ask at the leave. **A forced
+leave takes no save point**: the `Leave` directive's `forced` member, set by admin's
+`force-unload` alone, has this crate author `unload` with `forced` true, recording that
+the leave's save point was not taken, so the next load, restoring the latest published
+save point, carries the reset admin resolves from its marker. **A save point on demand
+is the `SavePoint` directive's**, admin's `save-point` verb over the coordination
+channel: at rest, the same four legs, the same event, and the answer `SavePointTaken`
+naming the digest, the finished name, the position covered and the trace position of
+the event, which admin's manifest records; while a turn runs it refuses
+`ActivityNotAtRest`, as `Stop` would not, because a save point of a turn in flight would
+hold half of it. The `Left` answer names the leave's save point the same way, so admin
+publishes it at once with its trace position. **A
 live restore is the loop's to trigger**: on the operator's demand this crate sends the
 `restore` ask naming a save point in the member's room, and on its answer flushes the
 decode session to `keep = 0` through the decode contract's existing cut before the next
@@ -2198,7 +2217,7 @@ per `weaver-state-PRD` section 4. **Every serving enter where the member stands 
 the ruling of 2026-10-02 on #58's fourth review round: the answered stamp, the save
 point's digest, run, sequence and last turn, must equal the same four members of the
 enter's `Lineage`, or be absent where the enter names none, the other members,
-`operator_supplied` and `built_from`, being admin's resolution and never the member's to
+`named_at_restore` and `built_from`, being admin's resolution and never the member's to
 answer, and a refusal, a miss, or a disagreement refuses the enter before it authors
 `load`, through the fan-out's before-load refusal with the stream still clean, so no
 `load` event names state the member did not restore. **The reset rides the `load`

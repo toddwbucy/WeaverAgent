@@ -216,6 +216,11 @@ pub struct AgentConfig {
 pub struct Restore {
     pub save_point: String,
 }
+```
+
+The one member is the published name or the digest, per the paragraph above.
+
+```rust
 
 pub struct StateStore {
     pub engine: StoreEngine,
@@ -600,17 +605,20 @@ record with no reductions in it. This is why `AgentConfig` derives no `Default` 
 `parse` returns no partial value. **`restore` names a save point**, on the operator's
 ruling of 2026-10-02 on #58, which retires the record restore of 2026-09-04 (issue
 #432) and its cut. It may be absent because `weaver-state-PRD` section 4 rules what
-absence means: the load restores the latest save point published, the order that
-makes one latest being a durable publication ordinal the save-point code act elects and
-not a run reference, a name or a file time, carried on #1, and with none state is
-rebuilt from the trace offline. **Restoring needs a member to restore into**: where the
+absence means: the load restores the latest save point published, the latest being the
+highest ordinal of admin's manifest whose file stands and whose digest matches, per
+`weaver-admin-Spec` section 6 on the operator's ruling of 2026-10-06 on #1, never a run
+reference, a name or a file time, and with none state is rebuilt from the trace
+offline. **Restoring needs a member to restore into**: where the
 declaration's store engine is `none`, no save point is selected, by name or by default,
 and a `restore` member present beside that engine refuses `ConfigInvalid` naming
-`restore`, so no load names holdings that no member restored. Present, `save-point` is a
-bare file name in the declaration's own directory, carrying no `/`, not `.` or `..`,
-not empty and with no control character, refusing
-`BadValue` naming `restore.save-point` otherwise. Admin opens it under its own custody,
-per `weaver-admin-Spec` section 4, and the harness never sees it. A save point the
+`restore`, so no load names holdings that no member restored. Present, `save-point` is the
+published name of a save point in the declaration's own directory,
+`<YYYYMMDDTHHMMSSZ>-<digest>.save-point`, or its digest alone, a bare name carrying no
+`/`, not `.` or `..`, not empty and with no control character, refusing `BadValue`
+naming `restore.save-point` otherwise. Admin resolves it through its manifest and opens
+it under its own custody, per `weaver-admin-Spec` section 4, and the harness never sees
+it; the record-and-cut form of before A3.2 retired with the record restore. A save point the
 operator built offline from a record names that record and cut inside itself, not here,
 so a branch from a record is the builder's act and this member keeps one meaning.
 
@@ -1255,7 +1263,8 @@ ruling.
 ```rust
 pub enum LifecycleDirective {
     Enter { payload: Box<EnterPayload> },
-    Leave { cause: Cause },
+    Leave { cause: Cause, forced: bool },
+    SavePoint { cause: Cause },
     Stop { cause: Cause },
     Observe,
     Admit { instruction: SpuInstruction },
@@ -1266,11 +1275,16 @@ pub enum LifecycleDirective {
     Unload { agent: AgentName },
     Validate { agent: AgentName },
     Show { agent: AgentName },
+    SavePointVerb { agent: AgentName },
+    Restore { agent: AgentName },
+    ForceUnload { agent: AgentName },
 }
 
 pub enum LifecycleAnswer {
     Ready,
-    Left,
+    Left { save_point: Option<SavePointReport> },
+    SavePointTaken { report: SavePointReport },
+    RestoreNamed { save_point: String, name: String },
     TurnAborted { turn: TurnKey },
     AtRest,
     Admitted,
@@ -1281,7 +1295,26 @@ pub enum LifecycleAnswer {
     State { state: AgentState, load: Option<Box<LoadFacts>>, constituents: Vec<u32> },
     InTransition,
 }
+
+pub struct SavePointReport {
+    pub save_point: String,
+    pub name: String,
+    pub run: RunId,
+    pub sequence: u64,
+    pub turn: u64,
+    pub position: Sequence,
+}
 ```
+
+**`Leave` carries `forced`, `SavePoint` is the on-demand save point, and `Left` names
+the leave's save point**, as of A3.2 on the operator's rulings of 2026-10-06 on #1:
+`SavePointReport` is what the harness reports of a finished save point, its digest, the
+finished name the member gave it, the position it covers and the trace position of the
+`save_point` event, so admin's manifest records the event's position without reading
+the record; `Left` carries none where the leave was forced or the binding diagnostic.
+`RestoreNamed` is the `restore` verb's answer, the save point it judged and entered in
+the manifest. The three verbs mirror the command line as `SavePointVerb`, `Restore` and
+`ForceUnload`, the first named apart from the directive the worker receives.
 
 **`Enter`'s payload and `State`'s load are boxed**, as of 2026-09-06 per issue #475:
 the two variants carried the whole of their enums' size onto every unit variant, four
@@ -1333,6 +1366,14 @@ pub enum LifecycleRefusal {
     Unanswered,
     OrganRefused { organ: RefusingOrgan, reason: Box<LifecycleRefusal> },
     ActivityNotAtRest,
+    SavePointNotTaken { missed: SavePointLeg },
+}
+
+pub enum SavePointLeg {
+    Write,
+    Answer,
+    Finished,
+    MemberDead,
 }
 
 pub struct EnterPayload {
@@ -1357,7 +1398,7 @@ pub struct Lineage {
     pub run: RunId,
     pub sequence: u64,
     pub turn: u64,
-    pub operator_supplied: bool,
+    pub named_at_restore: bool,
     pub built_from: Option<Branch>,
 }
 
@@ -1374,6 +1415,7 @@ pub struct Reset {
 
 pub enum ResetReason {
     NoCleanUnload,
+    ForcedUnload,
 }
 
 pub enum EnterBinding {
@@ -1413,7 +1455,9 @@ engine word, per `weaver-admin-Spec` section 6, one engine standing.
 **`restore` and `stack` ride the enter as of 2026-09-04.** `restore` rides as `Lineage`,
 resolved by admin from the save point the load restores, on the operator's ruling of
 2026-10-02 on #58: the save point's digest, the run, sequence and last turn it covers,
-whether the operator supplied it, and, where the offline builder made it from a record,
+whether it was named at a restore (`named_at_restore`, which replaced
+`operator_supplied` with A3.2 on the operator's ruling of 2026-10-06 on #1 that there is
+no operator-supplied save point), and, where the offline builder made it from a record,
 that record's session and the run and turn of its cut. **`reset` rides beside it and
 apart from it, present where the agent's last run did not end in a clean unload**,
 whether or not any save point stands, because a run that stopped before its first save
@@ -1421,7 +1465,8 @@ point still owes the record its reset, on the operator's ruling of 2026-10-02 on
 that an unclean stop resets to the latest known-good save point and records the reset:
 admin resolves it from its own clean-unload marker, per `weaver-admin-Spec` section 4,
 naming the prior run and the reason, `NoCleanUnload` where the marker says the run never
-unloaded cleanly, `UnitFailed` having retired with the unit it read on 2026-10-03 (#50),
+unloaded cleanly, `ForcedUnload` where admin's `force-unload` ended it without its leave
+save point (A3.2), `UnitFailed` having retired with the unit it read on 2026-10-03 (#50),
 and the harness authors the reset event from it. It never carries the save point's path,
 which admin read under its own custody and the harness has no business holding, on the
 same discipline as the sink. The harness names the save point on the load event, its
