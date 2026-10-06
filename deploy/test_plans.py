@@ -1033,10 +1033,19 @@ esac
         self.assertEqual(result.returncode, 1)
         self.assertIn("past the gate's bound of 32768 octets", result.stderr)
         self.assertNotIn("no gate at", result.stderr)
-        draft.write_text("   \n")
+        # The empty draft refuses by the identity door's own rule, and a
+        # draft of whitespace alone is a prompt the door admits, so it reaches
+        # the dial (Codex on #92, round 7). Perturbation: strip before the
+        # check and the blank draft refuses as empty.
+        draft.write_text("")
         result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
         self.assertEqual(result.returncode, 1)
         self.assertIn("is empty", result.stderr)
+        self.assertNotIn("no gate at", result.stderr)
+        draft.write_text("   \n")
+        result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no gate at", result.stderr)
         draft.write_text("You are Karl.\n")
         result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
         self.assertEqual(result.returncode, 1)

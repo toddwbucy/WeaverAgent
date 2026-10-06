@@ -95,7 +95,10 @@ def main() -> int:
             print(f"the prompt draft {draft} is not UTF-8 ({e}), and the gate's line is UTF-8 by the world "
                   f"contract; fix the file", file=sys.stderr)
             return 1
-        if not text.strip():
+        # The one rule for emptiness, the identity door's: the empty string
+        # refuses, and a draft of whitespace alone seeds as its bytes, the
+        # operator's choice as the declaration's was (Codex on #92, round 7).
+        if text == "":
             print(f"the prompt draft {draft} is empty, and an empty prompt seeds nothing", file=sys.stderr)
             return 1
         request = {"role": "system", "text": text}
