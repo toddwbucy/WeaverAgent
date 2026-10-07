@@ -2266,13 +2266,17 @@ fn lower_gate(run: &mut Run) -> Option<LifecycleRefusal> {
 /// **The lower reads its channel until the gate's own answer**, per Spec
 /// section 6 (Codex on #94, round 14): a frame the gate admitted before it
 /// took the `Lower` reaches this channel ahead of `GateStopped`, and a lower
-/// that read one message would take it for a malformed answer and drop it,
-/// the dialer unanswered and the record silent. Every frame met here is
-/// answered on its own exchange with the close a frame the harness cannot
-/// seat is given, `refused` naming the unload, and authored as a lifecycle
-/// refusal of the leave, so the dialer has its answer and the record its
-/// line; a fault report the gate sends meanwhile is authored as the serve
-/// loop authors one. The leave's early look at the channel stays: it
+/// that read one message would take it for a malformed answer, the record
+/// silent. Every frame met here is authored as a lifecycle refusal of the
+/// leave, so the record has its line; a fault report the gate sends
+/// meanwhile is authored as the serve loop authors one. **No response is
+/// sent for it** (Codex on #94, round 15): the gate drops its relay and with
+/// it every served connection when it takes the `Lower`, before it answers
+/// `GateStopped` (`weaver-gate/src/main.rs`, the `(Raised, Lower)` arm at
+/// line 550, `drop(relay)` at line 559), so a response written now would be
+/// discarded and its dialer reads the end of the connection whatever this
+/// crate sends. The drain that answers such a request is the lifecycle
+/// protocol's act. The leave's early look at the channel stays: it
 /// refuses the leave outright when traffic already stands, so a queued turn
 /// is served rather than refused and the operator retries, and this loop
 /// covers only what the gate admits between that look and the lower.
@@ -2295,19 +2299,13 @@ fn lower_exchange(
         let envelope = channel.recv().map_err(|_| LifecycleRefusal::NoResidency)?;
         match envelope.payload {
             weaver_types::Payload::Frame(_) if envelope.exchange.opener == Opener::Gate => {
+                // Recorded, and not answered: the gate dropped this frame's
+                // connection when it took the `Lower`.
                 author_refusal_on(
                     run,
                     weaver_types::LifecycleAsk::Leave,
                     &LifecycleRefusal::ActivityNotAtRest,
                 );
-                let close = render_close("refused", "reason", "the agent is unloading", None);
-                let _ = channel.send(&OrganEnvelope {
-                    exchange: envelope.exchange,
-                    position: Position::Close,
-                    payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry(
-                        close.as_bytes(),
-                    )),
-                });
             }
             weaver_types::Payload::Fault(report) => {
                 let _ = run
@@ -3450,9 +3448,9 @@ mod tests {
         /// An unforced `Leave` with a frame the gate stand-in queued before
         /// it, untaken by the loop (Codex on #94, round 13).
         QueuedFrame,
-        /// An unforced `Leave` whose gate stand-in admits a frame after
-        /// reading the `Lower` and before answering `GateStopped` (Codex on
-        /// #94, round 14).
+        /// An unforced `Leave` whose gate stand-in has a frame it admitted
+        /// standing ahead of `GateStopped` when it takes the `Lower` (Codex
+        /// on #94, rounds 14 and 15).
         FrameDuringLower,
     }
 
@@ -3634,7 +3632,15 @@ mod tests {
                         // **A gate stand-in**, so the leave's lower is an
                         // exchange the sequence records (Codex on #94, round
                         // 12): it answers `GateStopped` to the `Lower` and
-                        // marks the order; a child stands in for its pid.
+                        // marks the order; a child stands in for its pid. It
+                        // keeps the real gate's order (Codex on #94, round
+                        // 15): at the `Lower` the gate drops its relay and
+                        // every served connection (`weaver-gate/src/main.rs`,
+                        // the `(Raised, Lower)` arm at line 550, `drop(relay)`
+                        // at line 559) and then answers `GateStopped` (line
+                        // 562), never waiting on a response, and anything
+                        // the harness writes for a frame after that is
+                        // discarded, which the stand-in marks.
                         let (gate_near, gate_far) =
                             crate::channel::OrganChannel::pair().expect("gate pair");
                         // Reaped by pid in `lower_gate`, as the real gate is.
@@ -3675,8 +3681,8 @@ mod tests {
                                 ));
                                 gate_order.lock().unwrap().push("<gate lowered>".into());
                                 if frame_during_lower {
-                                    // Admitted after the Lower was read and
-                                    // before GateStopped is sent.
+                                    // The relay's send of a line it admitted
+                                    // stands ahead of the answer.
                                     channel
                                         .send(&OrganEnvelope {
                                             exchange: ExchangeId {
@@ -3691,19 +3697,9 @@ mod tests {
                                             ),
                                         })
                                         .expect("the frame sends");
-                                    let close = channel.recv().expect("the frame is answered");
-                                    assert_eq!(close.exchange.ordinal, 7, "on its own exchange");
-                                    assert!(matches!(close.position, Position::Close));
-                                    let weaver_types::Payload::Frame(frame) = close.payload else {
-                                        panic!("the frame is answered with a frame");
-                                    };
-                                    gate_order.lock().unwrap().push(format!(
-                                        "<frame answered> {}",
-                                        String::from_utf8_lossy(
-                                            &frame.octets().expect("the close decodes")
-                                        )
-                                    ));
                                 }
+                                // The relay is dropped, then the answer, with
+                                // no wait on any response.
                                 let _ = channel.send(&OrganEnvelope {
                                     exchange: envelope.exchange,
                                     position: Position::Close,
@@ -3711,6 +3707,14 @@ mod tests {
                                         LifecycleAnswer::GateStopped,
                                     ),
                                 });
+                                // What the harness writes now reaches a gate
+                                // with no connection to carry it.
+                                while let Ok(late) = channel.recv() {
+                                    gate_order.lock().unwrap().push(format!(
+                                        "<undeliverable> exchange {}",
+                                        late.exchange.ordinal
+                                    ));
+                                }
                             }
                         }));
                         if let Some(spu) = run.spu.take() {
@@ -4145,16 +4149,20 @@ mod tests {
         );
     }
 
-    /// **A frame the gate admits while it is being lowered is answered and
-    /// recorded**, per `weaver-harness-Spec` section 6 (Codex on #94, round
-    /// 14): the gate stand-in sends a frame after reading the `Lower` and
-    /// before `GateStopped`; the lower answers it `refused` on its own
-    /// exchange, authors a refusal of the leave, reads on to `GateStopped`,
-    /// and the leave completes with its save point. Perturbation: read one
+    /// **A frame the gate admitted as it is lowered is recorded and not
+    /// answered**, per `weaver-harness-Spec` section 6 (Codex on #94, rounds
+    /// 14 and 15): the gate stand-in, in the real gate's order, has a frame
+    /// standing ahead of `GateStopped` and drops its connections before it
+    /// answers; the lower authors a refusal of the leave for the frame,
+    /// writes nothing the gate could not deliver, reads on to `GateStopped`,
+    /// and the leave completes with its save point. Perturbations: read one
     /// message for the lower again and the frame is taken as a malformed
-    /// answer, the leave refusing and the frame unanswered.
+    /// answer, the leave refusing; send the response again and it reaches
+    /// the stand-in after the answer, undeliverable. The stand-in in round
+    /// 14's order, waiting on the response before it answers, passes that
+    /// broken send, which is why it is not the order kept.
     #[test]
-    fn a_frame_admitted_while_the_gate_lowers_is_answered_and_recorded() {
+    fn a_frame_admitted_while_the_gate_lowers_is_recorded_and_not_answered() {
         let (events, _, read, answer, still_entered) = enter_against_a_member_leaving(
             None,
             false,
@@ -4171,13 +4179,9 @@ mod tests {
             "the leave completes: {answer:?} {read:?}"
         );
         assert!(!still_entered);
-        let answered = read
-            .iter()
-            .find(|line| line.starts_with("<frame answered>"))
-            .unwrap_or_else(|| panic!("the frame was answered: {read:?}"));
         assert!(
-            answered.contains("refused") && answered.contains("unloading"),
-            "{answered}"
+            !read.iter().any(|line| line.starts_with("<undeliverable>")),
+            "nothing is written the gate cannot deliver: {read:?}"
         );
         let refusal = events
             .iter()

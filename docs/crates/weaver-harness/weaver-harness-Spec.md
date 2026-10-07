@@ -2074,9 +2074,12 @@ refusing `ActivityNotAtRest` as for a turn in flight rather than lowering a gate
 admitted frame would be dropped untraced and unanswered, the loop taking the frame next
 and the operator retrying. **And the lower reads its channel until the gate's own
 answer** (Codex on #94, round 14): a frame the gate admits between that look and the
-`Lower` reaches the channel ahead of `GateStopped`, and the lower answers it on its own
-exchange with the `refused` close naming the unload and authors it as a refusal of the
-leave, so no admitted request is dropped unanswered or unrecorded. The two are not one
+`Lower` reaches the channel ahead of `GateStopped`, and the lower authors it as a
+refusal of the leave, so no admitted request goes unrecorded. **It sends no response
+for it** (Codex on #94, round 15): the gate drops its relay and every served connection
+when it takes the `Lower`, before it answers, so a response would be discarded and the
+request's client reads the end of its connection. Answering such a request is the
+drain's, which is the lifecycle protocol's act and not this one. The two are not one
 check twice: the look refuses the whole leave while traffic already stands, so a queued
 turn is served and not refused, and the reading loop covers only the window between the
 look and the lower, which no look can close; a leave refused at its save

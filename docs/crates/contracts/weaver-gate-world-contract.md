@@ -181,9 +181,10 @@ response path, as extensions to this page rather than replacements of it.
 - A request while the hook is lowered finds no listener, which is refusal by absence
   and not a typed answer.
 - A request the gate admitted while the agent is unloading, accepted before the hook
-  came down, is answered with the refused close naming the unload, never dropped
-  unanswered: the harness answers every frame it meets while it lowers the gate, per
-  `weaver-harness-Spec` section 6, and records the refusal.
+  came down, is recorded on the trace as refused, and its connection closes with no
+  answer: the gate drops every served connection when it is lowered, per
+  `weaver-harness-Spec` section 6. A request answered through an unload is the
+  lifecycle protocol's, a later act.
 - A line that does not parse is a refused turn, per section 2.
 - A line that exceeds the Spec's bound with no delimiter found has left the
   framing, and the connection closes at that layer, below any turn: nothing
