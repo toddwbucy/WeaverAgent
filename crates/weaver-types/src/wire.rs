@@ -280,9 +280,13 @@ pub enum LifecycleDirective {
 
 /// What the harness reports of a finished save point, as of A3.2 on the
 /// operator's rulings of 2026-10-06 on #1: its digest, the finished name the
-/// member gave it, the position it covers, and the trace position of the
-/// `save_point` event, so admin's manifest records the event's position
-/// without reading the record.
+/// member gave it, the position it covers (`run`, `sequence`, `turn`, the
+/// stamp's), and the trace position of the `save_point` event, its own run
+/// and sequence (`event_run`, `position`), so admin's manifest records the
+/// event's position without reading the record. **The two runs differ**
+/// after a restore under an election that keeps the load out of state: the
+/// covered position is the prior run's until a distillate lands, the event
+/// is the standing run's (Codex on #94, round 6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SavePointReport {
     pub save_point: String,
@@ -290,6 +294,7 @@ pub struct SavePointReport {
     pub run: RunId,
     pub sequence: u64,
     pub turn: u64,
+    pub event_run: RunId,
     pub position: u64,
 }
 

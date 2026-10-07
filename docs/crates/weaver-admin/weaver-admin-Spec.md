@@ -623,7 +623,12 @@ operator retries, `save-point` and then `unload`; if it is dead the operator iss
 the save point and records on the `unload` event that the leave's save point was not
 taken, and this crate leaves the clean-unload marker open under `ForcedUnload`, so the
 next load restores the latest published save point with that reset recorded. The loss is
-the operator's recorded choice, never this crate's. `force-unload` is `unload` in every
+the operator's recorded choice, never this crate's. A forced verb that finds the run
+already ended, the lock free, closes the marker as forced where it stands open, and a
+forced leave the harness refuses past its `Left`, its organs going down behind the
+refusal, closes it the same inside the after-left wait before the refusal returns, so
+the next load records `ForcedUnload` and never `NoCleanUnload` for a run the operator
+forced. `force-unload` is `unload` in every
 other respect, the same waits and the same escalation.
 
 **The leave has a bound of its own, sixty seconds from the verb's start**, once the
@@ -1579,11 +1584,13 @@ rule of `weaver-state-Spec` section 3 to the published form, so a renamed file r
 not the file its name claims. Only then is the member's copy removed, so a publication
 cut short leaves the member's copy standing and is retried at the next verb, and one an
 unclean stop left behind is published at the next load. **Several entries published by
-one verb are ordered by the stamp's clock**, `taken.wall_ns` ascending with the digest
-as the tiebreak, before any ordinal is minted: the member's own count, `taken.ordinal`,
-is per process and restarts with it, the clock is monotonic enough across processes for
-one agent's files, and a reported save point is taken last by construction, so the
-latest the manifest names is the last taken and never a recovered older file the
+one verb are ordered recovered first, then reported, and by the stamp's clock within a
+kind**, `taken.wall_ns` ascending with the digest as the tiebreak, before any ordinal is
+minted: a reported save point was taken last by construction and is minted last
+whatever the clock did between, a clock stepped back included; within a kind the clock
+orders because the member's own count, `taken.ordinal`, is per process and restarts
+with it, and the clock is monotonic enough across processes for one agent's files. So
+the latest the manifest names is the last taken and never a recovered older file the
 listing happened to yield later. **Each publication appends one
 line to the manifest**, `save-points.manifest` in the declaration directory, a file this
 crate creates root-owned and mode `0644` and opens for appending alone, never rewriting
@@ -1591,7 +1598,9 @@ it: one JSON object per line carrying `ordinal`, a monotonic integer minted unde
 lock as one past the highest line standing; `digest`; `name`, the published name;
 `stamp`, the run, sequence, turn and schema digest the stamp line carries; `taken`, its
 wall clock; `position`, the trace position of the `save_point` event that named it, the
-run and sequence the harness reported in its `Left` or `SavePointTaken` answer, or
+event's own run and sequence as the harness reported them in its `Left` or
+`SavePointTaken` answer beside the position the save point covers, the two runs
+differing after a restore until a distillate lands, or
 absent where the file was recovered from the room after an unclean stop and no answer
 carried it; and `arrived`, one of `leave`, `demand`, `recovered`, or `restore` for a
 line the `restore` verb appended for a file it judged. **The manifest is this crate's own file and is judged on its descriptor before a byte

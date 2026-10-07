@@ -2097,7 +2097,9 @@ save point, carries the reset admin resolves from its marker. **A save point on 
 is the `SavePoint` directive's**, admin's `save-point` verb over the coordination
 channel: at rest, the same four legs, the same event, and the answer `SavePointTaken`
 naming the digest, the finished name, the position covered and the trace position of
-the event, which admin's manifest records; while a turn runs it refuses
+the event, its own run and sequence, since after a restore the covered position is the
+prior run's until a distillate lands and the event is this run's, which admin's
+manifest records; while a turn runs it refuses
 `ActivityNotAtRest`, as `Stop` would not, because a save point of a turn in flight would
 hold half of it. The `Left` answer names the leave's save point the same way, so admin
 publishes it at once with its trace position. **A

@@ -657,19 +657,25 @@ pub fn publish(
     let Some((room_dir, mut entries)) = read_room(room, member_uid) else {
         return Ok(appended);
     };
-    // **Several entries publish in the clock's order** (Codex on #94, round
-    // 5), per Spec section 6: `taken.wall_ns` ascending, the digest as the
-    // tiebreak, before any ordinal is minted, so the latest the manifest
-    // names is the last taken. The clock is the right order because the
-    // member's own count, `taken.ordinal`, is per process and restarts with
-    // it; the clock is monotonic enough across processes for one agent's
-    // files; and a reported save point is taken last by construction, so
-    // it lands above a recovered older file whatever the listing's order.
+    // **Several entries publish recovered first, then reported, the clock
+    // ordering within a kind** (Codex on #94, rounds 5 and 6), per Spec
+    // section 6: a reported save point was taken last by construction, so
+    // it is minted last whatever the clock did between, a clock stepped
+    // back included; within a kind `taken.wall_ns` ascending orders them,
+    // the digest as the tiebreak, because the member's own count,
+    // `taken.ordinal`, is per process and restarts with it, and the clock
+    // is monotonic enough across processes for one agent's files. So the
+    // latest the manifest names is the last taken, never a recovered older
+    // file the listing happened to yield later.
+    let reported = |entry: &RoomEntry| {
+        reports
+            .iter()
+            .any(|(report, _)| report.save_point == entry.judged.digest)
+    };
     entries.sort_by(|a, b| {
-        a.judged
-            .stamp
-            .wall_ns
-            .cmp(&b.judged.stamp.wall_ns)
+        reported(a)
+            .cmp(&reported(b))
+            .then_with(|| a.judged.stamp.wall_ns.cmp(&b.judged.stamp.wall_ns))
             .then_with(|| a.judged.digest.cmp(&b.judged.digest))
     });
     let remove_from_room = |name: &str| {
@@ -683,7 +689,15 @@ pub fn publish(
         let (position, arrived) = reports
             .iter()
             .find(|(report, _)| report.save_point == entry.judged.digest)
-            .map(|(report, arrival)| (Some((report.run.0.clone(), report.position)), *arrival))
+            .map(|(report, arrival)| {
+                // The manifest's position is the event's: its run and its
+                // sequence, never the covered position's run beside the
+                // event's sequence (Codex on #94, round 6).
+                (
+                    Some((report.event_run.0.clone(), report.position)),
+                    *arrival,
+                )
+            })
             .unwrap_or((None, Arrival::Recovered));
         let name = published_name(&entry.judged);
         if lines.iter().any(|line| line.digest == entry.judged.digest) {
@@ -1307,6 +1321,7 @@ mod tests {
             run: weaver_types::RunId("r-1".into()),
             sequence: 9,
             turn: 2,
+            event_run: weaver_types::RunId("r-2".into()),
             position: 9,
         };
         let lines = publish(&room, me, &dir, owner, mine, &[(report, Arrival::Demand)]).unwrap();
@@ -1324,6 +1339,46 @@ mod tests {
         );
         let latest = select(&dir, me, None, mine).unwrap().expect("a latest");
         assert_eq!(latest.line.digest, newer_digest);
+        // The manifest's position is the event's run and sequence, never
+        // the covered position's run (Codex on #94, round 6). Perturbation:
+        // write `report.run` into the position and this reads r-1.
+        assert_eq!(lines[1].position, Some(("r-2".into(), 9)));
+        // **A reported save point is last whatever the clock did** (Codex
+        // on #94, round 6): a recovered file whose clock is ahead of the
+        // reported one's, as a clock stepped back between them leaves it,
+        // is still minted below. Perturbation: sort by the clock alone and
+        // the reported one is minted first, the recovered selected latest.
+        let room = base.join("room-2");
+        let dir = base.join("decl-2");
+        std::fs::create_dir_all(&room).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let ahead = save_point("r-1", 3, 1, 8_000_000_000, b"recovered, clock ahead");
+        let ahead_digest = judge(&ahead).unwrap().digest;
+        let behind = save_point("r-1", 4, 1, 7_000_000_000, b"reported, clock behind");
+        let behind_digest = judge(&behind).unwrap().digest;
+        std::fs::write(room.join(format!("{ahead_digest}{SUFFIX}")), &ahead).unwrap();
+        std::fs::write(room.join(format!("{behind_digest}{SUFFIX}")), &behind).unwrap();
+        let report = weaver_types::SavePointReport {
+            save_point: behind_digest.clone(),
+            name: format!("{behind_digest}{SUFFIX}"),
+            run: weaver_types::RunId("r-1".into()),
+            sequence: 4,
+            turn: 1,
+            event_run: weaver_types::RunId("r-1".into()),
+            position: 4,
+        };
+        let lines = publish(&room, me, &dir, owner, mine, &[(report, Arrival::Demand)]).unwrap();
+        let minted: Vec<(u64, &str)> = lines
+            .iter()
+            .map(|line| (line.ordinal, line.digest.as_str()))
+            .collect();
+        assert_eq!(
+            minted,
+            vec![(1, ahead_digest.as_str()), (2, behind_digest.as_str())],
+            "the reported one is last though its clock is behind"
+        );
+        let latest = select(&dir, me, None, mine).unwrap().expect("a latest");
+        assert_eq!(latest.line.digest, behind_digest);
     }
 
     /// **A publication interrupted after the rename is adopted at the next

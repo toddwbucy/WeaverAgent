@@ -172,7 +172,7 @@ of 2026-10-06 on #1. `SavePoint`, opened by admin, carries the cause; the harnes
 rest, asks the member for a save point through `weaver-harness-state-contract` section
 2's four legs, authors the `save_point` event, and answers `SavePointTaken` naming the
 digest, the finished name, the position the save point covers and the trace position of
-the event, or refuses `ActivityNotAtRest` where a turn runs, or `SavePointNotTaken`
+the event, its own run and sequence, or refuses `ActivityNotAtRest` where a turn runs, or `SavePointNotTaken`
 naming which leg missed. `Leave` carries `forced` beside its cause: the harness takes the
 leave's save point before it authors `unload`, and answers `Left` naming it as
 `SavePointTaken` does so admin publishes it under the same ordinal rule; where the save

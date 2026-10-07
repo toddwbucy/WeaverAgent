@@ -1512,6 +1512,15 @@ fn unload_within(
         constituents: Vec::new(),
     });
     if !start::run_lock_held(&run_directory)? {
+        // **A forced verb that finds the run already ended closes the
+        // marker as forced where it stands open** (Codex on #94, round 6),
+        // per Spec section 3: a forced unload refused after the harness had
+        // left, retried, still records the operator's choice rather than
+        // `NoCleanUnload`. An unforced verb closes nothing here: a run that
+        // ended on its own is the unclean stop the next load records.
+        if forced {
+            close_marker(config, true)?;
+        }
         return unloaded;
     }
     // **A refused observation is silence**, `unload`'s promise being to end
@@ -1548,7 +1557,18 @@ fn unload_within(
             // since A3.2 `SavePointNotTaken`, on which the unload does not
             // complete, the run staying open with its lock, per Spec section
             // 3 on A3.0 item 6, so the operator retries or forces.
-            Err(LeaveFault::Refused(refusal)) => return Err(refusal),
+            Err(LeaveFault::Refused(refusal)) => {
+                // **A refusal after the run ended still closes the forced
+                // marker** (Codex on #94, round 6): a refusal the harness
+                // sends past `Left`, its organs going down behind it, ends
+                // the run all the same, so where the lock frees inside the
+                // after-left wait the marker closes as forced before the
+                // refusal returns.
+                if forced && start::wait_free(&run_directory, bounds.after_left) {
+                    close_marker(config, true)?;
+                }
+                return Err(refusal);
+            }
             // The leave went unanswered inside its bound: a worker that
             // would not exit, so the escalation follows.
             Err(LeaveFault::Unanswered) => {}
@@ -3229,6 +3249,7 @@ mod tests {
             run: weaver_types::RunId("r-1".into()),
             sequence: 5,
             turn: 1,
+            event_run: weaver_types::RunId("r-1".into()),
             position: 7,
         }
     }
@@ -3414,6 +3435,77 @@ mod tests {
         ));
         let _ = holder.kill();
         let _ = holder.wait();
+    }
+
+    /// **A forced verb closes the marker where the run already ended**, per
+    /// Spec section 3 (Codex on #94, round 6): with the lock free and an open
+    /// marker standing, `force-unload` answers unloaded and the marker reads
+    /// forced, while `unload` leaves it open as the unclean stop it is; and a
+    /// forced leave refused by a harness that then goes down closes the marker
+    /// as forced inside the after-left wait, the refusal still returned.
+    /// Perturbations: skip the early branch's close and the first marker
+    /// stays open; return the refusal without the wait and the third does.
+    #[test]
+    fn a_forced_verb_closes_the_marker_where_the_run_already_ended() {
+        let (config, _scratch) = scratch_config("forced-ended");
+        let open = |run: &str| save_points::Marker::Open { run: run.into() };
+        save_points::write_marker(&config.root, Some(&open("r-1"))).unwrap();
+        let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, false);
+        assert!(matches!(
+            answered,
+            Ok(LifecycleAnswer::State {
+                state: weaver_types::AgentState::Unloaded,
+                ..
+            })
+        ));
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(open("r-1")),
+            "an unforced verb leaves the unclean stop for the next load"
+        );
+        let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+        assert!(matches!(
+            answered,
+            Ok(LifecycleAnswer::State {
+                state: weaver_types::AgentState::Unloaded,
+                ..
+            })
+        ));
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Forced { run: "r-1".into() }),
+            "the forced verb records the operator's choice"
+        );
+        // The refusal arm: the holder keeps the lock while the worker
+        // refuses the leave, then goes down inside the after-left wait.
+        save_points::write_marker(&config.root, Some(&open("r-2"))).unwrap();
+        let _ = std::fs::remove_file(config.coordination_socket());
+        let mut holder = stand_in_holder(&config);
+        let worker = recording_worker(
+            &config,
+            vec![
+                weaver_types::Payload::Answer(LifecycleAnswer::State {
+                    state: weaver_types::AgentState::Idle,
+                    load: None,
+                    constituents: Vec::new(),
+                }),
+                weaver_types::Payload::Refusal(LifecycleRefusal::ActivityNotAtRest),
+            ],
+        );
+        let ender = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let _ = holder.kill();
+            let _ = holder.wait();
+        });
+        let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+        ender.join().unwrap();
+        let _ = worker.join();
+        assert!(matches!(answered, Err(LifecycleRefusal::ActivityNotAtRest)));
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Forced { run: "r-2".into() }),
+            "the refusal after the run ended still closed the marker as forced"
+        );
     }
 
     /// **The marker is restored by the rollback**, per Spec section 4 on

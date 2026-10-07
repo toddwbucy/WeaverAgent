@@ -2556,12 +2556,17 @@ fn take_save_point(
         // not a fact, per the Planner's rule on #1, so the leg is the
         // finished answer's and the operator retries.
         .map_err(|_| weaver_types::SavePointLeg::Finished)?;
+    // **The event's run is this run's, the covered position's the stamp's**
+    // (Codex on #94, round 6): after a restore the holdings may still stand
+    // at the prior run's position, and the manifest's position names the
+    // event, which is in the standing run.
     Ok(Some(weaver_types::SavePointReport {
         save_point: taken.stamp.digest,
         name: taken.name,
         run: weaver_types::RunId(taken.stamp.run),
         sequence: taken.stamp.sequence,
         turn: taken.stamp.turn,
+        event_run: run.run.clone(),
         position: position.0,
     }))
 }
@@ -3432,7 +3437,7 @@ mod tests {
                     restored_answer
                 } else if line.starts_with(r#"{"ask":{"snapshot""#) {
                     concat!(
-                        r#"{"answer":{"snapshot":{"save-point":"ab.save-point","run":"r-1","#,
+                        r#"{"answer":{"snapshot":{"save-point":"ab.save-point","run":"r-0","#,
                         r#""sequence":5,"turn":1,"digest":"ab"}}}"#
                     )
                 } else if line.starts_with(r#"{"acknowledge":{"snapshot""#) {
@@ -3705,7 +3710,7 @@ mod tests {
         assert_eq!(
             events[save_point]["payload"],
             serde_json::json!({
-                "save_point": "ab", "run": "r-1", "sequence": 5, "turn": 1, "name": "ab.save-point"
+                "save_point": "ab", "run": "r-0", "sequence": 5, "turn": 1, "name": "ab.save-point"
             })
         );
         assert_eq!(
@@ -3724,13 +3729,14 @@ mod tests {
                 save_point: Some(weaver_types::SavePointReport {
                     save_point: "ab".into(),
                     name: "ab.save-point".into(),
-                    run: weaver_types::RunId("r-1".into()),
+                    run: weaver_types::RunId("r-0".into()),
                     sequence: 5,
                     turn: 1,
+                    event_run: weaver_types::RunId("r-1".into()),
                     position,
                 }),
             })),
-            "Left names the leave's save point with the event's position"
+            "Left names the leave's save point with the event's position in this run, the covered one in the prior"
         );
         assert!(
             !read
@@ -3770,12 +3776,17 @@ mod tests {
             answer,
             Some(weaver_types::Payload::Answer(
                 LifecycleAnswer::SavePointTaken {
+                    // **The event's run is this run's, the covered position
+                    // the stamp's prior run** (Codex on #94, round 6).
+                    // Perturbation: report the stamp's run as the event's
+                    // and `event_run` reads r-0.
                     report: weaver_types::SavePointReport {
                         save_point: "ab".into(),
                         name: "ab.save-point".into(),
-                        run: weaver_types::RunId("r-1".into()),
+                        run: weaver_types::RunId("r-0".into()),
                         sequence: 5,
                         turn: 1,
+                        event_run: weaver_types::RunId("r-1".into()),
                         position,
                     },
                 }
