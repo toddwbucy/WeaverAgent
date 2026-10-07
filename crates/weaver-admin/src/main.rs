@@ -523,6 +523,7 @@ fn stand_state_member(
     // between fork and exec.
     unsafe {
         use std::os::unix::process::CommandExt;
+        let access_gid = config.access_gid;
         member.pre_exec(move || {
             // **The member takes its own session and resets the invocation's
             // ignored signals**, per Spec section 6, and holds the run lock's
@@ -539,7 +540,7 @@ fn stand_state_member(
                 start::seal_except(&[3, start::RUN_LOCK_FD])?;
             }
             start::detach_and_reset()?;
-            become_member(member_account)?;
+            become_member(member_account, access_gid)?;
             arm_member_end(raw_member_end)
         });
     }
@@ -616,10 +617,25 @@ fn prepare_territory(
 /// a member this crate could not unprivilege does not run at all.
 ///
 /// conforms: admin-member-spawn-drops-to-its-account
-fn become_member(member: inventory::MemberAccount) -> std::io::Result<()> {
+fn become_member(member: inventory::MemberAccount, access_gid: u32) -> std::io::Result<()> {
     // The drop lives in `inventory::drop_to` since issue #675, so the order
     // described above is implemented once.
-    inventory::drop_to(member.uid, &[member.gid as nix::libc::gid_t])
+    inventory::drop_to(member.uid, &member_groups(member, access_gid))
+}
+
+/// **The member's group set: its own group first, the access group beside
+/// it**, per Spec section 6 on the operator's ruling of 2026-10-07 on #1
+/// (Codex on #94, round 8): the territory is root's and grouped to the access
+/// group, and `drop_to` sets the supplementary set from this slice alone,
+/// never from the account database, so the passage through the territory to
+/// the member's own room is granted here from the territory's group as
+/// judged, whatever the account's memberships say. Nothing else: the trace's
+/// group is not among them, so the member cannot read the record.
+fn member_groups(member: inventory::MemberAccount, access_gid: u32) -> [nix::libc::gid_t; 2] {
+    [
+        member.gid as nix::libc::gid_t,
+        access_gid as nix::libc::gid_t,
+    ]
 }
 
 /// **The arming, the one deliberate gift**, per `weaver-admin-Spec` section
@@ -3693,6 +3709,21 @@ mod tests {
         );
     }
 
+    /// **The member's group set carries the access group beside its own**,
+    /// per Spec section 6 on the operator's ruling of 2026-10-07 on #1 (Codex
+    /// on #94, round 8): the territory is `0710` to the access group, and the
+    /// drop sets the supplementary set from this slice alone, so a member
+    /// dropped to its own group alone could not reach its room. Perturbation:
+    /// answer the member's group alone and the assertion fails.
+    #[test]
+    fn the_members_group_set_carries_the_access_group() {
+        let member = inventory::MemberAccount {
+            uid: 1501,
+            gid: 1501,
+        };
+        assert_eq!(member_groups(member, 1600), [1501, 1600]);
+    }
+
     /// **The marker is restored by the rollback**, per Spec section 4 on
     /// A3.0 item 5: a load that wrote the marker open and then failed puts
     /// back what stood before, a closed marker or none. Perturbation: skip
@@ -4102,8 +4133,10 @@ mod tests {
     /// the worker records the identity it runs under into the territory the
     /// real path prepared, and the reading is the kernel's own status after
     /// exec: every uid the member's, every gid its group's, and the
-    /// supplementary set that group alone, none of root's. The member's end
-    /// is read too, a socket at the fixed number.
+    /// supplementary set that group and the territory's access group alone,
+    /// none of root's, the access group riding the drop from the territory as
+    /// judged (Codex on #94, round 8). The member's end is read too, a socket
+    /// at the fixed number.
     ///
     /// `drop_to`'s own instrument, in the inventory module, watches the order
     /// of the three calls and the saved ids. This
@@ -4211,6 +4244,8 @@ mod tests {
             member_account: Some(member),
         };
         let mut service = unread_config();
+        // The territory's access group as judged, which rides the drop.
+        service.access_gid = 4244;
         service.worker = bin.join("weaver-worker");
         let run_directory = sink.join("run");
         std::fs::create_dir_all(&run_directory).unwrap();
@@ -4239,7 +4274,11 @@ mod tests {
             "every uid the member's"
         );
         assert_eq!(line("Gid:"), "4243 4243 4243 4243", "every gid its group's");
-        assert_eq!(line("Groups:"), "4243", "its group alone, none of root's");
+        assert_eq!(
+            line("Groups:"),
+            "4243 4244",
+            "its group and the territory's access group, none of root's"
+        );
         let fd3 = std::fs::read_to_string(territory.join("fd3")).expect("the end was read");
         assert!(
             fd3.starts_with("socket:"),

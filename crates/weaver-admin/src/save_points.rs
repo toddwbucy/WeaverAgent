@@ -745,6 +745,14 @@ pub fn publish(
                 nix::sys::stat::Mode::from_bits_truncate(0o640),
             )?;
             let mut file = std::fs::File::from(fd);
+            // **The mode is set through the descriptor, whatever the umask**
+            // (Codex on #94, round 8): the open's mode is narrowed by the
+            // invoking shell's umask, and the copy must be exactly 0640.
+            nix::sys::stat::fchmod(
+                file.as_fd(),
+                nix::sys::stat::Mode::from_bits_truncate(0o640),
+            )
+            .map_err(std::io::Error::from)?;
             file.write_all(&entry.bytes)?;
             nix::unistd::fchown(
                 file.as_fd(),
@@ -1817,6 +1825,44 @@ mod tests {
         );
         write_marker(&root, None).unwrap();
         assert_eq!(read_marker(&root), None);
+    }
+
+    /// **The published copy is 0640 whatever the umask**, per Spec section 6
+    /// (Codex on #94, round 8): under a umask of 077 the open alone would
+    /// make it 0600 and the exact-mode check would refuse every publication;
+    /// the mode is set through the descriptor. Perturbation: drop the
+    /// `fchmod` and nothing publishes under that umask.
+    #[test]
+    fn the_published_copy_is_0640_whatever_the_umask() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = crate::scratch::Scratch(
+            std::env::temp_dir().join(format!("weaver-admin-umask-{}", std::process::id())),
+        );
+        let base = scratch.0.clone();
+        let room = base.join("room");
+        let dir = base.join("decl");
+        std::fs::create_dir_all(&room).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_fd = open_directory(&dir).unwrap();
+        let me = nix::unistd::getuid().as_raw();
+        let mine = Owner {
+            uid: me,
+            gid: nix::unistd::getgid().as_raw(),
+        };
+        let owner = (me, mine.gid);
+        let bytes = save_point("r-1", 7, 1, 5_000_000_000, b"under a umask");
+        let judged = judge(&bytes).unwrap();
+        std::fs::write(room.join(format!("{}{SUFFIX}", judged.digest)), &bytes).unwrap();
+        let before = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o077));
+        let published = publish(&room, me, dir_fd.as_fd(), owner, mine, &[]);
+        nix::sys::stat::umask(before);
+        let lines = published.unwrap();
+        assert_eq!(lines.len(), 1, "the copy published under the umask");
+        let mode = std::fs::metadata(dir.join(&lines[0].name))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7777, 0o640);
     }
 
     /// **The publication lands in the judged directory whatever the path

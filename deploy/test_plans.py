@@ -56,6 +56,28 @@ def mapped(value):
         return str(root / value.lstrip('/'))
     return value
 
+def privileged(paths, run):
+    """Run `run` with every closed directory above the mapped `paths` opened
+    to this user for the call, as root's privilege would pass it: the
+    territory a test locks (LOCK_TERRITORY) is closed to the test process and
+    open to the fake sudo alone, which is the difference between a read made
+    under sudo and one made as the operator."""
+    opened = []
+    for p in paths:
+        p = pathlib.Path(p)
+        if not p.is_absolute() or not p.is_relative_to(root): continue
+        for d in p.parents:
+            if not d.is_relative_to(root) or d == root: break
+            try: st = os.lstat(d)
+            except OSError: continue
+            if (st.st_mode & 0o700) != 0o700 and os.path.isdir(d) and not os.path.islink(d):
+                opened.append((d, st.st_mode & 0o7777)); os.chmod(d, 0o700)
+    try: return run()
+    finally:
+        for d, mode in reversed(opened):
+            try: os.chmod(d, mode)
+            except OSError: pass
+
 def shell_read(arguments):
     if os.environ.get('PATH_FAIL') and os.environ['PATH_FAIL'] in arguments: sys.exit(1)
     rewritten = list(map(mapped, arguments))
@@ -125,24 +147,43 @@ elif name == 'sudo':
         file = pathlib.Path(mapped(rest[-1]))
         assert file.is_relative_to(root), file
         sys.exit(subprocess.run(['/usr/bin/' + op, *rest[:-1], str(file)]).returncode)
+    elif op in ('cat', 'tail', 'wc') or (op == 'test' and not identity):
+        # The install's reads under a territory, made as root (Codex on #94,
+        # round 8): run on the scratch file with the privilege wrapper, so a
+        # territory the test locked reads here and nowhere else.
+        file = pathlib.Path(mapped(rest[-1]))
+        assert file.is_relative_to(root), file
+        args = [a for a in rest[:-1] if a != '--']
+        sys.exit(privileged([file], lambda: subprocess.run(['/usr/bin/' + op, *args, str(file)]).returncode))
     elif op == 'tee':
         file = pathlib.Path(mapped(rest[-1]))
         assert file.is_relative_to(root), file
-        with file.open('a' if '-a' in rest else 'w') as output: output.write(sys.stdin.read())
+        text = sys.stdin.read()
+        def write():
+            with file.open('a' if '-a' in rest else 'w') as output: output.write(text)
+        privileged([file], write)
     elif op == 'cp':
         source, destination = (pathlib.Path(mapped(a)) for a in rest[-2:])
         assert source.is_relative_to(root) and destination.is_relative_to(root)
-        shutil.copyfile(source, destination)
+        privileged([source, destination], lambda: shutil.copyfile(source, destination))
     elif op == 'install':
         target = pathlib.Path(mapped(rest[-1]))
         assert target.is_relative_to(root), target
-        if '-d' in rest: target.mkdir(parents=True, exist_ok=True)
-        else: target.touch()
+        if '-d' in rest: privileged([target], lambda: target.mkdir(parents=True, exist_ok=True))
+        else: privileged([target], target.touch)
     elif op == 'mv':
         source, destination = (pathlib.Path(mapped(a)) for a in rest[-2:])
         assert source.is_relative_to(root) and destination.is_relative_to(root)
-        assert not destination.exists(), destination
-        source.rename(destination)
+        def move():
+            assert not destination.exists(), destination
+            source.rename(destination)
+        privileged([source, destination], move)
+    elif op == 'chmod' and os.environ.get('LOCK_TERRITORY') and rest[:1] == ['0710'] \
+            and pathlib.Path(mapped(rest[-1])) == pathlib.Path(os.environ['LOCK_TERRITORY']):
+        # **The migration's regroup closes the territory to this process**, as
+        # the real one does to a shell that has not taken the new login: the
+        # fake makes it 0000, which only the privilege wrapper above reopens.
+        os.chmod(pathlib.Path(mapped(rest[-1])), 0)
     elif op == 'mktemp':
         template = rest[-1]
         made = pathlib.Path(mapped(template.replace('XXXXXX', 'fixture')))
@@ -154,14 +195,15 @@ elif name == 'sudo':
     elif op == 'rm':
         target = pathlib.Path(mapped(rest[-1]))
         assert target.is_relative_to(root), target
-        target.unlink(missing_ok=True)
+        privileged([target], lambda: target.unlink(missing_ok=True))
     elif op == '-l':
         print('User ' + rest[-1] + ' may run the following commands on fixture-box:')
         for rule in sorted((root / 'etc' / 'sudoers.d').glob('weaver-*')):
             print('    ' + rule.read_text().splitlines()[-1])
     elif op == 'test':
-        # The probes of a sqlite agent's state room: the member passes, the
-        # agent's own uid is refused, unless the fixture opens the wall.
+        # The probes of a sqlite agent's state room, asked as an account: the
+        # member passes, the agent's own uid is refused, unless the fixture
+        # opens the wall.
         if identity == 'weaver-m1': sys.exit(0 if os.environ.get('WALL_OPEN') else 1)
         # The member's read of the trace: refused, unless the fixture opens it.
         if identity == 'weaver-m1-state' and '-r' in rest: sys.exit(0 if os.environ.get('TRACE_OPEN') else 1)
@@ -261,7 +303,7 @@ class PlanTests(unittest.TestCase):
                     "FIXTURE_ROOT": str(self.root)}
         for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
                      "VISUDO_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
-                     "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS", "GROUP_WRITES"):
+                     "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS", "GROUP_WRITES", "LOCK_TERRITORY"):
             self.env.pop(name, None)
         # Redirect even shell builtin /home probes into the fixture. The
         # production scripts have no test-only path switches and never read
@@ -1052,7 +1094,7 @@ esac
         text = (self.repo / "deploy" / "update-stack.sh").read_text()
         self.assertIn('sudo cp -a "$decl" "$decl.pre-$AFTER-bak"', text)
         self.assertIn('sudo cp -a "${entry##*|}" "${entry%%|*}"', text)
-        self.assertIn('patched=$(cat "$decl"; printf', text)
+        self.assertIn('patched=$(read_declaration "$decl"; printf', text)
         self.assertIn('printf \'%s\\n\' "$patched" | sudo tee "$decl"', text)
         self.assertNotIn('>> "$decl"', text)
         self.assertNotIn('cat "$decl" |', text)
@@ -1692,6 +1734,52 @@ esac
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("every declaration stands in its territory", result.stdout)
 
+    def test_the_install_reads_a_migrated_territory_through_privilege(self):
+        # Codex on #94, round 8: the migration joins the operator to the
+        # access group, a login fact this running shell does not acquire, and
+        # regroups the territory, so every read of a declaration or a sink
+        # after it goes through sudo and never through the operator's groups.
+        # The fake sudo locks the territory at the migration's chmod 0710
+        # (LOCK_TERRITORY) and reopens it for its own reads alone, so the
+        # reconcile step reaches the declaration and refuses on the fixture's
+        # unanswering admin, which is as far as this fixture can take an
+        # install; made as the operator, the same reads find no declaration
+        # and the run ends at "no agent root ... could be verified".
+        # Perturbation: make any read in the install path unprivileged again
+        # (`[ -f "$decl" ]`, `cat "$decl"`, `declared` opening the path) and
+        # "no declaration at" appears.
+        old_root = self.config / "old"
+        old_root.mkdir()
+        (old_root / "worker-binary").write_text(str(self.root / "installed" / "pyworker"))
+        old_dir = self.operator_home / ".weaveragent" / "old"
+        old_dir.mkdir(parents=True)
+        sink = self.root / "agents" / "weaver-old" / "trace.ndjson"
+        (old_dir / "agent.toml").write_text(f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "file"\npath = "{sink}"\n')
+        (old_dir / "system-prompt.md").write_text("You are old.\n")
+        (old_root / "declaration-directory").write_text(str(old_dir) + "\n")
+        territory = self.root / "agents" / "weaver-old"
+        territory.mkdir()
+        shutil.rmtree(self.config / "existing")
+        (self.root / "installed").mkdir(exist_ok=True)
+        self.env.update(ALLOW_APPLY_CHECKS="1", LOCK_TERRITORY=str(territory))
+        try:
+            result = self.run_script("update-stack.sh", "--install")
+        finally:
+            os.chmod(territory, 0o755)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("declaration, draft and logs moved from", result.stdout)
+        self.assertNotIn("no declaration at", result.stdout, result.stdout + result.stderr)
+        self.assertNotIn("could be verified", result.stderr)
+        self.assertIn("old refuses and this script will not guess the fix", result.stderr)
+        calls = self.calls()
+        after = calls.index(["sudo", "chmod", "0710", str(territory)])
+        self.assertIn(["sudo", "-n", "test", "-f", str(territory / "agent.toml")], calls[after:])
+        self.assertIn(["sudo", "-n", "cat", "--", str(territory / "agent.toml")], calls[after:])
+        # The rollback put the files back through the same privilege.
+        self.assertTrue((old_dir / "agent.toml").exists(), "the rollback moved the declaration back")
+        self.assertEqual((old_root / "declaration-directory").read_text(), str(old_dir) + "\n")
+        self.assertFalse((old_root / "territory").exists())
+
     def test_stack_refuses_an_unprovided_engine_and_names_the_migration(self):
         # A pre-#85 declaration electing postgres refuses before the build,
         # as an engine this build does not provide, and points to the
@@ -2091,9 +2179,11 @@ class DeclaredTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def read(self, text, key, want):
+        # The reader takes the document on stdin and the path only as a name
+        # (Codex on #94, round 8): who opens the file is the caller's question.
         decl = Path(self.tmp.name) / "a.toml"
         decl.write_text(text)
-        run = subprocess.run(["bash", "-c", declared_definition(self.script) + 'declared "$@"', "x",
+        run = subprocess.run(["bash", "-c", declared_definition(self.script) + 'declared "$2" "$3" "$1" < "$1"', "x",
                               str(decl), key, want], text=True, capture_output=True)
         return run.returncode, run.stdout.rstrip("\n"), run.stderr
 

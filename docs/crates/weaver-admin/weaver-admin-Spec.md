@@ -1454,13 +1454,20 @@ to: admin-member-spawn-drops-to-its-account
 
 **The drop's record is perturbation, as of 2026-09-26** (#673 item 6). What it asserts
 is that the spawned process runs as the member and holds no group root left it - the
-supplementary set narrowed to the member's own group, then the gids, then the uids, in
-that order, because the two narrowings need the privilege the last one gives away. The
+supplementary set narrowed to the member's own group and the territory's access group,
+then the gids, then the uids, in that order, because the two narrowings need the
+privilege the last one gives away. **The access group rides the drop from the
+territory's group as judged**, on the operator's ruling of 2026-10-07 on #1: the
+territory is root's and `0710` to that group, the drop sets the supplementary set from
+this crate's slice and never from the account database, so the member's passage to its
+own room is this crate's grant and no login fact, and the trace's group is not among
+them, so the member cannot read the record. The
 instrument drives `stand_state_member` itself inside a user namespace, where the test
 runs as root over the invoking user's subordinate ids: a stand-in member beside the
 worker records the identity it runs under into the territory the real path prepared, and
 the kernel's status after exec must read every uid the member's, every gid its group's,
-and the supplementary set that group alone. **It stood at review until then** on the
+and the supplementary set that group and the access group alone. **It stood at review
+until then** on the
 reading that an unprivileged suite could only assert the three calls' refusal. The store
 probe's namespaced watch of 2026-09-24 disproved that reading, the same calls succeeding
 inside the namespace, and this instrument is that watch pointed at the member's spawn. A
@@ -1575,7 +1582,8 @@ save-point format and a finished name, a part name being an unacknowledged save 
 that is never published, refuses and leaves in place any entry that fails, naming it,
 and copies only from the descriptor it judged, so a link or a planted file in the room
 cannot make a root step read a path the member chose. The copy is written under a
-temporary name, root's, grouped to the access group and mode `0640`, so the operator
+temporary name, root's, grouped to the access group and mode `0640`, the mode set
+through the descriptor so the invoking shell's umask narrows nothing, so the operator
 and the connector read it and nothing writes it but this crate, its owner and mode
 verified through the open file, then renamed to its published name, overwriting
 nothing, every step against `save-points/` as opened at section 9's judgment. **The published name is computable from the file's own bytes**:
@@ -2784,10 +2792,11 @@ directive is asserted where the run happens.
   confirmed by watching the mode read `0750` when the group-owned preparation
   is restored.
 - The member's spawn drops to its account: `stand_state_member` run as root
-  inside a user namespace stands a member whose every uid, every gid and whole
-  supplementary set are its account's, confirmed by watching the member run as
-  uid 0 when `become_member` is removed from the spawn's pre-exec, and carry
-  root's group when `drop_to` is handed it beside the member's.
+  inside a user namespace stands a member whose every uid and every gid are its
+  account's and whose supplementary set is its group and the territory's access group
+  alone, confirmed by watching the member run as uid 0 when `become_member` is removed
+  from the spawn's pre-exec, and carry root's group when `drop_to` is handed it beside
+  the member's.
 - One write is one read: two envelopes are written back to back on the
   coordination channel and both writes complete before either read, and two
   reads return exactly one envelope each, confirmed by watching the first

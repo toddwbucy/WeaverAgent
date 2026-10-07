@@ -73,13 +73,17 @@ done
 # mangled the rest. It prints the string at a dotted path, or checks that a
 # table stands there, and answers 3 where the path is absent. A file that does
 # not parse, or a value of another kind than asked, refuses by name.
+# **`declared KEY KIND [NAME]` reads the document on stdin**, never a path of
+# its own: who may open a declaration is the caller's question (below), and
+# this reader answers only what the text says. NAME is what a refusal calls
+# the document.
 declared() {
   python3 -c '
 import sys, tomllib
-path, key, want = sys.argv[1], sys.argv[2], sys.argv[3]
+key, want = sys.argv[1], sys.argv[2]
+path = sys.argv[3] if len(sys.argv) > 3 else "the declaration"
 try:
-    with open(path, "rb") as fh:
-        value = tomllib.load(fh)
+    value = tomllib.load(sys.stdin.buffer)
 except (OSError, tomllib.TOMLDecodeError) as e:
     sys.exit(f"{path} is not a TOML 1.0 document, the grammar every reader in the suite shares (weaver-types-Spec section 2): {e}")
 for part in key.split("."):
@@ -91,6 +95,29 @@ if want == "string" and isinstance(value, str):
 elif not (want == "table" and isinstance(value, dict)):
     sys.exit(f"{path}: {key} is not a {want}")
 ' "$@"
+}
+
+# **Every read of a declaration or a trace under a territory goes through
+# privilege once the install holds it** (Codex on #94, round 8), never through
+# the operator's groups: group membership is a login fact, and the layout
+# migration below joins this operator to the access group and regroups the
+# territory to it in one run, which a shell already running does not acquire,
+# so the reads that follow the migration would find the territory closed to
+# them, read every migrated declaration as absent, verify nothing and roll the
+# whole install back. In plan mode, and in the install before its credential,
+# nothing has moved and the reads are the operator's own, as before.
+# `PRIVILEGED` turns where the install takes its credential.
+PRIVILEGED=0
+as_root() { if [ "$PRIVILEGED" -eq 1 ]; then sudo -n "$@"; else "$@"; fi; }
+read_declaration() { as_root cat -- "$1"; }           # the declaration's text
+path_stands() { as_root test -f "$1"; }               # a regular file stands there
+path_exists() { as_root test -e "$1"; }
+# `declared_in DECL KEY KIND`: the declaration read whole first, so a read that
+# fails is a failure and never an empty document that reads as absence.
+declared_in() {
+  local text
+  text=$(read_declaration "$1") || return 1
+  printf '%s\n' "$text" | declared "$2" "$3" "$1"
 }
 
 # Reads a run's new trace lines on stdin and prints what the load event says
@@ -400,12 +427,12 @@ fi
 # the other and the run refuses by name before it spends the build.
 for agent in $AGENTS; do
   decl=$(declaration_of "$agent") || exit 1
-  [ -f "$decl" ] || continue
+  path_stands "$decl" || continue
   # The engine at `state-store.engine`, read by `declared` as the string
   # admin decodes, and an absent election means the crate's own default
   # rather than none.
   rc=0
-  elected=$(declared "$decl" state-store.engine string) || rc=$?
+  elected=$(declared_in "$decl" state-store.engine string) || rc=$?
   case $rc in
     0) ;;
     3) elected=sqlite ;;
@@ -433,9 +460,9 @@ printf '  elected store every agent under the base elects one this build carries
 for agent in $AGENTS; do
   decl=$(declaration_of "$agent") || exit 1
   rc=0
-  kind=$(declared "$decl" trace-sink.kind string) || rc=$?
+  kind=$(declared_in "$decl" trace-sink.kind string) || rc=$?
   [ "$rc" -eq 0 ] && [ "$kind" = file ] || continue
-  sink=$(declared "$decl" trace-sink.path string) || die "$agent: the declaration's trace-sink.path does not read"
+  sink=$(declared_in "$decl" trace-sink.path string) || die "$agent: the declaration's trace-sink.path does not read"
   [ -e "$sink" ] || [ -L "$sink" ] || continue
   # The type by predicate, never by `%F`'s words, which call a zero-byte file
   # "regular empty file" (Codex on #82).
@@ -466,7 +493,7 @@ printf '  traces        every file sink stands as the territory lays it out\n'
 MIGRATE=()
 for agent in $AGENTS; do
   decl=$(declaration_of "$agent") || exit 1
-  [ -f "$decl" ] || continue
+  path_stands "$decl" || continue
   plan=$(python3 "$REPO/deploy/migrate-identity.py" "$decl") \
     || die "$agent: its declaration carries an identity this run cannot move into system-prompt.md; see above and deploy/REDEPLOY.md section 8, step 2"
   [ -n "$plan" ] || continue
@@ -626,6 +653,7 @@ fi
 # connector's rule names its own user), so a repair run that installs nothing
 # needs the credential as much as one that installs everything (Codex on #79).
 sudo -v || die "--install needs sudo: reconcile and verify run admin as root"
+PRIVILEGED=1
 refuse_legacy_units
 
 # ------------------------------------------------------------------ 7. install
@@ -881,7 +909,7 @@ validate() {
 say "reconcile declarations"
 for agent in $AGENTS; do
   decl=$(declaration_of "$agent") || exit 1
-  if [ ! -f "$decl" ]; then
+  if ! path_stands "$decl"; then
     printf '  %-12s no declaration at %s\n' "$agent" "$decl"
     continue
   fi
@@ -893,7 +921,7 @@ for agent in $AGENTS; do
   # The one reconciliation this script knows how to make, and only where the
   # box cannot stand a leg at all. Anything else is the operator's.
   rc=0
-  declared "$decl" state-store table || rc=$?
+  declared_in "$decl" state-store table || rc=$?
   if [ ! -f "$STATE_BINARY" ] && [ "$rc" -eq 3 ]; then
     printf '  %-12s %s\n' "$agent" "$verdict"
     # **The declaration is root's in root's territory, so root patches it**
@@ -903,7 +931,7 @@ for agent in $AGENTS; do
     # would truncate what it reads.
     sudo cp -a "$decl" "$decl.pre-$AFTER-bak"
     PATCHED+=("$decl|$decl.pre-$AFTER-bak")
-    patched=$(cat "$decl"; printf '\n[state-store]\nengine = "none"\n')
+    patched=$(read_declaration "$decl"; printf '\n[state-store]\nengine = "none"\n')
     printf '%s\n' "$patched" | sudo tee "$decl" >/dev/null
     verdict=$(validate "$agent")
     if [ "$verdict" != '{"kind":"validated"}' ]; then
@@ -930,10 +958,11 @@ done
 # fifo would block until something closed it. This answers the caller rather
 # than exiting, because both calls sit inside a command substitution where an
 # exit would leave only the subshell and the install standing.
+# Through privilege, as every read under a territory in the install is.
 sink_lines() {
-  if [ ! -e "$1" ]; then printf '0\n'; return 0; fi
-  [ -f "$1" ] || return 1
-  wc -l < "$1"
+  if ! path_exists "$1"; then printf '0\n'; return 0; fi
+  path_stands "$1" || return 1
+  as_root wc -l -- "$1" | awk '{print $1}'
 }
 
 # -------------------------------------------------------------------- 9. verify
@@ -947,12 +976,12 @@ say "verify"
 VERIFIED=0
 for AGENT in $AGENTS; do
   decl=$(declaration_of "$AGENT") || exit 1
-  if [ ! -f "$decl" ]; then
+  if ! path_stands "$decl"; then
     printf '  %-12s no declaration, not verified\n' "$AGENT"
     continue
   fi
   rc=0
-  SINK=$(declared "$decl" trace-sink.path string) || rc=$?
+  SINK=$(declared_in "$decl" trace-sink.path string) || rc=$?
   [ "$rc" -eq 0 ] && [ -n "$SINK" ] || rollback "cannot find the trace sink for $AGENT"
   printf '  %s\n' "$AGENT"
   LINES=$(sink_lines "$SINK") || rollback "$AGENT: $SINK is not a regular file, and this step reads the load event back out of one"
@@ -978,7 +1007,7 @@ for AGENT in $AGENTS; do
     [ -n "$said" ] && printf '  the state member last said:\n%s\n' "$said" >&2
     rollback "$AGENT: the load wrote no events to $SINK"
   fi
-  if ! tail -n "$NEW" "$SINK" | weaver_read_load; then
+  if ! as_root tail -n "$NEW" -- "$SINK" | weaver_read_load; then
     rollback "$AGENT: the load event does not name its composer; the install did not take"
   fi
   sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" unload "$AGENT" >/dev/null 2>&1 || true
