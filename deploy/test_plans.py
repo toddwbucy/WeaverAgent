@@ -1736,9 +1736,9 @@ esac
         self.assertEqual((old_root / "territory").read_text(), str(territory) + "\n")
         self.assertFalse((old_root / "declaration-directory").exists())
         said = recorded.read_text()
-        self.assertIn(f"chown root:root {territory}/agent.toml", said)
+        self.assertIn(f"chown -h root:root {territory}/agent.toml", said)
         self.assertIn(f"chmod 0644 {territory}/agent.toml", said)
-        self.assertIn(f"chown root:weaver-old-admin {territory}/admin.log", said)
+        self.assertIn(f"chown -h root:weaver-old-admin {territory}/admin.log", said)
         self.assertIn(f"chmod 0640 {territory}/admin.log", said)
         self.assertIn("usermod -aG weaver-old-admin weaver-old-state", said)
         self.assertIn("usermod -aG weaver-old-admin fixture-no-home", said)
@@ -1820,7 +1820,7 @@ esac
         # owner's call is missing after the regroup.
         for name in ("agent.toml", "system-prompt.md"):
             self.assertIn(["sudo", "stat", "-c", "%u:%g %a", "--", str(old_dir / name)], calls[:after])
-            self.assertIn(["sudo", "chown", "12345:12345", "--", str(old_dir / name)], calls[after:])
+            self.assertIn(["sudo", "chown", "-h", "12345:12345", "--", str(old_dir / name)], calls[after:])
             self.assertIn(["sudo", "chmod", "600", "--", str(old_dir / name)], calls[after:])
 
     def test_stack_refuses_an_unprovided_engine_and_names_the_migration(self):

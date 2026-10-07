@@ -729,8 +729,10 @@ restore() {
         # **Given back as it was**: the owner and mode the move found, so the
         # operator reads and edits it as before the install.
         read -r owner fmode <<< "${MOVED_FILES["$agent|$f"]:-}"
+        # chown never follows a link (-h): a name under either directory that
+        # became a link between the move and the chown changes no target.
         [ -n "$owner" ] && [ -n "$fmode" ] \
-          && sudo chown "$owner" -- "$old/$f" && sudo chmod "$fmode" -- "$old/$f" \
+          && sudo chown -h "$owner" -- "$old/$f" && sudo chmod "$fmode" -- "$old/$f" \
           || { printf '  FAILED to restore the owner and mode of %s\n' "$old/$f" >&2; failed=1; }
       done
       # **The territory reads as it did**: its group and mode as the move
@@ -861,12 +863,12 @@ migrate_layout() {
     done
     for f in agent.toml system-prompt.md; do
       [ -e "$old/$f" ] || continue
-      sudo mv -T -- "$old/$f" "$territory/$f" && sudo chown root:root "$territory/$f" && sudo chmod 0644 "$territory/$f" \
+      sudo mv -T -- "$old/$f" "$territory/$f" && sudo chown -h root:root "$territory/$f" && sudo chmod 0644 "$territory/$f" \
         || rollback "$agent: $old/$f did not move into the territory"
     done
     for f in admin.log worker.log; do
       [ -e "$old/$f" ] || continue
-      sudo mv -T -- "$old/$f" "$territory/$f" && sudo chown "root:weaver-$agent-admin" "$territory/$f" && sudo chmod 0640 "$territory/$f" \
+      sudo mv -T -- "$old/$f" "$territory/$f" && sudo chown -h "root:weaver-$agent-admin" "$territory/$f" && sudo chmod 0640 "$territory/$f" \
         || rollback "$agent: $old/$f did not move into the territory"
     done
     sudo usermod -aG "weaver-$agent-admin" "weaver-$agent-state" \
