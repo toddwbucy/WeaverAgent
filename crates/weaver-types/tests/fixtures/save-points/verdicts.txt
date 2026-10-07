@@ -4,6 +4,7 @@ check-wrong.save-point refuses
 image-length-off.save-point refuses
 image-torn.save-point refuses
 nonce-missing-member.save-point refuses
+nonce-wall-clock-overlong.save-point refuses
 nonce-wall-clock-signed.save-point refuses
 nonce-wrong-type.save-point refuses
 sound.save-point sound

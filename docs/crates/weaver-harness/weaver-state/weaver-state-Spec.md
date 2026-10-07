@@ -351,10 +351,12 @@ three parts in one file: a stamp line, a check line, and the engine's image. The
 line is one JSON object carrying exactly seven members, the format's version, the run,
 sequence and turn, the digest of the schema text the image stands under, the image's
 length, and `taken`, which carries exactly three, the writing process, that process's
-own count of save points taken, which it never repeats, and the wall clock, which
+own count of save points taken, which it never repeats, and the wall clock, a string of
+decimal digits that fit an unsigned 64-bit count of nanoseconds since the epoch, which
 together tell two save points of one position apart whatever the clock does; a stamp
 line with a member absent, extra or of another type is not this format and is refused
-before any digest or name is computed from it. The check line names sha256 over the stamp line, its newline and the
+before any digest or name is computed from it, and so is a wall clock past what a clock
+can be, the rule every reader of this format holds alike. The check line names sha256 over the stamp line, its newline and the
 image, so a stamp altered, an image flipped or a file torn short all read as corrupt.
 The digest is sha256 over the whole file and the name is the digest with the suffix
 `.save-point`, so two save points with different bytes never share a name and two

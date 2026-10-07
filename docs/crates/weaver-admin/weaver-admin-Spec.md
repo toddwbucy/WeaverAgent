@@ -1578,7 +1578,13 @@ rendered in UTC to the second and the digest the file's, which extends the room'
 rule of `weaver-state-Spec` section 3 to the published form, so a renamed file reads as
 not the file its name claims. Only then is the member's copy removed, so a publication
 cut short leaves the member's copy standing and is retried at the next verb, and one an
-unclean stop left behind is published at the next load. **Each publication appends one
+unclean stop left behind is published at the next load. **Several entries published by
+one verb are ordered by the stamp's clock**, `taken.wall_ns` ascending with the digest
+as the tiebreak, before any ordinal is minted: the member's own count, `taken.ordinal`,
+is per process and restarts with it, the clock is monotonic enough across processes for
+one agent's files, and a reported save point is taken last by construction, so the
+latest the manifest names is the last taken and never a recovered older file the
+listing happened to yield later. **Each publication appends one
 line to the manifest**, `save-points.manifest` in the declaration directory, a file this
 crate creates root-owned and mode `0644` and opens for appending alone, never rewriting
 it: one JSON object per line carrying `ordinal`, a monotonic integer minted under the

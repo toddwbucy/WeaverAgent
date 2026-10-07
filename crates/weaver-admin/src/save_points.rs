@@ -179,7 +179,7 @@ pub struct Stamp {
     pub sequence: u64,
     pub turn: u64,
     pub schema: String,
-    pub wall_ns: u128,
+    pub wall_ns: u64,
 }
 
 /// A judged save point: its stamp and its digest, the bytes having passed
@@ -279,7 +279,10 @@ pub fn judge(bytes: &[u8]) -> Result<Judged, String> {
         .get("wall_ns")
         .and_then(|v| v.as_str())
         .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
-        .and_then(|v| v.parse::<u128>().ok())
+        // **Digits that fit an unsigned 64-bit count of nanoseconds**, the
+        // member's rule read here too (Codex on #94, round 5, the corpus's
+        // `nonce-wall-clock-overlong` case): what a clock can be.
+        .and_then(|v| v.parse::<u64>().ok())
         .ok_or("the stamp's taken names no wall clock")?;
     if image.len() as u64 != length {
         return Err(format!(
@@ -626,6 +629,9 @@ fn read_room(room: &Path, member_uid: u32) -> Option<(OwnedFd, Vec<RoomEntry>)> 
             Err(why) => diag!("weaver-admin: the room's {name} is not a save point ({why})"),
         }
     }
+    // The listing's order is the filesystem's and means nothing; by name
+    // it is the same on every box, and `publish` orders by the clock.
+    found.sort_by(|a, b| a.name.cmp(&b.name));
     Some((dir, found))
 }
 
@@ -648,9 +654,24 @@ pub fn publish(
     use std::os::unix::fs::OpenOptionsExt;
     let mut lines = read_manifest(directory, owner)?;
     let mut appended = Vec::new();
-    let Some((room_dir, entries)) = read_room(room, member_uid) else {
+    let Some((room_dir, mut entries)) = read_room(room, member_uid) else {
         return Ok(appended);
     };
+    // **Several entries publish in the clock's order** (Codex on #94, round
+    // 5), per Spec section 6: `taken.wall_ns` ascending, the digest as the
+    // tiebreak, before any ordinal is minted, so the latest the manifest
+    // names is the last taken. The clock is the right order because the
+    // member's own count, `taken.ordinal`, is per process and restarts with
+    // it; the clock is monotonic enough across processes for one agent's
+    // files; and a reported save point is taken last by construction, so
+    // it lands above a recovered older file whatever the listing's order.
+    entries.sort_by(|a, b| {
+        a.judged
+            .stamp
+            .wall_ns
+            .cmp(&b.judged.stamp.wall_ns)
+            .then_with(|| a.judged.digest.cmp(&b.judged.digest))
+    });
     let remove_from_room = |name: &str| {
         let _ = nix::unistd::unlinkat(
             room_dir.as_fd(),
@@ -1160,7 +1181,7 @@ mod tests {
         run: &str,
         sequence: u64,
         turn: u64,
-        wall_ns: u128,
+        wall_ns: u64,
         image: &[u8],
     ) -> Vec<u8> {
         let header = serde_json::json!({
@@ -1242,6 +1263,67 @@ mod tests {
             let why = judge(&rebuilt).unwrap_err();
             assert!(why.contains("taken"), "{taken}: {why}");
         }
+    }
+
+    /// **Several room entries publish in the clock's order**, per Spec
+    /// section 6 (Codex on #94, round 5): an older file left unreported and
+    /// a newer one reported in the same verb take their ordinals by
+    /// `taken.wall_ns`, so the newer is the latest the manifest names
+    /// whatever order the room lists them in. The newer's digest is chosen
+    /// to sort first, which is the order the room reader yields.
+    /// Perturbation: drop the sort in `publish` and the older file is
+    /// minted last and selected as latest.
+    #[test]
+    fn several_room_entries_publish_in_the_clocks_order() {
+        let scratch = crate::scratch::Scratch(
+            std::env::temp_dir().join(format!("weaver-admin-order-{}", std::process::id())),
+        );
+        let base = scratch.0.clone();
+        let room = base.join("room");
+        let dir = base.join("decl");
+        std::fs::create_dir_all(&room).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let me = nix::unistd::getuid().as_raw();
+        let mine = Owner {
+            uid: me,
+            gid: nix::unistd::getgid().as_raw(),
+        };
+        let owner = (me, mine.gid);
+        let older = save_point("r-1", 7, 1, 5_000_000_000, b"older, unreported");
+        let older_digest = judge(&older).unwrap().digest;
+        let (newer, newer_digest) = (0u32..)
+            .map(|i| {
+                let bytes = save_point("r-1", 9, 2, 6_000_000_000, format!("newer {i}").as_bytes());
+                let digest = judge(&bytes).unwrap().digest;
+                (bytes, digest)
+            })
+            .find(|(_, digest)| digest < &older_digest)
+            .expect("a newer file whose digest sorts first");
+        std::fs::write(room.join(format!("{newer_digest}{SUFFIX}")), &newer).unwrap();
+        std::fs::write(room.join(format!("{older_digest}{SUFFIX}")), &older).unwrap();
+        let report = weaver_types::SavePointReport {
+            save_point: newer_digest.clone(),
+            name: format!("{newer_digest}{SUFFIX}"),
+            run: weaver_types::RunId("r-1".into()),
+            sequence: 9,
+            turn: 2,
+            position: 9,
+        };
+        let lines = publish(&room, me, &dir, owner, mine, &[(report, Arrival::Demand)]).unwrap();
+        let minted: Vec<(u64, &str, Arrival)> = lines
+            .iter()
+            .map(|line| (line.ordinal, line.digest.as_str(), line.arrived))
+            .collect();
+        assert_eq!(
+            minted,
+            vec![
+                (1, older_digest.as_str(), Arrival::Recovered),
+                (2, newer_digest.as_str(), Arrival::Demand),
+            ],
+            "ordinals follow the clock, the reported one last"
+        );
+        let latest = select(&dir, me, None, mine).unwrap().expect("a latest");
+        assert_eq!(latest.line.digest, newer_digest);
     }
 
     /// **A publication interrupted after the rename is adopted at the next
@@ -1368,7 +1450,7 @@ mod tests {
         };
         let mut lines = Vec::new();
         for (sequence, wall) in [
-            (1u64, 1_000_000_000u128),
+            (1u64, 1_000_000_000u64),
             (2, 2_000_000_000),
             (3, 3_000_000_000),
         ] {

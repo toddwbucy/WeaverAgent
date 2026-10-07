@@ -230,8 +230,14 @@ impl SavePoint {
             && taken.get("pid").is_some_and(|v| v.as_u64().is_some())
             && taken.get("ordinal").is_some_and(|v| v.as_u64().is_some())
             && taken.get("wall_ns").is_some_and(|v| {
-                v.as_str()
-                    .is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+                // Digits alone, and digits that fit an unsigned 64-bit count
+                // of nanoseconds, what a clock can be: `u64`'s own parse
+                // admits a sign, so the digit rule stands beside it.
+                v.as_str().is_some_and(|s| {
+                    !s.is_empty()
+                        && s.bytes().all(|b| b.is_ascii_digit())
+                        && s.parse::<u64>().is_ok()
+                })
             });
         if !nonce_sound {
             return Err(malformed(

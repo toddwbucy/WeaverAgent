@@ -7,3 +7,6 @@ here and asserts the verdict `verdicts.txt` gives it (`sound` or `refuses`). A r
 that admits what the other refuses fails its own test, which is the drift this corpus
 pins. `sound.save-point` is the format exactly as the member writes it; each other file
 is malformed one way, named by its file name.
+The corpus grows by the case that showed the readers apart: `nonce-wall-clock-overlong`
+is a wall clock of digits past an unsigned 64-bit count of nanoseconds, which one reader
+admitted and the other refused until both held it to what a clock can be.
