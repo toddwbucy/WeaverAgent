@@ -1527,7 +1527,7 @@ fn unload_within(
                     // way: a refusal is logged and the room's files are
                     // recovered at the next load.
                     let _ = publish_from_room(config, &AgentName(config.agent.clone()), &reports);
-                    close_marker(config, forced);
+                    close_marker(config, forced)?;
                     return unloaded;
                 }
             }
@@ -1549,7 +1549,7 @@ fn unload_within(
     // operator forced this unload, in which case it closes as forced so the
     // record carries the operator's choice, as it does on a forced leave.
     if forced {
-        close_marker(config, true);
+        close_marker(config, true)?;
     }
     unloaded
 }
@@ -1627,19 +1627,28 @@ fn line_arrival(line: &save_points::ManifestLine) -> &'static str {
 
 /// Close the marker on a clean unload, or leave it open under `ForcedUnload`
 /// where the leave was forced, per Spec section 4.
-fn close_marker(config: &ServiceConfig, forced: bool) {
+fn close_marker(config: &ServiceConfig, forced: bool) -> Result<(), LifecycleRefusal> {
     let run = match save_points::read_marker(&config.root) {
         Some(save_points::Marker::Open { run }) | Some(save_points::Marker::Forced { run }) => run,
-        Some(save_points::Marker::Closed { .. }) | None => return,
+        Some(save_points::Marker::Closed { .. }) | None => return Ok(()),
     };
     let marker = if forced {
         save_points::Marker::Forced { run }
     } else {
         save_points::Marker::Closed { run }
     };
-    if let Err(e) = save_points::write_marker(&config.root, Some(&marker)) {
+    // **A marker that does not write refuses the verb**, at this end as at
+    // the load's: the run is gone either way, and the operator reads that
+    // the next load will record a reset the marker could not say, rather
+    // than an unload answered as recorded.
+    save_points::write_marker(&config.root, Some(&marker)).map_err(|e| {
+        diag!(
+            "weaver-admin: the clean-unload marker in {} does not write at the unload: {e}",
+            config.root.display()
+        );
         record(config, "marker", &format!("not written: {e}"));
-    }
+        LifecycleRefusal::BoundaryUnverified
+    })
 }
 
 /// Why a directed leave did not answer `Left`.
@@ -3301,6 +3310,52 @@ mod tests {
             Some(save_points::Marker::Forced { run: "r-1".into() }),
             "the escalated forced unload still closes the marker as forced"
         );
+
+        // **A marker that cannot be written refuses the unload** (Codex on
+        // #94, round 2, the load's class at the other end): the root made
+        // unwritable, an open marker standing, the forced unload ends the
+        // run and answers `BoundaryUnverified` rather than unloaded.
+        // Perturbation: log the failed write and answer unloaded again.
+        let _ = std::fs::remove_file(config.coordination_socket());
+        save_points::write_marker(
+            &config.root,
+            Some(&save_points::Marker::Open { run: "r-2".into() }),
+        )
+        .unwrap();
+        let mut holder = stand_in_holder(&config);
+        let worker = recording_worker(
+            &config,
+            vec![
+                weaver_types::Payload::Answer(LifecycleAnswer::State {
+                    state: weaver_types::AgentState::Idle,
+                    load: None,
+                    constituents: Vec::new(),
+                }),
+                weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point: None }),
+            ],
+        );
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&config.root, std::fs::Permissions::from_mode(0o500)).unwrap();
+        }
+        let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&config.root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let _ = worker.join();
+        let _ = holder.wait();
+        if nix::unistd::getuid().is_root() {
+            // Root writes through the mode; the case cannot stand as root.
+            assert!(answered.is_ok());
+        } else {
+            assert_eq!(answered, Err(LifecycleRefusal::BoundaryUnverified));
+            assert_eq!(
+                save_points::read_marker(&config.root),
+                Some(save_points::Marker::Open { run: "r-2".into() }),
+                "the marker stands as it was"
+            );
+        }
     }
 
     /// **The `save-point` verb asks the running worker and answers the

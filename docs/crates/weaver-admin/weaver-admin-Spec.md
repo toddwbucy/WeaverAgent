@@ -900,7 +900,12 @@ the vector and the agent, whose worker never holds the descriptor, never reaches
 save point. No save point selected is an absent descriptor and no refusal, the member
 standing empty.
 
-**The clean-unload marker is this crate's, and it is written only once a run stands**,
+**The clean-unload marker is written at both ends, and a write that fails refuses the
+verb at that end**: at the load after the enter answers, where a failed write rolls the
+load back, and at the unload after the member has stopped, where a failed write refuses
+the unload as unrecorded, the run being gone either way, so no run stands or ends with a
+reset the marker could not say. **The marker is this crate's, and it is written only
+once a run stands**,
 on the operator's rulings of 2026-10-06 on #1 (the A3.0 items) (item 5): at every load, after the enter answers `Ready`, this crate
 writes, in the agent's config root under its own custody, a marker naming the run it
 minted as open, and a clean unload marks that run closed; a load that fails at any later
