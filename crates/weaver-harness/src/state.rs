@@ -523,9 +523,14 @@ impl StateSeam {
     }
 
     /// **Await the answer numbered `ordinal`** inside the deadline: a line
-    /// that parses as the answer kind with another ordinal is dropped and
-    /// said, the wait going on; a line that does not parse at all is the
-    /// leg missed, as a malformed answer always was.
+    /// that is a numbered answer of the snapshot protocol, of either kind,
+    /// carrying another ordinal is dropped and said, the wait going on
+    /// (Codex on #94, rounds 10 and 11: a late `finished` frame of the ask
+    /// before, landing after the drain while the retry's answer is awaited,
+    /// is dropped by its number like a late answer); a line that is the
+    /// kind awaited with this ordinal is the answer; a line that is no
+    /// numbered answer of the protocol at all is the leg missed, as a
+    /// malformed answer always was.
     fn await_numbered<T>(
         &mut self,
         deadline: std::time::Instant,
@@ -534,12 +539,20 @@ impl StateSeam {
     ) -> Option<T> {
         loop {
             let line = self.await_line_until(deadline)?;
-            let (carried, answer) = parse(&line)?;
-            if carried == ordinal {
+            if let Some((carried, answer)) = parse(&line)
+                && carried == ordinal
+            {
                 return Some(answer);
             }
+            let carried = protocol_ordinal(&line)?;
+            if carried == ordinal {
+                // The right number on the other kind: the member answered
+                // out of order for this very exchange, which is the leg
+                // missed, never a frame to wait past.
+                return None;
+            }
             eprintln!(
-                "weaver-harness: the state seam dropped a snapshot answer carrying ask {carried} while waiting for ask {ordinal}, a late answer to an ask before"
+                "weaver-harness: the state seam dropped a snapshot-protocol answer carrying ask {carried} while waiting for ask {ordinal}, a late answer to an ask before"
             );
         }
     }
@@ -650,6 +663,17 @@ fn parse_snapshot_answer(line: &str) -> Option<(u64, SavePointTaken)> {
     let value: serde_json::Value = serde_json::from_str(line).ok()?;
     let body = value.get("answer")?.get("snapshot")?;
     Some((body.get("ask")?.as_u64()?, parse_stamped(body)?))
+}
+/// The ordinal any snapshot-protocol answer carries, the `snapshot` answer's
+/// or the `finished` answer's, or none where the line is neither.
+fn protocol_ordinal(line: &str) -> Option<u64> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let answer = value.get("answer")?;
+    answer
+        .get("snapshot")
+        .or_else(|| answer.get("finished"))?
+        .get("ask")?
+        .as_u64()
 }
 /// Parse the finished answer, `{"answer":{"finished":{"ask":N,"save-point":..}}}`,
 /// answering the ordinal it carries beside the name.
@@ -1393,6 +1417,78 @@ mod tests {
         assert_eq!(
             asked[2],
             "{\"acknowledge\":{\"snapshot\":{\"ask\":2,\"digest\":\"fresh\"}}}\n"
+        );
+    }
+
+    /// **A late `finished` frame of the ask before is dropped by its number
+    /// while the retry's answer is awaited**, per `weaver-harness-Spec`
+    /// section 6 (Codex on #94, round 11): the member finishes ask 1 only
+    /// after the retry's ask arrived, past the drain, then answers ask 2;
+    /// the harness drops the finished frame carrying ask 1 and reads ask
+    /// 2's answer. Perturbation: judge the awaited kind alone again and the
+    /// retry misses its answer leg on the finished frame.
+    #[test]
+    fn a_late_finished_frame_is_dropped_by_its_number_while_the_retry_is_awaited() {
+        use std::io::BufRead;
+        let (ours, theirs) = UnixStream::pair().expect("pair");
+        ours.set_nonblocking(true).expect("nonblocking");
+        let mut seam = StateSeam::new(ours);
+        let peer = std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(theirs.try_clone().expect("clone"));
+            let mut writer = theirs;
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("the first ask");
+            // Ask 1 is answered at once; its finished frame comes only after
+            // the retry's ask.
+            writer
+                .write_all(
+                    concat!(
+                        r#"{"answer":{"snapshot":{"ask":1,"save-point":"one.save-point","run":"r-1","sequence":1,"turn":1,"digest":"one"}}}"#,
+                        "\n"
+                    )
+                    .as_bytes(),
+                )
+                .expect("answers ask 1");
+            line.clear();
+            reader
+                .read_line(&mut line)
+                .expect("the acknowledgement of ask 1");
+            // Silent past the bound: the finished leg misses.
+            line.clear();
+            reader.read_line(&mut line).expect("the retry's ask");
+            writer
+                .write_all(
+                    concat!(
+                        r#"{"answer":{"finished":{"ask":1,"save-point":"one.save-point"}}}"#,
+                        "\n",
+                        r#"{"answer":{"snapshot":{"ask":2,"save-point":"two.save-point","run":"r-1","sequence":1,"turn":1,"digest":"two"}}}"#,
+                        "\n"
+                    )
+                    .as_bytes(),
+                )
+                .expect("finishes ask 1 late, then answers ask 2");
+            line.clear();
+            reader
+                .read_line(&mut line)
+                .expect("the acknowledgement of ask 2");
+            writer
+                .write_all(
+                    b"{\"answer\":{\"finished\":{\"ask\":2,\"save-point\":\"two.save-point\"}}}\n",
+                )
+                .expect("finishes ask 2");
+            line
+        });
+        assert!(matches!(
+            seam.ask_snapshot(),
+            Err(weaver_types::SavePointLeg::Finished)
+        ));
+        let taken = seam
+            .ask_snapshot()
+            .expect("the retry reads past the late finished frame to its own answer");
+        assert_eq!(taken.stamp.digest, "two");
+        assert_eq!(
+            peer.join().unwrap(),
+            "{\"acknowledge\":{\"snapshot\":{\"ask\":2,\"digest\":\"two\"}}}\n"
         );
     }
 }

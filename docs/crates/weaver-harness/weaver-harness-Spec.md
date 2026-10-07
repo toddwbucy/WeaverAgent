@@ -2090,8 +2090,9 @@ stays alive across the miss**: a missed answer or finished leg retires nothing, 
 its next ask the seam drains, without blocking, whatever lines or part of one the member
 sent late, discarding them and saying so in one diagnostic line with the count, the
 resync for every ask; **and a late answer is dropped by its number**: the retry's ask
-carries the next ordinal, and an answer that arrives past the drain carrying the ordinal
-of an ask before is dropped and said while the wait goes on inside the bound, so a
+carries the next ordinal, and an answer of either kind, the `snapshot` answer or the
+`finished` answer, that arrives past the drain carrying the ordinal of an ask before is
+dropped and said while the wait goes on inside the bound, so a
 member whose every snapshot outruns the bound never leaves the retry one answer behind,
 which a longer bound would not close, the race being one of order and not of time; a
 late finished answer's file stands in the room unrecorded and is published as recovered
