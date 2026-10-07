@@ -629,10 +629,12 @@ in every wait of the leave), the harness's shared `Left` is the force's answer, 
 force answers unloaded, publishing nothing and leaving the marker to the holder, which
 publishes and closes it. **A harness that takes the join and answers nothing inside the
 leave's sixty seconds is alive and silent, and does not hold the agent**: the force
-closes the marker as forced, the operator having forced a run whose save point was not
-taken, and runs the escalation below against the run's processes without the lock; the
+runs the escalation below against the run's processes without the lock, then closes the
+marker as forced, the operator having forced a run whose save point was not taken; the
 graceful holder's wait then reads the end of its connection and concludes with no save
-point taken, the marker standing under `ForcedUnload`. Where the harness refuses the
+point taken, the marker standing under `ForcedUnload`. The run is ended first, so a
+marker that will not write never leaves it standing: the escalation's refusal outranks
+the marker's, which the force answers after the escalation. Where the harness refuses the
 join, `OutOfOrder` because no leave is pending (the holder is no unload, a `show` past
 its wait or a `save-point`, or a graceful unload not yet past its observation), or
 cannot be dialed, the force tries the lock and, the lock still held, asks again a second

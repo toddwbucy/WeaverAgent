@@ -2042,10 +2042,11 @@ enum ForceBeside {
 /// operator's rulings of 2026-10-07 on #1. It sends `JoinLeave`: answered
 /// `Left`, it joined a graceful unload's leave, and the holder publishes and
 /// closes the marker. **Unanswered inside the leave's bound**, the harness is
-/// alive and silent, and the force does not wait on it: it closes the marker
-/// as forced, since the operator forced a run whose save point was not taken,
-/// and escalates against the run's processes without the lock, so the
-/// holder's wait reads the end of its connection. Refused, `OutOfOrder` where
+/// alive and silent, and the force does not wait on it: it escalates against
+/// the run's processes without the lock, so the holder's wait reads the end
+/// of its connection, and then closes the marker as forced, since the
+/// operator forced a run whose save point was not taken; the run is ended
+/// first, so a marker that will not write never leaves it standing. Refused, `OutOfOrder` where
 /// no leave is pending, or met by no harness, it tries the lock and, the lock
 /// still held, asks again a second later, so a force that came before the
 /// holder's leave was pending joins as soon as it is; once the holder lets
@@ -2077,8 +2078,14 @@ fn force_beside_holder(
                     "unload",
                     "forced: the harness answered no join inside the leave's bound; the run is ended without the lock, no save point taken",
                 );
-                close_marker(config, true)?;
-                start::escalate_within(run_directory, bounds.term, bounds.kill)?;
+                // **The run is ended before the marker is written** (Codex on
+                // #94, round 18): a marker that will not write never leaves a
+                // silent harness holding the agent. The escalation's refusal
+                // outranks the marker's, which is answered after it.
+                let escalated = start::escalate_within(run_directory, bounds.term, bounds.kill);
+                let marked = close_marker(config, true);
+                escalated?;
+                marked?;
                 return Ok(ForceBeside::Escalated);
             }
             Err(LeaveFault::Refused(_) | LeaveFault::Gone) => {}
@@ -4673,104 +4680,131 @@ mod tests {
     /// here), closes the marker as forced and escalates against the run
     /// without the lock; the run's processes end, the graceful holder's wait
     /// reads the end of its connection and concludes with no save point
-    /// taken, the marker forced. Perturbation: the force waits for the lock
-    /// instead, and nothing ends the run until the stand-in's patience runs
-    /// out.
+    /// taken, the marker forced. **With a root that will not take the marker**
+    /// (Codex on #94, round 18), the run is ended all the same and the force
+    /// answers the marker's refusal after it, the marker left as it stood.
+    /// Perturbations: the force waits for the lock instead, and nothing ends
+    /// the run until the stand-in's patience runs out; write the marker
+    /// before the escalation and return on its refusal, and the unwritable
+    /// case leaves the run standing.
     #[test]
     fn a_silent_harness_is_ended_by_the_force_without_the_lock() {
-        let (config, scratch) = scratch_config("force-escalates");
-        save_points::write_marker(
-            &config.root,
-            Some(&save_points::Marker::Open { run: "r-1".into() }),
-        )
-        .unwrap();
-        let mut holder = stand_in_holder(&config);
-        let listener = silent_worker(&config);
-        let (heard_tx, heard) = std::sync::mpsc::channel::<()>();
-        // The harness: answers the observation, then takes the leave and the
-        // join and answers neither; its connections close when the run's
-        // processes end, as a worker's do when it dies, or past a patience.
-        let worker = std::thread::spawn(move || {
-            let mut directed = Vec::new();
-            let mut held = Vec::new();
-            if let Some((peer, request)) = accept_within(&listener) {
-                directed.push(request.payload.clone());
-                close_with(
-                    &peer,
-                    request.exchange,
-                    state(weaver_types::AgentState::Active).unwrap(),
-                );
-            }
-            for at in 0..2 {
-                let Some((peer, request)) = accept_within(&listener) else {
-                    break;
-                };
-                directed.push(request.payload.clone());
-                held.push(peer);
-                if at == 0 {
-                    heard_tx.send(()).unwrap();
-                }
-            }
-            let until = std::time::Instant::now() + std::time::Duration::from_secs(12);
-            let ended_by_the_force = loop {
-                match holder.try_wait() {
-                    Ok(Some(_)) => break true,
-                    _ if std::time::Instant::now() > until => break false,
-                    _ => std::thread::sleep(std::time::Duration::from_millis(20)),
-                }
-            };
-            drop(held);
-            let _ = holder.kill();
-            let _ = holder.wait();
-            (directed, ended_by_the_force)
-        });
-        let (answered, published, child) = std::thread::scope(|scope| {
-            let unload = scope.spawn(|| {
-                let calls = std::cell::Cell::new(0);
-                let mut publisher = counting_publisher(&calls);
-                let answered = unload_with(&config, TEST_UNLOAD_BOUNDS, false, &mut publisher);
-                (answered, calls.get())
+        for unwritable in [false, true] {
+            let (config, scratch) = scratch_config(if unwritable {
+                "force-escalates-ro"
+            } else {
+                "force-escalates"
             });
-            heard
-                .recv_timeout(std::time::Duration::from_secs(5))
-                .expect("the graceful leave arrives");
-            let child = spawn_child_force(&scratch.0)
-                .wait_with_output()
-                .expect("the force's child finishes");
-            let (answered, published) = unload.join().unwrap();
-            (answered, published, child)
-        });
-        let (directed, ended_by_the_force) = worker.join().unwrap();
-        let child_out = String::from_utf8_lossy(&child.stdout);
-        assert!(
-            child_out.contains("force answered: Ok(State { state: Unloaded"),
-            "{child_out}\n{}",
-            String::from_utf8_lossy(&child.stderr)
-        );
-        assert!(
-            matches!(
-                directed.as_slice(),
-                [
-                    weaver_types::Payload::Directive(LifecycleDirective::Observe),
-                    weaver_types::Payload::Directive(LifecycleDirective::Leave {
-                        forced: false,
-                        ..
-                    }),
-                    weaver_types::Payload::Directive(LifecycleDirective::JoinLeave { .. }),
-                ]
-            ),
-            "{directed:?}"
-        );
-        assert!(
-            ended_by_the_force,
-            "the force ended the run, not the stand-in's patience"
-        );
-        assert!(is_unloaded(&answered), "{answered:?}");
-        assert_eq!(published, 0, "no save point was taken");
-        assert_eq!(
-            save_points::read_marker(&config.root),
-            Some(save_points::Marker::Forced { run: "r-1".into() })
-        );
+            save_points::write_marker(
+                &config.root,
+                Some(&save_points::Marker::Open { run: "r-1".into() }),
+            )
+            .unwrap();
+            if unwritable {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&config.root, std::fs::Permissions::from_mode(0o500))
+                    .unwrap();
+            }
+            let mut holder = stand_in_holder(&config);
+            let listener = silent_worker(&config);
+            let (heard_tx, heard) = std::sync::mpsc::channel::<()>();
+            // The harness: answers the observation, then takes the leave and the
+            // join and answers neither; its connections close when the run's
+            // processes end, as a worker's do when it dies, or past a patience.
+            let worker = std::thread::spawn(move || {
+                let mut directed = Vec::new();
+                let mut held = Vec::new();
+                if let Some((peer, request)) = accept_within(&listener) {
+                    directed.push(request.payload.clone());
+                    close_with(
+                        &peer,
+                        request.exchange,
+                        state(weaver_types::AgentState::Active).unwrap(),
+                    );
+                }
+                for at in 0..2 {
+                    let Some((peer, request)) = accept_within(&listener) else {
+                        break;
+                    };
+                    directed.push(request.payload.clone());
+                    held.push(peer);
+                    if at == 0 {
+                        heard_tx.send(()).unwrap();
+                    }
+                }
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(12);
+                let ended_by_the_force = loop {
+                    match holder.try_wait() {
+                        Ok(Some(_)) => break true,
+                        _ if std::time::Instant::now() > until => break false,
+                        _ => std::thread::sleep(std::time::Duration::from_millis(20)),
+                    }
+                };
+                drop(held);
+                let _ = holder.kill();
+                let _ = holder.wait();
+                (directed, ended_by_the_force)
+            });
+            let (answered, published, child) = std::thread::scope(|scope| {
+                let unload = scope.spawn(|| {
+                    let calls = std::cell::Cell::new(0);
+                    let mut publisher = counting_publisher(&calls);
+                    let answered = unload_with(&config, TEST_UNLOAD_BOUNDS, false, &mut publisher);
+                    (answered, calls.get())
+                });
+                heard
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .expect("the graceful leave arrives");
+                let child = spawn_child_force(&scratch.0)
+                    .wait_with_output()
+                    .expect("the force's child finishes");
+                let (answered, published) = unload.join().unwrap();
+                (answered, published, child)
+            });
+            let (directed, ended_by_the_force) = worker.join().unwrap();
+            if unwritable {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&config.root, std::fs::Permissions::from_mode(0o700))
+                    .unwrap();
+            }
+            let child_out = String::from_utf8_lossy(&child.stdout);
+            let expected = if unwritable {
+                "force answered: Err(BoundaryUnverified)"
+            } else {
+                "force answered: Ok(State { state: Unloaded"
+            };
+            assert!(
+                child_out.contains(expected),
+                "unwritable {unwritable}: {child_out}\n{}",
+                String::from_utf8_lossy(&child.stderr)
+            );
+            assert!(
+                matches!(
+                    directed.as_slice(),
+                    [
+                        weaver_types::Payload::Directive(LifecycleDirective::Observe),
+                        weaver_types::Payload::Directive(LifecycleDirective::Leave {
+                            forced: false,
+                            ..
+                        }),
+                        weaver_types::Payload::Directive(LifecycleDirective::JoinLeave { .. }),
+                    ]
+                ),
+                "unwritable {unwritable}: {directed:?}"
+            );
+            assert!(
+                ended_by_the_force,
+                "unwritable {unwritable}: the force ended the run, not the stand-in's patience"
+            );
+            assert!(is_unloaded(&answered), "{answered:?}");
+            assert_eq!(published, 0, "no save point was taken");
+            let marker = if unwritable {
+                save_points::Marker::Open { run: "r-1".into() }
+            } else {
+                save_points::Marker::Forced { run: "r-1".into() }
+            };
+            assert_eq!(save_points::read_marker(&config.root), Some(marker));
+        }
     }
 
     /// **A force that comes before the leave is pending joins once it is**,
