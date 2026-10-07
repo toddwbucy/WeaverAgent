@@ -1586,8 +1586,15 @@ operator pre-created or replaced refuses by uid, a second link refuses by count,
 link never opens. It is created only where no entry stands, exclusively as root at mode
 `0644`, and the directory is synced so the entry is durable before its first line. The
 directory is the operator's: the operator can remove the manifest, which fails closed
-per section 9, and cannot replace or write one, which refuses. **Every other file this
-crate touches at a publication goes the same way**: the room is listed by path for names
+per section 9, and cannot replace or write one, which refuses. **What is written is durable before what depends on it is written**: the
+operator's copy is synced after its ownership is set and the directory after the
+rename, before the manifest line names the entry; the line is synced before the room's
+copy goes; a line a failed write left torn is rolled back to the length the file had,
+and a torn last line a power loss left is dropped at the read, named, and truncated by
+the next append, so the publication it was for is retried through the adoption of its
+target rather than blocking every load; and the marker is synced as a temporary,
+renamed, and its root synced, so it survives the loss of power it exists to record.
+**Every other file this crate touches at a publication goes the same way**: the room is listed by path for names
 alone and every entry opened and removed through the room's descriptor; the operator's
 copy is created exclusively under a temporary name, its owner and mode verified on the
 open file, and renamed with `RENAME_NOREPLACE`, so an entry the operator put under the

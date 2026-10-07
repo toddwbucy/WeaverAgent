@@ -31,6 +31,19 @@ pub const SUFFIX: &str = ".save-point";
 /// directory the operator's.
 pub const SAVE_POINT_BOUND: u64 = 1024 * 1024 * 1024;
 
+/// Sync a directory's entries, so a rename or a creation in it is durable
+/// before anything that depends on it is written, per `weaver-admin-Spec`
+/// section 6.
+fn sync_directory(directory: &Path) -> std::io::Result<()> {
+    let dir = nix::fcntl::open(
+        directory,
+        nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_DIRECTORY | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::empty(),
+    )?;
+    nix::unistd::fsync(dir.as_fd())?;
+    Ok(())
+}
+
 /// Who the manifest belongs to: root in production, passed as the expected
 /// owner so the judgment below is one comparison the tests can run as the
 /// operator, planting a file the expected owner does not own.
@@ -400,8 +413,30 @@ pub fn read_manifest(
         );
         return Err(LifecycleRefusal::BoundaryUnverified);
     }
+    // **A last line without its newline is a torn append**, left by a write
+    // or a power loss that ended mid-line: it names no save point, it is
+    // dropped and named, and the next append truncates it away, so the
+    // publication it was for is retried through the adoption of its target
+    // rather than blocking every load behind a line nobody finished.
+    let whole = match text.rfind('\n') {
+        Some(end) => &text[..=end],
+        None if text.is_empty() => "",
+        None => {
+            diag!(
+                "weaver-admin: the manifest {} ends in a torn line, which is dropped",
+                path.display()
+            );
+            ""
+        }
+    };
+    if whole.len() < text.len() && !whole.is_empty() {
+        diag!(
+            "weaver-admin: the manifest {} ends in a torn line, which is dropped",
+            path.display()
+        );
+    }
     let mut lines = Vec::new();
-    for (at, line) in text.lines().enumerate() {
+    for (at, line) in whole.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
@@ -446,6 +481,7 @@ fn append_line(
         // manifest exists only where this crate made it and the entry is
         // durable before the line is.
         let file = std::fs::OpenOptions::new()
+            .read(true)
             .write(true)
             .create_new(true)
             .mode(0o644)
@@ -469,7 +505,10 @@ fn append_line(
             .map_err(|e| refuse(format!("'s directory does not sync: {e}")))?;
         file
     } else {
+        // Read as well as append: the tail is read back and a torn one
+        // truncated before the line goes, and a failed write is rolled back.
         std::fs::OpenOptions::new()
+            .read(true)
             .append(true)
             .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC)
             .open(&path)
@@ -482,10 +521,33 @@ fn append_line(
             })?
     };
     judge_manifest(&file, &path, owner)?;
+    // **A torn tail is truncated before the line goes**, and **a write that
+    // fails part way is rolled back to the length it found**, so the
+    // manifest holds whole lines or nothing of a failed one.
+    let prior = (|| -> std::io::Result<u64> {
+        let mut tail = Vec::new();
+        file.read_to_end(&mut tail)?;
+        let whole = match tail.iter().rposition(|&b| b == b'\n') {
+            Some(end) => end as u64 + 1,
+            None => 0,
+        };
+        if whole < tail.len() as u64 {
+            nix::unistd::ftruncate(file.as_fd(), whole as i64)?;
+            file.sync_all()?;
+        }
+        Ok(whole)
+    })()
+    .map_err(|e| refuse(format!("does not read back before the append: {e}")))?;
     let rendered = render_line(line);
-    file.write_all(rendered.as_bytes())
-        .and_then(|()| file.sync_all())
-        .map_err(|e| refuse(format!("does not take a line: {e}")))
+    let written = file
+        .write_all(rendered.as_bytes())
+        .and_then(|()| file.sync_all());
+    if let Err(e) = written {
+        let _ = nix::unistd::ftruncate(file.as_fd(), prior as i64);
+        let _ = file.sync_all();
+        return Err(refuse(format!("does not take a line: {e}")));
+    }
+    Ok(())
 }
 
 // ------------------------------------------------------------ publication
@@ -617,13 +679,15 @@ pub fn publish(
                 .custom_flags(nix::libc::O_CLOEXEC)
                 .open(&temporary)?;
             file.write_all(&entry.bytes)?;
-            file.sync_all()?;
             nix::unistd::fchown(
                 file.as_fd(),
                 Some(nix::unistd::Uid::from_raw(operator.0)),
                 Some(nix::unistd::Gid::from_raw(operator.1)),
             )
             .map_err(std::io::Error::from)?;
+            // Synced after the ownership change, so the owner is as durable
+            // as the bytes before the entry is named anywhere.
+            file.sync_all()?;
             let metadata = file.metadata()?;
             use std::os::unix::fs::MetadataExt;
             if metadata.uid() != operator.0 || metadata.mode() & 0o777 != 0o600 {
@@ -641,7 +705,10 @@ pub fn publish(
                 &target,
                 nix::fcntl::RenameFlags::RENAME_NOREPLACE,
             ) {
-                Ok(()) => Ok(()),
+                // **The directory is synced before the line names the entry**,
+                // so a manifest line never outlives its target across a power
+                // loss, and the room's copy goes only after both are durable.
+                Ok(()) => sync_directory(directory),
                 // **An entry already under the published name is adopted
                 // where it is this save point**: a publication interrupted
                 // between the rename and the manifest line left it, the
@@ -1016,7 +1083,7 @@ pub fn write_marker(root: &Path, marker: Option<&Marker>) -> std::io::Result<()>
     let path = root.join(MARKER);
     let Some(marker) = marker else {
         return match std::fs::remove_file(&path) {
-            Ok(()) => Ok(()),
+            Ok(()) => sync_directory(root),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e),
         };
@@ -1026,12 +1093,19 @@ pub fn write_marker(root: &Path, marker: Option<&Marker>) -> std::io::Result<()>
         Marker::Closed { run } => ("closed", run),
         Marker::Forced { run } => ("forced", run),
     };
+    // **The marker is durable before it is reported**: the temporary is
+    // written and synced, renamed into place, and the root synced, so the
+    // marker survives the loss of power it exists to record.
     let temporary = root.join(".run.marker.new");
-    std::fs::write(
-        &temporary,
-        format!("{}\n", serde_json::json!({"run": run, "state": state})),
-    )?;
-    std::fs::rename(&temporary, &path)
+    {
+        let mut file = std::fs::File::create(&temporary)?;
+        file.write_all(
+            format!("{}\n", serde_json::json!({"run": run, "state": state})).as_bytes(),
+        )?;
+        file.sync_all()?;
+    }
+    std::fs::rename(&temporary, &path)?;
+    sync_directory(root)
 }
 
 /// The reset a marker resolves, per `weaver-admin-Spec` section 4: an open
@@ -1378,6 +1452,30 @@ mod tests {
         ));
         std::fs::remove_file(dir.join(MANIFEST)).unwrap();
         std::fs::rename(dir.join("manifest-real"), dir.join(MANIFEST)).unwrap();
+        // **A torn last line is dropped and the next append truncates it**
+        // (Codex on #94, round 3): the lines before it read, the latest is
+        // selected among them, and after an append the file holds whole
+        // lines alone. Perturbation: parse the torn line and the read
+        // refuses the whole manifest.
+        {
+            use std::io::Write as _;
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(dir.join(MANIFEST))
+                .unwrap();
+            file.write_all(b"{\"ordinal\":9,\"dig").unwrap();
+        }
+        let read = read_manifest(&dir, mine).unwrap();
+        assert_eq!(read.len(), 4, "the torn line is dropped: {read:?}");
+        assert!(select(&dir, me, None, mine).unwrap().is_some());
+        append_line(&dir, mine, &lines[0]).unwrap();
+        let text = std::fs::read_to_string(dir.join(MANIFEST)).unwrap();
+        assert!(
+            !text.contains("\"dig\n") && !text.contains("\"dig{"),
+            "{text}"
+        );
+        assert!(text.ends_with('\n'));
+        assert_eq!(read_manifest(&dir, mine).unwrap().len(), 5);
         // A manifest that does not parse refuses, and so does one absent
         // beside published files; absent beside none is the first load.
         std::fs::write(dir.join(MANIFEST), "not json\n").unwrap();
