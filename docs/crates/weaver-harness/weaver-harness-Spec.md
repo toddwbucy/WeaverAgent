@@ -2072,7 +2072,14 @@ none the lower would drop ever crosses the at-rest boundary; and traffic the gat
 sent that this loop has not yet taken is activity (Codex on #94, round 13), the leave
 refusing `ActivityNotAtRest` as for a turn in flight rather than lowering a gate whose
 admitted frame would be dropped untraced and unanswered, the loop taking the frame next
-and the operator retrying; a leave refused at its save
+and the operator retrying. **And the lower reads its channel until the gate's own
+answer** (Codex on #94, round 14): a frame the gate admits between that look and the
+`Lower` reaches the channel ahead of `GateStopped`, and the lower answers it on its own
+exchange with the `refused` close naming the unload and authors it as a refusal of the
+leave, so no admitted request is dropped unanswered or unrecorded. The two are not one
+check twice: the look refuses the whole leave while traffic already stands, so a queued
+turn is served and not refused, and the reading loop covers only the window between the
+look and the lower, which no look can close; a leave refused at its save
 point leaves the run entered at rest with the gate lowered, which the retry or the force
 finds so. This crate sends the leave's
 `snapshot` ask after the last turn and before it authors `unload`, so the save point

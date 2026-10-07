@@ -37,6 +37,33 @@ die() { printf '\nREFUSED: %s\n' "$*" >&2; exit 1; }
 
 read_key() { cat "$STACK/$1" 2>/dev/null || true; }
 
+# **chmod_nofollow MODE PATH: root sets a moved file's mode through a
+# descriptor opened O_NOFOLLOW** (Codex on #94, round 14). chmod has no
+# no-dereference form, and a check that the name is no link followed by a
+# chmod of the name is two path resolutions, between which a link could be
+# put in its place; opening the name once with O_NOFOLLOW and setting the
+# mode on what was opened leaves no window. A link refuses by name (ELOOP),
+# and so does anything but a regular file, the open being non-blocking so a
+# FIFO under the name never holds the run. Run as root, through python3,
+# which this script already needs for tomllib.
+chmod_nofollow() {
+  sudo python3 -c '
+import errno, os, stat, sys
+mode, path = int(sys.argv[1], 8), sys.argv[2]
+try:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+except OSError as e:
+    sys.exit(f"{path} is a link, and root sets no mode through one" if e.errno == errno.ELOOP
+             else f"{path} does not open: {e.strerror}")
+try:
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        sys.exit(f"{path} is not a regular file")
+    os.fchmod(fd, mode)
+finally:
+    os.close(fd)
+' "$1" "$2"
+}
+
 # **held_closed PATH: admin's rule for what a root process may trust**, per
 # weaver-admin-Spec section 9 (`judge_ancestors`). PATH, resolved to its
 # canonical path, and every directory above it up to `/`, must be owned by uid
@@ -739,12 +766,12 @@ restore() {
         # **Given back as it was**: the owner and mode the move found, so the
         # operator reads and edits it as before the install.
         read -r owner fmode <<< "${MOVED_FILES["$agent|$f"]:-}"
-        # chown never follows a link (-h), and chmod, which has no such form,
-        # is given the name only once it is asked, through privilege, to be no
-        # link: a name under either directory that became a link between the
-        # move and here changes no target.
+        # chown never follows a link (-h), and the mode is set through a
+        # descriptor opened O_NOFOLLOW (chmod_nofollow): the file has just
+        # been given back to the operator in the operator's directory, and a
+        # name made a link here changes no target.
         [ -n "$owner" ] && [ -n "$fmode" ] \
-          && sudo chown -h "$owner" -- "$old/$f" && sudo test ! -L "$old/$f" && sudo chmod "$fmode" -- "$old/$f" \
+          && sudo chown -h "$owner" -- "$old/$f" && chmod_nofollow "$fmode" "$old/$f" \
           || { printf '  FAILED to restore the owner and mode of %s\n' "$old/$f" >&2; failed=1; }
       done
       # **The territory reads as it did**: its group and mode as the move
@@ -873,20 +900,20 @@ migrate_layout() {
       [ -n "$owner" ] && [ -n "$fmode" ] || rollback "$agent: cannot read the owner and mode of $old/$f"
       MOVED_FILES["$agent|$f"]="$owner $fmode"
     done
-    # **The judgment held at the step**: the entry is asked again, through
-    # privilege, to be no link immediately before the chmod, since chmod has
-    # no no-dereference form and a link made between the preflight and here
-    # would have root set its target's mode.
+    # **The judgment held at the step**: the mode is set through a descriptor
+    # opened O_NOFOLLOW (chmod_nofollow), since chmod has no no-dereference
+    # form and a link made between the preflight and here would otherwise
+    # have root set its target's mode; the open refuses a link by name.
     for f in agent.toml system-prompt.md; do
       [ -e "$old/$f" ] || continue
       sudo mv -T -- "$old/$f" "$territory/$f" && sudo chown -h root:root "$territory/$f" \
-        && sudo test ! -L "$territory/$f" && sudo chmod 0644 "$territory/$f" \
+        && chmod_nofollow 0644 "$territory/$f" \
         || rollback "$agent: $old/$f did not move into the territory as a regular file"
     done
     for f in admin.log worker.log; do
       [ -e "$old/$f" ] || continue
       sudo mv -T -- "$old/$f" "$territory/$f" && sudo chown -h "root:weaver-$agent-admin" "$territory/$f" \
-        && sudo test ! -L "$territory/$f" && sudo chmod 0640 "$territory/$f" \
+        && chmod_nofollow 0640 "$territory/$f" \
         || rollback "$agent: $old/$f did not move into the territory as a regular file"
     done
     sudo usermod -aG "weaver-$agent-admin" "weaver-$agent-state" \

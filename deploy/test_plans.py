@@ -199,6 +199,14 @@ elif name == 'sudo':
         # the real one does to a shell that has not taken the new login: the
         # fake makes it 0000, which only the privilege wrapper above reopens.
         os.chmod(pathlib.Path(mapped(rest[-1])), 0)
+    elif op == 'python3' and rest[:1] == ['-c']:
+        # **The no-follow chmod** (Codex on #94, round 14): the helper's own
+        # code run on the scratch file, as root would run it, through the
+        # privilege wrapper; a link under the name refuses as it would.
+        target = pathlib.Path(mapped(rest[-1]))
+        assert target.is_relative_to(root), target
+        sys.exit(privileged([target], lambda: subprocess.run(
+            [sys.executable, '-c', rest[1], *rest[2:-1], str(target)]).returncode))
     elif op == 'mktemp':
         template = rest[-1]
         made = pathlib.Path(mapped(template.replace('XXXXXX', 'fixture')))
@@ -1715,7 +1723,7 @@ esac
         (stand_in / "sudo").write_text(STAND_IN_SUDO.replace("{recorded}", str(recorded)))
         (stand_in / "sudo").chmod(0o755)
         text = (self.repo / "deploy" / "update-stack.sh").read_text()
-        program = (shell_function(text, "migrate_layout")
+        program = (shell_function(text, "chmod_nofollow") + shell_function(text, "migrate_layout")
                    + 'MOVED=(); declare -A MOVED_FILES=(); rollback() { echo "ROLLBACK: $1" >&2; exit 1; }\n'
                    + 'migrate_layout "$1"; printf \'%s\\n\' "${MOVED[@]}"')
         env = {**os.environ, "PATH": f"{stand_in}{os.pathsep}{os.environ['PATH']}",
@@ -1737,9 +1745,11 @@ esac
         self.assertFalse((old_root / "declaration-directory").exists())
         said = recorded.read_text()
         self.assertIn(f"chown -h root:root {territory}/agent.toml", said)
-        self.assertIn(f"chmod 0644 {territory}/agent.toml", said)
+        self.assertIn(f"0644 {territory}/agent.toml", said)
+        self.assertEqual((territory / "agent.toml").stat().st_mode & 0o7777, 0o644)
         self.assertIn(f"chown -h root:weaver-old-admin {territory}/admin.log", said)
-        self.assertIn(f"chmod 0640 {territory}/admin.log", said)
+        self.assertIn(f"0640 {territory}/admin.log", said)
+        self.assertEqual((territory / "admin.log").stat().st_mode & 0o7777, 0o640)
         self.assertIn("usermod -aG weaver-old-admin weaver-old-state", said)
         self.assertIn("usermod -aG weaver-old-admin fixture-no-home", said)
         self.assertIn(f"chgrp weaver-old-admin {territory}", said)
@@ -1821,7 +1831,38 @@ esac
         for name in ("agent.toml", "system-prompt.md"):
             self.assertIn(["sudo", "stat", "-c", "%u:%g %a", "--", str(old_dir / name)], calls[:after])
             self.assertIn(["sudo", "chown", "-h", "12345:12345", "--", str(old_dir / name)], calls[after:])
-            self.assertIn(["sudo", "chmod", "600", "--", str(old_dir / name)], calls[after:])
+            # The mode through the no-follow helper (Codex on #94, round 14).
+            self.assertTrue(any(c[:3] == ["sudo", "python3", "-c"] and c[-2:] == ["600", str(old_dir / name)]
+                                for c in calls[after:]), name)
+            self.assertEqual((old_dir / name).stat().st_mode & 0o7777, 0o600, name)
+
+    def test_the_no_follow_chmod_refuses_a_link_and_sets_a_regular_file(self):
+        # Codex on #94, round 14: root sets a moved file's mode through a
+        # descriptor opened O_NOFOLLOW, so a name made a link between any
+        # check and the chmod changes no target. The helper is run as the
+        # script defines it, with sudo standing in as the caller. Perturbation:
+        # open without O_NOFOLLOW and the planted link's target is made 0644.
+        text = (self.repo / "deploy" / "update-stack.sh").read_text()
+        target = self.root / "elsewhere"
+        target.write_text("sensitive\n")
+        target.chmod(0o600)
+        link = self.root / "system-prompt.md"
+        link.symlink_to(target)
+        regular = self.root / "agent.toml"
+        regular.write_text("")
+        regular.chmod(0o600)
+        program = 'sudo() { "$@"; }\n' + shell_function(text, "chmod_nofollow") + 'chmod_nofollow "$1" "$2"'
+        env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
+        ran = subprocess.run(["bash", "-c", program, "bash", "644", str(link)],
+                             env=env, text=True, capture_output=True, timeout=20)
+        self.assertNotEqual(ran.returncode, 0)
+        self.assertIn("is a link", ran.stderr)
+        self.assertEqual(target.stat().st_mode & 0o7777, 0o600, "the link's target keeps its mode")
+        ran = subprocess.run(["bash", "-c", program, "bash", "644", str(regular)],
+                             env=env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertEqual(regular.stat().st_mode & 0o7777, 0o644)
+        self.assertNotIn("test ! -L", text, "the separate link check is gone, the open being the check")
 
     def test_the_migration_refuses_a_link_in_the_old_directory(self):
         # Codex on #94, round 13: chmod has no no-dereference form, so a link
