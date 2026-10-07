@@ -319,12 +319,20 @@ for d in /var/lib/weaver "${!TERRITORY_BASES[@]}" "${!LOG_PATHS[@]}"; do [ -e "$
 # be the agent unarchived at its takedown (Codex on #94, round 8). A root
 # without the key, the pre-ruling layout, is archived by the bases as before;
 # a territory under a base is archived with its base and not twice.
+# Paths are compared canonical (Codex on #94, round 12): a territory written
+# as `<base>/../elsewhere` is outside the base however it is spelled, and a
+# base or a territory that does not resolve is left out of the comparison,
+# an absent base covering nothing and an absent territory archiving nothing.
 territories_outside() {
-  local bases=() b r v covered
-  while [ $# -gt 0 ] && [ "$1" != -- ]; do bases+=("$1"); shift; done
+  local bases=() b r v c covered
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do
+    c=$(realpath -e -- "$1" 2>/dev/null) && bases+=("$c")
+    shift
+  done
   [ "${1:-}" = -- ] && shift
   for r in "$@"; do
     v=$(cat "$r/territory" 2>/dev/null || true); v=${v%%$'\n'*}; [ -n "$v" ] && [ -d "$v" ] && [ ! -L "$v" ] || continue
+    v=$(realpath -e -- "$v" 2>/dev/null) || continue
     covered=0
     for b in "${bases[@]}"; do case "$v" in "$b"/*) covered=1;; esac; done
     [ "$covered" = 0 ] && printf '%s\n' "$v"

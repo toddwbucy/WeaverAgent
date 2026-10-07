@@ -148,13 +148,20 @@ elif name == 'sudo':
         assert file.is_relative_to(root), file
         sys.exit(subprocess.run(['/usr/bin/' + op, *rest[:-1], str(file)]).returncode)
     elif op == 'stat':
-        # The migration's look at the territory's group and mode before it
-        # changes them: the group the fixture names, the mode the directory's
-        # own (Codex on #94, round 9).
+        # The migration's look before it changes anything (Codex on #94,
+        # rounds 9 and 12): the territory's group as the fixture names it and
+        # the directory's own mode; a file's uid:gid as the fixture owns it,
+        # the operator's under the operator's home and root's elsewhere, and
+        # the file's own mode.
         target = pathlib.Path(mapped(rest[-1]))
         assert target.is_relative_to(root), target
         st = privileged([target], lambda: os.lstat(target))
-        print(os.environ.get('TERRITORY_GROUP_AS', 'fixture-group'), format(st.st_mode & 0o7777, 'o'))
+        if rest[:2] == ['-c', '%u:%g %a']:
+            operator_home = root / 'home' / os.environ.get('USER', '')
+            uid = os.environ.get('FIXTURE_UID', '12345') if target.is_relative_to(operator_home) else '0'
+            print(f"{uid}:{uid}", format(st.st_mode & 0o7777, 'o'))
+        else:
+            print(os.environ.get('TERRITORY_GROUP_AS', 'fixture-group'), format(st.st_mode & 0o7777, 'o'))
     elif op in ('cat', 'tail', 'wc') or (op == 'test' and not identity):
         # The install's reads under a territory, made as root (Codex on #94,
         # round 8): run on the scratch file with the privilege wrapper, so a
@@ -1709,7 +1716,7 @@ esac
         (stand_in / "sudo").chmod(0o755)
         text = (self.repo / "deploy" / "update-stack.sh").read_text()
         program = (shell_function(text, "migrate_layout")
-                   + 'MOVED=(); rollback() { echo "ROLLBACK: $1" >&2; exit 1; }\n'
+                   + 'MOVED=(); declare -A MOVED_FILES=(); rollback() { echo "ROLLBACK: $1" >&2; exit 1; }\n'
                    + 'migrate_layout "$1"; printf \'%s\\n\' "${MOVED[@]}"')
         env = {**os.environ, "PATH": f"{stand_in}{os.pathsep}{os.environ['PATH']}",
                "ADMIN_BASE": str(self.config), "OPERATOR_NAME": "fixture-no-home"}
@@ -1768,6 +1775,9 @@ esac
         sink = self.root / "agents" / "weaver-old" / "trace.ndjson"
         (old_dir / "agent.toml").write_text(f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "file"\npath = "{sink}"\n')
         (old_dir / "system-prompt.md").write_text("You are old.\n")
+        # As create-agent wrote them before the ruling: the operator's, 0600.
+        for name in ("agent.toml", "system-prompt.md"):
+            (old_dir / name).chmod(0o600)
         (old_root / "declaration-directory").write_text(str(old_dir) + "\n")
         territory = self.root / "agents" / "weaver-old"
         territory.mkdir()
@@ -1803,6 +1813,15 @@ esac
         self.assertIn(["sudo", "chmod", "710", str(territory)], calls[after:])
         self.assertLess(calls.index(["sudo", "chgrp", "weaver-old-admin", str(territory)]),
                         calls.index(["sudo", "chgrp", "weaver-old-state", str(territory)]))
+        # **And each moved file as the operator owned it** (Codex on #94,
+        # round 12): its uid:gid and mode read before the move, put back
+        # after the move back, so the operator reads and edits it as before
+        # the install. Perturbation: drop the chown from the restore and the
+        # owner's call is missing after the regroup.
+        for name in ("agent.toml", "system-prompt.md"):
+            self.assertIn(["sudo", "stat", "-c", "%u:%g %a", "--", str(old_dir / name)], calls[:after])
+            self.assertIn(["sudo", "chown", "12345:12345", "--", str(old_dir / name)], calls[after:])
+            self.assertIn(["sudo", "chmod", "600", "--", str(old_dir / name)], calls[after:])
 
     def test_stack_refuses_an_unprovided_engine_and_names_the_migration(self):
         # A pre-#85 declaration electing postgres refuses before the build,
@@ -1948,6 +1967,19 @@ class DecommissionTests(unittest.TestCase):
             listed = self.run_fn("territories_outside", str(base), "--",
                                  str(roots / "a"), str(roots / "b"), str(roots / "c"))
             self.assertEqual(listed.splitlines(), [str(custom)])
+            # Canonical, not lexical (Codex on #94, round 12): a territory
+            # written as `<base>/../elsewhere` is outside the base, and one
+            # written with a dotted path inside it is covered. Perturbation:
+            # compare the strings as written and the first lists nothing.
+            dotted_out = f"{base}/../srv-elsewhere/weaver-b"
+            dotted_in = f"{base}/../{base.name}/weaver-a"
+            for name, territory in (("d", dotted_out), ("e", dotted_in)):
+                root = roots / name
+                root.mkdir()
+                (root / "territory").write_text(f"{territory}\n")
+            listed = self.run_fn("territories_outside", str(base), "--",
+                                 str(roots / "d"), str(roots / "e"))
+            self.assertEqual(listed.splitlines(), [str(custom.resolve())])
         self.assertIn('for d in "${OWN_TERRITORIES[@]}"; do archive_path "$(archive_name territory "$d")" "$d"; done',
                       self.script)
         self.assertIn('mapfile -t OWN_TERRITORIES < <(territories_outside', self.script)

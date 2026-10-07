@@ -668,6 +668,14 @@ ADDED=()
 # access group is one the rolled-back member cannot traverse to its room. The
 # group memberships stay, being reads the ruling grants either way.
 MOVED=()
+# **Each moved file's owner and mode as found**, keyed "agent|file" (Codex on
+# #94, round 12): a parallel array rather than more fields on the entry, since
+# which of the four files stood varies per agent and the entry keeps one
+# shape for the restore to parse. The pre-ruling layout was the operator's
+# own files in the operator's directory, and a rollback gives them back as
+# they were: a group the operator's shell has not taken is no substitute for
+# a file the operator owned.
+declare -A MOVED_FILES=()
 # The agent the verify step has loaded right now, empty whenever none is. Every
 # rollback from inside that step happens with a worker running, and a restore
 # that leaves it running puts the old declaration and the old binaries under a
@@ -695,7 +703,7 @@ BACKUP=""
 restore() {
   [ "$RESTORED" -eq 0 ] || return 0
   RESTORED=1
-  local failed=0
+  local failed=0 owner fmode
   # **The running agent goes down before the files move under it.** A load that
   # succeeded and then failed its read-back left a worker serving while the
   # declaration it came up on and the binaries it was exec'd from were both
@@ -717,7 +725,13 @@ restore() {
       for f in agent.toml system-prompt.md admin.log worker.log; do
         sudo test -e "$territory/$f" || continue
         sudo mv -T -- "$territory/$f" "$old/$f" \
-          || { printf '  FAILED to move %s back\n' "$territory/$f" >&2; failed=1; }
+          || { printf '  FAILED to move %s back\n' "$territory/$f" >&2; failed=1; continue; }
+        # **Given back as it was**: the owner and mode the move found, so the
+        # operator reads and edits it as before the install.
+        read -r owner fmode <<< "${MOVED_FILES["$agent|$f"]:-}"
+        [ -n "$owner" ] && [ -n "$fmode" ] \
+          && sudo chown "$owner" -- "$old/$f" && sudo chmod "$fmode" -- "$old/$f" \
+          || { printf '  FAILED to restore the owner and mode of %s\n' "$old/$f" >&2; failed=1; }
       done
       # **The territory reads as it did**: its group and mode as the move
       # found them, so the pre-ruling admin's member, holding no supplementary
@@ -825,7 +839,7 @@ fi
 # stand-in sudo.
 # migrate_layout "AGENT|OLD|TERRITORY"...
 migrate_layout() {
-  local entry agent old territory f group mode
+  local entry agent old territory f group mode owner fmode
   for entry in "$@"; do
     IFS='|' read -r agent old territory <<< "$entry"
     # **What the territory was is recorded before anything changes**, its
@@ -837,6 +851,14 @@ migrate_layout() {
     MOVED+=("$entry|$group|$mode")
     sudo install -d -o root -g "weaver-$agent-admin" -m 0750 "$territory/save-points" \
       || rollback "$agent: cannot make $territory/save-points"
+    # Each file's owner and mode recorded before it moves, for the restore.
+    for f in agent.toml system-prompt.md admin.log worker.log; do
+      [ -e "$old/$f" ] || continue
+      read -r owner fmode < <(sudo stat -c '%u:%g %a' -- "$old/$f") \
+        || rollback "$agent: cannot read the owner and mode of $old/$f"
+      [ -n "$owner" ] && [ -n "$fmode" ] || rollback "$agent: cannot read the owner and mode of $old/$f"
+      MOVED_FILES["$agent|$f"]="$owner $fmode"
+    done
     for f in agent.toml system-prompt.md; do
       [ -e "$old/$f" ] || continue
       sudo mv -T -- "$old/$f" "$territory/$f" && sudo chown root:root "$territory/$f" && sudo chmod 0644 "$territory/$f" \
