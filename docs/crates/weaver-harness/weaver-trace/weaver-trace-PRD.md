@@ -374,7 +374,9 @@ restore. A live restore's KV flush is recorded as the `flush` it is. Each
 of these kinds is named and shaped by the act that lands its emitter, on the rule
 above, and added here then: the take landed as `save_point` on 2026-10-05; a restore at a load is a load and rides
 the `load` event's lineage with its named-at-restore mark, and a forced unload is an
-unload and rides the `unload` event's `forced`, both as of A3.2 (2026-10-06), no kind
+unload and rides the `unload` event's `forced`, both as of A3.2 (2026-10-06), a force
+that joined another account's leave naming its caller in the optional `forced_by`
+beside the leave's own `cause` (2026-10-07), no kind
 being named ahead of its emitter, so the live restore's own event, a reload within a
 residency, is the loop act's (A5) to name with its `Reopen`; the reset
 riding the `load` event per `weaver-trace-Spec` section 3. **These kinds never cross the tee into

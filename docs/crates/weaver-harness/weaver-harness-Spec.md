@@ -2151,7 +2151,13 @@ at the next publication, the leave's at the latest. A missed write, the ask itse
 `force-unload` alone, has this crate lower the gate at once with no drain, cancel the
 turn in flight as a stop does, recorded on the trace as a stop with state holding what
 landed up to the cancel, then take the leave's save point and report it as any leave
-does, and author `unload` with `forced` true. Only where the save point cannot be
+does, and author `unload` with `forced` true. **A force that joins a leave another
+account asked for is named apart** (Codex on #94, round 19), on the operator's ruling of
+2026-10-07 on #1: the pending leave keeps its own cause, the graceful caller's, and
+records the joining force's cause as `forced_by` when the force turns it forced, the
+`unload` event reading both when it is authored; the `save_point` event carries the
+leave's cause standing when it is authored. A leave forced from the start records no
+`forced_by`, its cause already naming the force. Only where the save point cannot be
 taken, the member dead or a leg unanswered, does the forced leave come down without
 one, the miss recorded as a lifecycle refusal of the leave naming the leg, so the next
 load, restoring the latest published save point, carries the reset admin resolves from

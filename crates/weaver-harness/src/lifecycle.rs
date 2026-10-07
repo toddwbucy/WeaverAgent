@@ -1271,6 +1271,7 @@ impl Harness {
                     answers: Vec::new(),
                     cause,
                     forced,
+                    forced_by: None,
                     quiesced: false,
                 })?;
                 connection.send(&OrganEnvelope {
@@ -2639,9 +2640,18 @@ fn hear_during_leave(
     };
     match envelope.payload {
         weaver_types::Payload::Directive(
-            LifecycleDirective::Leave { forced: true, .. } | LifecycleDirective::JoinLeave { .. },
+            LifecycleDirective::Leave {
+                forced: true,
+                cause,
+            }
+            | LifecycleDirective::JoinLeave { cause },
         ) => {
             if let Some(leave) = pending.as_mut() {
+                // The force that turns another caller's leave forced is
+                // named beside the leave's own cause (Codex on #94, round 19).
+                if !leave.forced {
+                    leave.forced_by = Some(cause);
+                }
                 leave.forced = true;
                 leave.answers.push((connection, exchange));
                 return true;
@@ -2770,6 +2780,11 @@ fn leave_after(
             grant_surface,
             cause: cause.map(crate::engine::trace_cause),
             forced: forced || run.pending_leave.as_ref().is_some_and(|leave| leave.forced),
+            forced_by: run
+                .pending_leave
+                .as_ref()
+                .and_then(|leave| leave.forced_by)
+                .map(crate::engine::trace_cause),
         }));
         let _ = run.author.author(
             &mut run.recorder,
@@ -4497,6 +4512,7 @@ mod tests {
                                     answers: vec![(connection, test_exchange())],
                                     cause: weaver_types::Cause { uid: 1000 },
                                     forced: false,
+                                    forced_by: None,
                                     quiesced: true,
                                 });
                             }
@@ -5050,6 +5066,11 @@ mod tests {
             .find(|e| e["kind"] == "unload")
             .expect("an unload");
         assert_eq!(unload["payload"]["forced"], true, "{unload}");
+        // **Both callers are kept** (Codex on #94, round 19): the leave's own
+        // cause, the graceful caller's, and the force that joined it.
+        // Perturbation: drop the `forced_by` write and the force goes unnamed.
+        assert_eq!(unload["payload"]["cause"]["uid"], 1000, "{unload}");
+        assert_eq!(unload["payload"]["forced_by"]["uid"], 0, "{unload}");
     }
 
     /// **A join with no leave pending is out of order**, per Spec section 6
@@ -5187,6 +5208,8 @@ mod tests {
             .find(|e| e["kind"] == "unload")
             .expect("an unload");
         assert_eq!(unload["payload"]["forced"], true, "{unload}");
+        // A sole forced unload names its caller in `cause` alone.
+        assert!(unload["payload"].get("forced_by").is_none(), "{unload}");
 
         let (events, _, _, answer, still_entered) = enter_against_a_member_leaving(
             None,

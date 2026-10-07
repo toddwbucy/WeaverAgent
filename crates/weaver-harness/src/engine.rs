@@ -50,11 +50,15 @@ type StopSlot = Option<(weaver_types::ExchangeId, weaver_types::Cause)>;
 /// answer is held here with its exchange, its connection taken out of the
 /// verb slot so the listener is heard again and a `force-unload` can dial in
 /// during the drain; `quiesced` says the gate was already told to accept no
-/// further input, the first thing the unload does.
+/// further input, the first thing the unload does. `cause` is the leave's
+/// own; `forced_by` names the `force-unload` that turned a leave another
+/// account asked for forced (the operator's ruling of 2026-10-07 on #1), and
+/// stays empty where the leave was forced from the start.
 pub(crate) struct PendingLeave {
     pub(crate) answers: Vec<(OrganChannel, weaver_types::ExchangeId)>,
     pub(crate) cause: weaver_types::Cause,
     pub(crate) forced: bool,
+    pub(crate) forced_by: Option<weaver_types::Cause>,
     pub(crate) quiesced: bool,
 }
 
@@ -1380,6 +1384,12 @@ impl<'a> Ports<'a> {
                                 let gate = self.gate.as_mut().expect("guarded above");
                                 match gate.leave.as_mut() {
                                     Some(leave) => {
+                                        // The force that turns another
+                                        // caller's leave forced is named
+                                        // beside the leave's own cause.
+                                        if forced && !leave.forced {
+                                            leave.forced_by = Some(cause);
+                                        }
                                         leave.forced |= forced;
                                         leave.answers.push((connection, exchange));
                                     }
@@ -1405,6 +1415,7 @@ impl<'a> Ports<'a> {
                                             answers: vec![(connection, exchange)],
                                             cause,
                                             forced,
+                                            forced_by: None,
                                             quiesced,
                                         });
                                     }
@@ -4161,9 +4172,11 @@ mod tests {
             .send(&weaver_types::OrganEnvelope {
                 exchange: leave_exchange.clone(),
                 position: weaver_types::Position::Open,
+                // The graceful caller is the operator's account, the force
+                // root's, so the record can tell them apart.
                 payload: weaver_types::Payload::Directive(
                     weaver_types::LifecycleDirective::Leave {
-                        cause: weaver_types::Cause { uid: 0 },
+                        cause: weaver_types::Cause { uid: 1000 },
                         forced: false,
                     },
                 ),
@@ -4296,6 +4309,11 @@ mod tests {
             "the graceful dialer and the force"
         );
         assert_eq!(pending.answers[0].1, leave_exchange);
+        // **Both callers are kept** (Codex on #94, round 19): the leave's
+        // cause stays the graceful caller's, and the force is named apart.
+        // Perturbation: drop the `forced_by` write and the force goes unnamed.
+        assert_eq!(pending.cause, weaver_types::Cause { uid: 1000 });
+        assert_eq!(pending.forced_by, Some(weaver_types::Cause { uid: 0 }));
         drop(forced_dial);
         let trace = recorder.structure().unwrap();
         let close = serde_json::from_str::<serde_json::Value>(

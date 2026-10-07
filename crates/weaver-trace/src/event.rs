@@ -571,6 +571,14 @@ pub struct UnloadClose {
     /// and the turn cancelled, the save point taken where it could be, which
     /// the `save_point` event or a refusal of the leave says.
     pub forced: bool,
+    /// **The account that forced a leave another account asked for**, on the
+    /// operator's ruling of 2026-10-07 on #1 (Codex on #94, round 19): where
+    /// a `force-unload` joined a graceful unload's pending leave, `cause`
+    /// stays the leave's own, the graceful caller's, and this names the
+    /// forcing caller, so the record keeps both. Absent where no force
+    /// joined, a sole forced unload included, whose `cause` already names it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forced_by: Option<Cause>,
 }
 
 /// What the leave found, in the envelope the confirm drivers carry: the

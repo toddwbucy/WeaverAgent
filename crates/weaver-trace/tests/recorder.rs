@@ -556,6 +556,7 @@ fn the_unload_always_carries_its_close() {
             grant_surface: Some(weaver_trace::GrantSurface::Varied),
             cause: Some(weaver_trace::Cause { uid: 1000 }),
             forced: false,
+            forced_by: None,
         }))
     };
     let bare = r.submit(event(Kind::Unload, None, None)).unwrap_err();
@@ -580,6 +581,7 @@ fn the_unload_always_carries_its_close() {
         grant_surface: Some(weaver_trace::GrantSurface::Unreadable),
         cause: Some(weaver_trace::Cause { uid: 1000 }),
         forced: false,
+        forced_by: None,
     })
     .expect("renders");
     assert_eq!(
@@ -592,9 +594,23 @@ fn the_unload_always_carries_its_close() {
         grant_surface: None,
         cause: None,
         forced: false,
+        forced_by: None,
     })
     .expect("renders");
     assert_eq!(bare, serde_json::json!({"forced": false}));
+    // A force that joined another caller's leave: both causes, the leave's
+    // own and the forcing one (Codex on #94, round 19).
+    let joined = serde_json::to_value(weaver_trace::UnloadClose {
+        grant_surface: None,
+        cause: Some(weaver_trace::Cause { uid: 1000 }),
+        forced: true,
+        forced_by: Some(weaver_trace::Cause { uid: 0 }),
+    })
+    .expect("renders");
+    assert_eq!(
+        joined,
+        serde_json::json!({"cause": {"uid": 1000}, "forced": true, "forced_by": {"uid": 0}})
+    );
 }
 
 /// A run-level kind carrying a turn refuses: a join key the work never held

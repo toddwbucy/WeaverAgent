@@ -310,6 +310,7 @@ pub struct UnloadClose {
     pub grant_surface: Option<GrantSurface>,
     pub cause: Option<Cause>,
     pub forced: bool,
+    pub forced_by: Option<Cause>,
 }
 
 pub enum GrantSurface {
@@ -662,7 +663,14 @@ true where admin's `force-unload` ended the run, the gate closed at once and the
 flight cancelled; whether the leave's save point was taken is told by the `save_point`
 event before it, or, where it was not, by a `refusal` of the leave naming
 `save_point_not_taken` and its leg, so the record says what state the operator's choice
-kept. `load` carries `Elections`. The five
+kept. **`forced_by` names the account that forced a leave another account asked for**, on
+the operator's ruling of 2026-10-07 on #1 (Codex on #94, round 19): where a
+`force-unload` joined a graceful unload's pending leave, `cause` stays the leave's own,
+the graceful caller's, and `forced_by` carries the forcing caller's cause, so the record
+keeps both accounts rather than attributing the force to the one who asked for a
+graceful unload. It is absent where no force joined, a sole forced unload included,
+whose `cause` already names it, and is never written null. An optional member on an
+existing kind's payload, it names no new kind. `load` carries `Elections`. The five
 message kinds carry `Message`. `turn.closed` carries `TurnClosed`. `fault` carries
 `Fault`. `flush` carries `FlushCounts`, the resident token counts before and after, both
 plain integers. **`elision` carries `ElisionSpan` and not those counts**: an elision
@@ -842,8 +850,8 @@ constitution**: it says who could read the run from outside, and it joins neithe
 declaration's digest nor the tuple, so granting a reader never makes the record another
 agent's. `cause` is who changed the agent, the uid sudo reports and nothing else, which
 person asked being WeaverWeb's record and never this one. It rides the `load` event, the
-`unload` event's `UnloadClose` where a leave asked, the worker's own unwind after a
-fault carrying none, and a turn closed by the operator's stop or by the agent's unload,
+`unload` event's `UnloadClose` where a leave asked, beside `forced_by` where a force
+joined another account's leave, the worker's own unwind after a fault carrying none, and a turn closed by the operator's stop or by the agent's unload,
 where `Stopped` carries it and every other stop reason carries none. The harness authors all three from what
 admin handed it, admin never writing this record. A read or a refusal changes nothing in
 the agent and is admin's operations log's, never the trace's.
