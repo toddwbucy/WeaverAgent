@@ -381,7 +381,7 @@ ask, rebuild the prefix from the restored holdings, which needs the decode seam'
 flushes the decode session to `keep = 0` through `weaver-harness-spu-decode-contract`'s
 existing cut, or, where the answered `identity` differs from the seated prefix, closes
 and reopens the decode session with it, per `weaver-harness-Spec` section 6, and this
-seam carries nothing of the flush. A save point only in the operator's directory
+seam carries nothing of the flush. A save point only in the territory's `save-points/`
 restores at a load, through the descriptor admin hands the member at spawn, and never
 through this ask.
 

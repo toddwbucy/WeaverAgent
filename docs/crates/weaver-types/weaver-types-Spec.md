@@ -179,13 +179,13 @@ are identifiers rather than numbers, which is what lets a run reference carry a
 stamp that distinguishes without anything being remembered between invocations,
 per the identity ruling of 2026-08-14.
 
-**One declaration per agent, in the operator's directory, on the operator's ruling of
-2026-10-02, and the system prompt is not in it**, on the operator's ruling of
-2026-10-06 (#1). Admin resolves an agent's declaration as `agent.toml` in the directory
-the agent's root names as its `declaration-directory`, `~/.weaveragent/<agent>/` by
-convention, per `weaver-admin-Spec` section 9. It is the operator's to edit and owned
-by the operator, and never readable by the agent, the directory being closed to the
-agent's uids. **The declaration says how the agent is built; state says who it is**:
+**One declaration per agent, in the agent's territory, on the operator's ruling of
+2026-10-07 (#1), and the system prompt is not in it**, on the operator's ruling of
+2026-10-06 (#1). Admin resolves an agent's declaration as `agent.toml` in the territory
+the agent's root names as its `territory`, `/var/lib/weaver-agent/weaver-<agent>/` as the
+deploy scripts lay it out, per `weaver-admin-Spec` section 9. It is root's, which the
+operator edits with `sudoedit` and the access group reads, and never readable by the
+agent, the territory being closed to the agent's uids. **The declaration says how the agent is built; state says who it is**:
 the system prompt is an entry in state management, entered through the gate as the
 agent's first turn and carried by its save points, per `weaver-harness-Spec` section
 6.1 and `weaver-gate-world-contract` section 2, and `system-prompt.md` beside the

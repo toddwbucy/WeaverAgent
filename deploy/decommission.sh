@@ -30,11 +30,14 @@
 # in transition, or that it cannot answer for refuses by name. The units of the
 # layout before #50 are still checked as before.
 #
-# **The operator's declaration directories stay**, as the models do: each is
-# the operator's own data (`agent.toml`, the prompt, `admin.log`,
-# `worker.log`), archived and never purged. The sudo rules
-# `/etc/sudoers.d/weaver-*` and the run directories under each coordination
-# root go with the agent.
+# **The territory is archived whole**: since the operator's ruling of
+# 2026-10-07 on #1 it holds the declaration, the prompt draft, the two logs and
+# the published save points beside the state room and the trace, so they ride
+# in the territories' archive and go with the agent. The operator's home is
+# never touched: a box from before that ruling keeps its `~/.weaveragent/`
+# directories where they stand, unarchived and unpurged, the operator's own.
+# The sudo rules `/etc/sudoers.d/weaver-*` and the run directories under each
+# coordination root go with the agent.
 #
 # **Three modes, because the archive is verified before anything is removed.**
 # `--archive` writes tarballs, dumps, a box-facts file and a SHA256SUMS, then
@@ -97,11 +100,11 @@ read_key() { cat "$1/$2" 2>/dev/null || true; }
 
 # Every path admin's configs name, so the install tree is the one the box
 # actually ran and not the one this script remembers.
-declare -A BIN_DIRS=() AGENT_DIRS=() LOG_PATHS=() DECL_DIRS=() COORD_ROOTS=()
+declare -A BIN_DIRS=() AGENT_DIRS=() LOG_PATHS=() COORD_ROOTS=()
 ALLOWED=""
 # **The per-agent roots**: every directory under a base, named as admin's name
-# check admits it, a link never one. Each names its binaries, its declaration
-# directory and its coordination root.
+# check admits it, a link never one. Each names its binaries, its territory
+# and its coordination root.
 AGENT_ROOTS=()
 for base in "${CONFIG_ROOTS[@]}"; do
   for root in "$base"/*/; do
@@ -112,7 +115,6 @@ for base in "${CONFIG_ROOTS[@]}"; do
     for k in worker-binary spu-binary gate-binary; do
       v=$(read_key "$root" "$k"); [ -n "$v" ] && BIN_DIRS["$(dirname "$v")"]=1
     done
-    v=$(read_key "$root" declaration-directory); [ -n "$v" ] && DECL_DIRS["$v"]=1
     v=$(read_key "$root" coordination-root); [ -n "$v" ] && COORD_ROOTS["$v"]=1
     ALLOWED="$ALLOWED ${root##*/}"
   done
@@ -160,8 +162,7 @@ mapfile -t SUDO_RULES < <(find /etc/sudoers.d -maxdepth 1 -type f \( -name 'weav
 say "config roots"
 for r in "${CONFIG_ROOTS[@]}"; do plan "$r  (allow-list: $(read_key "$r" allow-list | tr '\n' ' '))"; done
 [ ${#CONFIG_ROOTS[@]} -gt 0 ] || plan "none under /etc/weaver"
-for r in "${AGENT_ROOTS[@]}"; do plan "$r  (declaration-directory: $(read_key "$r" declaration-directory))"; done
-for d in "${!DECL_DIRS[@]}"; do plan "$d  KEPT: the operator's declaration directory, archived and not purged"; done
+for r in "${AGENT_ROOTS[@]}"; do plan "$r  (territory: $(read_key "$r" territory))"; done
 for f in "${SUDO_RULES[@]}"; do plan "$f  (sudo rule)"; done
 
 say "install prefixes (models excluded from every mode)"
@@ -437,13 +438,6 @@ if [ "$MODE" = archive ]; then
 
   [ -d /etc/weaver ] && archive_path etc-weaver /etc/weaver
   [ ${#SUDO_RULES[@]} -gt 0 ] && archive_path sudoers-weaver "${SUDO_RULES[@]}"
-  # The operator's declaration directories are archived and then dropped
-  # from the purge list: they are the operator's to keep.
-  if [ ${#DECL_DIRS[@]} -gt 0 ]; then
-    kept=${#PURGE[@]}
-    archive_path declaration-directories "${!DECL_DIRS[@]}"
-    PURGE=("${PURGE[@]:0:$kept}")
-  fi
   [ ${#LDSO_CONFS[@]} -gt 0 ] && archive_path ld-so-conf "${LDSO_CONFS[@]}"
   for p in "${!PREFIXES[@]}"; do
     parts=()

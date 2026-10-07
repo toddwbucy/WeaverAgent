@@ -871,7 +871,7 @@ state member stands**: under the `none` store engine the inventory selects no sa
 and resolves no lineage, and a declaration naming `restore` beside that engine refuses
 `ConfigInvalid` naming `restore`, per `weaver-types-Spec` section 2. **The manifest of
 section 6 is the record of what is loadable**: the inventory reads it, root-owned in
-section 9's `declaration-directory`, one line per published or named save point, and
+the territory's `save-points/` of section 9, one line per published or named save point, and
 selects either the save point the declaration's `[restore]` names, by its published name
 or its digest, or the latest, the line of highest ordinal whose file still stands under
 its name and whose bytes digest to the line's digest. **A file no line names is not
@@ -1090,7 +1090,7 @@ member could replace, or a link root would follow, would hand the worker a file 
 than the record, and since #80 the relay would read that file back out to the trace
 reader. **The trace's directory is judged first**: resolved once, owned by root or the
 admin principal and writable by no group or other, the territory's 0710 pass-through for
-the member's group being no write, and every directory above it held by section 9's
+the access group, the member among its members, being no write, and every directory above it held by section 9's
 rule. **The open goes through that directory** write-only with `O_APPEND`, `O_CLOEXEC`,
 `O_NOFOLLOW` and `O_NONBLOCK`, so a link at the trace's name refuses and a FIFO there
 never blocks, and the descriptor must be a regular file. **An existing trace stands as
@@ -1553,8 +1553,8 @@ exactly as section 5 hands the trace sink down and for the same reasons. The mem
 state lives in its memory and crosses loads by save points: the member writes each into
 its own room, the territory's `state/`, a new file per save point and never one
 rewritten, per `weaver-state-PRD` section 4. **At the load, this crate restores**: as
-root it opens the chosen save point in section 9's `declaration-directory`,
-`~/.weaveragent/<agent>/` by default, the one `restore` names or the latest published
+root it opens the chosen save point in the territory's `save-points/` of section 9, the
+one `restore` names or the latest published
 where none is named, close-on-exec in the opening call, and places it at its fixed
 number in the member's process at the spawn alone, the way it places the first door's
 end, per `weaver-state-Spec` section 2. No path rides the vector, and the agent, whose
@@ -1565,8 +1565,8 @@ rebuild from the trace being the offline builder's, per `weaver-state-Spec` sect
 lock**, on the operator's rulings of 2026-10-06 on #1 (the A3.0 items) (items 1, 3 and 7): as root, at the opening of a load's validate
 step under the run lock it took first, after the member has stopped at an unload, and at
 once at the `save-point` verb under the invocation lock with the run standing, it copies
-each finished save point from the member's room into the declaration directory and
-never moves one, because a move keeps the member's uid and the inventory's entry
+each finished save point from the member's room into the territory's `save-points/`
+and never moves one, because a move keeps the member's uid and the inventory's entry
 judgment would refuse the file as wrongly owned. **Every source is a value the member's
 account chose, so it is judged before root reads it**, per section 9: this crate holds
 the member's room open as a directory, opens each entry beneath that descriptor without
@@ -1575,9 +1575,10 @@ save-point format and a finished name, a part name being an unacknowledged save 
 that is never published, refuses and leaves in place any entry that fails, naming it,
 and copies only from the descriptor it judged, so a link or a planted file in the room
 cannot make a root step read a path the member chose. The copy is written under a
-temporary name, owned by the uid the root's `operator` key names and mode `0600`, its
-owner and mode verified through the open file, then renamed to its published name,
-overwriting nothing. **The published name is computable from the file's own bytes**:
+temporary name, root's, grouped to the access group and mode `0640`, so the operator
+and the connector read it and nothing writes it but this crate, its owner and mode
+verified through the open file, then renamed to its published name, overwriting
+nothing, every step against `save-points/` as opened at section 9's judgment. **The published name is computable from the file's own bytes**:
 `<YYYYMMDDTHHMMSSZ>-<digest>.save-point`, the time the stamp line's `taken.wall_ns`
 rendered in UTC to the second and the digest the file's, which extends the room's name
 rule of `weaver-state-Spec` section 3 to the published form, so a renamed file reads as
@@ -1592,8 +1593,8 @@ orders because the member's own count, `taken.ordinal`, is per process and resta
 with it, and the clock is monotonic enough across processes for one agent's files. So
 the latest the manifest names is the last taken and never a recovered older file the
 listing happened to yield later. **Each publication appends one
-line to the manifest**, `save-points.manifest` in the declaration directory, a file this
-crate creates root-owned and mode `0644` and opens for appending alone, never rewriting
+line to the manifest**, `save-points.manifest` in the territory's `save-points/`, a file
+this crate creates root-owned and mode `0644` and opens for appending alone, never rewriting
 it: one JSON object per line carrying `ordinal`, a monotonic integer minted under the
 lock as one past the highest line standing; `digest`; `name`, the published name;
 `stamp`, the run, sequence, turn and schema digest the stamp line carries; `taken`, its
@@ -1610,8 +1611,9 @@ one; anything else refuses `BoundaryUnverified` naming what was found, so a mani
 operator pre-created or replaced refuses by uid, a second link refuses by count, and a
 link never opens. It is created only where no entry stands, exclusively as root at mode
 `0644`, and the directory is synced so the entry is durable before its first line. The
-directory is the operator's: the operator can remove the manifest, which fails closed
-per section 9, and cannot replace or write one, which refuses. **What is written is durable before what depends on it is written**: the
+directory is root's, read by the access group and written by no one else: the operator
+removes a manifest only as root, which fails closed per section 9, and cannot replace
+or write one, which refuses. **What is written is durable before what depends on it is written**: the
 operator's copy is synced after its ownership is set and the directory after the
 rename, before the manifest line names the entry; the line is synced before the room's
 copy goes; a line a failed write left torn is rolled back to the length the file had,
@@ -1630,9 +1632,9 @@ directory it is not the latest and a restore naming it refuses, so no file a mem
 an operator wrote is read whole into this crate's memory past that bound. **The
 manifest is the record of what is loadable, and the latest is read from it**: the highest ordinal whose file still
 stands under its name and whose bytes digest to the line's digest, per section 4, and a
-file no line names is not loadable. The directory stays `0700` to the operator, so a
-save point on demand lands with the operator at once and a live restore of one the
-member still holds reads the member's own room with no part of this crate. **The verbs
+file no line names is not loadable. The directory is root's, read by the access group,
+so a save point on demand is readable by the operator at once, and a live restore of
+one the member still holds reads the member's own room with no part of this crate. **The verbs
 `save-point`, `restore` and `force-unload` are the operator contract's**, per section 2,
 and the publication itself carries nothing across it.
 
@@ -2068,13 +2070,14 @@ structural rather than disciplined.
 ## 8. The operations log
 
 **The format is NDJSON, one act per line, and it shares no schema with the trace.** **It
-is one per agent, at `admin.log` in the agent's declaration directory**,
-`~/.weaveragent/<agent>/admin.log` by default, beside `agent.toml`, the operator's
-prompt draft and the save points, on the operator's ruling of 2026-10-03 on #63's sixth question, carried
-forward on #50, which moves it from the root's `log-path` of #45. The agent's uids never
-reach it, that directory being closed to them by section 9's judgment, and the operator
-can read it: it is owned by the operator's uid and the declaration directory's group,
-mode `0640`, set through the open descriptor. This crate appends to it as root, opening
+is one per agent, at `admin.log` in the agent's territory**, beside `agent.toml`, the
+prompt draft and `save-points/`, on the operator's ruling of 2026-10-03 on #63's sixth
+question, carried forward on #50, which moves it from the root's `log-path` of #45, and
+on the operator's ruling of 2026-10-07 on #1, which moves it with the declaration from
+the operator's home into the territory. The agent's uids never reach it, the territory
+being closed to them by section 9's judgment, and the operator and the connector read
+it through the access group: it is root's, grouped to the access group, mode `0640`,
+set through the open descriptor. This crate appends to it as root, opening
 it with `O_NOFOLLOW` so a link planted at the name is refused rather than followed, and
 non-blocking and judged a regular file before a line is written, so a FIFO planted at
 the name neither holds the verb nor takes a line. `worker.log` is opened and owned the
@@ -2109,7 +2112,7 @@ was asked, the boundary file's digest in force, and the outcome. **The digest is
 where no boundary file was read**, a missing or malformed `roles.toml` among them, and
 the line says so rather than inventing a value. **A refusal before the agent's root is
 admitted has no `admin.log` to reach**: a malformed name or `NoSuchAgent` names no agent
-whose declaration directory this crate may write, so that refusal goes to standard
+whose territory this crate may write, so that refusal goes to standard
 error alone, beside the answer object, and to no log. **The relay's lines carry a schema
 of their own**, on #73's second item: the wall time, `actor` naming the relay, the
 agent, the event (`connect`, `replaced`, `refused`, `disconnect`, `truncated`, `ended`),
@@ -2192,8 +2195,8 @@ the same judgments before they commit**: `create-agent.sh`, `bootstrap-stack.sh`
 one they must apply before they provision, publish or run a root, so that no script
 leaves a root admin then refuses or runs a program admin would not. **The line those
 judgments hold is another principal's choice.** The operator runs every script and holds
-root, so a value the operator supplies (the environment, the arguments, the build, a
-directory under the operator's own home) is the operator's own choice and not an
+root, so a value the operator supplies (the environment, the arguments, the build) is
+the operator's own choice and not an
 escalation. A defect is a root step acting on a value another principal can choose: an
 agent's account, its state member's account, any other local user, or a root-owned path
 re-pointed through a directory such a principal can write. Every such value is judged
@@ -2202,30 +2205,37 @@ principal that owns it. Every value below is read from the root before any verb,
 value that fails to read fails the invocation as `ConfigInvalid` with no field.
 
 **The root holds one file per key.** Required: `worker-binary`, `spu-binary`,
-`gate-binary`, `coordination-root`, `declaration-directory`, `operator` and
+`gate-binary`, `coordination-root`, `territory`, `operator` and
 `roles.toml`, `run-tool` and `control-tool` retiring with the init system they reached
 on 2026-10-03 (#50), the boundary file of section 9 below. Optional: `headroom-bytes`,
 `library-path`, per section 6, and `load-bound-seconds`, per section 2, the
 `state-store-socket` key having retired with the service engine. **Every path a key names is
 absolute**, `worker-binary`, `spu-binary`, `gate-binary`, `coordination-root`,
-`declaration-directory` and `library-path` alike, and a relative
+`territory` and `library-path` alike, and a relative
 value fails the read naming the key, so no read resolves against the directory a caller
-ran sudo from and two invocations of one root always name the same files. **The agent's
-declaration stands in the operator's directory and not in the root**, on the operator's
-ruling of 2026-10-02: `declaration-directory` names it, absolute,
-`~/.weaveragent/<agent>/` by convention, and it holds `agent.toml`, which this crate
-parses per `weaver-types-Spec` section 2, the operator's prompt draft `system-prompt.md`,
-which this crate never reads, and, since A3.2, the published save points and
-`save-points.manifest`, the one root-owned file in the operator's directory, which this
-crate alone writes, per section 6. **The operator owns the directory and can remove the
-manifest**, and doing so makes every published save point unloadable, a file no line
-names being not loadable, until a `restore` names one, which appends the line that
-makes it loadable again; the recovery is the verb and never a hand edit of a root-owned
-file. **The operator cannot replace or write one**: a manifest that is not root's own,
-by uid, gid, mode, link count or kind, refuses at the inventory and at every
-publication, per section 6, so a planted line never names a loadable file. A declaration directory holding no
-`agent.toml` answers
-`NoSuchAgent`, as a root holding none did. **`operator` names the operator's uid**, on
+ran sudo from and two invocations of one root always name the same files. **The whole
+agent lives in its territory, and the declaration with it**, on the operator's ruling
+of 2026-10-07 on #1, which retires the operator's `~/.weaveragent/<agent>/` of the
+2026-10-02 election: `territory` names it, absolute, `/var/lib/weaver-agent/weaver-<agent>/`
+as the deploy scripts lay it out, root-owned, and it holds `agent.toml`, which this
+crate parses per `weaver-types-Spec` section 2 and the operator edits with `sudoedit`;
+the prompt draft `system-prompt.md`, which this crate never reads; `admin.log` and
+`worker.log`, per section 8; `save-points/`, holding the published save points and
+`save-points.manifest`, which this crate alone writes, per section 6; the trace, per
+section 5; and the member's room `state/`, per section 6. One ownership: root reads and
+writes root's files in root's directory, so no other principal's choice reaches what a
+root step reads. **The access group reads and never writes**: `weaver-<agent>-admin`,
+the connector's, is the territory's group, with passage by name through the territory
+and read on the draft, the logs and the published save points, and the operator joins
+it to read without sudo; a declaration, a draft or a manifest the group could write
+refuses, since the connector must not be able to rewrite the declaration. **Removing
+the manifest is root's act**, and doing so makes every published save point
+unloadable, a file no line names being not loadable, until a `restore` names one,
+which appends the line that makes it loadable again; the recovery is the verb and never
+a hand edit of a root-owned file. **Nothing replaces or writes one**: a manifest that
+is not root's own, by uid, gid, mode, link count or kind, refuses at the inventory and
+at every publication, per section 6, so a planted line never names a loadable file. A
+territory holding no `agent.toml` answers `NoSuchAgent`, as a root holding none did. **`operator` names the operator's uid**, on
 the operator's ruling of 2026-10-02 on this act's first question: a root-owned key
 `create-agent.sh` writes once, the box's own fact, set by root, about whose data defines
 the agent, and independent of who invokes a verb. The coordination name changed hands
@@ -2245,7 +2255,7 @@ deployment scripts from a stack record of their own that this crate never reads,
 agent's configuration is that agent's even where two roots carry the same values. The
 installed program files may stand once on disk and be named by every root, while the
 configuration and the processes are each agent's own. **The operations log is one per
-agent**, at `admin.log` in the agent's declaration directory, per section 8. Managing
+agent**, at `admin.log` in the agent's territory, per section 8. Managing
 several agents, listing them or holding a map across them, is not this crate's and
 belongs to WeaverWeb or a separate application, which drives each agent through its own
 admin.
@@ -2268,59 +2278,47 @@ by file name and `weaver-analysis` carries it into a run's code identity by thos
 No new refusal names any of them, the configuration's failure having no lifecycle case
 to be.
 
-**What the operator edits is read from the operator's directory, and what admin execs
-stays in the root**, on the operator's ruling of 2026-10-02. The split follows what each
-value is to a root process. The keys that name the programs this crate starts or hands
-the worker to start, `worker-binary`, `spu-binary` and `gate-binary`, are the agent's
-authority, so they stay where the admission is, in the
-root, root-owned and judged as above. The declaration is data the operator edits by
-hand, and a file under root's ownership taxed every edit with a privileged write. **Their place is the operator's choice and the line above holds it**:
-a directory under the operator's own home is a value the operator supplies, and the
-defect would be another principal able to choose what admin reads there. So the
-declaration directory is judged before any value in it is read, and the judgment is the
-root's with the operator in root's place. The value of `declaration-directory` is
-resolved once to its canonical path, the look not following a link at the directory
-itself, and every read goes through the directory as opened at the judgment. **The
-directory is held as a descriptor for the verb's life**, opened once at the judgment
-with no link followed and judged on that descriptor, and section 6's writes go through
-it: the published copy is made, renamed and synced, the manifest opened and appended,
-and a file judged for a load or at a restore, each against the descriptor and never
-through the path again, so a directory the operator swaps under the path between two
-steps is not followed and a link put at the path has this root process create nothing
-where it points. **The
-directory is closed to everyone but its owner**: its owner must be exactly the uid the
-root's `operator` key names, and a directory any other uid owns, the agent's or the
-member's account among them, refuses. **The operator is one person in the operator
-role**, on the operator's ruling of 2026-10-02 on #59, named in three places that never
-disagree. On the box it is the uid the root's `operator` key names, which owns the
-agent's data. Under #50 it is the person the connector acts for when it runs the agent's
-granted command lines. In
-WeaverWeb it is that person's authenticated identity. WeaverWeb authenticates the person
-and never chooses the box's operator uid, which is the box's to name and never taken
-from a server ("the box decides", toddwbucy/WeaverTools#6). The directory grants no
-permission to group or other and carries no access-control entry beyond its mode, so
-neither of the agent's uids, whatever passage the territory's provisioning opened
-through the directories above, can list it, enter it or read a file in it. **The one entry
-this crate reads is held closed**: `agent.toml` is a regular file and never a link,
-owned by that uid or by uid 0, and writable by no group or other. Its read bits are not
-judged, the closed directory already denying every other principal the path, so a file
-an editor writes under an ordinary umask passes. Other entries are the operator's and
-are not read, `system-prompt.md`, the operator's draft of the prompt that the seeding
-step reads as the operator and this crate never opens, among them, save `admin.log` and
-`worker.log`, the two this crate creates and appends to, without following a link, per
-section 8. **Every
-directory above it is held closed as the root's ancestors are**, each owned by uid 0 or
-by the operator and writable by no group or other unless its sticky bit is set, since a
-directory another principal could write would let it rename the judged directory away.
-Any failure refuses `BoundaryUnverified`, naming the path on stderr, before a value is
-read, and a declaration directory that does not exist or is not a directory refuses the
-same way, the operator's provisioning being incomplete rather than the agent absent. The
-deploy scripts are bound by this judgment as by the root's, per the line above.
+**The territory is judged before any value in it is read, on its descriptor**, on the
+operator's ruling of 2026-10-07 on #1, which retires the 2026-10-02 split of the
+declaration into the operator's home: the keys that name the programs this crate starts
+or hands the worker to start, `worker-binary`, `spu-binary` and `gate-binary`, stay in
+the root, root-owned and judged as above, and the declaration stands in the territory,
+root's as the root is, so there is no directory another principal could choose and no
+file another principal could write among what a root step reads. The value of
+`territory` is resolved once to its canonical path, the look not following a link at
+the directory itself. **The territory is held as a descriptor for the verb's life**:
+opened once at the judgment with no link followed, judged on that descriptor a
+directory owned by uid 0, mode `0710` exactly, grouped to the access group, which passes
+by name and never lists, nothing for other, so neither of the agent's uids enters, and
+carrying no access-control entry beyond its mode; `save-points/` beneath it is opened
+through that descriptor and judged the same way at mode `0750` and the territory's
+group; and every read and every write after goes through those descriptors and never
+through the path again: `agent.toml` opened beneath the territory's, and section 6's
+published copy made, renamed and synced, the manifest opened and appended, and a file
+judged for a load or at a restore, each against `save-points/`. **The one entry this
+crate reads is held closed**: `agent.toml` is a regular file and never a link, root's,
+and writable by no group or other, so the access group that reads it never rewrites it.
+Other entries are not read, `system-prompt.md`, the operator's draft of the prompt that
+the seeding step reads through the access group and this crate never opens, among
+them, save `admin.log` and `worker.log`, the two this crate creates and appends to,
+without following a link, per section 8. **Every directory above it is held closed as
+the root's ancestors are**, each owned by uid 0 and writable by no group or other
+unless its sticky bit is set. Any failure refuses `BoundaryUnverified`, naming the path
+on stderr, before a value is read, and a territory that does not exist, is not a
+directory or holds no `save-points/` refuses the same way, the operator's provisioning
+being incomplete rather than the agent absent. The deploy scripts are bound by this
+judgment as by the root's, per the line above. **The operator is one person in the
+operator role**, on the operator's ruling of 2026-10-02 on #59, named in three places
+that never disagree. On the box it is the uid the root's `operator` key names, the uid
+the harness admits the seeding turn from and the one the connector's rule acts for.
+Under #50 it is the person the connector acts for when it runs the agent's granted
+command lines. In WeaverWeb it is that person's authenticated identity. WeaverWeb
+authenticates the person and never chooses the box's operator uid, which is the box's
+to name and never taken from a server ("the box decides", toddwbucy/WeaverTools#6).
 
-**Admin reads both files as root and the agent never reads either.** What crosses to the
-agent's processes is what the parse yields and the enter carries, the prompt's text
-seated as the decoder instruction's `identity` and the two digests, never a path into
-the operator's directory and never a handle to it, the same discipline the sink's path
+**Admin reads the declaration as root and the agent never reads it.** What crosses to
+the agent's processes is what the parse yields and the enter carries, never a path into
+the territory's files and never a handle to them, the same discipline the sink's path
 keeps. The ruling's reading of a system prompt is that one: the model receives the text
 as its identity prefix at load, and that gives the agent process no read of the file
 and no way to change it.
@@ -2753,13 +2751,13 @@ directive is asserted where the run happens.
 
 - The root check: the binary run as a non-root uid refuses before touching any
   agent, confirmed by watching a verb proceed when the check is removed.
-- The declaration directory is closed, per section 9 as of 2026-10-02: a directory
-  granting group or other any permission, one carrying an access-control entry, one
-  owned by any uid but the one the root's `operator` key names (the agent's and the
-  member's among them), an `operator` key absent or naming no uid, an entry read that is a link or
-  writable by group or other, and an ancestor another principal can write each refuse
-  `BoundaryUnverified` before a value is read, confirmed by watching each pass and its
-  declaration parse when its arm of the judgment is removed. The enter's `operator` is
+- The territory is root's and closed, per section 9 as of 2026-10-07: a directory of
+  any mode but `0710`, one carrying an access-control entry, one not root's, one holding
+  no `save-points/` or one of any mode but `0750`, an `operator` key absent or naming no
+  uid, a declaration that is a link or writable by group or other, and an ancestor
+  another principal can write each refuse `BoundaryUnverified` before a value is read,
+  confirmed by watching each pass and its declaration parse when its arm of the
+  judgment is removed. The enter's `operator` is
   the root's `operator` key and never the caller's uid, confirmed by watching the two
   come out equal when the cause is copied in its place.
 - The answer and the exit status agree: a refusal exits non-zero and an answer

@@ -1066,8 +1066,8 @@ exchange, so the record names only a file that has its finished name, at every s
 leave before `unload` and on the operator's demand through admin's `save-point` verb,
 as of A3.2 on the operator's rulings of 2026-10-06 on #1, per `weaver-harness-Spec`
 section 6. **The payload is `SavePointTaken`**: `save_point`,
-the digest of the save point's bytes, which is its identity in the operator's directory
-and the `save_point` a later load's lineage names; `run` and `sequence`, the trace
+the digest of the save point's bytes, which is its identity in the territory's
+`save-points/` and the `save_point` a later load's lineage names; `run` and `sequence`, the trace
 position of the last distillate it holds; `turn`, the last turn that run holds in it,
 zero where it holds none; `name`, the file name the member wrote it under in its
 own room, so the operator can find the file the digest names, never its path; and

@@ -165,8 +165,11 @@ elif name == 'sudo':
         if identity == 'weaver-m1': sys.exit(0 if os.environ.get('WALL_OPEN') else 1)
         # The member's read of the trace: refused, unless the fixture opens it.
         if identity == 'weaver-m1-state' and '-r' in rest: sys.exit(0 if os.environ.get('TRACE_OPEN') else 1)
+        # The connector's write of the territory's files: refused, unless the
+        # fixture opens the group.
+        if identity == 'weaver-m1-admincon' and '-w' in rest: sys.exit(0 if os.environ.get('GROUP_WRITES') else 1)
         sys.exit(0)
-    elif op in ('useradd', 'usermod', 'groupadd', 'chmod', 'setfacl'): pass
+    elif op in ('useradd', 'usermod', 'groupadd', 'chmod', 'chown', 'chgrp', 'setfacl'): pass
     else: sys.exit(99)
 elif name == 'mktemp':
     if not os.environ.get('ALLOW_APPLY_CHECKS'): sys.exit(99)
@@ -176,6 +179,18 @@ elif name == 'mktemp':
 elif name == 'setfacl': sys.exit(1 if os.environ.get('ACL_FAIL') else 0)
 else: sys.exit(99)
 '''
+
+# The stand-in sudo the migration test runs `migrate_layout` against: the
+# file verbs run as this user, the account and ownership verbs are recorded.
+STAND_IN_SUDO = (
+    "#!/bin/sh\n"
+    "printf '%s\\n' \"$*\" >> {recorded}\n"
+    "case \"$1\" in\n"
+    "  chown|chgrp|usermod) exit 0 ;;\n"
+    "  install) mkdir -p \"${@: -1}\"; exit 0 ;;\n"
+    "  *) exec \"$@\" ;;\n"
+    "esac\n"
+)
 
 
 class PlanTests(unittest.TestCase):
@@ -191,15 +206,19 @@ class PlanTests(unittest.TestCase):
         existing = self.config / "existing"
         existing.mkdir()
         (existing / "worker-binary").write_text(str(self.root / "installed" / "pyworker"))
-        # The operator's home, holding each agent's declaration directory.
+        # The operator's home, which no script writes into since the
+        # operator's ruling of 2026-10-07 on #1: the whole agent lives in its
+        # territory under the stack record's agent-directory.
         self.home = self.root / "home"
         self.operator_home = self.home / "fixture-no-home"
         self.operator_home.mkdir(parents=True)
-        existing_decl = self.operator_home / ".weaveragent" / "existing"
-        existing_decl.mkdir(parents=True)
-        (existing_decl / "agent.toml").write_text("[state-store]\nengine = \"none\"\n")
-        (existing / "declaration-directory").write_text(str(existing_decl) + "\n")
-        self.decl = self.operator_home / ".weaveragent" / "m1"
+        (self.root / "agents").mkdir()
+        self.existing_territory = self.root / "agents" / "weaver-existing"
+        self.existing_territory.mkdir()
+        (self.existing_territory / "agent.toml").write_text("[state-store]\nengine = \"none\"\n")
+        (existing / "territory").write_text(str(self.existing_territory) + "\n")
+        # m1's territory, where its declaration and draft land.
+        self.decl = self.root / "agents" / "weaver-m1"
         # The box's sudoers, which includes sudoers.d, mapped into the fixture.
         (self.root / "etc" / "sudoers.d").mkdir(parents=True)
         (self.root / "etc" / "sudoers").write_text("@includedir /etc/sudoers.d\n")
@@ -221,7 +240,6 @@ class PlanTests(unittest.TestCase):
         }
         for key, value in self.stack_keys.items():
             (self.stack / key).write_text(value + ("" if value.endswith("\n") else "\n"))
-        (self.root / "agents").mkdir()
         self.hba = self.root / "pg_hba.conf"
         self.hba.write_text("local all all peer\n")
         self.ident = self.root / "pg_ident.conf"
@@ -243,7 +261,7 @@ class PlanTests(unittest.TestCase):
                     "FIXTURE_ROOT": str(self.root)}
         for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
                      "VISUDO_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
-                     "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS"):
+                     "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS", "GROUP_WRITES"):
             self.env.pop(name, None)
         # Redirect even shell builtin /home probes into the fixture. The
         # production scripts have no test-only path switches and never read
@@ -348,7 +366,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
 
     def test_agent_plan_refuses_visible_collisions(self):
         for collision in ("account", "relay account", "connector account", "access group",
-                          "agent root", "staged root", "sudo rule", "declaration", "prompt draft"):
+                          "agent root", "staged root", "sudo rule", "territory"):
             with self.subTest(collision=collision):
                 self.env.pop("COLLISION", None)
                 for path in (self.config / "m1", self.config / ".m1.partial"):
@@ -362,13 +380,8 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
                 elif collision == "agent root": (self.config / "m1").mkdir()
                 elif collision == "staged root": (self.config / ".m1.partial").mkdir()
                 elif collision == "sudo rule": self.rule.write_text("")
-                elif collision == "prompt draft":
-                    self.decl.mkdir(parents=True)
-                    self.decl.chmod(0o700)
-                    (self.decl / "system-prompt.md").write_text("")
                 else:
                     self.decl.mkdir(parents=True)
-                    self.decl.chmod(0o700)
                     (self.decl / "agent.toml").write_text("")
                 result = self.create()
                 self.assertNotEqual(result.returncode, 0)
@@ -447,7 +460,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         (self.stack / "agent-directory").write_text(f"  {self.root / 'agents'} \r\n")
         result = self.create()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(f"directory       {self.root / 'agents' / 'weaver-m1'} ", result.stdout)
+        self.assertIn(f"territory       {self.root / 'agents' / 'weaver-m1'} ", result.stdout)
 
     def test_a_territory_base_another_principal_could_write_refuses(self):
         # The operator's ruling of 2026-10-02 (#28): the territories stand under
@@ -504,17 +517,21 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
                 self.assertEqual((root / key).read_text(), spu + "\n")
             else:
                 self.assertEqual((root / key).read_text(), (self.stack / key).read_text(), key)
-        # The agent's own keys (weaver-admin-Spec section 9).
-        self.assertEqual((root / "declaration-directory").read_text(), str(self.decl) + "\n")
+        # The agent's own keys (weaver-admin-Spec section 9), the territory
+        # among them since the operator's ruling of 2026-10-07 on #1.
+        self.assertEqual((root / "territory").read_text(), str(self.decl) + "\n")
         self.assertEqual((root / "operator").read_text(), "12345\n")
         self.assertEqual((root / "roles.toml").read_text(), 'trace-reader = "weaver-m1-admincon"\n')
         for retired in ("allow-list", "agent-config-directory", "spu-implementations", "agent-spu",
-                        "agent.toml", "log-path", "run-tool", "control-tool", "unit-properties"):
+                        "agent.toml", "log-path", "run-tool", "control-tool", "unit-properties",
+                        "declaration-directory"):
             self.assertFalse((root / retired).exists(), retired)
             self.assertFalse((self.config / retired).exists(), retired)
-        # The declaration is the operator's, in a directory closed to all others.
-        self.assertEqual(self.decl.stat().st_mode & 0o777, 0o700)
-        self.assertEqual((self.decl / "agent.toml").stat().st_mode & 0o077, 0)
+        # The declaration and the draft are root's, 0644, in the territory,
+        # and nothing landed in the operator's home.
+        calls = self.calls()
+        self.assertIn(["sudo", "chmod", "0644", str(self.decl / "agent.toml"), str(self.decl / "system-prompt.md")], calls)
+        self.assertEqual(sorted(p.name for p in self.operator_home.iterdir()), [], "nothing in the operator's home")
         import tomllib
         declaration = tomllib.loads((self.decl / "agent.toml").read_text())
         # The declaration carries no identity in either of its earlier forms
@@ -526,7 +543,6 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertNotIn("identity", decoder)
         self.assertNotIn("identity-file", decoder)
         prompt = self.decl / "system-prompt.md"
-        self.assertEqual(prompt.stat().st_mode & 0o077, 0)
         self.assertTrue(prompt.read_text().startswith("You are a careful assistant."))
         self.assertTrue(prompt.read_text().endswith("question allows.\n"))
         store = declaration["state-store"]
@@ -644,27 +660,71 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
                 self.assertFalse((self.config / "m1").exists())
                 self.assertFalse(self.rule.exists())
 
-    def test_a_declaration_directory_another_principal_could_reach_refuses(self):
-        # weaver-admin-Spec section 9: the directory is the operator's and closed,
-        # and every directory above it the operator's or root's and closed.
-        # Perturbations: drop either judgment, and the plan runs on.
-        self.decl.mkdir(parents=True)
-        self.decl.chmod(0o750)
-        result = self.create()
+    def test_the_declaration_directory_flag_is_retired(self):
+        # The operator's ruling of 2026-10-07 on #1: the declaration lives in
+        # the territory and nothing is written into the operator's home, so
+        # the flag refuses naming the ruling, before any call. Perturbation:
+        # take the flag again and the plan runs.
+        result = self.create("--declaration-directory", "/elsewhere")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("grants group or other access", result.stderr)
-        self.decl.chmod(0o700)
-        (self.operator_home / ".weaveragent").chmod(0o777)
-        try:
-            result = self.create()
-        finally:
-            (self.operator_home / ".weaveragent").chmod(0o755)
+        self.assertIn("retired on the operator's ruling of 2026-10-07", result.stderr)
+        self.assertEqual(self.calls(), [])
+
+    def test_the_territory_holds_the_declaration_the_draft_and_the_save_points(self):
+        # The operator's ruling of 2026-10-07 on #1: the territory is
+        # root:weaver-<name>-admin 0710, the declaration and the draft root
+        # 0644 in it, save-points/ root:weaver-<name>-admin 0750 beside the
+        # state room, the member and the operator in the access group, and the
+        # root names the territory. Perturbations: write the draft into the
+        # operator's home again, group the territory to the member, or drop
+        # the save-points directory, and this fails.
+        self.env["ALLOW_APPLY_CHECKS"] = "1"
+        result = self.create("--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_agent_root("sqlite")
+        calls = self.calls()
+        territory = str(self.decl)
+        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-admin", "-m", "0710", territory], calls)
+        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-admin", "-m", "0750",
+                       territory + "/save-points"], calls)
+        self.assertIn(["sudo", "tee", territory + "/agent.toml"], calls)
+        self.assertIn(["sudo", "tee", territory + "/system-prompt.md"], calls)
+        self.assertIn(["sudo", "usermod", "-aG", "weaver-m1-admin", "weaver-m1-state"], calls)
+        self.assertIn(["sudo", "usermod", "-aG", "weaver-m1,weaver-m1-trace,weaver-m1-admin", "fixture-no-home"], calls)
+        self.assertFalse([c for c in calls if any(a.startswith(str(self.operator_home)) for a in c)],
+                         "no call reaches the operator's home")
+        self.assertNotIn("admin.log", "".join(a for c in calls for a in c), "admin makes the logs, not the script")
+        self.assertIn("sudoedit", result.stdout)
+
+    def test_the_access_group_reads_and_never_writes(self):
+        # The connector, which holds the access group, reads the declaration
+        # and can write neither it, the draft nor the save-points directory;
+        # a group that could write refuses before the admission. Perturbation:
+        # drop the write probes, and an open group is admitted.
+        self.env["ALLOW_APPLY_CHECKS"] = "1"
+        result = self.create("--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        territory = str(self.decl)
+        self.assertIn(["sudo", "-u", "weaver-m1-admincon", "test", "-r", territory + "/agent.toml"], calls)
+        for f in ("agent.toml", "system-prompt.md", "save-points"):
+            self.assertIn(["sudo", "-u", "weaver-m1-admincon", "test", "-w", f"{territory}/{f}"], calls)
+        # Every mode the script gives the territory's files grants the group no write.
+        for c in calls:
+            if c[:2] == ["sudo", "install"] and "-m" in c and c[-1].startswith(territory):
+                self.assertEqual(int(c[c.index("-m") + 1], 8) & 0o022, 0, c)
+            if c[:2] == ["sudo", "chmod"] and any(a.startswith(territory) for a in c):
+                self.assertEqual(int(c[2], 8) & 0o022, 0, c)
+        self.log.unlink(missing_ok=True)
+        shutil.rmtree(self.config / "m1", ignore_errors=True)
+        shutil.rmtree(self.config / ".m1.partial", ignore_errors=True)
+        shutil.rmtree(self.decl, ignore_errors=True)
+        self.rule.unlink(missing_ok=True)
+        self.env["GROUP_WRITES"] = "1"
+        result = self.create("--apply")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("which another principal could write", result.stderr)
-        result = self.create("--declaration-directory", "relative/dir")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("absolute path", result.stderr)
-        self.assert_unprivileged()
+        self.assertIn("CAN WRITE", result.stderr)
+        self.assertFalse((self.config / "m1").exists())
 
     def test_sqlite_wall_open_refuses_before_admission(self):
         self.env.update(ALLOW_APPLY_CHECKS="1", WALL_OPEN="1")
@@ -801,7 +861,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         sink = self.root / "agents" / "trace.ndjson"
         sink.write_text("")
         (self.decl / "agent.toml").write_text(f'[trace-sink]\nkind = "file"\npath = "{sink}"\n')
-        (root / "declaration-directory").write_text(str(self.decl) + "\n")
+        (root / "territory").write_text(str(self.decl) + "\n")
         state = self.root / "stub-state"
         state.mkdir()
         installed = self.root / "installed" / "bin"
@@ -888,20 +948,22 @@ esac
         self.assertIn("outlived the unload", result.stderr)
 
     def test_the_territory_is_passage_for_the_member_and_the_trace_is_not_its_to_read(self):
-        # The operator's ruling of 2026-10-02 (#28) as refined on #56: the member
-        # passes through a root:member 0710 territory (no setgid, no listing) to
-        # its 0700 room, and the trace is made before the first load as
-        # root:weaver-<name>-trace 0640, so the member, outside that group, cannot
-        # read it. The operator joins all three groups, and no access entry is set
-        # or probed. Perturbations: restore setgid (2710 or 2750), group the
-        # trace to the member, or drop the trace group from the operator, and
-        # this fails.
+        # The operator's ruling of 2026-10-02 (#28) as refined on #56 and by the
+        # ruling of 2026-10-07 on #1: the member passes through a
+        # root:weaver-<name>-admin 0710 territory (no setgid, no listing) to its
+        # 0700 room by the access group it holds, and the trace is made before
+        # the first load as root:weaver-<name>-trace 0640, so the member, outside
+        # that group, cannot read it. The operator joins the agent's group, the
+        # trace group and the access group, and no access entry is set or
+        # probed. Perturbations: restore setgid (2710 or 2750), group the trace
+        # to the member, or drop the trace group from the operator, and this
+        # fails.
         self.env["ALLOW_APPLY_CHECKS"] = "1"
         result = self.create("--apply")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.calls()
         territory = str(self.root / "agents" / "weaver-m1")
-        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-state", "-m", "0710", territory], calls)
+        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-admin", "-m", "0710", territory], calls)
         self.assertIn(["sudo", "install", "-o", "root", "-g", "weaver-m1-trace", "-m", "0640", "/dev/null",
                        territory + "/trace.ndjson"], calls)
         self.assertIn(["sudo", "install", "-d", "-o", "weaver-m1-state", "-g", "weaver-m1-state", "-m", "0700",
@@ -912,7 +974,7 @@ esac
                        "--no-user-group", "--gid", "weaver-m1-trace", "weaver-m1-relay"], calls)
         self.assertIn(["sudo", "useradd", "--system", "--shell", "/usr/sbin/nologin", "--no-create-home",
                        "--user-group", "--groups", "weaver-m1-admin", "weaver-m1-admincon"], calls)
-        self.assertIn(["sudo", "usermod", "-aG", "weaver-m1,weaver-m1-state,weaver-m1-trace", "fixture-no-home"], calls)
+        self.assertIn(["sudo", "usermod", "-aG", "weaver-m1,weaver-m1-trace,weaver-m1-admin", "fixture-no-home"], calls)
         self.assertIn(["sudo", "-u", "weaver-m1-state", "test", "-r", territory + "/trace.ndjson"], calls)
         self.assertFalse([c for c in calls if "setfacl" in c or c[0] == "mktemp"], calls)
 
@@ -981,17 +1043,19 @@ esac
             for line in reads:
                 self.assertIn('sudo -n -u "weaver-$AGENT-state" tail', line, (script, line))
 
-    def test_update_stack_patches_a_declaration_as_its_owner(self):
-        # The declaration is the operator's, in the operator's closed directory
-        # (weaver-admin-Spec section 9), so the patch and its restore are the
-        # operator's own writes and no root step touches a file another
-        # principal could choose. Perturbation: restore a root copy or append,
-        # and this fails.
+    def test_update_stack_patches_a_declaration_as_root(self):
+        # The declaration is root's in root's territory (the operator's ruling
+        # of 2026-10-07 on #1), so the patch, its backup and its restore are
+        # root's writes of root's own file, and the text is read whole before
+        # the write replaces it. Perturbation: append as the operator again,
+        # or pipe cat into tee, and this fails.
         text = (self.repo / "deploy" / "update-stack.sh").read_text()
-        for root_write in ('sudo cp -a "$decl"', 'sudo tee -a "$decl"', 'sudo cp -a "${entry##*|}"'):
-            self.assertNotIn(root_write, text)
-        self.assertIn('cp -a "$decl" "$decl.pre-$AFTER-bak"', text)
-        self.assertIn('engine = "none"\\n\' >> "$decl"', text)
+        self.assertIn('sudo cp -a "$decl" "$decl.pre-$AFTER-bak"', text)
+        self.assertIn('sudo cp -a "${entry##*|}" "${entry%%|*}"', text)
+        self.assertIn('patched=$(cat "$decl"; printf', text)
+        self.assertIn('printf \'%s\\n\' "$patched" | sudo tee "$decl"', text)
+        self.assertNotIn('>> "$decl"', text)
+        self.assertNotIn('cat "$decl" |', text)
 
     def test_verify_load_execs_admin_by_its_judged_canonical_path(self):
         # The walk of #45 round 11: admin was judged by its resolved path and
@@ -1015,15 +1079,15 @@ esac
                       result.stderr)
 
     def test_turn_system_reads_the_draft_and_measures_it_against_the_gates_bound(self):
-        # --system reads the operator's draft from the root's declaration
-        # directory and sends it as the system role; a draft whose line would
+        # --system reads the draft from the territory the root's `territory`
+        # key names and sends it as the system role; a draft whose line would
         # pass the gate's 32 KiB bound refuses before dialing, naming the size
         # (Codex on #92, round 3), and an empty draft refuses too. A draft
         # that fits reaches the dial, which finds no gate. Perturbation: drop
         # the measure and the oversize draft reaches the dial.
         root = self.config / "m1"
         root.mkdir()
-        (root / "declaration-directory").write_text(str(self.decl) + "\n")
+        (root / "territory").write_text(str(self.decl) + "\n")
         (root / "coordination-root").write_text(str(self.root / "nowhere") + "\n")
         self.decl.mkdir(parents=True)
         draft = self.decl / "system-prompt.md"
@@ -1073,7 +1137,7 @@ esac
         import socket, threading
         root = self.config / "m1"
         root.mkdir()
-        (root / "declaration-directory").write_text(str(self.decl) + "\n")
+        (root / "territory").write_text(str(self.decl) + "\n")
         coordination = self.root / "coordination"
         (coordination / "weaver-m1").mkdir(parents=True)
         (root / "coordination-root").write_text(str(coordination) + "\n")
@@ -1464,7 +1528,7 @@ esac
         # the build; one that cannot move losslessly refuses before the build,
         # naming the runbook step. Perturbation: drop the preflight and the
         # plan runs to the build in both cases.
-        decl = self.operator_home / ".weaveragent" / "existing" / "agent.toml"
+        decl = self.existing_territory / "agent.toml"
         decl.write_text(self.KARL)
         result = self.run_script("update-stack.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1485,7 +1549,7 @@ esac
         # which the new admin refuses at load and validate never sees, so the
         # plan refuses it before the build, naming the re-lay. Perturbation:
         # drop the preflight, and the run reaches the build.
-        decl = self.operator_home / ".weaveragent" / "existing" / "agent.toml"
+        decl = self.existing_territory / "agent.toml"
         # A path holding a space and a substitution, which a TOML string
         # carries and the printed command must quote.
         trace = self.root / "agents" / "a trace $(id).ndjson"
@@ -1534,11 +1598,12 @@ esac
         self.assertIn('[ "$BEFORE" != "$AFTER" ] && [ -z "${WEAVER_UPDATE_REEXECUTED:-}" ]', text)
         self.assertLess(text.index('ORIGINAL_ARGS=("$@")'), text.index('INSTALL=0'))
 
-    def test_stack_reads_each_declaration_from_its_directory(self):
-        # The declaration lives in the directory the root names. One the
-        # operator cannot read refuses by name and is never left out.
-        # Perturbation: read `<root>/agent.toml` again, and the agent is skipped.
-        decl = self.operator_home / ".weaveragent" / "existing" / "agent.toml"
+    def test_stack_reads_each_declaration_from_its_territory(self):
+        # The declaration lives in the territory the root names. One the
+        # operator cannot read refuses by name, pointing at the access group,
+        # and is never left out. Perturbation: read `<root>/agent.toml` again,
+        # and the agent is skipped.
+        decl = self.existing_territory / "agent.toml"
         decl.chmod(0o000)
         try:
             if os.access(decl, os.R_OK):
@@ -1548,13 +1613,91 @@ esac
             decl.chmod(0o644)
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn(str(decl) + " cannot be read", result.stderr)
+        self.assertIn("weaver-existing-admin", result.stderr)
+
+    def test_stack_migrates_a_root_naming_a_declaration_directory(self):
+        # The operator's ruling of 2026-10-07 on #1: a root still naming a
+        # declaration-directory is an agent of the layout before it. The plan
+        # names the move and changes nothing; a territory already holding an
+        # agent.toml refuses by name; the install's move, run against a
+        # stand-in sudo, moves the four files into the territory, makes
+        # save-points/, joins the member and the operator to the access group,
+        # regroups the territory, writes the root's territory key and removes
+        # the old one. Perturbations: skip the refusal and both declarations
+        # stand; leave the old key and the next run migrates again.
+        old_root = self.config / "old"
+        old_root.mkdir()
+        (old_root / "worker-binary").write_text(str(self.root / "installed" / "pyworker"))
+        old_dir = self.operator_home / ".weaveragent" / "old"
+        old_dir.mkdir(parents=True)
+        for name, text in (("agent.toml", "[state-store]\nengine = \"none\"\n"), ("system-prompt.md", "You are old.\n"),
+                           ("admin.log", "{}\n"), ("worker.log", "w\n")):
+            (old_dir / name).write_text(text)
+        (old_root / "declaration-directory").write_text(str(old_dir) + "\n")
+        territory = self.root / "agents" / "weaver-old"
+        territory.mkdir()
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"old          layout: agent.toml, system-prompt.md, admin.log and worker.log move from {old_dir} into {territory}",
+                      result.stdout)
+        self.assertTrue((old_dir / "agent.toml").exists(), "a plan moves nothing")
+        self.assertFalse((old_root / "territory").exists())
+        self.assert_unprivileged()
+        (territory / "agent.toml").write_text("")
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("already holds an agent.toml", result.stderr)
+        self.assertIn("REDEPLOY.md section 8, step 7", result.stderr)
+        (territory / "agent.toml").unlink()
+        # The move itself, as the install runs it: the stand-in sudo runs the
+        # file verbs and records the account and ownership verbs.
+        stand_in = self.root / "stand-in"
+        stand_in.mkdir()
+        recorded = self.root / "recorded"
+        (stand_in / "sudo").write_text(STAND_IN_SUDO.replace("{recorded}", str(recorded)))
+        (stand_in / "sudo").chmod(0o755)
+        text = (self.repo / "deploy" / "update-stack.sh").read_text()
+        program = (shell_function(text, "migrate_layout")
+                   + 'MOVED=(); rollback() { echo "ROLLBACK: $1" >&2; exit 1; }\n'
+                   + 'migrate_layout "$1"; printf \'%s\\n\' "${MOVED[@]}"')
+        env = {**os.environ, "PATH": f"{stand_in}{os.pathsep}{os.environ['PATH']}",
+               "ADMIN_BASE": str(self.config), "OPERATOR_NAME": "fixture-no-home"}
+        env.pop("BASH_ENV", None)
+        ran = subprocess.run(["bash", "-c", program, "bash", f"old|{old_dir}|{territory}"],
+                             env=env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertEqual(ran.stdout.splitlines()[-1], f"old|{old_dir}|{territory}", "registered for the rollback")
+        for name in ("agent.toml", "system-prompt.md", "admin.log", "worker.log"):
+            self.assertTrue((territory / name).exists(), name)
+            self.assertFalse((old_dir / name).exists(), name)
+        self.assertEqual((territory / "system-prompt.md").read_text(), "You are old.\n")
+        self.assertTrue((territory / "save-points").is_dir())
+        self.assertEqual((old_root / "territory").read_text(), str(territory) + "\n")
+        self.assertFalse((old_root / "declaration-directory").exists())
+        said = recorded.read_text()
+        self.assertIn(f"chown root:root {territory}/agent.toml", said)
+        self.assertIn(f"chmod 0644 {territory}/agent.toml", said)
+        self.assertIn(f"chown root:weaver-old-admin {territory}/admin.log", said)
+        self.assertIn(f"chmod 0640 {territory}/admin.log", said)
+        self.assertIn("usermod -aG weaver-old-admin weaver-old-state", said)
+        self.assertIn("usermod -aG weaver-old-admin fixture-no-home", said)
+        self.assertIn(f"chgrp weaver-old-admin {territory}", said)
+        self.assertIn(f"chmod 0710 {territory}", said)
+        # After the move the plan reads the declaration from the territory
+        # and names no migration (the fixture's build directory cleared, as a
+        # second build in one fixture needs).
+        self.log.unlink(missing_ok=True)
+        shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("every declaration stands in its territory", result.stdout)
 
     def test_stack_refuses_an_unprovided_engine_and_names_the_migration(self):
         # A pre-#85 declaration electing postgres refuses before the build,
         # as an engine this build does not provide, and points to the
         # migration step rather than to a feature the workspace lacks.
         # Perturbation: restore the old remedy and the step goes unnamed.
-        decl = self.operator_home / ".weaveragent" / "existing" / "agent.toml"
+        decl = self.existing_territory / "agent.toml"
         decl.write_text('[state-store]\nengine = "postgres"\ndatabase = "d"\nrole = "r"\n')
         result = self.run_script("update-stack.sh")
         self.assertEqual(result.returncode, 1, result.stdout)
@@ -1564,8 +1707,8 @@ esac
 
     def test_stack_agents_are_the_roots_under_the_base(self):
         # A staged root under a dot-name, a plain file, and a root naming no
-        # declaration directory are not agents. Perturbation: drop the
-        # declaration-directory check and `undeclared` is listed.
+        # territory are not agents. Perturbation: drop the territory check and
+        # `undeclared` is listed.
         (self.config / ".m2.partial").mkdir()
         (self.config / "stray-file").write_text("x")
         (self.config / "undeclared").mkdir()
@@ -1657,13 +1800,19 @@ class DecommissionTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(self.run_fn("strip_suffix", name), "m1")
 
-    def test_the_operators_declaration_directories_are_never_purged(self):
-        # They are archived and dropped from the purge list. Perturbation: drop
-        # the slice back, and the purge would remove the operator's files.
-        self.assertIn('archive_path declaration-directories "${!DECL_DIRS[@]}"', self.script)
-        self.assertIn('PURGE=("${PURGE[@]:0:$kept}")', self.script)
-        self.assertLess(self.script.index("kept=${#PURGE[@]}"),
-                        self.script.index('archive_path declaration-directories'))
+    def test_the_agent_is_archived_whole_with_its_territory_and_the_home_untouched(self):
+        # The operator's ruling of 2026-10-07 on #1: the declaration, the
+        # draft, the logs and the save points live in the territory, which
+        # the territories' archive takes whole, and the operator's home is
+        # never read, archived or purged. Perturbation: archive or purge a
+        # path under the home again, and this fails.
+        self.assertIn('archive_path "$(archive_name territories "$d")" "$d"', self.script)
+        self.assertNotIn("declaration-directories", self.script)
+        self.assertNotIn("DECL_DIRS", self.script)
+        self.assertFalse([l for l in self.script.splitlines()
+                          if ".weaveragent" in l and not l.lstrip().startswith("#")],
+                         "no line but a comment names the operator's directory")
+        self.assertIn('read_key "$r" territory', self.script)
 
     def test_a_running_agent_refuses_the_archive_and_the_purge(self):
         guard = '[ ${#RUNNING[@]} -eq 0 ] || die "agents still run or cannot be read'

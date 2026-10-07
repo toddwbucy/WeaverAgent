@@ -85,7 +85,7 @@ use weaver_types::{AgentName, FieldName, LifecycleAnswer, LifecycleDirective, Li
 
 /// One agent's operator-installed configuration, read from that agent's own
 /// root, per Spec section 9: the coordination root, the agent's binaries, the
-/// optional values, the operator's declaration directory and uid, and the
+/// optional values, the agent's territory and the operator's uid, and the
 /// boundary file. **These are deployment facts the operator installs** -
 /// crossing no seam, and **none of them discovered at runtime by searching**.
 /// Admin is one agent's organ, on the operator's ruling of 2026-10-01, so it
@@ -103,22 +103,29 @@ struct ServiceConfig {
     /// The bound on the enter's answer, per section 2: 900 seconds, or the
     /// root's `load-bound-seconds`.
     load_bound: std::time::Duration,
-    /// The operator's directory holding `agent.toml`, `admin.log` and
-    /// `worker.log`, canonical as judged, per sections 8 and 9.
-    declaration_directory: PathBuf,
-    /// **The declaration directory as opened at its judgment**, held for the
-    /// verb's life, per section 9: section 6's publication, the manifest and
-    /// the `restore` verb's judgment go through it and never through the
-    /// path again, so a directory the operator swaps under the path, or a
-    /// link put at it, reaches nothing this root process writes (Codex on
-    /// #94, round 7). `None` only in a test's unread configuration, where
-    /// every use refuses `BoundaryUnverified`.
-    declaration: Option<std::os::fd::OwnedFd>,
+    /// **The agent's territory**, root-owned, canonical as judged, per
+    /// section 9 on the operator's ruling of 2026-10-07 on #1: it holds
+    /// `agent.toml`, the prompt draft, `admin.log`, `worker.log`,
+    /// `save-points/`, the trace and the member's room, the whole agent in
+    /// one directory under one ownership.
+    territory: PathBuf,
+    /// **The territory as opened at its judgment**, held for the verb's life,
+    /// per section 9: the declaration is read through it and never through
+    /// the path again (Codex on #94, round 7). `None` only in a test's unread
+    /// configuration, where every use refuses `BoundaryUnverified`.
+    territory_fd: Option<std::os::fd::OwnedFd>,
+    /// **`save-points/` in the territory as opened at the judgment**, through
+    /// the territory's descriptor: section 6's publication, the manifest and
+    /// the `restore` verb's judgment go through it, so nothing this root
+    /// process writes is reached through a path after the judgment.
+    save_points: Option<std::os::fd::OwnedFd>,
     /// The operator's uid, the box's own fact about whose data defines the
-    /// agent, per section 9.
+    /// agent, per section 9: the harness admits the seeding line from it.
     operator: u32,
-    /// The declaration directory's group, the group the operator's logs take.
-    operator_gid: u32,
+    /// The access group's gid, the territory's group, which the logs and the
+    /// published save points take so the operator and the connector read
+    /// them and nothing else does, per sections 6 and 8.
+    access_gid: u32,
     /// The boundary file, `roles.toml`, as read: its sha256 hex and its one
     /// trace reader, or why it did not read. **Required at `validate` and
     /// `load` alone**, per section 9: a damaged file never takes `unload`,
@@ -172,30 +179,48 @@ impl ServiceConfig {
 
     /// The operations log, per section 8.
     fn admin_log(&self) -> PathBuf {
-        self.declaration_directory.join("admin.log")
+        self.territory.join("admin.log")
     }
 
-    /// The judged declaration directory's descriptor, per section 9.
-    fn declaration_fd(&self) -> Result<std::os::fd::BorrowedFd<'_>, LifecycleRefusal> {
+    /// The judged territory's descriptor, per section 9.
+    fn territory_fd(&self) -> Result<std::os::fd::BorrowedFd<'_>, LifecycleRefusal> {
         use std::os::fd::AsFd;
-        self.declaration
+        self.territory_fd
             .as_ref()
             .map(|fd| fd.as_fd())
             .ok_or_else(|| {
-                diag!("weaver-admin: the declaration directory was not opened at the judgment");
+                diag!("weaver-admin: the territory was not opened at the judgment");
+                LifecycleRefusal::BoundaryUnverified
+            })
+    }
+
+    /// The judged territory's `save-points/` descriptor, per section 9.
+    fn save_points_fd(&self) -> Result<std::os::fd::BorrowedFd<'_>, LifecycleRefusal> {
+        use std::os::fd::AsFd;
+        self.save_points
+            .as_ref()
+            .map(|fd| fd.as_fd())
+            .ok_or_else(|| {
+                diag!(
+                    "weaver-admin: the territory's save-points directory was not opened at the judgment"
+                );
                 LifecycleRefusal::BoundaryUnverified
             })
     }
 
     /// The worker's own log, per section 6, never the operations log.
     fn worker_log(&self) -> PathBuf {
-        self.declaration_directory.join("worker.log")
+        self.territory.join("worker.log")
     }
 
     /// Who owns the operator's logs: the `operator` uid and the declaration
     /// directory's group, set through the open descriptor, per section 8.
-    fn operator_owner(&self) -> (u32, u32) {
-        (self.operator, self.operator_gid)
+    /// **The owner of what this crate writes in the territory**: this
+    /// process's uid, root in production and the suite's own under test, and
+    /// the access group, so the logs and the published save points are root's
+    /// files in root's directory that the group reads, per sections 6 and 8.
+    fn file_owner(&self) -> (u32, u32) {
+        (nix::unistd::geteuid().as_raw(), self.access_gid)
     }
 }
 
@@ -683,6 +708,65 @@ fn stack_digests(
     stack
 }
 
+/// **The declaration is read through the territory's descriptor**, per Spec
+/// section 9 (closing #95): `agent.toml` opened beneath the descriptor the
+/// judgment holds, without following a link, judged on its own descriptor a
+/// regular file of this process's uid, root in production, writable by no
+/// group or other, and read; absent is `NoSuchAgent`, anything else that
+/// fails is the provisioning, refusing `BoundaryUnverified`.
+fn read_declaration(config: &ServiceConfig) -> Result<String, LifecycleRefusal> {
+    use std::io::Read;
+    let mut file = open_declaration(config.territory_fd()?, &config.territory)?;
+    let mut source = String::new();
+    file.read_to_string(&mut source).map_err(|_| {
+        diag!(
+            "weaver-admin: the territory's agent.toml does not read as text, in {}",
+            config.territory.display()
+        );
+        LifecycleRefusal::BoundaryUnverified
+    })?;
+    Ok(source)
+}
+
+/// Open `agent.toml` beneath the territory's descriptor and judge it, as
+/// `read_declaration` says; `directory` names the territory in the refusal.
+fn open_declaration(
+    territory: std::os::fd::BorrowedFd<'_>,
+    directory: &std::path::Path,
+) -> Result<std::fs::File, LifecycleRefusal> {
+    use std::os::unix::fs::MetadataExt;
+    let refuse = |what: &str| {
+        diag!(
+            "weaver-admin: the territory's agent.toml {what}, in {}",
+            directory.display()
+        );
+        LifecycleRefusal::BoundaryUnverified
+    };
+    let fd = match nix::fcntl::openat(
+        territory,
+        "agent.toml",
+        nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_NOFOLLOW | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::empty(),
+    ) {
+        Ok(fd) => fd,
+        Err(nix::errno::Errno::ENOENT) => return Err(LifecycleRefusal::NoSuchAgent),
+        Err(nix::errno::Errno::ELOOP) => return Err(refuse("is a link")),
+        Err(_) => return Err(refuse("does not open")),
+    };
+    let file = std::fs::File::from(fd);
+    let metadata = file.metadata().map_err(|_| refuse("does not stat"))?;
+    if !metadata.is_file() {
+        return Err(refuse("is not a regular file"));
+    }
+    if metadata.uid() != nix::unistd::geteuid().as_raw() {
+        return Err(refuse("is not root's"));
+    }
+    if metadata.mode() & 0o022 != 0 {
+        return Err(refuse("is writable by group or other"));
+    }
+    Ok(file)
+}
+
 fn take_inventory(
     config: &ServiceConfig,
     agent: &AgentName,
@@ -690,9 +774,7 @@ fn take_inventory(
     admissible(config, agent)?;
     judge_reader(&config.require_boundary()?.reader, agent)?;
     let identity = inventory::identity_for(agent);
-    let source_path = config.declaration_directory.join("agent.toml");
-    let source =
-        std::fs::read_to_string(&source_path).map_err(|_| LifecycleRefusal::NoSuchAgent)?;
+    let source = read_declaration(config)?;
     // The home comes from the account database rather than from a constructed
     // path: an operator who placed the agent elsewhere would otherwise have
     // the boundary checked against a directory that is not the agent's.
@@ -985,7 +1067,7 @@ fn run_load(
         account.uid,
         account.gid,
     )?;
-    let worker_log = start::open_log(&config.worker_log(), Some(config.operator_owner()))
+    let worker_log = start::open_log(&config.worker_log(), Some(config.file_owner()))
         .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
 
     // **The trace door stands only for a file sink**, per Spec section 6: a
@@ -1191,8 +1273,8 @@ fn select_save_point(
         return Ok(None);
     }
     save_points::select(
-        config.declaration_fd()?,
-        config.operator,
+        config.save_points_fd()?,
+        config.file_owner().0,
         restore,
         save_points::ROOT,
     )
@@ -1232,7 +1314,7 @@ fn save_point(
         Err(_) => return Err(LifecycleRefusal::Unanswered),
     };
     // **The verb answers only a published save point**: the harness's
-    // report is answered once its file stands in the operator's directory
+    // report is answered once its file stands in the territory's save-points
     // under a manifest line, and a publication that refuses, or does not
     // reach this save point, refuses the verb, the file standing in the
     // room for the next verb and said so in the log.
@@ -1278,8 +1360,8 @@ fn restore(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer,
         });
     }
     let line = save_points::name_at_restore(
-        config.declaration_fd()?,
-        config.operator,
+        config.save_points_fd()?,
+        config.file_owner().0,
         &named.save_point,
         save_points::ROOT,
     )?;
@@ -1335,7 +1417,7 @@ fn stand_relay(
         .ok_or_else(|| missing("weaver-trace-relay beside the worker binary"))?;
     let listener = start::bind_trace_door(&config.run_directory(), access_group.gid.as_raw())?;
     let read_only = start::reopen_read_only(sink)?;
-    let log = log::open_append(&config.admin_log(), Some(config.operator_owner()))
+    let log = log::open_append(&config.admin_log(), Some(config.file_owner()))
         .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
     let (lifetime_read, lifetime_write) = nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC)
         .map_err(|_| LifecycleRefusal::DescriptorsUnusable)?;
@@ -1634,7 +1716,7 @@ fn publish_from_room(
         return Ok(Vec::new());
     };
     let room = save_points::room_of(inventory::sink_directory(&inventory.config.trace_sink));
-    let directory = match config.declaration_fd() {
+    let directory = match config.save_points_fd() {
         Ok(directory) => directory,
         Err(refusal) => {
             record(
@@ -1649,7 +1731,7 @@ fn publish_from_room(
         &room,
         member.uid,
         directory,
-        config.operator_owner(),
+        config.file_owner(),
         save_points::ROOT,
         reports,
     ) {
@@ -1793,7 +1875,7 @@ fn stop(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
 /// never the verb.
 fn record(config: &ServiceConfig, verb: &'static str, outcome: &str) {
     let Ok(mut operations) =
-        log::OperationsLog::open(&config.admin_log(), Some(config.operator_owner()))
+        log::OperationsLog::open(&config.admin_log(), Some(config.file_owner()))
     else {
         diag!("weaver-admin: admin.log did not open; the {verb} line is lost");
         return;
@@ -1832,7 +1914,7 @@ fn load_service_config(agent: &AgentName) -> Result<ServiceConfig, LifecycleRefu
 /// The judgments in Spec section 9's order, against `owner` for the root's
 /// files, which production fixes at uid 0 and a test sets to its own uid: the
 /// root admitted and closed, its ancestors closed, its entries closed, its
-/// values read, then the operator's declaration directory judged against the
+/// values read, then the agent's territory judged against the
 /// `operator` the root names and `library-path` judged as the root is.
 fn load_service_config_at(
     base: &std::path::Path,
@@ -1849,16 +1931,11 @@ fn load_service_config_at(
         // named where it is required, at `validate` and `load`.
         LifecycleRefusal::ConfigInvalid { field: None }
     })?;
-    let (canonical, declaration) =
-        judge_declaration_directory(&config.declaration_directory, config.operator)?;
-    config.declaration_directory = canonical;
-    config.operator_gid = {
-        use std::os::fd::AsFd;
-        nix::sys::stat::fstat(declaration.as_fd())
-            .map_err(|_| LifecycleRefusal::BoundaryUnverified)?
-            .st_gid
-    };
-    config.declaration = Some(declaration);
+    let judged = judge_territory(&config.territory)?;
+    config.territory = judged.canonical;
+    config.access_gid = judged.access_gid;
+    config.territory_fd = Some(judged.territory);
+    config.save_points = Some(judged.save_points);
     if let Some(libraries) = &config.library_path {
         config.library_path = Some(judge_library_path(libraries, owner)?);
     }
@@ -1998,74 +2075,106 @@ fn judge_root(root: &std::path::Path, owner: u32) -> Result<(), LifecycleRefusal
     Ok(())
 }
 
-/// **The operator's declaration directory, judged before a value in it is
-/// read**, per Spec section 9 and the operator's ruling of 2026-10-02: not a
-/// link, a directory owned by exactly the `operator` uid, granting nothing to
-/// group or other and carrying no access-control entry beyond its mode, every
-/// directory above it owned by uid 0 or the operator and closed, and the
-/// `agent.toml` in it a regular file, never a link, owned by the operator or
-/// uid 0 and writable by no group or other. A directory with no `agent.toml`
-/// is no agent. Answers the canonical directory.
-fn judge_declaration_directory(
-    directory: &std::path::Path,
-    operator: u32,
-) -> Result<(std::path::PathBuf, std::os::fd::OwnedFd), LifecycleRefusal> {
+/// What the territory's judgment answers: the canonical path, the two
+/// descriptors held for the verb's life and the access group's gid.
+struct JudgedTerritory {
+    canonical: std::path::PathBuf,
+    territory: std::os::fd::OwnedFd,
+    save_points: std::os::fd::OwnedFd,
+    access_gid: u32,
+}
+
+/// **The territory is judged before any value in it is read, on its
+/// descriptor**, per Spec section 9 on the operator's ruling of 2026-10-07 on
+/// #1: opened once with no link followed, a directory owned by this process's
+/// uid, root in production and the suite's own under test, mode `0710`
+/// exactly, grouped to the access group, which passes by name and never
+/// lists, nothing for other, so neither of the agent's uids enters; carrying
+/// no access-control entry beyond its mode; every directory above it held
+/// closed by root as the root's ancestors are. `save-points/` beneath it is
+/// opened through that descriptor and judged the same way at mode `0750` and
+/// the territory's group. The ancestors' walk and the access-control look
+/// stay by path, being about the path; everything read after is through the
+/// descriptors.
+fn judge_territory(directory: &std::path::Path) -> Result<JudgedTerritory, LifecycleRefusal> {
     use std::os::fd::AsFd;
     use std::os::unix::fs::MetadataExt;
     let refuse = |what: &str| {
-        diag!(
-            "weaver-admin: the declaration directory {} {what}",
-            directory.display()
-        );
+        diag!("weaver-admin: the territory {} {what}", directory.display());
         LifecycleRefusal::BoundaryUnverified
     };
-    // **Opened once and judged on the descriptor**, per Spec section 9: the
-    // path is used here, a link at it refused, and what was judged is what
-    // every later step reaches (Codex on #94, round 7). The ancestors' walk
-    // and the access-control look stay by path, being about the path; the
-    // declaration's own read by path is #95.
     let opened = save_points::open_directory(directory).map_err(|e| match e.raw_os_error() {
         Some(nix::libc::ENOENT) => refuse("does not exist"),
         Some(nix::libc::ENOTDIR) => refuse("is not a directory"),
         Some(nix::libc::ELOOP) => refuse("is a link"),
         _ => refuse("does not open"),
     })?;
-    let metadata = std::fs::File::from(
-        nix::unistd::dup(opened.as_fd()).map_err(|_| refuse("does not duplicate"))?,
-    )
-    .metadata()
-    .map_err(|_| refuse("does not stat"))?;
+    let stat = |fd: std::os::fd::BorrowedFd<'_>,
+                what: &str|
+     -> Result<std::fs::Metadata, LifecycleRefusal> {
+        std::fs::File::from(nix::unistd::dup(fd).map_err(|_| refuse("does not duplicate"))?)
+            .metadata()
+            .map_err(|_| refuse(what))
+    };
+    let own = nix::unistd::geteuid().as_raw();
+    let metadata = stat(opened.as_fd(), "does not stat")?;
     if !metadata.is_dir() {
         return Err(refuse("is not a directory"));
     }
-    if metadata.uid() != operator {
-        return Err(refuse("is not the operator's"));
+    if metadata.uid() != own {
+        return Err(refuse("is not root's"));
     }
-    if metadata.mode() & 0o077 != 0 {
-        return Err(refuse("grants a permission to group or other"));
+    if metadata.mode() & 0o7777 != 0o710 {
+        return Err(refuse(
+            "is not mode 0710, root's with passage for the access group and nothing for other",
+        ));
     }
     if carries_access_entries(directory) {
         return Err(refuse("carries an access-control entry beyond its mode"));
     }
-    let canonical = judge_ancestors(directory, &[operator, 0])?;
-    let declaration = canonical.join("agent.toml");
-    match std::fs::symlink_metadata(&declaration) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(LifecycleRefusal::NoSuchAgent);
-        }
-        Err(_) => return Err(refuse("holds an agent.toml that cannot be read")),
-        Ok(file) => {
-            if !file.file_type().is_file()
-                || (file.uid() != operator && file.uid() != 0)
-                || file.mode() & 0o022 != 0
-            {
-                return Err(refuse(
-                    "holds an agent.toml that is not a closed regular file",
-                ));
-            }
-        }
+    let access_gid = metadata.gid();
+    let canonical = judge_ancestors(directory, &[own, 0])?;
+    let save_points = nix::fcntl::openat(
+        opened.as_fd(),
+        "save-points",
+        nix::fcntl::OFlag::O_RDONLY
+            | nix::fcntl::OFlag::O_DIRECTORY
+            | nix::fcntl::OFlag::O_NOFOLLOW
+            | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::empty(),
+    )
+    .map_err(|e| match e {
+        nix::errno::Errno::ENOENT => refuse("holds no save-points directory"),
+        nix::errno::Errno::ENOTDIR => refuse("holds a save-points that is not a directory"),
+        nix::errno::Errno::ELOOP => refuse("holds a save-points that is a link"),
+        _ => refuse("holds a save-points that does not open"),
+    })?;
+    let metadata = stat(
+        save_points.as_fd(),
+        "holds a save-points that does not stat",
+    )?;
+    if metadata.uid() != own {
+        return Err(refuse("holds a save-points that is not root's"));
     }
-    Ok((canonical, opened))
+    if metadata.gid() != access_gid {
+        return Err(refuse(
+            "holds a save-points not grouped to the access group",
+        ));
+    }
+    if metadata.mode() & 0o7777 != 0o750 {
+        return Err(refuse("holds a save-points that is not mode 0750"));
+    }
+    // **A territory holding no `agent.toml` is no agent**, `NoSuchAgent` as a
+    // root holding none was, and one holding a declaration that is not a
+    // closed regular file of root's is the provisioning, refused: judged here
+    // through the descriptor, as the inventory reads it.
+    drop(open_declaration(opened.as_fd(), directory)?);
+    Ok(JudgedTerritory {
+        canonical,
+        territory: opened,
+        save_points,
+        access_gid,
+    })
 }
 
 /// Whether a path carries a POSIX access-control list, access or default,
@@ -2129,7 +2238,7 @@ fn read_boundary(root: &std::path::Path) -> Result<BoundaryRead, String> {
 }
 
 /// Reads the root's values, per Spec section 9. Required: `worker-binary`,
-/// `spu-binary`, `gate-binary`, `coordination-root`, `declaration-directory`,
+/// `spu-binary`, `gate-binary`, `coordination-root`, `territory`,
 /// `operator` and `roles.toml`. Optional: `headroom-bytes`, `library-path` and
 /// `load-bound-seconds`. A failure names the value;
 /// a failure of the boundary file starts with its name, which the caller
@@ -2221,10 +2330,11 @@ fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<Servi
         headroom_bytes: optional("headroom-bytes")?.filter(|v| !v.is_empty()),
         library_path: optional_path("library-path")?,
         load_bound,
-        declaration_directory: path("declaration-directory")?,
-        declaration: None,
+        territory: path("territory")?,
+        territory_fd: None,
+        save_points: None,
         operator,
-        operator_gid: 0,
+        access_gid: 0,
         boundary,
         root: root.to_path_buf(),
     })
@@ -2520,36 +2630,42 @@ mod tests {
     }
 
     /// The values every root carries, written into a scratch root, with the
-    /// operator's declaration directory beside it, `<root>.decl`, owned by
-    /// this test's uid as the root's `operator`, closed, and holding an empty
-    /// `agent.toml`. Answers the declaration directory.
+    /// agent's territory beside it, `<root>.territory`, laid out as the
+    /// judgment asks with this test's uid in root's place: mode 0710, its
+    /// `save-points/` 0750, and an empty `agent.toml` 0644. Answers the
+    /// territory.
     fn write_root(root: &std::path::Path) -> std::path::PathBuf {
         use std::os::unix::fs::PermissionsExt;
         std::fs::create_dir_all(root).unwrap();
-        let declarations = root.with_extension("decl");
-        let _ = std::fs::remove_dir_all(&declarations);
-        std::fs::create_dir_all(&declarations).unwrap();
-        std::fs::set_permissions(&declarations, std::fs::Permissions::from_mode(0o700)).unwrap();
-        std::fs::write(declarations.join("agent.toml"), "").unwrap();
+        let territory = root.with_extension("territory");
+        let _ = std::fs::remove_dir_all(&territory);
+        std::fs::create_dir_all(territory.join("save-points")).unwrap();
         std::fs::set_permissions(
-            declarations.join("agent.toml"),
-            std::fs::Permissions::from_mode(0o600),
+            territory.join("save-points"),
+            std::fs::Permissions::from_mode(0o750),
         )
         .unwrap();
+        std::fs::write(territory.join("agent.toml"), "").unwrap();
+        std::fs::set_permissions(
+            territory.join("agent.toml"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(0o710)).unwrap();
         let operator = nix::unistd::getuid().as_raw().to_string();
-        let declaration_directory = declarations.display().to_string();
+        let territory_path = territory.display().to_string();
         for (name, text) in [
             ("coordination-root", "/run/weaver"),
             ("worker-binary", "/opt/weaver/bin/worker"),
             ("spu-binary", "/opt/weaver/bin/weaver-spu"),
             ("gate-binary", "/opt/weaver/bin/weaver-gate"),
-            ("declaration-directory", declaration_directory.as_str()),
+            ("territory", territory_path.as_str()),
             ("operator", operator.as_str()),
             ("roles.toml", "trace-reader = \"weaver-alpha-admincon\"\n"),
         ] {
             std::fs::write(root.join(name), text).unwrap();
         }
-        declarations
+        territory
     }
 
     /// **A root naming two binaries under one file name fails the read**,
@@ -2681,12 +2797,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// **A declaration directory with no `agent.toml` is no agent, and one
+    /// **A territory with no `agent.toml` is no agent, and one
     /// that is not a closed regular file refuses**, per Spec section 9: the
     /// root's keys standing do not make an agent. Perturbations: drop the
     /// declaration check, or judge presence alone, and a case here reads.
     #[test]
-    fn a_declaration_directory_without_a_declaration_is_no_agent() {
+    fn a_territory_without_a_declaration_is_no_agent() {
         use std::os::unix::fs::PermissionsExt;
         let me = nix::unistd::getuid().as_raw();
         let base =
@@ -2698,7 +2814,7 @@ mod tests {
         let config = load_service_config_at(&base, "alpha", me).expect("a declared agent reads");
         assert_eq!(config.agent, "alpha");
         assert_eq!(
-            config.declaration_directory,
+            config.territory,
             std::fs::canonicalize(&declarations).unwrap()
         );
         std::fs::remove_file(declarations.join("agent.toml")).unwrap();
@@ -2724,48 +2840,65 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// **The declaration directory is closed to everyone but the operator**,
-    /// per Spec section 9: owned by exactly the root's `operator`, granting
-    /// nothing to group or other, and never a link at its own name.
-    /// Perturbations: drop the owner comparison and the foreign operator
-    /// reads; test only the write bits and the group-readable directory reads.
+    /// **The territory is root's at mode 0710, its `save-points/` 0750 and
+    /// its declaration closed to writers, and never a link at its own name**,
+    /// per Spec section 9 on the operator's ruling of 2026-10-07 on #1, with
+    /// this test's uid in root's place. Perturbations: test only the write
+    /// bits and the 0750 territory reads; drop the save-points judgment and
+    /// the 0770 one reads; drop the declaration's mode check and the
+    /// group-writable declaration reads.
     #[test]
-    fn the_declaration_directory_is_the_operators_and_closed() {
+    fn the_territory_is_roots_at_0710_and_never_a_link() {
         use std::os::unix::fs::PermissionsExt;
         let me = nix::unistd::getuid().as_raw();
         let base = std::env::temp_dir().join(format!("weaver-admin-decl-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let root = base.join("alpha");
-        let declarations = write_root(&root);
+        let territory = write_root(&root);
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(load_service_config_at(&base, "alpha", me).is_ok());
-        for open in [0o740, 0o750, 0o704, 0o701] {
-            std::fs::set_permissions(&declarations, std::fs::Permissions::from_mode(open)).unwrap();
+        for open in [0o750, 0o711, 0o700, 0o770, 0o1710] {
+            std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(open)).unwrap();
             assert_eq!(
                 load_service_config_at(&base, "alpha", me).err(),
                 Some(LifecycleRefusal::BoundaryUnverified),
-                "{open:o} grants group or other a permission"
+                "{open:o} is not the territory's 0710"
             );
         }
-        std::fs::set_permissions(&declarations, std::fs::Permissions::from_mode(0o700)).unwrap();
-        std::fs::write(root.join("operator"), (me + 1).to_string()).unwrap();
+        std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(0o710)).unwrap();
+        let save_points = territory.join("save-points");
+        for open in [0o770, 0o755, 0o700] {
+            std::fs::set_permissions(&save_points, std::fs::Permissions::from_mode(open)).unwrap();
+            assert_eq!(
+                load_service_config_at(&base, "alpha", me).err(),
+                Some(LifecycleRefusal::BoundaryUnverified),
+                "{open:o} is not save-points' 0750"
+            );
+        }
+        std::fs::set_permissions(&save_points, std::fs::Permissions::from_mode(0o750)).unwrap();
+        std::fs::rename(&save_points, territory.join("aside")).unwrap();
         assert_eq!(
             load_service_config_at(&base, "alpha", me).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
-            "a directory another operator owns"
+            "no save-points directory is the provisioning incomplete"
         );
-        std::fs::write(root.join("operator"), me.to_string()).unwrap();
-        let link = base.join("linked.decl");
-        std::os::unix::fs::symlink(&declarations, &link).unwrap();
-        std::fs::write(
-            root.join("declaration-directory"),
-            link.display().to_string(),
-        )
-        .unwrap();
+        std::fs::rename(territory.join("aside"), &save_points).unwrap();
+        let declaration = territory.join("agent.toml");
+        std::fs::set_permissions(&declaration, std::fs::Permissions::from_mode(0o664)).unwrap();
         assert_eq!(
             load_service_config_at(&base, "alpha", me).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
-            "a link at the directory's own name"
+            "a declaration the group could write"
+        );
+        std::fs::set_permissions(&declaration, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(load_service_config_at(&base, "alpha", me).is_ok());
+        let link = base.join("linked.territory");
+        std::os::unix::fs::symlink(&territory, &link).unwrap();
+        std::fs::write(root.join("territory"), link.display().to_string()).unwrap();
+        assert_eq!(
+            load_service_config_at(&base, "alpha", me).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a link at the territory's own name"
         );
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -2902,7 +3035,7 @@ mod tests {
             "spu-binary",
             "gate-binary",
             "coordination-root",
-            "declaration-directory",
+            "territory",
             "library-path",
         ] {
             fresh();
@@ -2987,10 +3120,11 @@ mod tests {
             headroom_bytes: None,
             library_path: None,
             load_bound: DEFAULT_LOAD_BOUND,
-            declaration_directory: PathBuf::from("/nonexistent/declarations"),
-            declaration: None,
+            territory: PathBuf::from("/nonexistent/territory"),
+            territory_fd: None,
+            save_points: None,
             operator: 1000,
-            operator_gid: 1000,
+            access_gid: 1000,
             boundary: Ok(BoundaryRead {
                 digest: "0".repeat(64),
                 reader: "weaver-alpha-admincon".into(),

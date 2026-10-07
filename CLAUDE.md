@@ -242,10 +242,14 @@ state** (the operator's ruling of 2026-10-06, #76): the declaration carries no i
 admin reads no prompt, the seeding turn enters it, and every later load seats what the
 state member holds. The installed stack lives under
 `/etc/weaver/admin/<agent>/` (each agent's config root), `/etc/weaver/stack/` (the
-scripts' record of the install, which admin never reads) and `<prefix>/bin`. Each
-agent's declaration, its prompt draft `system-prompt.md`, `admin.log` and `worker.log`
-live in the directory the root's `declaration-directory` names, by default the
-operator's `~/.weaveragent/<agent>/`. Each agent runs under its own OS user, started by admin's
+scripts' record of the install, which admin never reads) and `<prefix>/bin`. **The
+whole agent lives in its territory** (the operator's ruling of 2026-10-07, #1),
+`/var/lib/weaver-agent/weaver-<agent>/`, root-owned, which the root's `territory` key names:
+the declaration `agent.toml` (edited with `sudoedit`), the prompt draft
+`system-prompt.md`, `admin.log`, `worker.log`, `save-points/` with the published save
+points and their manifest, the trace and the member's room. The access group
+`weaver-<agent>-admin` reads it and never writes; the operator joins that group to read
+without sudo. Each agent runs under its own OS user, started by admin's
 start step, with no systemd unit. `create-agent.sh` writes the connector's strict sudo
 rule. Taking down a single agent is still by hand (#35). A box installed before #50
 migrates by `REDEPLOY.md` section 8, which is the thinkpad's case, since it runs a stack

@@ -77,11 +77,11 @@ member's memory. The subdirectory, the territory's `state/`, is the member's roo
 holds the preload door's name where one stands and **the save points the member
 writes**, a new file each and never one rewritten, per the operator's ruling of
 2026-10-02 on #58 and `weaver-state-PRD` section 4, and admin, as root, publishes each
-finished one into the operator's declaration directory at the next load or unload or
-at once on the operator's `save-point`, under a manifest it keeps there, per
-`weaver-admin-Spec` section 6.
+finished one into the territory's `save-points/` at the next load or unload or at once
+on the operator's `save-point`, under a manifest it keeps there, per `weaver-admin-Spec`
+section 6.
 **The save point a load restores arrives as a descriptor and never as a path**, per
-`weaver-admin-Spec` section 6: admin opens the chosen save point in the operator's
+`weaver-admin-Spec` section 6: admin opens the chosen save point in the territory's
 directory for reading, the latest by default or the one `restore` names, and the member
 inherits it at its spawn the way it inherits the first door's end. Where no save point
 exists the descriptor is absent, which is an agent's first load or every save point
@@ -864,11 +864,11 @@ Format section 5.
   stands. Nothing holds that signature in place, so a later act widening one of
   them to a concrete engine compiles and this claim goes quiet. What would buy
   it is a compile-fail pin over an ingest path that names an engine.
-- **The member sees a descriptor and never the operator's path** is read off the vector
-  and the spawn: no positional or flag names a save point in the operator's directory,
-  and the member opens files by name only inside its own room. What would buy it is a
-  test over the vector admin composes refusing any member naming the declaration
-  directory, which is admin's side and its Spec's.
+- **The member sees a descriptor and never a path into `save-points/`** is read off the
+  vector and the spawn: no positional or flag names a published save point, and the
+  member opens files by name only inside its own room. What would buy it is a test over
+  the vector admin composes refusing any member naming `save-points/`, which is admin's
+  side and its Spec's.
 
 **The walks the seam's conformance asks for are not in this tree.** The contract's
 section 8 names them and says both directions land with the acts that open the seam and
@@ -881,8 +881,8 @@ those properties through the port or through the unit that holds them rather tha
 the seam, which is the cheaper instrument and not the one the contract names, and **the
 dead-peer clause is reached by nothing here in either direction**. The save points'
 custody is owed the same kind of walk, the agent's uid asked to open one in the member's
-room and in the operator's directory and refused, and the member's own process asked to
-open the operator's copy by path and refused. The `grants` ask reports the room's owner
+room and in the territory's `save-points/` and refused, and the member's own process
+asked to write a published copy and refused. The `grants` ask reports the room's owner
 and mode and asserts nothing about either, so it is a surface for that walk rather than
 the walk.
 

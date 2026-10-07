@@ -7,8 +7,11 @@
 # WEAVER_ADMIN_CONFIG), rather than written here, so the same script serves
 # either seat. The agents are the roots under the base: admin admits an agent
 # by its root existing, and this script serves the same set. Each agent's
-# declaration is read from the directory its root's `declaration-directory`
-# names, the operator's own, as the operator running this script.
+# declaration is `agent.toml` in the territory its root's `territory` key
+# names, root's and 0644, read as the operator running this script through
+# the access group (the operator's ruling of 2026-10-07 on #1). A root still
+# naming a `declaration-directory`, the layout before that ruling, is
+# migrated by `--install`, its files moved into the territory.
 #
 #   ./deploy/update-stack.sh            plan only; refreshes refs, tests and builds, no install
 #   ./deploy/update-stack.sh --install  plan, then install what changed
@@ -161,8 +164,10 @@ refuse_legacy_units
 # **The agents are the roots under the base**, named as admin's name check
 # admits them (ASCII letters, digits, `-` and `_`), so a staged root
 # `create-agent.sh` left under a dot-name is not one. A symlink is not a root.
-# A root naming a `declaration-directory` is an agent, and its declaration is
-# `agent.toml` there. **A root of the layout before #50 refuses by name**: one
+# A root naming a `territory` is an agent, and its declaration is `agent.toml`
+# there; one naming a `declaration-directory` instead is an agent of the
+# layout before 2026-10-07, which this run migrates (below) before anything
+# else changes. **A root of the layout before #50 refuses by name**: one
 # holding `agent.toml` itself, or the retired `run-tool`, `control-tool`,
 # `unit-properties` or `log-path`, is migrated by hand first (deploy/REDEPLOY.md
 # section 8), since the admin this script installs reads none of them and would
@@ -188,25 +193,65 @@ for root in "$ADMIN_BASE"/*/; do
   for retired in agent.toml run-tool control-tool unit-properties log-path; do
     [ ! -e "$root/$retired" ] || die "$root holds $retired: it is on the layout before #50. Migrate it first (deploy/REDEPLOY.md section 8), then rerun."
   done
-  [ -f "$root/declaration-directory" ] || continue
+  [ -f "$root/territory" ] || [ -f "$root/declaration-directory" ] || continue
   AGENTS="$AGENTS $agent"
 done
 [ -n "$AGENTS" ] || die "no agent root under $ADMIN_BASE: make one with create-agent.sh first"
 
-# **Each agent's declaration, read as the operator.** The root names the
-# directory, which create-agent.sh made the operator's own and closed, so the
-# operator running this script reads it without privilege. One it cannot read
+# **One key of an agent's root, trimmed, an absolute path**, or a refusal by
+# name; empty where the key does not stand.
+root_path() { # root_path AGENT KEY
+  local value
+  [ -e "$ADMIN_BASE/$1/$2" ] || return 0
+  value=$(cat "$ADMIN_BASE/$1/$2" 2>/dev/null) || die "$1: its root's $2 does not read"
+  value=${value#"${value%%[![:space:]]*}"}; value=${value%"${value##*[![:space:]]}"}
+  [[ "$value" == /* ]] || die "$1: its root's $2 is not an absolute path"
+  printf '%s' "$value"
+}
+# **The territory is the stack's layout fact**: `<agent-directory>/weaver-<a>`,
+# as create-agent.sh lays it out, which is where a migrated agent's files go.
+AGENT_DIR=$(read_key agent-directory)
+territory_of() { # territory_of AGENT: prints its territory
+  local t
+  t=$(root_path "$1" territory) || exit 1
+  if [ -n "$t" ]; then printf '%s' "$t"; return 0; fi
+  [ -n "$AGENT_DIR" ] || die "no agent-directory in the stack record $STACK, so $1's territory cannot be named"
+  printf '%s/weaver-%s' "$AGENT_DIR" "$1"
+}
+# **Each agent's declaration, read as the operator.** It is `agent.toml` in the
+# territory, root's and 0644, which the operator reads through the access
+# group; or, on a root the layout migration below has not yet moved, in the
+# directory the root's `declaration-directory` names. One it cannot read
 # refuses by name and is never left out, on the ground the root's check gives.
 declaration_of() { # declaration_of AGENT: prints the path of its agent.toml
   local dir
-  dir=$(cat "$ADMIN_BASE/$1/declaration-directory" 2>/dev/null) || die "$1: its root's declaration-directory does not read"
-  dir=${dir#"${dir%%[![:space:]]*}"}; dir=${dir%"${dir##*[![:space:]]}"}
-  [[ "$dir" == /* ]] || die "$1: its root's declaration-directory is not an absolute path"
+  dir=$(root_path "$1" territory) || exit 1
+  [ -n "$dir" ] || dir=$(root_path "$1" declaration-directory) || exit 1
+  [ -n "$dir" ] || die "$1: its root names neither a territory nor a declaration-directory"
   printf '%s/agent.toml' "$dir"
 }
 for agent in $AGENTS; do
   decl=$(declaration_of "$agent") || exit 1
-  [ -r "$decl" ] || die "$agent: its declaration $decl cannot be read by $OPERATOR_NAME. It is the operator's own: run this script as the operator who owns it."
+  [ -r "$decl" ] || die "$agent: its declaration $decl cannot be read by $OPERATOR_NAME. It stands in the territory, which the access group weaver-$agent-admin passes: join that group (create-agent.sh adds the operator to it), and take a new login before it applies."
+done
+# **A root of the layout before 2026-10-07 is migrated by the install**, on the
+# operator's ruling of that date on #1: its `declaration-directory` names the
+# operator's own directory holding `agent.toml`, `system-prompt.md`,
+# `admin.log` and `worker.log`, which move into the territory, root's, with
+# `save-points/` made beside them, the root's `territory` key written and the
+# old key removed, the member and the operator joined to the access group,
+# and the territory grouped to it. The plan names the move and does nothing. A
+# territory already holding an `agent.toml` refuses, since two declarations of
+# one agent is not a state this script can choose between.
+LAYOUT=()
+for agent in $AGENTS; do
+  old=$(root_path "$agent" declaration-directory) || exit 1
+  [ -n "$old" ] || continue
+  [ -z "$(root_path "$agent" territory)" ] || die "$agent: its root names both a territory and a declaration-directory; remove the key that is wrong, then rerun"
+  territory=$(territory_of "$agent") || exit 1
+  [ -d "$territory" ] && [ ! -L "$territory" ] || die "$agent: its territory $territory does not stand, so its declaration cannot move there (deploy/REDEPLOY.md section 8, step 7)"
+  [ ! -e "$territory/agent.toml" ] || die "$agent: its territory $territory already holds an agent.toml while its root still names $old; remove the one that is wrong, then rerun (deploy/REDEPLOY.md section 8, step 7)"
+  LAYOUT+=("$agent|$old|$territory")
 done
 
 # **Where cargo builds is asked rather than assumed.** This box sets
@@ -429,6 +474,11 @@ for agent in $AGENTS; do
   MIGRATE+=("$decl")
 done
 [ ${#MIGRATE[@]} -gt 0 ] || printf '  identity      no declaration carries the inline identity of before 2026-10-06\n'
+for entry in "${LAYOUT[@]}"; do
+  IFS='|' read -r agent old territory <<< "$entry"
+  printf '  %-12s layout: agent.toml, system-prompt.md, admin.log and worker.log move from %s into %s, root'"'"'s, with save-points/ beside them; the root takes the territory key\n' "$agent" "$old" "$territory"
+done
+[ ${#LAYOUT[@]} -gt 0 ] || printf '  layout        every declaration stands in its territory\n'
 
 # --------------------------------------------------------------- 2. update main
 say "tree"
@@ -581,6 +631,11 @@ refuse_legacy_units
 # ------------------------------------------------------------------ 7. install
 PATCHED=()
 ADDED=()
+# The layout moves this run made, each "agent|old directory|territory", put
+# back by the restore: the four files moved back as they were, the root's
+# keys as they were. The group memberships stay, being reads the ruling
+# grants either way.
+MOVED=()
 # The agent the verify step has loaded right now, empty whenever none is. Every
 # rollback from inside that step happens with a worker running, and a restore
 # that leaves it running puts the old declaration and the old binaries under a
@@ -623,10 +678,27 @@ restore() {
       || { printf '  %s WOULD NOT UNLOAD. It is still serving, and the files below go back under it. Unload it by hand before loading anything.\n' "$LOADED_AGENT" >&2; failed=1; }
     LOADED_AGENT=""
   fi
+  if [ ${#MOVED[@]} -gt 0 ]; then
+    for entry in "${MOVED[@]}"; do
+      IFS='|' read -r agent old territory <<< "$entry"
+      printf '  moving %s'"'"'s files back from %s into %s\n' "$agent" "$territory" "$old" >&2
+      for f in agent.toml system-prompt.md admin.log worker.log; do
+        sudo test -e "$territory/$f" || continue
+        sudo mv -T -- "$territory/$f" "$old/$f" \
+          || { printf '  FAILED to move %s back\n' "$territory/$f" >&2; failed=1; }
+      done
+      printf '%s\n' "$old" | sudo tee "$ADMIN_BASE/$agent/declaration-directory" >/dev/null \
+        && sudo chmod 0644 "$ADMIN_BASE/$agent/declaration-directory" \
+        && sudo rm -f "$ADMIN_BASE/$agent/territory" \
+        || { printf '  FAILED to restore %s'"'"'s root keys\n' "$agent" >&2; failed=1; }
+    done
+  fi
   if [ ${#PATCHED[@]} -gt 0 ]; then
     for entry in "${PATCHED[@]}"; do
       printf '  restoring declaration %s\n' "${entry%%|*}" >&2
-      cp -a "${entry##*|}" "${entry%%|*}" \
+      # As root: the declaration is root's in root's territory (the ruling of
+      # 2026-10-07), and a backup beside it is root's too.
+      sudo cp -a "${entry##*|}" "${entry%%|*}" \
         || { printf '  FAILED to restore %s\n' "${entry%%|*}" >&2; failed=1; }
     done
   fi
@@ -672,7 +744,7 @@ rollback() {
 # three replaced and nothing registered to put them back.
 on_exit() {
   local rc=$?
-  if [ "$COMPLETED" -eq 0 ] && { [ "$INSTALL_DONE" -eq 1 ] || [ ${#PATCHED[@]} -gt 0 ]; }; then
+  if [ "$COMPLETED" -eq 0 ] && { [ "$INSTALL_DONE" -eq 1 ] || [ ${#PATCHED[@]} -gt 0 ] || [ ${#MOVED[@]} -gt 0 ]; }; then
     printf '\n  the run did not complete (exit %d)\n' "$rc" >&2
     restore
   fi
@@ -682,16 +754,72 @@ trap on_exit EXIT
 # **The identity moves before the binaries**, as the operator, each
 # declaration backed up and registered so a rollback puts it back under the
 # old admin, which requires the table the new one refuses.
+# **The identity moves before the layout does**, since migrate-identity.py
+# writes the draft beside the declaration as this user, which it can do in
+# the operator's directory of the layout before 2026-10-07 and not in the
+# territory; a declaration already in its territory is root's, and the move
+# is made there as root.
 if [ ${#MIGRATE[@]} -gt 0 ]; then
   say "migrate identities"
   for decl in "${MIGRATE[@]}"; do
-    cp -a "$decl" "$decl.pre-$AFTER-bak"
-    PATCHED+=("$decl|$decl.pre-$AFTER-bak")
-    python3 "$REPO/deploy/migrate-identity.py" "$decl" --apply >/dev/null \
-      || rollback "the identity of $decl did not move; see above"
+    if [ -w "$decl" ]; then
+      cp -a "$decl" "$decl.pre-$AFTER-bak"
+      PATCHED+=("$decl|$decl.pre-$AFTER-bak")
+      python3 "$REPO/deploy/migrate-identity.py" "$decl" --apply >/dev/null \
+        || rollback "the identity of $decl did not move; see above"
+    else
+      sudo cp -a "$decl" "$decl.pre-$AFTER-bak"
+      PATCHED+=("$decl|$decl.pre-$AFTER-bak")
+      sudo python3 "$REPO/deploy/migrate-identity.py" "$decl" --apply >/dev/null \
+        || rollback "the identity of $decl did not move; see above"
+      sudo chmod 0644 "$decl" "$(dirname "$decl")/system-prompt.md"
+    fi
     printf '  %s: identity moved into system-prompt.md beside it (backup %s); seed it after the load with deploy/turn.py <agent> --system\n' \
       "$decl" "$(basename "$decl.pre-$AFTER-bak")"
   done
+fi
+
+# **The layout moves next, as root, before the binaries** (the operator's
+# ruling of 2026-10-07 on #1): each file moved and made root's, the logs
+# grouped to the access group as admin makes them, the save points directory
+# made, the root's keys swapped, the groups joined, the territory regrouped.
+# Each entry is registered before its first step, so a death inside the loop
+# still puts the files back. A function, so the plan tests run it against a
+# stand-in sudo.
+# migrate_layout "AGENT|OLD|TERRITORY"...
+migrate_layout() {
+  local entry agent old territory f
+  for entry in "$@"; do
+    IFS='|' read -r agent old territory <<< "$entry"
+    MOVED+=("$entry")
+    sudo install -d -o root -g "weaver-$agent-admin" -m 0750 "$territory/save-points" \
+      || rollback "$agent: cannot make $territory/save-points"
+    for f in agent.toml system-prompt.md; do
+      [ -e "$old/$f" ] || continue
+      sudo mv -T -- "$old/$f" "$territory/$f" && sudo chown root:root "$territory/$f" && sudo chmod 0644 "$territory/$f" \
+        || rollback "$agent: $old/$f did not move into the territory"
+    done
+    for f in admin.log worker.log; do
+      [ -e "$old/$f" ] || continue
+      sudo mv -T -- "$old/$f" "$territory/$f" && sudo chown "root:weaver-$agent-admin" "$territory/$f" && sudo chmod 0640 "$territory/$f" \
+        || rollback "$agent: $old/$f did not move into the territory"
+    done
+    sudo usermod -aG "weaver-$agent-admin" "weaver-$agent-state" \
+      && sudo usermod -aG "weaver-$agent-admin" "$OPERATOR_NAME" \
+      || rollback "$agent: the member and the operator could not join weaver-$agent-admin"
+    sudo chgrp "weaver-$agent-admin" "$territory" && sudo chmod 0710 "$territory" \
+      || rollback "$agent: the territory could not take the access group"
+    printf '%s\n' "$territory" | sudo tee "$ADMIN_BASE/$agent/territory" >/dev/null \
+      && sudo chmod 0644 "$ADMIN_BASE/$agent/territory" \
+      && sudo rm -f "$ADMIN_BASE/$agent/declaration-directory" \
+      || rollback "$agent: the root's keys did not change over"
+    printf '  %s: declaration, draft and logs moved from %s into %s; %s joined %s, take a new login before it applies\n' \
+      "$agent" "$old" "$territory" "$OPERATOR_NAME" "weaver-$agent-admin"
+  done
+}
+if [ ${#LAYOUT[@]} -gt 0 ]; then
+  say "migrate layout"
+  migrate_layout "${LAYOUT[@]}"
 fi
 
 if [ ${#CHANGED[@]} -gt 0 ]; then
@@ -768,12 +896,15 @@ for agent in $AGENTS; do
   declared "$decl" state-store table || rc=$?
   if [ ! -f "$STATE_BINARY" ] && [ "$rc" -eq 3 ]; then
     printf '  %-12s %s\n' "$agent" "$verdict"
-    # **The declaration is the operator's, so the operator patches it**,
-    # without privilege, in the operator's own closed directory: no root step
-    # writes a file another principal could choose.
-    cp -a "$decl" "$decl.pre-$AFTER-bak"
+    # **The declaration is root's in root's territory, so root patches it**
+    # (the operator's ruling of 2026-10-07 on #1): a write of root's own file
+    # in root's own directory, which no other principal can choose. The text
+    # is read whole before the write replaces it, never through a pipe that
+    # would truncate what it reads.
+    sudo cp -a "$decl" "$decl.pre-$AFTER-bak"
     PATCHED+=("$decl|$decl.pre-$AFTER-bak")
-    printf '\n[state-store]\nengine = "none"\n' >> "$decl"
+    patched=$(cat "$decl"; printf '\n[state-store]\nengine = "none"\n')
+    printf '%s\n' "$patched" | sudo tee "$decl" >/dev/null
     verdict=$(validate "$agent")
     if [ "$verdict" != '{"kind":"validated"}' ]; then
       rollback "$agent still refuses after the declaration: $verdict"

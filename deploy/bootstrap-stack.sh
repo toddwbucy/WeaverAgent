@@ -25,8 +25,8 @@
 # root per agent. **No init system is involved**: admin's start step stands
 # the agent itself, on the operator's ruling of 2026-10-03 (#50), so no unit,
 # run tool or control tool is installed or recorded, and each agent's
-# operations log lives in its declaration directory rather than under a box
-# log directory.
+# operations log lives in its territory rather than under a box log
+# directory.
 #
 # Box facts are environment, defaulted, printed, and never discovered from a
 # directory listing (the install set is named, per update-stack.sh):

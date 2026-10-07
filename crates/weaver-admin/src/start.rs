@@ -574,7 +574,7 @@ pub struct WorkerStart<'a> {
     pub gid: u32,
     pub home: &'a Path,
     pub library_path: Option<&'a Path>,
-    /// The worker log, `worker.log` in the declaration directory, never the
+    /// The worker log, `worker.log` in the territory, never the
     /// operations log.
     pub log: &'a std::fs::File,
     pub run_lock: &'a RunLock,

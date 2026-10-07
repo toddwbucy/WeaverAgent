@@ -2149,7 +2149,7 @@ included, so such an agent is seeded in every residency, as its first turn, and 
 seeding turn is admitted there as anywhere, since it is the one way the prompt enters. The
 declaration carries no identity and the enter no prompt, per `weaver-types-Spec`
 sections 2 and 4, so this crate holds no file, no path and no handle into the
-operator's directory. **The load writes none of what it seats to the record**, on
+territory's declaration or draft. **The load writes none of what it seats to the record**, on
 the operator's ruling of 2026-10-06 (later, #1) that a session's trace and the state it loaded from are not tied together once the agent is unloaded: the `load` event's lineage names the save point the session started from, the
 `recall` of the identity ask names the events the member handed back for seating, and
 the prompt's text is on the trace where it was entered, at the seeding turn, and

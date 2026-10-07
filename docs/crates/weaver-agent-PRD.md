@@ -157,7 +157,7 @@ the human's ruling of 2026-08-01 corrected as an overstatement: an agent holding
 working structure and a hot cache is not stateless. That ruling also held that the
 agent's state died with the session, and the operator's ruling of 2026-10-02 revises
 it: **state management accumulates across sessions**, its holdings carried between
-loads by save points in the operator's directory, which the agent never reaches, and
+loads by save points in the territory's `save-points/`, which the agent never reaches, and
 rebuildable from a record the agent never reaches either. The custody is what makes
 the crossing lawful, and memory, which will read from those save points, is still to
 come.

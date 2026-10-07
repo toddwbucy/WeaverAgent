@@ -8,8 +8,8 @@
 # The verify step of update-stack.sh, standing alone so a fresh install and a
 # single agent can be checked without a rebuild. Everything it reads is the
 # agent's own root, `<admin base>/<agent>/` (WEAVER_ADMIN_CONFIG names the
-# base, default /etc/weaver/admin), and the declaration directory that root
-# names, as admin reads them: the declaration `agent.toml`. `weaver-admin`
+# base, default /etc/weaver/admin), and the territory that root names, as admin
+# reads them: the declaration `agent.toml` there. `weaver-admin`
 # itself is taken from the stack record's `prefix` (WEAVER_STACK_RECORD,
 # default /etc/weaver/stack), never from a key of the agent's root, which admin
 # has not yet judged when this runs it as root. It reads the sink path out of
@@ -88,10 +88,11 @@ admin() { WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$ADMIN" "$@" 2>&1 || true; }
 # answers `validated`, and through admin's judgment rather than a copy of it.
 VERDICT=$(admin validate "$AGENT" | tail -1)
 [ "$VERDICT" = '{"kind":"validated"}' ] || die "admin does not validate $AGENT, so its root is not read: $VERDICT"
-# The declaration directory is the root's key, judged by the validate above.
-DECL_DIR=$(< "$ROOT/declaration-directory")
-DECL_DIR=${DECL_DIR#"${DECL_DIR%%[![:space:]]*}"}; DECL_DIR=${DECL_DIR%"${DECL_DIR##*[![:space:]]}"}
-DECL="$DECL_DIR/agent.toml"; [ -f "$DECL" ] || die "no declaration at $DECL"
+# The territory is the root's key, judged by the validate above, and the
+# declaration stands in it (the operator's ruling of 2026-10-07 on #1).
+TERRITORY=$(< "$ROOT/territory")
+TERRITORY=${TERRITORY#"${TERRITORY%%[![:space:]]*}"}; TERRITORY=${TERRITORY%"${TERRITORY##*[![:space:]]}"}
+DECL="$TERRITORY/agent.toml"; [ -f "$DECL" ] || die "no declaration at $DECL"
 
 SINK=$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["trace-sink"]["path"])' "$DECL") \
   || die "the declaration names no trace-sink.path"

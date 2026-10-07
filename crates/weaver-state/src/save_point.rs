@@ -24,7 +24,7 @@
 //! file's digest,
 //! and the check line itself is covered by the digest: **the digest is sha256
 //! over the whole file** and is the save point's identity on the trace and
-//! in the operator's directory. **The name is the digest**, so two save points
+//! in the territory's `save-points/`. **The name is the digest**, so two save points
 //! with different bytes can never share one, and the stamp's `taken` member,
 //! the writing process, a counter that process never repeats, and the wall
 //! clock, makes two save points of the same holdings at the same position

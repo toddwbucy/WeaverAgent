@@ -161,7 +161,7 @@ assembly and its loop's decisions, and the model receives only what the loop
 serves it as composed context, the same wall `weaver-harness-PRD` section 5
 holds for the trace. There is no model-facing read path and no tool that opens
 one. **The agent never reaches its own raw trace or its save points**, per the
-operator's ruling of 2026-10-02: a save point is a file in the operator's custody that
+operator's ruling of 2026-10-02: a save point is a file in root's custody that
 this member writes without a path the agent's uid holds, per section 4, and nothing
 the agent's uid holds names it or opens it.
 
@@ -413,7 +413,7 @@ the ranking and the classifying are the loop's through the SPU rather than the s
 its own act, with its own custody clause, and section 5 names that cell without laying
 one in.
 
-**Custody is the member's room, the operator's directory, and the member's process.**
+**Custody is the member's room, the territory's `save-points/`, and the member's process.**
 The wall of section 2 is one requirement: the agent's uid reaches no store, because a
 store the model's uid could read would hand the model its own state through an ordinary
 tool call. **The live store is in the member's memory**, in a process running under the
@@ -422,19 +422,21 @@ each save point into its own room**, the territory's `state/`, which it owns `07
 which the agent's uid cannot enter, on the operator's ruling of 2026-10-02 on #58: a
 new file per save point, never one rewritten, so the write needs no handle from admin
 and no admin resident. **Admin, as root, publishes each finished save point into the
-operator's declaration directory**, `~/.weaveragent/<agent>/` by default, beside the
-declaration and the system prompt, at the next load or unload or at once on the
-operator's `save-point`, per `weaver-admin-Spec` section 6, so a save point taken on demand lands with the operator at the next verb, and
-one that survived an unclean stop is published at the next load. That directory stays
-`0700` to the operator, so the member cannot open it by path and does not try. **A load
-restores through a descriptor**: admin, as root, opens the chosen save point in the
-operator's directory, the latest by admin's manifest or the one `restore` names, one
+territory's `save-points/`**, root's and read by the access group, beside the
+declaration and the prompt draft, on the operator's ruling of 2026-10-07 on #1, at the
+next load or unload or at once on the operator's `save-point`, per `weaver-admin-Spec`
+section 6, so a save point taken on demand is readable by the operator at the next
+verb, and one that survived an unclean stop is published at the next load. The member
+reads its own published copies through the access group and writes none, and does not
+try to open one by path. **A load
+restores through a descriptor**: admin, as root, opens the chosen save point in
+`save-points/`, the latest by admin's manifest or the one `restore` names, one
 named at a restore included, and hands the member the open descriptor at spawn, exactly as it opens the
 trace sink and hands it down, and for the same reasons. **A live restore reads the
 member's own room**, the save point the member itself wrote and still holds, with no
-admin. A save point that is only in the operator's directory restores at a load. The
-member sees its own room and a descriptor and never the operator's path, and the agent
-never reaches either.
+admin. A save point that is only in `save-points/` restores at a load. The member sees
+its own room and a descriptor and never a path into `save-points/`, and the agent never
+reaches either.
 
 **The store is reached through the seam, never as a file and never as a
 connection.** A save point opened from two processes would be a seam crossing a process

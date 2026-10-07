@@ -17,9 +17,13 @@ the agent's trace, not this script's output.
 
 **`--system` is the seeding turn**, per weaver-gate-world-contract section 2 on the
 operator's ruling of 2026-10-06 that the system prompt is state: it reads the
-operator's draft, `<declaration directory>/system-prompt.md` (the root's
-`declaration-directory` key, as admin reads it), and sends it as the one line
-`{"role": "system", "text": ...}`. The harness admits a system line from the
+operator's draft, `<territory>/system-prompt.md` (the root's `territory` key, as
+admin reads it; the file is root's, 0644, and the operator reads it through the
+access group `weaver-<agent>-admin`, on the ruling of 2026-10-07 that the whole
+agent lives in its territory), and sends it as the one line
+`{"role": "system", "text": ...}`. The territory is taken from the root's key and
+derived from nothing: this script already reads the root's keys as the operator,
+`coordination-root` among them, so the mechanism is the one it has. The harness admits a system line from the
 operator's uid alone, authors the prompt as the session's prefix and turns on it,
 so the model's first answer comes back and the prompt is state from then on. The
 file is a draft: the agent holds the prompt the gate carried, in its state, and the
@@ -70,13 +74,13 @@ def main() -> int:
     raw = "--raw" in args[1:]
     base = os.environ.get("WEAVER_ADMIN_CONFIG") or "/etc/weaver/admin"
     if system:
-        # The draft stands in the operator's declaration directory, the one
-        # admin's root names, beside agent.toml. A text given with --system
-        # would be two prompts, so the flag takes none.
+        # The draft stands in the agent's territory, the one admin's root
+        # names, beside agent.toml. A text given with --system would be two
+        # prompts, so the flag takes none.
         if any(not a.startswith("--") for a in args[1:]):
             print("--system reads the prompt draft and takes no text", file=sys.stderr)
             return 2
-        directory = read_key(base, agent, "declaration-directory")
+        directory = read_key(base, agent, "territory")
         if directory is None:
             return 1
         draft = os.path.join(directory, "system-prompt.md")

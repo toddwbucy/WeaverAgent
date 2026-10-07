@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use sha2::Digest;
 use weaver_types::{LifecycleRefusal, SavePointReport};
 
-/// The manifest's name in the operator's declaration directory.
+/// The manifest's name in the territory's `save-points/`.
 pub const MANIFEST: &str = "save-points.manifest";
 /// The marker's name in the agent's config root.
 pub const MARKER: &str = "run.marker";
@@ -742,7 +742,7 @@ pub fn publish(
                     | nix::fcntl::OFlag::O_EXCL
                     | nix::fcntl::OFlag::O_NOFOLLOW
                     | nix::fcntl::OFlag::O_CLOEXEC,
-                nix::sys::stat::Mode::from_bits_truncate(0o600),
+                nix::sys::stat::Mode::from_bits_truncate(0o640),
             )?;
             let mut file = std::fs::File::from(fd);
             file.write_all(&entry.bytes)?;
@@ -757,8 +757,10 @@ pub fn publish(
             file.sync_all()?;
             let metadata = file.metadata()?;
             use std::os::unix::fs::MetadataExt;
-            if metadata.uid() != operator.0 || metadata.mode() & 0o777 != 0o600 {
-                return Err(std::io::Error::other("the copy is not the operator's 0600"));
+            if metadata.uid() != operator.0 || metadata.mode() & 0o777 != 0o640 {
+                return Err(std::io::Error::other(
+                    "the copy is not root's 0640, read by the access group",
+                ));
             }
             // **The rename replaces nothing**: an entry the operator put
             // under the published name, a link among them, refuses the
@@ -836,8 +838,8 @@ pub struct Selected {
     pub lineage: weaver_types::Lineage,
 }
 
-/// Open and judge one file of the operator's directory through the
-/// directory's descriptor, per `weaver-admin-Spec` section 4: a regular
+/// Open and judge one file of the territory's save-points directory through
+/// its descriptor, per `weaver-admin-Spec` section 4: a regular
 /// file, not a link, the operator's, closed to group and other, under the
 /// size bound, whose bytes judge sound and whose published name is the one
 /// its bytes compute. `Ok(None)` is no entry. The file is answered rewound.
@@ -865,10 +867,12 @@ fn open_judged(
         return Err(format!("{name} is not a regular file"));
     }
     if metadata.uid() != operator {
-        return Err(format!("{name} is not the operator's"));
+        return Err(format!("{name} is not root's"));
     }
-    if metadata.mode() & 0o077 != 0 {
-        return Err(format!("{name} grants a permission to group or other"));
+    if metadata.mode() & 0o7777 != 0o640 {
+        return Err(format!(
+            "{name} is not mode 0640, root's and read by the access group"
+        ));
     }
     if metadata.len() > SAVE_POINT_BOUND {
         return Err(format!(
@@ -927,7 +931,7 @@ pub fn select(
             .any(|name| name.ends_with(SUFFIX))
     {
         diag!(
-            "weaver-admin: the declaration directory holds save points and no {MANIFEST}; a file the manifest does not name is not loadable, and the restore verb is what names one"
+            "weaver-admin: the territory's save-points directory holds save points and no {MANIFEST}; a file the manifest does not name is not loadable, and the restore verb is what names one"
         );
         return Err(LifecycleRefusal::BoundaryUnverified);
     }
@@ -961,7 +965,7 @@ pub fn select(
             })),
             Ok(None) => {
                 diag!(
-                    "weaver-admin: restore names {named}, whose file is gone from the declaration directory"
+                    "weaver-admin: restore names {named}, whose file is gone from the save-points directory"
                 );
                 Err(LifecycleRefusal::BoundaryUnverified)
             }
@@ -1028,7 +1032,7 @@ pub fn name_at_restore(
             Ok(Some(_)) => Ok(line.clone()),
             Ok(None) => {
                 diag!(
-                    "weaver-admin: restore names {named}, whose file is gone from the declaration directory"
+                    "weaver-admin: restore names {named}, whose file is gone from the save-points directory"
                 );
                 Err(LifecycleRefusal::BoundaryUnverified)
             }
@@ -1069,7 +1073,7 @@ pub fn name_at_restore(
             [one] => one.clone(),
             [] => {
                 diag!(
-                    "weaver-admin: restore names the digest {named}, and no published file in the declaration directory carries it"
+                    "weaver-admin: restore names the digest {named}, and no published file in the save-points directory carries it"
                 );
                 return Err(refuse_config());
             }
@@ -1092,7 +1096,7 @@ pub fn name_at_restore(
         Ok(Some((_, judged))) => judged,
         Ok(None) => {
             diag!(
-                "weaver-admin: restore names {named}, which does not stand in the declaration directory"
+                "weaver-admin: restore names {named}, which does not stand in the save-points directory"
             );
             return Err(refuse_config());
         }
@@ -1446,7 +1450,7 @@ mod tests {
         std::fs::write(&target, &bytes).unwrap();
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
         }
         let lines = publish(&room, me, dir_fd.as_fd(), owner, mine, &[]).unwrap();
         assert_eq!(
@@ -1469,7 +1473,7 @@ mod tests {
         std::fs::write(&impostor, b"not those bytes").unwrap();
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&impostor, std::fs::Permissions::from_mode(0o600)).unwrap();
+            std::fs::set_permissions(&impostor, std::fs::Permissions::from_mode(0o640)).unwrap();
         }
         let lines = publish(&room, me, dir_fd.as_fd(), owner, mine, &[]).unwrap();
         assert!(lines.is_empty(), "no line for the impostor's name");
@@ -1548,7 +1552,7 @@ mod tests {
             let name = published_name(&judged);
             std::fs::write(dir.join(&name), &bytes).unwrap();
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(dir.join(&name), std::fs::Permissions::from_mode(0o600))
+            std::fs::set_permissions(dir.join(&name), std::fs::Permissions::from_mode(0o640))
                 .unwrap();
             let line = ManifestLine {
                 ordinal: next_ordinal(&lines),
@@ -1606,7 +1610,7 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(
                 dir.join(&stray_name),
-                std::fs::Permissions::from_mode(0o600),
+                std::fs::Permissions::from_mode(0o640),
             )
             .unwrap();
         }
