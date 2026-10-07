@@ -916,10 +916,47 @@ pub fn name_at_restore(
         position: None,
         arrived: Arrival::Restore,
     };
+    // **A digest names the file that computes to it**: a name of the
+    // published form is opened as written, and a bare digest finds the one
+    // entry `<stamp>-<digest>.save-point` in the directory, so an unlisted
+    // file is loadable by either, as the declaration may name it.
+    let entry_name = if named.ends_with(SUFFIX) {
+        named.to_string()
+    } else {
+        let wanted = format!("-{named}{SUFFIX}");
+        let mut matches: Vec<String> = std::fs::read_dir(directory)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+                    .filter(|name| name.ends_with(&wanted))
+                    .collect()
+            })
+            .unwrap_or_default();
+        matches.sort();
+        match matches.as_slice() {
+            [one] => one.clone(),
+            [] => {
+                diag!(
+                    "weaver-admin: restore names the digest {named}, and no published file in the declaration directory carries it"
+                );
+                return Err(refuse_config());
+            }
+            several => {
+                diag!(
+                    "weaver-admin: restore names the digest {named}, which {} files carry; name one by its published name",
+                    several.len()
+                );
+                return Err(refuse_config());
+            }
+        }
+    };
+    let named = entry_name.as_str();
+    let mut probe = candidate.clone();
+    probe.name = named.to_string();
     // The file is judged through the directory as a load judges one; the
     // digest and the stamp are its own, and the name must be the one its
     // bytes compute, so a renamed file does not enter.
-    let mut probe = candidate.clone();
     let judged = match open_judged(directory, named, operator) {
         Ok(Some((_, judged))) => judged,
         Ok(None) => {
@@ -1278,9 +1315,15 @@ mod tests {
             select(&dir, me, Some(&stray_name), mine),
             Err(LifecycleRefusal::ConfigInvalid { .. })
         ));
-        // Named at a restore, it enters with the next ordinal and is then
-        // loadable by name and by digest.
-        let named = name_at_restore(&dir, me, &stray_name, mine).unwrap();
+        // Named at a restore by its bare digest, the unlisted file is found
+        // under its published name (Codex on #94, round 2), enters with the
+        // next ordinal and is then loadable by name and by digest; a digest
+        // no file carries refuses. Perturbation: open the digest as a name
+        // and the first call refuses.
+        let stray_digest = judge(&stray).unwrap().digest;
+        assert!(name_at_restore(&dir, me, &"0".repeat(64), mine).is_err());
+        let named = name_at_restore(&dir, me, &stray_digest, mine).unwrap();
+        assert_eq!(named.name, stray_name);
         assert_eq!((named.ordinal, named.arrived), (4, Arrival::Restore));
         let by_name = select(&dir, me, Some(&stray_name), mine).unwrap().unwrap();
         assert_eq!(by_name.line.ordinal, 4);

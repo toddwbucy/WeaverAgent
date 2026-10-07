@@ -483,12 +483,16 @@ fn stand_state_member(
             // ignored signals**, per Spec section 6, and holds the run lock's
             // description for its life, per section 3.
             start::place(raw_lock, start::RUN_LOCK_FD)?;
+            // The member's allowlist: its first door's end at 3, armed below,
+            // the save point at 4 only where one is handed, so a descriptor
+            // the invoking shell left at 4 never crosses as a save point,
+            // and the run lock at 9.
             if let Some(raw) = raw_save_point {
                 start::place(raw, SAVE_POINT_FD)?;
+                start::seal_except(&[3, SAVE_POINT_FD, start::RUN_LOCK_FD])?;
+            } else {
+                start::seal_except(&[3, start::RUN_LOCK_FD])?;
             }
-            // The member's allowlist: its first door's end at 3, armed below,
-            // the save point at 4 where one is handed, and the run lock at 9.
-            start::seal_except(&[3, SAVE_POINT_FD, start::RUN_LOCK_FD])?;
             start::detach_and_reset()?;
             become_member(member_account)?;
             arm_member_end(raw_member_end)
@@ -977,6 +981,7 @@ fn run_load(
         }
         _ => None,
     };
+    let member_elected = inventory.member_account.is_some();
     let state_end = stand_state_member(
         config,
         &inventory,
@@ -984,6 +989,17 @@ fn run_load(
         selected.map(|selected| selected.descriptor),
     );
     standing.forked |= state_end.is_some();
+    // **An elected member that does not stand refuses the load**: the
+    // harness would otherwise enter with no state end, skip the `restored`
+    // agreement no member can answer, and author a `load` naming a lineage
+    // nobody restored, or run an agent the declaration gave a store without
+    // one. `BindFailed` names it, and the rollback ends what forked.
+    if member_elected && state_end.is_none() {
+        diag!(
+            "weaver-admin: the declaration elects a state member and none stood, so the load does not go on without it"
+        );
+        return Err(LifecycleRefusal::BindFailed);
+    }
     let classify = config
         .worker
         .parent()
