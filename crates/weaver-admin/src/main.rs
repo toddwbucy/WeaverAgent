@@ -1109,29 +1109,41 @@ fn run_load(
                 // Spec section 4 on A3.0 item 5: after the enter answers,
                 // its prior state kept for the rollback of any later step,
                 // so a load that never authored `load` never opened a run.
-                let before = save_points::read_marker(&config.root);
-                let marker = save_points::Marker::Open {
-                    run: run_reference.0.clone(),
-                };
-                // **A marker that cannot be written fails the load**: a run
-                // standing with no open marker would stop unclean without
-                // its reset at the next load, so the enter is rolled back
-                // instead, nothing standing that the record would misname.
-                if let Err(e) = save_points::write_marker(&config.root, Some(&marker)) {
-                    diag!(
-                        "weaver-admin: the clean-unload marker in {} does not write: {e}",
-                        config.root.display()
-                    );
-                    return Err(LifecycleRefusal::BoundaryUnverified);
-                }
-                standing.marker_before = Some(before);
-                Ok(())
+                open_marker(&config.root, standing, &run_reference.0)
             }
             weaver_types::Payload::Refusal(refusal) => Err(refusal),
             _ => Err(LifecycleRefusal::Malformed),
         },
         Err(_) => Err(LifecycleRefusal::NoResidency),
     }
+}
+
+/// **Write the run's open marker once the run stands**, per Spec section 4
+/// on A3.0 item 5. **What stood before is recorded ahead of the write**
+/// (Codex on #94, round 4): a replacement that lands and whose root does
+/// not sync fails the write with the open marker in place, so the rollback
+/// must know what to put back whether the write failed before or after the
+/// rename. **A marker that cannot be written fails the load**: a run
+/// standing with no open marker would stop unclean without its reset at the
+/// next load, so the enter is rolled back instead, nothing standing that
+/// the record would misname.
+fn open_marker(
+    root: &std::path::Path,
+    standing: &mut Standing,
+    run: &str,
+) -> Result<(), LifecycleRefusal> {
+    standing.marker_before = Some(save_points::read_marker(root));
+    let marker = save_points::Marker::Open {
+        run: run.to_string(),
+    };
+    if let Err(e) = save_points::write_marker(root, Some(&marker)) {
+        diag!(
+            "weaver-admin: the clean-unload marker in {} does not write: {e}",
+            root.display()
+        );
+        return Err(LifecycleRefusal::BoundaryUnverified);
+    }
+    Ok(())
 }
 
 /// **Select the save point this load restores**, per Spec section 4: nothing
@@ -3424,7 +3436,7 @@ mod tests {
         .unwrap();
         let account = roll_back(&config, &mut standing);
         assert!(account.contains("marker restored"), "{account}");
-        assert_eq!(save_points::read_marker(&config.root), Some(closed));
+        assert_eq!(save_points::read_marker(&config.root), Some(closed.clone()));
         let mut standing = Standing {
             marker_before: Some(None),
             ..Standing::default()
@@ -3436,6 +3448,32 @@ mod tests {
         .unwrap();
         roll_back(&config, &mut standing);
         assert_eq!(save_points::read_marker(&config.root), None);
+        // **What stood before is recorded ahead of the write** (Codex on
+        // #94, round 4): the root made unwritable, the open marker does not
+        // write, the load refuses, and the standing still carries the closed
+        // marker it found, so the rollback puts it back once the root
+        // writes. Perturbation: record `marker_before` after the write and
+        // the refused write records nothing.
+        save_points::write_marker(&config.root, Some(&closed)).unwrap();
+        let mut standing = Standing::default();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&config.root, std::fs::Permissions::from_mode(0o500)).unwrap();
+        }
+        let refused = open_marker(&config.root, &mut standing, "r-1");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&config.root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        assert!(matches!(refused, Err(LifecycleRefusal::BoundaryUnverified)));
+        assert_eq!(standing.marker_before, Some(Some(closed.clone())));
+        save_points::write_marker(
+            &config.root,
+            Some(&save_points::Marker::Open { run: "r-1".into() }),
+        )
+        .unwrap();
+        roll_back(&config, &mut standing);
+        assert_eq!(save_points::read_marker(&config.root), Some(closed));
     }
 
     const TEST_UNLOAD_BOUNDS: UnloadBounds = UnloadBounds {

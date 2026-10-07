@@ -2083,8 +2083,14 @@ complete**: this crate authors no `unload`, answers admin `SavePointNotTaken` na
 which leg, the write, the answer, the acknowledgement's answer, or the member being
 dead, and stays entered at rest with the run open, so the operator retries with
 `save-point` and `unload` or, where the member is dead, forces the unload; nothing is
-silent and the dead-peer conversion does not apply to this ask at the leave. **A forced
-leave takes no save point**: the `Leave` directive's `forced` member, set by admin's
+silent and the dead-peer conversion does not apply to this ask at the leave. **The seam
+stays alive across the miss**: a missed answer or finished leg retires nothing, and before
+its next ask the seam drains, without blocking, whatever lines or part of one the member
+sent late, discarding them and saying so in one diagnostic line with the count, so the
+retry's answer is read as the retry's; a late finished answer's file stands in the room
+unrecorded and is published as recovered at the next publication, the leave's at the
+latest. A missed write, the ask itself unsent, is the dead peer as every send failure is.
+**A forced leave takes no save point**: the `Leave` directive's `forced` member, set by admin's
 `force-unload` alone, has this crate author `unload` with `forced` true, recording that
 the leave's save point was not taken, so the next load, restoring the latest published
 save point, carries the reset admin resolves from its marker. **A save point on demand

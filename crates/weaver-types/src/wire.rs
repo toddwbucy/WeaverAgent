@@ -328,8 +328,9 @@ pub enum LifecycleAnswer {
     SavePointTaken {
         report: SavePointReport,
     },
-    /// The `restore` verb's answer: the save point it judged and entered in
-    /// the manifest as named at a restore.
+    /// The `restore` verb's answer: the save point it judged loadable now
+    /// and, where no line named it, entered in the manifest as named at a
+    /// restore.
     RestoreNamed {
         save_point: String,
         name: String,

@@ -199,9 +199,10 @@ a choice between outcomes that its caller should make is left to the caller, adm
 which reads `show` and issues the next verb. **Three verbs joined with A3.2**, on the operator's rulings of 2026-10-06 on #1 (the A3.0 items): `save-point`, asking the running
 worker for a save point on demand over section 7's channel and publishing it at once,
 per section 6; `restore`, naming the save point the next load restores, which is the one
-the declaration's `[restore]` names, judged and entered in the manifest as named at a
-restore, per section 4, so a file that arrived by no publication becomes loadable only by
-this verb; and `force-unload`, the unload that completes without its leave save point,
+the declaration's `[restore]` names, judged loadable now and, where no line names it,
+entered in the manifest as named at a restore, per section 4, so a file that arrived by
+no publication becomes loadable only by this verb and `RestoreNamed` means named and
+judged loadable now; and `force-unload`, the unload that completes without its leave save point,
 per section 3. Each is one fixed command line with no argument: the save point `restore`
 names is the declaration's and never the caller's, which is why the verb takes none, and
 the operator's rule grants all three, the observer's none. **The live restore of a
@@ -874,8 +875,12 @@ loadable**, whatever stands in the directory: a declaration naming one refuses
 `restore` verb, which judges it as below and appends the line that names it, marked as
 named at a restore, so the manifest records what this crate published and what the
 operator named and nothing else; there is no operator-supplied save point, only a save
-point named at a restore, on item 3. A manifest that stands beside published files and
-does not read, or a named line whose file is absent, refuses `BoundaryUnverified` naming
+point named at a restore, on item 3. **The verb judges a listed name too**: the file is
+opened and judged as the load judges it below before the verb answers, gone refusing
+`BoundaryUnverified` and not digesting to its line refusing `ConfigInvalid` naming
+`restore`, as the load would, so `RestoreNamed` means named and judged loadable now, never
+a line whose file has since gone or changed. A manifest that stands beside published
+files and does not read, or a named line whose file is absent, refuses `BoundaryUnverified` naming
 the manifest, and no manifest and no file is an agent's first load. **The selected save
 point's bytes are judged here**, before any process exists, under this crate's custody
 through the descriptor it opens and never by path: the entry judgment of section 9 (a

@@ -961,16 +961,33 @@ pub fn name_at_restore(
     owner: Owner,
 ) -> Result<ManifestLine, LifecycleRefusal> {
     let lines = read_manifest(directory, owner)?;
+    let refuse_config = || LifecycleRefusal::ConfigInvalid {
+        field: Some(weaver_types::FieldName("restore".into())),
+    };
+    // **A listed name is judged before the verb answers** (Codex on #94,
+    // round 4), per Spec section 4: the operator owns the published file
+    // and it may have gone or changed since its line, so the verb opens
+    // and judges it as the load does, refusing as the load would, and
+    // `RestoreNamed` means named and judged loadable now.
     if let Some(line) = lines
         .iter()
         .rev()
         .find(|line| line.name == named || line.digest == named)
     {
-        return Ok(line.clone());
+        return match open_published(directory, line, operator) {
+            Ok(Some(_)) => Ok(line.clone()),
+            Ok(None) => {
+                diag!(
+                    "weaver-admin: restore names {named}, whose file is gone from the declaration directory"
+                );
+                Err(LifecycleRefusal::BoundaryUnverified)
+            }
+            Err(why) => {
+                diag!("weaver-admin: the save point restore names refuses: {why}");
+                Err(refuse_config())
+            }
+        };
     }
-    let refuse_config = || LifecycleRefusal::ConfigInvalid {
-        field: Some(weaver_types::FieldName("restore".into())),
-    };
     let candidate = ManifestLine {
         ordinal: next_ordinal(&lines),
         digest: String::new(),
@@ -1433,6 +1450,33 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(by_digest.lineage.named_at_restore);
+        // **A listed name is judged at the verb** (Codex on #94, round 4):
+        // the file holding other sound bytes refuses as the load would, gone
+        // it refuses the boundary, and standing again it answers its line.
+        // Perturbation: answer the listed line unjudged and the first two
+        // calls answer.
+        std::fs::write(
+            dir.join(&stray_name),
+            save_point("r-9", 9, 0, 9_000_000_001, b"swapped"),
+        )
+        .unwrap();
+        assert!(matches!(
+            name_at_restore(&dir, me, &stray_name, mine),
+            Err(LifecycleRefusal::ConfigInvalid { .. })
+        ));
+        std::fs::rename(dir.join(&stray_name), dir.join("aside")).unwrap();
+        assert!(matches!(
+            name_at_restore(&dir, me, &stray_digest, mine),
+            Err(LifecycleRefusal::BoundaryUnverified)
+        ));
+        std::fs::rename(dir.join("aside"), dir.join(&stray_name)).unwrap();
+        std::fs::write(dir.join(&stray_name), &stray).unwrap();
+        assert_eq!(
+            name_at_restore(&dir, me, &stray_name, mine)
+                .unwrap()
+                .ordinal,
+            4
+        );
         // A renamed file does not enter.
         std::fs::rename(
             dir.join(&stray_name),
