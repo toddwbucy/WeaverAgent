@@ -1267,7 +1267,12 @@ impl Harness {
                 // refused on its own connection, the gate down, the save
                 // point, and the unload. A leave heard mid-turn runs the same
                 // sequence at the turn's close (`finish_pending_leave`).
-                let (payload, left) = self.leave_sequence(cause, forced, false)?;
+                let (payload, left) = self.leave_sequence(crate::engine::PendingLeave {
+                    answers: Vec::new(),
+                    cause,
+                    forced,
+                    quiesced: false,
+                })?;
                 connection.send(&OrganEnvelope {
                     exchange,
                     position: Position::Close,
@@ -2149,20 +2154,23 @@ impl Harness {
     /// coordination exchange, so the answer carries the identity that arrived
     /// rather than a fresh one this crate numbered.
     /// **The unload's sequence**, per Spec section 6 on the operator's
-    /// rulings of 2026-10-07 on #1, with no turn running: unforced, the gate
-    /// quiesced (unless the turn already did it) and drained, every request
-    /// it admitted refused on its own connection; forced, the held requests
-    /// refused and nothing drained. Then the gate lowered, the leave save
-    /// point taken, and the unload. An unforced leave whose save point is
-    /// not finished stops there, the run entered at rest with its gate down,
-    /// for the retry or the force; a forced one comes down without it, the
-    /// miss recorded as a refusal of the leave. Answers the payload owed to
-    /// every dialer of the leave and whether the run left.
+    /// rulings of 2026-10-07 on #1, with no turn running. Unforced: the gate
+    /// quiesced (unless the turn already did it) and drained, every request it
+    /// admitted refused on its own connection; then the wind-down turn; then
+    /// the gate lowered, its wait hearing the coordination listener so a
+    /// `force-unload` reaches this crate through a drain a non-reading client
+    /// holds. Forced, or turned forced by a `force-unload` joining: the gate
+    /// down at once, no wind-down. Then the leave save point and the unload.
+    /// An unforced leave whose save point is not finished stops there, the
+    /// run entered at rest with its gate down, for the retry or the force; a
+    /// forced one comes down without it, the miss recorded as a refusal of
+    /// the leave. The pending leave rides the run throughout, so the
+    /// wind-down's tool calls are interrupted and a joining force is heard.
+    /// Answers every dialer the leave holds, and returns the payload for the
+    /// caller's own dialer and whether the run left.
     fn leave_sequence(
         &mut self,
-        cause: weaver_types::Cause,
-        forced: bool,
-        quiesced: bool,
+        leave: crate::engine::PendingLeave,
     ) -> Result<(weaver_types::Payload, bool), ChannelFault> {
         let ChannelState::Entered(run) = &mut self.state else {
             return Ok((
@@ -2170,15 +2178,30 @@ impl Harness {
                 false,
             ));
         };
-        let drained = drain_gate(run, forced, quiesced);
-        let lowered = lower_gate(run).or(drained);
+        let coordination = &self.coordination;
+        let drained = drain_gate(run, leave.forced, leave.quiesced);
+        let quiesced = leave.quiesced || !leave.forced;
+        run.pending_leave = Some(leave);
+        if !run.pending_leave.as_ref().is_some_and(|leave| leave.forced) {
+            wind_down(run, coordination);
+        }
+        let forced = run.pending_leave.as_ref().is_some_and(|leave| leave.forced);
+        let lowered = if forced {
+            force_gate_down(run, quiesced)
+        } else {
+            lower_gate(run, Some(coordination))
+        }
+        .or(drained);
+        let leave = run.pending_leave.take().expect("the leave rode the run");
+        let forced = leave.forced;
+        let cause = leave.cause;
         let save_point = match take_save_point(run, Some(cause)) {
             Ok(report) => report,
             Err(missed) if !forced => {
-                return Ok((
-                    weaver_types::Payload::Refusal(LifecycleRefusal::SavePointNotTaken { missed }),
-                    false,
-                ));
+                let payload =
+                    weaver_types::Payload::Refusal(LifecycleRefusal::SavePointNotTaken { missed });
+                answer_all(leave.answers, &payload);
+                return Ok((payload, false));
             }
             Err(missed) => {
                 author_refusal_on(
@@ -2202,11 +2225,12 @@ impl Harness {
             // says so rather than claiming a clean close.
             Err(refusal) => weaver_types::Payload::Refusal(refusal),
         };
+        answer_all(leave.answers, &payload);
         Ok((payload, true))
     }
 
-    /// **A leave heard mid-turn runs at the turn's close**: the sequence,
-    /// then the answer to every dialer the pending leave holds.
+    /// **A leave heard mid-turn runs at the turn's close**, its dialers
+    /// answered inside the sequence.
     fn finish_pending_leave(&mut self) -> Result<bool, ChannelFault> {
         let ChannelState::Entered(run) = &mut self.state else {
             return Ok(false);
@@ -2214,14 +2238,7 @@ impl Harness {
         let Some(leave) = run.pending_leave.take() else {
             return Ok(false);
         };
-        let (payload, left) = self.leave_sequence(leave.cause, leave.forced, leave.quiesced)?;
-        for (connection, exchange) in leave.answers {
-            let _ = connection.send(&OrganEnvelope {
-                exchange,
-                position: Position::Close,
-                payload: payload.clone(),
-            });
-        }
+        let (_, left) = self.leave_sequence(leave)?;
         Ok(left)
     }
 
@@ -2267,7 +2284,7 @@ fn leave(
     cause: Option<weaver_types::Cause>,
     forced: bool,
 ) -> Result<(), LifecycleRefusal> {
-    let lowered = lower_gate(run);
+    let lowered = lower_gate(run, None);
     leave_after(run, cause, forced, lowered)
 }
 
@@ -2371,13 +2388,107 @@ fn refuse_frame(run: &mut Run, channel: &OrganChannel, exchange: ExchangeId) {
 /// the channel drops rather than raced against it; a refusal is answered to
 /// the caller to name as the leave's first. A run with no gate standing
 /// lowers nothing.
-fn lower_gate(run: &mut Run) -> Option<LifecycleRefusal> {
+fn lower_gate(
+    run: &mut Run,
+    coordination: Option<&crate::channel::CoordinationListener>,
+) -> Option<LifecycleRefusal> {
     let gate = run.gate.take()?;
     run.gate_ordinal += 1;
-    let lowered = lower_exchange(run, &gate.channel, run.gate_ordinal);
+    let lowered = lower_exchange(run, &gate.channel, run.gate_ordinal, coordination);
     drop(gate.channel);
     reap(gate.pid);
-    lowered.err()
+    match lowered {
+        Ok(_) | Err(Lowering::Forced) => None,
+        Err(Lowering::Refused(refusal)) => Some(refusal),
+    }
+}
+
+/// **The forced unload takes the gate down at once**: a raised gate is
+/// lowered, its every connection closing; a quiesced one, already holding
+/// nothing new, has its channel closed, on which the gate exits and the
+/// connections it still held close with it, the drain not waited on.
+fn force_gate_down(run: &mut Run, quiesced: bool) -> Option<LifecycleRefusal> {
+    if !quiesced {
+        return lower_gate(run, None);
+    }
+    let gate = run.gate.take()?;
+    drop(gate.channel);
+    reap(gate.pid);
+    None
+}
+
+/// **The wind-down turn's request**, per Spec section 6 on the operator's
+/// ruling of 2026-10-07 on #1: a `user` message the harness authors at every
+/// graceful unload, after the drain and before the gate is lowered.
+pub(crate) const WIND_DOWN_REQUEST: &str = "The agent is unloading now. Summarize the work so far and where it stands, so that it can be resumed after the agent is reloaded. Do not call any tool; a tool call will not run.";
+
+/// **The wind-down turn**, per Spec section 6 on the operator's ruling of
+/// 2026-10-07 on #1: the gate quiesced and drained, the harness tells the
+/// model the agent is unloading and asks it to summarize the work and where
+/// it stands, one generation under the turn's own bound, the request and the
+/// answer authored as any turn's and teed into state as elected. There is no
+/// gate caller, so the answer goes to the record and state alone. A tool call
+/// the model makes is not sent and is recorded interrupted by the unload, the
+/// turn closing there, the pending leave riding the gate port. Run by this
+/// crate outside the loop, as the seeding turn is (`Ports::seed`). The
+/// coordination listener is heard throughout, so a `force-unload` cancels the
+/// generation and joins the leave. A diagnostic binding, or a run with no
+/// model, runs none.
+fn wind_down(run: &mut Run, coordination: &crate::channel::CoordinationListener) {
+    if run.recorder.serving().is_none() {
+        return;
+    }
+    let Some(spu) = run.spu.as_ref() else {
+        return;
+    };
+    let mut slot: Option<OrganChannel> = None;
+    let gate_port = run.gate.as_ref().map(|gate| crate::engine::GatePort {
+        channel: &gate.channel,
+        ordinal: &mut run.gate_ordinal,
+        held: &mut run.held_frames,
+        leave: &mut run.pending_leave,
+    });
+    let mut ports = crate::engine::Ports::grant(
+        &spu.decode,
+        &run.author,
+        &mut run.recorder,
+        &mut run.turn_ordinal,
+        &mut run.turn_in_flight,
+        &run.load,
+        None,
+        coordination,
+        Some(&mut slot),
+        gate_port,
+        run.state.as_mut(),
+        run.classify.as_ref().map(|arm| &arm.channel),
+        &mut run.fullness,
+        &mut run.pressure_reported,
+    );
+    let _ = ports.turn(vec![weaver_traits::Message {
+        role: weaver_traits::Role::User,
+        content: vec![weaver_traits::ContentBlock::Text {
+            text: WIND_DOWN_REQUEST.to_string(),
+        }],
+    }]);
+}
+
+/// Every dialer a leave holds, answered once with the leave's payload.
+fn answer_all(answers: Vec<(OrganChannel, ExchangeId)>, payload: &weaver_types::Payload) {
+    for (connection, exchange) in answers {
+        let _ = connection.send(&OrganEnvelope {
+            exchange,
+            position: Position::Close,
+            payload: payload.clone(),
+        });
+    }
+}
+
+/// How the lower's wait ended other than with the gate's answer.
+enum Lowering {
+    /// The gate refused or failed.
+    Refused(LifecycleRefusal),
+    /// A `force-unload` joined the leave during the wait.
+    Forced,
 }
 
 /// **The lower reads its channel until the gate's own answer**, per Spec
@@ -2397,7 +2508,9 @@ fn lower_exchange(
     run: &mut Run,
     channel: &OrganChannel,
     ordinal: u64,
-) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    coordination: Option<&crate::channel::CoordinationListener>,
+) -> Result<LifecycleAnswer, Lowering> {
+    use std::os::fd::AsFd;
     channel
         .send(&OrganEnvelope {
             exchange: ExchangeId {
@@ -2407,9 +2520,34 @@ fn lower_exchange(
             position: Position::Open,
             payload: weaver_types::Payload::Directive(LifecycleDirective::Lower),
         })
-        .map_err(|_| LifecycleRefusal::NoResidency)?;
+        .map_err(|_| Lowering::Refused(LifecycleRefusal::NoResidency))?;
     loop {
-        let envelope = channel.recv().map_err(|_| LifecycleRefusal::NoResidency)?;
+        // **The coordination listener is heard while the gate drains its
+        // last writes** (the operator's go of 2026-10-07 on #1): a client
+        // that will not read its answer holds the gate's stop, and a
+        // `force-unload` must still reach this crate to take the save point,
+        // never falling to admin's escalation while the harness lives.
+        if let Some(listener) = coordination {
+            let mut fds = [
+                nix::poll::PollFd::new(channel.as_fd(), nix::poll::PollFlags::POLLIN),
+                nix::poll::PollFd::new(listener.as_fd(), nix::poll::PollFlags::POLLIN),
+            ];
+            match nix::poll::poll(&mut fds, nix::poll::PollTimeout::NONE) {
+                Ok(_) | Err(nix::errno::Errno::EINTR) => {}
+                Err(_) => return Err(Lowering::Refused(LifecycleRefusal::NoResidency)),
+            }
+            let gate_ready = fds[0].revents().is_some_and(|r| !r.is_empty());
+            let dialed = fds[1].revents().is_some_and(|r| !r.is_empty());
+            if !gate_ready {
+                if dialed && hear_during_lower(run, listener) {
+                    return Err(Lowering::Forced);
+                }
+                continue;
+            }
+        }
+        let envelope = channel
+            .recv()
+            .map_err(|_| Lowering::Refused(LifecycleRefusal::NoResidency))?;
         match envelope.payload {
             weaver_types::Payload::Frame(_) if envelope.exchange.opener == Opener::Gate => {
                 refuse_frame(run, channel, envelope.exchange);
@@ -2421,12 +2559,55 @@ fn lower_exchange(
             }
             weaver_types::Payload::Answer(answer) => return Ok(answer),
             weaver_types::Payload::Refusal(reason) => {
-                return Err(LifecycleRefusal::OrganRefused {
+                return Err(Lowering::Refused(LifecycleRefusal::OrganRefused {
                     organ: weaver_types::RefusingOrgan::Gate,
                     reason: Box::new(reason),
-                });
+                }));
             }
-            _ => return Err(LifecycleRefusal::Malformed),
+            _ => return Err(Lowering::Refused(LifecycleRefusal::Malformed)),
+        }
+    }
+}
+
+/// **One verb heard while the gate drains**: a forced leave joins the pending
+/// leave and turns it forced, answering `true`; an observation answers
+/// `Active`; anything else is out of order while the leave is pending.
+fn hear_during_lower(run: &mut Run, listener: &crate::channel::CoordinationListener) -> bool {
+    let Ok(connection) = listener.accept_root() else {
+        return false;
+    };
+    let Ok(envelope) = connection.recv() else {
+        return false;
+    };
+    let exchange = envelope.exchange.clone();
+    let reply = |payload| {
+        let _ = connection.send(&OrganEnvelope {
+            exchange: exchange.clone(),
+            position: Position::Close,
+            payload,
+        });
+    };
+    match envelope.payload {
+        weaver_types::Payload::Directive(LifecycleDirective::Leave { forced: true, .. }) => {
+            if let Some(leave) = run.pending_leave.as_mut() {
+                leave.forced = true;
+                leave.answers.push((connection, exchange));
+                return true;
+            }
+            reply(weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder));
+            false
+        }
+        weaver_types::Payload::Directive(LifecycleDirective::Observe) => {
+            reply(weaver_types::Payload::Answer(LifecycleAnswer::State {
+                state: weaver_types::AgentState::Active,
+                load: Some(Box::new(run.load.clone())),
+                constituents: Vec::new(),
+            }));
+            false
+        }
+        _ => {
+            reply(weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder));
+            false
         }
     }
 }
@@ -3560,6 +3741,115 @@ mod tests {
         /// ahead of `GateQuiesced`, as the real gate flushes its pending
         /// frames before the answer.
         FrameAtQuiesce,
+        /// A `Leave`, forced or not, against a run whose model answers: an
+        /// SPU stand-in keeping the real SPU's order stands in for the dead
+        /// arm, so the wind-down turn has a model to ask.
+        WindDown {
+            forced: bool,
+        },
+        /// A leave heard mid-turn, run at the turn's close: the pending leave
+        /// stands as the engine leaves it (quiesced, its `GateQuiesced`
+        /// shelved with the held envelopes) and the serve loop's hook runs it.
+        WindDownAfterTurn,
+        /// An unforced `Leave` whose gate stand-in never answers the `Lower`,
+        /// as a gate whose client will not read its answer, while a
+        /// `force-unload` dials the coordination listener. Needs root: the
+        /// listener admits root alone.
+        StalledDrain,
+    }
+
+    /// **An SPU stand-in keeping the real SPU's order**, for the wind-down
+    /// watches: it mirrors `weaver-spu/src/main.rs`, answering an
+    /// `AppendAndGenerate` with one completed generation (the decode arm at
+    /// line 596) and a `Release` with `Released` once the device is free (the
+    /// `(Admitted, Release)` arm at line 1612). Each generation it is asked
+    /// for is marked in the fixture's order with the delta's text. A child
+    /// stands in for the pid, reaped by the leave as the real SPU is.
+    fn stand_in_spu(order: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> SpuChannels {
+        use nix::sys::socket::{
+            AddressFamily, MsgFlags, SockFlag, SockType, recv, send, socketpair,
+        };
+        use std::os::fd::AsRawFd;
+        let (near, far) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("a decode pair");
+        let decode = crate::channel::decode_from_owned(near);
+        let decode_order = order.clone();
+        std::thread::spawn(move || {
+            let mut buffer = vec![0u8; 1 << 20];
+            loop {
+                let Ok(n) = recv(far.as_raw_fd(), &mut buffer, MsgFlags::empty()) else {
+                    return;
+                };
+                if n == 0 {
+                    return;
+                }
+                let Ok(directive) =
+                    serde_json::from_slice::<weaver_types::TokenDirective>(&buffer[..n])
+                else {
+                    return;
+                };
+                if let weaver_types::TokenDirective::AppendAndGenerate { delta, .. } = directive {
+                    let text = serde_json::to_string(&delta).unwrap_or_default();
+                    decode_order
+                        .lock()
+                        .unwrap()
+                        .push(format!("<model asked> {text}"));
+                    let generated =
+                        weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+                            content: vec![weaver_traits::ContentBlock::Text {
+                                text: "The summary: work stands at the fixture.".into(),
+                            }],
+                            emission: "The summary: work stands at the fixture.".into(),
+                            finish: weaver_types::Finish::Completed,
+                            resident: 64,
+                            capacity: 4096,
+                            request: serde_json::value::RawValue::from_string(
+                                r#"{"rendered":"fixture"}"#.into(),
+                            )
+                            .unwrap(),
+                            measurement: serde_json::value::RawValue::from_string("{}".into())
+                                .unwrap(),
+                        });
+                    let _ = send(
+                        far.as_raw_fd(),
+                        &serde_json::to_vec(&generated).unwrap(),
+                        MsgFlags::empty(),
+                    );
+                }
+            }
+        });
+        let (lifecycle, lifecycle_far) = OrganChannel::pair().expect("a lifecycle pair");
+        std::thread::spawn(move || {
+            let channel = lifecycle_far.into_channel();
+            while let Ok(envelope) = channel.recv() {
+                if matches!(
+                    envelope.payload,
+                    weaver_types::Payload::Directive(LifecycleDirective::Release)
+                ) {
+                    let _ = channel.send(&OrganEnvelope {
+                        exchange: envelope.exchange,
+                        position: Position::Close,
+                        payload: weaver_types::Payload::Answer(LifecycleAnswer::Released),
+                    });
+                }
+            }
+        });
+        // Reaped by pid in the leave, as the real SPU is.
+        #[allow(clippy::zombie_processes)]
+        let child = std::process::Command::new("true")
+            .spawn()
+            .expect("a child to reap");
+        SpuChannels {
+            lifecycle,
+            decode,
+            pid: nix::unistd::Pid::from_raw(child.id() as i32),
+            last_word: crate::spawn::LastWord::quiet(),
+        }
     }
 
     /// The enter against a member stub, left as `mode` says. Answers the
@@ -3731,7 +4021,10 @@ mod tests {
                     LeaveMode::Directive { .. }
                     | LeaveMode::SavePoint
                     | LeaveMode::QueuedFrame
-                    | LeaveMode::FrameAtQuiesce => {
+                    | LeaveMode::FrameAtQuiesce
+                    | LeaveMode::WindDown { .. }
+                    | LeaveMode::WindDownAfterTurn
+                    | LeaveMode::StalledDrain => {
                         // The fixture's SPU never admitted, its exec having
                         // failed: its dead arm is dropped and reaped here so
                         // the leave's answer is the save point's and not the
@@ -3771,6 +4064,11 @@ mod tests {
                         let gate_order = order.clone();
                         let queue_frame = matches!(mode, LeaveMode::QueuedFrame);
                         let frame_at_quiesce = matches!(mode, LeaveMode::FrameAtQuiesce);
+                        // Quiesced already, as the engine leaves the gate
+                        // for a leave heard mid-turn.
+                        let starts_draining = matches!(mode, LeaveMode::WindDownAfterTurn);
+                        // A gate whose last client will not read its answer.
+                        let stalls = matches!(mode, LeaveMode::StalledDrain);
                         gate_stand_in = Some(std::thread::spawn(move || {
                             let channel = gate_far.into_channel();
                             let admitted = |ordinal| OrganEnvelope {
@@ -3786,7 +4084,7 @@ mod tests {
                             if queue_frame {
                                 channel.send(&admitted(1)).expect("the frame queues");
                             }
-                            let mut draining = false;
+                            let mut draining = starts_draining;
                             while let Ok(envelope) = channel.recv() {
                                 match envelope.payload {
                                     weaver_types::Payload::Directive(
@@ -3823,6 +4121,50 @@ mod tests {
                                         } else {
                                             "<gate lowered at once>".into()
                                         });
+                                        if stalls {
+                                            // `finish_lower` defers the
+                                            // answer while a write stands:
+                                            // nothing comes until the
+                                            // harness closes the channel.
+                                            // A patience bound beyond the
+                                            // real gate's, so a harness
+                                            // that never hears the force
+                                            // fails the watch rather than
+                                            // hanging it.
+                                            use std::os::fd::AsFd;
+                                            let until = std::time::Instant::now()
+                                                + std::time::Duration::from_secs(5);
+                                            loop {
+                                                let mut fds = [nix::poll::PollFd::new(
+                                                    channel.as_fd(),
+                                                    nix::poll::PollFlags::POLLIN,
+                                                )];
+                                                let ready = nix::poll::poll(&mut fds, 50u16)
+                                                    .unwrap_or(0)
+                                                    > 0;
+                                                if ready && channel.recv().is_err() {
+                                                    gate_order
+                                                        .lock()
+                                                        .unwrap()
+                                                        .push("<gate channel closed>".into());
+                                                    break;
+                                                }
+                                                if std::time::Instant::now() > until {
+                                                    gate_order.lock().unwrap().push(
+                                                        "<gate stopped past its patience>".into(),
+                                                    );
+                                                    let _ = channel.send(&OrganEnvelope {
+                                                        exchange: envelope.exchange.clone(),
+                                                        position: Position::Close,
+                                                        payload: weaver_types::Payload::Answer(
+                                                            LifecycleAnswer::GateStopped,
+                                                        ),
+                                                    });
+                                                    break;
+                                                }
+                                            }
+                                            break;
+                                        }
                                         let _ = channel.send(&OrganEnvelope {
                                             exchange: envelope.exchange,
                                             position: Position::Close,
@@ -3840,6 +4182,27 @@ mod tests {
                             drop(spu.decode);
                             drop(spu.lifecycle);
                             reap(spu.pid);
+                        }
+                        if matches!(
+                            mode,
+                            LeaveMode::WindDown { .. } | LeaveMode::WindDownAfterTurn
+                        ) {
+                            run.spu = Some(stand_in_spu(order.clone()));
+                        }
+                        if matches!(mode, LeaveMode::WindDownAfterTurn) {
+                            // The engine's shelf after a mid-turn leave: the
+                            // gate's `GateQuiesced`, and the leave pending
+                            // with its dialer.
+                            run.held_frames.push_back(OrganEnvelope {
+                                exchange: ExchangeId {
+                                    opener: Opener::Harness,
+                                    ordinal: 99,
+                                },
+                                position: Position::Close,
+                                payload: weaver_types::Payload::Answer(
+                                    LifecycleAnswer::GateQuiesced,
+                                ),
+                            });
                         }
                         harness.state = ChannelState::Entered(run);
                         let (connection, admin_peer) = OrganChannel::pair().expect("leave pair");
@@ -3875,20 +4238,82 @@ mod tests {
                                 cause: weaver_types::Cause { uid: 1000 },
                                 forced,
                             },
-                            LeaveMode::QueuedFrame | LeaveMode::FrameAtQuiesce => {
-                                LifecycleDirective::Leave {
-                                    cause: weaver_types::Cause { uid: 1000 },
-                                    forced: false,
-                                }
-                            }
+                            LeaveMode::QueuedFrame
+                            | LeaveMode::FrameAtQuiesce
+                            | LeaveMode::StalledDrain
+                            | LeaveMode::WindDownAfterTurn => LifecycleDirective::Leave {
+                                cause: weaver_types::Cause { uid: 1000 },
+                                forced: false,
+                            },
+                            LeaveMode::WindDown { forced } => LifecycleDirective::Leave {
+                                cause: weaver_types::Cause { uid: 1000 },
+                                forced,
+                            },
                             _ => LifecycleDirective::SavePoint {
                                 cause: weaver_types::Cause { uid: 1000 },
                             },
                         };
-                        harness
-                            .dispatch_on(&connection, test_exchange(), directive, None, None)
-                            .expect("the directive dispatches");
+                        // **The force during a stalled drain**: once the
+                        // gate has the `Lower` and holds it, a
+                        // `force-unload` dials as admin does, as root.
+                        let forcing = matches!(mode, LeaveMode::StalledDrain).then(|| {
+                            let force_order = order.clone();
+                            let socket = dir.join("coordination.sock");
+                            std::thread::spawn(move || {
+                                let until =
+                                    std::time::Instant::now() + std::time::Duration::from_secs(10);
+                                while !force_order
+                                    .lock()
+                                    .unwrap()
+                                    .iter()
+                                    .any(|mark| mark == "<gate lowered>")
+                                {
+                                    assert!(std::time::Instant::now() < until, "the lower");
+                                    std::thread::sleep(std::time::Duration::from_millis(5));
+                                }
+                                let force = OrganChannel::dial_for_test(&socket);
+                                force
+                                    .send(&OrganEnvelope {
+                                        exchange: ExchangeId {
+                                            opener: Opener::Admin,
+                                            ordinal: 1,
+                                        },
+                                        position: Position::Open,
+                                        payload: weaver_types::Payload::Directive(
+                                            LifecycleDirective::Leave {
+                                                cause: weaver_types::Cause { uid: 0 },
+                                                forced: true,
+                                            },
+                                        ),
+                                    })
+                                    .expect("the force is sent");
+                                let answered = force.recv().expect("the force is answered");
+                                force_order
+                                    .lock()
+                                    .unwrap()
+                                    .push(format!("<force answered> {:?}", answered.payload));
+                            })
+                        });
+                        if matches!(mode, LeaveMode::WindDownAfterTurn) {
+                            // The serve loop's hook at the turn's close.
+                            if let ChannelState::Entered(run) = &mut harness.state {
+                                run.pending_leave = Some(crate::engine::PendingLeave {
+                                    answers: vec![(connection, test_exchange())],
+                                    cause: weaver_types::Cause { uid: 1000 },
+                                    forced: false,
+                                    quiesced: true,
+                                });
+                            }
+                            assert!(harness.finish_pending_leave().expect("the leave runs"));
+                        } else {
+                            harness
+                                .dispatch_on(&connection, test_exchange(), directive, None, None)
+                                .expect("the directive dispatches");
+                        }
                         answer = Some(admin_peer.recv().expect("the leave answers").payload);
+                        if let Some(forcing) = forcing {
+                            forcing.join().expect("the force thread");
+                        }
                         still_entered = matches!(harness.state, ChannelState::Entered(_));
                         if let ChannelState::Entered(run) =
                             std::mem::replace(&mut harness.state, ChannelState::Left)
@@ -4205,6 +4630,216 @@ mod tests {
                     },
                 }
             ))
+        );
+    }
+
+    /// The wind-down's account in one run's record and order: the request
+    /// and the answer authored before the save point, the model asked after
+    /// the drain and before the gate was lowered.
+    fn assert_wound_down(events: &[serde_json::Value], read: &[String]) {
+        let at = |mark: &str| {
+            read.iter()
+                .position(|line| line.starts_with(mark))
+                .unwrap_or_else(|| panic!("{mark} in {read:?}"))
+        };
+        assert!(
+            at("<model asked>") < at("<gate lowered>")
+                && at("<gate lowered>") < at(r#"{"ask":{"snapshot""#),
+            "the wind-down before the lower, the lower before the save point: {read:?}"
+        );
+        assert!(read[at("<model asked>")].contains("The agent is unloading now"));
+        let kind_at = |kind: &str, text: Option<&str>| {
+            events
+                .iter()
+                .position(|e| {
+                    e["kind"] == kind && text.is_none_or(|text| e.to_string().contains(text))
+                })
+                .unwrap_or_else(|| panic!("{kind} on the record: {events:?}"))
+        };
+        let request = kind_at("message.user", Some("The agent is unloading now"));
+        let summary = kind_at("message.assistant", Some("The summary"));
+        let save_point = kind_at("save_point", None);
+        assert!(request < summary && summary < save_point, "{events:?}");
+    }
+
+    /// **A graceful leave at rest runs the wind-down turn**, per
+    /// `weaver-harness-Spec` section 6 on the operator's ruling of
+    /// 2026-10-07 on #1: after the drain and before the gate is lowered, the
+    /// model is told the agent is unloading and asked to summarize, one
+    /// generation, its request and answer on the record before the save
+    /// point. Perturbation: skip the wind-down and no request is recorded.
+    #[test]
+    fn a_graceful_leave_at_rest_runs_the_wind_down_before_the_save_point() {
+        let (events, _, read, answer, still_entered) = enter_against_a_member_leaving(
+            None,
+            false,
+            EMPTY_RESTORED,
+            LeaveMode::WindDown { forced: false },
+        );
+        assert!(!still_entered);
+        assert!(
+            matches!(
+                answer,
+                Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                    save_point: Some(_)
+                }))
+            ),
+            "{answer:?}"
+        );
+        assert!(
+            read.iter().position(|l| l.starts_with("<gate quiesced>"))
+                < read.iter().position(|l| l.starts_with("<model asked>"))
+        );
+        assert_wound_down(&events, &read);
+    }
+
+    /// **A leave heard mid-turn runs the wind-down at the turn's close**:
+    /// the serve loop's hook takes the pending leave the engine left (the gate
+    /// quiesced, its answer shelved) and runs the sequence, the wind-down
+    /// among it, answering the leave's dialer `Left`. Perturbation: run the
+    /// pending leave without the wind-down and no request is recorded.
+    #[test]
+    fn a_leave_heard_mid_turn_runs_the_wind_down_at_the_turns_close() {
+        let (events, _, read, answer, still_entered) = enter_against_a_member_leaving(
+            None,
+            false,
+            EMPTY_RESTORED,
+            LeaveMode::WindDownAfterTurn,
+        );
+        assert!(!still_entered);
+        assert!(
+            matches!(
+                answer,
+                Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                    save_point: Some(_)
+                }))
+            ),
+            "{answer:?}"
+        );
+        assert_wound_down(&events, &read);
+    }
+
+    /// **A forced leave runs no wind-down**, on the operator's ruling of
+    /// 2026-10-07 on #1, no further tokens: the gate down at once, the save
+    /// point taken, and the model never asked. Perturbation: run the
+    /// wind-down on a forced leave and the model is asked.
+    #[test]
+    fn a_forced_leave_runs_no_wind_down() {
+        let (events, _, read, answer, _) = enter_against_a_member_leaving(
+            None,
+            false,
+            EMPTY_RESTORED,
+            LeaveMode::WindDown { forced: true },
+        );
+        assert!(
+            matches!(
+                answer,
+                Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                    save_point: Some(_)
+                }))
+            ),
+            "{answer:?}"
+        );
+        assert!(
+            !read.iter().any(|line| line.starts_with("<model asked>")),
+            "no further tokens on a forced leave: {read:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.to_string().contains("The agent is unloading now"))
+        );
+    }
+
+    /// **A `force-unload` reaches the harness through a stalled drain**, per
+    /// `weaver-harness-Spec` section 6 on the operator's go of 2026-10-07 on
+    /// #1: the gate holds its `GateStopped` for a client that will not read
+    /// (the stand-in never answers the `Lower`), the lower's wait hears the
+    /// coordination listener, the forced leave joins, the gate's channel is
+    /// closed so it comes down at once, the save point is taken, and both
+    /// dialers are answered `Left` naming it. Needs root, the listener
+    /// admitting root alone: run inside a user namespace by the watch below.
+    /// Perturbation: wait on the gate alone and the force is never heard, the
+    /// fixture's bound failing.
+    #[test]
+    #[ignore = "needs root in a user namespace; run by the_leave_instruments_are_watched_inside_a_user_namespace"]
+    fn a_force_reaches_a_stalled_drain_and_keeps_state() {
+        assert!(
+            nix::unistd::geteuid().is_root(),
+            "this instrument needs euid 0"
+        );
+        let (events, _, read, answer, still_entered) =
+            enter_against_a_member_leaving(None, false, EMPTY_RESTORED, LeaveMode::StalledDrain);
+        assert!(!still_entered);
+        assert!(
+            matches!(
+                answer,
+                Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                    save_point: Some(_)
+                }))
+            ),
+            "the draining leave's dialer is answered with the save point: {answer:?}"
+        );
+        let forced = read
+            .iter()
+            .find(|line| line.starts_with("<force answered>"))
+            .unwrap_or_else(|| panic!("the force was answered: {read:?}"));
+        assert!(
+            forced.contains("Left") && forced.contains("save_point: Some"),
+            "{forced}"
+        );
+        assert!(
+            read.iter().any(|line| line == "<gate channel closed>"),
+            "{read:?}"
+        );
+        let unload = events
+            .iter()
+            .find(|e| e["kind"] == "unload")
+            .expect("an unload");
+        assert_eq!(unload["payload"]["forced"], true, "{unload}");
+        assert!(events.iter().any(|e| e["kind"] == "save_point"));
+    }
+
+    /// The watch: re-runs the root instruments of the leave inside `unshare
+    /// --map-root-user`, where the coordination listener admits the test as
+    /// admin. A box with no user namespace says so and skips.
+    #[test]
+    fn the_leave_instruments_are_watched_inside_a_user_namespace() {
+        if nix::unistd::geteuid().is_root() {
+            return;
+        }
+        let exe = std::env::current_exe().expect("the test binary names itself");
+        let ran = std::process::Command::new("unshare")
+            .arg("--map-root-user")
+            .arg(&exe)
+            .args([
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+                "a_force_reaches_a_stalled_drain_and_keeps_state",
+                "a_second_dial_during_a_held_turn",
+            ])
+            .stdin(std::process::Stdio::null())
+            .output();
+        let output = match ran {
+            Ok(output) => output,
+            Err(e) => {
+                eprintln!("SKIP leave watch: unshare could not run: {e}");
+                return;
+            }
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.starts_with("unshare:") {
+            eprintln!(
+                "SKIP leave watch: no user namespace here: {}",
+                stderr.trim()
+            );
+            return;
+        }
+        assert!(
+            output.status.success() && stdout.contains("test result: ok. 2 passed"),
+            "the leave instruments failed inside the namespace\nstdout:\n{stdout}\nstderr:\n{stderr}"
         );
     }
 

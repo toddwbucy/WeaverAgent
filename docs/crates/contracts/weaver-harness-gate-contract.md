@@ -218,6 +218,12 @@ holds. **Containment beyond the group is owed**, a boundary holding every
 descendant whatever group it enters, and it lands with its own Spec clause
 and lifecycle tests rather than as a promise here.
 
+**Interrupt the execution for the unload**, on the operator's rulings of 2026-10-07 on
+#1: `ToolInterrupt`, sent as the cancel is, inside an open execution at the continue
+position, when the agent's unload interrupts a tool call. The gate ends the execution as
+at a cancel and answers `Killed { by: unload }`, so the record names the unload in the
+gate's own word and the call reads as never finished, re-runnable after the reload.
+
 **Cancel the execution, on the operator's ruling of 2026-09-22.** Sent by
 the harness inside an open execution exchange, at the continue position the
 channel has carried unused until this act, and carrying nothing beyond its

@@ -412,7 +412,10 @@ fn serve_channel_event(channel: &Channel, state: &mut HookState) -> Result<(), E
     // A cancel may cross the answer in flight. It has no answer of its own.
     if envelope.exchange.opener == Opener::Harness
         && envelope.position == Position::Continue
-        && matches!(envelope.payload, Payload::ToolCancel)
+        && matches!(
+            envelope.payload,
+            Payload::ToolCancel | Payload::ToolInterrupt
+        )
     {
         return Ok(());
     }

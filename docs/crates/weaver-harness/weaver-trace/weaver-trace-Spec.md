@@ -843,8 +843,8 @@ declaration's digest nor the tuple, so granting a reader never makes the record 
 agent's. `cause` is who changed the agent, the uid sudo reports and nothing else, which
 person asked being WeaverWeb's record and never this one. It rides the `load` event, the
 `unload` event's `UnloadClose` where a leave asked, the worker's own unwind after a
-fault carrying none, and a turn closed by the operator's stop, where `Stopped` carries
-it and every other stop reason carries none. The harness authors all three from what
+fault carrying none, and a turn closed by the operator's stop or by the agent's unload,
+where `Stopped` carries it and every other stop reason carries none. The harness authors all three from what
 admin handed it, admin never writing this record. A read or a refusal changes nothing in
 the agent and is admin's operations log's, never the trace's.
 
@@ -962,7 +962,18 @@ set is four seam vocabularies wide and grows with the seams, and declaring
 it here would make this crate depend on what it must not depend on and
 version what it does not own.
 
-**`StopReason` gains `Refused`**, per the charter's same-act edit. It is a
+**`StopReason` gains `Unload`, and the tool outcome's `by` gains `unload`**, a trace
+Spec election of A3.2 on the operator's rulings of 2026-10-07 on #1, made so the record
+names an unload's interruption and not only that something stopped the turn: a turn
+the agent's unload ended, gracefully with a tool call out or forced, closes `Stopped {
+reason: unload, cause }` with the unload's cause, and the call it carried completes
+`Killed { by: unload }`, in the gate's own word for a call the gate was running and in
+the harness's for one it never sent. Two values on members that stand, `reason` on the
+close and `by` on the kill, rather than a new member, because each member already says
+what ended its thing and an unload is one more answer to that question; and `unload`
+rather than the stop's `directive` because a re-run after the reload is owed to an
+unload's interruption and not to an operator's stop. **`StopReason` gains `Refused`**,
+per the charter's same-act edit. It is a
 satellite by section 12 and its variants are not enumerated here, but the
 addition is the charter's rather than a naming choice: a close that cannot
 say a refusal ended the turn says something else instead.

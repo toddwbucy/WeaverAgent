@@ -1083,6 +1083,7 @@ pub enum Payload {
     Tool(ToolExecution),
     ToolAnswer(ToolOutcome),
     ToolCancel,
+    ToolInterrupt,
 }
 
 pub enum RefusingOrgan {
@@ -1228,6 +1229,7 @@ pub enum ToolOutcome {
 pub enum KillCause {
     Clock,
     Cancel,
+    Unload,
 }
 ```
 

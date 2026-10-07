@@ -662,7 +662,11 @@ forced. `force-unload` is `unload` in every
 other respect, the same waits and the same escalation.
 
 **A forced unload's leave has a bound of its own, sixty seconds from the verb's start**,
-once the invocation lock is held (a graceful unload's has none, above): the observation and both dials spend it, so `unload` holds the
+once the invocation lock is held (a graceful unload's has none, above). **The escalation
+it leads to is the last resort**, on the operator's go of 2026-10-07 on #1: the harness
+hears a `force-unload` even through a drain a non-reading client holds, and takes the
+save point, so the bound expires only where the harness itself does not answer, the
+run then ended with no save point taken, which `admin.log` records as such. The bound: the observation and both dials spend it, so `unload` holds the
 invocation lock at most those sixty seconds and the escalation's forty-five, 105 in all,
 the number a caller builds against beside `show`'s short wait for the lock. A worker
 that accepts leave and answers nothing inside it is a worker that would not exit: the

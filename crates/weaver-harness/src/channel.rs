@@ -423,6 +423,31 @@ impl CoordinationListener {
 }
 
 impl OrganChannel {
+    /// **A test's dial of a coordination listener**, as admin dials one: a
+    /// `SOCK_SEQPACKET` connection to the socket's path, its receive bounded
+    /// at 15 seconds. Test-only, the harness itself never dials.
+    #[cfg(test)]
+    pub(crate) fn dial_for_test(path: &std::path::Path) -> OrganChannel {
+        use nix::sys::socket::{UnixAddr, connect, socket};
+        let fd = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("a socket");
+        connect(fd.as_raw_fd(), &UnixAddr::new(path).expect("an address")).expect("the dial");
+        // A dial the harness never hears fails its test rather than hanging
+        // it: the receive is bounded.
+        nix::sys::socket::setsockopt(
+            &fd,
+            nix::sys::socket::sockopt::ReceiveTimeout,
+            &nix::sys::time::TimeVal::new(15, 0),
+        )
+        .expect("a bounded receive");
+        OrganChannel { end: fd }
+    }
+
     /// Creates a pair with close-on-exec set atomically at creation by
     /// `SOCK_CLOEXEC` in the `socketpair` call rather than by a later `fcntl`.
     ///

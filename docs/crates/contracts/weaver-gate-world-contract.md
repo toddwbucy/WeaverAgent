@@ -187,12 +187,15 @@ response path, as extensions to this page rather than replacements of it.
   further input. A request the gate received and the agent had not started is answered
   with the refused close naming the unload, `{"kind":"refused","reason":"the agent is
   unloading"}`, its connection still standing, and the refusal is recorded. The gate
-  goes down only after those answers are written. **An unload may therefore take the
-  length of a turn**, with no time bound of its own beyond the turn's.
+  goes down only after those answers are written. Before it goes down the agent runs one
+  wind-down turn of its own, asking its model to summarize where the work stands for
+  the reload; it answers no dialer. **An unload may therefore take the length of a turn
+  and one more generation**, with no time bound of its own beyond the turns' limits.
 - **What a tool's return sees at an unload**: a tool call out at the gate when the
   unload arrives is interrupted, since its return would come through a gate that
-  accepts no further input; the trace records it killed by the cancel and the turn
-  closes there, its answer given to its dialer.
+  accepts no further input; the trace records it killed by the unload, never finished
+  and to be run again after the reload, and the turn closes there, its answer given to
+  its dialer.
 - **A forced unload does not wait**: the gate closes at once, every connection closing
   unanswered, the turn in flight cancelled, its cancellation recorded as a stop.
 - A line that does not parse is a refused turn, per section 2.

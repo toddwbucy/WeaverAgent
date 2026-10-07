@@ -205,8 +205,8 @@ fn run_in_home(
                 }
                 let slice = remaining.min(std::time::Duration::from_millis(25));
                 match supervision_wait(channel, exchange, slice) {
-                    Ok(true) => break Ok(Some(KillCause::Cancel)),
-                    Ok(false) => {}
+                    Ok(Some(cause)) => break Ok(Some(cause)),
+                    Ok(None) => {}
                     Err(fault) => break Err(ShellEnd::Channel(fault)),
                 }
             }
@@ -261,23 +261,26 @@ fn supervision_wait(
     channel: &Channel,
     exchange: &ExchangeId,
     slice: std::time::Duration,
-) -> Result<bool, ChannelFault> {
+) -> Result<Option<KillCause>, ChannelFault> {
     use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
     let mut fds = [PollFd::new(channel.as_fd(), PollFlags::POLLIN)];
     let timeout = PollTimeout::try_from(slice).expect("the supervision slice fits poll");
     #[cfg(test)]
     tests::wait_entered();
     match poll(&mut fds, timeout) {
-        Ok(0) | Err(nix::errno::Errno::EINTR) => return Ok(false),
+        Ok(0) | Err(nix::errno::Errno::EINTR) => return Ok(None),
         Err(_) => return Err(ChannelFault::Closed),
         Ok(_) => {}
     }
     let envelope = channel.recv()?;
-    if envelope.exchange == *exchange
-        && envelope.position == Position::Continue
-        && matches!(envelope.payload, Payload::ToolCancel)
-    {
-        return Ok(true);
+    if envelope.exchange == *exchange && envelope.position == Position::Continue {
+        // The operator's stop, or the agent's unload, which the record names
+        // as such (the operator's rulings of 2026-10-07 on #1).
+        match envelope.payload {
+            Payload::ToolCancel => return Ok(Some(KillCause::Cancel)),
+            Payload::ToolInterrupt => return Ok(Some(KillCause::Unload)),
+            _ => {}
+        }
     }
     // A misplaced message is refused as at rest. Continue supervising the
     // live group regardless, and never let a bad sender bypass cleanup.
@@ -286,7 +289,7 @@ fn supervision_wait(
         position: Position::Close,
         payload: Payload::Refusal(LifecycleRefusal::OutOfOrder),
     })?;
-    Ok(false)
+    Ok(None)
 }
 
 /// Captured bytes from one pipe. I/O failure travels as an error, never as
@@ -512,6 +515,53 @@ mod tests {
             started.elapsed() < Duration::from_millis(800),
             "cancel spent the clock: {:?}",
             started.elapsed()
+        );
+    }
+
+    /// **An interrupt kills the call as the unload's**, on the operator's
+    /// rulings of 2026-10-07 on #1: the harness's `ToolInterrupt` ends the
+    /// execution as a cancel does and the gate answers `Killed { by: unload }`,
+    /// naming the unload in its own word. Perturbation: answer the interrupt
+    /// as a cancel and the outcome reads `cancel`.
+    #[test]
+    fn an_interrupt_kills_the_call_as_the_unloads() {
+        use std::time::Duration;
+        let (gate, harness) = pair();
+        let (entered, waiting) = std::sync::mpsc::sync_channel(1);
+        WAIT_ENTERED.with(|slot| *slot.borrow_mut() = Some(entered));
+        let peer = std::thread::spawn(move || {
+            waiting
+                .recv_timeout(Duration::from_secs(2))
+                .expect("supervision entered");
+            harness
+                .send(&OrganEnvelope {
+                    exchange: exchange(),
+                    position: Position::Continue,
+                    payload: Payload::ToolInterrupt,
+                })
+                .unwrap();
+            harness
+        });
+        let outcome = super::execute(
+            &ToolExecution {
+                name: ToolName(SHELL_NAME.into()),
+                arguments: r#"{"command":"sleep 5"}"#.into(),
+                clock_ms: 2_000,
+            },
+            &gate,
+            &exchange(),
+        )
+        .unwrap();
+        let _harness = peer.join().unwrap();
+        assert!(
+            matches!(
+                outcome,
+                ToolOutcome::Killed {
+                    by: KillCause::Unload,
+                    ..
+                }
+            ),
+            "{outcome:?}"
         );
     }
 

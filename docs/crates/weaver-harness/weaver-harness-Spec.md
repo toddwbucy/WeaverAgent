@@ -2071,14 +2071,31 @@ this crate sending `Quiesce` the moment the leave is heard, at rest or mid-turn,
 tool execution's cancel where a tool call is out; then a turn in flight finishes what
 it can without further input, its answer going to its dialer through the still-standing
 connection, and a tool call out at the gate, whose return would come through a gate
-that accepts no further input, is cancelled and recorded killed by the cancel, the turn
-closing as stopped by the directive, while a call asked after the leave was heard is
-not sent and is recorded the same way; then every request the gate admitted and the
-agent had not started is refused on its own exchange with the `refused` close naming
-the unload and recorded as a refusal of the leave, this crate reading the gate channel
-until `GateQuiesced`, which the gate sends only after every frame it admitted; then the
-gate is lowered, its `GateStopped` coming only after those answers are written; then the
-leave's save point; then `unload`. **A leave heard mid-turn is no longer refused**: it
+that accepts no further input, is interrupted, this crate sending `ToolInterrupt`, which
+the gate answers `Killed { by: unload }`, the turn closing `Stopped { reason: unload }`,
+while a call asked after the leave was heard is not sent and is recorded the same way,
+so the record names the unload and the call reads as never finished and re-runnable
+after the reload; then every request the gate admitted and the agent had not started is
+refused on its own exchange with the `refused` close naming the unload and recorded as a
+refusal of the leave, this crate reading the gate channel until `GateQuiesced`, which
+the gate sends only after every frame it admitted; **then the wind-down turn**: this
+crate tells the model the agent is unloading and asks it to summarize the work and
+where it stands for resuming after the reload, the request a `user` message it
+authors, its text the constant `WIND_DOWN_REQUEST`, "The agent is unloading now.
+Summarize the work so far and where it stands, so that it can be resumed after the
+agent is reloaded. Do not call any tool; a tool call will not run.", one generation
+under the turn's own bound, the request and the summary on the record and teed into
+state as elected, no gate caller to answer; a tool call the model makes there is not
+sent and is recorded interrupted, the turn closing there. This crate runs it outside
+the loop, as it runs the seeding turn (`Ports::seed`); a storeless agent runs it, the
+record alone holding it; an unseeded one runs it with no identity prefix; a diagnostic
+binding runs none; a forced leave runs none, no further tokens. Then the gate is
+lowered, its `GateStopped` coming only after the drain's answers are written, **this
+crate's wait hearing the coordination listener**, so a `force-unload` reaches it through
+a drain that a client which will not read its answer holds: the forced leave joins,
+the gate's channel is closed so it comes down at once, and the save point is still
+taken; admin's escalation stays the last resort for a harness that does not answer at
+all. Then the leave's save point; then `unload`. **A leave heard mid-turn is no longer refused**: it
 waits, with its dialer's connection taken out of the verb slot so the listener is heard
 again, and runs at the turn's close before any held request is served; a second
 unforced leave meanwhile is out of order, a forced one joins it, and `Observe` answers

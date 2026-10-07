@@ -1790,6 +1790,17 @@ fn unload_within(
             Err(LeaveFault::Unanswered) => {}
         }
     }
+    // **The escalation is the last resort**: the harness hears a
+    // `force-unload` even through a stalled drain and takes the save point,
+    // so reaching here means the harness itself did not answer, and the run
+    // is ended with no save point taken, which the log records.
+    if entered {
+        record(
+            config,
+            "unload",
+            "escalated: the harness did not answer the leave, so no save point was taken",
+        );
+    }
     start::escalate_within(&run_directory, bounds.term, bounds.kill)?;
     // A run that had to be ended by force took no leave save point: the
     // room's finished files are recovered at the next load. The marker

@@ -229,7 +229,8 @@ the next load's reset, per `weaver-admin-Spec` section 3; `force-unload` comes d
 whether or not its save point publishes. **A graceful `unload` may take the length of a
 turn**, on the operator's rulings of 2026-10-07 on #1: the agent accepts no further
 input from the unload, finishes the turn in flight and answers it, refuses requests it
-had not started, and only then goes down, with no time bound of its own; the invocation
+had not started, runs one wind-down turn summarizing where the work stands for the
+reload, and only then goes down, with no time bound of its own; the invocation
 lock is released during that wait, so `force-unload` can be issued at any point and
 always comes down at once. A `save-point` or a second `unload` issued during the wait
 refuses `OutOfOrder`, a `load` refuses as for a running agent, and `show` answers. A `stop` or a `show` whose answer does not arrive within its bound refuses

@@ -102,6 +102,9 @@ impl ToolResult {
                     weaver_types::KillCause::Cancel => {
                         "the command was killed by the operator's stop"
                     }
+                    weaver_types::KillCause::Unload => {
+                        "the command was interrupted by the agent's unload and never finished; it can be run again after the reload"
+                    }
                 };
                 match partial {
                     Some(partial) => {

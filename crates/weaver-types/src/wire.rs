@@ -130,6 +130,12 @@ pub enum Payload {
     ToolAnswer(ToolOutcome),
     /// Cancel the open execution at the continue position.
     ToolCancel,
+    /// **Interrupt the open execution for the agent's unload**, at the
+    /// continue position, on the operator's rulings of 2026-10-07 on #1: the
+    /// gate kills it as it does at a cancel and answers `Killed` with `by:
+    /// unload`, so the record names the unload in the gate's own word and the
+    /// call reads as never finished, to be run again after the reload.
+    ToolInterrupt,
 }
 
 /// One tool call as it crosses the gate seam: the name and arguments exactly
@@ -185,6 +191,10 @@ pub enum ToolOutcome {
 pub enum KillCause {
     Clock,
     Cancel,
+    /// The agent's unload interrupted the call, gracefully or forced, on the
+    /// operator's rulings of 2026-10-07 on #1: it never finished, and it is
+    /// re-runnable after the reload.
+    Unload,
 }
 
 /// The organs that refuse inside a fan-out: only the SPU and the gate. Admin

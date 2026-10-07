@@ -342,6 +342,11 @@ pub enum TurnClose {
 pub enum StopReason {
     Directive,
     Fault,
+    /// The agent's unload ended the turn, on the operator's rulings of
+    /// 2026-10-07 on #1: a tool call it carried was interrupted and is
+    /// re-runnable after the reload, or a forced unload cancelled the
+    /// generation. The `cause` beside it is the unload's.
+    Unload,
     /// The turn ended because a seam refused an ask it carried, per the
     /// charter's clause of 2026-08-22.
     ///
