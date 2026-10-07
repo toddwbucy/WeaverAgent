@@ -249,8 +249,18 @@ pub fn judge(bytes: &[u8]) -> Result<Judged, String> {
         .get("taken")
         .and_then(|v| v.as_object())
         .ok_or("the stamp names no taken")?;
+    // **The nonce is judged as the member judges it**: exactly `pid` and
+    // `ordinal` as numbers and `wall_ns` as a string, so a save point this
+    // crate admits is one the member's own parse admits at the opener, and
+    // a named restore never passes here to refuse there.
     if taken.len() != 3 {
         return Err("the stamp's taken does not carry exactly three members".into());
+    }
+    if taken.get("pid").and_then(|v| v.as_u64()).is_none() {
+        return Err("the stamp's taken names no pid".into());
+    }
+    if taken.get("ordinal").and_then(|v| v.as_u64()).is_none() {
+        return Err("the stamp's taken names no ordinal".into());
     }
     let wall_ns = taken
         .get("wall_ns")
@@ -624,14 +634,37 @@ pub fn publish(
             // rename rather than being replaced or followed, the temporary
             // then removed and the room's copy left for the next verb.
             let target = directory.join(&name);
-            nix::fcntl::renameat2(
+            match nix::fcntl::renameat2(
                 nix::fcntl::AT_FDCWD,
                 &temporary,
                 nix::fcntl::AT_FDCWD,
                 &target,
                 nix::fcntl::RenameFlags::RENAME_NOREPLACE,
-            )
-            .map_err(std::io::Error::from)
+            ) {
+                Ok(()) => Ok(()),
+                // **An entry already under the published name is adopted
+                // where it is this save point**: a publication interrupted
+                // between the rename and the manifest line left it, the
+                // retry at the next verb appends the line; judged through
+                // the directory as a load judges one, so an entry of other
+                // bytes refuses the rename and is left in place, named.
+                Err(nix::errno::Errno::EEXIST) => {
+                    let _ = std::fs::remove_file(&temporary);
+                    match open_judged(directory, &name, operator.0) {
+                        Ok(Some((_, standing))) if standing.digest == entry.judged.digest => Ok(()),
+                        Ok(Some(_)) => Err(std::io::Error::other(
+                            "an entry of other bytes stands under the published name",
+                        )),
+                        Ok(None) => Err(std::io::Error::other(
+                            "the published name's entry vanished between the rename and its judgment",
+                        )),
+                        Err(why) => Err(std::io::Error::other(format!(
+                            "an entry stands under the published name and is not this save point: {why}"
+                        ))),
+                    }
+                }
+                Err(e) => Err(std::io::Error::from(e)),
+            }
         })();
         if let Err(e) = written {
             diag!(
@@ -670,15 +703,16 @@ pub struct Selected {
     pub lineage: weaver_types::Lineage,
 }
 
-/// Open and judge one published file through the directory, per
-/// `weaver-admin-Spec` section 4: a regular file, not a link, the operator's,
-/// closed to group and other, whose bytes judge to the line's digest and
-/// whose published name is the one its bytes compute.
-fn open_published(
+/// Open and judge one file of the operator's directory through the
+/// directory's descriptor, per `weaver-admin-Spec` section 4: a regular
+/// file, not a link, the operator's, closed to group and other, under the
+/// size bound, whose bytes judge sound and whose published name is the one
+/// its bytes compute. `Ok(None)` is no entry. The file is answered rewound.
+fn open_judged(
     directory: &Path,
-    line: &ManifestLine,
+    name: &str,
     operator: u32,
-) -> Result<Option<OwnedFd>, String> {
+) -> Result<Option<(std::fs::File, Judged)>, String> {
     use std::os::unix::fs::MetadataExt;
     let dir = nix::fcntl::open(
         directory,
@@ -688,52 +722,58 @@ fn open_published(
     .map_err(|e| format!("the declaration directory does not open: {e}"))?;
     let fd = match nix::fcntl::openat(
         dir.as_fd(),
-        line.name.as_str(),
+        name,
         nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_NOFOLLOW | nix::fcntl::OFlag::O_CLOEXEC,
         nix::sys::stat::Mode::empty(),
     ) {
         Ok(fd) => fd,
         Err(nix::errno::Errno::ENOENT) => return Ok(None),
-        Err(e) => return Err(format!("{} does not open: {e}", line.name)),
+        Err(e) => return Err(format!("{name} does not open: {e}")),
     };
     let mut file = std::fs::File::from(fd);
     let metadata = file
         .metadata()
-        .map_err(|e| format!("{} does not stat: {e}", line.name))?;
+        .map_err(|e| format!("{name} does not stat: {e}"))?;
     if !metadata.is_file() {
-        return Err(format!("{} is not a regular file", line.name));
+        return Err(format!("{name} is not a regular file"));
     }
     if metadata.uid() != operator {
-        return Err(format!("{} is not the operator's", line.name));
+        return Err(format!("{name} is not the operator's"));
     }
     if metadata.mode() & 0o077 != 0 {
-        return Err(format!(
-            "{} grants a permission to group or other",
-            line.name
-        ));
+        return Err(format!("{name} grants a permission to group or other"));
     }
     if metadata.len() > SAVE_POINT_BOUND {
         return Err(format!(
-            "{} is {} bytes, past the bound of {SAVE_POINT_BOUND}",
-            line.name,
+            "{name} is {} bytes, past the bound of {SAVE_POINT_BOUND}",
             metadata.len()
         ));
     }
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
-        .map_err(|e| format!("{} does not read: {e}", line.name))?;
-    let judged =
-        judge(&bytes).map_err(|why| format!("{} is not a save point: {why}", line.name))?;
+        .map_err(|e| format!("{name} does not read: {e}"))?;
+    let judged = judge(&bytes).map_err(|why| format!("{name} is not a save point: {why}"))?;
+    if published_name(&judged) != name {
+        return Err(format!("{name} is not the name its bytes compute"));
+    }
+    nix::unistd::lseek(file.as_fd(), 0, nix::unistd::Whence::SeekSet)
+        .map_err(|e| format!("{name} does not seek: {e}"))?;
+    Ok(Some((file, judged)))
+}
+
+/// Open and judge the file a manifest line names, per `weaver-admin-Spec`
+/// section 4: `open_judged`, and the bytes digest to the line's digest.
+fn open_published(
+    directory: &Path,
+    line: &ManifestLine,
+    operator: u32,
+) -> Result<Option<OwnedFd>, String> {
+    let Some((file, judged)) = open_judged(directory, &line.name, operator)? else {
+        return Ok(None);
+    };
     if judged.digest != line.digest {
         return Err(format!("{} does not digest to its line", line.name));
     }
-    if published_name(&judged) != line.name {
-        return Err(format!("{} is not the name its bytes compute", line.name));
-    }
-    // Rewound for the member: the read above consumed the offset, and the
-    // member reads from zero.
-    nix::unistd::lseek(file.as_fd(), 0, nix::unistd::Whence::SeekSet)
-        .map_err(|e| format!("{} does not seek: {e}", line.name))?;
     Ok(Some(OwnedFd::from(file)))
 }
 
@@ -880,49 +920,18 @@ pub fn name_at_restore(
     // digest and the stamp are its own, and the name must be the one its
     // bytes compute, so a renamed file does not enter.
     let mut probe = candidate.clone();
-    let judged = {
-        use std::os::unix::fs::MetadataExt;
-        let dir = nix::fcntl::open(
-            directory,
-            nix::fcntl::OFlag::O_RDONLY
-                | nix::fcntl::OFlag::O_DIRECTORY
-                | nix::fcntl::OFlag::O_CLOEXEC,
-            nix::sys::stat::Mode::empty(),
-        )
-        .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
-        let fd = nix::fcntl::openat(
-            dir.as_fd(),
-            named,
-            nix::fcntl::OFlag::O_RDONLY
-                | nix::fcntl::OFlag::O_NOFOLLOW
-                | nix::fcntl::OFlag::O_CLOEXEC,
-            nix::sys::stat::Mode::empty(),
-        )
-        .map_err(|e| {
-            diag!("weaver-admin: restore names {named}, which does not open: {e}");
-            refuse_config()
-        })?;
-        let mut file = std::fs::File::from(fd);
-        let metadata = file.metadata().map_err(|_| refuse_config())?;
-        if !metadata.is_file() || metadata.uid() != operator || metadata.mode() & 0o077 != 0 {
+    let judged = match open_judged(directory, named, operator) {
+        Ok(Some((_, judged))) => judged,
+        Ok(None) => {
             diag!(
-                "weaver-admin: restore names {named}, which is not the operator's regular file closed to group and other"
-            );
-            return Err(LifecycleRefusal::BoundaryUnverified);
-        }
-        if metadata.len() > SAVE_POINT_BOUND {
-            diag!(
-                "weaver-admin: restore names {named}, which is {} bytes, past the bound of {SAVE_POINT_BOUND}",
-                metadata.len()
+                "weaver-admin: restore names {named}, which does not stand in the declaration directory"
             );
             return Err(refuse_config());
         }
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes).map_err(|_| refuse_config())?;
-        judge(&bytes).map_err(|why| {
-            diag!("weaver-admin: restore names {named}, which is not a save point: {why}");
-            refuse_config()
-        })?
+        Err(why) => {
+            diag!("weaver-admin: restore names {named}, which refuses: {why}");
+            return Err(refuse_config());
+        }
     };
     if published_name(&judged) != named {
         diag!(
@@ -1087,6 +1096,88 @@ mod tests {
         let mut rebuilt = header.to_string().into_bytes();
         rebuilt.extend_from_slice(&short_stamp[header_end..]);
         assert!(judge(&rebuilt).unwrap_err().contains("seven"));
+        // The nonce is judged as the member judges it: three members of the
+        // wrong names, or a pid that is not a number, refuse (Codex on #94,
+        // round 1). Perturbation: drop the pid and ordinal checks and both
+        // judge sound.
+        for taken in [
+            r#"{"x":1,"y":2,"wall_ns":"1"}"#,
+            r#"{"pid":"one","ordinal":0,"wall_ns":"1"}"#,
+        ] {
+            let mut header: serde_json::Value =
+                serde_json::from_slice(&bytes[..header_end]).unwrap();
+            header["taken"] = serde_json::from_str(taken).unwrap();
+            let mut rebuilt = header.to_string().into_bytes();
+            rebuilt.extend_from_slice(&bytes[header_end..]);
+            let why = judge(&rebuilt).unwrap_err();
+            assert!(why.contains("taken"), "{taken}: {why}");
+        }
+    }
+
+    /// **A publication interrupted after the rename is adopted at the next
+    /// verb**, per `weaver-admin-Spec` section 6's retry: the target stands
+    /// under its published name with no manifest line, and the next
+    /// publication judges it as this save point, appends the line and removes
+    /// the room's copy; an entry of other bytes under that name refuses and
+    /// the room's copy stays. Perturbation: treat `EEXIST` as a failure again
+    /// and the first case never gets its line.
+    #[test]
+    fn an_interrupted_publication_is_adopted_and_an_impostor_is_not() {
+        let scratch = crate::scratch::Scratch(
+            std::env::temp_dir().join(format!("weaver-admin-adopt-{}", std::process::id())),
+        );
+        let base = scratch.0.clone();
+        let room = base.join("room");
+        let dir = base.join("decl");
+        std::fs::create_dir_all(&room).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let me = nix::unistd::getuid().as_raw();
+        let mine = Owner {
+            uid: me,
+            gid: nix::unistd::getgid().as_raw(),
+        };
+        let owner = (me, mine.gid);
+        let bytes = save_point("r-1", 7, 1, 5_000_000_000, b"interrupted");
+        let judged = judge(&bytes).unwrap();
+        let room_name = format!("{}{SUFFIX}", judged.digest);
+        std::fs::write(room.join(&room_name), &bytes).unwrap();
+        // The target stands already, as the interrupted rename left it.
+        let target = dir.join(published_name(&judged));
+        std::fs::write(&target, &bytes).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let lines = publish(&room, me, &dir, owner, mine, &[]).unwrap();
+        assert_eq!(
+            lines.len(),
+            1,
+            "the line is appended for the adopted target"
+        );
+        assert_eq!(lines[0].digest, judged.digest);
+        assert!(!room.join(&room_name).exists(), "the room's copy went");
+        // An impostor under the published name: other bytes, the room's
+        // copy stays and no line is appended.
+        let other = save_point("r-1", 8, 1, 6_000_000_000, b"other");
+        let other_judged = judge(&other).unwrap();
+        std::fs::write(
+            room.join(format!("{}{SUFFIX}", other_judged.digest)),
+            &other,
+        )
+        .unwrap();
+        let impostor = dir.join(published_name(&other_judged));
+        std::fs::write(&impostor, b"not those bytes").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&impostor, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let lines = publish(&room, me, &dir, owner, mine, &[]).unwrap();
+        assert!(lines.is_empty(), "no line for the impostor's name");
+        assert!(
+            room.join(format!("{}{SUFFIX}", other_judged.digest))
+                .exists(),
+            "the room's copy stays for the next verb"
+        );
     }
 
     /// **The civil date is the epoch's own**: known instants render as the

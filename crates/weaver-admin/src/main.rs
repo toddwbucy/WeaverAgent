@@ -926,7 +926,10 @@ fn run_load(
     // **The publication opens the validate step, under the run lock**, per
     // Spec sections 3 and 6: what an unclean stop left in the room is
     // published now and selectable below.
-    publish_from_room(config, &[]);
+    // Refused here only where the manifest or the directory refuses, which
+    // the selection below would refuse too; a room with nothing to publish
+    // is no refusal.
+    publish_from_room(config, agent, &[])?;
     // **The selection**, per Spec section 4: the save point `restore` names
     // or the latest the manifest names, judged through the descriptor the
     // member will inherit; no member elected selects nothing, and a restore
@@ -1090,13 +1093,22 @@ fn run_load(
                 // Spec section 4 on A3.0 item 5: after the enter answers,
                 // its prior state kept for the rollback of any later step,
                 // so a load that never authored `load` never opened a run.
-                standing.marker_before = Some(save_points::read_marker(&config.root));
+                let before = save_points::read_marker(&config.root);
                 let marker = save_points::Marker::Open {
                     run: run_reference.0.clone(),
                 };
+                // **A marker that cannot be written fails the load**: a run
+                // standing with no open marker would stop unclean without
+                // its reset at the next load, so the enter is rolled back
+                // instead, nothing standing that the record would misname.
                 if let Err(e) = save_points::write_marker(&config.root, Some(&marker)) {
-                    record(config, "marker", &format!("not written: {e}"));
+                    diag!(
+                        "weaver-admin: the clean-unload marker in {} does not write: {e}",
+                        config.root.display()
+                    );
+                    return Err(LifecycleRefusal::BoundaryUnverified);
                 }
+                standing.marker_before = Some(before);
                 Ok(())
             }
             weaver_types::Payload::Refusal(refusal) => Err(refusal),
@@ -1171,8 +1183,23 @@ fn save_point(
         },
         Err(_) => return Err(LifecycleRefusal::Unanswered),
     };
-    let _ = agent;
-    publish_from_room(config, &[(report.clone(), save_points::Arrival::Demand)]);
+    // **The verb answers only a published save point**: the harness's
+    // report is answered once its file stands in the operator's directory
+    // under a manifest line, and a publication that refuses, or does not
+    // reach this save point, refuses the verb, the file standing in the
+    // room for the next verb and said so in the log.
+    let lines = publish_from_room(
+        config,
+        agent,
+        &[(report.clone(), save_points::Arrival::Demand)],
+    )?;
+    if !lines.iter().any(|line| line.digest == report.save_point) {
+        diag!(
+            "weaver-admin: the save point {} was taken and not published; it stands in the member's room for the next verb",
+            report.save_point
+        );
+        return Err(LifecycleRefusal::BoundaryUnverified);
+    }
     Ok(LifecycleAnswer::SavePointTaken { report })
 }
 
@@ -1480,7 +1507,10 @@ fn unload_within(
                         .into_iter()
                         .map(|report| (report, save_points::Arrival::Leave))
                         .collect();
-                    publish_from_room(config, &reports);
+                    // Best effort at an unload, the run being gone either
+                    // way: a refusal is logged and the room's files are
+                    // recovered at the next load.
+                    let _ = publish_from_room(config, &AgentName(config.agent.clone()), &reports);
                     close_marker(config, forced);
                     return unloaded;
                 }
@@ -1498,8 +1528,13 @@ fn unload_within(
     }
     start::escalate_within(&run_directory, bounds.term, bounds.kill)?;
     // A run that had to be ended by force took no leave save point: the
-    // room's finished files are recovered at the next load, and the marker
-    // stays open, which the next load reads as `NoCleanUnload`.
+    // room's finished files are recovered at the next load. The marker
+    // stays open, which the next load reads as `NoCleanUnload`, unless the
+    // operator forced this unload, in which case it closes as forced so the
+    // record carries the operator's choice, as it does on a forced leave.
+    if forced {
+        close_marker(config, true);
+    }
     unloaded
 }
 
@@ -1510,10 +1545,10 @@ fn unload_within(
 /// said in the log. The lines appended are logged.
 fn publish_from_room(
     config: &ServiceConfig,
+    agent: &AgentName,
     reports: &[(weaver_types::SavePointReport, save_points::Arrival)],
-) {
-    let agent = AgentName(config.agent.clone());
-    let inventory = match take_inventory(config, &agent) {
+) -> Result<Vec<save_points::ManifestLine>, LifecycleRefusal> {
+    let inventory = match take_inventory(config, agent) {
         Ok(inventory) => inventory,
         Err(refusal) => {
             record(
@@ -1524,11 +1559,11 @@ fn publish_from_room(
                     surface::render_refusal(&refusal)
                 ),
             );
-            return;
+            return Err(refusal);
         }
     };
     let Some(member) = inventory.member_account else {
-        return;
+        return Ok(Vec::new());
     };
     let room = save_points::room_of(inventory::sink_directory(&inventory.config.trace_sink));
     match save_points::publish(
@@ -1540,7 +1575,7 @@ fn publish_from_room(
         reports,
     ) {
         Ok(lines) => {
-            for line in lines {
+            for line in &lines {
                 record(
                     config,
                     "publish",
@@ -1548,16 +1583,20 @@ fn publish_from_room(
                         "{} ordinal {} {}",
                         line.name,
                         line.ordinal,
-                        line_arrival(&line)
+                        line_arrival(line)
                     ),
                 );
             }
+            Ok(lines)
         }
-        Err(refusal) => record(
-            config,
-            "publish",
-            &format!("refused: {}", surface::render_refusal(&refusal)),
-        ),
+        Err(refusal) => {
+            record(
+                config,
+                "publish",
+                &format!("refused: {}", surface::render_refusal(&refusal)),
+            );
+            Err(refusal)
+        }
     }
 }
 
@@ -3203,8 +3242,15 @@ mod tests {
             "the holder was not ended"
         );
 
-        // The first worker's name goes before the second binds it.
+        // The first worker's name goes before the second binds it, and an
+        // open marker stands, which the forced unload closes as forced even
+        // through the escalation (Codex on #94, round 1).
         let _ = std::fs::remove_file(config.coordination_socket());
+        save_points::write_marker(
+            &config.root,
+            Some(&save_points::Marker::Open { run: "r-1".into() }),
+        )
+        .unwrap();
         let worker = recording_worker(
             &config,
             vec![
@@ -3234,13 +3280,20 @@ mod tests {
         );
         let _ = holder.wait();
         assert!(!start::run_lock_held(&config.run_directory()).unwrap());
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Forced { run: "r-1".into() }),
+            "the escalated forced unload still closes the marker as forced"
+        );
     }
 
     /// **The `save-point` verb asks the running worker and answers the
-    /// report**, per Spec sections 2 and 6: one directive, one answer, and
-    /// out of order where no run stands. Perturbation: drop the run-lock
+    /// report only once it is published**, per Spec sections 2 and 6: one
+    /// directive, one answer, out of order where no run stands, and a refusal
+    /// where the publication cannot be made. Perturbations: drop the run-lock
     /// check and the second case dials an absent worker and answers
-    /// `Unanswered` instead.
+    /// `Unanswered` instead; answer the report whatever the publication did
+    /// and the third assertion sees `SavePointTaken`.
     #[test]
     fn the_save_point_verb_answers_the_report_and_is_out_of_order_without_a_run() {
         let (config, _scratch) = scratch_config("save-point-verb");
@@ -3257,9 +3310,19 @@ mod tests {
                 LifecycleAnswer::SavePointTaken { report: report() },
             )],
         );
-        assert_eq!(
-            save_point(&config, &agent),
-            Ok(LifecycleAnswer::SavePointTaken { report: report() })
+        // The fixture holds no declaration to publish from, so the verb
+        // refuses rather than answering a report of a save point that
+        // stands in the room alone (Codex on #94, round 1); the directive
+        // reached the worker all the same.
+        let answered = save_point(&config, &agent);
+        assert!(
+            matches!(
+                answered,
+                Err(LifecycleRefusal::NoSuchAgent)
+                    | Err(LifecycleRefusal::BoundaryUnverified)
+                    | Err(LifecycleRefusal::ConfigInvalid { .. })
+            ),
+            "answers only a published save point: {answered:?}"
         );
         let directed = worker.join().unwrap();
         assert!(matches!(
