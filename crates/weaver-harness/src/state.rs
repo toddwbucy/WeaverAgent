@@ -182,6 +182,12 @@ pub struct StateSeam {
     /// `weaver-harness-Spec` section 6, and the retry's answer is read as
     /// the retry's.
     unsettled: bool,
+    /// **The next snapshot ask's ordinal**, per residency from 1 (Codex on
+    /// #94, round 10): the ask carries it, the member echoes it on the answer
+    /// and the finished answer, and an answer carrying another number is a
+    /// late one and is dropped by its number rather than by timing, so a
+    /// slow member's answer to the ask before never passes as the retry's.
+    snapshot_ordinal: u64,
     /// Bytes read past the last answered line, kept for the next await: an
     /// answer that arrived in the same read as the one before it is the next
     /// exchange's, never dropped, which the four-leg save point of A3.2
@@ -197,6 +203,7 @@ impl StateSeam {
             channel,
             dead: false,
             unsettled: false,
+            snapshot_ordinal: 1,
             residual: Vec::new(),
         }
     }
@@ -329,29 +336,37 @@ impl StateSeam {
         if self.dead {
             return Err(SavePointLeg::MemberDead);
         }
-        if !self.send(b"{\"ask\":{\"snapshot\":{}}}\n") {
+        let ordinal = self.snapshot_ordinal;
+        self.snapshot_ordinal += 1;
+        let ask = format!(
+            "{}\n",
+            serde_json::json!({"ask": {"snapshot": {"ask": ordinal}}})
+        );
+        if !self.send(ask.as_bytes()) {
             self.dead = true;
             return Err(SavePointLeg::MemberDead);
         }
-        let Some(answered) = self
-            .await_line(ANSWER_BOUND_MS)
-            .and_then(|line| parse_snapshot_answer(&line))
-        else {
+        // **An answer is read by its number**: one carrying another ordinal
+        // is a late answer to an ask before, dropped and said, and the wait
+        // goes on inside the one bound; a line that is no snapshot answer at
+        // all misses the leg as before.
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_millis(ANSWER_BOUND_MS);
+        let Some(answered) = self.await_numbered(deadline, ordinal, parse_snapshot_answer) else {
             self.unsettled = true;
             return Err(SavePointLeg::Answer);
         };
         let acknowledge = format!(
             "{}\n",
-            serde_json::json!({"acknowledge": {"snapshot": {"digest": answered.stamp.digest}}})
+            serde_json::json!({"acknowledge": {"snapshot": {"ask": ordinal, "digest": answered.stamp.digest}}})
         );
         if !self.send(acknowledge.as_bytes()) {
             self.dead = true;
             return Err(SavePointLeg::MemberDead);
         }
-        let Some(finished) = self
-            .await_line(ANSWER_BOUND_MS)
-            .and_then(|line| parse_finished_answer(&line))
-        else {
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_millis(ANSWER_BOUND_MS);
+        let Some(finished) = self.await_numbered(deadline, ordinal, parse_finished_answer) else {
             self.unsettled = true;
             return Err(SavePointLeg::Finished);
         };
@@ -504,6 +519,32 @@ impl StateSeam {
     /// timeout.
     fn await_line(&mut self, bound_ms: u64) -> Option<String> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(bound_ms);
+        self.await_line_until(deadline)
+    }
+
+    /// **Await the answer numbered `ordinal`** inside the deadline: a line
+    /// that parses as the answer kind with another ordinal is dropped and
+    /// said, the wait going on; a line that does not parse at all is the
+    /// leg missed, as a malformed answer always was.
+    fn await_numbered<T>(
+        &mut self,
+        deadline: std::time::Instant,
+        ordinal: u64,
+        parse: fn(&str) -> Option<(u64, T)>,
+    ) -> Option<T> {
+        loop {
+            let line = self.await_line_until(deadline)?;
+            let (carried, answer) = parse(&line)?;
+            if carried == ordinal {
+                return Some(answer);
+            }
+            eprintln!(
+                "weaver-harness: the state seam dropped a snapshot answer carrying ask {carried} while waiting for ask {ordinal}, a late answer to an ask before"
+            );
+        }
+    }
+
+    fn await_line_until(&mut self, deadline: std::time::Instant) -> Option<String> {
         let mut buffer: Vec<u8> = std::mem::take(&mut self.residual);
         loop {
             if let Some(position) = buffer.iter().position(|&b| b == b'\n') {
@@ -603,24 +644,22 @@ fn parse_stamped(body: &serde_json::Value) -> Option<SavePointTaken> {
 }
 
 /// Parse the snapshot answer, per the contract:
-/// `{"answer":{"snapshot":{"save-point":..,"run":..,"sequence":..,"turn":..,"digest":..}}}`.
-fn parse_snapshot_answer(line: &str) -> Option<SavePointTaken> {
+/// `{"answer":{"snapshot":{"ask":N,"save-point":..,"run":..,"sequence":..,"turn":..,"digest":..}}}`,
+/// answering the ordinal it carries beside the stamp.
+fn parse_snapshot_answer(line: &str) -> Option<(u64, SavePointTaken)> {
     let value: serde_json::Value = serde_json::from_str(line).ok()?;
-    parse_stamped(value.get("answer")?.get("snapshot")?)
+    let body = value.get("answer")?.get("snapshot")?;
+    Some((body.get("ask")?.as_u64()?, parse_stamped(body)?))
 }
-
-/// Parse the finished answer, the fourth leg:
-/// `{"answer":{"finished":{"save-point":"<name>"}}}`.
-fn parse_finished_answer(line: &str) -> Option<String> {
+/// Parse the finished answer, `{"answer":{"finished":{"ask":N,"save-point":..}}}`,
+/// answering the ordinal it carries beside the name.
+fn parse_finished_answer(line: &str) -> Option<(u64, String)> {
     let value: serde_json::Value = serde_json::from_str(line).ok()?;
-    Some(
-        value
-            .get("answer")?
-            .get("finished")?
-            .get("save-point")?
-            .as_str()?
-            .to_string(),
-    )
+    let body = value.get("answer")?.get("finished")?;
+    Some((
+        body.get("ask")?.as_u64()?,
+        body.get("save-point")?.as_str()?.to_string(),
+    ))
 }
 
 /// Parse the restore answer: the snapshot's members and `identity`.
@@ -934,17 +973,17 @@ mod tests {
         // is the snapshot ask followed by the acknowledgement of the digest.
         let (parsed, asked) = exchange(
             concat!(
-                r#"{"answer":{"snapshot":{"save-point":"ab.save-point","run":"r-1","sequence":41,"turn":2,"digest":"ab"}}}"#,
+                r#"{"answer":{"snapshot":{"ask":1,"save-point":"ab.save-point","run":"r-1","sequence":41,"turn":2,"digest":"ab"}}}"#,
                 "\n",
-                r#"{"answer":{"finished":{"save-point":"ab.save-point"}}}"#
+                r#"{"answer":{"finished":{"ask":1,"save-point":"ab.save-point"}}}"#
             ),
             &|seam| seam.ask_snapshot().ok().map(|a| format!("{a:?}")),
         );
         assert_eq!(
             asked,
             concat!(
-                "{\"ask\":{\"snapshot\":{}}}\n",
-                "{\"acknowledge\":{\"snapshot\":{\"digest\":\"ab\"}}}\n"
+                "{\"ask\":{\"snapshot\":{\"ask\":1}}}\n",
+                "{\"acknowledge\":{\"snapshot\":{\"ask\":1,\"digest\":\"ab\"}}}\n"
             )
         );
         // A finished answer naming another file, or none, is the finished
@@ -952,15 +991,15 @@ mod tests {
         // case parses.
         let (parsed_other, _) = exchange(
             concat!(
-                r#"{"answer":{"snapshot":{"save-point":"ab.save-point","run":"r-1","sequence":41,"turn":2,"digest":"ab"}}}"#,
+                r#"{"answer":{"snapshot":{"ask":1,"save-point":"ab.save-point","run":"r-1","sequence":41,"turn":2,"digest":"ab"}}}"#,
                 "\n",
-                r#"{"answer":{"finished":{"save-point":"other.save-point"}}}"#
+                r#"{"answer":{"finished":{"ask":1,"save-point":"other.save-point"}}}"#
             ),
             &|seam| seam.ask_snapshot().err().map(|leg| format!("{leg:?}")),
         );
         assert_eq!(parsed_other.as_deref(), Some("Finished"));
         let (parsed_none, _) = exchange(
-            r#"{"answer":{"snapshot":{"save-point":"ab.save-point","run":"r-1","sequence":41,"turn":2,"digest":"ab"}}}"#,
+            r#"{"answer":{"snapshot":{"ask":1,"save-point":"ab.save-point","run":"r-1","sequence":41,"turn":2,"digest":"ab"}}}"#,
             &|seam| seam.ask_snapshot().err().map(|leg| format!("{leg:?}")),
         );
         assert_eq!(parsed_none.as_deref(), Some("Finished"));
@@ -976,10 +1015,17 @@ mod tests {
         assert_eq!(parsed, Some(format!("{taken:?}")));
         assert!(
             parse_snapshot_answer(
-                r#"{"answer":{"snapshot":{"save-point":"x","run":"r","sequence":1,"digest":"d"}}}"#
+                r#"{"answer":{"snapshot":{"ask":1,"save-point":"x","run":"r","sequence":1,"digest":"d"}}}"#
             )
             .is_none(),
             "a stamp without its turn is malformed"
+        );
+        assert!(
+            parse_snapshot_answer(
+                r#"{"answer":{"snapshot":{"save-point":"x","run":"r","sequence":1,"turn":1,"digest":"d"}}}"#
+            )
+            .is_none(),
+            "an answer without its ordinal is malformed (Codex on #94, round 10)"
         );
         let (parsed, asked) = exchange(
             concat!(
@@ -1236,7 +1282,7 @@ mod tests {
             writer
                 .write_all(
                     concat!(
-                        r#"{"answer":{"snapshot":{"save-point":"late.save-point","run":"r-1","sequence":1,"turn":1,"digest":"late"}}}"#,
+                        r#"{"answer":{"snapshot":{"ask":1,"save-point":"late.save-point","run":"r-1","sequence":1,"turn":1,"digest":"late"}}}"#,
                         "\n",
                         "{\"part"
                     )
@@ -1250,7 +1296,7 @@ mod tests {
             writer
                 .write_all(
                     concat!(
-                        r#"{"answer":{"snapshot":{"save-point":"fresh.save-point","run":"r-1","sequence":1,"turn":1,"digest":"fresh"}}}"#,
+                        r#"{"answer":{"snapshot":{"ask":2,"save-point":"fresh.save-point","run":"r-1","sequence":1,"turn":1,"digest":"fresh"}}}"#,
                         "\n"
                     )
                     .as_bytes(),
@@ -1260,7 +1306,9 @@ mod tests {
             reader.read_line(&mut line).expect("the acknowledgement");
             asked.push(line.clone());
             writer
-                .write_all(b"{\"answer\":{\"finished\":{\"save-point\":\"fresh.save-point\"}}}\n")
+                .write_all(
+                    b"{\"answer\":{\"finished\":{\"ask\":2,\"save-point\":\"fresh.save-point\"}}}\n",
+                )
                 .expect("finishes");
             asked
         });
@@ -1278,10 +1326,73 @@ mod tests {
         assert_eq!(
             asked,
             vec![
-                "{\"ask\":{\"snapshot\":{}}}\n".to_string(),
-                "{\"ask\":{\"snapshot\":{}}}\n".to_string(),
-                "{\"acknowledge\":{\"snapshot\":{\"digest\":\"fresh\"}}}\n".to_string(),
+                "{\"ask\":{\"snapshot\":{\"ask\":1}}}\n".to_string(),
+                "{\"ask\":{\"snapshot\":{\"ask\":2}}}\n".to_string(),
+                "{\"acknowledge\":{\"snapshot\":{\"ask\":2,\"digest\":\"fresh\"}}}\n".to_string(),
             ]
+        );
+    }
+
+    /// **A late answer is dropped by its number, not by timing**, per
+    /// `weaver-harness-Spec` section 6 (Codex on #94, round 10): the member
+    /// answers the first ask only after the retry's ask has arrived, past
+    /// the drain, then answers the retry; the harness reads past the answer
+    /// carrying ask 1 to the one carrying ask 2 and acknowledges that one,
+    /// so a slow member never leaves the retry one answer behind.
+    /// Perturbation: ignore the ordinal and the stale answer is taken as the
+    /// retry's, the acknowledgement names "late" and the finished leg misses.
+    #[test]
+    fn a_late_answer_is_dropped_by_its_number_and_the_retrys_is_read() {
+        use std::io::BufRead;
+        let (ours, theirs) = UnixStream::pair().expect("pair");
+        ours.set_nonblocking(true).expect("nonblocking");
+        let mut seam = StateSeam::new(ours);
+        let peer = std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(theirs.try_clone().expect("clone"));
+            let mut writer = theirs;
+            let mut asked = Vec::new();
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("the first ask");
+            asked.push(line.clone());
+            // Silent past the bound: the first ask misses.
+            line.clear();
+            reader.read_line(&mut line).expect("the retry");
+            asked.push(line.clone());
+            // The late answer to ask 1 lands after the retry's ask, past any
+            // drain, then the retry's own.
+            writer
+                .write_all(
+                    concat!(
+                        r#"{"answer":{"snapshot":{"ask":1,"save-point":"late.save-point","run":"r-1","sequence":1,"turn":1,"digest":"late"}}}"#,
+                        "\n",
+                        r#"{"answer":{"snapshot":{"ask":2,"save-point":"fresh.save-point","run":"r-1","sequence":1,"turn":1,"digest":"fresh"}}}"#,
+                        "\n"
+                    )
+                    .as_bytes(),
+                )
+                .expect("answers late and then the retry");
+            line.clear();
+            reader.read_line(&mut line).expect("the acknowledgement");
+            asked.push(line.clone());
+            writer
+                .write_all(
+                    b"{\"answer\":{\"finished\":{\"ask\":2,\"save-point\":\"fresh.save-point\"}}}\n",
+                )
+                .expect("finishes the retry's");
+            asked
+        });
+        assert!(matches!(
+            seam.ask_snapshot(),
+            Err(weaver_types::SavePointLeg::Answer)
+        ));
+        let taken = seam
+            .ask_snapshot()
+            .expect("the retry reads past the late answer to its own");
+        assert_eq!(taken.stamp.digest, "fresh");
+        let asked = peer.join().unwrap();
+        assert_eq!(
+            asked[2],
+            "{\"acknowledge\":{\"snapshot\":{\"ask\":2,\"digest\":\"fresh\"}}}\n"
         );
     }
 }

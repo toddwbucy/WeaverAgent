@@ -1203,6 +1203,15 @@ pub fn write_marker(root: &Path, marker: Option<&Marker>) -> std::io::Result<()>
     let temporary = root.join(".run.marker.new");
     {
         let mut file = std::fs::File::create(&temporary)?;
+        // **Root's, 0644, whatever the umask** (Codex on #94, round 10): the
+        // create takes the invoking shell's umask, and a permissive one
+        // would leave the marker writable in the 0755 root, so the mode is
+        // set through the descriptor before the sync.
+        nix::sys::stat::fchmod(
+            file.as_fd(),
+            nix::sys::stat::Mode::from_bits_truncate(0o644),
+        )
+        .map_err(std::io::Error::from)?;
         file.write_all(
             format!("{}\n", serde_json::json!({"run": run, "state": state})).as_bytes(),
         )?;
@@ -1877,6 +1886,28 @@ mod tests {
         );
         write_marker(&root, None).unwrap();
         assert_eq!(read_marker(&root), None);
+    }
+
+    /// **The marker is 0644 whatever the umask**, per Spec section 4 (Codex
+    /// on #94, round 10): under a umask of 000 the create alone would leave
+    /// it 0666 in the root; the mode is set through the descriptor.
+    /// Perturbation: drop the `fchmod` and the marker reads 0666.
+    #[test]
+    fn the_marker_is_0644_whatever_the_umask() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = crate::scratch::Scratch(
+            std::env::temp_dir().join(format!("weaver-admin-marker-umask-{}", std::process::id())),
+        );
+        std::fs::create_dir_all(&scratch.0).unwrap();
+        let before = nix::sys::stat::umask(nix::sys::stat::Mode::empty());
+        let written = write_marker(&scratch.0, Some(&Marker::Open { run: "r-1".into() }));
+        nix::sys::stat::umask(before);
+        written.unwrap();
+        let mode = std::fs::metadata(scratch.0.join(MARKER))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7777, 0o644);
     }
 
     /// **The published copy is 0640 whatever the umask**, per Spec section 6

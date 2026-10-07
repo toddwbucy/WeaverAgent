@@ -382,6 +382,7 @@ struct Custody<'a> {
 }
 
 struct PendingSavePoint {
+    ordinal: u64,
     name: String,
     digest: String,
 }
@@ -618,11 +619,18 @@ fn drain_harness_lines(
         // A store that cannot answer, like an answer past the bound, is
         // silence the harness's bound converts, per the contract: custody
         // never invents an answer shape for a fault.
-        if let Ok(frame) = answer_frame(&ask, custody)
-            && frame.len() <= ANSWER_BOUND
-            && !harness.respond(frame.as_bytes())
-        {
-            return Some(std::process::ExitCode::SUCCESS);
+        match answer_frame(&ask, custody) {
+            Ok(frame) if frame.len() <= ANSWER_BOUND => {
+                if !harness.respond(frame.as_bytes()) {
+                    return Some(std::process::ExitCode::SUCCESS);
+                }
+            }
+            Ok(_) => {
+                eprintln!("weaver-state: {ask:?} answered nothing: the answer is past the bound")
+            }
+            // Silence on the seam, said on stderr: custody never invents an
+            // answer shape for a fault, and the operator reads why.
+            Err(fault) => eprintln!("weaver-state: {ask:?} answered nothing: {fault:?}"),
         }
     }
     None
@@ -671,7 +679,7 @@ fn answer_frame(
         // only once the write is whole. A write that fails answers nothing
         // and leaves no file under a finished name. An empty store has no
         // position and its stamp names no run and sequence zero.
-        Ask::Snapshot => {
+        Ask::Snapshot { ordinal } => {
             let stamp = custody
                 .store
                 .position()?
@@ -695,37 +703,43 @@ fn answer_frame(
                 .map_err(|e| CustodyFault::SavePoint(e.to_string()))?;
             let digest = save_point.digest();
             custody.pending = Some(PendingSavePoint {
+                ordinal: *ordinal,
                 name: name.clone(),
                 digest: digest.clone(),
             });
-            Ok(render_snapshot_answer(&SavePointAnswer {
-                name,
-                stamp,
-                digest,
-            }))
+            Ok(render_snapshot_answer(
+                &SavePointAnswer {
+                    name,
+                    stamp,
+                    digest,
+                },
+                *ordinal,
+            ))
         }
         // **The acknowledgement gives the part its finished name**: one
-        // naming the pending part's digest finishes it and answers the
-        // name; any other is answered by nothing and the part is removed,
-        // so a finished name is given only once.
-        Ask::Acknowledge { digest } => {
+        // naming the pending part's ordinal and digest both finishes it and
+        // answers the name; any other is answered by nothing and the part is
+        // removed, so a finished name is given only once and never to an
+        // acknowledgement meant for another exchange (Codex on #94, round
+        // 10).
+        Ask::Acknowledge { ordinal, digest } => {
             let Some(pending) = custody.pending.take() else {
                 return Err(CustodyFault::SavePoint(
                     "an acknowledgement names no part this member holds".into(),
                 ));
             };
-            if pending.digest != *digest {
+            if pending.digest != *digest || pending.ordinal != *ordinal {
                 custody.room.discard_part(&pending.name);
                 return Err(CustodyFault::SavePoint(format!(
-                    "the acknowledgement names {digest} and the part is {}",
-                    pending.digest
+                    "the acknowledgement names ask {ordinal} digest {digest} and the part is ask {} digest {}",
+                    pending.ordinal, pending.digest
                 )));
             }
             custody
                 .room
                 .finish(&pending.name)
                 .map_err(|e| CustodyFault::SavePoint(e.to_string()))?;
-            Ok(render_finished_answer(&pending.name))
+            Ok(render_finished_answer(&pending.name, pending.ordinal))
         }
         // **The restore reads its own room by name**, per the Spec: a name
         // that is not a plain entry of the room, a file that fails its check

@@ -741,20 +741,37 @@ impl Member {
     }
     fn ask(&mut self, ask: &str, last: Option<usize>) -> String {
         let body = last.map(|n| json!({"last-turns":n})).unwrap_or(json!({}));
+        self.ask_with(ask, body)
+    }
+    fn ask_with(&mut self, ask: &str, body: Value) -> String {
         self.send(&format!("{}\n", json!({"ask":{ask:body}})));
         self.receive(WAIT)
             .unwrap_or_else(|| panic!("missing {ask} answer: {}", self.log()))
     }
-    /// **The four-leg snapshot**, per the contract as of A3.2: the ask, the
-    /// answer, this driver's acknowledgement of the digest, and the member's
-    /// `finished` answer naming the file, which stands under its finished
+    /// The next snapshot ordinal this driver sends, per residency from 1 as
+    /// the harness counts it; one counter for the process serves every
+    /// driver here, the member matching and never sequencing.
+    fn next_snapshot_ordinal() -> u64 {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+    /// **The four-leg snapshot**, per the contract as of A3.2: the ask with
+    /// its ordinal, the answer echoing it, this driver's acknowledgement of
+    /// the ordinal and the digest, and the member's `finished` answer naming
+    /// the file and echoing the ordinal, which stands under its finished
     /// name only now. Answers the snapshot answer's line.
     fn snapshot(&mut self) -> String {
-        let answer = self.ask("snapshot", None);
+        let ordinal = Self::next_snapshot_ordinal();
+        let answer = self.ask_with("snapshot", json!({"ask": ordinal}));
         let stamp = stamp_of(&answer, "snapshot");
+        let answered: Value = serde_json::from_str(&answer).expect("the snapshot answer parses");
+        assert_eq!(
+            answered["answer"]["snapshot"]["ask"], ordinal,
+            "the answer echoes the ask's ordinal"
+        );
         self.send(&format!(
             "{}\n",
-            json!({"acknowledge":{"snapshot":{"digest":stamp.digest}}})
+            json!({"acknowledge":{"snapshot":{"ask":ordinal,"digest":stamp.digest}}})
         ));
         let finished = self
             .receive(WAIT)
@@ -763,6 +780,10 @@ impl Member {
         assert_eq!(
             finished["answer"]["finished"]["save-point"], stamp.name,
             "the finished answer names the file the snapshot answer named"
+        );
+        assert_eq!(
+            finished["answer"]["finished"]["ask"], ordinal,
+            "the finished answer echoes the ask's ordinal"
         );
         answer
     }
@@ -1421,7 +1442,10 @@ fn a_reloaded_store_equals_a_full_replay() {
     // acknowledgement naming another digest finishes nothing and removes the
     // part too. Perturbations: finish in the write and the finished file
     // stands before any acknowledgement; keep the part and two stand.
-    let unacknowledged = stamp_of(&live.ask("snapshot", None), "snapshot");
+    let unacknowledged = stamp_of(
+        &live.ask_with("snapshot", json!({"ask": 900_000})),
+        "snapshot",
+    );
     assert!(
         !live.directory.0.join(&unacknowledged.name).exists(),
         "no finished name without the acknowledgement"
@@ -1433,7 +1457,10 @@ fn a_reloaded_store_equals_a_full_replay() {
             .is_file(),
         "the part stands"
     );
-    let replaced = stamp_of(&live.ask("snapshot", None), "snapshot");
+    let replaced = stamp_of(
+        &live.ask_with("snapshot", json!({"ask": 900_001})),
+        "snapshot",
+    );
     assert!(
         !live
             .directory
@@ -1444,7 +1471,7 @@ fn a_reloaded_store_equals_a_full_replay() {
     );
     live.send(&format!(
         "{}\n",
-        json!({"acknowledge":{"snapshot":{"digest":"not-the-part"}}})
+        json!({"acknowledge":{"snapshot":{"ask":900_001,"digest":"not-the-part"}}})
     ));
     assert!(
         live.receive(std::time::Duration::from_millis(300))

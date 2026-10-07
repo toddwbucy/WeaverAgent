@@ -789,8 +789,46 @@ fn take_inventory(
 ) -> Result<inventory::Inventory, LifecycleRefusal> {
     admissible(config, agent)?;
     judge_reader(&config.require_boundary()?.reader, agent)?;
-    let identity = inventory::identity_for(agent);
     let source = read_declaration(config)?;
+    let inventory = take_inventory_from(config, agent, &source)?;
+    // **The sink's directory is the territory** (Codex on #94, round 10),
+    // per Spec section 9: the trace and the member's room are derived from
+    // the declaration's sink, and the territory is the agent whole, so a
+    // declaration naming a sink elsewhere would stand the trace and the room
+    // outside what the territory's custody, group and archive cover.
+    sink_within_territory(&inventory.config.trace_sink, &config.territory)?;
+    Ok(inventory)
+}
+
+/// **A sink outside the territory refuses `ConfigInvalid` naming
+/// `trace-sink`**, per Spec section 9: the sink's directory must be the judged
+/// territory itself.
+fn sink_within_territory(
+    sink: &weaver_types::TraceSink,
+    territory: &std::path::Path,
+) -> Result<(), LifecycleRefusal> {
+    let directory = inventory::sink_directory(sink);
+    if directory == territory {
+        return Ok(());
+    }
+    diag!(
+        "weaver-admin: config invalid: the trace sink's directory {} is not the territory {}",
+        directory.display(),
+        territory.display()
+    );
+    Err(LifecycleRefusal::ConfigInvalid {
+        field: Some(FieldName("trace-sink".into())),
+    })
+}
+
+/// The inventory from the declaration's text, as before the sink's place is
+/// judged against the territory.
+fn take_inventory_from(
+    config: &ServiceConfig,
+    agent: &AgentName,
+    source: &str,
+) -> Result<inventory::Inventory, LifecycleRefusal> {
+    let identity = inventory::identity_for(agent);
     // The home comes from the account database rather than from a constructed
     // path: an operator who placed the agent elsewhere would otherwise have
     // the boundary checked against a directory that is not the agent's.
@@ -848,7 +886,7 @@ fn take_inventory(
                 gid: user.gid.as_raw(),
             }),
     };
-    inventory::take_inventory(agent, &source, &boundary)
+    inventory::take_inventory(agent, source, &boundary)
 }
 
 /// Every gid the worker may run under: the group the unit sets, the passwd
@@ -3840,6 +3878,40 @@ mod tests {
             unpublished_leave(&[], &Err(LifecycleRefusal::BoundaryUnverified)),
             None
         );
+    }
+
+    /// **A sink outside the territory refuses naming `trace-sink`**, per Spec
+    /// section 9 (Codex on #94, round 10): the sink's directory must be the
+    /// judged territory itself, a file, a pipe or a socket alike.
+    /// Perturbation: compare the sink's path prefix instead and a sink in a
+    /// subdirectory of the territory passes.
+    #[test]
+    fn a_sink_outside_the_territory_refuses() {
+        let territory = std::path::Path::new("/var/lib/weaver-agent/weaver-alpha");
+        let file = |path: &str| weaver_types::TraceSink::File {
+            path: path.into(),
+            create: false,
+        };
+        assert!(
+            sink_within_territory(
+                &file("/var/lib/weaver-agent/weaver-alpha/trace.ndjson"),
+                territory
+            )
+            .is_ok()
+        );
+        for elsewhere in [
+            "/var/lib/weaver-agent/weaver-beta/trace.ndjson",
+            "/var/lib/weaver-agent/weaver-alpha/state/trace.ndjson",
+            "/srv/trace.ndjson",
+        ] {
+            assert_eq!(
+                sink_within_territory(&file(elsewhere), territory).err(),
+                Some(LifecycleRefusal::ConfigInvalid {
+                    field: Some(FieldName("trace-sink".into()))
+                }),
+                "{elsewhere}"
+            );
+        }
     }
 
     /// **The marker is restored by the rollback**, per Spec section 4 on

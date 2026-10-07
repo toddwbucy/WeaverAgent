@@ -662,7 +662,10 @@ all conforming sinks, per `weaver-admin-operator-contract` section 3, so the fie
 carries a discriminated shape and admin opens by the discriminant. A bare path
 would force admin to guess from the filesystem what the operator meant, and the
 guess is wrong exactly when the operator meant a named pipe that does not exist
-yet, which is the discriminant's whole argument.
+yet, which is the discriminant's whole argument. **The sink's directory is the agent's
+territory**, whatever the kind, on the operator's ruling of 2026-10-07 on #1: admin
+refuses a declaration whose sink stands elsewhere, `ConfigInvalid` naming `trace-sink`,
+per `weaver-admin-Spec` section 9.
 
 **Admin is the field's one reader**, per `weaver-admin-Spec` section 5's assertion that
 the sink path dies at its one open site and issue #311: the harness receives the opened

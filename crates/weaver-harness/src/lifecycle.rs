@@ -3426,6 +3426,7 @@ mod tests {
         let member = std::thread::spawn(move || {
             let mut answers = far.try_clone().expect("clone");
             let mut read: Vec<String> = Vec::new();
+            let mut echoed: String;
             for line in BufReader::new(far).lines() {
                 let Ok(line) = line else { break };
                 read.push(line.clone());
@@ -3441,15 +3442,33 @@ mod tests {
                 } else if line.starts_with(r#"{"ask":{"restored""#) {
                     restored_answer
                 } else if line.starts_with(r#"{"ask":{"snapshot""#) {
-                    concat!(
-                        r#"{"answer":{"snapshot":{"save-point":"ab.save-point","run":"r-0","#,
-                        r#""sequence":5,"turn":1,"digest":"ab"}}}"#
-                    )
+                    // The answer echoes the ask's ordinal (Codex on #94,
+                    // round 10).
+                    let ordinal = serde_json::from_str::<serde_json::Value>(&line)
+                        .ok()
+                        .and_then(|v| v["ask"]["snapshot"]["ask"].as_u64())
+                        .expect("the snapshot ask carries its ordinal");
+                    echoed = format!(
+                        concat!(
+                            r#"{{"answer":{{"snapshot":{{"ask":{},"save-point":"ab.save-point","run":"r-0","#,
+                            r#""sequence":5,"turn":1,"digest":"ab"}}}}}}"#
+                        ),
+                        ordinal
+                    );
+                    echoed.as_str()
                 } else if line.starts_with(r#"{"acknowledge":{"snapshot""#) {
                     if !finished_answered {
                         continue;
                     }
-                    r#"{"answer":{"finished":{"save-point":"ab.save-point"}}}"#
+                    let ordinal = serde_json::from_str::<serde_json::Value>(&line)
+                        .ok()
+                        .and_then(|v| v["acknowledge"]["snapshot"]["ask"].as_u64())
+                        .expect("the acknowledgement carries its ordinal");
+                    echoed = format!(
+                        r#"{{"answer":{{"finished":{{"ask":{},"save-point":"ab.save-point"}}}}}}"#,
+                        ordinal
+                    );
+                    echoed.as_str()
                 } else {
                     continue;
                 };
@@ -3694,7 +3713,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("{needle} reached the member: {read:?}"))
         };
         assert!(
-            at(r#"{"ask":{"snapshot""#) < at(r#"{"acknowledge":{"snapshot":{"digest":"ab"}}"#),
+            at(r#"{"ask":{"snapshot""#)
+                < at(r#"{"acknowledge":{"snapshot":{"ask":1,"digest":"ab"}}"#),
             "the acknowledgement names the answered digest: {read:?}"
         );
         assert!(

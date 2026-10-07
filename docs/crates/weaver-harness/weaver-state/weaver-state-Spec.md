@@ -534,17 +534,21 @@ stamp it restored, its `lineage` carrying `digest`, `run`, `sequence` and `turn`
 **The `snapshot` ask
 writes a save point and answers its stamp, and the finished name follows the
 acknowledgement**, per the contract's sixth ask of 2026-10-02 as amended by the
-operator's ruling of 2026-10-06 on #1: the member serializes the whole database with its
-schema and its stamp, writes it as a part in its room, never over one that stands, and
-answers
-`{"answer":{"snapshot":{"save-point":...,"run":...,"sequence":...,"turn":...,"digest":...}}}`
-naming the finished name the file will take, the position it covers with the last turn
-that run's holdings carry, and the digest of its bytes, or drops the ask unanswered where
-the write failed, the silence converting at the harness into a missing answer like every
-other; on the harness's `{"acknowledge":{"snapshot":{"digest":...}}}` naming that
-digest it links the finished name and answers
-`{"answer":{"finished":{"save-point":...}}}`, and an acknowledgement naming no part it
-holds, or a link that fails, is answered by nothing, the part removed. **The leave's
+operator's ruling of 2026-10-06 on #1: the ask carries `ask`, the harness's ordinal for
+the exchange (Codex on #94, round 10), and the member serializes the whole database with
+its schema and its stamp, writes it as a part in its room, never over one that stands,
+and answers
+`{"answer":{"snapshot":{"ask":N,"save-point":...,"run":...,"sequence":...,"turn":...,"digest":...}}}`
+echoing the ordinal and naming the finished name the file will take, the position it
+covers with the last turn that run's holdings carry, and the digest of its bytes, or
+drops the ask unanswered where the write failed, the silence converting at the harness
+into a missing answer like every other; on the harness's
+`{"acknowledge":{"snapshot":{"ask":N,"digest":...}}}` naming that ordinal and that
+digest both it links the finished name and answers
+`{"answer":{"finished":{"ask":N,"save-point":...}}}`, and an acknowledgement naming no
+part it holds, or one whose ordinal or digest is not the part's, or a link that fails,
+is answered by nothing, the part removed. An ask without its ordinal is not this ask and
+answers nothing. **The leave's
 save point is taken before the `unload` event**, per `weaver-harness-Spec` section 6 as
 of A3.2, so the holdings a load restores never carry the prior run's `unload` event,
 lifecycle provenance the record keeps, and a rebuild through the preload door to the

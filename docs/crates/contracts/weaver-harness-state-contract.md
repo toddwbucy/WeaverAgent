@@ -332,16 +332,22 @@ on issue #1, shaped by the rulings of the same day on #58, and amended on the op
 ruling of 2026-10-06 on #1 (A3.0 item 4) to write, answer, acknowledge: the store
 initiates nothing, so a save point is taken when the harness asks, at every serving
 leave and on the operator's demand, and never under a diagnostic binding, per
-`weaver-harness-Spec` section 6. The ask carries no members. The custodian writes the
+`weaver-harness-Spec` section 6. **The ask carries one member, `ask`, the harness's
+ordinal for the exchange**, counted per residency from 1 (Codex on #94, round 10), so a
+late answer is told from the retry's by its number: the custodian echoes it on the
+answer and on the `finished` answer, matches the acknowledgement to the part by number
+and digest both, and the harness drops an answer carrying another number and keeps
+waiting inside its bound. The custodian writes the
 whole of its holdings with the schema they stand under as a part in its own room, the
 territory's `state/`, never overwriting one that stands, per `weaver-state-PRD` section
-4. The answer carries five members: `save-point`, the finished name the file will take,
-`run` and `sequence`, the trace position of the last distillate it holds, `turn`, the
-last turn that run's holdings carry, and `digest`, the digest of its bytes. **The
-harness then sends `acknowledge`**, the one message on this seam that is not an ask,
-`{"acknowledge":{"snapshot":{"digest":...}}}` naming the digest it was answered, and the
-custodian gives the file its finished name and answers `{"answer":{"finished":
-{"save-point":...}}}`, on which the harness records the `save_point` event of
+4. The answer carries six members: `ask`, the ordinal echoed, `save-point`, the finished
+name the file will take, `run` and `sequence`, the trace position of the last distillate
+it holds, `turn`, the last turn that run's holdings carry, and `digest`, the digest of
+its bytes. **The harness then sends `acknowledge`**, the one message on this seam that
+is not an ask, `{"acknowledge":{"snapshot":{"ask":N,"digest":...}}}` naming the ordinal
+and the digest it was answered, and the custodian gives the file its finished name and
+answers `{"answer":{"finished":{"ask":N,"save-point":...}}}`, on which the harness
+records the `save_point` event of
 `weaver-trace-PRD` section 3; admin publishes finished names alone, at the next load or
 unload or at once on the operator's demand, so a save point whose answer or
 acknowledgement was lost never has a finished name, is never published and is never

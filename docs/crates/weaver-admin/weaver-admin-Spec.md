@@ -1640,8 +1640,9 @@ rename, before the manifest line names the entry; the line is synced before the 
 copy goes; a line a failed write left torn is rolled back to the length the file had,
 and a torn last line a power loss left is dropped at the read, named, and truncated by
 the next append, so the publication it was for is retried through the adoption of its
-target rather than blocking every load; and the marker is synced as a temporary,
-renamed, and its root synced, so it survives the loss of power it exists to record.
+target rather than blocking every load; and the marker is synced as a temporary, root's
+and mode `0644` set through the descriptor whatever the umask, renamed, and its root
+synced, so it survives the loss of power it exists to record.
 **Every other file this crate touches at a publication goes the same way**: the room is listed by path for names
 alone and every entry opened and removed through the room's descriptor; the operator's
 copy is created exclusively under a temporary name, its owner and mode verified on the
@@ -2316,7 +2317,12 @@ through that descriptor and judged the same way at mode `0750` and the territory
 group; and every read and every write after goes through those descriptors and never
 through the path again: `agent.toml` opened beneath the territory's, and section 6's
 published copy made, renamed and synced, the manifest opened and appended, and a file
-judged for a load or at a restore, each against `save-points/`. **The one entry this
+judged for a load or at a restore, each against `save-points/`. **The declaration's sink
+stands in the territory** (Codex on #94, round 10): the trace and the member's room are
+derived from the sink's directory, and the territory is the agent whole, so a
+declaration whose sink's directory is not the judged territory refuses `ConfigInvalid`
+naming `trace-sink`, never standing the trace or the room outside what the territory's
+custody, group and archive cover. **The one entry this
 crate reads is held closed**: `agent.toml` is a regular file and never a link, root's,
 and writable by no group or other, so the access group that reads it never rewrites it.
 Other entries are not read, `system-prompt.md`, the operator's draft of the prompt that

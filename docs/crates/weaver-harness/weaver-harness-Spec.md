@@ -2073,8 +2073,10 @@ tail; the holdings restored at a load therefore never carry the prior run's `unl
 event, and a rebuild through the preload door to the stamp stops before it too, so the
 member's restore-equals-rebuild instrument, `a_reloaded_store_equals_a_full_replay`,
 stays equal by construction. **A save point has four legs**, per `weaver-harness-state-contract` section 2:
-the ask, the answer naming the finished name and the digest, this crate's `acknowledge`
-of that digest, and the member's `finished` answer, on which this crate authors the
+the ask, carrying its ordinal, counted per residency from 1 (Codex on #94, round 10),
+the answer echoing it and naming the finished name and the digest, this crate's
+`acknowledge` of that ordinal and that digest, and the member's `finished` answer
+echoing the ordinal, on which this crate authors the
 `save_point` event, per `weaver-trace-Spec` section 3, the save point by digest and the
 position it covers, an event the tee never sends to state under any election, so the
 save point and a rebuild to its position hold the same; a save point is never
@@ -2086,10 +2088,14 @@ dead, and stays entered at rest with the run open, so the operator retries with
 silent and the dead-peer conversion does not apply to this ask at the leave. **The seam
 stays alive across the miss**: a missed answer or finished leg retires nothing, and before
 its next ask the seam drains, without blocking, whatever lines or part of one the member
-sent late, discarding them and saying so in one diagnostic line with the count, so the
-retry's answer is read as the retry's; a late finished answer's file stands in the room
-unrecorded and is published as recovered at the next publication, the leave's at the
-latest. A missed write, the ask itself unsent, is the dead peer as every send failure is.
+sent late, discarding them and saying so in one diagnostic line with the count, the
+resync for every ask; **and a late answer is dropped by its number**: the retry's ask
+carries the next ordinal, and an answer that arrives past the drain carrying the ordinal
+of an ask before is dropped and said while the wait goes on inside the bound, so a
+member whose every snapshot outruns the bound never leaves the retry one answer behind,
+which a longer bound would not close, the race being one of order and not of time; a
+late finished answer's file stands in the room unrecorded and is published as recovered
+at the next publication, the leave's at the latest. A missed write, the ask itself unsent, is the dead peer as every send failure is.
 **A forced leave takes no save point**: the `Leave` directive's `forced` member, set by admin's
 `force-unload` alone, has this crate author `unload` with `forced` true, recording that
 the leave's save point was not taken, so the next load, restoring the latest published
