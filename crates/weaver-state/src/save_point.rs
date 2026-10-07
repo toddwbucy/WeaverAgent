@@ -591,6 +591,32 @@ mod tests {
     /// flipped in the stamp, and a check line altered each refuse.
     /// Perturbation: skip the check comparison in `parse` and the flipped
     /// cases parse as sound.
+    /// **The corpus holds the two readers equal**, per `weaver-admin-Spec`
+    /// section 4: every file of the workspace's save-point corpus parses to
+    /// the verdict the corpus gives it, so a case this parse admits and
+    /// admin's judgment refuses, or the reverse, fails here or in admin's
+    /// own corpus test. Perturbation: relax any one rule of `parse` and its
+    /// case parses sound against a `refuses` verdict.
+    #[test]
+    fn the_corpus_holds_the_parse_equal_to_admins_judgment() {
+        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../weaver-types/tests/fixtures/save-points");
+        let verdicts = std::fs::read_to_string(corpus.join("verdicts.txt")).expect("the verdicts");
+        let mut cases = 0;
+        for line in verdicts.lines().filter(|l| !l.trim().is_empty()) {
+            let (name, verdict) = line.split_once(' ').expect("name and verdict");
+            let bytes = std::fs::read(corpus.join(name)).expect(name);
+            let parsed = SavePoint::parse(&bytes);
+            match verdict {
+                "sound" => assert!(parsed.is_ok(), "{name} parses sound: {parsed:?}"),
+                "refuses" => assert!(parsed.is_err(), "{name} refuses"),
+                other => panic!("{name}: verdict {other} is not sound or refuses"),
+            }
+            cases += 1;
+        }
+        assert!(cases >= 10, "the corpus holds its cases: {cases}");
+    }
+
     #[test]
     fn a_torn_or_damaged_save_point_is_refused() {
         let sound = taken("r-1", 41, b"a longer image so a cut lands inside it");

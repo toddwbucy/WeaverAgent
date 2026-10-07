@@ -883,7 +883,12 @@ regular file, not a link, owned by the operator, closed to group and other), a s
 of the format's seven members, a check over the bytes that holds, a digest equal to the
 manifest's and a published name computable from the stamp per `weaver-state-Spec`
 section 3, and any of these failing refuses `ConfigInvalid` naming the save point, so a
-damaged save point never reaches the member and the operator names another. **The
+damaged save point never reaches the member and the operator names another. **The judgment is the member's format rule read twice, and held equal by one corpus**:
+this crate links no interior crate, so its reader of the format and the member's parse
+are two hand-written readers, and the workspace's save-point corpus
+(`crates/weaver-types/tests/fixtures/save-points/`, a sound file and one malformed each
+way with a verdict per file) is read by both crates' tests, so a reader that admits what
+the other refuses fails its own test. **The
 schema is the member's to judge**, at the opener and answered on the enter's `restored`
 ask of `weaver-harness-state-contract` section 2: this crate links no engine and the
 member's vector carries no flag, so the one party that can read the schema a save point

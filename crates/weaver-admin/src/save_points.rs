@@ -278,6 +278,7 @@ pub fn judge(bytes: &[u8]) -> Result<Judged, String> {
     let wall_ns = taken
         .get("wall_ns")
         .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
         .and_then(|v| v.parse::<u128>().ok())
         .ok_or("the stamp's taken names no wall clock")?;
     if image.len() as u64 != length {
@@ -286,18 +287,19 @@ pub fn judge(bytes: &[u8]) -> Result<Judged, String> {
             image.len()
         ));
     }
-    let check: serde_json::Value = serde_json::from_slice(check_line)
-        .map_err(|e| format!("the check line does not parse: {e}"))?;
-    let claimed = check
-        .get("check")
-        .and_then(|v| v.as_str())
-        .ok_or("the check line names no check")?;
+    // **The check line is the member's canonical rendering, byte for
+    // byte**: `{"check":"<hex>"}` and nothing else, as the member's parse
+    // compares it, so whitespace or a member beside it refuses here as
+    // there.
     let mut hasher = sha2::Sha256::new();
     hasher.update(header);
     hasher.update(b"\n");
     hasher.update(image);
-    if hex(&hasher.finalize()) != claimed {
-        return Err("the check over the bytes does not hold".into());
+    let canonical = serde_json::json!({"check": hex(&hasher.finalize())}).to_string();
+    if check_line != canonical.as_bytes() {
+        return Err(
+            "the check line is not the check over the bytes in its canonical rendering".into(),
+        );
     }
     Ok(Judged {
         stamp: Stamp {
@@ -1289,6 +1291,32 @@ mod tests {
                 .exists(),
             "the room's copy stays for the next verb"
         );
+    }
+
+    /// **The corpus holds the two readers equal**, per `weaver-admin-Spec`
+    /// section 4: every file of the workspace's save-point corpus judges to
+    /// the verdict the corpus gives it, so a case this reader admits and the
+    /// member's refuses, or the reverse, fails here or in the member's own
+    /// corpus test. Perturbation: relax any one rule of `judge` and its case
+    /// judges sound against a `refuses` verdict.
+    #[test]
+    fn the_corpus_holds_the_judgment_equal_to_the_members_parse() {
+        let corpus = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../weaver-types/tests/fixtures/save-points");
+        let verdicts = std::fs::read_to_string(corpus.join("verdicts.txt")).expect("the verdicts");
+        let mut cases = 0;
+        for line in verdicts.lines().filter(|l| !l.trim().is_empty()) {
+            let (name, verdict) = line.split_once(' ').expect("name and verdict");
+            let bytes = std::fs::read(corpus.join(name)).expect(name);
+            let judged = judge(&bytes);
+            match verdict {
+                "sound" => assert!(judged.is_ok(), "{name} judges sound: {judged:?}"),
+                "refuses" => assert!(judged.is_err(), "{name} refuses"),
+                other => panic!("{name}: verdict {other} is not sound or refuses"),
+            }
+            cases += 1;
+        }
+        assert!(cases >= 10, "the corpus holds its cases: {cases}");
     }
 
     /// **The civil date is the epoch's own**: known instants render as the
