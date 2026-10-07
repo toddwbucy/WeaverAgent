@@ -616,7 +616,8 @@ all, returns to the operator unchanged and answers nothing further.
 `weaver-harness-Spec` section 6, and where that save point is not finished, the write
 having failed, the answer or the acknowledgement having missed its bound, or the member
 being dead, it answers `SavePointNotTaken` naming which, authors no `unload`, and stays
-entered at rest: the run stays open, the constituents keep the run lock, this verb prints
+entered at rest: the run stays open with its gate lowered, since the harness lowers the
+gate before it takes the leave's save point, the constituents keep the run lock, this verb prints
 the refusal and exits non-zero, and nothing silent happens. If the member is alive the
 operator retries, `save-point` and then `unload`; if it is dead the operator issues
 `force-unload`, which directs the leave with `forced` set, so the harness leaves without

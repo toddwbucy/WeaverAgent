@@ -1239,6 +1239,17 @@ impl Harness {
                     self.refuse(connection, &exchange, LifecycleRefusal::ActivityNotAtRest)?;
                     return Ok(None);
                 }
+                // **The gate is lowered before the leave's save point is
+                // taken** (Codex on #94, round 12), per Spec section 6: a
+                // turn the gate admitted while the snapshot ran would be
+                // dropped at the lower with no record and no answer, so no
+                // new work crosses the at-rest boundary once the leave has
+                // begun; a lower that refuses is remembered and the leave
+                // names it as its first refusal, the unwind running whole.
+                // A leave refused at its save point leaves the run entered
+                // at rest with the gate lowered, the retry or the force
+                // finding it so.
+                let lowered = lower_gate(run);
                 // **The leave's save point first, and the leave does not
                 // complete without it**, per Spec section 6 on the operator's
                 // ruling of 2026-10-06 on #1 (A3.0 item 6): a missed leg
@@ -1268,7 +1279,7 @@ impl Harness {
                         return Err(ChannelFault::Undecodable);
                     }
                 };
-                match leave(&mut run, Some(cause), forced) {
+                match leave_after(&mut run, Some(cause), forced, lowered) {
                     Ok(()) => {
                         self.answer(connection, &exchange, LifecycleAnswer::Left { save_point })?;
                     }
@@ -2194,30 +2205,44 @@ fn leave(
     cause: Option<weaver_types::Cause>,
     forced: bool,
 ) -> Result<(), LifecycleRefusal> {
+    let lowered = lower_gate(run);
+    leave_after(run, cause, forced, lowered)
+}
+
+/// **Lower the gate**, the leave's first step, taken on its own before the
+/// leave's save point (Codex on #94, round 12) so no turn is admitted while
+/// the snapshot runs: the lower is an exchange, not a shot, its confirmation
+/// being what admin's leave aggregate rests on, so the answer is read before
+/// the channel drops rather than raced against it; a refusal is answered to
+/// the caller to name as the leave's first. A run with no gate standing
+/// lowers nothing.
+fn lower_gate(run: &mut Run) -> Option<LifecycleRefusal> {
+    let gate = run.gate.take()?;
+    run.gate_ordinal += 1;
+    let lowered = exchange(
+        &gate.channel,
+        Opener::Harness,
+        run.gate_ordinal,
+        weaver_types::RefusingOrgan::Gate,
+        LifecycleDirective::Lower,
+    );
+    drop(gate.channel);
+    reap(gate.pid);
+    lowered.err()
+}
+
+/// The leave after its gate is lowered: the rest of the unwind, whole.
+fn leave_after(
+    run: &mut Run,
+    cause: Option<weaver_types::Cause>,
+    forced: bool,
+    lowered: Option<LifecycleRefusal>,
+) -> Result<(), LifecycleRefusal> {
     // The unwind runs whole whatever refuses along it, because stopping at
     // the first refusal leaks everything after it: a refused lower must not
     // leave a device held. The first refusal in sequence order is what the
     // answer names, per the contract's a-refusal-names-where-it-stopped.
-    let mut first_refusal: Option<LifecycleRefusal> = None;
-
-    if let Some(gate) = run.gate.take() {
-        run.gate_ordinal += 1;
-        // The lower is an exchange, not a shot: its confirmation is what
-        // admin's leave aggregate rests on, so the answer is read before the
-        // channel drops rather than raced against it.
-        let lowered = exchange(
-            &gate.channel,
-            Opener::Harness,
-            run.gate_ordinal,
-            weaver_types::RefusingOrgan::Gate,
-            LifecycleDirective::Lower,
-        );
-        drop(gate.channel);
-        reap(gate.pid);
-        if let Err(refusal) = lowered {
-            first_refusal.get_or_insert(refusal);
-        }
-    }
+    let mut first_refusal: Option<LifecycleRefusal> = lowered;
     if let Some(classify) = run.classify.take() {
         // Closure is the release, per the classify contract's failure
         // section: the process exits on its seam's close and the reap reads
@@ -3423,6 +3448,11 @@ mod tests {
             },
         };
         let (near, far) = std::os::unix::net::UnixStream::pair().expect("pair");
+        // Every line the member reads and every directive the gate stand-in
+        // takes, in arrival order, so a test reads the leave's sequence
+        // across the two organs.
+        let order: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        let member_order = order.clone();
         let member = std::thread::spawn(move || {
             let mut answers = far.try_clone().expect("clone");
             let mut read: Vec<String> = Vec::new();
@@ -3430,6 +3460,7 @@ mod tests {
             for line in BufReader::new(far).lines() {
                 let Ok(line) = line else { break };
                 read.push(line.clone());
+                member_order.lock().unwrap().push(line.clone());
                 let answer = if line.starts_with(r#"{"ask":{"grants""#) {
                     r#"{"answer":{"grants":{"surface":[]}}}"#
                 } else if line.starts_with(r#"{"ask":{"identity""#) {
@@ -3480,6 +3511,7 @@ mod tests {
         });
         let mut answer = None;
         let mut still_entered = false;
+        let mut gate_stand_in: Option<std::thread::JoinHandle<()>> = None;
         let refusal = match harness.enter(payload, Some(sink), Some(OwnedFd::from(near))) {
             Err(EnterFailure::AfterLoad(run, _)) => {
                 match mode {
@@ -3494,6 +3526,40 @@ mod tests {
                         // the leave's answer is the save point's and not the
                         // release's refusal.
                         let mut run = run;
+                        // **A gate stand-in**, so the leave's lower is an
+                        // exchange the sequence records (Codex on #94, round
+                        // 12): it answers `GateStopped` to the `Lower` and
+                        // marks the order; a child stands in for its pid.
+                        let (gate_near, gate_far) =
+                            crate::channel::OrganChannel::pair().expect("gate pair");
+                        // Reaped by pid in `lower_gate`, as the real gate is.
+                        #[allow(clippy::zombie_processes)]
+                        let gate_child = std::process::Command::new("true")
+                            .spawn()
+                            .expect("a child to reap");
+                        run.gate = Some(GateChannel {
+                            channel: gate_near,
+                            pid: nix::unistd::Pid::from_raw(gate_child.id() as i32),
+                            last_word: crate::spawn::LastWord::quiet(),
+                        });
+                        let gate_order = order.clone();
+                        gate_stand_in = Some(std::thread::spawn(move || {
+                            let channel = gate_far.into_channel();
+                            if let Ok(envelope) = channel.recv() {
+                                assert!(matches!(
+                                    envelope.payload,
+                                    weaver_types::Payload::Directive(LifecycleDirective::Lower)
+                                ));
+                                gate_order.lock().unwrap().push("<gate lowered>".into());
+                                let _ = channel.send(&OrganEnvelope {
+                                    exchange: envelope.exchange,
+                                    position: Position::Close,
+                                    payload: weaver_types::Payload::Answer(
+                                        LifecycleAnswer::GateStopped,
+                                    ),
+                                });
+                            }
+                        }));
                         if let Some(spu) = run.spu.take() {
                             drop(spu.decode);
                             drop(spu.lifecycle);
@@ -3531,9 +3597,15 @@ mod tests {
             Err(EnterFailure::BeforeLoad(refusal)) => Some(refusal),
         };
         drop(harness);
-        let read = member
+        member
             .join()
             .expect("the member finishes when the channel closes");
+        if let Some(gate) = gate_stand_in {
+            gate.join()
+                .expect("the gate stand-in finishes when its channel closes");
+        }
+        // The member's lines and the gate's marks, in arrival order.
+        let read = order.lock().unwrap().clone();
         let held = std::fs::read_to_string(&sink_path).expect("the sink reads back");
         let _ = std::fs::remove_dir_all(&dir);
         let events = held
@@ -3712,6 +3784,10 @@ mod tests {
                 .position(|line| line.contains(needle))
                 .unwrap_or_else(|| panic!("{needle} reached the member: {read:?}"))
         };
+        assert!(
+            at("<gate lowered>") < at(r#"{"ask":{"snapshot""#),
+            "the gate is lowered before the leave's save point is taken (Codex on #94, round 12): {read:?}"
+        );
         assert!(
             at(r#"{"ask":{"snapshot""#)
                 < at(r#"{"acknowledge":{"snapshot":{"ask":1,"digest":"ab"}}"#),
