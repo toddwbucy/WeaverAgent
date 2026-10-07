@@ -44,6 +44,20 @@ use crate::channel::{CoordinationListener, DecodeChannel, OrganChannel};
 /// `weaver-trace-Spec` section 3 as of 2026-10-03.
 type StopSlot = Option<(weaver_types::ExchangeId, weaver_types::Cause)>;
 
+/// **A leave heard while a turn runs**, on the operator's rulings of
+/// 2026-10-07 on #1: the unload drains, so the turn is let finish (or, forced,
+/// cancelled) and the leave runs at its close. Every dialer owed the leave's
+/// answer is held here with its exchange, its connection taken out of the
+/// verb slot so the listener is heard again and a `force-unload` can dial in
+/// during the drain; `quiesced` says the gate was already told to accept no
+/// further input, the first thing the unload does.
+pub(crate) struct PendingLeave {
+    pub(crate) answers: Vec<(OrganChannel, weaver_types::ExchangeId)>,
+    pub(crate) cause: weaver_types::Cause,
+    pub(crate) forced: bool,
+    pub(crate) quiesced: bool,
+}
+
 /// The floor's cause in the record's spelling: the two crates link downward
 /// only, so the harness converts at authorship.
 pub(crate) fn trace_cause(cause: weaver_types::Cause) -> weaver_trace::Cause {
@@ -79,6 +93,8 @@ pub(crate) struct GatePort<'a> {
     pub(crate) channel: &'a crate::channel::OrganChannel,
     pub(crate) ordinal: &'a mut u64,
     pub(crate) held: &'a mut std::collections::VecDeque<weaver_types::OrganEnvelope>,
+    /// The leave heard mid-turn, run by the serve loop at the turn's close.
+    pub(crate) leave: &'a mut Option<PendingLeave>,
 }
 
 pub struct Ports<'a> {
@@ -1077,6 +1093,36 @@ impl<'a> Ports<'a> {
             )
             .map_err(|_| TurnError::ChannelLost)?;
 
+        // **A call asked after the unload began is interrupted, not sent**,
+        // on the operator's ruling of 2026-10-07 on #1: the quiesced gate
+        // would carry no return, so the call is recorded killed by the
+        // cancel, the turn stops before its next generation, and the leave
+        // follows. The stop's cause is the leave's.
+        if let Some(leave) = self.gate.as_ref().and_then(|gate| gate.leave.as_ref()) {
+            if stop.is_none() {
+                let owed = leave.answers.first().map(|(_, exchange)| exchange.clone());
+                if let Some(owed) = owed {
+                    *stop = Some((owed, leave.cause));
+                }
+            }
+            let outcome = weaver_types::ToolOutcome::Killed {
+                partial: None,
+                by: weaver_types::KillCause::Cancel,
+            };
+            let completed = serde_json::to_string(&outcome).map_err(|_| TurnError::ChannelLost)?;
+            let completed = weaver_trace::raw_payload(&completed).ok_or(TurnError::ChannelLost)?;
+            self.author
+                .author(
+                    self.recorder,
+                    Kind::ToolCallCompleted,
+                    Subsystem::Harness,
+                    Some(turn),
+                    Some(Payload::Deferred(completed)),
+                )
+                .map_err(|_| TurnError::ChannelLost)?;
+            return Ok(crate::tools::ToolResult::granted(&outcome));
+        }
+
         let gate = self
             .gate
             .as_mut()
@@ -1154,6 +1200,30 @@ impl<'a> Ports<'a> {
             .map_err(|_| TurnError::ChannelLost)?;
 
         Ok(crate::tools::ToolResult::granted(&outcome))
+    }
+
+    /// **Cancel what the turn has in flight**: the tool call out at the gate,
+    /// by its exchange, or the generation, by the turn, as a stop does.
+    fn cancel_turn(
+        gate: Option<&GatePort<'_>>,
+        decode: &DecodeChannel,
+        turn: &TurnKey,
+        execution: Option<&weaver_types::ExchangeId>,
+    ) -> Result<(), TurnError> {
+        if let Some(execution) = execution {
+            gate.expect("invocation gate")
+                .channel
+                .send(&weaver_types::OrganEnvelope {
+                    exchange: execution.clone(),
+                    position: weaver_types::Position::Continue,
+                    payload: weaver_types::Payload::ToolCancel,
+                })
+                .map_err(|_| TurnError::ChannelLost)
+        } else {
+            decode
+                .send_directive(&TokenDirective::Cancel { turn: turn.clone() })
+                .map_err(|_| TurnError::ChannelLost)
+        }
     }
 
     /// Coordination during either kind of live exchange shares the same
@@ -1237,9 +1307,84 @@ impl<'a> Ports<'a> {
                                     ),
                                 });
                             }
-                            // A second stop, a leave, and everything
-                            // else are out of order for a turn in
-                            // flight, refused and not queued.
+                            // **A leave mid-turn drains rather than refuses**,
+                            // on the operator's rulings of 2026-10-07 on #1:
+                            // an unforced leave tells the gate at once to
+                            // accept no further input and lets the turn run
+                            // to its close; a forced one cancels the turn as
+                            // a stop does, recorded on the trace as a stop,
+                            // and the leave runs at the close either way. A
+                            // second unforced leave while one is pending is
+                            // out of order; a forced one joins it and turns
+                            // it forced.
+                            weaver_types::Payload::Directive(
+                                weaver_types::LifecycleDirective::Leave { cause, forced },
+                            ) if self.gate.is_some() => {
+                                let pending_unforced =
+                                    self.gate.as_ref().is_some_and(|gate| gate.leave.is_some());
+                                if pending_unforced && !forced {
+                                    let _ = connection.send(&weaver_types::OrganEnvelope {
+                                        exchange,
+                                        position: weaver_types::Position::Close,
+                                        payload: weaver_types::Payload::Refusal(
+                                            weaver_types::LifecycleRefusal::OutOfOrder,
+                                        ),
+                                    });
+                                    return Ok(());
+                                }
+                                // A forced leave cancels whatever runs; an
+                                // unforced one cancels only a tool call out
+                                // at the gate, whose return the quiesced gate
+                                // would never carry (the operator's ruling of
+                                // 2026-10-07 on #1), and lets a generation
+                                // finish. The cancel crosses before the
+                                // quiesce, a gate executing a tool reading
+                                // only its cancel until the call ends.
+                                if (forced || execution.is_some()) && stop.is_none() {
+                                    Self::cancel_turn(
+                                        self.gate.as_ref(),
+                                        self.decode,
+                                        turn,
+                                        execution,
+                                    )?;
+                                    *stop = Some((exchange.clone(), cause));
+                                }
+                                let connection = slot.take().expect("the connection stood");
+                                let gate = self.gate.as_mut().expect("guarded above");
+                                match gate.leave.as_mut() {
+                                    Some(leave) => {
+                                        leave.forced |= forced;
+                                        leave.answers.push((connection, exchange));
+                                    }
+                                    None => {
+                                        let mut quiesced = false;
+                                        if !forced {
+                                            *gate.ordinal += 1;
+                                            gate.channel
+                                                .send(&weaver_types::OrganEnvelope {
+                                                    exchange: weaver_types::ExchangeId {
+                                                        opener: weaver_types::Opener::Harness,
+                                                        ordinal: *gate.ordinal,
+                                                    },
+                                                    position: weaver_types::Position::Open,
+                                                    payload: weaver_types::Payload::Directive(
+                                                        weaver_types::LifecycleDirective::Quiesce,
+                                                    ),
+                                                })
+                                                .map_err(|_| TurnError::ChannelLost)?;
+                                            quiesced = true;
+                                        }
+                                        *gate.leave = Some(PendingLeave {
+                                            answers: vec![(connection, exchange)],
+                                            cause,
+                                            forced,
+                                            quiesced,
+                                        });
+                                    }
+                                }
+                            }
+                            // A leave with no gate standing has no drain to
+                            // run, so it is refused as before.
                             weaver_types::Payload::Directive(
                                 weaver_types::LifecycleDirective::Leave { .. },
                             ) => {
@@ -1803,6 +1948,11 @@ impl<'a> Ports<'a> {
         // reports, carrying the turn's fate, aborted or completed-at-rest,
         // both truthful at the moment of answering.
         if let Some((exchange, _)) = stop.take()
+            && !self.gate.as_ref().is_some_and(|gate| {
+                gate.leave
+                    .as_ref()
+                    .is_some_and(|leave| leave.answers.iter().any(|(_, owed)| *owed == exchange))
+            })
             && let Some(slot) = self.pending.as_deref_mut()
             && let Some(connection) = slot.as_ref()
         {
@@ -3026,6 +3176,7 @@ mod tests {
         let mut turn_in_flight: Option<weaver_types::TurnKey> = None;
         let mut gate_ordinal = 0u64;
         let mut held = std::collections::VecDeque::new();
+        let mut leave = None;
 
         let (listener, _dir) = test_listener();
         let outcome = {
@@ -3046,6 +3197,7 @@ mod tests {
                     channel: &gate_near,
                     ordinal: &mut gate_ordinal,
                     held: &mut held,
+                    leave: &mut leave,
                 }),
                 None,
                 None,
@@ -3748,6 +3900,7 @@ mod tests {
         let mut slot = Some(verb_end);
         let mut gate_ordinal = 0;
         let mut held = std::collections::VecDeque::new();
+        let mut leave = None;
         let mut fullness = None;
         let mut pressure_reported = false;
         let load_facts = test_load_facts();
@@ -3789,6 +3942,7 @@ mod tests {
                     channel: &gate_near,
                     ordinal: &mut gate_ordinal,
                     held: &mut held,
+                    leave: &mut leave,
                 }),
                 None,
                 None,
@@ -3857,6 +4011,342 @@ mod tests {
                 "{completed}"
             );
         }
+    }
+
+    /// **A graceful leave while a tool call is out interrupts the call and
+    /// quiesces the gate**, per `weaver-harness-Spec` section 6 on the
+    /// operator's rulings of 2026-10-07 on #1: the call's return would come
+    /// through a gate that accepts no further input, so it is cancelled and
+    /// recorded killed by the cancel, the turn closes as stopped by the
+    /// directive, the gate is told to quiesce only after the cancel crosses,
+    /// and the leave waits, unanswered, for the serve loop with its
+    /// connection out of the verb slot. Perturbation: send the quiesce before
+    /// the cancel and the gate stand-in sees it first.
+    #[test]
+    fn a_leave_while_a_tool_call_is_out_interrupts_it_and_quiesces_after_the_cancel() {
+        left_mid_invocation();
+    }
+
+    fn left_mid_invocation() {
+        let (crossing, call_count) = (false, 1);
+        use nix::poll::{PollFd, PollFlags, poll};
+        use std::os::fd::AsFd;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        use std::time::{Duration, Instant};
+        const DELAY_MS: u16 = 2_000;
+        let (listener, _dir) = test_listener();
+        let (near, far) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let decode = crate::channel::decode_from_owned(near);
+        let (verb_end, admin_end) = crate::channel::OrganChannel::pair().unwrap();
+        let admin = admin_end.into_channel();
+        let (gate_near, gate_child) = crate::channel::OrganChannel::pair().unwrap();
+        let generated = |content, finish| {
+            weaver_types::TokenAnswer::Generated(Generation {
+                content,
+                emission: "tool emission".into(),
+                finish,
+                resident: 64,
+                capacity: 4096,
+                request: serde_json::value::RawValue::from_string(
+                    r#"{"rendered":"fixture"}"#.into(),
+                )
+                .unwrap(),
+                measurement: serde_json::value::RawValue::from_string(r#"{}"#.into()).unwrap(),
+            })
+        };
+        let calls = (0..call_count)
+            .map(|_| {
+                ContentBlock::ToolCall(weaver_traits::ToolCall {
+                    name: "bash".into(),
+                    arguments: r#"{"command":"sleep 5"}"#.into(),
+                })
+            })
+            .collect();
+        // Both are ready before the turn: decode's initial answer wins, then
+        // the invocation wait must hear coordination while gate holds its answer.
+        send(
+            far.as_raw_fd(),
+            &serde_json::to_vec(&generated(calls, Finish::Completed)).unwrap(),
+            MsgFlags::empty(),
+        )
+        .unwrap();
+        let finished = Arc::new(AtomicBool::new(false));
+        let decode_finished = finished.clone();
+        let stopped = generated(vec![], Finish::Stopped);
+        let peer = std::thread::spawn(move || {
+            let mut appends = 0;
+            let until = Instant::now() + Duration::from_secs(6);
+            loop {
+                let mut fds = [PollFd::new(far.as_fd(), PollFlags::POLLIN)];
+                let ready = poll(&mut fds, 25u16).unwrap();
+                if ready > 0 {
+                    let mut buf = vec![0; 65536];
+                    let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    let request: weaver_types::TokenDirective =
+                        serde_json::from_slice(&buf[..n]).unwrap();
+                    if matches!(request, TokenDirective::AppendAndGenerate { .. }) {
+                        appends += 1;
+                    }
+                    if appends > 1 || matches!(request, TokenDirective::Cancel { .. }) {
+                        send(
+                            far.as_raw_fd(),
+                            &serde_json::to_vec(&stopped).unwrap(),
+                            MsgFlags::empty(),
+                        )
+                        .unwrap();
+                    }
+                } else if decode_finished.load(Ordering::Acquire) {
+                    break;
+                }
+                assert!(Instant::now() < until, "decode fixture did not finish");
+            }
+            appends
+        });
+        let gate_finished = finished.clone();
+        let gate_peer = std::thread::spawn(move || {
+            let gate = gate_child.into_channel();
+            let mut fds = [PollFd::new(gate.as_fd(), PollFlags::POLLIN)];
+            assert!(poll(&mut fds, 5_000u16).unwrap() > 0);
+            let open = gate.recv().unwrap();
+            assert_eq!(open.position, weaver_types::Position::Open);
+            assert!(matches!(open.payload, weaver_types::Payload::Tool(_)));
+            let mut fds = [PollFd::new(gate.as_fd(), PollFlags::POLLIN)];
+            let ready = poll(&mut fds, DELAY_MS).unwrap() > 0;
+            let answer = |outcome| {
+                gate.send(&weaver_types::OrganEnvelope {
+                    exchange: open.exchange.clone(),
+                    position: weaver_types::Position::Close,
+                    payload: weaver_types::Payload::ToolAnswer(outcome),
+                })
+                .unwrap();
+            };
+            // In the crossing arm the result leaves before the gate reads
+            // the queued cancel, as on a naturally completed invocation.
+            if crossing {
+                answer(weaver_types::ToolOutcome::Result {
+                    content: "finished as cancel crossed".into(),
+                });
+            }
+            let mut cancels = 0;
+            if ready {
+                let cancel = gate.recv().unwrap();
+                assert_eq!(cancel.exchange, open.exchange);
+                assert_eq!(cancel.position, weaver_types::Position::Continue);
+                assert_eq!(cancel.payload, weaver_types::Payload::ToolCancel);
+                cancels += 1;
+            }
+            if !crossing {
+                answer(if ready {
+                    weaver_types::ToolOutcome::Killed {
+                        partial: Some("partial".into()),
+                        by: weaver_types::KillCause::Cancel,
+                    }
+                } else {
+                    weaver_types::ToolOutcome::Result {
+                        content: "finished at fixture delay".into(),
+                    }
+                });
+            }
+            let mut executions = 1;
+            let mut quiesced_after: Option<u32> = None;
+            let until = Instant::now() + Duration::from_secs(6);
+            loop {
+                let mut fds = [PollFd::new(gate.as_fd(), PollFlags::POLLIN)];
+                if poll(&mut fds, 25u16).unwrap() > 0 {
+                    let Ok(envelope) = gate.recv() else {
+                        break;
+                    };
+                    match envelope.payload {
+                        weaver_types::Payload::ToolCancel => cancels += 1,
+                        weaver_types::Payload::Tool(_) => {
+                            executions += 1;
+                            gate.send(&weaver_types::OrganEnvelope {
+                                exchange: envelope.exchange,
+                                position: weaver_types::Position::Close,
+                                payload: weaver_types::Payload::ToolAnswer(
+                                    weaver_types::ToolOutcome::Result {
+                                        content: "unwanted second execution".into(),
+                                    },
+                                ),
+                            })
+                            .unwrap();
+                        }
+                        // The quiesce arrives only after the cancel, as a
+                        // gate executing a tool reads its cancel alone
+                        // (`weaver-gate/src/tools.rs`, `supervision_wait`);
+                        // answered as the raised gate answers it
+                        // (`weaver-gate/src/main.rs`, `(Raised, Quiesce)`).
+                        weaver_types::Payload::Directive(
+                            weaver_types::LifecycleDirective::Quiesce,
+                        ) => {
+                            quiesced_after = Some(cancels);
+                            gate.send(&weaver_types::OrganEnvelope {
+                                exchange: envelope.exchange,
+                                position: weaver_types::Position::Close,
+                                payload: weaver_types::Payload::Answer(
+                                    weaver_types::LifecycleAnswer::GateQuiesced,
+                                ),
+                            })
+                            .unwrap();
+                        }
+                        _ => panic!("unexpected gate traffic"),
+                    }
+                } else if gate_finished.load(Ordering::Acquire) {
+                    break;
+                }
+                assert!(Instant::now() < until, "gate fixture did not finish");
+            }
+            (cancels, executions, quiesced_after)
+        });
+        let session = SessionId("s-stop-invocation".into());
+        let mut recorder = crate::record::Record::Serving(
+            Recorder::receive(
+                tempfile(),
+                RunRef("r-1".into()),
+                SessionRef(session.0.clone()),
+            )
+            .expect("recorder"),
+        );
+        // Author owns its origin. Bracket its construction so trace
+        // monotonic timestamps map to intervals on this test's clock
+        // without changing production code or treating return as close.
+        let origin_before = Instant::now();
+        let author = Author::new(&session, &weaver_types::RunId("r-1".into()));
+        let origin_after = Instant::now();
+        author
+            .author(
+                &mut recorder,
+                Kind::Load,
+                Subsystem::Harness,
+                None,
+                Some(Payload::Elections(Box::new(weaver_trace::Elections {
+                    residual_readout: false,
+                    field: None,
+                    surprisal: false,
+                    tee: Some(weaver_trace::Election::default()),
+                    state_member: false,
+                    declaration: Default::default(),
+                    lineage: None,
+                    reset: None,
+                    stack: Default::default(),
+                    boundary: String::new(),
+                    cause: weaver_trace::Cause { uid: 0 },
+                    library_path: None,
+                    state_store: Default::default(),
+                    composer: weaver_trace::LoopIdentity::compiled("test"),
+                }))),
+            )
+            .expect("load");
+        let mut turn_ordinal = 0;
+        let mut turn_in_flight = None;
+        let mut slot = Some(verb_end);
+        let mut gate_ordinal = 0;
+        let mut held = std::collections::VecDeque::new();
+        let mut leave = None;
+        let mut fullness = None;
+        let mut pressure_reported = false;
+        let load_facts = test_load_facts();
+
+        let stop_before = Instant::now();
+        let stop_exchange = weaver_types::ExchangeId {
+            opener: weaver_types::Opener::Admin,
+            ordinal: 9,
+        };
+        admin
+            .send(&weaver_types::OrganEnvelope {
+                exchange: stop_exchange.clone(),
+                position: weaver_types::Position::Open,
+                payload: weaver_types::Payload::Directive(
+                    weaver_types::LifecycleDirective::Leave {
+                        cause: weaver_types::Cause { uid: 0 },
+                        forced: false,
+                    },
+                ),
+            })
+            .unwrap();
+        let result = {
+            let mut ports = Ports::grant(
+                &decode,
+                &author,
+                &mut recorder,
+                &mut turn_ordinal,
+                &mut turn_in_flight,
+                &load_facts,
+                None,
+                &listener,
+                Some(&mut slot),
+                Some(GatePort {
+                    channel: &gate_near,
+                    ordinal: &mut gate_ordinal,
+                    held: &mut held,
+                    leave: &mut leave,
+                }),
+                None,
+                None,
+                &mut fullness,
+                &mut pressure_reported,
+            );
+            ports.turn(vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: "stop invocation".into(),
+                }],
+            }])
+        };
+        finished.store(true, Ordering::Release);
+        let appends = peer.join().unwrap();
+        let (cancels, executions, quiesced_after) = gate_peer.join().unwrap();
+        let outcome = result.expect("turn returns");
+        assert!(outcome.aborted && outcome.stopped);
+        assert_eq!(cancels, 1, "exactly one cancel");
+        assert_eq!(executions, 1, "no second execution");
+        assert_eq!(appends, 1, "no result re-feed");
+        assert_eq!(
+            quiesced_after,
+            Some(1),
+            "the quiesce crosses after the cancel"
+        );
+        let pending = leave.as_ref().expect("the leave waits for the serve loop");
+        assert!(pending.quiesced && !pending.forced);
+        assert_eq!(pending.answers.len(), 1);
+        assert_eq!(pending.answers[0].1, stop_exchange);
+        assert!(slot.is_none(), "the leave's connection left the verb slot");
+        let mut fds = [PollFd::new(admin.as_fd(), PollFlags::POLLIN)];
+        assert_eq!(
+            poll(&mut fds, 200u16).unwrap(),
+            0,
+            "the turn answers the leave nothing"
+        );
+        let trace = recorder.structure().unwrap();
+        let event = |kind| {
+            serde_json::from_str::<serde_json::Value>(
+                &trace.by_kind(kind).next().expect("trace event").line,
+            )
+            .unwrap()
+        };
+        let completed = event(Kind::ToolCallCompleted);
+        let close = event(Kind::TurnClosed);
+        assert!(
+            close.to_string().contains(r#""reason":"directive""#),
+            "{close}"
+        );
+        assert!(
+            completed.to_string().contains(r#""by":"cancel""#),
+            "{completed}"
+        );
+        let _ = (crossing, origin_before, origin_after, stop_before);
     }
 
     #[test]

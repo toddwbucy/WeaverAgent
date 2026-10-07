@@ -1163,7 +1163,7 @@ pub enum Marker {
     Open { run: String },
     /// A clean unload closed it.
     Closed { run: String },
-    /// `force-unload` ended it without its leave save point.
+    /// `force-unload` ended it and its leave save point was not kept.
     Forced { run: String },
 }
 

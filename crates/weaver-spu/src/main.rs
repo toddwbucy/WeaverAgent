@@ -1631,6 +1631,7 @@ fn dispatch(
             | LifecycleDirective::Stop { .. }
             | LifecycleDirective::Observe
             | LifecycleDirective::Raise { .. }
+            | LifecycleDirective::Quiesce
             | LifecycleDirective::Lower
             | LifecycleDirective::Load { .. }
             | LifecycleDirective::Unload { .. }

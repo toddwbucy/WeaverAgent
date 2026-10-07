@@ -188,6 +188,23 @@ impl Served {
         !self.outbound.is_empty()
     }
 
+    /// Whether this connection is owed nothing: no exchange open and no
+    /// response standing undelivered. At a quiesce such a connection closes,
+    /// its input never having been received as a request.
+    pub fn owed_nothing(&self) -> bool {
+        self.exchange.is_none() && self.outbound.is_empty()
+    }
+
+    /// The exchange this connection awaits a response on, if one is open.
+    pub fn open_exchange(&self) -> Option<u64> {
+        self.exchange
+    }
+
+    /// The dialer's uid, for the operator's line about a drain that stands.
+    pub fn dialer(&self) -> u32 {
+        self.dialer
+    }
+
     /// The descriptor, for the wait's registration.
     pub fn as_fd(&self) -> BorrowedFd<'_> {
         self.stream.as_fd()

@@ -561,9 +561,10 @@ pub struct UnloadClose {
     pub grant_surface: Option<GrantSurface>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cause: Option<Cause>,
-    /// True where admin's `force-unload` ended the run without its leave save
-    /// point, as of A3.2 on the operator's ruling of 2026-10-06 on #1 (A3.0
-    /// item 6), so the record says the loss was the operator's choice.
+    /// True where admin's `force-unload` ended the run, as of A3.2 and the
+    /// operator's clarification of 2026-10-07 on #1: the gate closed at once
+    /// and the turn cancelled, the save point taken where it could be, which
+    /// the `save_point` event or a refusal of the leave says.
     pub forced: bool,
 }
 

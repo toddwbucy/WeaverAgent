@@ -32,7 +32,8 @@ pub enum Request {
     SavePoint(AgentName),
     /// Name the save point the next load restores, the declaration's.
     Restore(AgentName),
-    /// The unload that completes without its leave save point.
+    /// The unload that does not wait: the gate closed at once, the turn
+    /// cancelled, the save point taken where it can be.
     ForceUnload(AgentName),
 }
 

@@ -81,7 +81,9 @@ rulings of 2026-10-03 on #50, and, as of A3.2 on the operator's rulings of 2026-
 #1, `save-point`, which takes a save point of the running agent and publishes it at
 once, `restore`, which names the save point the next load restores, the one the
 declaration's `[restore]` names and never one the caller chooses, and `force-unload`,
-the unload that completes without its leave save point and records the loss.
+the unload that does not wait: it closes the gate at once and cancels the turn in
+flight, and takes the leave save point all the same, coming down without it only where
+it cannot be taken, and records the loss then.
 **Which lines a caller may run is the rule the operator installs**: an observer's rule
 grants `show`, and an operator's adds `validate`, `load`, `unload`, `stop`, `save-point`,
 `restore` and `force-unload`, the role split of #50 mapped onto command lines. Nothing else crosses in:
@@ -223,8 +225,14 @@ cannot pin the run lock's holder refuses `LockHolderUnknown`, and one whose work
 holds the run lock after the escalation refuses `WorkerWouldNotExit` and answers no
 state. An `unload` whose leave save point was reported and did not publish refuses
 `SavePointNotTaken` naming `published`, admin's own leg, and leaves the marker open for
-the next load's reset, per `weaver-admin-Spec` section 3; `force-unload` reports no save
-point and is unchanged. A `stop` or a `show` whose answer does not arrive within its bound refuses
+the next load's reset, per `weaver-admin-Spec` section 3; `force-unload` comes down
+whether or not its save point publishes. **A graceful `unload` may take the length of a
+turn**, on the operator's rulings of 2026-10-07 on #1: the agent accepts no further
+input from the unload, finishes the turn in flight and answers it, refuses requests it
+had not started, and only then goes down, with no time bound of its own; the invocation
+lock is released during that wait, so `force-unload` can be issued at any point and
+always comes down at once. A `save-point` or a second `unload` issued during the wait
+refuses `OutOfOrder`, a `load` refuses as for a running agent, and `show` answers. A `stop` or a `show` whose answer does not arrive within its bound refuses
 `Unanswered`, and so does a `load` meeting a run whose worker is silent, each leaving
 the run as it stands for `unload`. **Recovery from a killed invocation is the
 caller's**: admin-con reads `show`'s facts and issues `unload`, which ends whatever

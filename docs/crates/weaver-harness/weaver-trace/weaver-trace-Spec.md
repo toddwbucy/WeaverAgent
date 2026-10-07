@@ -657,9 +657,12 @@ the payload-free case counting as one of them. `refusal` carries `Refusal`, spli
 organ's own account of what it turned away. `session.closed` and `turn.started` carry
 `None`, and `unload` carries `UnloadClose`, its grant surface present where a member
 stood, its cause where a leave directive asked, and, as of A3.2 on the operator's
-ruling of 2026-10-06 on #1 (A3.0 item 6), `forced`, true where admin's `force-unload`
-ended the run without its leave save point, so the record says the loss was the
-operator's choice. `load` carries `Elections`. The five
+ruling of 2026-10-06 on #1 (A3.0 item 6) and the clarification of 2026-10-07, `forced`,
+true where admin's `force-unload` ended the run, the gate closed at once and the turn in
+flight cancelled; whether the leave's save point was taken is told by the `save_point`
+event before it, or, where it was not, by a `refusal` of the leave naming
+`save_point_not_taken` and its leg, so the record says what state the operator's choice
+kept. `load` carries `Elections`. The five
 message kinds carry `Message`. `turn.closed` carries `TurnClosed`. `fault` carries
 `Fault`. `flush` carries `FlushCounts`, the resident token counts before and after, both
 plain integers. **`elision` carries `ElisionSpan` and not those counts**: an elision
@@ -821,7 +824,7 @@ at as `through`. `reset` stands beside `lineage` and apart from it, present only
 the agent's last run did not end in a clean unload, whether or not a save point stands,
 and carries that run as `prior_run` and the reason as admin resolved it,
 `no_clean_unload` or, as of A3.2, `forced_unload` where the operator's `force-unload`
-closed that run without its leave save point. Both are copied from the enter per `weaver-types-Spec`
+closed that run and its leave save point could not be taken. Both are copied from the enter per `weaver-types-Spec`
 section 4 and never the save point's path, which the
 harness does not hold. `stack` is the digests of the organ binaries admin started and of
 the agent's SPU and the gate it hands the worker to fork, keyed by the binary's name,

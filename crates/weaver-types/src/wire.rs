@@ -215,9 +215,10 @@ pub enum LifecycleDirective {
     /// The cause rides each change, per `weaver-types-Spec` section 3.1, and
     /// the harness records it on the unload event. **`forced` is admin's
     /// `force-unload`**, as of A3.2 on the operator's ruling of 2026-10-06 on
-    /// #1: the harness then leaves without its leave save point and records
-    /// on the `unload` event that it was not taken; false, the leave does not
-    /// complete without one.
+    /// #1 and the clarification of 2026-10-07: the harness closes the gate at
+    /// once, cancels the turn in flight, and takes the leave save point where
+    /// it can, coming down without one only where it cannot; false, the leave
+    /// drains and does not complete without its save point.
     Leave {
         cause: crate::Cause,
         #[serde(default)]
@@ -252,6 +253,14 @@ pub enum LifecycleDirective {
         instruction: GateInstruction,
         socket: std::path::PathBuf,
     },
+    /// **The gate accepts no further input**, the unload's first step on the
+    /// operator's ruling of 2026-10-07 on #1: the listener closes, connections
+    /// owed nothing close, the rest stop being read, and every frame already
+    /// admitted is sent ahead of the answer, `GateQuiesced`, so the harness
+    /// answers each one while its connection still stands.
+    Quiesce,
+    /// The gate shuts down: from a quiesced gate, once every owed response is
+    /// written; from a raised one, at once, the forced unload's path.
     Lower,
     Load {
         agent: AgentName,
@@ -319,7 +328,8 @@ pub enum SavePointLeg {
 /// Every directive receives exactly one answer: `Enter` answers `Ready`,
 /// `Leave` answers `Left`, `Stop` answers `TurnAborted` or `AtRest` by what it
 /// interrupted, `Admit` answers `Admitted`, `Release` answers `Released`,
-/// `Raise` answers `GateReady`, `Lower` answers `GateStopped`, `Validate`
+/// `Raise` answers `GateReady`, `Quiesce` answers `GateQuiesced`, `Lower`
+/// answers `GateStopped`, `Validate`
 /// answers `Validated`, and `Load`, `Unload`, and `Show` answer `State`. Any
 /// directive may answer a [`LifecycleRefusal`] instead,
 /// which is the second half of what one answer per request means.
@@ -352,6 +362,9 @@ pub enum LifecycleAnswer {
     Admitted,
     Released,
     GateReady,
+    /// `Quiesce`'s answer: every frame the gate admitted has been sent ahead
+    /// of it on the channel.
+    GateQuiesced,
     GateStopped,
     Validated,
     /// **An answer, not a state**, per `weaver-types-Spec` section 3.1:

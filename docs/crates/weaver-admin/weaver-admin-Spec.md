@@ -202,8 +202,8 @@ per section 6; `restore`, naming the save point the next load restores, which is
 the declaration's `[restore]` names, judged loadable now and, where no line names it,
 entered in the manifest as named at a restore, per section 4, so a file that arrived by
 no publication becomes loadable only by this verb and `RestoreNamed` means named and
-judged loadable now; and `force-unload`, the unload that completes without its leave save point,
-per section 3. Each is one fixed command line with no argument: the save point `restore`
+judged loadable now; and `force-unload`, the unload that does not wait, the gate closed
+at once and the turn cancelled, its save point taken where it can be, per section 3. Each is one fixed command line with no argument: the save point `restore`
 names is the declaration's and never the caller's, which is why the verb takes none, and
 the operator's rule grants all three, the observer's none. **The live restore of a
 running agent waits on the decode seam's `Reopen`**, the loop act's (A5): a restore is a
@@ -609,9 +609,23 @@ publishing the member's finished save points per section 6 once the member has s
 the leave's own among them, which the harness's `Left` answer names, and answer
 provisioned-and-unloaded **only once the lock is free**. The publication adds no step to
 the three, being the second step's tail. A refusal on leave, `ActivityNotAtRest` above
-all, returns to the operator unchanged and answers nothing further; `ActivityNotAtRest`
-covers a frame the gate admitted that the harness's loop has not yet taken, per
-`weaver-harness-Spec` section 6, so an unload that meets one is retried after the turn.
+all, returns to the operator unchanged and answers nothing further. **The leave drains**,
+on the operator's rulings of 2026-10-07 on #1: the harness tells the gate to accept no
+further input, lets a turn in flight finish what it can without further input, refuses
+every request received and not started, lowers the gate, takes the save point and
+answers `Left`, per `weaver-harness-Spec` section 6, so a leave heard mid-turn is
+answered at the turn's close and not refused, and the verb may wait the length of a
+turn. **The graceful unload waits for `Left` with no time bound and without the
+invocation lock**: it holds the lock to observe and to send the leave, releases it once
+the leave is sent, and takes it again after `Left` for the publication and the marker,
+so a `force-unload` is never blocked behind the drain it exists to cut short; where a
+`force-unload` holds the lock when the drain ends, the publication and the marker are
+the force's and this verb answers unloaded. **The gap is safe because every verb that
+could run in it refuses or only reads**: a `load` refuses at the run lock, which the
+standing run holds; a `save-point` and a second `unload` refuse `OutOfOrder` at the
+harness while the leave is pending; `show` answers `Active`; and a `force-unload` joins
+the pending leave and turns it forced. A forced unload keeps the lock and the leave's
+bound below.
 
 **An unload whose leave save point is not finished does not complete**, on the operator's rulings of 2026-10-06 on #1 (the A3.0 items)
 (item 6). The harness takes the leave's save point before it authors `unload`, per
@@ -622,11 +636,15 @@ entered at rest: the run stays open with its gate lowered, since the harness low
 gate before it takes the leave's save point, the constituents keep the run lock, this verb prints
 the refusal and exits non-zero, and nothing silent happens. If the member is alive the
 operator retries, `save-point` and then `unload`; if it is dead the operator issues
-`force-unload`, which directs the leave with `forced` set, so the harness leaves without
-the save point and records on the `unload` event that the leave's save point was not
-taken, and this crate leaves the clean-unload marker open under `ForcedUnload`, so the
-next load restores the latest published save point with that reset recorded. The loss is
-the operator's recorded choice, never this crate's. **Nor does an unload complete whose
+`force-unload`, which directs the leave with `forced` set: the harness lowers the gate at
+once, cancels the turn in flight, and takes the save point all the same, on the
+operator's clarification of 2026-10-07 on #1 that a forced unload stops work and not
+state integrity; where the save point is taken and published this crate closes the
+marker clean, no state having been lost, and where it cannot be, the member dead or a
+leg unanswered, the harness comes down without it, recording the miss as a refusal of
+the leave, and this crate leaves the marker open under `ForcedUnload`, so the next load
+restores the latest published save point with that reset recorded. The loss is the
+operator's recorded choice, never this crate's. **Nor does an unload complete whose
 leave save point did not publish** (Codex on #94, round 9), publication being part of
 taking it: the leave's reported digest must be among the lines section 6's publication
 appended at the unload, and where it is not, a room file past the bound or any
@@ -634,7 +652,8 @@ publication that does not land, this verb refuses `SavePointNotTaken` naming the
 publication, the fifth leg and this crate's own, and leaves the marker open, so the next
 load records `NoCleanUnload` and recovers the room's file or names it as unpublishable,
 never restoring an older save point in silence behind an `Unloaded`. A forced unload
-reports no save point and is unchanged. A forced verb that finds the run
+whose save point does not publish still comes down, answering unloaded with the marker
+open under `ForcedUnload`. A forced verb that finds the run
 already ended, the lock free, closes the marker as forced where it stands open, and a
 forced leave the harness refuses past its `Left`, its organs going down behind the
 refusal, closes it the same inside the after-left wait before the refusal returns, so
@@ -642,8 +661,8 @@ the next load records `ForcedUnload` and never `NoCleanUnload` for a run the ope
 forced. `force-unload` is `unload` in every
 other respect, the same waits and the same escalation.
 
-**The leave has a bound of its own, sixty seconds from the verb's start**, once the
-invocation lock is held: the observation and both dials spend it, so `unload` holds the
+**A forced unload's leave has a bound of its own, sixty seconds from the verb's start**,
+once the invocation lock is held (a graceful unload's has none, above): the observation and both dials spend it, so `unload` holds the
 invocation lock at most those sixty seconds and the escalation's forty-five, 105 in all,
 the number a caller builds against beside `show`'s short wait for the lock. A worker
 that accepts leave and answers nothing inside it is a worker that would not exit: the

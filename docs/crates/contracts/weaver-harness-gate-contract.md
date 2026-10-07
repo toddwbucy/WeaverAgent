@@ -123,8 +123,8 @@ per `weaver-gate-PRD` section 7.
 
 ## 2. The exchanges
 
-Five, and no others in this pass. Three are opened by the harness, raise, lower,
-and the tool execution as of the tool workflow's opening act of 2026-08-17, and
+Six, and no others in this pass. Four are opened by the harness, raise, quiesce
+(as of the operator's rulings of 2026-10-07 on #1), lower, and the tool execution as of the tool workflow's opening act of 2026-08-17, and
 two by the gate, the turn and the fault report, which is the two-initiator
 channel carrying both directions as of the token workflow's gate act. **The
 egress ruling of 2026-08-07 gave the gate a second seam toward the world**, the
@@ -143,13 +143,24 @@ translation, which is what makes `weaver-admin-harness-contract` section 6's
 refusing-organ case one refusal rather than a report to parse. The answer, either
 way, closes the exchange.
 
-**Lower the hook.** Opened by the harness, first in the leave fan-out. The gate
-closes the listener and answers stopped. **Stopped is sent only after the close has
-returned,** so nothing new can arrive anywhere in the interior once the harness
-proceeds, which is what stopped-first protects. Drain is modest by
-construction, per the token workflow's act: leave waits on rest, so no turn
-is in flight at a lower, and the gate closes its accepted connections after
-the listener, holding nothing that needs finishing.
+**Quiesce the hook.** Opened by the harness, the unload's first step, on the
+operator's rulings of 2026-10-07 on #1: at once when the leave is heard at rest or
+mid-turn, after a tool execution's cancel where one is out, since a gate executing a
+tool reads only its cancel until the execution ends. The gate closes the listener,
+closes every connection owed nothing, stops reading the rest, and answers
+`GateQuiesced`. **Every turn frame the gate admitted precedes that answer on the
+channel**, the gate sending what waited on writability before it answers, so the
+harness reading to `GateQuiesced` has met every request it will ever be sent and
+answers each, the turn in flight with its final output and a request received but not
+started with the refused close naming the unload, while the connection still stands.
+
+**Lower the hook.** Opened by the harness, after the drain, or at once on a forced
+unload. From a quiesced gate, `GateStopped` is sent only once every response the
+harness sent has been written to its connection, so a dialer the drain answered has
+its answer before the gate goes; from a raised gate, the forced path, the listener and
+every connection close at once and stopped follows the closes. **Stopped is sent only
+after the closes have returned,** so nothing new can arrive anywhere in the interior
+once the harness proceeds.
 
 **Carry a turn.** Opened by the gate, one exchange per client request, from
 the token workflow's act of 2026-08-02. The gate relays the client's line
@@ -296,11 +307,13 @@ that exchange.
 ## 3. Ordering
 
 - Raise is first and happens exactly once on a channel.
+- Quiesce, where it comes, comes once, after the raise and before the lower.
 - Lower is last, happens at most once, and is terminal on the channel.
 - A lower with no completed raise before it is refused and is not queued, because
   there is no listener for it to close.
-- Turn exchanges, tool executions, and fault reports are valid only between a
-  completed raise and a lower, the window being the raised hook.
+- Turn exchanges are opened only between a completed raise and a quiesce, or a
+  lower where no quiesce came; their responses, tool executions and fault reports are
+  valid until the lower.
 - More than one turn exchange may be open at once, the harness serving them
   one at a time in arrival order, per section 2.
 - Messages within one exchange are ordered.

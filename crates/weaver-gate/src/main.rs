@@ -40,13 +40,25 @@ use weaver_types::{
 enum HookState {
     /// No raise has arrived. Only a raise is in order.
     BeforeRaise,
-    /// The hook stands. Only a lower is in order.
+    /// The hook stands. A quiesce, the unload's drain, or a lower, the
+    /// forced unload's immediate close, is in order.
     ///
     /// The relay rides with it, because its connections exist only while it
     /// does: the lower drops the hook and them together, which is what makes
     /// `weaver-gate-world-contract` section 5's "a request while the hook is
     /// lowered finds no listener" true of a connection that was already open.
     Raised(Hook, Box<Relay>),
+    /// **Quiesced: the unload's drain**, on the operator's ruling of
+    /// 2026-10-07 on #1. The listener is gone and no connection is read
+    /// again; the connections owed a response stay, so the turn in flight
+    /// delivers its final output and every frame admitted before the quiesce
+    /// is answered on its own connection. `lowering` holds the `Lower`'s
+    /// exchange while the last owed responses are still being written, its
+    /// answer, `GateStopped`, deferred until they are.
+    Draining {
+        relay: Box<Relay>,
+        lowering: Option<weaver_types::ExchangeId>,
+    },
     /// Terminal. A directive of any kind arriving here answers `OutOfOrder`.
     Lowered,
 }
@@ -123,7 +135,9 @@ fn serve(channel: Channel) -> ExitCode {
         let mut waiting = Vec::with_capacity(4);
         let mut tags = Vec::with_capacity(4);
         let channel_flags = match &state {
-            HookState::Raised(_, relay) if !relay.pending.is_empty() => {
+            HookState::Raised(_, relay) | HookState::Draining { relay, .. }
+                if !relay.pending.is_empty() =>
+            {
                 PollFlags::POLLIN | PollFlags::POLLOUT
             }
             _ => PollFlags::POLLIN,
@@ -144,6 +158,20 @@ fn serve(channel: Channel) -> ExitCode {
                 if flags.is_empty() {
                     continue;
                 }
+                waiting.push(PollFd::new(served.as_fd(), flags));
+                tags.push(Tag::Conn(index));
+            }
+        }
+        // **Draining: write only**, never read, the quiesce having ended
+        // input; a connection still owed its response is polled for the
+        // write that delivers it, and for its hang-up.
+        if let HookState::Draining { relay, .. } = &state {
+            for (index, served) in relay.served.iter().enumerate() {
+                let flags = if served.wants_write() {
+                    PollFlags::POLLOUT
+                } else {
+                    PollFlags::empty()
+                };
                 waiting.push(PollFd::new(served.as_fd(), flags));
                 tags.push(Tag::Conn(index));
             }
@@ -202,7 +230,8 @@ fn serve(channel: Channel) -> ExitCode {
             }
             Tag::Channel => {
                 // Writable alone: the pending envelopes drain, in order.
-                if let HookState::Raised(_, relay) = &mut state {
+                if let HookState::Raised(_, relay) | HookState::Draining { relay, .. } = &mut state
+                {
                     while let Some(front) = relay.pending.front() {
                         match channel.try_send(front) {
                             Ok(true) => {
@@ -234,6 +263,25 @@ fn serve(channel: Channel) -> ExitCode {
                 }
             }
             Tag::Conn(at) => {
+                if let HookState::Draining { relay, .. } = &mut state {
+                    // A quiesced gate only delivers: the write drains, and a
+                    // connection owed nothing more leaves, its answer given;
+                    // one that hung up leaves with its delivery lost.
+                    if revents.contains(PollFlags::POLLOUT)
+                        && let Some(served) = relay.served.get_mut(at)
+                    {
+                        match served.on_writable() {
+                            Ok(()) => {
+                                if served.owed_nothing() {
+                                    relay.served.swap_remove(at);
+                                }
+                            }
+                            Err(gone) => remove(relay, at, &gone),
+                        }
+                    } else if revents.intersects(PollFlags::POLLHUP | PollFlags::POLLERR) {
+                        remove(relay, at, &relay::Gone::PeerLeft);
+                    }
+                }
                 if let HookState::Raised(_, relay) = &mut state {
                     // An errored connection surfaces through its own read,
                     // costing the connection and never the gate.
@@ -287,6 +335,53 @@ fn serve(channel: Channel) -> ExitCode {
                 }
             }
         }
+        if let Err(code) = finish_lower(&channel, &mut state) {
+            return code;
+        }
+    }
+}
+
+/// **A deferred lower answers once the drain is done**: a quiesced gate that
+/// has taken its `Lower` drops the relay and answers `GateStopped` when no
+/// connection still has a response to write.
+fn finish_lower(channel: &Channel, state: &mut HookState) -> Result<(), ExitCode> {
+    let HookState::Draining {
+        relay,
+        lowering: Some(exchange),
+    } = state
+    else {
+        return Ok(());
+    };
+    if relay.served.iter().any(|served| served.wants_write()) {
+        return Ok(());
+    }
+    let exchange = exchange.clone();
+    *state = HookState::Lowered;
+    answer(
+        channel,
+        exchange,
+        Payload::Answer(LifecycleAnswer::GateStopped),
+    )
+}
+
+/// One answer on the channel, the teardown's closed channel being the
+/// ordinary end and not a failure.
+fn answer(
+    channel: &Channel,
+    exchange: weaver_types::ExchangeId,
+    payload: Payload,
+) -> Result<(), ExitCode> {
+    match channel.send(&OrganEnvelope {
+        exchange,
+        position: Position::Close,
+        payload,
+    }) {
+        Ok(()) => Ok(()),
+        Err(ChannelFault::Closed) => Err(ExitCode::SUCCESS),
+        Err(fault) => {
+            eprintln!("{}", fault_line(&fault));
+            Err(ExitCode::FAILURE)
+        }
     }
 }
 
@@ -324,7 +419,7 @@ fn serve_channel_event(channel: &Channel, state: &mut HookState) -> Result<(), E
     let payload = if let Payload::Tool(execution) = &envelope.payload
         && envelope.exchange.opener == Opener::Harness
         && envelope.position == Position::Open
-        && matches!(state, HookState::Raised(_, _))
+        && matches!(state, HookState::Raised(_, _) | HookState::Draining { .. })
     {
         match weaver_gate::tools::execute(execution, channel, &envelope.exchange) {
             Ok(outcome) => Payload::ToolAnswer(outcome),
@@ -334,9 +429,54 @@ fn serve_channel_event(channel: &Channel, state: &mut HookState) -> Result<(), E
                 return Err(ExitCode::FAILURE);
             }
         }
+    } else if envelope.exchange.opener == Opener::Harness
+        && envelope.position == Position::Open
+        && matches!(
+            envelope.payload,
+            Payload::Directive(LifecycleDirective::Lower)
+        )
+        && let HookState::Draining { relay, lowering } = state
+        && lowering.is_none()
+        && relay.served.iter().any(|served| served.wants_write())
+    {
+        // **The lower waits on the last deliveries**: the answer is deferred
+        // until every response the harness sent is written, and a client
+        // that has not read its answer is named, so an operator deciding
+        // whether to force can see why the drain stands. A connection still
+        // awaiting a response the harness never sent is dropped now, its
+        // delivery lost.
+        relay
+            .served
+            .retain(|served| served.wants_write() || served.open_exchange().is_none());
+        for served in relay.served.iter().filter(|served| served.wants_write()) {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "drain": "waiting on a client that has not read its answer",
+                    "dialer": served.dialer(),
+                })
+            );
+        }
+        *lowering = Some(envelope.exchange.clone());
+        return Ok(());
     } else {
         dispatch(state, &envelope)
     };
+    // **Every frame admitted before the quiesce precedes its answer**: what
+    // waited on the channel's writability is sent now, in order, so the
+    // harness has answered each before it lowers.
+    if let HookState::Draining { relay, .. } = state {
+        while let Some(front) = relay.pending.pop_front() {
+            match channel.send(&front) {
+                Ok(()) => {}
+                Err(ChannelFault::Closed) => return Err(ExitCode::SUCCESS),
+                Err(fault) => {
+                    eprintln!("{}", fault_line(&fault));
+                    return Err(ExitCode::FAILURE);
+                }
+            }
+        }
+    }
     match channel.send(&OrganEnvelope {
         exchange: envelope.exchange,
         position: Position::Close,
@@ -370,7 +510,7 @@ fn route_response(
     envelope: &OrganEnvelope,
     frame: &weaver_types::TurnFrame,
 ) {
-    let HookState::Raised(_, relay) = state else {
+    let (HookState::Raised(_, relay) | HookState::Draining { relay, .. }) = state else {
         eprintln!(
             "{}",
             serde_json::json!({"fault": "a response arrived with no hook raised"})
@@ -547,15 +687,38 @@ fn dispatch(state: &mut HookState, envelope: &OrganEnvelope) -> Payload {
                 }
             }
         }
+        (HookState::Raised(_, _), LifecycleDirective::Quiesce) => {
+            // **No further input**, the unload's first step: the listener
+            // closes, so no new connection is accepted; a connection owed
+            // nothing closes, its input never received as a request; the
+            // rest stay for their answers and are never read again.
+            let previous = std::mem::replace(state, HookState::Lowered);
+            if let HookState::Raised(hook, mut relay) = previous {
+                hook.lower();
+                relay.served.retain(|served| !served.owed_nothing());
+                *state = HookState::Draining {
+                    relay,
+                    lowering: None,
+                };
+            }
+            Payload::Answer(LifecycleAnswer::GateQuiesced)
+        }
+        (HookState::Draining { .. }, LifecycleDirective::Lower) => {
+            // Nothing left to write: the relay drops and the gate is down.
+            // A connection still awaiting a response the harness never sent
+            // closes with it, its delivery lost.
+            *state = HookState::Lowered;
+            Payload::Answer(LifecycleAnswer::GateStopped)
+        }
         (HookState::Raised(_, _), LifecycleDirective::Lower) => {
             // The close happens here, before the answer is formed, so nothing
             // new can arrive once the harness reads stopped.
             let previous = std::mem::replace(state, HookState::Lowered);
             if let HookState::Raised(hook, relay) = previous {
-                // The served connections close with the listener, whatever
-                // their buffers still held undelivered, which is what makes
-                // a lowered hook find nothing standing: no turn is in flight
-                // at a lower, so what the closes drop is deliveries at most.
+                // **The forced unload's close**: the served connections close
+                // with the listener at once, whatever they still awaited, the
+                // operator having chosen no time to finish, on the ruling of
+                // 2026-10-07 on #1. An unforced unload quiesces first.
                 drop(relay);
                 hook.lower();
             }
@@ -569,6 +732,7 @@ fn dispatch(state: &mut HookState, envelope: &OrganEnvelope) -> Payload {
         (
             _,
             LifecycleDirective::Raise { .. }
+            | LifecycleDirective::Quiesce
             | LifecycleDirective::Lower
             | LifecycleDirective::Enter { .. }
             | LifecycleDirective::Leave { .. }
@@ -845,6 +1009,61 @@ mod tests {
             path.exists(),
             "the lower closes the listener and unlinks nothing"
         );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// **A quiesce drains, and only a lower follows it**, on the operator's
+    /// ruling of 2026-10-07 on #1: `Quiesce` from a raised gate answers
+    /// `GateQuiesced` and leaves the gate draining with its listener gone; a
+    /// second quiesce, a raise and a quiesce before any raise are out of
+    /// order; `Lower` from a draining gate with nothing to write answers
+    /// `GateStopped`. Perturbation: answer the quiesce from the draining
+    /// arm too and the second quiesce answers instead of refusing.
+    #[test]
+    fn a_quiesce_drains_and_a_lower_ends_it() {
+        let path = scratch("quiesce");
+        let mut state = HookState::BeforeRaise;
+        assert_eq!(
+            dispatch(&mut state, &opened(LifecycleDirective::Quiesce)),
+            Payload::Refusal(LifecycleRefusal::OutOfOrder),
+            "no quiesce before a raise"
+        );
+        assert_eq!(
+            dispatch(
+                &mut state,
+                &opened(LifecycleDirective::Raise {
+                    instruction: instruction(),
+                    socket: path.to_path_buf(),
+                }),
+            ),
+            Payload::Answer(LifecycleAnswer::GateReady)
+        );
+        assert_eq!(
+            dispatch(&mut state, &opened(LifecycleDirective::Quiesce)),
+            Payload::Answer(LifecycleAnswer::GateQuiesced)
+        );
+        assert!(matches!(state, HookState::Draining { lowering: None, .. }));
+        assert!(
+            std::os::unix::net::UnixStream::connect(&path).is_err(),
+            "the listener is gone at the quiesce"
+        );
+        for again in [
+            LifecycleDirective::Quiesce,
+            LifecycleDirective::Raise {
+                instruction: instruction(),
+                socket: path.to_path_buf(),
+            },
+        ] {
+            assert_eq!(
+                dispatch(&mut state, &opened(again)),
+                Payload::Refusal(LifecycleRefusal::OutOfOrder)
+            );
+        }
+        assert_eq!(
+            dispatch(&mut state, &opened(LifecycleDirective::Lower)),
+            Payload::Answer(LifecycleAnswer::GateStopped)
+        );
+        assert!(matches!(state, HookState::Lowered));
         std::fs::remove_file(&path).ok();
     }
 

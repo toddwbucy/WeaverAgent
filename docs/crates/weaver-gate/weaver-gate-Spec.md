@@ -332,8 +332,10 @@ election's receive obligation as every receiving crate does, per
 envelope bound, a read returning with `MSG_TRUNC` set is a channel fault and
 never a message, and the same bound is asserted on this crate's sends. A
 directive out of order for the channel's state answers `OutOfOrder`, per
-`weaver-harness-gate-contract` section 3, and the state has three positions,
-before-raise, raised, and lowered, the last terminal.
+`weaver-harness-gate-contract` section 3, and the state has four positions,
+before-raise, raised, draining and lowered, the last terminal; draining, on the
+operator's rulings of 2026-10-07 on #1, is the unload's drain between `Quiesce` and
+`Lower`.
 
 ```graph
 node: gate-truncation-is-a-fault
@@ -740,12 +742,24 @@ from: weaver-gate
 to: gate-one-exchange-open-per-connection
 ```
 
-**A lower closes in order, and stopped answers last.** The lower read from
-the channel closes the listener first, then every accepted connection with
-whatever its buffer still held undelivered, and answers stopped only after
-the closes return, per charter section 13.3 and the ordering the lifecycle
-half already pins. No turn is in flight at a lower, leave refusing while
-one is, so what the closes drop is deliveries at most and never turns.
+**An unload quiesces first, and the gate accepts no further input from it**, on the
+operator's rulings of 2026-10-07 on #1. `Quiesce` from a raised gate closes the
+listener, so no new connection is accepted; closes every connection owed nothing, its
+input never having been received as a request; stops reading every connection that
+stands; sends every frame still waiting on the channel's writability; and only then
+answers `GateQuiesced`, so every request this crate admitted reaches the harness ahead
+of the answer. **Draining delivers and reads nothing**: a response frame still routes
+to the connection owed it, so the turn in flight gives its final output and a request
+received but not started gets its refusal, each on its own connection, and a tool
+execution still runs. **`Lower` from a draining gate answers last**: `GateStopped` is
+deferred until every owed response has been written, the relay dropped then; a client
+that has not read its answer holds the drain, and this crate names it on standard error
+(the dialer's uid) so the operator can see why the drain stands and choose
+`force-unload`. A connection still awaiting a response the harness never sent closes
+with the lower, its delivery lost. **`Lower` from a raised gate is the forced unload's
+close**: the listener and every accepted connection close at once, whatever they
+awaited, and stopped is answered after the closes return, per charter section 13.3,
+the operator having chosen no time to finish.
 
 **A frame carries the dialer beside its octets**, as of the operator's ruling of
 2026-10-06 (#1): the `turn-frame` this crate opens inward names the connection's

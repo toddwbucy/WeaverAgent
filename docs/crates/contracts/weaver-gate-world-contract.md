@@ -180,10 +180,21 @@ response path, as extensions to this page rather than replacements of it.
 - A peer that fails the predicate is refused at accept, before any content is read.
 - A request while the hook is lowered finds no listener, which is refusal by absence
   and not a typed answer.
-- A request the gate admitted while the agent is unloading, accepted before the hook
-  came down, is answered with the refused close naming the unload, never dropped
-  unanswered: the harness answers every frame it meets while it lowers the gate, per
-  `weaver-harness-Spec` section 6, and records the refusal.
+- **What a dialer sees at an unload**, on the operator's rulings of 2026-10-07 on #1.
+  From the unload the gate accepts no further input: a dial finds no listener, and a
+  connection that has sent no request is closed. A request whose turn is running gets
+  that turn's answer on its connection, and the turn finishes what it can without
+  further input. A request the gate received and the agent had not started is answered
+  with the refused close naming the unload, `{"kind":"refused","reason":"the agent is
+  unloading"}`, its connection still standing, and the refusal is recorded. The gate
+  goes down only after those answers are written. **An unload may therefore take the
+  length of a turn**, with no time bound of its own beyond the turn's.
+- **What a tool's return sees at an unload**: a tool call out at the gate when the
+  unload arrives is interrupted, since its return would come through a gate that
+  accepts no further input; the trace records it killed by the cancel and the turn
+  closes there, its answer given to its dialer.
+- **A forced unload does not wait**: the gate closes at once, every connection closing
+  unanswered, the turn in flight cancelled, its cancellation recorded as a stop.
 - A line that does not parse is a refused turn, per section 2.
 - A line that exceeds the Spec's bound with no delimiter found has left the
   framing, and the connection closes at that layer, below any turn: nothing

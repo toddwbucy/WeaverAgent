@@ -173,16 +173,22 @@ rest, asks the member for a save point through `weaver-harness-state-contract` s
 2's four legs, authors the `save_point` event, and answers `SavePointTaken` naming the
 digest, the finished name, the position the save point covers and the trace position of
 the event, its own run and sequence, or refuses `ActivityNotAtRest` where a turn runs, or `SavePointNotTaken`
-naming which leg missed. `Leave` carries `forced` beside its cause: the harness takes the
+naming which leg missed. `Leave` carries `forced` beside its cause. **Unforced, it
+drains**, on the operator's rulings of 2026-10-07 on #1: the harness quiesces the gate,
+lets a turn in flight finish (a leave heard mid-turn is answered at the turn's close,
+not refused), refuses the requests it had not started, lowers the gate, takes the
 leave's save point before it authors `unload`, and answers `Left` naming it as
 `SavePointTaken` does so admin publishes it under the same ordinal rule; where the save
-point is not finished and `forced` is false it answers `SavePointNotTaken` and stays
-entered, the run open, and where `forced` is true it leaves without one and the `unload`
-event says so. The legs the harness names are the write, the answer, the finished answer
+point is not finished it answers `SavePointNotTaken` and stays entered, the run open.
+**Forced, it does not wait**: the gate lowers at once and the turn is cancelled, the
+save point is taken all the same and `Left` names it, and where it cannot be taken the
+harness leaves without one, `Left` naming none and the miss recorded. While an unforced
+leave is pending a second unforced one is refused `OutOfOrder` and a forced one joins
+it, both dialers answered at the close. The legs the harness names are the write, the answer, the finished answer
 and the member dead; admin names a fifth of its own, `published`, at the unload, where
 the leave's save point was reported and its publication did not land, per
-`weaver-admin-operator-contract` section 3. A `Left` with no save point is a forced leave, or a leave under a
-diagnostic binding, which takes none.
+`weaver-admin-operator-contract` section 3. A `Left` with no save point is a forced leave whose save point could not be taken, or a
+leave under a diagnostic binding, which takes none.
 
 **Enter the run.** Opened by admin. Admin directs the harness to enter, supplying the
 session identity, the run reference, the kind of the binding, the trace sink handle, the
@@ -352,7 +358,7 @@ it covers, whether it was named at a restore, where the offline builder made it 
 record that record's session and the run and turn of its cut, resolved by admin from the
 save point's stamp and the manifest's line and never the save point's path, beside it
 and apart from it the reset, where the agent's last run did not end in a clean unload or
-was forced to end without its leave save point, that run and the reason, whether or not
+was forced to end and its leave save point could not be kept, that run and the reason, whether or not
 a save point stands, on the operator's rulings of 2026-10-02 on #58, so the harness names where
 its state came from without opening anything, the digests of the organ binaries admin
 started and of the agent's SPU and the gate it hands the worker, keyed by name, the

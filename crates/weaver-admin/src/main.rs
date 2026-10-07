@@ -1657,7 +1657,7 @@ fn unload_within(
     forced: bool,
 ) -> Result<LifecycleAnswer, LifecycleRefusal> {
     let run_directory = config.run_directory();
-    let _invocation = start::take_invocation_lock(&run_directory)?;
+    let mut invocation = Some(start::take_invocation_lock(&run_directory)?);
     // **The leave's budget runs from here**, per Spec section 3: the
     // observation and both dials spend it, so the verb holds the invocation
     // lock at most the leave's sixty seconds and the escalation's forty-five.
@@ -1688,7 +1688,36 @@ fn unload_within(
         Observation::State(..) | Observation::Silent => true,
     };
     if entered {
-        match direct_leave_within(config, leave_deadline, forced) {
+        // **A graceful unload drains with no time bound, and without the
+        // invocation lock**, per Spec section 3 on the operator's rulings of
+        // 2026-10-07 on #1: the leave lets the turn in flight finish, so its
+        // answer may take the length of a turn, and the lock is released once
+        // the leave is sent, so a `force-unload` is never blocked behind the
+        // drain it exists to cut short. It is taken again for the
+        // publication and the marker after `Left`. A forced unload keeps the
+        // lock and the leave's bound, the escalation following an unanswered
+        // leave.
+        let bound = if forced { Some(leave_deadline) } else { None };
+        let answered = direct_leave_within(config, bound, forced, &mut || {
+            if !forced {
+                invocation = None;
+            }
+        });
+        let _retaken = if invocation.is_none() {
+            match start::take_invocation_lock(&run_directory) {
+                Ok(lock) => Some(lock),
+                // A `force-unload` took the agent down during the drain and
+                // holds the lock: the publication and the marker are its.
+                Err(LifecycleRefusal::InvocationInFlight) => {
+                    record(config, "unload", "the drain ended under a force-unload");
+                    return unloaded;
+                }
+                Err(refusal) => return Err(refusal),
+            }
+        } else {
+            None
+        };
+        match answered {
             Ok(report) => {
                 if start::wait_free(&run_directory, bounds.after_left) {
                     // **The member has stopped: publish, then close the
@@ -1712,6 +1741,16 @@ fn unload_within(
                     // and is unchanged.
                     let published =
                         publish_from_room(config, &AgentName(config.agent.clone()), &reports);
+                    // **A forced unload whose save point published closes the
+                    // marker clean**, on the operator's clarification of
+                    // 2026-10-07 on #1, no state having been lost; one with
+                    // no save point, or one that did not publish, comes down
+                    // all the same with the marker open under
+                    // `ForcedUnload`, the next load recording the reset.
+                    if forced {
+                        close_marker(config, !forced_kept_state(&reports, &published))?;
+                        return unloaded;
+                    }
                     if let Some(digest) = unpublished_leave(&reports, &published) {
                         diag!(
                             "weaver-admin: the leave's save point {digest} did not publish; the marker stays open and the unload does not complete"
@@ -1761,6 +1800,17 @@ fn unload_within(
         close_marker(config, true)?;
     }
     unloaded
+}
+
+/// **Whether a forced unload kept state**, per Spec section 3 on the
+/// operator's clarification of 2026-10-07 on #1: its leave save point was
+/// reported and published, so the marker closes clean; otherwise it stays
+/// open under `ForcedUnload`.
+fn forced_kept_state(
+    reports: &[(weaver_types::SavePointReport, save_points::Arrival)],
+    published: &Result<Vec<save_points::ManifestLine>, LifecycleRefusal>,
+) -> bool {
+    !reports.is_empty() && unpublished_leave(reports, published).is_none()
 }
 
 /// **The leave's save point that did not publish**, per Spec section 3: the
@@ -1898,7 +1948,12 @@ enum LeaveFault {
 fn direct_leave(
     config: &ServiceConfig,
 ) -> Result<Option<weaver_types::SavePointReport>, LeaveFault> {
-    direct_leave_within(config, std::time::Instant::now() + LEAVE_BOUND, false)
+    direct_leave_within(
+        config,
+        Some(std::time::Instant::now() + LEAVE_BOUND),
+        false,
+        &mut || {},
+    )
 }
 
 /// Directs leave, forced or not, and waits for its answer until `deadline`,
@@ -1908,8 +1963,9 @@ fn direct_leave(
 /// publication that follows carries the event's position.
 fn direct_leave_within(
     config: &ServiceConfig,
-    deadline: std::time::Instant,
+    deadline: Option<std::time::Instant>,
     forced: bool,
+    sent: &mut dyn FnMut(),
 ) -> Result<Option<weaver_types::SavePointReport>, LeaveFault> {
     let Ok(mut coordination) = channel::dial(&config.coordination_socket()) else {
         return Err(LeaveFault::Unanswered);
@@ -1924,7 +1980,11 @@ fn direct_leave_within(
             },
         )
         .map_err(|_| LeaveFault::Unanswered)?;
-    match coordination.recv_within(deadline.saturating_duration_since(std::time::Instant::now())) {
+    sent();
+    let bound = deadline.map_or(std::time::Duration::MAX, |deadline| {
+        deadline.saturating_duration_since(std::time::Instant::now())
+    });
+    match coordination.recv_within(bound) {
         Ok(answer) => match answer.payload {
             weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point }) => Ok(save_point),
             weaver_types::Payload::Refusal(refusal) => Err(LeaveFault::Refused(refusal)),
@@ -3912,6 +3972,141 @@ mod tests {
                 "{elsewhere}"
             );
         }
+    }
+
+    /// **A forced unload keeps state where it can**, per Spec section 3 on
+    /// the operator's clarification of 2026-10-07 on #1: a reported save
+    /// point that published means state was kept and the marker closes
+    /// clean; no save point, or one that did not publish, means it was not
+    /// and the marker stays open under `ForcedUnload`. Perturbation: answer
+    /// forced always and the first case reads lost.
+    #[test]
+    fn a_forced_unload_kept_state_only_where_its_save_point_published() {
+        let line = save_points::ManifestLine {
+            ordinal: 1,
+            digest: "ab".into(),
+            name: "x".into(),
+            stamp: save_points::Stamp {
+                run: "r-1".into(),
+                sequence: 5,
+                turn: 1,
+                schema: String::new(),
+                wall_ns: 0,
+            },
+            position: None,
+            arrived: save_points::Arrival::Leave,
+        };
+        let reports = vec![(report(), save_points::Arrival::Leave)];
+        assert!(forced_kept_state(&reports, &Ok(vec![line])));
+        assert!(!forced_kept_state(&reports, &Ok(vec![])));
+        assert!(!forced_kept_state(
+            &reports,
+            &Err(LifecycleRefusal::BoundaryUnverified)
+        ));
+        assert!(
+            !forced_kept_state(&[], &Ok(vec![])),
+            "no save point, nothing kept"
+        );
+    }
+
+    /// **A graceful unload drains without the invocation lock, and what could
+    /// run in the gap refuses**, per Spec section 3 on the operator's rulings
+    /// of 2026-10-07 on #1: the worker holds the leave's answer, as a turn
+    /// running to its close does; meanwhile the invocation lock is free, so a
+    /// `force-unload` is not blocked, and a load's first step, the run lock,
+    /// refuses because the run still holds it; once the worker answers `Left`
+    /// the unload takes the lock again, closes the marker clean, and answers
+    /// unloaded. The harness's own refusals in the gap (a save point and a
+    /// second unforced leave while one is pending, `OutOfOrder`; `show`
+    /// answered `Active`) are its watches. Perturbation: hold the invocation
+    /// lock across the wait and the lock take during the drain refuses.
+    #[test]
+    fn a_graceful_unload_drains_without_the_invocation_lock() {
+        let (config, _scratch) = scratch_config("drain-gap");
+        save_points::write_marker(
+            &config.root,
+            Some(&save_points::Marker::Open { run: "r-1".into() }),
+        )
+        .unwrap();
+        let mut holder = stand_in_holder(&config);
+        let listener = silent_worker(&config);
+        let (heard_tx, heard) = std::sync::mpsc::channel::<()>();
+        let (release, release_rx) = std::sync::mpsc::channel::<()>();
+        let worker = std::thread::spawn(move || {
+            for at in 0..2 {
+                let Ok(raw) = nix::sys::socket::accept(std::os::fd::AsRawFd::as_raw_fd(&listener))
+                else {
+                    return;
+                };
+                let fd =
+                    unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(raw) };
+                let peer = channel::Coordination::adopt(fd);
+                let Ok(request) = peer.recv() else { return };
+                let payload = if at == 0 {
+                    weaver_types::Payload::Answer(LifecycleAnswer::State {
+                        state: weaver_types::AgentState::Active,
+                        load: None,
+                        constituents: Vec::new(),
+                    })
+                } else {
+                    // The leave: held as a turn runs to its close.
+                    heard_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point: None })
+                };
+                let _ = peer.send(&weaver_types::OrganEnvelope {
+                    exchange: request.exchange,
+                    position: weaver_types::Position::Close,
+                    payload,
+                });
+            }
+        });
+        let (answered, lock_free, run_lock_free) = std::thread::scope(|scope| {
+            let unload = scope.spawn(|| unload_within(&config, TEST_UNLOAD_BOUNDS, false));
+            heard
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the leave arrives");
+            // The gap: the invocation lock is free, and the run lock is held.
+            // The lock is a process's `fcntl` lock, which never conflicts with
+            // a take from the same process, so another process asks.
+            let probe = std::process::Command::new("python3")
+                .args([
+                    "-c",
+                    "import fcntl, sys\nf = open(sys.argv[1], 'r+')\nfcntl.lockf(f, fcntl.LOCK_EX | fcntl.LOCK_NB)",
+                ])
+                .arg(config.run_directory().join("admin.lock"))
+                .status()
+                .expect("python3 runs");
+            let run_lock_free = start::take_run_lock(&config.run_directory())
+                .unwrap()
+                .is_some();
+            // Released before anything is judged, so a failing case fails
+            // rather than holding the drain for ever.
+            release.send(()).unwrap();
+            let _ = holder.kill();
+            let _ = holder.wait();
+            (unload.join().unwrap(), probe.success(), run_lock_free)
+        });
+        worker.join().unwrap();
+        assert!(lock_free, "the drain holds no invocation lock");
+        assert!(
+            !run_lock_free,
+            "a load during the drain refuses at the run lock, the worker standing"
+        );
+        assert!(
+            matches!(
+                answered,
+                Ok(LifecycleAnswer::State {
+                    state: weaver_types::AgentState::Unloaded,
+                    ..
+                })
+            ),
+            "{answered:?}"
+        );
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Closed { run: "r-1".into() })
+        );
     }
 
     /// **The marker is restored by the rollback**, per Spec section 4 on

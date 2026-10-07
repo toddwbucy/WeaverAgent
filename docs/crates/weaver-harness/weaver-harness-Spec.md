@@ -2065,23 +2065,26 @@ load as production state. The offline builder's save point is the builder's writ
 dead-peer conversion every state ask takes, per the operator's rulings of 2026-10-02 on
 #58. **The leave's save point is taken at rest, before the `unload` event, and the leave
 does not complete without it**, on the operator's rulings of 2026-10-06 on #1 (A3.0
-items 4 and 6), which close the open item that stood here. **The gate is lowered first**
-(Codex on #94, round 12): this crate lowers the gate, then sends the leave's `snapshot`
-ask, then authors `unload`, so no turn is admitted while the save point is taken and
-none the lower would drop ever crosses the at-rest boundary; and traffic the gate has
-sent that this loop has not yet taken is activity (Codex on #94, round 13), the leave
-refusing `ActivityNotAtRest` as for a turn in flight rather than lowering a gate whose
-admitted frame would be dropped untraced and unanswered, the loop taking the frame next
-and the operator retrying. **And the lower reads its channel until the gate's own
-answer** (Codex on #94, round 14): a frame the gate admits between that look and the
-`Lower` reaches the channel ahead of `GateStopped`, and the lower answers it on its own
-exchange with the `refused` close naming the unload and authors it as a refusal of the
-leave, so no admitted request is dropped unanswered or unrecorded. The two are not one
-check twice: the look refuses the whole leave while traffic already stands, so a queued
-turn is served and not refused, and the reading loop covers only the window between the
-look and the lower, which no look can close; a leave refused at its save
-point leaves the run entered at rest with the gate lowered, which the retry or the force
-finds so. This crate sends the leave's
+items 4 and 6), which close the open item that stood here. **An unload drains, in Todd's order**, on the operator's rulings of 2026-10-07 on
+#1, which answer Codex on #94 rounds 12 to 15: first the gate accepts no further input,
+this crate sending `Quiesce` the moment the leave is heard, at rest or mid-turn, after a
+tool execution's cancel where a tool call is out; then a turn in flight finishes what
+it can without further input, its answer going to its dialer through the still-standing
+connection, and a tool call out at the gate, whose return would come through a gate
+that accepts no further input, is cancelled and recorded killed by the cancel, the turn
+closing as stopped by the directive, while a call asked after the leave was heard is
+not sent and is recorded the same way; then every request the gate admitted and the
+agent had not started is refused on its own exchange with the `refused` close naming
+the unload and recorded as a refusal of the leave, this crate reading the gate channel
+until `GateQuiesced`, which the gate sends only after every frame it admitted; then the
+gate is lowered, its `GateStopped` coming only after those answers are written; then the
+leave's save point; then `unload`. **A leave heard mid-turn is no longer refused**: it
+waits, with its dialer's connection taken out of the verb slot so the listener is heard
+again, and runs at the turn's close before any held request is served; a second
+unforced leave meanwhile is out of order, a forced one joins it, and `Observe` answers
+`Active`. **The drain has no time bound of its own** beyond the turn's limits;
+`force-unload` is the exit. A leave refused at its save point leaves the run entered at
+rest with the gate lowered, which the retry or the force finds so. This crate sends the leave's
 `snapshot` ask after the last turn and before it authors `unload`, so the save point
 holds every elected event of the run but the `unload` event's own distillate, which is
 lifecycle provenance the record keeps and no holding needs, and the next load replays no
@@ -2113,10 +2116,16 @@ member whose every snapshot outruns the bound never leaves the retry one answer 
 which a longer bound would not close, the race being one of order and not of time; a
 late finished answer's file stands in the room unrecorded and is published as recovered
 at the next publication, the leave's at the latest. A missed write, the ask itself unsent, is the dead peer as every send failure is.
-**A forced leave takes no save point**: the `Leave` directive's `forced` member, set by admin's
-`force-unload` alone, has this crate author `unload` with `forced` true, recording that
-the leave's save point was not taken, so the next load, restoring the latest published
-save point, carries the reset admin resolves from its marker. **A save point on demand
+**A forced leave stops work, not state integrity**, on the operator's clarification of
+2026-10-07 on #1: the `Leave` directive's `forced` member, set by admin's
+`force-unload` alone, has this crate lower the gate at once with no drain, cancel the
+turn in flight as a stop does, recorded on the trace as a stop with state holding what
+landed up to the cancel, then take the leave's save point and report it as any leave
+does, and author `unload` with `forced` true. Only where the save point cannot be
+taken, the member dead or a leg unanswered, does the forced leave come down without
+one, the miss recorded as a lifecycle refusal of the leave naming the leg, so the next
+load, restoring the latest published save point, carries the reset admin resolves from
+its marker. **A save point on demand
 is the `SavePoint` directive's**, admin's `save-point` verb over the coordination
 channel: at rest, the same four legs, the same event, and the answer `SavePointTaken`
 naming the digest, the finished name, the position covered and the trace position of
