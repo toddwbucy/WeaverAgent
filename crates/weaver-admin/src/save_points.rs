@@ -485,7 +485,7 @@ pub fn next_ordinal(lines: &[ManifestLine]) -> u64 {
 
 /// **Append one line**, the manifest root-owned and mode `0644`, opened for
 /// appending alone and never rewritten.
-fn append_line(
+pub(crate) fn append_line(
     directory: BorrowedFd<'_>,
     owner: Owner,
     line: &ManifestLine,

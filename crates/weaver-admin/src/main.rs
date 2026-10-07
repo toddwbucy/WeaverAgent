@@ -1703,69 +1703,29 @@ fn unload_within(
                 invocation = None;
             }
         });
+        // **The retake waits, and never reads who held the lock as what
+        // happened** (Codex on #94, round 16), per Spec section 3 on the
+        // operator's ruling of 2026-10-07 on #1: a `force-unload`, a refused
+        // `save-point` or a `show` may hold the lock when the leave answers,
+        // and the verb waits it out, then judges the run from the marker and
+        // the manifest.
         let _retaken = if invocation.is_none() {
-            match start::take_invocation_lock(&run_directory) {
-                Ok(lock) => Some(lock),
-                // A `force-unload` took the agent down during the drain and
-                // holds the lock: the publication and the marker are its.
-                Err(LifecycleRefusal::InvocationInFlight) => {
-                    record(config, "unload", "the drain ended under a force-unload");
-                    return unloaded;
-                }
-                Err(refusal) => return Err(refusal),
-            }
+            Some(start::wait_invocation_lock(&run_directory)?)
         } else {
             None
         };
         match answered {
             Ok(report) => {
                 if start::wait_free(&run_directory, bounds.after_left) {
-                    // **The member has stopped: publish, then close the
-                    // marker**, per Spec sections 3 and 6: the leave's save
-                    // point carries its event's position, anything else the
-                    // room still held is recovered, and the marker closes
-                    // on a clean unload or stays open under `ForcedUnload`.
-                    let reports: Vec<_> = report
-                        .into_iter()
-                        .map(|report| (report, save_points::Arrival::Leave))
-                        .collect();
-                    // **The unload does not complete without its save point
-                    // published** (Codex on #94, round 9), per Spec section
-                    // 3 on A3.0 item 6: the leave's reported digest must be
-                    // among the lines this publication appended, or the
-                    // marker stays open, so the next load records
-                    // `NoCleanUnload` and recovers the room's file or names
-                    // it as unpublishable, and the verb refuses naming the
-                    // publication rather than answering Unloaded over a
-                    // stale restore. A forced unload reports no save point
-                    // and is unchanged.
-                    let published =
-                        publish_from_room(config, &AgentName(config.agent.clone()), &reports);
-                    // **A forced unload whose save point published closes the
-                    // marker clean**, on the operator's clarification of
-                    // 2026-10-07 on #1, no state having been lost; one with
-                    // no save point, or one that did not publish, comes down
-                    // all the same with the marker open under
-                    // `ForcedUnload`, the next load recording the reset.
-                    if forced {
-                        close_marker(config, !forced_kept_state(&reports, &published))?;
-                        return unloaded;
-                    }
-                    if let Some(digest) = unpublished_leave(&reports, &published) {
-                        diag!(
-                            "weaver-admin: the leave's save point {digest} did not publish; the marker stays open and the unload does not complete"
-                        );
-                        record(
-                            config,
-                            "unload",
-                            "refused: the leave's save point did not publish",
-                        );
-                        return Err(LifecycleRefusal::SavePointNotTaken {
-                            missed: weaver_types::SavePointLeg::Published,
-                        });
-                    }
-                    close_marker(config, forced)?;
-                    return unloaded;
+                    return conclude_left(
+                        config,
+                        report,
+                        forced,
+                        save_points::ROOT,
+                        &mut |reports| {
+                            publish_from_room(config, &AgentName(config.agent.clone()), reports)
+                        },
+                    );
                 }
             }
             // A refusal on leave returns to the operator unchanged and
@@ -1811,6 +1771,108 @@ fn unload_within(
         close_marker(config, true)?;
     }
     unloaded
+}
+
+/// The publication a conclusion runs: `publish_from_room` on a box, a
+/// stand-in in the tests that order two conclusions.
+type Publication<'a> = dyn FnMut(
+        &[(weaver_types::SavePointReport, save_points::Arrival)],
+    ) -> Result<Vec<save_points::ManifestLine>, LifecycleRefusal>
+    + 'a;
+
+/// **The leave's conclusion, first come**, per Spec section 3 on the
+/// operator's ruling of 2026-10-07 on #1, run with the invocation lock held
+/// and the member stopped: whichever invocation, graceful or forced, takes
+/// the lock first after `Left` publishes and closes the marker, and the
+/// second finds it done and publishes nothing again. Done is read from the
+/// records the first one wrote: the marker no longer open, and the reported
+/// save point's digest among the manifest's lines (a leave that reported
+/// none needs the marker alone). Otherwise the leave's save point carries
+/// its event's position, anything else the room still held is recovered,
+/// and the marker closes on a clean unload or stays open under
+/// `ForcedUnload` where a forced one kept no state.
+fn conclude_left(
+    config: &ServiceConfig,
+    report: Option<weaver_types::SavePointReport>,
+    forced: bool,
+    owner: save_points::Owner,
+    publish: &mut Publication<'_>,
+) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    let unloaded = Ok(LifecycleAnswer::State {
+        state: weaver_types::AgentState::Unloaded,
+        load: None,
+        constituents: Vec::new(),
+    });
+    if leave_concluded(config, report.as_ref(), owner) {
+        record(
+            config,
+            "unload",
+            "the leave was concluded by the invocation that held the lock first",
+        );
+        return unloaded;
+    }
+    let reports: Vec<_> = report
+        .into_iter()
+        .map(|report| (report, save_points::Arrival::Leave))
+        .collect();
+    // **The unload does not complete without its save point published**
+    // (Codex on #94, round 9), per Spec section 3 on A3.0 item 6: the leave's
+    // reported digest must be among the lines this publication appended, or
+    // the marker stays open, so the next load records `NoCleanUnload` and
+    // recovers the room's file or names it as unpublishable, and the verb
+    // refuses naming the publication rather than answering Unloaded over a
+    // stale restore.
+    let published = publish(&reports);
+    // **A forced unload whose save point published closes the marker
+    // clean**, on the operator's clarification of 2026-10-07 on #1, no state
+    // having been lost; one with no save point, or one that did not publish,
+    // comes down all the same with the marker open under `ForcedUnload`, the
+    // next load recording the reset.
+    if forced {
+        close_marker(config, !forced_kept_state(&reports, &published))?;
+        return unloaded;
+    }
+    if let Some(digest) = unpublished_leave(&reports, &published) {
+        diag!(
+            "weaver-admin: the leave's save point {digest} did not publish; the marker stays open and the unload does not complete"
+        );
+        record(
+            config,
+            "unload",
+            "refused: the leave's save point did not publish",
+        );
+        return Err(LifecycleRefusal::SavePointNotTaken {
+            missed: weaver_types::SavePointLeg::Published,
+        });
+    }
+    close_marker(config, false)?;
+    unloaded
+}
+
+/// **Whether an earlier invocation concluded this leave**: the marker is no
+/// longer open, and the reported save point, where there is one, has its
+/// line in the manifest. A marker absent or open, a manifest that does not
+/// read, or a digest with no line, is not concluded, and the conclusion
+/// runs.
+fn leave_concluded(
+    config: &ServiceConfig,
+    report: Option<&weaver_types::SavePointReport>,
+    owner: save_points::Owner,
+) -> bool {
+    match save_points::read_marker(&config.root) {
+        Some(save_points::Marker::Closed { .. } | save_points::Marker::Forced { .. }) => {}
+        Some(save_points::Marker::Open { .. }) | None => return false,
+    }
+    let Some(report) = report else {
+        return true;
+    };
+    let Ok(directory) = config.save_points_fd() else {
+        return false;
+    };
+    matches!(
+        save_points::read_manifest(directory, owner),
+        Ok(lines) if lines.iter().any(|line| line.digest == report.save_point)
+    )
 }
 
 /// **Whether a forced unload kept state**, per Spec section 3 on the
@@ -4114,6 +4176,292 @@ mod tests {
             ),
             "{answered:?}"
         );
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Closed { run: "r-1".into() })
+        );
+    }
+
+    /// **The retake waits out whoever holds the lock and concludes the leave
+    /// itself** (Codex on #94, round 16), per Spec section 3 on the
+    /// operator's ruling of 2026-10-07 on #1: another process holds the
+    /// invocation lock across `Left`, exclusively as a refused `save-point`
+    /// or a second `unload` does, or shared past `show`'s wait as a poller
+    /// does; the unload waits, then closes the marker clean and answers
+    /// unloaded. Perturbation: the round's branch, which read the contended
+    /// retake as a `force-unload` and answered unloaded with the marker
+    /// still open, fails both cases.
+    #[test]
+    fn a_retake_waits_out_any_holder_and_concludes_the_leave() {
+        for (tag, kind) in [("exclusive", "LOCK_EX"), ("shared", "LOCK_SH")] {
+            let (config, _scratch) = scratch_config(&format!("retake-{tag}"));
+            save_points::write_marker(
+                &config.root,
+                Some(&save_points::Marker::Open { run: "r-1".into() }),
+            )
+            .unwrap();
+            let mut holder = stand_in_holder(&config);
+            let listener = silent_worker(&config);
+            let (heard_tx, heard) = std::sync::mpsc::channel::<()>();
+            let (release, release_rx) = std::sync::mpsc::channel::<()>();
+            let worker = std::thread::spawn(move || {
+                for at in 0..2 {
+                    let Ok(raw) =
+                        nix::sys::socket::accept(std::os::fd::AsRawFd::as_raw_fd(&listener))
+                    else {
+                        return;
+                    };
+                    let fd = unsafe {
+                        <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(raw)
+                    };
+                    let peer = channel::Coordination::adopt(fd);
+                    let Ok(request) = peer.recv() else { return };
+                    let payload = if at == 0 {
+                        weaver_types::Payload::Answer(LifecycleAnswer::State {
+                            state: weaver_types::AgentState::Active,
+                            load: None,
+                            constituents: Vec::new(),
+                        })
+                    } else {
+                        heard_tx.send(()).unwrap();
+                        let _ = release_rx.recv();
+                        weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point: None })
+                    };
+                    let _ = peer.send(&weaver_types::OrganEnvelope {
+                        exchange: request.exchange,
+                        position: weaver_types::Position::Close,
+                        payload,
+                    });
+                }
+            });
+            let (answered, lock_holder) = std::thread::scope(|scope| {
+                let unload = scope.spawn(|| unload_within(&config, TEST_UNLOAD_BOUNDS, false));
+                heard
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .expect("the leave arrives");
+                // Another process takes the lock in the drain's gap and holds
+                // it past `Left` and past `show`'s one-second wait.
+                let mut lock_holder = std::process::Command::new("python3")
+                    .args([
+                        "-c",
+                        &format!(
+                            "import fcntl, sys, time\nf = open(sys.argv[1], 'r+')\nfcntl.lockf(f, fcntl.{kind} | fcntl.LOCK_NB)\nprint('held', flush=True)\ntime.sleep(1.5)"
+                        ),
+                    ])
+                    .arg(config.run_directory().join("admin.lock"))
+                    .stdout(std::process::Stdio::piped())
+                    .spawn()
+                    .expect("python3 runs");
+                let mut line = String::new();
+                std::io::BufRead::read_line(
+                    &mut std::io::BufReader::new(lock_holder.stdout.as_mut().unwrap()),
+                    &mut line,
+                )
+                .unwrap();
+                // Released before anything is judged, so a failing case fails
+                // rather than holding the drain for ever.
+                let _ = release.send(());
+                let _ = holder.kill();
+                let _ = holder.wait();
+                let answered = unload.join().unwrap();
+                (answered, (line, lock_holder.wait().unwrap()))
+            });
+            worker.join().unwrap();
+            assert_eq!(
+                lock_holder.0.trim(),
+                "held",
+                "{tag}: the holder took the lock"
+            );
+            assert!(lock_holder.1.success(), "{tag}");
+            assert!(
+                matches!(
+                    answered,
+                    Ok(LifecycleAnswer::State {
+                        state: weaver_types::AgentState::Unloaded,
+                        ..
+                    })
+                ),
+                "{tag}: {answered:?}"
+            );
+            assert_eq!(
+                save_points::read_marker(&config.root),
+                Some(save_points::Marker::Closed { run: "r-1".into() }),
+                "{tag}: the unload concluded the leave itself"
+            );
+        }
+    }
+
+    /// A scratch config whose save-points directory is open, judged against
+    /// this test's uid, with the marker open, for the conclusion's order.
+    fn conclusion_scratch(
+        tag: &str,
+    ) -> (ServiceConfig, crate::scratch::Scratch, save_points::Owner) {
+        let (mut config, scratch) = scratch_config(tag);
+        let directory = scratch.0.join("save-points");
+        std::fs::create_dir_all(&directory).unwrap();
+        config.save_points = Some(save_points::open_directory(&directory).unwrap());
+        save_points::write_marker(
+            &config.root,
+            Some(&save_points::Marker::Open { run: "r-1".into() }),
+        )
+        .unwrap();
+        let mine = save_points::Owner {
+            uid: nix::unistd::getuid().as_raw(),
+            gid: nix::unistd::getgid().as_raw(),
+        };
+        (config, scratch, mine)
+    }
+
+    /// A publication stand-in that appends the reported save point's line to
+    /// the manifest, as `publish` does on a box, and counts its calls.
+    fn appending_publisher<'a>(
+        config: &'a ServiceConfig,
+        owner: save_points::Owner,
+        calls: &'a std::cell::Cell<u32>,
+    ) -> impl FnMut(
+        &[(weaver_types::SavePointReport, save_points::Arrival)],
+    ) -> Result<Vec<save_points::ManifestLine>, LifecycleRefusal>
+    + 'a {
+        move |reports| {
+            calls.set(calls.get() + 1);
+            let directory = config.save_points_fd()?;
+            let mut lines = Vec::new();
+            for (report, arrived) in reports {
+                let line = save_points::ManifestLine {
+                    ordinal: u64::from(calls.get()),
+                    digest: report.save_point.clone(),
+                    name: report.name.clone(),
+                    stamp: save_points::Stamp {
+                        run: report.run.0.clone(),
+                        sequence: report.sequence,
+                        turn: report.turn,
+                        schema: String::new(),
+                        wall_ns: 0,
+                    },
+                    position: None,
+                    arrived: *arrived,
+                };
+                save_points::append_line(directory, owner, &line)?;
+                lines.push(line);
+            }
+            Ok(lines)
+        }
+    }
+
+    fn manifest_digests(config: &ServiceConfig, owner: save_points::Owner) -> Vec<String> {
+        save_points::read_manifest(config.save_points_fd().unwrap(), owner)
+            .unwrap()
+            .into_iter()
+            .map(|line| line.digest)
+            .collect()
+    }
+
+    /// **A force that joins and takes the lock first publishes; the graceful
+    /// unload after it publishes nothing again**, per Spec section 3 on the
+    /// operator's ruling of 2026-10-07 on #1 (Codex on #94, round 16): both
+    /// dialers hold the same `Left`, the lock serializes their conclusions,
+    /// and the second reads the marker closed and the digest's line standing.
+    /// Perturbation: skip the done-check and the graceful one publishes again,
+    /// a second line; on a box, where the room's copy is gone, it refuses
+    /// `SavePointNotTaken` over a save point the force published.
+    #[test]
+    fn a_force_that_concludes_first_leaves_the_graceful_unload_nothing_to_publish() {
+        let (config, _scratch, mine) = conclusion_scratch("conclude-force-first");
+        let calls = std::cell::Cell::new(0);
+        let mut publisher = appending_publisher(&config, mine, &calls);
+        let forced = conclude_left(&config, Some(report()), true, mine, &mut publisher);
+        let graceful = conclude_left(&config, Some(report()), false, mine, &mut publisher);
+        for answered in [&forced, &graceful] {
+            assert!(
+                matches!(
+                    answered,
+                    Ok(LifecycleAnswer::State {
+                        state: weaver_types::AgentState::Unloaded,
+                        ..
+                    })
+                ),
+                "{answered:?}"
+            );
+        }
+        assert_eq!(calls.get(), 1, "one publication");
+        assert_eq!(manifest_digests(&config, mine), ["ab"]);
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Closed { run: "r-1".into() }),
+            "the force kept state, so the marker closed clean and stays so"
+        );
+    }
+
+    /// **A graceful unload that concludes first leaves the force nothing to
+    /// publish**, per Spec section 3 on the operator's ruling of 2026-10-07
+    /// on #1 (Codex on #94, round 16): the conclusion in the opposite order
+    /// publishes once and keeps the clean marker, and a `force-unload`
+    /// issued after the run ended answers unloaded and leaves the clean
+    /// marker as it stands. Perturbation: skip the done-check and the forced
+    /// conclusion publishes again.
+    #[test]
+    fn a_graceful_unload_that_concludes_first_leaves_the_force_nothing_to_publish() {
+        let (config, _scratch, mine) = conclusion_scratch("conclude-graceful-first");
+        let calls = std::cell::Cell::new(0);
+        let mut publisher = appending_publisher(&config, mine, &calls);
+        let graceful = conclude_left(&config, Some(report()), false, mine, &mut publisher);
+        let forced = conclude_left(&config, Some(report()), true, mine, &mut publisher);
+        for answered in [&graceful, &forced] {
+            assert!(
+                matches!(
+                    answered,
+                    Ok(LifecycleAnswer::State {
+                        state: weaver_types::AgentState::Unloaded,
+                        ..
+                    })
+                ),
+                "{answered:?}"
+            );
+        }
+        assert_eq!(calls.get(), 1, "one publication");
+        assert_eq!(manifest_digests(&config, mine), ["ab"]);
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Closed { run: "r-1".into() })
+        );
+        // The force issued once the run has ended takes the verb's early
+        // branch, and a clean marker stays clean.
+        let late = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+        assert!(
+            matches!(late, Ok(LifecycleAnswer::State { .. })),
+            "{late:?}"
+        );
+        assert_eq!(manifest_digests(&config, mine), ["ab"]);
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Closed { run: "r-1".into() })
+        );
+    }
+
+    /// **A marker closed without the digest's line is not a conclusion**,
+    /// per Spec section 3 on the operator's ruling of 2026-10-07 on #1: a
+    /// `force-unload` that found the harness gone after `Left` escalated and
+    /// closed the marker forced, publishing nothing, so the graceful unload
+    /// holding the leave's report still publishes it and closes the marker
+    /// clean, state having been kept. Perturbation: read done from the marker
+    /// alone and the report is never published.
+    #[test]
+    fn a_marker_closed_without_the_digests_line_still_publishes() {
+        let (config, _scratch, mine) = conclusion_scratch("conclude-no-line");
+        save_points::write_marker(
+            &config.root,
+            Some(&save_points::Marker::Forced { run: "r-1".into() }),
+        )
+        .unwrap();
+        let calls = std::cell::Cell::new(0);
+        let mut publisher = appending_publisher(&config, mine, &calls);
+        let graceful = conclude_left(&config, Some(report()), false, mine, &mut publisher);
+        assert!(
+            matches!(graceful, Ok(LifecycleAnswer::State { .. })),
+            "{graceful:?}"
+        );
+        assert_eq!(calls.get(), 1);
+        assert_eq!(manifest_digests(&config, mine), ["ab"]);
         assert_eq!(
             save_points::read_marker(&config.root),
             Some(save_points::Marker::Closed { run: "r-1".into() })

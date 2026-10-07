@@ -618,9 +618,15 @@ answered at the turn's close and not refused, and the verb may wait the length o
 turn. **The graceful unload waits for `Left` with no time bound and without the
 invocation lock**: it holds the lock to observe and to send the leave, releases it once
 the leave is sent, and takes it again after `Left` for the publication and the marker,
-so a `force-unload` is never blocked behind the drain it exists to cut short; where a
-`force-unload` holds the lock when the drain ends, the publication and the marker are
-the force's and this verb answers unloaded. **The gap is safe because every verb that
+so a `force-unload` is never blocked behind the drain it exists to cut short. **The
+retake waits for the lock with no bound of its own**, whoever holds it, and never reads
+the holder as what happened to the run. **Publication is first-come**, on the operator's
+ruling of 2026-10-07 on #1: a `force-unload` that joins the leave receives the same
+`Left`, and whichever invocation, graceful or forced, holds the lock first after `Left`
+publishes and closes the marker. The second finds it done, the marker no longer open and
+the reported save point's digest among the manifest's lines, and answers unloaded,
+publishing nothing again; a marker closed without that line is not done, and the
+holder of the report publishes it. **The gap is safe because every verb that
 could run in it refuses or only reads**: a `load` refuses at the run lock, which the
 standing run holds; a `save-point` and a second `unload` refuse `OutOfOrder` at the
 harness while the leave is pending; `show` answers `Active`; and a `force-unload` joins
