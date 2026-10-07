@@ -1679,36 +1679,14 @@ fn unload_with(
     // per Spec section 3 on the operator's ruling of 2026-10-07 on #1, a
     // graceful unload's drain included, so no other verb runs between its
     // leave and its publication. **A `force-unload` that finds the lock held
-    // goes to the harness without it**: it sends `JoinLeave`, and where a
-    // graceful unload holds the lock its leave is pending, the force joins
-    // it, and the harness's `Left` is the force's answer, the holder
-    // publishing and closing the marker. Any other answer, or none (the
-    // holder is no unload: a `show`, a refused `save-point`; or the harness
-    // is gone), and the force waits for the lock and unloads alone.
+    // goes to the harness without it** (`force_beside_holder`).
     let _invocation = match start::take_invocation_lock(&run_directory) {
         Ok(lock) => lock,
         Err(LifecycleRefusal::InvocationInFlight) if forced => {
-            let joined = direct_leave_within(
-                config,
-                Some(std::time::Instant::now() + bounds.leave),
-                LifecycleDirective::JoinLeave {
-                    cause: invocation_cause(),
-                },
-            );
-            if joined.is_ok() {
-                record(
-                    config,
-                    "unload",
-                    "forced: joined the unload in progress, whose invocation publishes and closes the marker",
-                );
-                return unloaded;
+            match force_beside_holder(config, bounds, &run_directory)? {
+                ForceBeside::Joined | ForceBeside::Escalated => return unloaded,
+                ForceBeside::Holds(lock) => lock,
             }
-            record(
-                config,
-                "unload",
-                "forced: the lock's holder is no unload; waiting for the lock to unload alone",
-            );
-            start::wait_invocation_lock(&run_directory)?
         }
         Err(refusal) => return Err(refusal),
     };
@@ -1778,7 +1756,7 @@ fn unload_with(
             }
             // The leave went unanswered inside its bound: a worker that
             // would not exit, so the escalation follows.
-            Err(LeaveFault::Unanswered) => {}
+            Err(LeaveFault::Unanswered | LeaveFault::Gone) => {}
         }
     }
     // **The escalation is the last resort**: the harness hears a
@@ -2038,7 +2016,86 @@ fn close_marker(config: &ServiceConfig, forced: bool) -> Result<(), LifecycleRef
 /// Why a directed leave did not answer `Left`.
 enum LeaveFault {
     Refused(LifecycleRefusal),
+    /// The harness took the directive and answered nothing inside the bound:
+    /// a live worker that does not answer.
     Unanswered,
+    /// No harness to answer: the dial found none, or the connection ended.
+    Gone,
+}
+
+/// How often a `force-unload` waiting on a held lock asks the harness to
+/// join again, per Spec section 3.
+const JOIN_RETRY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// What a `force-unload` that met a held lock came to.
+enum ForceBeside {
+    /// It joined a graceful unload's pending leave and was answered `Left`.
+    Joined,
+    /// The harness answered no join inside the leave's bound, and the force
+    /// ended the run itself.
+    Escalated,
+    /// The holder let the lock go; the force holds it and unloads alone.
+    Holds(start::InvocationLock),
+}
+
+/// **A `force-unload` beside the lock's holder**, per Spec section 3 on the
+/// operator's rulings of 2026-10-07 on #1. It sends `JoinLeave`: answered
+/// `Left`, it joined a graceful unload's leave, and the holder publishes and
+/// closes the marker. **Unanswered inside the leave's bound**, the harness is
+/// alive and silent, and the force does not wait on it: it closes the marker
+/// as forced, since the operator forced a run whose save point was not taken,
+/// and escalates against the run's processes without the lock, so the
+/// holder's wait reads the end of its connection. Refused, `OutOfOrder` where
+/// no leave is pending, or met by no harness, it tries the lock and, the lock
+/// still held, asks again a second later, so a force that came before the
+/// holder's leave was pending joins as soon as it is; once the holder lets
+/// the lock go, the force holds it and unloads alone.
+fn force_beside_holder(
+    config: &ServiceConfig,
+    bounds: UnloadBounds,
+    run_directory: &std::path::Path,
+) -> Result<ForceBeside, LifecycleRefusal> {
+    loop {
+        match direct_leave_within(
+            config,
+            Some(std::time::Instant::now() + bounds.leave),
+            LifecycleDirective::JoinLeave {
+                cause: invocation_cause(),
+            },
+        ) {
+            Ok(_) => {
+                record(
+                    config,
+                    "unload",
+                    "forced: joined the unload in progress, whose invocation publishes and closes the marker",
+                );
+                return Ok(ForceBeside::Joined);
+            }
+            Err(LeaveFault::Unanswered) => {
+                record(
+                    config,
+                    "unload",
+                    "forced: the harness answered no join inside the leave's bound; the run is ended without the lock, no save point taken",
+                );
+                close_marker(config, true)?;
+                start::escalate_within(run_directory, bounds.term, bounds.kill)?;
+                return Ok(ForceBeside::Escalated);
+            }
+            Err(LeaveFault::Refused(_) | LeaveFault::Gone) => {}
+        }
+        match start::take_invocation_lock(run_directory) {
+            Ok(lock) => {
+                record(
+                    config,
+                    "unload",
+                    "forced: the lock's holder let it go; unloading alone",
+                );
+                return Ok(ForceBeside::Holds(lock));
+            }
+            Err(LifecycleRefusal::InvocationInFlight) => std::thread::sleep(JOIN_RETRY),
+            Err(refusal) => return Err(refusal),
+        }
+    }
 }
 
 /// **Directs leave under the leave's own bound**, per Spec section 3.
@@ -2066,12 +2123,12 @@ fn direct_leave_within(
     directive: LifecycleDirective,
 ) -> Result<Option<weaver_types::SavePointReport>, LeaveFault> {
     let Ok(mut coordination) = channel::dial(&config.coordination_socket()) else {
-        return Err(LeaveFault::Unanswered);
+        return Err(LeaveFault::Gone);
     };
     let ordinal = coordination.next_ordinal();
     coordination
         .send_directive(ordinal, directive)
-        .map_err(|_| LeaveFault::Unanswered)?;
+        .map_err(|_| LeaveFault::Gone)?;
     let bound = deadline.map_or(std::time::Duration::MAX, |deadline| {
         deadline.saturating_duration_since(std::time::Instant::now())
     });
@@ -2081,7 +2138,8 @@ fn direct_leave_within(
             weaver_types::Payload::Refusal(refusal) => Err(LeaveFault::Refused(refusal)),
             _ => Err(LeaveFault::Refused(LifecycleRefusal::Malformed)),
         },
-        Err(_) => Err(LeaveFault::Unanswered),
+        Err(channel::ChannelFault::Unanswered) => Err(LeaveFault::Unanswered),
+        Err(_) => Err(LeaveFault::Gone),
     }
 }
 
@@ -3622,8 +3680,10 @@ mod tests {
         let listener = silent_worker(config);
         std::thread::spawn(move || {
             for payload in answers {
-                let Ok(raw) = nix::sys::socket::accept(std::os::fd::AsRawFd::as_raw_fd(&listener))
-                else {
+                let Ok(raw) = nix::sys::socket::accept4(
+                    std::os::fd::AsRawFd::as_raw_fd(&listener),
+                    nix::sys::socket::SockFlag::SOCK_CLOEXEC,
+                ) else {
                     return;
                 };
                 // SAFETY: accept answered a fresh descriptor this thread owns.
@@ -3651,8 +3711,10 @@ mod tests {
         std::thread::spawn(move || {
             let mut directed = Vec::new();
             for payload in answers {
-                let Ok(raw) = nix::sys::socket::accept(std::os::fd::AsRawFd::as_raw_fd(&listener))
-                else {
+                let Ok(raw) = nix::sys::socket::accept4(
+                    std::os::fd::AsRawFd::as_raw_fd(&listener),
+                    nix::sys::socket::SockFlag::SOCK_CLOEXEC,
+                ) else {
                     break;
                 };
                 let fd =
@@ -4208,17 +4270,21 @@ mod tests {
     /// does: it answers each dial in turn with the next answer, `None`
     /// closing the dial unanswered as a harness that went away, and keeps
     /// what it was sent. The run-lock holder is ended just before a `Left`
-    /// goes out. Answers what it was sent and whether the holder had ended
-    /// within ten seconds of the last answer, by whatever ended it.
+    /// goes out. A `JoinLeave` is answered `join` where one is given, as a
+    /// harness with no leave pending answers every join alike, without
+    /// spending an answer. Answers what it was sent and whether the holder
+    /// had ended within ten seconds of the last answer, by whatever ended it.
     fn ending_worker(
         config: &ServiceConfig,
         answers: Vec<Option<weaver_types::Payload>>,
+        join: Option<weaver_types::Payload>,
         mut holder: std::process::Child,
     ) -> std::thread::JoinHandle<(Vec<weaver_types::Payload>, bool)> {
         let listener = silent_worker(config);
         std::thread::spawn(move || {
             let mut directed = Vec::new();
-            for answer in answers {
+            let mut answers = answers.into_iter();
+            while answers.len() > 0 {
                 // Each dial is waited for ten seconds at most, so an admin
                 // that never dials fails its test rather than hanging it.
                 let mut ready = nix::libc::pollfd {
@@ -4230,15 +4296,25 @@ mod tests {
                 if unsafe { nix::libc::poll(&mut ready, 1, 10_000) } <= 0 {
                     break;
                 }
-                let Ok(raw) = nix::sys::socket::accept(std::os::fd::AsRawFd::as_raw_fd(&listener))
-                else {
+                let Ok(raw) = nix::sys::socket::accept4(
+                    std::os::fd::AsRawFd::as_raw_fd(&listener),
+                    nix::sys::socket::SockFlag::SOCK_CLOEXEC,
+                ) else {
                     break;
                 };
                 let fd =
                     unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(raw) };
                 let peer = channel::Coordination::adopt(fd);
                 let Ok(request) = peer.recv() else { break };
+                let joining = matches!(
+                    request.payload,
+                    weaver_types::Payload::Directive(LifecycleDirective::JoinLeave { .. })
+                );
                 directed.push(request.payload);
+                let answer = match (&join, joining) {
+                    (Some(join), true) => Some(join.clone()),
+                    _ => answers.next().expect("an answer remains"),
+                };
                 let Some(payload) = answer else {
                     drop(peer);
                     continue;
@@ -4318,8 +4394,10 @@ mod tests {
         let (release, release_rx) = std::sync::mpsc::channel::<()>();
         let worker = std::thread::spawn(move || {
             for at in 0..2 {
-                let Ok(raw) = nix::sys::socket::accept(std::os::fd::AsRawFd::as_raw_fd(&listener))
-                else {
+                let Ok(raw) = nix::sys::socket::accept4(
+                    std::os::fd::AsRawFd::as_raw_fd(&listener),
+                    nix::sys::socket::SockFlag::SOCK_CLOEXEC,
+                ) else {
                     return;
                 };
                 let fd =
@@ -4442,8 +4520,10 @@ mod tests {
                         break;
                     }
                 }
-                let Ok(raw) = nix::sys::socket::accept(std::os::fd::AsRawFd::as_raw_fd(&listener))
-                else {
+                let Ok(raw) = nix::sys::socket::accept4(
+                    std::os::fd::AsRawFd::as_raw_fd(&listener),
+                    nix::sys::socket::SockFlag::SOCK_CLOEXEC,
+                ) else {
                     break;
                 };
                 let fd =
@@ -4530,6 +4610,269 @@ mod tests {
         );
     }
 
+    /// The force's child process, started against `base`, its output piped.
+    fn spawn_child_force(base: &std::path::Path) -> std::process::Child {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "tests::force_unload_in_a_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("WEAVER_ADMIN_TEST_FORCE_BASE", base)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("the force's child runs")
+    }
+
+    /// Accepts the next dial within ten seconds and reads its directive. The
+    /// stand-in harnesses accept close-on-exec, so a force's child process
+    /// spawned meanwhile holds none of their connections open.
+    fn accept_within(
+        listener: &std::os::fd::OwnedFd,
+    ) -> Option<(channel::Coordination, weaver_types::OrganEnvelope)> {
+        let mut ready = nix::libc::pollfd {
+            fd: std::os::fd::AsRawFd::as_raw_fd(listener),
+            events: nix::libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: poll on one descriptor this thread owns.
+        if unsafe { nix::libc::poll(&mut ready, 1, 10_000) } <= 0 {
+            return None;
+        }
+        let raw = nix::sys::socket::accept4(
+            std::os::fd::AsRawFd::as_raw_fd(listener),
+            nix::sys::socket::SockFlag::SOCK_CLOEXEC,
+        )
+        .ok()?;
+        let fd = unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(raw) };
+        let peer = channel::Coordination::adopt(fd);
+        let request = peer.recv().ok()?;
+        Some((peer, request))
+    }
+
+    fn close_with(
+        peer: &channel::Coordination,
+        exchange: weaver_types::ExchangeId,
+        payload: weaver_types::Payload,
+    ) {
+        let _ = peer.send(&weaver_types::OrganEnvelope {
+            exchange,
+            position: weaver_types::Position::Close,
+            payload,
+        });
+    }
+
+    /// **A live, silent harness does not hold the agent**, per Spec section
+    /// 3 on the operator's ruling of 2026-10-07 on #1: the harness takes the
+    /// graceful leave and the force's join and answers neither; the force,
+    /// its join unanswered inside the leave's bound (injected at two seconds
+    /// here), closes the marker as forced and escalates against the run
+    /// without the lock; the run's processes end, the graceful holder's wait
+    /// reads the end of its connection and concludes with no save point
+    /// taken, the marker forced. Perturbation: the force waits for the lock
+    /// instead, and nothing ends the run until the stand-in's patience runs
+    /// out.
+    #[test]
+    fn a_silent_harness_is_ended_by_the_force_without_the_lock() {
+        let (config, scratch) = scratch_config("force-escalates");
+        save_points::write_marker(
+            &config.root,
+            Some(&save_points::Marker::Open { run: "r-1".into() }),
+        )
+        .unwrap();
+        let mut holder = stand_in_holder(&config);
+        let listener = silent_worker(&config);
+        let (heard_tx, heard) = std::sync::mpsc::channel::<()>();
+        // The harness: answers the observation, then takes the leave and the
+        // join and answers neither; its connections close when the run's
+        // processes end, as a worker's do when it dies, or past a patience.
+        let worker = std::thread::spawn(move || {
+            let mut directed = Vec::new();
+            let mut held = Vec::new();
+            if let Some((peer, request)) = accept_within(&listener) {
+                directed.push(request.payload.clone());
+                close_with(
+                    &peer,
+                    request.exchange,
+                    state(weaver_types::AgentState::Active).unwrap(),
+                );
+            }
+            for at in 0..2 {
+                let Some((peer, request)) = accept_within(&listener) else {
+                    break;
+                };
+                directed.push(request.payload.clone());
+                held.push(peer);
+                if at == 0 {
+                    heard_tx.send(()).unwrap();
+                }
+            }
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(12);
+            let ended_by_the_force = loop {
+                match holder.try_wait() {
+                    Ok(Some(_)) => break true,
+                    _ if std::time::Instant::now() > until => break false,
+                    _ => std::thread::sleep(std::time::Duration::from_millis(20)),
+                }
+            };
+            drop(held);
+            let _ = holder.kill();
+            let _ = holder.wait();
+            (directed, ended_by_the_force)
+        });
+        let (answered, published, child) = std::thread::scope(|scope| {
+            let unload = scope.spawn(|| {
+                let calls = std::cell::Cell::new(0);
+                let mut publisher = counting_publisher(&calls);
+                let answered = unload_with(&config, TEST_UNLOAD_BOUNDS, false, &mut publisher);
+                (answered, calls.get())
+            });
+            heard
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the graceful leave arrives");
+            let child = spawn_child_force(&scratch.0)
+                .wait_with_output()
+                .expect("the force's child finishes");
+            let (answered, published) = unload.join().unwrap();
+            (answered, published, child)
+        });
+        let (directed, ended_by_the_force) = worker.join().unwrap();
+        let child_out = String::from_utf8_lossy(&child.stdout);
+        assert!(
+            child_out.contains("force answered: Ok(State { state: Unloaded"),
+            "{child_out}\n{}",
+            String::from_utf8_lossy(&child.stderr)
+        );
+        assert!(
+            matches!(
+                directed.as_slice(),
+                [
+                    weaver_types::Payload::Directive(LifecycleDirective::Observe),
+                    weaver_types::Payload::Directive(LifecycleDirective::Leave {
+                        forced: false,
+                        ..
+                    }),
+                    weaver_types::Payload::Directive(LifecycleDirective::JoinLeave { .. }),
+                ]
+            ),
+            "{directed:?}"
+        );
+        assert!(
+            ended_by_the_force,
+            "the force ended the run, not the stand-in's patience"
+        );
+        assert!(is_unloaded(&answered), "{answered:?}");
+        assert_eq!(published, 0, "no save point was taken");
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Forced { run: "r-1".into() })
+        );
+    }
+
+    /// **A force that comes before the leave is pending joins once it is**,
+    /// per Spec section 3 on the operator's ruling of 2026-10-07 on #1: the
+    /// graceful unload holds the lock and is still observing when the force's
+    /// first join arrives, which the harness refuses `OutOfOrder`; the force,
+    /// the lock still held, asks again a second later, by when the graceful
+    /// leave is pending, and joins it, answered with the shared `Left`; the
+    /// graceful unload publishes once. Perturbation: a single join attempt,
+    /// and the force waits behind the whole drain instead.
+    #[test]
+    fn a_force_before_the_leave_joins_once_it_is_pending() {
+        let (config, scratch) = scratch_config("force-before-leave");
+        save_points::write_marker(
+            &config.root,
+            Some(&save_points::Marker::Open { run: "r-1".into() }),
+        )
+        .unwrap();
+        let mut holder = stand_in_holder(&config);
+        let listener = silent_worker(&config);
+        let (observed_tx, observed) = std::sync::mpsc::channel::<()>();
+        let worker = std::thread::spawn(move || {
+            let mut directed = Vec::new();
+            // The observation, held until the force's first join is refused.
+            let (observe_peer, observe) = accept_within(&listener).expect("the observation");
+            directed.push(observe.payload.clone());
+            observed_tx.send(()).unwrap();
+            if let Some((peer, request)) = accept_within(&listener) {
+                directed.push(request.payload.clone());
+                close_with(
+                    &peer,
+                    request.exchange,
+                    weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder),
+                );
+            }
+            close_with(
+                &observe_peer,
+                observe.exchange,
+                state(weaver_types::AgentState::Active).unwrap(),
+            );
+            // The graceful leave, pending; then the force's next join.
+            let mut pending = Vec::new();
+            for _ in 0..2 {
+                let Some((peer, request)) = accept_within(&listener) else {
+                    break;
+                };
+                directed.push(request.payload.clone());
+                pending.push((peer, request.exchange));
+            }
+            let _ = holder.kill();
+            let _ = holder.wait();
+            for (peer, exchange) in pending.into_iter().rev() {
+                close_with(&peer, exchange, left_with_report().unwrap());
+            }
+            directed
+        });
+        let (answered, published, child) = std::thread::scope(|scope| {
+            let unload = scope.spawn(|| {
+                let calls = std::cell::Cell::new(0);
+                let mut publisher = counting_publisher(&calls);
+                let answered = unload_with(&config, TEST_UNLOAD_BOUNDS, false, &mut publisher);
+                (answered, calls.get())
+            });
+            observed
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the observation arrives");
+            let child = spawn_child_force(&scratch.0)
+                .wait_with_output()
+                .expect("the force's child finishes");
+            let (answered, published) = unload.join().unwrap();
+            (answered, published, child)
+        });
+        let directed = worker.join().unwrap();
+        let child_out = String::from_utf8_lossy(&child.stdout);
+        assert!(
+            child_out.contains("force answered: Ok(State { state: Unloaded"),
+            "{child_out}\n{}",
+            String::from_utf8_lossy(&child.stderr)
+        );
+        assert!(
+            matches!(
+                directed.as_slice(),
+                [
+                    weaver_types::Payload::Directive(LifecycleDirective::Observe),
+                    weaver_types::Payload::Directive(LifecycleDirective::JoinLeave { .. }),
+                    weaver_types::Payload::Directive(LifecycleDirective::Leave {
+                        forced: false,
+                        ..
+                    }),
+                    weaver_types::Payload::Directive(LifecycleDirective::JoinLeave { .. }),
+                ]
+            ),
+            "the force asked again and joined the pending leave: {directed:?}"
+        );
+        assert!(is_unloaded(&answered), "{answered:?}");
+        assert_eq!(published, 1, "the graceful unload published, once");
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Closed { run: "r-1".into() })
+        );
+    }
+
     /// **A force with no unload running takes the lock and does everything**,
     /// per Spec section 3 on the operator's ruling of 2026-10-07 on #1: it
     /// observes, directs the leave forced, publishes the reported save point
@@ -4548,6 +4891,7 @@ mod tests {
         let worker = ending_worker(
             &config,
             vec![state(weaver_types::AgentState::Idle), left_with_report()],
+            None,
             holder,
         );
         let calls = std::cell::Cell::new(0);
@@ -4600,11 +4944,8 @@ mod tests {
         let holder = stand_in_holder(&config);
         let worker = ending_worker(
             &config,
-            vec![
-                Some(weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder)),
-                state(weaver_types::AgentState::Idle),
-                left_with_report(),
-            ],
+            vec![state(weaver_types::AgentState::Idle), left_with_report()],
+            Some(weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder)),
             holder,
         );
         // The lock file stands before the reader opens it, as after any verb.
@@ -4634,11 +4975,22 @@ mod tests {
         );
         let _ = show.wait();
         let (directed, ended) = worker.join().unwrap();
+        // Every join is refused while the `show` holds the lock, the force
+        // asking again each second; then it unloads alone.
+        let joins = directed
+            .iter()
+            .take_while(|payload| {
+                matches!(
+                    payload,
+                    weaver_types::Payload::Directive(LifecycleDirective::JoinLeave { .. })
+                )
+            })
+            .count();
+        assert!(joins >= 1, "{directed:?}");
         assert!(
             matches!(
-                directed.as_slice(),
+                &directed[joins..],
                 [
-                    weaver_types::Payload::Directive(LifecycleDirective::JoinLeave { .. }),
                     weaver_types::Payload::Directive(LifecycleDirective::Observe),
                     weaver_types::Payload::Directive(LifecycleDirective::Leave {
                         forced: true,
@@ -4677,6 +5029,7 @@ mod tests {
         let worker = ending_worker(
             &config,
             vec![state(weaver_types::AgentState::Active), None],
+            None,
             holder,
         );
         let calls = std::cell::Cell::new(0);

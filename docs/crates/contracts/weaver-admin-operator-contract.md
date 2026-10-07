@@ -237,10 +237,12 @@ invocation lock throughout, so a `load`, a `save-point`, a `restore`, a `stop` o
 does not wait for the lock but reaches the agent beside the `unload`, and answers
 unloaded once the agent has gone down; the `unload` then publishes the save point and
 closes the record, and its answer is the one that reports the publication. A
-`force-unload` issued while something other than an unload holds the lock waits for it
-and then unloads alone. An agent that has gone away is ended at once by the `unload` that
-holds the lock; one that stays up and answers nothing holds that `unload` until the
-invocation is ended. A `stop` or a `show` whose answer does not arrive within its bound refuses
+`force-unload` issued just before the `unload` reaches the agent joins as soon as it
+does. A `force-unload` issued while something other than an unload holds the lock waits
+for it and then unloads alone. An agent that has gone away is ended at once by the
+`unload` that holds the lock; one that stays up and answers nothing is ended by the
+`force-unload` within sixty seconds, no save point taken, and the next load records
+`ForcedUnload`. A `stop` or a `show` whose answer does not arrive within its bound refuses
 `Unanswered`, and so does a `load` meeting a run whose worker is silent, each leaving
 the run as it stands for `unload`. **Recovery from a killed invocation is the
 caller's**: admin-con reads `show`'s facts and issues `unload`, which ends whatever

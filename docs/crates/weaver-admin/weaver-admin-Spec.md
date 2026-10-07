@@ -627,14 +627,20 @@ socket and sends `JoinLeave`. Where the holder is a graceful unload, its leave i
 pending, the force joins it and turns it forced (`weaver-harness-Spec` section 6, heard
 in every wait of the leave), the harness's shared `Left` is the force's answer, and the
 force answers unloaded, publishing nothing and leaving the marker to the holder, which
-publishes and closes it. Where the harness answers anything else, `OutOfOrder` because
-no leave is pending and the holder is no unload (a `show` past its wait, a
-`save-point`), or does not answer inside the leave's sixty seconds, or cannot be dialed,
-the force waits for the lock with no bound of its own and then unloads alone, as below.
+publishes and closes it. **A harness that takes the join and answers nothing inside the
+leave's sixty seconds is alive and silent, and does not hold the agent**: the force
+closes the marker as forced, the operator having forced a run whose save point was not
+taken, and runs the escalation below against the run's processes without the lock; the
+graceful holder's wait then reads the end of its connection and concludes with no save
+point taken, the marker standing under `ForcedUnload`. Where the harness refuses the
+join, `OutOfOrder` because no leave is pending (the holder is no unload, a `show` past
+its wait or a `save-point`, or a graceful unload not yet past its observation), or
+cannot be dialed, the force tries the lock and, the lock still held, asks again a second
+later, so a force that came before the holder's leave was pending joins as soon as it
+is; once the holder lets the lock go, the force holds it and unloads alone, as below.
 **A harness that goes away answers nothing, and the holder escalates at once**: the
 graceful unload reads the end of its connection as an unanswered leave and goes to the
-escalation below, so nothing waits on a dead process; a force's own escalation runs only
-where the force holds the lock. A forced unload that holds the lock keeps the leave's
+escalation below, so nothing waits on a dead process. A forced unload that holds the lock keeps the leave's
 bound below. **A reported save point already in the manifest is not published again**,
 a defence for an unload retried after its publication landed: the standing line counts
 as published and the marker closes as it would have.
@@ -759,9 +765,8 @@ verb refusing `InvocationInFlight` and `show` answering `InTransition`. **The gr
 unload's drain is the one wait without a bound of its own**, the length of a turn and the
 wind-down's generation, on the operator's ruling of 2026-10-07 on #1, and `force-unload`
 reaches the harness past it without the lock. A harness that is gone ends the wait at
-once. A harness that is alive and answers neither the leave nor a join holds the
-graceful unload, and the lock with it, until it ends; a waiting `force-unload` acts once
-that invocation is ended. The interior verbs of section 2 take the same rule by the
+once, and one that is alive and answers no join inside the leave's bound is ended by the
+`force-unload` itself, so no harness holds the agent past a force. The interior verbs of section 2 take the same rule by the
 recipe.
 
 **This record's edge moves to the integration invariant.** The labelling pass

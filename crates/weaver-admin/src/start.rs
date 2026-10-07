@@ -200,26 +200,6 @@ pub fn take_invocation_lock(run_directory: &Path) -> Result<InvocationLock, Life
     }
 }
 
-/// **Waits for the invocation lock exclusively, with no bound of its own**,
-/// per section 3 on the operator's ruling of 2026-10-07 on #1: the wait of a
-/// `force-unload` whose join the harness refused, the lock's holder being no
-/// unload (a `show`, a refused `save-point`) or the harness gone. Once it
-/// holds the lock the force unloads alone.
-pub fn wait_invocation_lock(run_directory: &Path) -> Result<InvocationLock, LifecycleRefusal> {
-    let path = run_directory.join("admin.lock");
-    let file = open_lock_file(&path)?;
-    loop {
-        let request = whole_file(nix::libc::F_WRLCK);
-        // SAFETY: fcntl on a descriptor this frame owns, with a lock it built.
-        if unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_SETLKW, &request) } == 0 {
-            return Ok(InvocationLock { _file: file });
-        }
-        if std::io::Error::last_os_error().raw_os_error() != Some(nix::libc::EINTR) {
-            return Err(refuse_path("cannot be locked", &path));
-        }
-    }
-}
-
 /// **Takes the invocation lock shared, without waiting**, `show`'s take, per
 /// section 3: refused where an exclusive holder stands, which is a
 /// transition in flight.
