@@ -1268,7 +1268,24 @@ impl<'a> Ports<'a> {
                 match connection.recv() {
                     Ok(envelope) => {
                         let exchange = envelope.exchange.clone();
-                        match envelope.payload {
+                        // **A `force-unload` without the invocation lock
+                        // joins the leave pending here** as a forced leave
+                        // would (the operator's ruling of 2026-10-07 on #1);
+                        // with none pending, its holder is no unload and the
+                        // join is out of order, below.
+                        let pending = self.gate.as_ref().is_some_and(|gate| gate.leave.is_some());
+                        let payload = match envelope.payload {
+                            weaver_types::Payload::Directive(
+                                weaver_types::LifecycleDirective::JoinLeave { cause },
+                            ) if pending => weaver_types::Payload::Directive(
+                                weaver_types::LifecycleDirective::Leave {
+                                    cause,
+                                    forced: true,
+                                },
+                            ),
+                            other => other,
+                        };
+                        match payload {
                             weaver_types::Payload::Directive(
                                 weaver_types::LifecycleDirective::Stop { cause },
                             ) if stop.is_none() => {
@@ -4037,16 +4054,16 @@ mod tests {
     /// holds its generation open, a graceful leave arrives and is held, and
     /// further verbs dial in as admin dials them. A second unforced leave is
     /// refused `OutOfOrder`; a `save-point` is refused `OutOfOrder`; an
-    /// observation answers `Active`; a forced leave joins the pending one,
-    /// turns it forced and cancels the generation, the turn closing stopped
-    /// by the unload. The decode stand-in mirrors the SPU's order
+    /// observation answers `Active`; a `force-unload` that does not hold the
+    /// lock (`JoinLeave`) joins the pending one, turns it forced and cancels
+    /// the generation, the turn closing stopped by the unload. The decode stand-in mirrors the SPU's order
     /// (`weaver-spu/src/main.rs`, the `AppendAndGenerate` arm, a cancel
     /// answered with the stopped generation); the gate stand-in answers the
     /// quiesce as the raised gate does. Needs root, the listener admitting
     /// root alone: run by the leave watch in the lifecycle module.
     /// Perturbations: let a second unforced leave through and its refusal
-    /// never comes; drop the forced join and the generation is never
-    /// cancelled, the fixture's bound failing.
+    /// never comes; drop the join and the generation is never cancelled, the
+    /// fixture's bound failing.
     #[test]
     #[ignore = "needs root in a user namespace; run by the_leave_instruments_are_watched_inside_a_user_namespace"]
     fn a_second_dial_during_a_held_turn_meets_the_pending_leave() {
@@ -4184,9 +4201,10 @@ mod tests {
                 cause: weaver_types::Cause { uid: 0 },
             }));
             let observed = answered(ask(weaver_types::LifecycleDirective::Observe));
-            let forced = ask(weaver_types::LifecycleDirective::Leave {
+            // The force as admin sends it beside a graceful unload holding
+            // the lock: a join, not a leave.
+            let forced = ask(weaver_types::LifecycleDirective::JoinLeave {
                 cause: weaver_types::Cause { uid: 0 },
-                forced: true,
             });
             (second, save_point, observed, forced)
         });

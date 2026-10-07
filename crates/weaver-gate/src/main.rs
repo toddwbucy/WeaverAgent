@@ -739,6 +739,7 @@ fn dispatch(state: &mut HookState, envelope: &OrganEnvelope) -> Payload {
             | LifecycleDirective::Lower
             | LifecycleDirective::Enter { .. }
             | LifecycleDirective::Leave { .. }
+            | LifecycleDirective::JoinLeave { .. }
             | LifecycleDirective::Stop { .. }
             | LifecycleDirective::Observe
             | LifecycleDirective::Admit { .. }

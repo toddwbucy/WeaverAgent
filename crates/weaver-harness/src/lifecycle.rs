@@ -1325,7 +1325,7 @@ impl Harness {
                     self.refuse(connection, &exchange, LifecycleRefusal::ActivityNotAtRest)?;
                     return Ok(None);
                 }
-                match take_save_point(run, Some(cause)) {
+                match take_save_point(run, Some(cause), None) {
                     Ok(Some(report)) => {
                         self.answer(
                             connection,
@@ -2179,25 +2179,30 @@ impl Harness {
             ));
         };
         let coordination = &self.coordination;
-        let drained = drain_gate(run, leave.forced, leave.quiesced);
-        let quiesced = leave.quiesced || !leave.forced;
+        let (initially_forced, already_quiesced) = (leave.forced, leave.quiesced);
+        let quiesced = already_quiesced || !initially_forced;
+        let cause = leave.cause;
+        // **The leave rides the run from here to its answers**, so every
+        // wait below hears a `force-unload` join it (Codex on #94, round 17):
+        // the drain, the wind-down, the lower, the save point's legs and the
+        // grants read-back poll the listener, and what landed while nothing
+        // could poll is swept before the answers go out.
         run.pending_leave = Some(leave);
-        if !run.pending_leave.as_ref().is_some_and(|leave| leave.forced) {
+        let forced_now = |run: &Run| run.pending_leave.as_ref().is_some_and(|leave| leave.forced);
+        let drained = drain_gate(run, initially_forced, already_quiesced, Some(coordination));
+        if !forced_now(run) {
             wind_down(run, coordination);
         }
-        let forced = run.pending_leave.as_ref().is_some_and(|leave| leave.forced);
-        let lowered = if forced {
+        let lowered = if forced_now(run) {
             force_gate_down(run, quiesced)
         } else {
             lower_gate(run, Some(coordination))
         }
         .or(drained);
-        let leave = run.pending_leave.take().expect("the leave rode the run");
-        let forced = leave.forced;
-        let cause = leave.cause;
-        let save_point = match take_save_point(run, Some(cause)) {
+        let save_point = match take_save_point(run, Some(cause), Some(coordination)) {
             Ok(report) => report,
-            Err(missed) if !forced => {
+            Err(missed) if !forced_now(run) => {
+                let leave = run.pending_leave.take().expect("the leave rode the run");
                 let payload =
                     weaver_types::Payload::Refusal(LifecycleRefusal::SavePointNotTaken { missed });
                 answer_all(leave.answers, &payload);
@@ -2212,6 +2217,7 @@ impl Harness {
                 None
             }
         };
+        let forced = forced_now(run);
         let mut run = match std::mem::replace(&mut self.state, ChannelState::Left) {
             ChannelState::Entered(run) => *run,
             other => {
@@ -2219,12 +2225,15 @@ impl Harness {
                 return Err(ChannelFault::Undecodable);
             }
         };
-        let payload = match leave_after(&mut run, Some(cause), forced, lowered) {
+        let payload = match leave_after(&mut run, Some(cause), forced, lowered, Some(coordination))
+        {
             Ok(()) => weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point }),
             // Everything admitted did not reach the stream, so the answer
             // says so rather than claiming a clean close.
             Err(refusal) => weaver_types::Payload::Refusal(refusal),
         };
+        sweep_dials(&mut run.pending_leave, &run.load, coordination);
+        let leave = run.pending_leave.take().expect("the leave rode the run");
         answer_all(leave.answers, &payload);
         Ok((payload, true))
     }
@@ -2285,7 +2294,7 @@ fn leave(
     forced: bool,
 ) -> Result<(), LifecycleRefusal> {
     let lowered = lower_gate(run, None);
-    leave_after(run, cause, forced, lowered)
+    leave_after(run, cause, forced, lowered, None)
 }
 
 /// **Drain the gate before it lowers**, per Spec section 6 on the operator's
@@ -2298,7 +2307,12 @@ fn leave(
 /// way, so each is answered while its connection still stands. Forced, no
 /// drain: the gate lowers at once. Answers a refusal where the drain did
 /// not reach `GateQuiesced`, which the leave names as its first.
-fn drain_gate(run: &mut Run, forced: bool, quiesced: bool) -> Option<LifecycleRefusal> {
+fn drain_gate(
+    run: &mut Run,
+    forced: bool,
+    quiesced: bool,
+    coordination: Option<&crate::channel::CoordinationListener>,
+) -> Option<LifecycleRefusal> {
     let gate = run.gate.take()?;
     let mut done = forced;
     let held: Vec<_> = run.held_frames.drain(..).collect();
@@ -2333,6 +2347,31 @@ fn drain_gate(run: &mut Run, forced: bool, quiesced: bool) -> Option<LifecycleRe
         }
     }
     while !done {
+        // **The drain hears the coordination listener** (Codex on #94,
+        // round 17): a `force-unload` that joins here ends the wait, the gate
+        // then coming down at once.
+        if let Some(listener) = coordination {
+            use std::os::fd::AsFd;
+            let mut fds = [
+                nix::poll::PollFd::new(gate.channel.as_fd(), nix::poll::PollFlags::POLLIN),
+                nix::poll::PollFd::new(listener.as_fd(), nix::poll::PollFlags::POLLIN),
+            ];
+            match nix::poll::poll(&mut fds, nix::poll::PollTimeout::NONE) {
+                Ok(_) | Err(nix::errno::Errno::EINTR) => {}
+                Err(_) => {
+                    fault = Some(LifecycleRefusal::NoResidency);
+                    break;
+                }
+            }
+            let gate_ready = fds[0].revents().is_some_and(|r| !r.is_empty());
+            let dialed = fds[1].revents().is_some_and(|r| !r.is_empty());
+            if dialed && hear_during_leave(&mut run.pending_leave, &run.load, listener) {
+                break;
+            }
+            if !gate_ready {
+                continue;
+            }
+        }
         let Ok(envelope) = gate.channel.recv() else {
             fault = Some(LifecycleRefusal::NoResidency);
             break;
@@ -2539,7 +2578,7 @@ fn lower_exchange(
             let gate_ready = fds[0].revents().is_some_and(|r| !r.is_empty());
             let dialed = fds[1].revents().is_some_and(|r| !r.is_empty());
             if !gate_ready {
-                if dialed && hear_during_lower(run, listener) {
+                if dialed && hear_during_leave(&mut run.pending_leave, &run.load, listener) {
                     return Err(Lowering::Forced);
                 }
                 continue;
@@ -2569,10 +2608,21 @@ fn lower_exchange(
     }
 }
 
-/// **One verb heard while the gate drains**: a forced leave joins the pending
-/// leave and turns it forced, answering `true`; an observation answers
-/// `Active`; anything else is out of order while the leave is pending.
-fn hear_during_lower(run: &mut Run, listener: &crate::channel::CoordinationListener) -> bool {
+/// **One dial heard during the leave's waits**, per Spec section 6 on the
+/// operator's rulings of 2026-10-07 on #1: the drain, the lower, the leave's
+/// save point and the unwind after it all hear the coordination listener
+/// through this one helper. A `force-unload` joins the pending leave and
+/// turns it forced, answering `true`, whether it came holding the invocation
+/// lock (`Leave` forced, a sole force meeting a leave whose admin is gone) or
+/// without it (`JoinLeave`, a force beside a graceful unload that holds the
+/// lock); its dialer is answered with the leave's shared answer. An
+/// observation answers `Active`; anything else, a second unforced leave or
+/// a save point among them, is out of order while the leave is pending.
+fn hear_during_leave(
+    pending: &mut Option<crate::engine::PendingLeave>,
+    load: &weaver_types::LoadFacts,
+    listener: &crate::channel::CoordinationListener,
+) -> bool {
     let Ok(connection) = listener.accept_root() else {
         return false;
     };
@@ -2588,8 +2638,10 @@ fn hear_during_lower(run: &mut Run, listener: &crate::channel::CoordinationListe
         });
     };
     match envelope.payload {
-        weaver_types::Payload::Directive(LifecycleDirective::Leave { forced: true, .. }) => {
-            if let Some(leave) = run.pending_leave.as_mut() {
+        weaver_types::Payload::Directive(
+            LifecycleDirective::Leave { forced: true, .. } | LifecycleDirective::JoinLeave { .. },
+        ) => {
+            if let Some(leave) = pending.as_mut() {
                 leave.forced = true;
                 leave.answers.push((connection, exchange));
                 return true;
@@ -2600,7 +2652,7 @@ fn hear_during_lower(run: &mut Run, listener: &crate::channel::CoordinationListe
         weaver_types::Payload::Directive(LifecycleDirective::Observe) => {
             reply(weaver_types::Payload::Answer(LifecycleAnswer::State {
                 state: weaver_types::AgentState::Active,
-                load: Some(Box::new(run.load.clone())),
+                load: Some(Box::new(load.clone())),
                 constituents: Vec::new(),
             }));
             false
@@ -2612,12 +2664,64 @@ fn hear_during_lower(run: &mut Run, listener: &crate::channel::CoordinationListe
     }
 }
 
-/// The leave after its gate is lowered: the rest of the unwind, whole.
+/// Runs a seam wait hearing the coordination listener where one is given, a
+/// dial heard there going to [`hear_during_leave`].
+fn hearing_on<T>(
+    coordination: Option<&crate::channel::CoordinationListener>,
+    pending: &mut Option<crate::engine::PendingLeave>,
+    load: &weaver_types::LoadFacts,
+    wait: impl FnOnce(Option<&mut crate::state::Hearing<'_>>) -> T,
+) -> T {
+    use std::os::fd::AsFd;
+    let Some(listener) = coordination else {
+        return wait(None);
+    };
+    let mut heard = || {
+        hear_during_leave(pending, load, listener);
+    };
+    let mut hearing = crate::state::Hearing {
+        fd: listener.as_fd(),
+        heard: &mut heard,
+    };
+    wait(Some(&mut hearing))
+}
+
+/// **The dials that landed while nothing polled**, heard before the leave's
+/// dialers are answered: the trace's drain, the SPU's release and the reaps
+/// wait on what cannot be polled beside the listener, so a `force-unload`
+/// that dialed during them stands in the listener's backlog and is heard
+/// here, joining the leave and receiving its shared answer before the worker
+/// exits. Does not wait: a listener with nothing pending ends the sweep.
+fn sweep_dials(
+    pending: &mut Option<crate::engine::PendingLeave>,
+    load: &weaver_types::LoadFacts,
+    listener: &crate::channel::CoordinationListener,
+) {
+    use std::os::fd::AsFd;
+    loop {
+        let mut fds = [nix::poll::PollFd::new(
+            listener.as_fd(),
+            nix::poll::PollFlags::POLLIN,
+        )];
+        match nix::poll::poll(&mut fds, nix::poll::PollTimeout::ZERO) {
+            Ok(n) if n > 0 => {}
+            Err(nix::errno::Errno::EINTR) => continue,
+            _ => return,
+        }
+        hear_during_leave(pending, load, listener);
+    }
+}
+
+/// The leave after its gate is lowered: the rest of the unwind, whole. The
+/// grants read-back hears the coordination listener where one is given, a
+/// `force-unload` there joining the pending leave, and the `unload` event's
+/// `forced` reads the leave as it stands when the event is authored.
 fn leave_after(
     run: &mut Run,
     cause: Option<weaver_types::Cause>,
     forced: bool,
     lowered: Option<LifecycleRefusal>,
+    coordination: Option<&crate::channel::CoordinationListener>,
 ) -> Result<(), LifecycleRefusal> {
     // The unwind runs whole whatever refuses along it, because stopping at
     // the first refusal leaks everything after it: a refused lower must not
@@ -2643,9 +2747,18 @@ fn leave_after(
         // rather than reported unchanged. Where no member stood there was
         // no boundary to read and the surface is absent. The cause is the
         // leave directive's, absent where the worker unwound itself.
-        let grant_surface = run.state.as_mut().map(|seam| {
-            let at_leave = seam.ask_grants();
-            match (&run.grants_at_enter, at_leave) {
+        let Run {
+            state,
+            pending_leave,
+            load,
+            grants_at_enter,
+            ..
+        } = &mut *run;
+        let grant_surface = state.as_mut().map(|seam| {
+            let at_leave = hearing_on(coordination, pending_leave, load, |hearing| {
+                seam.ask_grants_hearing(hearing)
+            });
+            match (&*grants_at_enter, at_leave) {
                 (Some(entered), Some(left)) if *entered == left => {
                     weaver_trace::GrantSurface::Unchanged
                 }
@@ -2656,7 +2769,7 @@ fn leave_after(
         let payload = Some(weaver_trace::Payload::Unload(weaver_trace::UnloadClose {
             grant_surface,
             cause: cause.map(crate::engine::trace_cause),
-            forced,
+            forced: forced || run.pending_leave.as_ref().is_some_and(|leave| leave.forced),
         }));
         let _ = run.author.author(
             &mut run.recorder,
@@ -2933,14 +3046,28 @@ fn restored_agrees(
 fn take_save_point(
     run: &mut Run,
     cause: Option<weaver_types::Cause>,
+    coordination: Option<&crate::channel::CoordinationListener>,
 ) -> Result<Option<weaver_types::SavePointReport>, weaver_types::SavePointLeg> {
     if run.recorder.serving().is_none() {
         return Ok(None);
     }
-    let Some(seam) = run.state.as_mut() else {
+    let Run {
+        state,
+        pending_leave,
+        load,
+        ..
+    } = &mut *run;
+    let Some(seam) = state.as_mut() else {
         return Ok(None);
     };
-    let taken = seam.ask_snapshot()?;
+    // **The leave's save point hears the coordination listener** through
+    // all four legs (Codex on #94, round 17), per Spec section 6 on the
+    // operator's ruling of 2026-10-07 on #1: a `force-unload` that dials
+    // while the member writes joins the leave here, so a leg the member then
+    // misses brings the agent down forced rather than leaving it entered.
+    let taken = hearing_on(coordination, pending_leave, load, |hearing| {
+        seam.ask_snapshot_hearing(hearing)
+    })?;
     let position = run
         .author
         .author(
@@ -3756,6 +3883,13 @@ mod tests {
         /// `force-unload` dials the coordination listener. Needs root: the
         /// listener admits root alone.
         StalledDrain,
+        /// An unforced `Leave` during whose save point a `force-unload`
+        /// without the lock dials (`JoinLeave`): the member holds its answer
+        /// to the snapshot ask until the force is sent, then answers a line
+        /// that is no answer, the leg missed. Needs root.
+        ForceDuringSavePoint,
+        /// A `JoinLeave` against a run at rest, no leave pending.
+        JoinAtRest,
     }
 
     /// **An SPU stand-in keeping the real SPU's order**, for the wind-down
@@ -3951,6 +4085,7 @@ mod tests {
         // across the two organs.
         let order: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
         let member_order = order.clone();
+        let force_at_snapshot = matches!(mode, LeaveMode::ForceDuringSavePoint);
         let member = std::thread::spawn(move || {
             let mut answers = far.try_clone().expect("clone");
             let mut read: Vec<String> = Vec::new();
@@ -3970,6 +4105,20 @@ mod tests {
                     )
                 } else if line.starts_with(r#"{"ask":{"restored""#) {
                     restored_answer
+                } else if force_at_snapshot && line.starts_with(r#"{"ask":{"snapshot""#) {
+                    // Held until the force is on the listener, then a line
+                    // that is no answer of the protocol: the leg missed.
+                    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                    while !member_order
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|mark| mark == "<force sent>")
+                        && std::time::Instant::now() < until
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    r#"{"answer":{"nothing":{}}}"#
                 } else if line.starts_with(r#"{"ask":{"snapshot""#) {
                     // The answer echoes the ask's ordinal (Codex on #94,
                     // round 10).
@@ -4024,7 +4173,9 @@ mod tests {
                     | LeaveMode::FrameAtQuiesce
                     | LeaveMode::WindDown { .. }
                     | LeaveMode::WindDownAfterTurn
-                    | LeaveMode::StalledDrain => {
+                    | LeaveMode::StalledDrain
+                    | LeaveMode::ForceDuringSavePoint
+                    | LeaveMode::JoinAtRest => {
                         // The fixture's SPU never admitted, its exec having
                         // failed: its dead arm is dropped and reaped here so
                         // the leave's answer is the save point's and not the
@@ -4241,6 +4392,7 @@ mod tests {
                             LeaveMode::QueuedFrame
                             | LeaveMode::FrameAtQuiesce
                             | LeaveMode::StalledDrain
+                            | LeaveMode::ForceDuringSavePoint
                             | LeaveMode::WindDownAfterTurn => LifecycleDirective::Leave {
                                 cause: weaver_types::Cause { uid: 1000 },
                                 forced: false,
@@ -4248,6 +4400,9 @@ mod tests {
                             LeaveMode::WindDown { forced } => LifecycleDirective::Leave {
                                 cause: weaver_types::Cause { uid: 1000 },
                                 forced,
+                            },
+                            LeaveMode::JoinAtRest => LifecycleDirective::JoinLeave {
+                                cause: weaver_types::Cause { uid: 0 },
                             },
                             _ => LifecycleDirective::SavePoint {
                                 cause: weaver_types::Cause { uid: 1000 },
@@ -4294,6 +4449,47 @@ mod tests {
                                     .push(format!("<force answered> {:?}", answered.payload));
                             })
                         });
+                        // **The force during the save point**: once the
+                        // member has the snapshot ask, a `force-unload` that
+                        // does not hold the lock dials, as admin's does.
+                        let joining = matches!(mode, LeaveMode::ForceDuringSavePoint).then(|| {
+                            let force_order = order.clone();
+                            let socket = dir.join("coordination.sock");
+                            std::thread::spawn(move || {
+                                let until =
+                                    std::time::Instant::now() + std::time::Duration::from_secs(10);
+                                while !force_order
+                                    .lock()
+                                    .unwrap()
+                                    .iter()
+                                    .any(|line| line.starts_with(r#"{"ask":{"snapshot""#))
+                                {
+                                    assert!(std::time::Instant::now() < until, "the save point");
+                                    std::thread::sleep(std::time::Duration::from_millis(5));
+                                }
+                                let force = OrganChannel::dial_for_test(&socket);
+                                force
+                                    .send(&OrganEnvelope {
+                                        exchange: ExchangeId {
+                                            opener: Opener::Admin,
+                                            ordinal: 1,
+                                        },
+                                        position: Position::Open,
+                                        payload: weaver_types::Payload::Directive(
+                                            LifecycleDirective::JoinLeave {
+                                                cause: weaver_types::Cause { uid: 0 },
+                                            },
+                                        ),
+                                    })
+                                    .expect("the force is sent");
+                                force_order.lock().unwrap().push("<force sent>".into());
+                                let answered = force.recv().expect("the force is answered");
+                                force_order
+                                    .lock()
+                                    .unwrap()
+                                    .push(format!("<force answered> {:?}", answered.payload));
+                            })
+                        });
                         if matches!(mode, LeaveMode::WindDownAfterTurn) {
                             // The serve loop's hook at the turn's close.
                             if let ChannelState::Entered(run) = &mut harness.state {
@@ -4313,6 +4509,9 @@ mod tests {
                         answer = Some(admin_peer.recv().expect("the leave answers").payload);
                         if let Some(forcing) = forcing {
                             forcing.join().expect("the force thread");
+                        }
+                        if let Some(joining) = joining {
+                            joining.join().expect("the force thread");
                         }
                         still_entered = matches!(harness.state, ChannelState::Entered(_));
                         if let ChannelState::Entered(run) =
@@ -4800,6 +4999,75 @@ mod tests {
         assert!(events.iter().any(|e| e["kind"] == "save_point"));
     }
 
+    /// **A force during the leave's save point is heard and joins**, per Spec
+    /// section 6 on the operator's ruling of 2026-10-07 on #1 (Codex on #94,
+    /// round 17): a `force-unload` without the lock dials while the member
+    /// holds the snapshot's answer, the save point's wait hears it and the
+    /// leave turns forced, so the member's missed leg brings the agent down
+    /// without the save point, the miss recorded, rather than leaving it
+    /// entered; both dialers hold the one `Left`. Root-only, the listener
+    /// admitting root alone. Perturbation: the save point's wait stops
+    /// hearing the listener and the unforced miss refuses, the run staying
+    /// entered and the force unanswered past its bounded receive.
+    #[test]
+    #[ignore = "needs root in a user namespace; run by the_leave_instruments_are_watched_inside_a_user_namespace"]
+    fn a_force_during_the_save_points_legs_is_heard_and_joins() {
+        assert!(
+            nix::unistd::geteuid().is_root(),
+            "this instrument needs euid 0"
+        );
+        let (events, _, read, answer, still_entered) = enter_against_a_member_leaving(
+            None,
+            false,
+            EMPTY_RESTORED,
+            LeaveMode::ForceDuringSavePoint,
+        );
+        assert!(!still_entered, "{answer:?}");
+        assert_eq!(
+            answer,
+            Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                save_point: None
+            }))
+        );
+        let forced = read
+            .iter()
+            .find(|line| line.starts_with("<force answered>"))
+            .unwrap_or_else(|| panic!("the force was answered: {read:?}"));
+        assert!(
+            forced.contains("Left") && forced.contains("save_point: None"),
+            "{forced}"
+        );
+        let refusal = events
+            .iter()
+            .find(|e| e["kind"] == "refusal")
+            .unwrap_or_else(|| panic!("the miss is on the record: {events:?}"));
+        assert_eq!(
+            refusal["payload"]["refusal"]["kind"], "save_point_not_taken",
+            "{refusal}"
+        );
+        let unload = events
+            .iter()
+            .find(|e| e["kind"] == "unload")
+            .expect("an unload");
+        assert_eq!(unload["payload"]["forced"], true, "{unload}");
+    }
+
+    /// **A join with no leave pending is out of order**, per Spec section 6
+    /// on the operator's ruling of 2026-10-07 on #1: a `force-unload` that
+    /// found the lock held by something other than an unload reads this and
+    /// waits for the lock, so the run stays entered. Perturbation: take the
+    /// join as a forced leave at rest and the run leaves.
+    #[test]
+    fn a_join_with_no_leave_pending_is_out_of_order() {
+        let (_, _, _, answer, still_entered) =
+            enter_against_a_member_leaving(None, false, EMPTY_RESTORED, LeaveMode::JoinAtRest);
+        assert_eq!(
+            answer,
+            Some(weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder))
+        );
+        assert!(still_entered);
+    }
+
     /// The watch: re-runs the root instruments of the leave inside `unshare
     /// --map-root-user`, where the coordination listener admits the test as
     /// admin. A box with no user namespace says so and skips.
@@ -4818,6 +5086,7 @@ mod tests {
                 "--test-threads=1",
                 "a_force_reaches_a_stalled_drain_and_keeps_state",
                 "a_second_dial_during_a_held_turn",
+                "a_force_during_the_save_points_legs",
             ])
             .stdin(std::process::Stdio::null())
             .output();
@@ -4838,7 +5107,7 @@ mod tests {
             return;
         }
         assert!(
-            output.status.success() && stdout.contains("test result: ok. 2 passed"),
+            output.status.success() && stdout.contains("test result: ok. 3 passed"),
             "the leave instruments failed inside the namespace\nstdout:\n{stdout}\nstderr:\n{stderr}"
         );
     }

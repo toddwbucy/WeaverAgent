@@ -234,6 +234,16 @@ pub enum LifecycleDirective {
         #[serde(default)]
         forced: bool,
     },
+    /// **A `force-unload` that does not hold the invocation lock**, on the
+    /// operator's ruling of 2026-10-07 on #1: the lock's holder is a graceful
+    /// unload draining, so the force joins its pending leave and turns it
+    /// forced, and is answered with the leave's shared `Left`; the holder
+    /// publishes and closes the marker. Where no leave is pending (the holder
+    /// is not an unload) the harness refuses `OutOfOrder`, and the force waits
+    /// for the lock and acts as the sole unload.
+    JoinLeave {
+        cause: crate::Cause,
+    },
     /// **A save point on demand**, admin's `save-point` verb, as of A3.2: the
     /// harness, at rest, takes one through the state seam's four legs,
     /// authors the `save_point` event and answers `SavePointTaken`.
@@ -348,8 +358,8 @@ pub enum SavePointLeg {
 pub enum LifecycleAnswer {
     Ready,
     /// **`Left` names the leave's save point**, as of A3.2, so admin publishes
-    /// it with its trace position; none where the leave was forced or the
-    /// binding diagnostic.
+    /// it with its trace position; none where the save point could not be
+    /// taken or the binding is diagnostic.
     Left {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         save_point: Option<SavePointReport>,

@@ -535,8 +535,9 @@ with the map, and the unit-name uniqueness that replaced it went with the init s
 What holds now is the invocation lock: a second `load`, `unload` or `stop` arriving
 while one runs refuses `InvocationInFlight` before it touches anything, across the
 pre-enter window included, so two loads cannot both start a worker and an unload cannot
-end a load that is still admitting its model. The run lock then answers what a later
-invocation finds: a worker present or not.
+end a load that is still admitting its model. `force-unload` is the one verb that does
+not stop at a held lock: it reaches the harness without it, per the unload below. The
+run lock then answers what a later invocation finds: a worker present or not.
 
 ```graph
 node: admin-publishes-only-on-ready
@@ -615,23 +616,28 @@ further input, lets a turn in flight finish what it can without further input, r
 every request received and not started, lowers the gate, takes the save point and
 answers `Left`, per `weaver-harness-Spec` section 6, so a leave heard mid-turn is
 answered at the turn's close and not refused, and the verb may wait the length of a
-turn. **The graceful unload waits for `Left` with no time bound and without the
-invocation lock**: it holds the lock to observe and to send the leave, releases it once
-the leave is sent, and takes it again after `Left` for the publication and the marker,
-so a `force-unload` is never blocked behind the drain it exists to cut short. **The
-retake waits for the lock with no bound of its own**, whoever holds it, and never reads
-the holder as what happened to the run. **Publication is first-come**, on the operator's
-ruling of 2026-10-07 on #1: a `force-unload` that joins the leave receives the same
-`Left`, and whichever invocation, graceful or forced, holds the lock first after `Left`
-publishes and closes the marker. The second finds it done, the marker no longer open and
-the reported save point's digest among the manifest's lines, and answers unloaded,
-publishing nothing again; a marker closed without that line is not done, and the
-holder of the report publishes it. **The gap is safe because every verb that
-could run in it refuses or only reads**: a `load` refuses at the run lock, which the
-standing run holds; a `save-point` and a second `unload` refuse `OutOfOrder` at the
-harness while the leave is pending; `show` answers `Active`; and a `force-unload` joins
-the pending leave and turns it forced. A forced unload keeps the lock and the leave's
-bound below.
+turn. **The graceful unload waits for `Left` with no time bound of its own, holding the
+invocation lock throughout**, on the operator's ruling of 2026-10-07 on #1: it holds the
+lock from its first step to the publication and the marker, the drain included, so no
+other verb runs between its leave and its conclusion, and there is no gap to make safe.
+A `load`, a `save-point`, a `restore`, a `stop` and a second `unload` refuse
+`InvocationInFlight` at the lock, and `show` answers `InTransition`. **A `force-unload`
+that finds the lock held reaches the harness without it**: it dials the coordination
+socket and sends `JoinLeave`. Where the holder is a graceful unload, its leave is
+pending, the force joins it and turns it forced (`weaver-harness-Spec` section 6, heard
+in every wait of the leave), the harness's shared `Left` is the force's answer, and the
+force answers unloaded, publishing nothing and leaving the marker to the holder, which
+publishes and closes it. Where the harness answers anything else, `OutOfOrder` because
+no leave is pending and the holder is no unload (a `show` past its wait, a
+`save-point`), or does not answer inside the leave's sixty seconds, or cannot be dialed,
+the force waits for the lock with no bound of its own and then unloads alone, as below.
+**A harness that goes away answers nothing, and the holder escalates at once**: the
+graceful unload reads the end of its connection as an unanswered leave and goes to the
+escalation below, so nothing waits on a dead process; a force's own escalation runs only
+where the force holds the lock. A forced unload that holds the lock keeps the leave's
+bound below. **A reported save point already in the manifest is not published again**,
+a defence for an unload retried after its publication landed: the standing line counts
+as published and the marker closes as it would have.
 
 **An unload whose leave save point is not finished does not complete**, on the operator's rulings of 2026-10-06 on #1 (the A3.0 items)
 (item 6). The harness takes the leave's save point before it authors `unload`, per
@@ -749,8 +755,14 @@ recovery. **An observation unanswered inside its bound** refuses `show` with
 refuses `Unanswered` and inside `unload` it is the silence section 3 meets with a
 bounded leave. **No verb holds the invocation lock past a bound it states**, since the
 invocation ignores the catchable signals and a wait without end would leave every later
-verb refusing `InvocationInFlight` and `show` answering `InTransition`. The interior
-verbs of section 2 take the same rule by the recipe.
+verb refusing `InvocationInFlight` and `show` answering `InTransition`. **The graceful
+unload's drain is the one wait without a bound of its own**, the length of a turn and the
+wind-down's generation, on the operator's ruling of 2026-10-07 on #1, and `force-unload`
+reaches the harness past it without the lock. A harness that is gone ends the wait at
+once. A harness that is alive and answers neither the leave nor a join holds the
+graceful unload, and the lock with it, until it ends; a waiting `force-unload` acts once
+that invocation is ended. The interior verbs of section 2 take the same rule by the
+recipe.
 
 **This record's edge moves to the integration invariant.** The labelling pass
 placed it at `axiom-organ-and-submodule`, that being the nearest thing the apex

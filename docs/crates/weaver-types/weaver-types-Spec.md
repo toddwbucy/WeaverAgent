@@ -1269,6 +1269,7 @@ ruling.
 pub enum LifecycleDirective {
     Enter { payload: Box<EnterPayload> },
     Leave { cause: Cause, forced: bool },
+    JoinLeave { cause: Cause },
     SavePoint { cause: Cause },
     Stop { cause: Cause },
     Observe,
@@ -1318,7 +1319,10 @@ the leave's save point**, as of A3.2 on the operator's rulings of 2026-10-06 on 
 `SavePointReport` is what the harness reports of a finished save point, its digest, the
 finished name the member gave it, the position it covers and the trace position of the
 `save_point` event, so admin's manifest records the event's position without reading
-the record; `Left` carries none where the leave was forced or the binding diagnostic.
+the record; `Left` carries none where the save point could not be taken or the binding
+is diagnostic. **`JoinLeave` is a `force-unload` that does not hold the invocation
+lock**, on the operator's ruling of 2026-10-07 on #1: it joins a pending leave and is
+answered with its shared `Left`, or is refused `OutOfOrder` where none is pending.
 `RestoreNamed` is the `restore` verb's answer, the save point it judged and entered in
 the manifest. The three verbs mirror the command line as `SavePointVerb`, `Restore` and
 `ForceUnload`, the first named apart from the directive the worker receives.

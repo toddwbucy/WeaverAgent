@@ -201,11 +201,10 @@ pub fn take_invocation_lock(run_directory: &Path) -> Result<InvocationLock, Life
 }
 
 /// **Waits for the invocation lock exclusively, with no bound of its own**,
-/// per section 3 on the operator's ruling of 2026-10-07 on #1: the graceful
-/// unload's retake after `Left`. Whoever holds the lock meanwhile, a
-/// `force-unload`, a refused `save-point` or a `show`, is waited out, and
-/// the holder's kind is never read as what happened to the run: the verb
-/// judges that from the marker and the manifest once it holds the lock.
+/// per section 3 on the operator's ruling of 2026-10-07 on #1: the wait of a
+/// `force-unload` whose join the harness refused, the lock's holder being no
+/// unload (a `show`, a refused `save-point`) or the harness gone. Once it
+/// holds the lock the force unloads alone.
 pub fn wait_invocation_lock(run_directory: &Path) -> Result<InvocationLock, LifecycleRefusal> {
     let path = run_directory.join("admin.lock");
     let file = open_lock_file(&path)?;
@@ -535,6 +534,30 @@ pub(crate) fn seal_except(keep: &[RawFd]) -> std::io::Result<()> {
         low = kept + 1;
     }
     close_on_exec_range(low, u32::MAX)
+}
+
+/// **A test's forked child closes what it inherited**, every descriptor
+/// above standard error but `keep`, as its first act: a fork without an exec
+/// carries every descriptor the test process held at that instant, another
+/// test's run-lock description among them, so the child would hold that
+/// run's lock, and the escalation of that test, finding it among the
+/// holders, would end it. Async-signal-safe: raw `close_range` calls only.
+#[cfg(test)]
+pub(crate) fn close_inherited_except(keep: Option<RawFd>) {
+    let close = |first: u32, last: u32| {
+        if first <= last {
+            // SAFETY: close_range closes a range of this process's
+            // descriptors and is async-signal-safe.
+            unsafe { nix::libc::syscall(nix::libc::SYS_close_range, first, last, 0u32) };
+        }
+    };
+    match keep {
+        Some(kept) if kept >= 3 => {
+            close(3, kept as u32 - 1);
+            close(kept as u32 + 1, u32::MAX);
+        }
+        _ => close(3, u32::MAX),
+    }
 }
 
 fn close_on_exec_range(first: u32, last: u32) -> std::io::Result<()> {
@@ -1119,6 +1142,7 @@ mod tests {
         // SAFETY: the child only calls async-signal-safe functions.
         match unsafe { nix::unistd::fork() }.unwrap() {
             nix::unistd::ForkResult::Child => {
+                close_inherited_except(None);
                 // SAFETY: open and fcntl are async-signal-safe.
                 let code = unsafe {
                     let fd = nix::libc::open(c_path.as_ptr(), nix::libc::O_RDWR);
@@ -1155,6 +1179,7 @@ mod tests {
         // SAFETY: the child calls only async-signal-safe functions.
         match unsafe { nix::unistd::fork() }.unwrap() {
             nix::unistd::ForkResult::Child => {
+                close_inherited_except(Some(ready_write.as_raw_fd()));
                 // SAFETY: open, fcntl, write, nanosleep and _exit are
                 // async-signal-safe.
                 unsafe {

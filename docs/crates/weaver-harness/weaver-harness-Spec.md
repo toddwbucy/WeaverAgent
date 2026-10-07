@@ -2095,11 +2095,24 @@ crate's wait hearing the coordination listener**, so a `force-unload` reaches it
 a drain that a client which will not read its answer holds: the forced leave joins,
 the gate's channel is closed so it comes down at once, and the save point is still
 taken; admin's escalation stays the last resort for a harness that does not answer at
-all. Then the leave's save point; then `unload`. **A leave heard mid-turn is no longer refused**: it
+all. Then the leave's save point; then `unload`. **Every wait of the leave hears the
+coordination listener** (Codex on #94, round 17), on the operator's ruling of
+2026-10-07 on #1, through one helper: the drain's wait for `GateQuiesced`, the
+wind-down, the lower, the save point's four legs and the grants read-back poll the
+listener beside what they wait on, and the dials that land while this crate waits on
+what cannot be polled beside it, the trace's drain, the SPU's release and the reaps,
+are swept from the listener's backlog before the leave's dialers are answered. A
+`force-unload` heard in any of them joins the pending leave and turns it forced,
+whether it arrives as a forced `Leave` or as `JoinLeave`, admin's force that does not
+hold the invocation lock beside a graceful unload that does, and its dialer is
+answered with the leave's shared answer; a force heard during the drain ends that wait,
+and one heard during the save point turns a missed leg into a forced come-down rather
+than a refusal that leaves the run entered. `JoinLeave` with no leave pending is
+`OutOfOrder`. **A leave heard mid-turn is no longer refused**: it
 waits, with its dialer's connection taken out of the verb slot so the listener is heard
 again, and runs at the turn's close before any held request is served; a second
-unforced leave meanwhile is out of order, a forced one joins it, and `Observe` answers
-`Active`. **The drain has no time bound of its own** beyond the turn's limits;
+unforced leave meanwhile is out of order, a forced one or a `JoinLeave` joins it, and
+`Observe` answers `Active`. **The drain has no time bound of its own** beyond the turn's limits;
 `force-unload` is the exit. A leave refused at its save point leaves the run entered at
 rest with the gate lowered, which the retry or the force finds so. This crate sends the leave's
 `snapshot` ask after the last turn and before it authors `unload`, so the save point

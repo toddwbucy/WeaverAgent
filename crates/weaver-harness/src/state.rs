@@ -163,6 +163,17 @@ pub enum RestoredAnswer {
     Refused(String),
 }
 
+/// **A second descriptor a seam wait polls beside its channel**, and what to
+/// do when it is readable: the leave's waits hear the coordination listener
+/// through it, per `weaver-harness-Spec` section 6 on the operator's ruling of
+/// 2026-10-07 on #1, so a `force-unload` dialing while the member writes the
+/// leave's save point joins the leave there. Heard before the channel is
+/// read, and the wait's deadline is unchanged by it.
+pub(crate) struct Hearing<'a> {
+    pub(crate) fd: std::os::fd::BorrowedFd<'a>,
+    pub(crate) heard: &'a mut dyn FnMut(),
+}
+
 /// The harness's end of the serve direction: the ask, the bounded wait, and
 /// the parse. Held on the run, granted to the seat, mintable nowhere else.
 pub struct StateSeam {
@@ -241,21 +252,32 @@ impl StateSeam {
     /// never granted to a loop, and missing on the same three grounds as
     /// every other ask.
     pub(crate) fn ask_grants(&mut self) -> Option<Vec<String>> {
+        self.ask_grants_hearing(None)
+    }
+
+    /// The grants ask, hearing a second descriptor while it waits: the
+    /// leave's read-back, per [`Hearing`].
+    pub(crate) fn ask_grants_hearing(
+        &mut self,
+        hearing: Option<&mut Hearing<'_>>,
+    ) -> Option<Vec<String>> {
         if self.dead {
             return None;
         }
-        let answered = self.grants_exchange();
+        let answered = self.grants_exchange(hearing);
         if answered.is_none() {
             self.dead = true;
         }
         answered
     }
 
-    fn grants_exchange(&mut self) -> Option<Vec<String>> {
+    fn grants_exchange(&mut self, hearing: Option<&mut Hearing<'_>>) -> Option<Vec<String>> {
         if !self.send(b"{\"ask\":{\"grants\":{}}}\n") {
             return None;
         }
-        let line = self.await_line(ANSWER_BOUND_MS)?;
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_millis(ANSWER_BOUND_MS);
+        let line = self.await_line_until(deadline, hearing)?;
         parse_grants_answer(&line)
     }
 
@@ -331,7 +353,18 @@ impl StateSeam {
     /// the acknowledgement of a digest the member no longer holds misses
     /// the finished leg, the retry failing closed as a miss again. A write
     /// that does not send is the dead peer as every send failure is.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn ask_snapshot(&mut self) -> Result<SavePointTaken, weaver_types::SavePointLeg> {
+        self.ask_snapshot_hearing(None)
+    }
+
+    /// The snapshot's four legs, hearing a second descriptor through both
+    /// waits, per [`Hearing`]: the leave's save point hears the
+    /// coordination listener.
+    pub(crate) fn ask_snapshot_hearing(
+        &mut self,
+        mut hearing: Option<&mut Hearing<'_>>,
+    ) -> Result<SavePointTaken, weaver_types::SavePointLeg> {
         use weaver_types::SavePointLeg;
         if self.dead {
             return Err(SavePointLeg::MemberDead);
@@ -352,7 +385,12 @@ impl StateSeam {
         // all misses the leg as before.
         let deadline =
             std::time::Instant::now() + std::time::Duration::from_millis(ANSWER_BOUND_MS);
-        let Some(answered) = self.await_numbered(deadline, ordinal, parse_snapshot_answer) else {
+        let Some(answered) = self.await_numbered(
+            deadline,
+            ordinal,
+            parse_snapshot_answer,
+            hearing.as_deref_mut(),
+        ) else {
             self.unsettled = true;
             return Err(SavePointLeg::Answer);
         };
@@ -366,7 +404,8 @@ impl StateSeam {
         }
         let deadline =
             std::time::Instant::now() + std::time::Duration::from_millis(ANSWER_BOUND_MS);
-        let Some(finished) = self.await_numbered(deadline, ordinal, parse_finished_answer) else {
+        let Some(finished) = self.await_numbered(deadline, ordinal, parse_finished_answer, hearing)
+        else {
             self.unsettled = true;
             return Err(SavePointLeg::Finished);
         };
@@ -519,7 +558,7 @@ impl StateSeam {
     /// timeout.
     fn await_line(&mut self, bound_ms: u64) -> Option<String> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(bound_ms);
-        self.await_line_until(deadline)
+        self.await_line_until(deadline, None)
     }
 
     /// **Await the answer numbered `ordinal`** inside the deadline: a line
@@ -536,9 +575,10 @@ impl StateSeam {
         deadline: std::time::Instant,
         ordinal: u64,
         parse: fn(&str) -> Option<(u64, T)>,
+        mut hearing: Option<&mut Hearing<'_>>,
     ) -> Option<T> {
         loop {
-            let line = self.await_line_until(deadline)?;
+            let line = self.await_line_until(deadline, hearing.as_deref_mut())?;
             if let Some((carried, answer)) = parse(&line)
                 && carried == ordinal
             {
@@ -557,7 +597,11 @@ impl StateSeam {
         }
     }
 
-    fn await_line_until(&mut self, deadline: std::time::Instant) -> Option<String> {
+    fn await_line_until(
+        &mut self,
+        deadline: std::time::Instant,
+        mut hearing: Option<&mut Hearing<'_>>,
+    ) -> Option<String> {
         let mut buffer: Vec<u8> = std::mem::take(&mut self.residual);
         loop {
             if let Some(position) = buffer.iter().position(|&b| b == b'\n') {
@@ -573,15 +617,32 @@ impl StateSeam {
                 return None;
             }
             let wait = Self::poll_slice(remaining);
-            let mut fds = [nix::poll::PollFd::new(
+            let mut fds = vec![nix::poll::PollFd::new(
                 self.channel.as_fd(),
                 nix::poll::PollFlags::POLLIN,
             )];
+            if let Some(hearing) = hearing.as_deref() {
+                fds.push(nix::poll::PollFd::new(
+                    hearing.fd,
+                    nix::poll::PollFlags::POLLIN,
+                ));
+            }
             match nix::poll::poll(&mut fds, wait) {
                 Ok(0) => continue,
                 Ok(_) => {}
                 Err(nix::errno::Errno::EINTR) => continue,
                 Err(_) => return None,
+            }
+            let channel_ready = fds[0].revents().is_some_and(|r| !r.is_empty());
+            let heard = fds
+                .get(1)
+                .is_some_and(|fd| fd.revents().is_some_and(|r| !r.is_empty()));
+            drop(fds);
+            if heard && let Some(hearing) = hearing.as_deref_mut() {
+                (hearing.heard)();
+            }
+            if !channel_ready {
+                continue;
             }
             let mut chunk = [0u8; 65536];
             match self.channel.read(&mut chunk) {

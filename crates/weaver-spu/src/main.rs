@@ -1628,6 +1628,7 @@ fn dispatch(
             | LifecycleDirective::Release
             | LifecycleDirective::Enter { .. }
             | LifecycleDirective::Leave { .. }
+            | LifecycleDirective::JoinLeave { .. }
             | LifecycleDirective::Stop { .. }
             | LifecycleDirective::Observe
             | LifecycleDirective::Raise { .. }

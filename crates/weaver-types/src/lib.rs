@@ -32,6 +32,7 @@
 //!     match d {
 //!         LifecycleDirective::Enter { .. } => "enter",
 //!         LifecycleDirective::Leave { .. } => "leave",
+//!         LifecycleDirective::JoinLeave { .. } => "join_leave",
 //!         LifecycleDirective::Stop { .. } => "stop",
 //!         LifecycleDirective::Admit { .. } => "admit",
 //!         LifecycleDirective::Release => "release",

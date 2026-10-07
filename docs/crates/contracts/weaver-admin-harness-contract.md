@@ -184,7 +184,14 @@ point is not finished it answers `SavePointNotTaken` and stays entered, the run 
 save point is taken all the same and `Left` names it, and where it cannot be taken the
 harness leaves without one, `Left` naming none and the miss recorded. While an unforced
 leave is pending a second unforced one is refused `OutOfOrder` and a forced one joins
-it, both dialers answered at the close. The legs the harness names are the write, the answer, the finished answer
+it, both dialers answered at the close. **`JoinLeave`, opened by admin, is a
+`force-unload` that does not hold the invocation lock**, on the operator's ruling of
+2026-10-07 on #1, the lock being held by a graceful `unload` draining: it carries the
+cause, joins the pending leave and turns it forced, and is answered with the leave's
+shared `Left`. The harness hears it in every wait of the leave, the drain, the
+wind-down, the lower, the save point's legs and the unwind after them, so a leave a
+force has joined comes down without waiting on what remains. With no leave pending it is
+refused `OutOfOrder`, which tells admin the lock's holder is no unload. The legs the harness names are the write, the answer, the finished answer
 and the member dead; admin names a fifth of its own, `published`, at the unload, where
 the leave's save point was reported and its publication did not land, per
 `weaver-admin-operator-contract` section 3. A `Left` with no save point is a forced leave whose save point could not be taken, or a
@@ -232,8 +239,8 @@ answer's content rather than as parties to this seam.
 
 **Leave the run.** Opened by admin. Admin directs the harness to leave, supplying the
 cause as the enter does, which the harness records on its closing event. The harness
-stops Gate first where one stands, refuses while a turn is in flight, authors
-its closing event, `unload` on a serving binding and the diagnostic
+drains and stops Gate first where one stands, a turn in flight running to its close
+as above, authors its closing event, `unload` on a serving binding and the diagnostic
 mechanism's counterpart where that vocabulary is elected,
 drains the writer's queue to the stream, and releases the SPU. It answers left, or
 it refuses, and a refusal names where the sequence stopped. **After answering left the
