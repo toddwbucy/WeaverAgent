@@ -278,6 +278,16 @@ for agent in $AGENTS; do
   territory=$(territory_of "$agent") || exit 1
   [ -d "$territory" ] && [ ! -L "$territory" ] || die "$agent: its territory $territory does not stand, so its declaration cannot move there (deploy/REDEPLOY.md section 8, step 7)"
   [ ! -e "$territory/agent.toml" ] || die "$agent: its territory $territory already holds an agent.toml while its root still names $old; remove the one that is wrong, then rerun (deploy/REDEPLOY.md section 8, step 7)"
+  # **Every entry the move would take is a regular file and not a link**,
+  # judged here before anything moves, in the plan as in the install (Codex
+  # on #94, round 13): chmod has no no-dereference form, so a link must never
+  # reach the root chmod the move and the rollback apply, which would set the
+  # mode of whatever file it names. The link is asked of first, since a
+  # dangling one is a link that nothing else sees.
+  for f in agent.toml system-prompt.md admin.log worker.log; do
+    [ ! -L "$old/$f" ] || die "$agent: $old/$f is a link, which the migration does not move; replace it with the file itself, then rerun (deploy/REDEPLOY.md section 8, step 7)"
+    [ ! -e "$old/$f" ] || [ -f "$old/$f" ] || die "$agent: $old/$f is not a regular file, which the migration does not move; remove it, then rerun (deploy/REDEPLOY.md section 8, step 7)"
+  done
   LAYOUT+=("$agent|$old|$territory")
 done
 
@@ -729,10 +739,12 @@ restore() {
         # **Given back as it was**: the owner and mode the move found, so the
         # operator reads and edits it as before the install.
         read -r owner fmode <<< "${MOVED_FILES["$agent|$f"]:-}"
-        # chown never follows a link (-h): a name under either directory that
-        # became a link between the move and the chown changes no target.
+        # chown never follows a link (-h), and chmod, which has no such form,
+        # is given the name only once it is asked, through privilege, to be no
+        # link: a name under either directory that became a link between the
+        # move and here changes no target.
         [ -n "$owner" ] && [ -n "$fmode" ] \
-          && sudo chown -h "$owner" -- "$old/$f" && sudo chmod "$fmode" -- "$old/$f" \
+          && sudo chown -h "$owner" -- "$old/$f" && sudo test ! -L "$old/$f" && sudo chmod "$fmode" -- "$old/$f" \
           || { printf '  FAILED to restore the owner and mode of %s\n' "$old/$f" >&2; failed=1; }
       done
       # **The territory reads as it did**: its group and mode as the move
@@ -861,15 +873,21 @@ migrate_layout() {
       [ -n "$owner" ] && [ -n "$fmode" ] || rollback "$agent: cannot read the owner and mode of $old/$f"
       MOVED_FILES["$agent|$f"]="$owner $fmode"
     done
+    # **The judgment held at the step**: the entry is asked again, through
+    # privilege, to be no link immediately before the chmod, since chmod has
+    # no no-dereference form and a link made between the preflight and here
+    # would have root set its target's mode.
     for f in agent.toml system-prompt.md; do
       [ -e "$old/$f" ] || continue
-      sudo mv -T -- "$old/$f" "$territory/$f" && sudo chown -h root:root "$territory/$f" && sudo chmod 0644 "$territory/$f" \
-        || rollback "$agent: $old/$f did not move into the territory"
+      sudo mv -T -- "$old/$f" "$territory/$f" && sudo chown -h root:root "$territory/$f" \
+        && sudo test ! -L "$territory/$f" && sudo chmod 0644 "$territory/$f" \
+        || rollback "$agent: $old/$f did not move into the territory as a regular file"
     done
     for f in admin.log worker.log; do
       [ -e "$old/$f" ] || continue
-      sudo mv -T -- "$old/$f" "$territory/$f" && sudo chown -h "root:weaver-$agent-admin" "$territory/$f" && sudo chmod 0640 "$territory/$f" \
-        || rollback "$agent: $old/$f did not move into the territory"
+      sudo mv -T -- "$old/$f" "$territory/$f" && sudo chown -h "root:weaver-$agent-admin" "$territory/$f" \
+        && sudo test ! -L "$territory/$f" && sudo chmod 0640 "$territory/$f" \
+        || rollback "$agent: $old/$f did not move into the territory as a regular file"
     done
     sudo usermod -aG "weaver-$agent-admin" "weaver-$agent-state" \
       && sudo usermod -aG "weaver-$agent-admin" "$OPERATOR_NAME" \

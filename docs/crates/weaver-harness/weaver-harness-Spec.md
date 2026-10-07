@@ -2068,7 +2068,11 @@ does not complete without it**, on the operator's rulings of 2026-10-06 on #1 (A
 items 4 and 6), which close the open item that stood here. **The gate is lowered first**
 (Codex on #94, round 12): this crate lowers the gate, then sends the leave's `snapshot`
 ask, then authors `unload`, so no turn is admitted while the save point is taken and
-none the lower would drop ever crosses the at-rest boundary; a leave refused at its save
+none the lower would drop ever crosses the at-rest boundary; and traffic the gate has
+sent that this loop has not yet taken is activity (Codex on #94, round 13), the leave
+refusing `ActivityNotAtRest` as for a turn in flight rather than lowering a gate whose
+admitted frame would be dropped untraced and unanswered, the loop taking the frame next
+and the operator retrying; a leave refused at its save
 point leaves the run entered at rest with the gate lowered, which the retry or the force
 finds so. This crate sends the leave's
 `snapshot` ask after the last turn and before it authors `unload`, so the save point

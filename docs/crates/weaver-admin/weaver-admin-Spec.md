@@ -609,7 +609,9 @@ publishing the member's finished save points per section 6 once the member has s
 the leave's own among them, which the harness's `Left` answer names, and answer
 provisioned-and-unloaded **only once the lock is free**. The publication adds no step to
 the three, being the second step's tail. A refusal on leave, `ActivityNotAtRest` above
-all, returns to the operator unchanged and answers nothing further.
+all, returns to the operator unchanged and answers nothing further; `ActivityNotAtRest`
+covers a frame the gate admitted that the harness's loop has not yet taken, per
+`weaver-harness-Spec` section 6, so an unload that meets one is retried after the turn.
 
 **An unload whose leave save point is not finished does not complete**, on the operator's rulings of 2026-10-06 on #1 (the A3.0 items)
 (item 6). The harness takes the leave's save point before it authors `unload`, per

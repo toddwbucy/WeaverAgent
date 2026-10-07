@@ -1239,6 +1239,22 @@ impl Harness {
                     self.refuse(connection, &exchange, LifecycleRefusal::ActivityNotAtRest)?;
                     return Ok(None);
                 }
+                // **Traffic the gate has sent and this loop has not taken is
+                // activity** (Codex on #94, round 13): the wait serves the
+                // admin connection ahead of the gate, so a frame the gate
+                // admitted can stand queued when the leave arrives with no
+                // turn in flight yet, and the lower's exchange would read it
+                // as a malformed answer and drop it untraced and unanswered.
+                // The leave refuses `ActivityNotAtRest` instead, the loop
+                // takes the frame next, and the operator retries.
+                if run
+                    .gate
+                    .as_ref()
+                    .is_some_and(|gate| channel_has_pending(&gate.channel))
+                {
+                    self.refuse(connection, &exchange, LifecycleRefusal::ActivityNotAtRest)?;
+                    return Ok(None);
+                }
                 // **The gate is lowered before the leave's save point is
                 // taken** (Codex on #94, round 12), per Spec section 6: a
                 // turn the gate admitted while the snapshot ran would be
@@ -2207,6 +2223,23 @@ fn leave(
 ) -> Result<(), LifecycleRefusal> {
     let lowered = lower_gate(run);
     leave_after(run, cause, forced, lowered)
+}
+
+/// Whether an organ channel holds traffic this loop has not taken: a poll
+/// with no wait, readable or hung up both counting, since either is a
+/// message the next recv answers.
+fn channel_has_pending(channel: &OrganChannel) -> bool {
+    use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+    use std::os::fd::AsFd;
+    let mut fds = [PollFd::new(channel.as_fd(), PollFlags::POLLIN)];
+    match poll(&mut fds, PollTimeout::ZERO) {
+        Ok(0) => false,
+        Ok(_) => fds[0]
+            .revents()
+            .unwrap_or(PollFlags::empty())
+            .intersects(PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR),
+        Err(_) => false,
+    }
 }
 
 /// **Lower the gate**, the leave's first step, taken on its own before the
@@ -3352,6 +3385,9 @@ mod tests {
         /// The `SavePoint` directive against the entered run, then the
         /// fixture's own unwind: the answer captured is the save point's.
         SavePoint,
+        /// An unforced `Leave` with a frame the gate stand-in queued before
+        /// it, untaken by the loop (Codex on #94, round 13).
+        QueuedFrame,
     }
 
     /// The enter against a member stub, left as `mode` says. Answers the
@@ -3520,7 +3556,7 @@ mod tests {
                         let _ = leave(&mut run, None, false);
                         drop(run);
                     }
-                    LeaveMode::Directive { .. } | LeaveMode::SavePoint => {
+                    LeaveMode::Directive { .. } | LeaveMode::SavePoint | LeaveMode::QueuedFrame => {
                         // The fixture's SPU never admitted, its exec having
                         // failed: its dead arm is dropped and reaped here so
                         // the leave's answer is the save point's and not the
@@ -3543,8 +3579,25 @@ mod tests {
                             last_word: crate::spawn::LastWord::quiet(),
                         });
                         let gate_order = order.clone();
+                        let queue_frame = matches!(mode, LeaveMode::QueuedFrame);
                         gate_stand_in = Some(std::thread::spawn(move || {
                             let channel = gate_far.into_channel();
+                            if queue_frame {
+                                // Admitted by the gate and sent before the
+                                // leave arrives, untaken by the loop.
+                                channel
+                                    .send(&OrganEnvelope {
+                                        exchange: ExchangeId {
+                                            opener: Opener::Gate,
+                                            ordinal: 1,
+                                        },
+                                        position: Position::Open,
+                                        payload: weaver_types::Payload::Frame(
+                                            weaver_types::TurnFrame::carry(b"{\"text\":\"late\"}"),
+                                        ),
+                                    })
+                                    .expect("the frame queues");
+                            }
                             if let Ok(envelope) = channel.recv() {
                                 assert!(matches!(
                                     envelope.payload,
@@ -3568,10 +3621,28 @@ mod tests {
                         harness.state = ChannelState::Entered(run);
                         let (connection, admin_peer) = OrganChannel::pair().expect("leave pair");
                         let admin_peer = admin_peer.into_channel();
+                        if queue_frame {
+                            // The frame must stand in the channel before the
+                            // leave is dispatched: the stand-in sends it
+                            // first thing, and the wait here is for its
+                            // arrival, not a sleep for luck.
+                            let until =
+                                std::time::Instant::now() + std::time::Duration::from_secs(5);
+                            while std::time::Instant::now() < until
+                                && !matches!(&harness.state, ChannelState::Entered(run)
+                                    if run.gate.as_ref().is_some_and(|gate| channel_has_pending(&gate.channel)))
+                            {
+                                std::thread::sleep(std::time::Duration::from_millis(5));
+                            }
+                        }
                         let directive = match mode {
                             LeaveMode::Directive { forced, .. } => LifecycleDirective::Leave {
                                 cause: weaver_types::Cause { uid: 1000 },
                                 forced,
+                            },
+                            LeaveMode::QueuedFrame => LifecycleDirective::Leave {
+                                cause: weaver_types::Cause { uid: 1000 },
+                                forced: false,
                             },
                             _ => LifecycleDirective::SavePoint {
                                 cause: weaver_types::Cause { uid: 1000 },
@@ -3969,6 +4040,37 @@ mod tests {
         assert!(
             !events.iter().any(|e| e["kind"] == "save_point"),
             "no save point on a forced leave"
+        );
+    }
+
+    /// **A leave with a frame queued at the gate refuses `ActivityNotAtRest`**,
+    /// per `weaver-harness-Spec` section 6 (Codex on #94, round 13): the gate
+    /// admitted a frame the loop has not taken when the leave arrives, so the
+    /// leave neither lowers the gate nor takes the save point, the run stays
+    /// entered, and the frame is the loop's next. Perturbation: drop the
+    /// pending look and the lower reads the frame as a malformed answer, the
+    /// leave answering that refusal instead.
+    #[test]
+    fn a_leave_with_a_frame_queued_at_the_gate_refuses_not_at_rest() {
+        let (events, _, read, answer, still_entered) =
+            enter_against_a_member_leaving(None, false, EMPTY_RESTORED, LeaveMode::QueuedFrame);
+        assert_eq!(
+            answer,
+            Some(weaver_types::Payload::Refusal(
+                LifecycleRefusal::ActivityNotAtRest
+            )),
+            "{read:?}"
+        );
+        assert!(still_entered, "the run stays entered for the frame");
+        assert!(
+            !read
+                .iter()
+                .any(|line| line.starts_with(r#"{"ask":{"snapshot""#)),
+            "no save point is taken over a queued frame: {read:?}"
+        );
+        assert!(
+            !events.iter().any(|e| e["kind"] == "save_point"),
+            "nothing recorded"
         );
     }
 

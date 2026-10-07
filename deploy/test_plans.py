@@ -1823,6 +1823,53 @@ esac
             self.assertIn(["sudo", "chown", "-h", "12345:12345", "--", str(old_dir / name)], calls[after:])
             self.assertIn(["sudo", "chmod", "600", "--", str(old_dir / name)], calls[after:])
 
+    def test_the_migration_refuses_a_link_in_the_old_directory(self):
+        # Codex on #94, round 13: chmod has no no-dereference form, so a link
+        # among the four entries would have root set its target's mode at the
+        # move or the rollback. Every entry is judged a regular file and no
+        # link before anything moves, in the plan as in the install, and the
+        # target keeps its mode. Perturbation: drop the link judgment from the
+        # preflight and the plan names the move.
+        old_root = self.config / "old"
+        old_root.mkdir()
+        (old_root / "worker-binary").write_text(str(self.root / "installed" / "pyworker"))
+        old_dir = self.operator_home / ".weaveragent" / "old"
+        old_dir.mkdir(parents=True)
+        (old_dir / "agent.toml").write_text("[state-store]\nengine = \"none\"\n")
+        secret = self.root / "elsewhere-secret"
+        secret.write_text("not the draft\n")
+        secret.chmod(0o600)
+        (old_dir / "system-prompt.md").symlink_to(secret)
+        (old_root / "declaration-directory").write_text(str(old_dir) + "\n")
+        territory = self.root / "agents" / "weaver-old"
+        territory.mkdir()
+        (self.root / "installed").mkdir(exist_ok=True)
+        for mode in ((), ("--install",)):
+            with self.subTest(mode=mode):
+                self.log.unlink(missing_ok=True)
+                self.env["ALLOW_APPLY_CHECKS"] = "1"
+                result = self.run_script("update-stack.sh", *mode)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(str(old_dir / "system-prompt.md") + " is a link", result.stderr)
+                self.assertNotIn("layout: agent.toml", result.stdout)
+                self.assertFalse([c for c in self.calls() if c[0] in ("cargo", "sudo")], self.calls())
+                self.assertTrue((old_dir / "system-prompt.md").is_symlink())
+                self.assertTrue((old_dir / "agent.toml").exists())
+                self.assertFalse((territory / "agent.toml").exists())
+                self.assertEqual(secret.stat().st_mode & 0o777, 0o600, "the target keeps its mode")
+        # A regular file that is not one (a directory under the name) refuses
+        # the same way, and a dangling link is a link.
+        (old_dir / "system-prompt.md").unlink()
+        (old_dir / "system-prompt.md").mkdir()
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(str(old_dir / "system-prompt.md") + " is not a regular file", result.stderr)
+        (old_dir / "system-prompt.md").rmdir()
+        (old_dir / "worker.log").symlink_to(self.root / "absent")
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(str(old_dir / "worker.log") + " is a link", result.stderr)
+
     def test_stack_refuses_an_unprovided_engine_and_names_the_migration(self):
         # A pre-#85 declaration electing postgres refuses before the build,
         # as an engine this build does not provide, and points to the
