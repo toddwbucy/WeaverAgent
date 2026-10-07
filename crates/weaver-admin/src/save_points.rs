@@ -13,7 +13,7 @@
 //! runs, it answers on the enter's `restored` ask.
 
 use std::io::{Read, Write};
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
 use sha2::Digest;
@@ -31,17 +31,54 @@ pub const SUFFIX: &str = ".save-point";
 /// directory the operator's.
 pub const SAVE_POINT_BOUND: u64 = 1024 * 1024 * 1024;
 
+/// **Open a directory once, to be held as a descriptor**, per
+/// `weaver-admin-Spec` section 9: the path is used here and nowhere after,
+/// a link at it refused, so every step that follows reaches the directory
+/// as it was judged and never what the path resolves to later.
+pub fn open_directory(path: &Path) -> std::io::Result<OwnedFd> {
+    Ok(nix::fcntl::open(
+        path,
+        nix::fcntl::OFlag::O_RDONLY
+            | nix::fcntl::OFlag::O_DIRECTORY
+            | nix::fcntl::OFlag::O_NOFOLLOW
+            | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::empty(),
+    )?)
+}
+
 /// Sync a directory's entries, so a rename or a creation in it is durable
 /// before anything that depends on it is written, per `weaver-admin-Spec`
 /// section 6.
-fn sync_directory(directory: &Path) -> std::io::Result<()> {
-    let dir = nix::fcntl::open(
-        directory,
-        nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_DIRECTORY | nix::fcntl::OFlag::O_CLOEXEC,
-        nix::sys::stat::Mode::empty(),
-    )?;
-    nix::unistd::fsync(dir.as_fd())?;
+fn sync_directory(directory: BorrowedFd<'_>) -> std::io::Result<()> {
+    nix::unistd::fsync(directory)?;
     Ok(())
+}
+
+/// Sync a directory named by path: the config root's, this crate's own
+/// root-owned directory where the marker lives, per Spec section 4, which
+/// no other principal can swap.
+fn sync_path(directory: &Path) -> std::io::Result<()> {
+    sync_directory(open_directory(directory)?.as_fd())
+}
+
+/// The names the directory holds, read through its descriptor.
+fn list_directory(directory: BorrowedFd<'_>) -> Vec<String> {
+    let Ok(duplicate) = nix::unistd::dup(directory) else {
+        return Vec::new();
+    };
+    let Ok(mut dir) = nix::dir::Dir::from_fd(duplicate) else {
+        return Vec::new();
+    };
+    dir.iter()
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str().ok().map(str::to_string))
+        .filter(|name| name != "." && name != "..")
+        .collect()
+}
+
+/// Whether an entry of the name stands in the directory, a link included.
+fn entry_stands(directory: BorrowedFd<'_>, name: &str) -> bool {
+    nix::sys::stat::fstatat(directory, name, nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW).is_ok()
 }
 
 /// Who the manifest belongs to: root in production, passed as the expected
@@ -63,10 +100,10 @@ pub const ROOT: Owner = Owner { uid: 0, gid: 0 };
 /// operator owns refuses by uid, a second link refuses by count, and a link
 /// never opens, `O_NOFOLLOW` refusing it before this is reached; what is
 /// found is named.
-fn judge_manifest(file: &std::fs::File, path: &Path, owner: Owner) -> Result<(), LifecycleRefusal> {
+fn judge_manifest(file: &std::fs::File, owner: Owner) -> Result<(), LifecycleRefusal> {
     use std::os::unix::fs::MetadataExt;
     let refuse = |what: &str| {
-        diag!("weaver-admin: the manifest {} {what}", path.display());
+        diag!("weaver-admin: the manifest {MANIFEST} {what}");
         LifecycleRefusal::BoundaryUnverified
     };
     let metadata = file.metadata().map_err(|_| refuse("does not stat"))?;
@@ -105,34 +142,27 @@ fn judge_manifest(file: &std::fs::File, path: &Path, owner: Owner) -> Result<(),
 /// Open the manifest for reading through `O_NOFOLLOW`, judged: `None` where
 /// no entry stands.
 fn open_manifest(
-    directory: &Path,
+    directory: BorrowedFd<'_>,
     owner: Owner,
 ) -> Result<Option<std::fs::File>, LifecycleRefusal> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let path = directory.join(MANIFEST);
-    let file = match std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC)
-        .open(&path)
-    {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) if e.raw_os_error() == Some(nix::libc::ELOOP) => {
-            diag!(
-                "weaver-admin: the manifest {} is a link, which is never the manifest",
-                path.display()
-            );
+    let file = match nix::fcntl::openat(
+        directory,
+        MANIFEST,
+        nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_NOFOLLOW | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::empty(),
+    ) {
+        Ok(fd) => std::fs::File::from(fd),
+        Err(nix::errno::Errno::ENOENT) => return Ok(None),
+        Err(nix::errno::Errno::ELOOP) => {
+            diag!("weaver-admin: the manifest {MANIFEST} is a link, which is never the manifest");
             return Err(LifecycleRefusal::BoundaryUnverified);
         }
         Err(e) => {
-            diag!(
-                "weaver-admin: the manifest {} does not open: {e}",
-                path.display()
-            );
+            diag!("weaver-admin: the manifest {MANIFEST} does not open: {e}");
             return Err(LifecycleRefusal::BoundaryUnverified);
         }
     };
-    judge_manifest(&file, &path, owner)?;
+    judge_manifest(&file, owner)?;
     Ok(Some(file))
 }
 
@@ -403,19 +433,15 @@ fn parse_line(text: &str) -> Option<ManifestLine> {
 /// refuses `BoundaryUnverified` naming it, since what is loadable can then
 /// not be said.
 pub fn read_manifest(
-    directory: &Path,
+    directory: BorrowedFd<'_>,
     owner: Owner,
 ) -> Result<Vec<ManifestLine>, LifecycleRefusal> {
-    let path = directory.join(MANIFEST);
     let Some(mut file) = open_manifest(directory, owner)? else {
         return Ok(Vec::new());
     };
     let mut text = String::new();
     if let Err(e) = file.read_to_string(&mut text) {
-        diag!(
-            "weaver-admin: the manifest {} does not read: {e}",
-            path.display()
-        );
+        diag!("weaver-admin: the manifest {MANIFEST} does not read: {e}");
         return Err(LifecycleRefusal::BoundaryUnverified);
     }
     // **A last line without its newline is a torn append**, left by a write
@@ -427,18 +453,12 @@ pub fn read_manifest(
         Some(end) => &text[..=end],
         None if text.is_empty() => "",
         None => {
-            diag!(
-                "weaver-admin: the manifest {} ends in a torn line, which is dropped",
-                path.display()
-            );
+            diag!("weaver-admin: the manifest {MANIFEST} ends in a torn line, which is dropped");
             ""
         }
     };
     if whole.len() < text.len() && !whole.is_empty() {
-        diag!(
-            "weaver-admin: the manifest {} ends in a torn line, which is dropped",
-            path.display()
-        );
+        diag!("weaver-admin: the manifest {MANIFEST} ends in a torn line, which is dropped");
     }
     let mut lines = Vec::new();
     for (at, line) in whole.lines().enumerate() {
@@ -447,8 +467,7 @@ pub fn read_manifest(
         }
         let Some(parsed) = parse_line(line) else {
             diag!(
-                "weaver-admin: the manifest {} does not parse at line {}",
-                path.display(),
+                "weaver-admin: the manifest {MANIFEST} does not parse at line {}",
                 at + 1
             );
             return Err(LifecycleRefusal::BoundaryUnverified);
@@ -467,65 +486,59 @@ pub fn next_ordinal(lines: &[ManifestLine]) -> u64 {
 /// **Append one line**, the manifest root-owned and mode `0644`, opened for
 /// appending alone and never rewritten.
 fn append_line(
-    directory: &Path,
+    directory: BorrowedFd<'_>,
     owner: Owner,
     line: &ManifestLine,
 ) -> Result<(), LifecycleRefusal> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let path = directory.join(MANIFEST);
     let refuse = |what: String| {
-        diag!("weaver-admin: the manifest {} {what}", path.display());
+        diag!("weaver-admin: the manifest {MANIFEST} {what}");
         LifecycleRefusal::BoundaryUnverified
     };
-    let absent = matches!(
-        std::fs::symlink_metadata(&path),
-        Err(ref e) if e.kind() == std::io::ErrorKind::NotFound
-    );
-    let mut file = if absent {
+    let mut file = if !entry_stands(directory, MANIFEST) {
         // **Created exclusively, mode 0644, and the directory synced**, so a
         // manifest exists only where this crate made it and the entry is
-        // durable before the line is.
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .mode(0o644)
-            .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC)
-            .open(&path)
-            .map_err(|e| refuse(format!("does not create: {e}")))?;
+        // durable before the line is; through the directory's descriptor,
+        // per Spec section 9, so it is made in the directory judged.
+        let fd = nix::fcntl::openat(
+            directory,
+            MANIFEST,
+            nix::fcntl::OFlag::O_RDWR
+                | nix::fcntl::OFlag::O_CREAT
+                | nix::fcntl::OFlag::O_EXCL
+                | nix::fcntl::OFlag::O_NOFOLLOW
+                | nix::fcntl::OFlag::O_CLOEXEC,
+            nix::sys::stat::Mode::from_bits_truncate(0o644),
+        )
+        .map_err(|e| refuse(format!("does not create: {e}")))?;
+        let file = std::fs::File::from(fd);
         nix::sys::stat::fchmod(
             file.as_fd(),
             nix::sys::stat::Mode::from_bits_truncate(0o644),
         )
         .map_err(|e| refuse(format!("does not take mode 0644: {e}")))?;
-        let dir = nix::fcntl::open(
-            directory,
-            nix::fcntl::OFlag::O_RDONLY
-                | nix::fcntl::OFlag::O_DIRECTORY
-                | nix::fcntl::OFlag::O_CLOEXEC,
-            nix::sys::stat::Mode::empty(),
-        )
-        .map_err(|e| refuse(format!("'s directory does not open to sync: {e}")))?;
-        nix::unistd::fsync(dir.as_fd())
+        nix::unistd::fsync(directory)
             .map_err(|e| refuse(format!("'s directory does not sync: {e}")))?;
         file
     } else {
         // Read as well as append: the tail is read back and a torn one
         // truncated before the line goes, and a failed write is rolled back.
-        std::fs::OpenOptions::new()
-            .read(true)
-            .append(true)
-            .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC)
-            .open(&path)
-            .map_err(|e| {
-                if e.raw_os_error() == Some(nix::libc::ELOOP) {
-                    refuse("is a link, which is never the manifest".to_string())
-                } else {
-                    refuse(format!("does not open for appending: {e}"))
-                }
-            })?
+        match nix::fcntl::openat(
+            directory,
+            MANIFEST,
+            nix::fcntl::OFlag::O_RDWR
+                | nix::fcntl::OFlag::O_APPEND
+                | nix::fcntl::OFlag::O_NOFOLLOW
+                | nix::fcntl::OFlag::O_CLOEXEC,
+            nix::sys::stat::Mode::empty(),
+        ) {
+            Ok(fd) => std::fs::File::from(fd),
+            Err(nix::errno::Errno::ELOOP) => {
+                return Err(refuse("is a link, which is never the manifest".to_string()));
+            }
+            Err(e) => return Err(refuse(format!("does not open for appending: {e}"))),
+        }
     };
-    judge_manifest(&file, &path, owner)?;
+    judge_manifest(&file, owner)?;
     // **A torn tail is truncated before the line goes**, and **a write that
     // fails part way is rolled back to the length it found**, so the
     // manifest holds whole lines or nothing of a failed one.
@@ -646,12 +659,11 @@ fn read_room(room: &Path, member_uid: u32) -> Option<(OwnedFd, Vec<RoomEntry>)> 
 pub fn publish(
     room: &Path,
     member_uid: u32,
-    directory: &Path,
+    directory: BorrowedFd<'_>,
     operator: (u32, u32),
     owner: Owner,
     reports: &[(SavePointReport, Arrival)],
 ) -> Result<Vec<ManifestLine>, LifecycleRefusal> {
-    use std::os::unix::fs::OpenOptionsExt;
     let mut lines = read_manifest(directory, owner)?;
     let mut appended = Vec::new();
     let Some((room_dir, mut entries)) = read_room(room, member_uid) else {
@@ -706,15 +718,33 @@ pub fn publish(
             remove_from_room(&entry.name);
             continue;
         }
-        let temporary = directory.join(format!(".publishing-{}", entry.judged.digest));
-        let _ = std::fs::remove_file(&temporary);
+        // **Every step goes through the directory's descriptor** (Codex on
+        // #94, round 7), per Spec section 9: the temporary is made, renamed
+        // and the directory synced against the descriptor opened at the
+        // judgment, so a directory the operator swaps under the path between
+        // steps is not followed and a link put at the path has this root
+        // process create nothing where it points.
+        let temporary = format!(".publishing-{}", entry.judged.digest);
+        let remove_temporary = || {
+            let _ = nix::unistd::unlinkat(
+                directory,
+                temporary.as_str(),
+                nix::unistd::UnlinkatFlags::NoRemoveDir,
+            );
+        };
+        remove_temporary();
         let written = (|| -> std::io::Result<()> {
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .custom_flags(nix::libc::O_CLOEXEC)
-                .open(&temporary)?;
+            let fd = nix::fcntl::openat(
+                directory,
+                temporary.as_str(),
+                nix::fcntl::OFlag::O_WRONLY
+                    | nix::fcntl::OFlag::O_CREAT
+                    | nix::fcntl::OFlag::O_EXCL
+                    | nix::fcntl::OFlag::O_NOFOLLOW
+                    | nix::fcntl::OFlag::O_CLOEXEC,
+                nix::sys::stat::Mode::from_bits_truncate(0o600),
+            )?;
+            let mut file = std::fs::File::from(fd);
             file.write_all(&entry.bytes)?;
             nix::unistd::fchown(
                 file.as_fd(),
@@ -734,12 +764,11 @@ pub fn publish(
             // under the published name, a link among them, refuses the
             // rename rather than being replaced or followed, the temporary
             // then removed and the room's copy left for the next verb.
-            let target = directory.join(&name);
             match nix::fcntl::renameat2(
-                nix::fcntl::AT_FDCWD,
-                &temporary,
-                nix::fcntl::AT_FDCWD,
-                &target,
+                directory,
+                temporary.as_str(),
+                directory,
+                name.as_str(),
                 nix::fcntl::RenameFlags::RENAME_NOREPLACE,
             ) {
                 // **The directory is synced before the line names the entry**,
@@ -753,7 +782,7 @@ pub fn publish(
                 // the directory as a load judges one, so an entry of other
                 // bytes refuses the rename and is left in place, named.
                 Err(nix::errno::Errno::EEXIST) => {
-                    let _ = std::fs::remove_file(&temporary);
+                    remove_temporary();
                     match open_judged(directory, &name, operator.0) {
                         Ok(Some((_, standing))) if standing.digest == entry.judged.digest => Ok(()),
                         Ok(Some(_)) => Err(std::io::Error::other(
@@ -775,7 +804,7 @@ pub fn publish(
                 "weaver-admin: the room's {} did not publish ({e}) and is left in place",
                 entry.name
             );
-            let _ = std::fs::remove_file(&temporary);
+            remove_temporary();
             continue;
         }
         let line = ManifestLine {
@@ -813,19 +842,13 @@ pub struct Selected {
 /// size bound, whose bytes judge sound and whose published name is the one
 /// its bytes compute. `Ok(None)` is no entry. The file is answered rewound.
 fn open_judged(
-    directory: &Path,
+    directory: BorrowedFd<'_>,
     name: &str,
     operator: u32,
 ) -> Result<Option<(std::fs::File, Judged)>, String> {
     use std::os::unix::fs::MetadataExt;
-    let dir = nix::fcntl::open(
-        directory,
-        nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_DIRECTORY | nix::fcntl::OFlag::O_CLOEXEC,
-        nix::sys::stat::Mode::empty(),
-    )
-    .map_err(|e| format!("the declaration directory does not open: {e}"))?;
     let fd = match nix::fcntl::openat(
-        dir.as_fd(),
+        directory,
         name,
         nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_NOFOLLOW | nix::fcntl::OFlag::O_CLOEXEC,
         nix::sys::stat::Mode::empty(),
@@ -868,7 +891,7 @@ fn open_judged(
 /// Open and judge the file a manifest line names, per `weaver-admin-Spec`
 /// section 4: `open_judged`, and the bytes digest to the line's digest.
 fn open_published(
-    directory: &Path,
+    directory: BorrowedFd<'_>,
     line: &ManifestLine,
     operator: u32,
 ) -> Result<Option<OwnedFd>, String> {
@@ -888,7 +911,7 @@ fn open_published(
 /// gone or differs being passed over. `Ok(None)` is no save point: an empty
 /// manifest with nothing named.
 pub fn select(
-    directory: &Path,
+    directory: BorrowedFd<'_>,
     operator: u32,
     restore: Option<&str>,
     owner: Owner,
@@ -898,21 +921,13 @@ pub fn select(
     // section 4: what is loadable cannot be said, and the files are not
     // loadable without it; no manifest and no file is the first load.
     if lines.is_empty()
-        && !directory.join(MANIFEST).exists()
-        && std::fs::read_dir(directory)
-            .map(|entries| {
-                entries.flatten().any(|entry| {
-                    entry
-                        .file_name()
-                        .to_str()
-                        .is_some_and(|name| name.ends_with(SUFFIX))
-                })
-            })
-            .unwrap_or(false)
+        && !entry_stands(directory, MANIFEST)
+        && list_directory(directory)
+            .iter()
+            .any(|name| name.ends_with(SUFFIX))
     {
         diag!(
-            "weaver-admin: {} holds save points and no {MANIFEST}; a file the manifest does not name is not loadable, and the restore verb is what names one",
-            directory.display()
+            "weaver-admin: the declaration directory holds save points and no {MANIFEST}; a file the manifest does not name is not loadable, and the restore verb is what names one"
         );
         return Err(LifecycleRefusal::BoundaryUnverified);
     }
@@ -990,7 +1005,7 @@ pub fn select(
 /// its line; otherwise the file is judged as a load judges one and a line
 /// naming it is appended, marked as arrived by restore, with no position.
 pub fn name_at_restore(
-    directory: &Path,
+    directory: BorrowedFd<'_>,
     operator: u32,
     named: &str,
     owner: Owner,
@@ -1045,15 +1060,10 @@ pub fn name_at_restore(
         named.to_string()
     } else {
         let wanted = format!("-{named}{SUFFIX}");
-        let mut matches: Vec<String> = std::fs::read_dir(directory)
-            .map(|entries| {
-                entries
-                    .flatten()
-                    .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
-                    .filter(|name| name.ends_with(&wanted))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut matches: Vec<String> = list_directory(directory)
+            .into_iter()
+            .filter(|name| name.ends_with(&wanted))
+            .collect();
         matches.sort();
         match matches.as_slice() {
             [one] => one.clone(),
@@ -1137,7 +1147,7 @@ pub fn write_marker(root: &Path, marker: Option<&Marker>) -> std::io::Result<()>
     let path = root.join(MARKER);
     let Some(marker) = marker else {
         return match std::fs::remove_file(&path) {
-            Ok(()) => sync_directory(root),
+            Ok(()) => sync_path(root),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e),
         };
@@ -1159,7 +1169,7 @@ pub fn write_marker(root: &Path, marker: Option<&Marker>) -> std::io::Result<()>
         file.sync_all()?;
     }
     std::fs::rename(&temporary, &path)?;
-    sync_directory(root)
+    sync_path(root)
 }
 
 /// The reset a marker resolves, per `weaver-admin-Spec` section 4: an open
@@ -1297,6 +1307,7 @@ mod tests {
         let dir = base.join("decl");
         std::fs::create_dir_all(&room).unwrap();
         std::fs::create_dir_all(&dir).unwrap();
+        let dir_fd = open_directory(&dir).unwrap();
         let me = nix::unistd::getuid().as_raw();
         let mine = Owner {
             uid: me,
@@ -1324,7 +1335,15 @@ mod tests {
             event_run: weaver_types::RunId("r-2".into()),
             position: 9,
         };
-        let lines = publish(&room, me, &dir, owner, mine, &[(report, Arrival::Demand)]).unwrap();
+        let lines = publish(
+            &room,
+            me,
+            dir_fd.as_fd(),
+            owner,
+            mine,
+            &[(report, Arrival::Demand)],
+        )
+        .unwrap();
         let minted: Vec<(u64, &str, Arrival)> = lines
             .iter()
             .map(|line| (line.ordinal, line.digest.as_str(), line.arrived))
@@ -1337,7 +1356,9 @@ mod tests {
             ],
             "ordinals follow the clock, the reported one last"
         );
-        let latest = select(&dir, me, None, mine).unwrap().expect("a latest");
+        let latest = select(dir_fd.as_fd(), me, None, mine)
+            .unwrap()
+            .expect("a latest");
         assert_eq!(latest.line.digest, newer_digest);
         // The manifest's position is the event's run and sequence, never
         // the covered position's run (Codex on #94, round 6). Perturbation:
@@ -1352,6 +1373,7 @@ mod tests {
         let dir = base.join("decl-2");
         std::fs::create_dir_all(&room).unwrap();
         std::fs::create_dir_all(&dir).unwrap();
+        let dir_fd = open_directory(&dir).unwrap();
         let ahead = save_point("r-1", 3, 1, 8_000_000_000, b"recovered, clock ahead");
         let ahead_digest = judge(&ahead).unwrap().digest;
         let behind = save_point("r-1", 4, 1, 7_000_000_000, b"reported, clock behind");
@@ -1367,7 +1389,15 @@ mod tests {
             event_run: weaver_types::RunId("r-1".into()),
             position: 4,
         };
-        let lines = publish(&room, me, &dir, owner, mine, &[(report, Arrival::Demand)]).unwrap();
+        let lines = publish(
+            &room,
+            me,
+            dir_fd.as_fd(),
+            owner,
+            mine,
+            &[(report, Arrival::Demand)],
+        )
+        .unwrap();
         let minted: Vec<(u64, &str)> = lines
             .iter()
             .map(|line| (line.ordinal, line.digest.as_str()))
@@ -1377,7 +1407,9 @@ mod tests {
             vec![(1, ahead_digest.as_str()), (2, behind_digest.as_str())],
             "the reported one is last though its clock is behind"
         );
-        let latest = select(&dir, me, None, mine).unwrap().expect("a latest");
+        let latest = select(dir_fd.as_fd(), me, None, mine)
+            .unwrap()
+            .expect("a latest");
         assert_eq!(latest.line.digest, behind_digest);
     }
 
@@ -1398,6 +1430,7 @@ mod tests {
         let dir = base.join("decl");
         std::fs::create_dir_all(&room).unwrap();
         std::fs::create_dir_all(&dir).unwrap();
+        let dir_fd = open_directory(&dir).unwrap();
         let me = nix::unistd::getuid().as_raw();
         let mine = Owner {
             uid: me,
@@ -1415,7 +1448,7 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
         }
-        let lines = publish(&room, me, &dir, owner, mine, &[]).unwrap();
+        let lines = publish(&room, me, dir_fd.as_fd(), owner, mine, &[]).unwrap();
         assert_eq!(
             lines.len(),
             1,
@@ -1438,7 +1471,7 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&impostor, std::fs::Permissions::from_mode(0o600)).unwrap();
         }
-        let lines = publish(&room, me, &dir, owner, mine, &[]).unwrap();
+        let lines = publish(&room, me, dir_fd.as_fd(), owner, mine, &[]).unwrap();
         assert!(lines.is_empty(), "no line for the impostor's name");
         assert!(
             room.join(format!("{}{SUFFIX}", other_judged.digest))
@@ -1498,6 +1531,7 @@ mod tests {
         );
         let dir = scratch.0.clone();
         std::fs::create_dir_all(&dir).unwrap();
+        let dir_fd = open_directory(&dir).unwrap();
         let me = nix::unistd::getuid().as_raw();
         let mine = Owner {
             uid: me,
@@ -1528,24 +1562,31 @@ mod tests {
                     Arrival::Leave
                 },
             };
-            append_line(&dir, mine, &line).unwrap();
+            append_line(dir_fd.as_fd(), mine, &line).unwrap();
             lines.push(line);
         }
         assert_eq!(
-            read_manifest(&dir, mine).unwrap(),
+            read_manifest(dir_fd.as_fd(), mine).unwrap(),
             lines,
             "the lines round-trip"
         );
-        let latest = select(&dir, me, None, mine).unwrap().expect("a latest");
+        let latest = select(dir_fd.as_fd(), me, None, mine)
+            .unwrap()
+            .expect("a latest");
         assert_eq!(latest.line.ordinal, 3);
         assert!(!latest.lineage.named_at_restore);
         // The third's file goes: the second is latest, named at a restore,
         // and the next ordinal is still four.
         std::fs::remove_file(dir.join(&lines[2].name)).unwrap();
-        let latest = select(&dir, me, None, mine).unwrap().expect("a latest");
+        let latest = select(dir_fd.as_fd(), me, None, mine)
+            .unwrap()
+            .expect("a latest");
         assert_eq!(latest.line.ordinal, 2);
         assert!(latest.lineage.named_at_restore);
-        assert_eq!(next_ordinal(&read_manifest(&dir, mine).unwrap()), 4);
+        assert_eq!(
+            next_ordinal(&read_manifest(dir_fd.as_fd(), mine).unwrap()),
+            4
+        );
         // The second's file holds other sound bytes, a save point whose digest
         // is not its line's: not the latest, the first is.
         std::fs::write(
@@ -1553,7 +1594,9 @@ mod tests {
             save_point("r-1", 2, 0, 2_000_000_000, b"other image"),
         )
         .unwrap();
-        let latest = select(&dir, me, None, mine).unwrap().expect("a latest");
+        let latest = select(dir_fd.as_fd(), me, None, mine)
+            .unwrap()
+            .expect("a latest");
         assert_eq!(latest.line.ordinal, 1);
         // A file no line names is not loadable by name.
         let stray = save_point("r-9", 9, 0, 9_000_000_000, b"stray");
@@ -1568,7 +1611,7 @@ mod tests {
             .unwrap();
         }
         assert!(matches!(
-            select(&dir, me, Some(&stray_name), mine),
+            select(dir_fd.as_fd(), me, Some(&stray_name), mine),
             Err(LifecycleRefusal::ConfigInvalid { .. })
         ));
         // Named at a restore by its bare digest, the unlisted file is found
@@ -1577,13 +1620,15 @@ mod tests {
         // no file carries refuses. Perturbation: open the digest as a name
         // and the first call refuses.
         let stray_digest = judge(&stray).unwrap().digest;
-        assert!(name_at_restore(&dir, me, &"0".repeat(64), mine).is_err());
-        let named = name_at_restore(&dir, me, &stray_digest, mine).unwrap();
+        assert!(name_at_restore(dir_fd.as_fd(), me, &"0".repeat(64), mine).is_err());
+        let named = name_at_restore(dir_fd.as_fd(), me, &stray_digest, mine).unwrap();
         assert_eq!(named.name, stray_name);
         assert_eq!((named.ordinal, named.arrived), (4, Arrival::Restore));
-        let by_name = select(&dir, me, Some(&stray_name), mine).unwrap().unwrap();
+        let by_name = select(dir_fd.as_fd(), me, Some(&stray_name), mine)
+            .unwrap()
+            .unwrap();
         assert_eq!(by_name.line.ordinal, 4);
-        let by_digest = select(&dir, me, Some(&named.digest), mine)
+        let by_digest = select(dir_fd.as_fd(), me, Some(&named.digest), mine)
             .unwrap()
             .unwrap();
         assert!(by_digest.lineage.named_at_restore);
@@ -1598,18 +1643,18 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            name_at_restore(&dir, me, &stray_name, mine),
+            name_at_restore(dir_fd.as_fd(), me, &stray_name, mine),
             Err(LifecycleRefusal::ConfigInvalid { .. })
         ));
         std::fs::rename(dir.join(&stray_name), dir.join("aside")).unwrap();
         assert!(matches!(
-            name_at_restore(&dir, me, &stray_digest, mine),
+            name_at_restore(dir_fd.as_fd(), me, &stray_digest, mine),
             Err(LifecycleRefusal::BoundaryUnverified)
         ));
         std::fs::rename(dir.join("aside"), dir.join(&stray_name)).unwrap();
         std::fs::write(dir.join(&stray_name), &stray).unwrap();
         assert_eq!(
-            name_at_restore(&dir, me, &stray_name, mine)
+            name_at_restore(dir_fd.as_fd(), me, &stray_name, mine)
                 .unwrap()
                 .ordinal,
             4
@@ -1620,7 +1665,9 @@ mod tests {
             dir.join("20200101T000000Z-aa.save-point"),
         )
         .unwrap();
-        assert!(name_at_restore(&dir, me, "20200101T000000Z-aa.save-point", mine).is_err());
+        assert!(
+            name_at_restore(dir_fd.as_fd(), me, "20200101T000000Z-aa.save-point", mine).is_err()
+        );
         // **The manifest is judged as the owner's**: against another expected
         // owner the one that stands reads as the operator's and refuses, read
         // and appended, its planted lines selecting nothing; a second link
@@ -1632,31 +1679,31 @@ mod tests {
             gid: mine.gid,
         };
         assert!(matches!(
-            read_manifest(&dir, other),
+            read_manifest(dir_fd.as_fd(), other),
             Err(LifecycleRefusal::BoundaryUnverified)
         ));
         assert!(matches!(
-            select(&dir, me, None, other),
+            select(dir_fd.as_fd(), me, None, other),
             Err(LifecycleRefusal::BoundaryUnverified)
         ));
         assert!(matches!(
-            append_line(&dir, other, &lines[0]),
+            append_line(dir_fd.as_fd(), other, &lines[0]),
             Err(LifecycleRefusal::BoundaryUnverified)
         ));
         std::fs::hard_link(dir.join(MANIFEST), dir.join("manifest-link")).unwrap();
         assert!(matches!(
-            read_manifest(&dir, mine),
+            read_manifest(dir_fd.as_fd(), mine),
             Err(LifecycleRefusal::BoundaryUnverified)
         ));
         std::fs::remove_file(dir.join("manifest-link")).unwrap();
         assert!(
-            read_manifest(&dir, mine).is_ok(),
+            read_manifest(dir_fd.as_fd(), mine).is_ok(),
             "the owner's own reads again"
         );
         std::fs::rename(dir.join(MANIFEST), dir.join("manifest-real")).unwrap();
         std::os::unix::fs::symlink(dir.join("manifest-real"), dir.join(MANIFEST)).unwrap();
         assert!(matches!(
-            read_manifest(&dir, mine),
+            read_manifest(dir_fd.as_fd(), mine),
             Err(LifecycleRefusal::BoundaryUnverified)
         ));
         std::fs::remove_file(dir.join(MANIFEST)).unwrap();
@@ -1674,17 +1721,17 @@ mod tests {
                 .unwrap();
             file.write_all(b"{\"ordinal\":9,\"dig").unwrap();
         }
-        let read = read_manifest(&dir, mine).unwrap();
+        let read = read_manifest(dir_fd.as_fd(), mine).unwrap();
         assert_eq!(read.len(), 4, "the torn line is dropped: {read:?}");
-        assert!(select(&dir, me, None, mine).unwrap().is_some());
-        append_line(&dir, mine, &lines[0]).unwrap();
+        assert!(select(dir_fd.as_fd(), me, None, mine).unwrap().is_some());
+        append_line(dir_fd.as_fd(), mine, &lines[0]).unwrap();
         let text = std::fs::read_to_string(dir.join(MANIFEST)).unwrap();
         assert!(
             !text.contains("\"dig\n") && !text.contains("\"dig{"),
             "{text}"
         );
         assert!(text.ends_with('\n'));
-        assert_eq!(read_manifest(&dir, mine).unwrap().len(), 5);
+        assert_eq!(read_manifest(dir_fd.as_fd(), mine).unwrap().len(), 5);
         // A manifest that does not parse refuses, and so does one absent
         // beside published files; absent beside none is the first load.
         std::fs::write(dir.join(MANIFEST), "not json\n").unwrap();
@@ -1694,12 +1741,12 @@ mod tests {
                 .unwrap();
         }
         assert!(matches!(
-            select(&dir, me, None, mine),
+            select(dir_fd.as_fd(), me, None, mine),
             Err(LifecycleRefusal::BoundaryUnverified)
         ));
         std::fs::remove_file(dir.join(MANIFEST)).unwrap();
         assert!(matches!(
-            select(&dir, me, None, mine),
+            select(dir_fd.as_fd(), me, None, mine),
             Err(LifecycleRefusal::BoundaryUnverified)
         ));
         // A manifest of another mode is not this crate's and refuses, read
@@ -1711,11 +1758,11 @@ mod tests {
                 .unwrap();
         }
         assert!(matches!(
-            read_manifest(&dir, mine),
+            read_manifest(dir_fd.as_fd(), mine),
             Err(LifecycleRefusal::BoundaryUnverified)
         ));
         assert!(matches!(
-            append_line(&dir, mine, &lines[0]),
+            append_line(dir_fd.as_fd(), mine, &lines[0]),
             Err(LifecycleRefusal::BoundaryUnverified)
         ));
         std::fs::remove_file(dir.join(MANIFEST)).unwrap();
@@ -1723,7 +1770,7 @@ mod tests {
             std::fs::remove_file(entry.path()).unwrap();
         }
         assert!(
-            select(&dir, me, None, mine).unwrap().is_none(),
+            select(dir_fd.as_fd(), me, None, mine).unwrap().is_none(),
             "nothing at all is the first load"
         );
     }
@@ -1766,5 +1813,63 @@ mod tests {
         );
         write_marker(&root, None).unwrap();
         assert_eq!(read_marker(&root), None);
+    }
+
+    /// **The publication lands in the judged directory whatever the path
+    /// does**, per `weaver-admin-Spec` section 9 (Codex on #94, round 7):
+    /// the directory is opened once, then renamed away and another put at
+    /// its path; the publication, its manifest line and the selection all go
+    /// through the descriptor and land in the directory judged, the one at
+    /// the path getting nothing. The pin is the type: every step takes the
+    /// descriptor and no path reaches it, so the perturbation is the watch's
+    /// own, opening the descriptor after the swap, which puts everything in
+    /// the replacement and fails the assertion.
+    #[test]
+    fn the_publication_lands_in_the_judged_directory_whatever_the_path_does() {
+        let scratch = crate::scratch::Scratch(
+            std::env::temp_dir().join(format!("weaver-admin-swap-{}", std::process::id())),
+        );
+        let base = scratch.0.clone();
+        let room = base.join("room");
+        let dir = base.join("decl");
+        std::fs::create_dir_all(&room).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_fd = open_directory(&dir).unwrap();
+        let me = nix::unistd::getuid().as_raw();
+        let mine = Owner {
+            uid: me,
+            gid: nix::unistd::getgid().as_raw(),
+        };
+        let owner = (me, mine.gid);
+        let bytes = save_point("r-1", 7, 1, 5_000_000_000, b"judged directory");
+        let judged = judge(&bytes).unwrap();
+        std::fs::write(room.join(format!("{}{SUFFIX}", judged.digest)), &bytes).unwrap();
+        // The swap: the judged directory moves aside and a replacement
+        // stands at the path.
+        let aside = base.join("decl-judged");
+        std::fs::rename(&dir, &aside).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let lines = publish(&room, me, dir_fd.as_fd(), owner, mine, &[]).unwrap();
+        assert_eq!(lines.len(), 1);
+        assert!(
+            aside.join(&lines[0].name).exists() && aside.join(MANIFEST).exists(),
+            "the target and the line land in the directory judged"
+        );
+        assert!(
+            std::fs::read_dir(&dir).unwrap().next().is_none(),
+            "the directory at the path gets nothing"
+        );
+        let latest = select(dir_fd.as_fd(), me, None, mine)
+            .unwrap()
+            .expect("a latest");
+        assert_eq!(latest.line.digest, judged.digest);
+        // A descriptor opened at the path now reaches the replacement, which
+        // holds no manifest and no file: the first load's answer.
+        let replacement = open_directory(&dir).unwrap();
+        assert!(
+            select(replacement.as_fd(), me, None, mine)
+                .unwrap()
+                .is_none()
+        );
     }
 }

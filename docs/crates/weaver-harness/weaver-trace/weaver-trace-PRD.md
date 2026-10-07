@@ -317,7 +317,7 @@ its closure.
 | `recall` | an answered ask on the state seam, what was asked and the identities of the events custody answered with, never their contents |
 | `message.restored` | one message of a restored conversation, seated at a restoring load's open ahead of every turn, the message whole |
 | `score` | a task's verdict on its run at the run's close, the predicate answered and whether it held, and the ratio over the task's denominator as its two terms where one exists |
-| `save_point` | a save point taken, by digest, with the trace position it covers and the name the member wrote it under, authored after the holdings it names were taken |
+| `save_point` | a save point taken, by digest, with the trace position it covers, the name the member wrote it under and the cause that asked for it, authored after the holdings it names were taken |
 
 Twenty-five kinds. Adding one is an edit to this charter and to every contract whose
 vocabulary clause names the set, because consumers key on the closure.

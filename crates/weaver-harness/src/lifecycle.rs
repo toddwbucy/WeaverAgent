@@ -1248,7 +1248,7 @@ impl Harness {
                 let save_point = if forced {
                     None
                 } else {
-                    match take_save_point(run) {
+                    match take_save_point(run, Some(cause)) {
                         Ok(report) => report,
                         Err(missed) => {
                             self.refuse(
@@ -1320,12 +1320,12 @@ impl Harness {
             // section 6: at rest only, the same four legs and the same event
             // as the leave's, answered with the report admin's manifest
             // records, or refused naming the leg that missed.
-            (ChannelState::Entered(run), LifecycleDirective::SavePoint { cause: _ }) => {
+            (ChannelState::Entered(run), LifecycleDirective::SavePoint { cause }) => {
                 if run.turn_in_flight.is_some() {
                     self.refuse(connection, &exchange, LifecycleRefusal::ActivityNotAtRest)?;
                     return Ok(None);
                 }
-                match take_save_point(run) {
+                match take_save_point(run, Some(cause)) {
                     Ok(Some(report)) => {
                         self.answer(
                             connection,
@@ -2526,6 +2526,7 @@ fn restored_agrees(
 /// event's own position for admin's manifest.
 fn take_save_point(
     run: &mut Run,
+    cause: Option<weaver_types::Cause>,
 ) -> Result<Option<weaver_types::SavePointReport>, weaver_types::SavePointLeg> {
     if run.recorder.serving().is_none() {
         return Ok(None);
@@ -2548,6 +2549,10 @@ fn take_save_point(
                     sequence: taken.stamp.sequence,
                     turn: taken.stamp.turn,
                     name: taken.name.clone(),
+                    // **The cause the directive carried** (Codex on #94,
+                    // round 7), as `unload` carries its own, so a save point
+                    // is attributed to the account that asked for it.
+                    cause: cause.map(crate::engine::trace_cause),
                 },
             )),
         )
@@ -3710,7 +3715,8 @@ mod tests {
         assert_eq!(
             events[save_point]["payload"],
             serde_json::json!({
-                "save_point": "ab", "run": "r-0", "sequence": 5, "turn": 1, "name": "ab.save-point"
+                "save_point": "ab", "run": "r-0", "sequence": 5, "turn": 1, "name": "ab.save-point",
+                "cause": {"uid": 1000}
             })
         );
         assert_eq!(
@@ -3767,6 +3773,10 @@ mod tests {
             .iter()
             .find(|e| e["kind"] == "save_point")
             .expect("the save point is recorded");
+        // **The cause the directive carried is on the event** (Codex on #94,
+        // round 7). Perturbation: author the payload with `cause: None` and
+        // this reads null.
+        assert_eq!(taken["payload"]["cause"], serde_json::json!({"uid": 1000}));
         let position = taken["sequence"]
             .as_str()
             .expect("the sequence")

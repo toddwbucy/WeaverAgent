@@ -106,6 +106,14 @@ struct ServiceConfig {
     /// The operator's directory holding `agent.toml`, `admin.log` and
     /// `worker.log`, canonical as judged, per sections 8 and 9.
     declaration_directory: PathBuf,
+    /// **The declaration directory as opened at its judgment**, held for the
+    /// verb's life, per section 9: section 6's publication, the manifest and
+    /// the `restore` verb's judgment go through it and never through the
+    /// path again, so a directory the operator swaps under the path, or a
+    /// link put at it, reaches nothing this root process writes (Codex on
+    /// #94, round 7). `None` only in a test's unread configuration, where
+    /// every use refuses `BoundaryUnverified`.
+    declaration: Option<std::os::fd::OwnedFd>,
     /// The operator's uid, the box's own fact about whose data defines the
     /// agent, per section 9.
     operator: u32,
@@ -165,6 +173,18 @@ impl ServiceConfig {
     /// The operations log, per section 8.
     fn admin_log(&self) -> PathBuf {
         self.declaration_directory.join("admin.log")
+    }
+
+    /// The judged declaration directory's descriptor, per section 9.
+    fn declaration_fd(&self) -> Result<std::os::fd::BorrowedFd<'_>, LifecycleRefusal> {
+        use std::os::fd::AsFd;
+        self.declaration
+            .as_ref()
+            .map(|fd| fd.as_fd())
+            .ok_or_else(|| {
+                diag!("weaver-admin: the declaration directory was not opened at the judgment");
+                LifecycleRefusal::BoundaryUnverified
+            })
     }
 
     /// The worker's own log, per section 6, never the operations log.
@@ -1171,7 +1191,7 @@ fn select_save_point(
         return Ok(None);
     }
     save_points::select(
-        &config.declaration_directory,
+        config.declaration_fd()?,
         config.operator,
         restore,
         save_points::ROOT,
@@ -1258,7 +1278,7 @@ fn restore(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer,
         });
     }
     let line = save_points::name_at_restore(
-        &config.declaration_directory,
+        config.declaration_fd()?,
         config.operator,
         &named.save_point,
         save_points::ROOT,
@@ -1614,10 +1634,21 @@ fn publish_from_room(
         return Ok(Vec::new());
     };
     let room = save_points::room_of(inventory::sink_directory(&inventory.config.trace_sink));
+    let directory = match config.declaration_fd() {
+        Ok(directory) => directory,
+        Err(refusal) => {
+            record(
+                config,
+                "publish",
+                &format!("refused: {}", surface::render_refusal(&refusal)),
+            );
+            return Err(refusal);
+        }
+    };
     match save_points::publish(
         &room,
         member.uid,
-        &config.declaration_directory,
+        directory,
         config.operator_owner(),
         save_points::ROOT,
         reports,
@@ -1818,14 +1849,16 @@ fn load_service_config_at(
         // named where it is required, at `validate` and `load`.
         LifecycleRefusal::ConfigInvalid { field: None }
     })?;
-    config.declaration_directory =
+    let (canonical, declaration) =
         judge_declaration_directory(&config.declaration_directory, config.operator)?;
+    config.declaration_directory = canonical;
     config.operator_gid = {
-        use std::os::unix::fs::MetadataExt;
-        std::fs::metadata(&config.declaration_directory)
+        use std::os::fd::AsFd;
+        nix::sys::stat::fstat(declaration.as_fd())
             .map_err(|_| LifecycleRefusal::BoundaryUnverified)?
-            .gid()
+            .st_gid
     };
+    config.declaration = Some(declaration);
     if let Some(libraries) = &config.library_path {
         config.library_path = Some(judge_library_path(libraries, owner)?);
     }
@@ -1976,7 +2009,8 @@ fn judge_root(root: &std::path::Path, owner: u32) -> Result<(), LifecycleRefusal
 fn judge_declaration_directory(
     directory: &std::path::Path,
     operator: u32,
-) -> Result<std::path::PathBuf, LifecycleRefusal> {
+) -> Result<(std::path::PathBuf, std::os::fd::OwnedFd), LifecycleRefusal> {
+    use std::os::fd::AsFd;
     use std::os::unix::fs::MetadataExt;
     let refuse = |what: &str| {
         diag!(
@@ -1985,7 +2019,22 @@ fn judge_declaration_directory(
         );
         LifecycleRefusal::BoundaryUnverified
     };
-    let metadata = std::fs::symlink_metadata(directory).map_err(|_| refuse("does not exist"))?;
+    // **Opened once and judged on the descriptor**, per Spec section 9: the
+    // path is used here, a link at it refused, and what was judged is what
+    // every later step reaches (Codex on #94, round 7). The ancestors' walk
+    // and the access-control look stay by path, being about the path; the
+    // declaration's own read by path is #95.
+    let opened = save_points::open_directory(directory).map_err(|e| match e.raw_os_error() {
+        Some(nix::libc::ENOENT) => refuse("does not exist"),
+        Some(nix::libc::ENOTDIR) => refuse("is not a directory"),
+        Some(nix::libc::ELOOP) => refuse("is a link"),
+        _ => refuse("does not open"),
+    })?;
+    let metadata = std::fs::File::from(
+        nix::unistd::dup(opened.as_fd()).map_err(|_| refuse("does not duplicate"))?,
+    )
+    .metadata()
+    .map_err(|_| refuse("does not stat"))?;
     if !metadata.is_dir() {
         return Err(refuse("is not a directory"));
     }
@@ -2016,7 +2065,7 @@ fn judge_declaration_directory(
             }
         }
     }
-    Ok(canonical)
+    Ok((canonical, opened))
 }
 
 /// Whether a path carries a POSIX access-control list, access or default,
@@ -2173,6 +2222,7 @@ fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<Servi
         library_path: optional_path("library-path")?,
         load_bound,
         declaration_directory: path("declaration-directory")?,
+        declaration: None,
         operator,
         operator_gid: 0,
         boundary,
@@ -2938,6 +2988,7 @@ mod tests {
             library_path: None,
             load_bound: DEFAULT_LOAD_BOUND,
             declaration_directory: PathBuf::from("/nonexistent/declarations"),
+            declaration: None,
             operator: 1000,
             operator_gid: 1000,
             boundary: Ok(BoundaryRead {

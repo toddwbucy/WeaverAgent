@@ -390,6 +390,12 @@ pub struct SavePointTaken {
     pub sequence: u64,
     pub turn: u64,
     pub name: String,
+    /// Who asked, the uid admin's directive carried, as `unload` carries
+    /// its cause (Codex on #94, round 7): a save point on demand is
+    /// attributed to the account that asked for it, the leave's to the
+    /// leave's cause.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cause: Option<Cause>,
 }
 
 /// The ratio's two terms: what the run measured over what the task supplies,

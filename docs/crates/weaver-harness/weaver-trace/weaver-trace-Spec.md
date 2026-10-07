@@ -1069,8 +1069,11 @@ section 6. **The payload is `SavePointTaken`**: `save_point`,
 the digest of the save point's bytes, which is its identity in the operator's directory
 and the `save_point` a later load's lineage names; `run` and `sequence`, the trace
 position of the last distillate it holds; `turn`, the last turn that run holds in it,
-zero where it holds none; and `name`, the file name the member wrote it under in its
-own room, so the operator can find the file the digest names, never its path. **The
+zero where it holds none; `name`, the file name the member wrote it under in its
+own room, so the operator can find the file the digest names, never its path; and
+`cause`, the uid admin's directive carried, the leave's cause at a leave and the
+`save-point` verb's on demand, as `unload` carries its own, so a save point is
+attributed to the account that asked for it, absent only where no directive asked. **The
 kind forbids a turn**, the save point being taken at the leave or between turns, for
 the flush's reason. **It never crosses the tee into state, whatever the election**, per
 the charter's section 3: it is provenance about the holdings, authored after the
@@ -1881,9 +1884,9 @@ the fact exists.
   whole, per section 3: the recorder refuses one carrying a turn or another kind's
   payload, watched to fail when the kind leaves `turn_forbidden` or the message
   pairing row.
-- A save point taken is recorded turnless under `save_point` with its digest, position
-  and name, per section 3, authored by the harness after `unload` from the member's
-  answer, watched to fail when the ask is sent before `unload` is authored, and never
+- A save point taken is recorded turnless under `save_point` with its digest, position,
+  name and cause, per section 3, authored by the harness before `unload` from the
+  member's finished answer, watched to fail when `unload` is authored before the ask, and never
   distilled by the tee, watched to fail when `distill` stops refusing the kind.
 - A score is recorded turnless with the verdict and the ratio's two terms, per section
   3: the recorder refuses one carrying a turn or another kind's payload, watched to fail

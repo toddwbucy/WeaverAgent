@@ -2281,6 +2281,13 @@ declaration directory is judged before any value in it is read, and the judgment
 root's with the operator in root's place. The value of `declaration-directory` is
 resolved once to its canonical path, the look not following a link at the directory
 itself, and every read goes through the directory as opened at the judgment. **The
+directory is held as a descriptor for the verb's life**, opened once at the judgment
+with no link followed and judged on that descriptor, and section 6's writes go through
+it: the published copy is made, renamed and synced, the manifest opened and appended,
+and a file judged for a load or at a restore, each against the descriptor and never
+through the path again, so a directory the operator swaps under the path between two
+steps is not followed and a link put at the path has this root process create nothing
+where it points. **The
 directory is closed to everyone but its owner**: its owner must be exactly the uid the
 root's `operator` key names, and a directory any other uid owns, the agent's or the
 member's account among them, refuses. **The operator is one person in the operator
