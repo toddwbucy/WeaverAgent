@@ -627,7 +627,13 @@ socket and sends `JoinLeave`. Where the holder is a graceful unload, its leave i
 pending, the force joins it and turns it forced (`weaver-harness-Spec` section 6, heard
 in every wait of the leave), the harness's shared `Left` is the force's answer, and the
 force answers unloaded, publishing nothing and leaving the marker to the holder, which
-publishes and closes it. **A harness that takes the join and answers nothing inside the
+publishes and closes it as the leave ended: the harness's `Left` says the leave came
+down forced (Codex on #94, round 20), and the holder concludes it as a forced unload, the
+marker clean where its save point published and under `ForcedUnload` where none was
+kept, rather than as the graceful unload it asked for. A refusal past `Left` carries no
+such word, so that rare case is concluded as unforced, the marker left open and the next
+load's reset reading `NoCleanUnload` rather than `ForcedUnload` (accepted on
+2026-10-07: the reset is recorded, only its label differs). **A harness that takes the join and answers nothing inside the
 leave's sixty seconds is alive and silent, and does not hold the agent**: the force
 runs the escalation below against the run's processes without the lock, then closes the
 marker as forced, the operator having forced a run whose save point was not taken; the

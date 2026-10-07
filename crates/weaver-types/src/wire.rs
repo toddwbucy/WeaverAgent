@@ -363,6 +363,13 @@ pub enum LifecycleAnswer {
     Left {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         save_point: Option<SavePointReport>,
+        /// **Whether the leave came down forced**, on the operator's go of
+        /// 2026-10-07 on #1 (Codex on #94, round 20): true where admin
+        /// directed it forced or a `force-unload` joined it, so the
+        /// invocation that concludes the leave closes the marker as the
+        /// leave actually ended. Absent, and read false, otherwise.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        forced: bool,
     },
     /// The `SavePoint` directive's answer.
     SavePointTaken {

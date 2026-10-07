@@ -2226,14 +2226,21 @@ impl Harness {
                 return Err(ChannelFault::Undecodable);
             }
         };
-        let payload = match leave_after(&mut run, Some(cause), forced, lowered, Some(coordination))
-        {
-            Ok(()) => weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point }),
+        let unwound = leave_after(&mut run, Some(cause), forced, lowered, Some(coordination));
+        sweep_dials(&mut run.pending_leave, &run.load, coordination);
+        let payload = match unwound {
+            // **`Left` says whether the leave came down forced** (Codex on
+            // #94, round 20), a force that joined anywhere along it
+            // included, so admin's conclusion closes the marker as the
+            // leave ended.
+            Ok(()) => weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                save_point,
+                forced: run.pending_leave.as_ref().is_some_and(|leave| leave.forced),
+            }),
             // Everything admitted did not reach the stream, so the answer
             // says so rather than claiming a clean close.
             Err(refusal) => weaver_types::Payload::Refusal(refusal),
         };
-        sweep_dials(&mut run.pending_leave, &run.load, coordination);
         let leave = run.pending_leave.take().expect("the leave rode the run");
         answer_all(leave.answers, &payload);
         Ok((payload, true))
@@ -4785,6 +4792,7 @@ mod tests {
                     event_run: weaver_types::RunId("r-1".into()),
                     position,
                 }),
+                forced: false,
             })),
             "Left names the leave's save point with the event's position in this run, the covered one in the prior"
         );
@@ -4896,7 +4904,8 @@ mod tests {
             matches!(
                 answer,
                 Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
-                    save_point: Some(_)
+                    save_point: Some(_),
+                    forced: false,
                 }))
             ),
             "{answer:?}"
@@ -4926,7 +4935,8 @@ mod tests {
             matches!(
                 answer,
                 Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
-                    save_point: Some(_)
+                    save_point: Some(_),
+                    forced: false,
                 }))
             ),
             "{answer:?}"
@@ -4950,7 +4960,8 @@ mod tests {
             matches!(
                 answer,
                 Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
-                    save_point: Some(_)
+                    save_point: Some(_),
+                    forced: true,
                 }))
             ),
             "{answer:?}"
@@ -4990,7 +5001,8 @@ mod tests {
             matches!(
                 answer,
                 Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
-                    save_point: Some(_)
+                    save_point: Some(_),
+                    forced: true,
                 }))
             ),
             "the draining leave's dialer is answered with the save point: {answer:?}"
@@ -5042,7 +5054,8 @@ mod tests {
         assert_eq!(
             answer,
             Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
-                save_point: None
+                save_point: None,
+                forced: true,
             }))
         );
         let forced = read
@@ -5191,7 +5204,8 @@ mod tests {
             matches!(
                 answer,
                 Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
-                    save_point: Some(_)
+                    save_point: Some(_),
+                    forced: true,
                 }))
             ),
             "the forced leave reports its save point: {answer:?}"
@@ -5227,7 +5241,8 @@ mod tests {
         assert_eq!(
             answer,
             Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
-                save_point: None
+                save_point: None,
+                forced: true,
             }))
         );
         assert!(!events.iter().any(|e| e["kind"] == "save_point"));
@@ -5260,7 +5275,8 @@ mod tests {
             matches!(
                 answer,
                 Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
-                    save_point: Some(_)
+                    save_point: Some(_),
+                    forced: false,
                 }))
             ),
             "the leave completes with its save point: {answer:?} {read:?}"

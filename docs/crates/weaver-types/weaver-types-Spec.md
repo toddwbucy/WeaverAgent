@@ -1289,7 +1289,7 @@ pub enum LifecycleDirective {
 
 pub enum LifecycleAnswer {
     Ready,
-    Left { save_point: Option<SavePointReport> },
+    Left { save_point: Option<SavePointReport>, forced: bool },
     SavePointTaken { report: SavePointReport },
     RestoreNamed { save_point: String, name: String },
     TurnAborted { turn: TurnKey },
@@ -1320,7 +1320,10 @@ the leave's save point**, as of A3.2 on the operator's rulings of 2026-10-06 on 
 finished name the member gave it, the position it covers and the trace position of the
 `save_point` event, so admin's manifest records the event's position without reading
 the record; `Left` carries none where the save point could not be taken or the binding
-is diagnostic. **`JoinLeave` is a `force-unload` that does not hold the invocation
+is diagnostic. **`Left`'s `forced` says the leave came down forced**, admin's forced
+leave or a graceful one a `force-unload` joined, on the operator's go of 2026-10-07 on
+#1, absent and read false otherwise, so the invocation that concludes the leave closes
+the marker as it ended. **`JoinLeave` is a `force-unload` that does not hold the invocation
 lock**, on the operator's ruling of 2026-10-07 on #1: it joins a pending leave and is
 answered with its shared `Left`, or is refused `OutOfOrder` where none is pending.
 `RestoreNamed` is the `restore` verb's answer, the save point it judged and entered in

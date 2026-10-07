@@ -188,7 +188,12 @@ it, both dialers answered at the close. **`JoinLeave`, opened by admin, is a
 `force-unload` that does not hold the invocation lock**, on the operator's ruling of
 2026-10-07 on #1, the lock being held by a graceful `unload` draining: it carries the
 cause, joins the pending leave and turns it forced, and is answered with the leave's
-shared `Left`. The harness hears it in every wait of the leave, the drain, the
+shared `Left`. **`Left` carries `forced`**, true where the leave came down forced,
+directed so or joined by a force, absent and read false otherwise (Codex on #94, round
+20), so the graceful invocation that holds the lock concludes as the leave ended: the
+marker under `ForcedUnload` where no save point was kept, and a save point that did not
+publish coming down as a forced leave does. A refusal carries no such word, so a joined
+leave that is refused past its `Left` is concluded as unforced. The harness hears it in every wait of the leave, the drain, the
 wind-down, the lower, the save point's legs and the unwind after them, so a leave a
 force has joined comes down without waiting on what remains. With no leave pending it is
 refused `OutOfOrder`, which tells admin the lock's holder is no unload. The legs the harness names are the write, the answer, the finished answer

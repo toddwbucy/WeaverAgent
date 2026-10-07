@@ -1714,6 +1714,7 @@ fn unload_with(
         }
         Observation::State(..) | Observation::Silent => true,
     };
+    let mut forced_in_effect = forced;
     if entered {
         // **A graceful unload drains with no time bound of its own**, per
         // Spec section 3 on the operator's rulings of 2026-10-07 on #1: the
@@ -1732,9 +1733,20 @@ fn unload_with(
             },
         );
         match answered {
-            Ok(report) => {
+            // **The leave's own word on whether it came down forced** (Codex
+            // on #94, round 20): a force that joined this graceful leave
+            // turned it forced, and the conclusion, here or after the
+            // escalation below, closes the marker as the leave ended.
+            Ok((report, left_forced)) => {
+                forced_in_effect = forced || left_forced;
                 if start::wait_free(&run_directory, bounds.after_left) {
-                    return conclude_left(config, report, forced, save_points::ROOT, publish);
+                    return conclude_left(
+                        config,
+                        report,
+                        forced_in_effect,
+                        save_points::ROOT,
+                        publish,
+                    );
                 }
             }
             // A refusal on leave returns to the operator unchanged and
@@ -1748,7 +1760,10 @@ fn unload_with(
                 // sends past `Left`, its organs going down behind it, ends
                 // the run all the same, so where the lock frees inside the
                 // after-left wait the marker closes as forced before the
-                // refusal returns.
+                // refusal returns. A refusal carries no word on a force
+                // that joined, so a graceful leave a force joined and that
+                // then refused leaves the marker open, its reset recorded
+                // as `NoCleanUnload` (accepted on 2026-10-07).
                 if forced && start::wait_free(&run_directory, bounds.after_left) {
                     close_marker(config, true)?;
                 }
@@ -1775,8 +1790,9 @@ fn unload_with(
     // room's finished files are recovered at the next load. The marker
     // stays open, which the next load reads as `NoCleanUnload`, unless the
     // operator forced this unload, in which case it closes as forced so the
-    // record carries the operator's choice, as it does on a forced leave.
-    if forced {
+    // record carries the operator's choice, as it does on a forced leave, a
+    // force that joined a graceful leave answered `Left` included.
+    if forced_in_effect {
         close_marker(config, true)?;
     }
     unloaded
@@ -2108,7 +2124,7 @@ fn force_beside_holder(
 /// **Directs leave under the leave's own bound**, per Spec section 3.
 fn direct_leave(
     config: &ServiceConfig,
-) -> Result<Option<weaver_types::SavePointReport>, LeaveFault> {
+) -> Result<(Option<weaver_types::SavePointReport>, bool), LeaveFault> {
     direct_leave_within(
         config,
         Some(std::time::Instant::now() + LEAVE_BOUND),
@@ -2123,12 +2139,15 @@ fn direct_leave(
 /// until `deadline`, the dial spending nothing of the bound. **The answer
 /// names the leave's save point**, per `weaver-admin-harness-contract`
 /// section 3 as of A3.2, none where none was taken or the binding is
-/// diagnostic, so the publication that follows carries the event's position.
+/// diagnostic, so the publication that follows carries the event's position,
+/// **and whether the leave came down forced** (Codex on #94, round 20), a
+/// force that joined it included, so the conclusion closes the marker as the
+/// leave ended rather than as this invocation asked.
 fn direct_leave_within(
     config: &ServiceConfig,
     deadline: Option<std::time::Instant>,
     directive: LifecycleDirective,
-) -> Result<Option<weaver_types::SavePointReport>, LeaveFault> {
+) -> Result<(Option<weaver_types::SavePointReport>, bool), LeaveFault> {
     let Ok(mut coordination) = channel::dial(&config.coordination_socket()) else {
         return Err(LeaveFault::Gone);
     };
@@ -2141,7 +2160,9 @@ fn direct_leave_within(
     });
     match coordination.recv_within(bound) {
         Ok(answer) => match answer.payload {
-            weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point }) => Ok(save_point),
+            weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point, forced }) => {
+                Ok((save_point, forced))
+            }
             weaver_types::Payload::Refusal(refusal) => Err(LeaveFault::Refused(refusal)),
             _ => Err(LeaveFault::Refused(LifecycleRefusal::Malformed)),
         },
@@ -3814,7 +3835,10 @@ mod tests {
                     load: None,
                     constituents: Vec::new(),
                 }),
-                weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point: None }),
+                weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                    save_point: None,
+                    forced: false,
+                }),
             ],
         );
         assert_eq!(
@@ -3861,7 +3885,10 @@ mod tests {
                     load: None,
                     constituents: Vec::new(),
                 }),
-                weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point: None }),
+                weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                    save_point: None,
+                    forced: false,
+                }),
             ],
         );
         {
@@ -4049,6 +4076,7 @@ mod tests {
                 }),
                 weaver_types::Payload::Answer(LifecycleAnswer::Left {
                     save_point: Some(report()),
+                    forced: false,
                 }),
             ],
         );
@@ -4364,6 +4392,7 @@ mod tests {
     fn left_with_report() -> Option<weaver_types::Payload> {
         Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
             save_point: Some(report()),
+            forced: false,
         }))
     }
 
@@ -4416,7 +4445,10 @@ mod tests {
                 } else {
                     heard_tx.send(()).unwrap();
                     let _ = release_rx.recv();
-                    weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point: None })
+                    weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                        save_point: None,
+                        forced: false,
+                    })
                 };
                 let _ = peer.send(&weaver_types::OrganEnvelope {
                     exchange: request.exchange,
@@ -4907,6 +4939,51 @@ mod tests {
         );
     }
 
+    /// **The graceful holder concludes as the leave ended, forced where a
+    /// force joined it** (Codex on #94, round 20), per Spec section 3 on the
+    /// operator's go of 2026-10-07 on #1: the harness's `Left` says the leave
+    /// came down forced. With no save point taken, the marker stands under
+    /// `ForcedUnload`, never closed clean over lost state; with a save point
+    /// that did not publish, the unload comes down as a forced one does,
+    /// answering unloaded with the marker forced, rather than refusing as an
+    /// ordinary unload whose next load would read `NoCleanUnload`.
+    /// Perturbation: conclude with this invocation's own `forced` alone, and
+    /// the first case closes clean and the second refuses.
+    #[test]
+    fn a_graceful_holder_concludes_a_leave_a_force_joined_as_forced() {
+        for (tag, report) in [("none", None), ("unpublished", Some(report()))] {
+            let (config, _scratch) = scratch_config(&format!("joined-forced-{tag}"));
+            save_points::write_marker(
+                &config.root,
+                Some(&save_points::Marker::Open { run: "r-1".into() }),
+            )
+            .unwrap();
+            let holder = stand_in_holder(&config);
+            let worker = ending_worker(
+                &config,
+                vec![
+                    state(weaver_types::AgentState::Active),
+                    Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                        save_point: report,
+                        forced: true,
+                    })),
+                ],
+                None,
+                holder,
+            );
+            // A publication that lands nothing, as one that did not publish.
+            let answered = unload_with(&config, TEST_UNLOAD_BOUNDS, false, &mut |_| Ok(Vec::new()));
+            let (_, ended) = worker.join().unwrap();
+            assert!(ended, "{tag}");
+            assert!(is_unloaded(&answered), "{tag}: {answered:?}");
+            assert_eq!(
+                save_points::read_marker(&config.root),
+                Some(save_points::Marker::Forced { run: "r-1".into() }),
+                "{tag}"
+            );
+        }
+    }
+
     /// **A force with no unload running takes the lock and does everything**,
     /// per Spec section 3 on the operator's ruling of 2026-10-07 on #1: it
     /// observes, directs the leave forced, publishes the reported save point
@@ -5202,7 +5279,10 @@ mod tests {
                 &config,
                 vec![
                     observed,
-                    weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point: None }),
+                    weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                        save_point: None,
+                        forced: false,
+                    }),
                 ],
             );
             assert_eq!(
