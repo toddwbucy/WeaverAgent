@@ -310,6 +310,28 @@ for d in "${!AGENT_DIRS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan 
 declare -A TERRITORY_BASES=([/var/lib/weaver-agent]=1)
 v=$(read_key /etc/weaver/stack agent-directory); [ -n "$v" ] && TERRITORY_BASES["$v"]=1
 for d in /var/lib/weaver "${!TERRITORY_BASES[@]}" "${!LOG_PATHS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"; done
+# **territories_outside BASE... -- ROOT...: each root's own territory that no
+# base covers**, read from the root's `territory` key (the operator's ruling of
+# 2026-10-07 on #1), one per line. Under the new layout a territory is the
+# declaration, the draft, the logs and the published save points as well as
+# the trace and the state room, so one the bases miss, a custom territory or
+# one made under an agent-directory the stack record no longer names, would
+# be the agent unarchived at its takedown (Codex on #94, round 8). A root
+# without the key, the pre-ruling layout, is archived by the bases as before;
+# a territory under a base is archived with its base and not twice.
+territories_outside() {
+  local bases=() b r v covered
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do bases+=("$1"); shift; done
+  [ "${1:-}" = -- ] && shift
+  for r in "$@"; do
+    v=$(cat "$r/territory" 2>/dev/null || true); v=${v%%$'\n'*}; [ -n "$v" ] && [ -d "$v" ] && [ ! -L "$v" ] || continue
+    covered=0
+    for b in "${bases[@]}"; do case "$v" in "$b"/*) covered=1;; esac; done
+    [ "$covered" = 0 ] && printf '%s\n' "$v"
+  done | sort -u
+}
+mapfile -t OWN_TERRITORIES < <(territories_outside "${!TERRITORY_BASES[@]}" -- "${AGENT_ROOTS[@]}")
+for d in "${OWN_TERRITORIES[@]}"; do TERRITORY_PATHS+=("$d") && plan "$d  (a root's own territory, outside the bases) $(du -sh "$d" 2>/dev/null | cut -f1)"; done
 HOMES=()
 for u in "${WEAVER_USERS[@]}"; do
   h=$(getent passwd "$u" | cut -d: -f6)
@@ -450,6 +472,8 @@ if [ "$MODE" = archive ]; then
   for d in "${!TERRITORY_BASES[@]}"; do
     [ -e "$d" ] && archive_path "$(archive_name territories "$d")" "$d"
   done
+  # Each root's own territory the bases miss, by the path its root names.
+  for d in "${OWN_TERRITORIES[@]}"; do archive_path "$(archive_name territory "$d")" "$d"; done
   for d in "${!LOG_PATHS[@]}"; do archive_path "$(archive_name log "$d")" "$d"; done
   for d in "${!AGENT_DIRS[@]}"; do archive_path "$(archive_name agent-config "$d")" "$d"; done
   [ ${#HOMES[@]} -gt 0 ] && archive_path home-weaver-users "${HOMES[@]}"

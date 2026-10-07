@@ -1902,6 +1902,32 @@ class DecommissionTests(unittest.TestCase):
                          "no line but a comment names the operator's directory")
         self.assertIn('read_key "$r" territory', self.script)
 
+    def test_each_roots_own_territory_outside_the_bases_is_archived(self):
+        # A root names its territory; one outside every base is archived by
+        # that path, one under a base rides the base's archive, and a root
+        # without the key (the pre-ruling layout) is covered by the bases as
+        # before (Codex on #94, round 8). Perturbation: drop the base check
+        # and the covered territory prints twice over; drop the key read and
+        # the custom one is never archived.
+        with tempfile.TemporaryDirectory() as scratch:
+            base = Path(scratch) / "var-lib-weaver-agent"
+            under = base / "weaver-a"
+            custom = Path(scratch) / "srv-elsewhere" / "weaver-b"
+            for d in (under, custom):
+                d.mkdir(parents=True)
+            roots = Path(scratch) / "admin"
+            for name, territory in (("a", under), ("b", custom), ("c", None)):
+                root = roots / name
+                root.mkdir(parents=True)
+                if territory is not None:
+                    (root / "territory").write_text(f"{territory}\n")
+            listed = self.run_fn("territories_outside", str(base), "--",
+                                 str(roots / "a"), str(roots / "b"), str(roots / "c"))
+            self.assertEqual(listed.splitlines(), [str(custom)])
+        self.assertIn('for d in "${OWN_TERRITORIES[@]}"; do archive_path "$(archive_name territory "$d")" "$d"; done',
+                      self.script)
+        self.assertIn('mapfile -t OWN_TERRITORIES < <(territories_outside', self.script)
+
     def test_a_running_agent_refuses_the_archive_and_the_purge(self):
         guard = '[ ${#RUNNING[@]} -eq 0 ] || die "agents still run or cannot be read'
         self.assertEqual(self.script.count(guard), 2)
