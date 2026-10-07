@@ -1662,10 +1662,31 @@ fn unload_within(
                         .into_iter()
                         .map(|report| (report, save_points::Arrival::Leave))
                         .collect();
-                    // Best effort at an unload, the run being gone either
-                    // way: a refusal is logged and the room's files are
-                    // recovered at the next load.
-                    let _ = publish_from_room(config, &AgentName(config.agent.clone()), &reports);
+                    // **The unload does not complete without its save point
+                    // published** (Codex on #94, round 9), per Spec section
+                    // 3 on A3.0 item 6: the leave's reported digest must be
+                    // among the lines this publication appended, or the
+                    // marker stays open, so the next load records
+                    // `NoCleanUnload` and recovers the room's file or names
+                    // it as unpublishable, and the verb refuses naming the
+                    // publication rather than answering Unloaded over a
+                    // stale restore. A forced unload reports no save point
+                    // and is unchanged.
+                    let published =
+                        publish_from_room(config, &AgentName(config.agent.clone()), &reports);
+                    if let Some(digest) = unpublished_leave(&reports, &published) {
+                        diag!(
+                            "weaver-admin: the leave's save point {digest} did not publish; the marker stays open and the unload does not complete"
+                        );
+                        record(
+                            config,
+                            "unload",
+                            "refused: the leave's save point did not publish",
+                        );
+                        return Err(LifecycleRefusal::SavePointNotTaken {
+                            missed: weaver_types::SavePointLeg::Published,
+                        });
+                    }
                     close_marker(config, forced)?;
                     return unloaded;
                 }
@@ -1702,6 +1723,23 @@ fn unload_within(
         close_marker(config, true)?;
     }
     unloaded
+}
+
+/// **The leave's save point that did not publish**, per Spec section 3: the
+/// digest of a reported leave save point that is not among the lines the
+/// publication answered, or none where no save point was reported (a forced
+/// leave, or no member standing) or every reported one published.
+fn unpublished_leave(
+    reports: &[(weaver_types::SavePointReport, save_points::Arrival)],
+    published: &Result<Vec<save_points::ManifestLine>, LifecycleRefusal>,
+) -> Option<String> {
+    reports
+        .iter()
+        .map(|(report, _)| &report.save_point)
+        .find(|digest| {
+            !matches!(published, Ok(lines) if lines.iter().any(|line| &line.digest == *digest))
+        })
+        .cloned()
 }
 
 /// **Publish the member's finished save points into the operator's
@@ -3722,6 +3760,86 @@ mod tests {
             gid: 1501,
         };
         assert_eq!(member_groups(member, 1600), [1501, 1600]);
+    }
+
+    /// **A clean unload whose leave save point did not publish does not
+    /// complete**, per Spec section 3 on A3.0 item 6 (Codex on #94, round 9):
+    /// the worker answers `Left` naming a save point, the publication refuses
+    /// (here the scratch inventory's refusal; on a box, a room file past the
+    /// bound or any publication that does not land), the verb refuses
+    /// `SavePointNotTaken` naming the publication and the marker stays open,
+    /// so the next load records `NoCleanUnload`. The forced unload's case,
+    /// no save point reported, is `a_forced_verb_closes_the_marker_where_the_run_already_ended`.
+    /// Perturbation: discard the publication's result again and the verb
+    /// answers unloaded with the marker closed.
+    #[test]
+    fn a_clean_unload_whose_save_point_did_not_publish_stops() {
+        let (config, _scratch) = scratch_config("unload-unpublished");
+        save_points::write_marker(
+            &config.root,
+            Some(&save_points::Marker::Open { run: "r-1".into() }),
+        )
+        .unwrap();
+        let mut holder = stand_in_holder(&config);
+        let worker = recording_worker(
+            &config,
+            vec![
+                weaver_types::Payload::Answer(LifecycleAnswer::State {
+                    state: weaver_types::AgentState::Idle,
+                    load: None,
+                    constituents: Vec::new(),
+                }),
+                weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                    save_point: Some(report()),
+                }),
+            ],
+        );
+        let ender = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let _ = holder.kill();
+            let _ = holder.wait();
+        });
+        let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, false);
+        ender.join().unwrap();
+        let _ = worker.join();
+        assert_eq!(
+            answered,
+            Err(LifecycleRefusal::SavePointNotTaken {
+                missed: weaver_types::SavePointLeg::Published,
+            })
+        );
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Open { run: "r-1".into() }),
+            "the marker stays open for the next load's reset"
+        );
+        // The helper's own cases: a reported digest among the lines passes,
+        // one missing or a refused publication names it, none reported passes.
+        let line = save_points::ManifestLine {
+            ordinal: 1,
+            digest: "ab".into(),
+            name: "x".into(),
+            stamp: save_points::Stamp {
+                run: "r-1".into(),
+                sequence: 5,
+                turn: 1,
+                schema: String::new(),
+                wall_ns: 0,
+            },
+            position: None,
+            arrived: save_points::Arrival::Leave,
+        };
+        let reports = vec![(report(), save_points::Arrival::Leave)];
+        assert_eq!(unpublished_leave(&reports, &Ok(vec![line])), None);
+        assert_eq!(unpublished_leave(&reports, &Ok(vec![])), Some("ab".into()));
+        assert_eq!(
+            unpublished_leave(&reports, &Err(LifecycleRefusal::BoundaryUnverified)),
+            Some("ab".into())
+        );
+        assert_eq!(
+            unpublished_leave(&[], &Err(LifecycleRefusal::BoundaryUnverified)),
+            None
+        );
     }
 
     /// **The marker is restored by the rollback**, per Spec section 4 on

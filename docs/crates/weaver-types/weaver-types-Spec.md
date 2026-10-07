@@ -1374,6 +1374,7 @@ pub enum SavePointLeg {
     Answer,
     Finished,
     MemberDead,
+    Published,
 }
 
 pub struct EnterPayload {

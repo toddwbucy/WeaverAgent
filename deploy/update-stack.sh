@@ -659,10 +659,14 @@ refuse_legacy_units
 # ------------------------------------------------------------------ 7. install
 PATCHED=()
 ADDED=()
-# The layout moves this run made, each "agent|old directory|territory", put
-# back by the restore: the four files moved back as they were, the root's
-# keys as they were. The group memberships stay, being reads the ruling
-# grants either way.
+# The layout moves this run made, each "agent|old directory|territory|group|
+# mode", the territory's group and mode as found before the move, put back
+# by the restore: the four files moved back as they were, the root's keys as
+# they were, and the territory regrouped and remoded as it stood (Codex on
+# #94, round 9), since the admin from before the ruling of 2026-10-07 drops
+# the member to its primary group alone, so a territory left grouped to the
+# access group is one the rolled-back member cannot traverse to its room. The
+# group memberships stay, being reads the ruling grants either way.
 MOVED=()
 # The agent the verify step has loaded right now, empty whenever none is. Every
 # rollback from inside that step happens with a worker running, and a restore
@@ -708,13 +712,18 @@ restore() {
   fi
   if [ ${#MOVED[@]} -gt 0 ]; then
     for entry in "${MOVED[@]}"; do
-      IFS='|' read -r agent old territory <<< "$entry"
+      IFS='|' read -r agent old territory group mode <<< "$entry"
       printf '  moving %s'"'"'s files back from %s into %s\n' "$agent" "$territory" "$old" >&2
       for f in agent.toml system-prompt.md admin.log worker.log; do
         sudo test -e "$territory/$f" || continue
         sudo mv -T -- "$territory/$f" "$old/$f" \
           || { printf '  FAILED to move %s back\n' "$territory/$f" >&2; failed=1; }
       done
+      # **The territory reads as it did**: its group and mode as the move
+      # found them, so the pre-ruling admin's member, holding no supplementary
+      # group, passes to its room again.
+      sudo chgrp "$group" "$territory" && sudo chmod "$mode" "$territory" \
+        || { printf '  FAILED to restore the group and mode of %s\n' "$territory" >&2; failed=1; }
       printf '%s\n' "$old" | sudo tee "$ADMIN_BASE/$agent/declaration-directory" >/dev/null \
         && sudo chmod 0644 "$ADMIN_BASE/$agent/declaration-directory" \
         && sudo rm -f "$ADMIN_BASE/$agent/territory" \
@@ -816,10 +825,16 @@ fi
 # stand-in sudo.
 # migrate_layout "AGENT|OLD|TERRITORY"...
 migrate_layout() {
-  local entry agent old territory f
+  local entry agent old territory f group mode
   for entry in "$@"; do
     IFS='|' read -r agent old territory <<< "$entry"
-    MOVED+=("$entry")
+    # **What the territory was is recorded before anything changes**, its
+    # group and mode as they stand, so the restore puts them back (Codex on
+    # #94, round 9).
+    read -r group mode < <(sudo stat -c '%G %a' -- "$territory") \
+      || rollback "$agent: cannot read the group and mode of $territory"
+    [ -n "$group" ] && [ -n "$mode" ] || rollback "$agent: cannot read the group and mode of $territory"
+    MOVED+=("$entry|$group|$mode")
     sudo install -d -o root -g "weaver-$agent-admin" -m 0750 "$territory/save-points" \
       || rollback "$agent: cannot make $territory/save-points"
     for f in agent.toml system-prompt.md; do

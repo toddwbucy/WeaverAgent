@@ -178,7 +178,10 @@ leave's save point before it authors `unload`, and answers `Left` naming it as
 `SavePointTaken` does so admin publishes it under the same ordinal rule; where the save
 point is not finished and `forced` is false it answers `SavePointNotTaken` and stays
 entered, the run open, and where `forced` is true it leaves without one and the `unload`
-event says so. A `Left` with no save point is a forced leave, or a leave under a
+event says so. The legs the harness names are the write, the answer, the finished answer
+and the member dead; admin names a fifth of its own, `published`, at the unload, where
+the leave's save point was reported and its publication did not land, per
+`weaver-admin-operator-contract` section 3. A `Left` with no save point is a forced leave, or a leave under a
 diagnostic binding, which takes none.
 
 **Enter the run.** Opened by admin. Admin directs the harness to enter, supplying the

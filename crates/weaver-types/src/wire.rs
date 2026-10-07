@@ -309,6 +309,11 @@ pub enum SavePointLeg {
     Answer,
     Finished,
     MemberDead,
+    /// Admin's own leg, at the unload (Codex on #94, round 9): the leave's
+    /// save point finished and was reported, and its publication into the
+    /// territory's `save-points/` did not land, so the unload does not
+    /// complete, publication being part of taking the save point.
+    Published,
 }
 
 /// Every directive receives exactly one answer: `Enter` answers `Ready`,

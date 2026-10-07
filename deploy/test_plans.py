@@ -147,6 +147,14 @@ elif name == 'sudo':
         file = pathlib.Path(mapped(rest[-1]))
         assert file.is_relative_to(root), file
         sys.exit(subprocess.run(['/usr/bin/' + op, *rest[:-1], str(file)]).returncode)
+    elif op == 'stat':
+        # The migration's look at the territory's group and mode before it
+        # changes them: the group the fixture names, the mode the directory's
+        # own (Codex on #94, round 9).
+        target = pathlib.Path(mapped(rest[-1]))
+        assert target.is_relative_to(root), target
+        st = privileged([target], lambda: os.lstat(target))
+        print(os.environ.get('TERRITORY_GROUP_AS', 'fixture-group'), format(st.st_mode & 0o7777, 'o'))
     elif op in ('cat', 'tail', 'wc') or (op == 'test' and not identity):
         # The install's reads under a territory, made as root (Codex on #94,
         # round 8): run on the scratch file with the privilege wrapper, so a
@@ -303,7 +311,8 @@ class PlanTests(unittest.TestCase):
                     "FIXTURE_ROOT": str(self.root)}
         for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
                      "VISUDO_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
-                     "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS", "GROUP_WRITES", "LOCK_TERRITORY"):
+                     "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS", "GROUP_WRITES", "LOCK_TERRITORY",
+                     "TERRITORY_GROUP_AS"):
             self.env.pop(name, None)
         # Redirect even shell builtin /home probes into the fixture. The
         # production scripts have no test-only path switches and never read
@@ -1708,7 +1717,10 @@ esac
         ran = subprocess.run(["bash", "-c", program, "bash", f"old|{old_dir}|{territory}"],
                              env=env, text=True, capture_output=True, timeout=20)
         self.assertEqual(ran.returncode, 0, ran.stderr)
-        self.assertEqual(ran.stdout.splitlines()[-1], f"old|{old_dir}|{territory}", "registered for the rollback")
+        registered = ran.stdout.splitlines()[-1]
+        self.assertTrue(registered.startswith(f"old|{old_dir}|{territory}|"), registered)
+        group, mode = registered.split("|")[3:]
+        self.assertTrue(group and mode.isdigit(), "registered with the territory's group and mode for the rollback")
         for name in ("agent.toml", "system-prompt.md", "admin.log", "worker.log"):
             self.assertTrue((territory / name).exists(), name)
             self.assertFalse((old_dir / name).exists(), name)
@@ -1759,9 +1771,11 @@ esac
         (old_root / "declaration-directory").write_text(str(old_dir) + "\n")
         territory = self.root / "agents" / "weaver-old"
         territory.mkdir()
+        # As create-agent laid it out before the ruling: root:weaver-old-state 0710.
+        territory.chmod(0o710)
         shutil.rmtree(self.config / "existing")
         (self.root / "installed").mkdir(exist_ok=True)
-        self.env.update(ALLOW_APPLY_CHECKS="1", LOCK_TERRITORY=str(territory))
+        self.env.update(ALLOW_APPLY_CHECKS="1", LOCK_TERRITORY=str(territory), TERRITORY_GROUP_AS="weaver-old-state")
         try:
             result = self.run_script("update-stack.sh", "--install")
         finally:
@@ -1779,6 +1793,16 @@ esac
         self.assertTrue((old_dir / "agent.toml").exists(), "the rollback moved the declaration back")
         self.assertEqual((old_root / "declaration-directory").read_text(), str(old_dir) + "\n")
         self.assertFalse((old_root / "territory").exists())
+        # **And the territory's group and mode as the fixture laid them out**
+        # (Codex on #94, round 9): read before the move, put back after the
+        # regroup, so the pre-ruling admin's member passes to its room again.
+        # Perturbation: drop the chgrp from the restore and the group's call
+        # is missing after the regroup.
+        self.assertIn(["sudo", "stat", "-c", "%G %a", "--", str(territory)], calls[:after])
+        self.assertIn(["sudo", "chgrp", "weaver-old-state", str(territory)], calls[after:])
+        self.assertIn(["sudo", "chmod", "710", str(territory)], calls[after:])
+        self.assertLess(calls.index(["sudo", "chgrp", "weaver-old-admin", str(territory)]),
+                        calls.index(["sudo", "chgrp", "weaver-old-state", str(territory)]))
 
     def test_stack_refuses_an_unprovided_engine_and_names_the_migration(self):
         # A pre-#85 declaration electing postgres refuses before the build,

@@ -623,7 +623,15 @@ operator retries, `save-point` and then `unload`; if it is dead the operator iss
 the save point and records on the `unload` event that the leave's save point was not
 taken, and this crate leaves the clean-unload marker open under `ForcedUnload`, so the
 next load restores the latest published save point with that reset recorded. The loss is
-the operator's recorded choice, never this crate's. A forced verb that finds the run
+the operator's recorded choice, never this crate's. **Nor does an unload complete whose
+leave save point did not publish** (Codex on #94, round 9), publication being part of
+taking it: the leave's reported digest must be among the lines section 6's publication
+appended at the unload, and where it is not, a room file past the bound or any
+publication that does not land, this verb refuses `SavePointNotTaken` naming the
+publication, the fifth leg and this crate's own, and leaves the marker open, so the next
+load records `NoCleanUnload` and recovers the room's file or names it as unpublishable,
+never restoring an older save point in silence behind an `Unloaded`. A forced unload
+reports no save point and is unchanged. A forced verb that finds the run
 already ended, the lock free, closes the marker as forced where it stands open, and a
 forced leave the harness refuses past its `Left`, its organs going down behind the
 refusal, closes it the same inside the after-left wait before the refusal returns, so
@@ -1592,7 +1600,12 @@ rendered in UTC to the second and the digest the file's, which extends the room'
 rule of `weaver-state-Spec` section 3 to the published form, so a renamed file reads as
 not the file its name claims. Only then is the member's copy removed, so a publication
 cut short leaves the member's copy standing and is retried at the next verb, and one an
-unclean stop left behind is published at the next load. **Several entries published by
+unclean stop left behind is published at the next load. **A line already standing for
+the room's copy is judged before the copy goes** (Codex on #94, round 9): the copy is
+removed only where the line's target stands and digests to the line; a target gone is
+recreated beneath the standing line, the line being the record and no second one
+appended; a target of other bytes is left with the copy, then the last sound copy, and
+named in the log. **Several entries published by
 one verb are ordered recovered first, then reported, and by the stamp's clock within a
 kind**, `taken.wall_ns` ascending with the digest as the tiebreak, before any ordinal is
 minted: a reported save point was taken last by construction and is minted last

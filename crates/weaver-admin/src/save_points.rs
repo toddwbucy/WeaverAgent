@@ -712,11 +712,34 @@ pub fn publish(
             })
             .unwrap_or((None, Arrival::Recovered));
         let name = published_name(&entry.judged);
-        if lines.iter().any(|line| line.digest == entry.judged.digest) {
-            // Published already, under an earlier verb cut short before the
-            // room's copy was removed: the copy goes, the line stands.
-            remove_from_room(&entry.name);
-            continue;
+        // **A line standing for the room's copy is judged before the copy
+        // goes** (Codex on #94, round 9): the copy goes only where the line's
+        // target stands and digests to the line; a target gone is recreated
+        // beneath the standing line, the line being the record and no second
+        // one appended; a target of other bytes is left with the copy, which
+        // is then the last sound copy, and named in the log.
+        let standing = lines
+            .iter()
+            .find(|line| line.digest == entry.judged.digest)
+            .cloned();
+        if let Some(line) = &standing {
+            match open_published(directory, line, operator.0) {
+                Ok(Some(_)) => {
+                    remove_from_room(&entry.name);
+                    continue;
+                }
+                Ok(None) => diag!(
+                    "weaver-admin: the manifest names {}, which is gone; the room's copy recreates it under the standing line",
+                    line.name
+                ),
+                Err(why) => {
+                    diag!(
+                        "weaver-admin: the manifest names {}, which is not the file its line says ({why}); the room's copy stays",
+                        line.name
+                    );
+                    continue;
+                }
+            }
         }
         // **Every step goes through the directory's descriptor** (Codex on
         // #94, round 7), per Spec section 9: the temporary is made, renamed
@@ -815,6 +838,11 @@ pub fn publish(
                 entry.name
             );
             remove_temporary();
+            continue;
+        }
+        if standing.is_some() {
+            // The target stands again under its line; nothing to append.
+            remove_from_room(&entry.name);
             continue;
         }
         let line = ManifestLine {
@@ -1490,6 +1518,30 @@ mod tests {
                 .exists(),
             "the room's copy stays for the next verb"
         );
+        // **A line standing for the room's copy is judged before the copy
+        // goes** (Codex on #94, round 9): the first save point's line stands;
+        // its room copy put back and its target removed, the publication
+        // recreates the target under the standing line, appends nothing and
+        // removes the copy; the copy put back and the target replaced by
+        // other bytes, the copy stays and no line is appended. Perturbation:
+        // remove the copy on the digest alone and the first case loses the
+        // last sound copy with the target still gone.
+        std::fs::write(room.join(&room_name), &bytes).unwrap();
+        std::fs::remove_file(&target).unwrap();
+        let lines = publish(&room, me, dir_fd.as_fd(), owner, mine, &[]).unwrap();
+        assert!(lines.is_empty(), "no second line for a standing one");
+        assert!(target.exists(), "the target is recreated under its line");
+        assert!(
+            !room.join(&room_name).exists(),
+            "the copy went once the target stood"
+        );
+        assert_eq!(read_manifest(dir_fd.as_fd(), mine).unwrap().len(), 1);
+        std::fs::write(room.join(&room_name), &bytes).unwrap();
+        std::fs::write(&target, b"damaged").unwrap();
+        let lines = publish(&room, me, dir_fd.as_fd(), owner, mine, &[]).unwrap();
+        assert!(lines.is_empty());
+        assert!(room.join(&room_name).exists(), "the last sound copy stays");
+        std::fs::write(&target, &bytes).unwrap();
     }
 
     /// **The corpus holds the two readers equal**, per `weaver-admin-Spec`
