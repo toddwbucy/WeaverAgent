@@ -158,7 +158,7 @@ if standing "$STACK"; then
 fi
 # An admin base that holds anything is a stack this script did not write: an
 # agent's root, or the box-wide configuration of the layout before 2026-10-01,
-# which REDEPLOY.md migrates by hand. An empty one is harmless and kept, and one
+# which is taken down, never migrated. An empty one is harmless and kept, and one
 # that cannot be listed is never read as empty.
 if standing "$ADMIN_BASE"; then
   listing=$(LC_ALL=C ls -A -- "$ADMIN_BASE" 2>&1) || die "cannot list $ADMIN_BASE to see whether it holds configuration: $listing"

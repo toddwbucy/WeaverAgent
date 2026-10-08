@@ -120,9 +120,8 @@ while [ $# -gt 0 ]; do
     --session)  [ $# -ge 2 ] || die "--session needs a name"; SESSION=$2; shift ;;
     --member-identity) die "--member-identity is retired as of 2026-09-15, issue #545. The
    member's account is weaver-<name>-state, derived by weaver-admin from the
-   agent's name. Lay an agent made before this date out as create-agent.sh now
-   makes one: root:weaver-<name>-state 0710, its trace root:weaver-<name>-trace
-   0640 (deploy/REDEPLOY.md, existing territories)." ;;
+   agent's name. An agent made before this date is recreated with create-agent.sh
+   after its take-down by deploy/HowToDeployANewAgent.md section 7." ;;
     --engine)   [ $# -ge 2 ] || die "--engine needs a name"; ENGINE=$2; shift ;;
     --spu)      [ $# -ge 2 ] || die "--spu needs a path"; SPU_OVERRIDE=$2; shift ;;
     --declaration-directory) die "--declaration-directory is retired on the operator's ruling of 2026-10-07 on #1:
@@ -331,7 +330,7 @@ AGENT_DIR=$(realpath -e -- "$AGENT_DIR") || die "the stack record's agent-direct
 # look is admin's own: either POSIX ACL attribute present, read without
 # following a link; a look that cannot answer refuses.
 read -r base_mode < <(stat -c '%a' -- "$AGENT_DIR" 2>/dev/null) || die "cannot read the mode of the agent-directory $AGENT_DIR"
-(( 8#$base_mode & 8#2000 )) && die "the stack record's agent-directory $AGENT_DIR is setgid (mode $base_mode), so a territory made in it would be setgid, which admin refuses; clear the bit (deploy/REDEPLOY.md), then rerun"
+(( 8#$base_mode & 8#2000 )) && die "the stack record's agent-directory $AGENT_DIR is setgid (mode $base_mode), so a territory made in it would be setgid, which admin refuses; clear its setgid bit, then rerun"
 rc=0
 python3 -c '
 import errno, os, sys
@@ -341,7 +340,7 @@ except OSError as e:
     sys.exit(1 if e.errno in (errno.ENODATA, errno.EOPNOTSUPP) else 2)
 ' "$AGENT_DIR" || rc=$?
 case $rc in
-  0) die "the stack record's agent-directory $AGENT_DIR carries a default access entry, which a territory made in it would inherit and admin refuses; remove it (deploy/REDEPLOY.md), then rerun" ;;
+  0) die "the stack record's agent-directory $AGENT_DIR carries a default access entry, which a territory made in it would inherit and admin refuses; remove the default entry from it, then rerun" ;;
   1) ;;
   *) die "whether the agent-directory $AGENT_DIR carries a default access entry cannot be read" ;;
 esac
