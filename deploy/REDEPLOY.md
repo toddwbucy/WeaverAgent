@@ -193,19 +193,24 @@ deploy/create-agent.sh m1 --artifact /opt/weaver/models/qwen2.5-0.5b-instruct-q6
 The store is the embedded sqlite engine, the default (the service engine retired on the
 operator's ruling of 2026-10-02 on #1). The script makes the four accounts and the two
 groups, the territory (root:weaver-<name>-state 0710 under the stack record's
-`agent-directory`, passage for the state group, which the member holds as its own and the
-operator and the connector join, and nothing for the agent's own uid, with no access entries), its trace
+`agent-directory`, made canonical, with no access entries), its trace
 (root:weaver-<name>-trace 0640, which the member cannot read), the declaration and the
 prompt draft in the territory (root:weaver-<name>-admin 0640; `sudoedit` edits the declaration) and
-`save-points/` beside them, and the agent root staged under a dot-name: every key
-copied from the stack record, `territory`, `operator` and `roles.toml`. It then proves
-the boundary (the member cannot read the trace, the relay holds the trace group alone
-and the connector the access group and nothing of the agent's, the member can write its
-state room and the agent's own uid cannot enter it, and the connector reads the
-declaration and writes nothing of the territory), installs the sudo rule once `visudo`
-passes it, and only then moves the root into place, which is the admission. The
-operator's three new group memberships, the agent's, the trace group and the access
-group, need a fresh login before they apply (`newgrp` selects one group in one shell).
+`save-points/` beside them (root:weaver-<name>-admin 0750), and the agent root staged
+under a dot-name: every key copied from the stack record, `territory`, `operator` and
+`roles.toml`. **The territory is the state group's and passes it; the access group reads
+the files** (the operator's ruling of 2026-10-08 on #1). The member holds the state group
+alone, the connector holds the state group for passage and the access group for reading,
+and the agent's own uid holds neither. It then proves the boundary (the member cannot
+read the trace, the relay holds the trace group alone and the connector the state and
+access groups and no group of the agent's or the trace's, the member can write its
+state room and the agent's own uid can pass neither it nor the territory, and the
+connector reads the declaration and writes nothing of the territory), installs the sudo
+rule once `visudo` passes it, and only then moves the root into place, which is the
+admission. The operator joins four groups: `weaver-<name>` for the gate's socket,
+`weaver-<name>-trace` for the trace, `weaver-<name>-state` to pass the territory and
+`weaver-<name>-admin` to read the declaration, the draft, the logs and the save points.
+They need a fresh login before they apply (`newgrp` selects one group in one shell).
 
 An agent electing no store (`[state-store] engine = "none"`) is made by hand, since
 there is no member or store to provision or probe: `HowToDeployANewAgent.md` section 3.
@@ -269,16 +274,18 @@ before the new admin is installed:
 
 1. Keep the old configuration whole: `sudo cp -a /etc/weaver/admin
    /etc/weaver/admin.before-migration`.
-2. For each agent in the old `allow-list`, make its root under `/etc/weaver/admin/<a>/`
-   with the binary keys and `coordination-root` copied from the old base, its own
-   `spu-binary` (its `agent-spu` choice resolved through `spu-implementations`, where it
-   had one), and install its declaration `<agent-config-directory>/<a>.toml` as
-   root:weaver-<a>-admin 0640 at `<territory>/agent.toml` (section 8, step 7, for the territory's layout).
-   Then finish it as section 8, steps 2 to 4, describe, step 2's move already made.
-3. Remove the old top-level files, so that the base holds only agent roots: `sudo find
+2. **Write the stack record first**, as section 3, step 6, describes: admin never reads
+   it, and every agent's step below reads its `agent-directory` and `library-path`.
+3. For each agent in the old `allow-list`, make its root, `sudo install -d -o root -g
+   root -m 0755 /etc/weaver/admin/<a>`, with the binary keys and `coordination-root`
+   copied from the old base and its own `spu-binary` (its `agent-spu` choice resolved
+   through `spu-implementations`, where it had one). Then finish it by section 8: step 2,
+   its block's first line setting `D=<agent-config-directory>/<a>.toml`, the declaration
+   it installs; step 3 for its trace; and step 4 for its sudo rule.
+4. Remove the old top-level files, so that the base holds only agent roots: `sudo find
    /etc/weaver/admin -maxdepth 1 -type f -delete`.
-4. Write the stack record as section 3, step 6, describes, then install with
-   `deploy/update-stack.sh --install`.
+5. Install with `deploy/update-stack.sh --install`, after pulling main as section 8,
+   step 6, says.
 
 ## 8. Migrating a box on the per-agent layout from before #50
 
@@ -295,24 +302,51 @@ install prefix, `/opt/weaver` by default.
    'weaver-worker@*'` shows none active. The new admin ends a run by its run lock, which
    a unit's worker never took, so it could not reach a worker left serving.
 
-2. **Move the declaration into the territory** and retire the root's old keys (the
-   territory's full layout is step 7, which `update-stack.sh --install` lays out for
-   a box that took this step before 2026-10-07):
+2. **Make the groups and accounts, lay the territory out at the law, and move the
+   declaration into it**, in `create-agent.sh`'s order, so every group stands before a
+   file uses it. Run it as the operator, one chain: a step that fails stops the rest, so
+   the root's declaration is removed only once it stands in the territory.
 
    ```sh
-   A=<a>; R=/etc/weaver/admin/$A; T=/var/lib/weaver-agent/weaver-$A
-   sudo install -o root -g weaver-$A-admin -m 0640 "$R/agent.toml" "$T/agent.toml"
-   sudo cp -a "$R" "/etc/weaver/admin.before-50-$A"      # outside the base, a dot-free name admin never reads
-   sudo rm -f "$R/agent.toml" "$R/run-tool" "$R/control-tool" "$R/unit-properties" "$R/log-path"
-   echo "$T" | sudo tee "$R/territory" >/dev/null
-   id -u | sudo tee "$R/operator" >/dev/null
-   echo "trace-reader = \"weaver-$A-admincon\"" | sudo tee "$R/roles.toml" >/dev/null
-   [ ! -f /etc/weaver/stack/library-path ] || sudo cp /etc/weaver/stack/library-path "$R/library-path"
-   sudo chmod 0644 "$R"/*
+   A=<a>; R=/etc/weaver/admin/$A; D="$R/agent.toml"   # section 7 sets D to the old declaration
+   T=$(realpath -e -- "$(cat /etc/weaver/stack/agent-directory)")/weaver-$A \
+   && { getent group "weaver-$A-state" >/dev/null || sudo groupadd --system "weaver-$A-state"; } \
+   && { getent group "weaver-$A-trace" >/dev/null || sudo groupadd --system "weaver-$A-trace"; } \
+   && sudo groupadd --system "weaver-$A-admin" \
+   && sudo useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group --gid "weaver-$A-trace" "weaver-$A-relay" \
+   && sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group --groups "weaver-$A-state,weaver-$A-admin" "weaver-$A-admincon" \
+   && sudo usermod -aG "weaver-$A,weaver-$A-trace,weaver-$A-state,weaver-$A-admin" "$(id -un)" \
+   && ! sudo test -L "$T" \
+   && { sudo test -d "$T" || sudo install -d -o root -g "weaver-$A-state" -m 00710 "$T"; } \
+   && sudo chown root:"weaver-$A-state" "$T" && sudo chmod 00710 "$T" \
+   && { [ -z "$(sudo getfacl --skip-base --absolute-names -- "$T")" ] || sudo setfacl -b -- "$T"; } \
+   && sudo install -d -o root -g "weaver-$A-admin" -m 00750 "$T/save-points" \
+   && ! sudo test -e "$T/agent.toml" && ! sudo test -L "$T/agent.toml" \
+   && sudo install -o root -g "weaver-$A-admin" -m 0640 "$D" "$T/agent.toml" \
+   && sudo cp -a "$R" "/etc/weaver/admin.before-50-$A" \
+   && sudo rm -f "$R/agent.toml" "$R/run-tool" "$R/control-tool" "$R/unit-properties" "$R/log-path" \
+   && printf '%s\n' "$T" | sudo tee "$R/territory" >/dev/null \
+   && id -u | sudo tee "$R/operator" >/dev/null \
+   && printf 'trace-reader = "%s"\n' "weaver-$A-admincon" | sudo tee "$R/roles.toml" >/dev/null \
+   && { [ ! -f /etc/weaver/stack/library-path ] || sudo cp /etc/weaver/stack/library-path "$R/library-path"; } \
+   && sudo chmod 0644 "$R"/* \
+   && echo "$A: laid out at $T"
    ```
 
-   The copy goes beside the base, never inside it, where its name would be read as an
-   agent's.
+   This is the law `create-agent.sh` lays out (the operator's ruling of 2026-10-08 on
+   #1): the territory root:weaver-<a>-state 0710, `save-points/` root:weaver-<a>-admin
+   0750, the declaration root:weaver-<a>-admin 0640; the operator joined to the agent,
+   trace, state and access groups; the connector holding the state and access groups.
+   **A storeless agent carries the state group too**, with no member account: it is the
+   territory's group, and admin resolves it for every verb. The 5-digit modes clear a
+   setgid bit an older territory carries, which `chmod 0710` keeps, and `setfacl -b`
+   drops access entries, which admin refuses on the territory. The territory's path is
+   the stack record's `agent-directory` made canonical, as `create-agent.sh` makes it,
+   since admin compares the declaration's sink with the canonical territory. A chain
+   that stops leaves what it made standing: read the failing command's error, fix it,
+   and run the remaining lines. `update-stack.sh --install` also repairs a territory
+   that is not at the law. The copy of the root goes beside the base, never inside it,
+   where its name would be read as an agent's.
 
    **An agent electing `postgres` moves to the embedded engine here**, since postgres
    is not an engine this build provides (#85) and `update-stack.sh` refuses such a
@@ -335,41 +369,44 @@ install prefix, `/opt/weaver` by default.
    `deploy/turn.py <a> --system` (`HowToDeployANewAgent.md` section 4), and the save
    point taken after that seeding is the agent's starting state.
 
-3. **Provision the relay, the access group and the connector**, as `create-agent.sh`
-   makes them:
-
-   ```sh
-   getent group "weaver-$A-trace" >/dev/null || sudo groupadd --system "weaver-$A-trace"
-   sudo groupadd --system "weaver-$A-admin"
-   sudo useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group --gid "weaver-$A-trace" "weaver-$A-relay"
-   sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group --groups "weaver-$A-state,weaver-$A-admin" "weaver-$A-admincon"
-   ```
-
-   A territory from before 2026-10-02 that is still grouped to its member and setgid is
-   re-laid first, with its trace root:weaver-<a>-trace 0640, as `create-agent.sh` makes
-   one (`HowToDeployANewAgent.md` section 0); a territory from before 2026-10-07 takes
-   the access group at step 7. **Every trace must stand root's, grouped
-   `weaver-<a>-trace`, 0640**, which admin checks at every load since #62. An admin
+3. **Re-lay the trace and check the sink's path.** **Every trace must stand root's,
+   grouped `weaver-<a>-trace`, 0640**, which admin checks at every load since #62. An admin
    before #62 recreated a lost trace root:root, so re-lay any such regular file with
    `sudo chown root:weaver-$A-trace <trace> && sudo chmod 0640 <trace>`, and remove a
-   link or any other entry at the trace's path and provision the trace afresh, since
-   chown and chmod follow a link. `update-stack.sh` refuses before its build while one
-   stands otherwise, naming what it found and what is required and pointing here, and
-   prints no command.
+   link or any other entry at the trace's path and provision the trace afresh, as
+   `create-agent.sh` does, `sudo install -o root -g weaver-$A-trace -m 0640 /dev/null
+   <trace>`, since chown and chmod follow a link. `update-stack.sh` refuses before its
+   build while one stands otherwise, naming what it found and what is required and
+   pointing here, and prints no command. **The declaration's `[trace-sink] path` names
+   a file directly in `$T`**, the canonical path step 2 printed: admin compares the
+   sink's directory with the canonical territory and otherwise refuses every
+   `validate`, `load` and `restore` `config_invalid` naming `trace-sink`. Correct it with `sudoedit
+   "$T/agent.toml"`.
 
-4. **Install the connector's sudo rule**, checked before it is placed:
+4. **Install the connector's sudo rule**, staged and checked as `create-agent.sh`
+   stages it: under a dot-name inside `/etc/sudoers.d`, which sudo never reads and no
+   other principal can claim, checked by `visudo`, then moved into place. Never stage
+   it under `/tmp`, where any local user can make the name first.
 
    ```sh
-   ADMIN=<prefix>/bin/weaver-admin
-   cat > /tmp/weaver-$A.rule <<EOF
-   Defaults:weaver-$A-admincon !pam_session
-   weaver-$A-admincon ALL=(root) NOPASSWD: $ADMIN show $A, $ADMIN validate $A, $ADMIN load $A, $ADMIN unload $A, $ADMIN stop $A
-   EOF
-   sudo visudo -cf /tmp/weaver-$A.rule && sudo install -o root -g root -m 0440 /tmp/weaver-$A.rule /etc/sudoers.d/weaver-$A
-   rm /tmp/weaver-$A.rule
+   A=<a>; ADMIN=$(realpath -e -- <prefix>/bin/weaver-admin); lines=""
+   for verb in show validate load unload stop save-point restore force-unload; do
+     lines="$lines${lines:+, }$ADMIN $verb $A"
+   done
+   sudo grep -qE '^[#@]includedir[[:space:]]+/etc/sudoers\.d([[:space:]]|$)' /etc/sudoers \
+   && rule=$(sudo mktemp "/etc/sudoers.d/.weaver-$A.XXXXXX") \
+   && printf 'Defaults:%s !pam_session\n%s ALL=(root) NOPASSWD: %s\n' "weaver-$A-admincon" "weaver-$A-admincon" "$lines" \
+      | sudo tee "$rule" >/dev/null \
+   && sudo chmod 0440 "$rule" \
+   && { sudo visudo -cqf "$rule" || { sudo rm -f -- "$rule"; false; }; } \
+   && sudo mv -T -- "$rule" "/etc/sudoers.d/weaver-$A" \
+   && sudo -l -U "weaver-$A-admincon"
    ```
 
-   The observer role's rule grants the `show` line alone.
+   These are the operator role's eight command lines, as `create-agent.sh` grants them.
+   The observer role's rule grants the `show` line alone: run the loop over `show`
+   only. A chain that stops after `mktemp` leaves the dot-named stage, which sudo
+   ignores; remove it by hand.
 
 5. **Bring the stack record forward**, once for the box: remove `run-tool`,
    `control-tool`, `unit-properties` and `log-directory` from `/etc/weaver/stack/`, and
@@ -403,10 +440,13 @@ install prefix, `/opt/weaver` by default.
    choose between: remove the one that is wrong first. After the install the
    operator's old directory stands empty but for the identity backups, yours to
    remove, and every later edit of the declaration is `sudoedit
-   /var/lib/weaver-agent/weaver-<a>/agent.toml`. Published save points a box made before
-   this step stand in the old directory under the operator's uid; the manifest there
-   is root's. They are not moved, being an unclean mix of owners: name one at a
-   `restore` only after installing it as root:weaver-<a>-admin 0640 into
-   `<territory>/save-points/`, or start the agent from its first load under the new
-   layout and let the next unload publish the first save point there. The operator's
+   <territory>/agent.toml`, the root's `territory` key naming the directory. Published
+   save points a box made before this step stand in the old directory under the
+   operator's uid; the manifest there is root's. They are not moved, being an unclean
+   mix of owners: name one at a `restore` only after installing it as
+   root:weaver-<a>-admin 0640 into `<territory>/save-points/`, by
+   `HowToDeployANewAgent.md` section 5, whose `[restore]` is honoured only while the
+   save point it names is the manifest's latest (remove it, or run `restore` again,
+   once a newer one is published), or start the agent from its first load under the
+   new layout and let the next unload publish the first save point there. The operator's
    new group membership needs a fresh login before it applies.

@@ -28,11 +28,11 @@ load where any piece is missing, so the pieces are made first and admin is asked
 | Piece | Path | Owner and mode |
 |---|---|---|
 | Agent account, the worker's uid | `weaver-<name>`, home `/home/weaver-<name>` | system user, nologin, home 2750 |
-| Member account, the state store's uid (agents with a store) | `weaver-<name>-state`, no home | system user, nologin |
+| Member account, the state store's uid (agents with a store) | `weaver-<name>-state`, no home | system user, nologin; its group `weaver-<name>-state`, the state group, is the territory's and stands for every agent, a storeless one included |
 | Trace group | `weaver-<name>-trace`, the trace's readers: the operator and the relay, never the member | system group |
 | Relay account, the trace relay's uid | `weaver-<name>-relay`, no home | system user, nologin, its one group the trace group |
-| Access group, the territory's and the trace door's | `weaver-<name>-admin` | system group, held by the connector and the operator, never the member; it reads and never writes |
-| Connector account, admin-con's service user | `weaver-<name>-admincon`, no home | system user, nologin, holds the access group and nothing of the agent's |
+| Access group, the territory files' and the trace door's | `weaver-<name>-admin` | system group, held by the connector and the operator, never the member or the agent's uid; it reads and never writes |
+| Connector account, admin-con's service user | `weaver-<name>-admincon`, no home | system user, nologin, holds the state group for passage and the access group for reading, and no group of the agent's or the trace's |
 | Territory | `<agent-directory>/weaver-<name>/`, the stack record's `agent-directory` (default `/var/lib/weaver-agent`, root 0755) | root:weaver-<name>-state 0710, not setgid: the state group passes to what stands in it by name, which the member holds as its own and the operator and the connector join; the agent's own uid passes not; none lists; the files' own modes are the wall beneath, and no access entry is set |
 | State room (agents with a store) | `<territory>/state/`, where the member writes its save points | member 0700, unreachable by the agent's uid |
 | Trace sink | `<territory>/trace.ndjson` | made by create-agent before the first load, root:weaver-<name>-trace 0640, so the member cannot read it, and admin opens it append-only at load and leaves its owner and mode alone |
@@ -44,15 +44,20 @@ load where any piece is missing, so the pieces are made first and admin is asked
 | Sudo rule | `/etc/sudoers.d/weaver-<name>` | root 0440, checked by `visudo` |
 | Run directory | `<coordination-root>/weaver.run/<name>/`: `run.lock`, `admin.lock`, `trace.sock` | made by admin, root 0755 |
 
-The operator joins three groups: `weaver-<name>` for the gate's socket,
-`weaver-<name>-trace` to read the trace without sudo, and `weaver-<name>-admin`, the
-access group, to pass the territory and read the declaration, the draft, the logs and
-the save points without sudo. The member holds its own group alone and reaches its room
-by the territory's passage, which every uid has; it is in neither the access group nor
-the trace group, so it reads neither the logs nor the save points nor the trace, whose content it receives only as the tee's distillate. The
-access group reads and never writes: the connector, which holds it, cannot rewrite the
-declaration. The connector reaches the trace through the relay's door alone, by the
-access group, and the relay admits only the reader `roles.toml` names. A session that
+**The territory is the state group's and passes it; the access group reads the files**
+(the operator's ruling of 2026-10-08 on #1). The operator joins four groups:
+`weaver-<name>` for the gate's socket, `weaver-<name>-trace` to read the trace without
+sudo, `weaver-<name>-state` to pass the territory, and `weaver-<name>-admin` to read the
+declaration, the draft, the logs and the save points without sudo. The member holds the
+state group alone and reaches its room by the territory's passage at 0710, which only
+that group has; it is in neither the access group nor the trace group, so it reads
+neither the logs nor the save points nor the trace, whose content it receives only as
+the tee's distillate. The connector holds the state group for passage and the access
+group for reading, and no group of the agent's or the trace's. The agent's own uid
+holds neither the state group nor the access group, so it cannot pass the territory.
+The access group reads and never writes: the connector cannot rewrite the declaration.
+The connector reaches the trace through the relay's door alone, by the access group,
+and the relay admits only the reader `roles.toml` names. A session that
 predates the join needs a fresh login before the groups apply: `newgrp` selects one
 group in one shell.
 
@@ -95,8 +100,9 @@ Apply makes the accounts and the territory, writes the declaration and the draft
 it as root, then stages the agent root under the
 dot-name `/etc/weaver/admin/.<name>.partial`, which admin's name check never admits, and
 probes the boundary: the member can write its state room, the agent's own uid cannot
-enter it, the member cannot read the trace, the relay holds the trace group alone, the
-connector holds the access group and no group of the agent's, and the connector reads
+enter it nor pass the territory, the member cannot read the trace, the relay holds the
+trace group alone, the connector holds the state and access groups and no group of the
+agent's or the trace's, and the connector reads
 the declaration and can write neither it, the draft nor the save points directory. A
 refusal there is the
 boundary being wrong, not the agent, and leaves the staged root in place to read and
@@ -123,38 +129,48 @@ name.
 
 `create-agent.sh` refuses `--engine none`, since a storeless agent has no member, no
 state room and no store to verify. The pieces are made by hand: the script's `accounts`
-and `territory` steps minus the member and the state room, the relay and connector
-accounts and the two groups, the declaration and the draft in the territory, then the
-agent root from the stack record, with the root made last because it is the admission.
-The sudo rule is section 5's, made the same way create-agent makes it.
+and `territory` steps minus the member account and the state room, the relay and
+connector accounts and the three groups, the declaration and the draft in the territory,
+then the agent root from the stack record, with the root made last because it is the
+admission. **A storeless agent carries the state group `weaver-<name>-state` with no
+member account**: it is the territory's group, which the operator and the connector pass
+by, and admin resolves it for every verb. The block runs as the operator, one chain, so
+a step that fails stops the rest; it refuses a territory, a stage or a root that already
+stands, since `install -d` would merge with it. The territory is the stack record's
+`agent-directory` made canonical, as `create-agent.sh` makes it, and the 5-digit modes
+clear a setgid bit the base would otherwise pass down. The block stages the root; then
+install the sudo rule by `REDEPLOY.md` section 8, step 4's commands, with `A=$N`, and
+only then move the root into place, which is the admission: `sudo mv -T --
+/etc/weaver/admin/.$N.partial /etc/weaver/admin/$N`.
 
 ```sh
 N=<name>
-sudo useradd --system --shell /usr/sbin/nologin --create-home --user-group weaver-$N
-sudo groupadd --system weaver-$N-trace
-sudo groupadd --system weaver-$N-admin
-sudo useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group --gid weaver-$N-trace weaver-$N-relay
-sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group --groups weaver-$N-state,weaver-$N-admin weaver-$N-admincon
-sudo usermod -aG weaver-$N,weaver-$N-trace,weaver-$N-state,weaver-$N-admin "$USER"
-sudo chmod 2750 /home/weaver-$N
-T=/var/lib/weaver-agent/weaver-$N      # the stack record's agent-directory, then the account
-[ ! -e "$T" ] || { echo "REFUSED: $T already exists"; exit 1; }   # install -d would merge
-sudo install -d -o root -g weaver-$N-state -m 0710 "$T"
-sudo install -o root -g weaver-$N-trace -m 0640 /dev/null "$T/trace.ndjson"
-sudo install -d -o root -g weaver-$N-admin -m 0750 "$T/save-points"
-sudo install -o root -g weaver-$N-admin -m 0640 $N.toml "$T/agent.toml"
-sudo install -o root -g weaver-$N-admin -m 0640 $N-prompt.md "$T/system-prompt.md"
-R=/etc/weaver/admin/.$N.partial
-sudo install -d -o root -g root -m 0755 "$R"
-for k in worker-binary spu-binary gate-binary coordination-root \
-         library-path headroom-bytes load-bound-seconds; do
-  [ ! -f /etc/weaver/stack/$k ] || sudo cp /etc/weaver/stack/$k "$R/$k"
-done
-echo "$T" | sudo tee "$R/territory" >/dev/null
-id -u | sudo tee "$R/operator" >/dev/null
-echo "trace-reader = \"weaver-$N-admincon\"" | sudo tee "$R/roles.toml" >/dev/null
-sudo chmod 0644 "$R"/*
-sudo mv -T "$R" /etc/weaver/admin/$N
+T=$(realpath -e -- "$(cat /etc/weaver/stack/agent-directory)")/weaver-$N \
+&& R=/etc/weaver/admin/.$N.partial \
+&& [ ! -e "$T" ] && [ ! -L "$T" ] && [ ! -e "$R" ] && [ ! -e /etc/weaver/admin/$N ] \
+&& sudo useradd --system --shell /usr/sbin/nologin --create-home --user-group weaver-$N \
+&& sudo groupadd --system weaver-$N-state \
+&& sudo groupadd --system weaver-$N-trace \
+&& sudo groupadd --system weaver-$N-admin \
+&& sudo useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group --gid weaver-$N-trace weaver-$N-relay \
+&& sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group --groups weaver-$N-state,weaver-$N-admin weaver-$N-admincon \
+&& sudo usermod -aG weaver-$N,weaver-$N-trace,weaver-$N-state,weaver-$N-admin "$(id -un)" \
+&& sudo chmod 2750 /home/weaver-$N \
+&& sudo install -d -o root -g weaver-$N-state -m 00710 "$T" \
+&& sudo install -o root -g weaver-$N-trace -m 0640 /dev/null "$T/trace.ndjson" \
+&& sudo install -d -o root -g weaver-$N-admin -m 00750 "$T/save-points" \
+&& sudo install -o root -g weaver-$N-admin -m 0640 $N.toml "$T/agent.toml" \
+&& sudo install -o root -g weaver-$N-admin -m 0640 $N-prompt.md "$T/system-prompt.md" \
+&& sudo install -d -o root -g root -m 0755 "$R" \
+&& { ok=1; for k in worker-binary spu-binary gate-binary coordination-root \
+                    library-path headroom-bytes load-bound-seconds; do
+       [ ! -f /etc/weaver/stack/$k ] || sudo cp -- /etc/weaver/stack/$k "$R/$k" || { ok=0; break; }
+     done; [ "$ok" = 1 ]; } \
+&& printf '%s\n' "$T" | sudo tee "$R/territory" >/dev/null \
+&& id -u | sudo tee "$R/operator" >/dev/null \
+&& printf 'trace-reader = "%s"\n' "weaver-$N-admincon" | sudo tee "$R/roles.toml" >/dev/null \
+&& sudo chmod 0644 "$R"/* \
+&& echo "$N: staged at $R; install the sudo rule, then: sudo mv -T -- $R /etc/weaver/admin/$N"
 ```
 
 The declaration is written by hand. karl's, which loaded on 2026-09-30, is the shape,
@@ -194,7 +210,11 @@ declaration written before 2026-10-06, and the `identity-file` key of the days b
 each refuse by name: take the text out into `system-prompt.md` beside the declaration and
 seed it through the gate (section 4). `update-stack.sh --install` makes that move for a
 declaration carrying one system text message (`deploy/migrate-identity.py` is what it
-runs, and says why when it cannot move a shape losslessly); the seeding stays yours. `allowed-uids` is who may dial the gate, the
+runs, and says why when it cannot move a shape losslessly); the seeding stays yours.
+**The sink's `path` is `$T/trace.ndjson`, with `$T` the canonical territory the block
+derives**, karl's being the default's: admin compares the sink's directory with the
+canonical territory, so a path through a link, or under another base, refuses every
+`validate`, `load` and `restore` `config_invalid` naming `trace-sink`. `allowed-uids` is who may dial the gate, the
 operator's uid here, and the one uid the harness takes a seeding line from. Check it
 parses before installing it:
 `python3 -c 'import tomllib,sys; tomllib.load(open(sys.argv[1],"rb"))' <name>.toml`.
@@ -246,7 +266,8 @@ deploy/turn.py <name> --system
 ```
 
 This reads `<territory>/system-prompt.md`, the root's `territory` key naming the
-directory and the access group letting you read the file, and sends it through the gate
+directory, the state group passing you through the territory and the access group
+letting you read the file, and sends it through the gate
 as the one line `{"role": "system", "text": ...}`. The harness takes a system line from
 the operator's uid alone, the one `allowed-uids` names and admin's `operator` key
 records: it writes the prompt into the record as the session's prefix, the tee carries
@@ -296,7 +317,7 @@ sudo /opt/weaver/bin/weaver-admin load <name>         # answers {"kind":"state",
 sudo /opt/weaver/bin/weaver-admin show <name>         # the state and the run's constituent pids
 sudo /opt/weaver/bin/weaver-admin save-point <name>   # a save point now, published at once
 sudo /opt/weaver/bin/weaver-admin unload <name>       # answers {"kind":"state","state":"unloaded"}
-sudo /opt/weaver/bin/weaver-admin restore <name>      # name the save point the next load restores
+sudo /opt/weaver/bin/weaver-admin restore <name>      # make [restore]'s save point the latest, which the next load restores
 sudo /opt/weaver/bin/weaver-admin force-unload <name> # unload without the leave's save point
 ```
 
@@ -307,13 +328,29 @@ root:weaver-<name>-admin 0640, and names it on one line of `save-points.manifest
 there, root 0644: the ordinal, the digest, the position it covers, where the trace
 names it, and how it arrived. You read both through the access group and write
 neither. The next load restores the latest the manifest names whose file still stands
-and digests to its line. A file the manifest does not name is not loadable: to start
-from another state, put the file in the directory as root (its name must be the one its
-bytes compute, and it must stand root's), name it in `agent.toml` as `[restore]
-save-point = "<name or digest>"` with `sudoedit`, run `restore <name>`, which judges it
-and adds its manifest line, then `load`. The manifest is root's; the one way a file
-enters it is the `restore` verb, and removing the manifest makes every published save
-point unloadable until a restore names one again.
+and digests to its line. A file the manifest does not name is not loadable. To start
+from another state, put the file in the directory as root, root:weaver-<name>-admin
+0640, its name the one its bytes compute, since `restore` refuses any other owner, group
+or mode:
+
+```sh
+sudo install -o root -g weaver-<name>-admin -m 0640 <file> <territory>/save-points/<save point name>
+```
+
+Then name it in `agent.toml` as `[restore] save-point = "<name or digest>"` with
+`sudoedit`, run `restore <name>`, which judges it and makes it the manifest's latest,
+then `load`. A save point the manifest already names is restored the same way, without
+the install. The manifest is root's; the one way a file enters it is the `restore`
+verb, and removing the manifest makes every published save point unloadable until a
+restore names one again.
+
+**`[restore]` is honoured only while the save point it names is the manifest's latest**
+(the operator's ruling of 2026-10-08 on #99), which the `restore` verb makes it. Once a
+later unload or `save-point` publishes a newer one, a load with `[restore]` still in the
+declaration refuses `config_invalid` naming `restore`, and `admin.log` names both save
+points, rather than restore the older state over the newer. Remove `[restore]` with
+`sudoedit` to continue from the latest, or run `restore <name>` again to continue from
+the named one.
 
 **An unload that cannot take its save point does not complete.** It answers
 `{"kind":"save_point_not_taken","missed":...}` naming the leg that missed, the run stays
@@ -366,7 +403,10 @@ first.
 section 0 in reverse. Unload it, and check `show` reads unloaded with no constituent.
 Remove its sudo rule `/etc/sudoers.d/weaver-<name>` first, so the connector can run
 nothing more, then its root `/etc/weaver/admin/<name>/`, which ends its admission, and
-its run directory `<coordination-root>/weaver.run/<name>/`. `userdel -r` the agent's
+its run and runtime directories, `<coordination-root>/weaver.run/<name>/` and
+`<coordination-root>/weaver-<name>/`, the second holding the gate's and the harness's
+sockets, which `decommission.sh` purges beside the first (both on tmpfs, so a reboot
+also clears them). `userdel -r` the agent's
 account and `userdel` the member's, the relay's and the connector's, then delete the
 groups, which `userdel` leaves while a member remains and which a later `useradd
 --user-group` of the same name would refuse on. Archive the territory and remove it: it
