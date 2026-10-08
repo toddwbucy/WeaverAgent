@@ -265,6 +265,10 @@ OPERATOR_NAME=$(id -un)
 [ -r "$ADMIN_BASE" ] && [ -x "$ADMIN_BASE" ] \
   || die "$ADMIN_BASE cannot be listed by $OPERATOR_NAME, so its agent roots cannot be enumerated"
 AGENTS=""
+# **The root keys of layouts admin no longer reads**, beside
+# `declaration-directory` below: admin's `RETIRED_ROOT_KEYS` (weaver-admin
+# main.rs) holds the same names, and test_plans holds the two lists equal.
+RETIRED_ROOT_KEYS="agent.toml run-tool control-tool unit-properties log-path log-directory"
 for root in "$ADMIN_BASE"/*/; do
   root=${root%/}
   [ -d "$root" ] && [ ! -L "$root" ] || continue
@@ -272,13 +276,18 @@ for root in "$ADMIN_BASE"/*/; do
   [[ "$agent" =~ ^[A-Za-z0-9_-]+$ ]] || continue
   [ -r "$root" ] && [ -x "$root" ] \
     || die "$root is closed to $OPERATOR_NAME, so whether it is an agent, and what it names, cannot be read. Open it to 0755 as create-agent.sh makes it, then rerun."
-  for retired in agent.toml run-tool control-tool unit-properties log-path; do
-    [ ! -e "$root/$retired" ] || die "$agent: its root $root holds $retired, the layout before #50, which the admin this installs does not read. $(recreate "$agent")"
+  # Looked at as admin looks, of the name and never its target, so a link
+  # at a retired name refuses as admin's refuses it (Codex on #105).
+  for retired in $RETIRED_ROOT_KEYS; do
+    if [ -e "$root/$retired" ] || [ -L "$root/$retired" ]; then
+      die "$agent: its root $root holds $retired, the layout before #50, which the admin this installs does not read. $(recreate "$agent")"
+    fi
   done
-  [ ! -e "$root/declaration-directory" ] \
-    || die "$agent: its root $root names a declaration-directory, the layout before 2026-10-07, which the admin this installs does not read. $(recreate "$agent")"
-  [ -f "$root/territory" ] \
-    || die "$agent: its root $root names neither a territory nor a declaration-directory, which admin refuses at every verb. $(recreate "$agent")"
+  if [ -e "$root/declaration-directory" ] || [ -L "$root/declaration-directory" ]; then
+    die "$agent: its root $root names a declaration-directory, the layout before 2026-10-07, which the admin this installs does not read. $(recreate "$agent")"
+  fi
+  [ -f "$root/territory" ] && [ ! -L "$root/territory" ] \
+    || die "$agent: its root $root names no territory as a regular file, which admin refuses at every verb. $(recreate "$agent")"
   AGENTS="$AGENTS $agent"
 done
 [ -n "$AGENTS" ] || die "no agent root under $ADMIN_BASE: make one with create-agent.sh first"
@@ -351,6 +360,10 @@ for agent in $AGENTS; do
   [ -d "$territory" ] && [ ! -L "$territory" ] \
     || die "$agent: its territory $territory does not stand as a directory, or is a link, which admin refuses at every verb. $(recreate "$agent")"
   canonical=$(realpath -e -- "$territory") || die "$agent: its territory $territory does not resolve"
+  # **Named by its canonical path**, as admin's `judge_territory` requires
+  # (#99 area 2, H3): a key reaching it through a link refuses at every verb.
+  [ "$canonical" = "$territory" ] \
+    || die "$agent: its root names its territory as $territory, which resolves to $canonical, and admin requires the canonical path. $(recreate "$agent")"
   bad=$(held_closed "$(dirname -- "$canonical")") \
     || die "$agent: $bad, above its territory, is not held closed by root, which admin refuses at every verb"
   IFS=: read -r t_owner t_group t_mode < <(stat -c '%u:%G:%a' -- "$territory" 2>/dev/null) \

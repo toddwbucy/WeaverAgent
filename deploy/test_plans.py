@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import re
 import shutil
 import subprocess
 import sys
@@ -1521,18 +1522,37 @@ esac
         # A root holding its declaration or a retired key is recreated, since
         # the admin this installs reads none of them. Refused by name before
         # cargo runs. Perturbation: drop the check, and the run plans on.
-        for retired in ("agent.toml", "run-tool", "control-tool", "unit-properties", "log-path"):
-            with self.subTest(retired=retired):
-                self.log.unlink(missing_ok=True)
-                (self.config / "existing" / retired).write_text("x\n")
-                result = self.run_script("update-stack.sh")
-                self.assertEqual(result.returncode, 1, result.stderr)
-                self.assertIn(f"existing: its root {self.config / 'existing'} holds {retired}, the layout before #50",
-                              result.stderr)
-                self.assertIn("Recreate existing with deploy/create-agent.sh after its take-down by "
-                              "deploy/HowToDeployANewAgent.md section 7", result.stderr)
-                self.assertFalse(any(c[0] == "cargo" for c in self.calls()))
-                (self.config / "existing" / retired).unlink()
+        # Each key admin refuses, as a file and as a dangling link, which
+        # admin's look counts too (Codex on #105).
+        for retired in admin_retired_root_keys() - {"declaration-directory"}:
+            for form in ("file", "dangling link"):
+                with self.subTest(retired=retired, form=form):
+                    self.log.unlink(missing_ok=True)
+                    at = self.config / "existing" / retired
+                    if form == "file":
+                        at.write_text("x\n")
+                    else:
+                        at.symlink_to(self.root / "nowhere")
+                    result = self.run_script("update-stack.sh")
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertIn(f"existing: its root {self.config / 'existing'} holds {retired}, the layout before #50",
+                                  result.stderr)
+                    self.assertIn("Recreate existing with deploy/create-agent.sh after its take-down by "
+                                  "deploy/HowToDeployANewAgent.md section 7", result.stderr)
+                    self.assertFalse(any(c[0] == "cargo" for c in self.calls()))
+                    at.unlink()
+
+    def test_stack_and_admin_refuse_the_same_retired_root_keys(self):
+        # **The two lists of retired root keys are one** (Codex on #105):
+        # update-stack's preflight and admin's `RETIRED_ROOT_KEYS` judge the
+        # same root, so a key admin refuses and the preflight passes would
+        # build and install before reconcile met the refusal. Perturbation:
+        # drop a key from either list, and they differ.
+        script = (DEPLOY / "update-stack.sh").read_text()
+        line = next(l for l in script.splitlines() if l.startswith("RETIRED_ROOT_KEYS="))
+        stack_keys = set(line.split("=", 1)[1].strip('"').split()) | {"declaration-directory"}
+        self.assertEqual(stack_keys, admin_retired_root_keys())
+        self.assertIn('[ -e "$root/declaration-directory" ] || [ -L "$root/declaration-directory" ]', script)
 
     def test_stack_refuses_while_a_unit_of_the_old_layout_serves(self):
         # The admin this installs ends a run by its run lock, which a unit's
@@ -1813,10 +1833,44 @@ esac
         (self.config / "undeclared" / "worker-binary").write_text("/x")
         result = self.run_script("update-stack.sh")
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn(f"undeclared: its root {self.config / 'undeclared'} names neither a territory nor a "
-                      "declaration-directory, which admin refuses at every verb", result.stderr)
+        self.assertIn(f"undeclared: its root {self.config / 'undeclared'} names no territory as a regular "
+                      "file, which admin refuses at every verb", result.stderr)
         self.assertIn("Recreate undeclared with deploy/create-agent.sh after its take-down by "
                       "deploy/HowToDeployANewAgent.md section 7", result.stderr)
+        self.assertFalse(any(c[0] == "cargo" for c in self.calls()))
+        # **A territory key that is a link refuses too**, as admin refuses
+        # any root entry that is not a regular file (Codex on #105).
+        # Perturbation: look at the key with -f alone, and it reads.
+        shutil.rmtree(self.config / "undeclared")
+        key = self.config / "existing" / "territory"
+        aside = self.root / "territory.key"
+        key.rename(aside)
+        key.symlink_to(aside)
+        try:
+            result = self.run_script("update-stack.sh")
+        finally:
+            key.unlink()
+            aside.rename(key)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("names no territory as a regular file", result.stderr)
+
+    def test_stack_refuses_a_territory_named_through_a_link(self):
+        # **The territory key is its canonical path**, as admin's
+        # `judge_territory` requires (#99 area 2, H3; Codex on #105). A key
+        # reaching it through a link above it refuses by name before the
+        # build. Perturbation: drop the comparison, and the plan runs on.
+        key = self.config / "existing" / "territory"
+        real = self.existing_territory
+        via = self.root / "via"
+        via.symlink_to(real.parent)
+        saved = key.read_text()
+        key.write_text(str(via / real.name) + "\n")
+        try:
+            result = self.run_script("update-stack.sh")
+        finally:
+            key.write_text(saved)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(f"which resolves to {real.resolve()}, and admin requires the canonical path", result.stderr)
         self.assertFalse(any(c[0] == "cargo" for c in self.calls()))
 
     def test_stack_refuses_a_root_closed_to_the_operator(self):
@@ -2223,6 +2277,18 @@ esac
         result = self.lifecycle("--cleanup")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("removes only the territory named for its agent", result.stderr)
+
+
+def admin_retired_root_keys():
+    """The root keys weaver-admin refuses by name, read from its
+    `RETIRED_ROOT_KEYS` so test_plans compares the scripts with admin's own
+    list."""
+    main = (DEPLOY.parent / "crates" / "weaver-admin" / "src" / "main.rs").read_text()
+    block = main[main.index("const RETIRED_ROOT_KEYS"):]
+    block = block[:block.index("];")]
+    keys = set(re.findall(r'\(\s*"([a-z.-]+)",', block))
+    assert len(keys) == 7, keys
+    return keys
 
 
 def lifecycle_functions(script, *names):
