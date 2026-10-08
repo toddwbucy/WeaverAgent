@@ -638,12 +638,20 @@ reports no save point and is unchanged. **A leave whose lock outlives the after-
 wait keeps its report** (the #94 survey's S7): the escalation ends the holders and the
 reported save point is published as on a lock that freed, the same refusal following
 where it does not land, so `Unloaded` is never answered over a leave save point left in
-the room. **A verb that finds the run already ended, the lock free, publishes the room
+the room. **The marker closes clean only for this run's own save point** (the push review
+of 197e80b): a report whose `event_run` is not the run the marker stands open on, the
+reference this crate minted, publishes and leaves the marker open, so the next load
+records the reset. The report's covered `run` is not compared, a run restored and left
+with no turn covering the prior run's position; where the run is so ended and found
+already gone, its file reads as not its own and the marker stays open, a reset recorded
+rather than a clean unload claimed. **A verb that finds the run already ended, the lock free, publishes the room
 first** (the #94 survey's S11): a publication that refuses or leaves a file refuses
-`SavePointNotTaken` naming the publication again; one that published a room file closes
-the marker clean for either verb, the leave's save point having been taken, so a force
-records no `ForcedUnload` over the save point it published; where the room held none, a
-forced verb closes the marker as forced where it stands open, and an unforced one closes
+`SavePointNotTaken` naming the publication again; one that published a file this run
+took, its stamp naming the run the marker stands open on, closes the marker clean for
+either verb, the leave's save point having been taken, so a force records no
+`ForcedUnload` over the save point it published; a file recovered from an older run
+publishes and makes no run clean. Where the room held none of this run's, a forced verb
+closes the marker as forced where it stands open, and an unforced one closes
 nothing, a run that ended on its own being the unclean stop the next load records. A
 forced leave the harness refuses past its `Left`, its organs going down behind the
 refusal, closes it the same inside the after-left wait before the refusal returns, so

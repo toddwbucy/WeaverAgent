@@ -1838,7 +1838,12 @@ fn unloaded_answer() -> LifecycleAnswer {
 /// load records `NoCleanUnload` and recovers the room's file or names it as
 /// unpublishable, and the verb refuses naming the publication rather than
 /// answering Unloaded over a stale restore. A forced unload reports no save
-/// point and is unchanged.
+/// point and is unchanged. **The marker closes clean only for this run's own
+/// save point** (the push review of 197e80b): the report's `event_run` must
+/// be the run the marker stands open on, the reference admin minted, or the
+/// marker stays open and the next load records the reset. The report's
+/// covered `run` is not compared, since a run restored and left with no turn
+/// covers the prior run's position.
 fn conclude_left(
     config: &ServiceConfig,
     report: Option<weaver_types::SavePointReport>,
@@ -1862,21 +1867,50 @@ fn conclude_left(
             missed: weaver_types::SavePointLeg::Published,
         });
     }
+    if let Some((report, _)) = reports.first() {
+        let open = open_run(config)?;
+        if open.as_deref() != Some(report.event_run.0.as_str()) {
+            diag!(
+                "weaver-admin: the leave reported a save point of run {}, not the run the marker stands open on; the marker stays open",
+                report.event_run.0
+            );
+            record(
+                config,
+                "unload",
+                "the leave's save point is not this run's; the marker stays open",
+            );
+            return Ok(unloaded_answer());
+        }
+    }
     close_marker(config, forced)?;
     Ok(unloaded_answer())
+}
+
+/// The run the clean-unload marker stands open on, or none where it stands
+/// otherwise.
+fn open_run(config: &ServiceConfig) -> Result<Option<String>, LifecycleRefusal> {
+    Ok(match read_marker_or_refuse(config)? {
+        Some(save_points::Marker::Open { run }) => Some(run),
+        _ => None,
+    })
 }
 
 /// **An unload that finds the run already ended publishes the room first**
 /// (the #94 survey's S11), per Spec section 3: after an unload refused
 /// `SavePointNotTaken` naming `published`, the leave's save point stands in
 /// the room and the operator retries, plainly or forced. A publication that
-/// refuses or leaves a file refuses `published` again. Where it published a
-/// room file the leave's save point existed, so the marker closes clean for
-/// either verb and a force records no `ForcedUnload` over a save point it
-/// published; where the room held none, a forced verb closes the marker as
-/// forced, the operator's choice (Codex on #94, round 6), and an unforced one
-/// closes nothing, a run that ended on its own being the unclean stop the
-/// next load records.
+/// refuses or leaves a file refuses `published` again. **Where it published
+/// a file this run took**, its stamp naming the run the marker stands open
+/// on (the push review of 197e80b), the leave's save point existed, so the
+/// marker closes clean for either verb and a force records no
+/// `ForcedUnload` over a save point it published. A file recovered from an
+/// older run publishes and makes nothing clean: then, as where the room held
+/// none, a forced verb closes the marker as forced, the operator's choice
+/// (Codex on #94, round 6), and an unforced one closes nothing, a run that
+/// ended on its own being the unclean stop the next load records. A run
+/// restored and ended with no turn takes a save point stamped with the prior
+/// run, which reads as not its own; the marker then stays open, a reset
+/// recorded rather than a clean unload claimed.
 fn conclude_ended(
     config: &ServiceConfig,
     forced: bool,
@@ -1896,7 +1930,11 @@ fn conclude_ended(
     if deferred {
         return Err(not_published());
     }
-    if !lines.is_empty() {
+    let open = open_run(config)?;
+    let own = lines
+        .iter()
+        .any(|line| open.as_deref() == Some(line.stamp.run.as_str()));
+    if own {
         close_marker(config, false)?;
     } else if forced {
         close_marker(config, true)?;
@@ -4616,6 +4654,76 @@ mod tests {
         assert_eq!(
             save_points::read_marker(&config.root),
             Some(save_points::Marker::Closed { run: "r-1".into() })
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **A file of an older run makes no run clean** (the push review of
+    /// 197e80b): a run that crashed with only an older run's file in its
+    /// room publishes it as recovered, and the marker stays open on the
+    /// crashed run, so the next load records `NoCleanUnload`. Perturbation:
+    /// close the marker on any publication and it reads closed.
+    #[test]
+    fn a_recovered_file_of_an_older_run_leaves_the_marker_open() {
+        let (config, report, base) = territory_with_one_room_file("older-run");
+        save_points::write_marker(
+            &config.root,
+            Some(&save_points::Marker::Open { run: "r-2".into() }),
+        )
+        .unwrap();
+        assert_eq!(
+            unload_within(&config, TEST_UNLOAD_BOUNDS, false),
+            Ok(unloaded_answer())
+        );
+        assert_eq!(manifest_digests(&config), [report.save_point]);
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Open { run: "r-2".into() })
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **A leave's save point of another run makes no run clean** (the push
+    /// review of 197e80b): the worker reports a save point whose event run
+    /// is not the run the marker stands open on; it publishes, the verb
+    /// answers unloaded, and the marker stays open for the next load's
+    /// reset. Perturbation: close the marker whatever the report's run and
+    /// it reads closed.
+    #[test]
+    fn a_leave_reporting_another_runs_save_point_leaves_the_marker_open() {
+        let (config, report, base) = territory_with_one_room_file("other-run-leave");
+        save_points::write_marker(
+            &config.root,
+            Some(&save_points::Marker::Open { run: "r-2".into() }),
+        )
+        .unwrap();
+        let mut holder = stand_in_holder(&config);
+        let worker = recording_worker(
+            &config,
+            vec![
+                weaver_types::Payload::Answer(LifecycleAnswer::State {
+                    state: weaver_types::AgentState::Idle,
+                    load: None,
+                    constituents: Vec::new(),
+                }),
+                weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                    save_point: Some(report.clone()),
+                }),
+            ],
+        );
+        let ender = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let _ = holder.kill();
+            let _ = holder.wait();
+        });
+        let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, false);
+        ender.join().unwrap();
+        let _ = worker.join();
+        assert_eq!(answered, Ok(unloaded_answer()));
+        assert_eq!(manifest_digests(&config), [report.save_point]);
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Open { run: "r-2".into() })
         );
         let _ = std::fs::remove_dir_all(&base);
     }
