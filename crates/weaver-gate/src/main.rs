@@ -891,16 +891,14 @@ mod tests {
         let agent = || AgentName("alpha".into());
         vec![
             LifecycleDirective::Leave {
-                cause: cause.clone(),
+                cause,
                 forced: false,
             },
             LifecycleDirective::Leave {
-                cause: cause.clone(),
+                cause,
                 forced: true,
             },
-            LifecycleDirective::SavePoint {
-                cause: cause.clone(),
-            },
+            LifecycleDirective::SavePoint { cause },
             LifecycleDirective::Stop { cause },
             LifecycleDirective::Observe,
             LifecycleDirective::Release,

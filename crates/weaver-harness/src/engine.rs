@@ -3397,15 +3397,13 @@ mod tests {
     fn a_save_point_or_a_leave_mid_turn_is_refused_not_at_rest() {
         let cause = weaver_types::Cause { uid: 0 };
         for directive in [
-            weaver_types::LifecycleDirective::SavePoint {
-                cause: cause.clone(),
-            },
+            weaver_types::LifecycleDirective::SavePoint { cause },
             weaver_types::LifecycleDirective::Leave {
-                cause: cause.clone(),
+                cause,
                 forced: false,
             },
             weaver_types::LifecycleDirective::Leave {
-                cause: cause.clone(),
+                cause,
                 forced: true,
             },
         ] {

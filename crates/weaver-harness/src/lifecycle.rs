@@ -5246,15 +5246,13 @@ mod tests {
     fn a_save_point_or_a_leave_with_a_turn_in_flight_is_refused_not_at_rest() {
         let cause = weaver_types::Cause { uid: 0 };
         for directive in [
-            LifecycleDirective::SavePoint {
-                cause: cause.clone(),
-            },
+            LifecycleDirective::SavePoint { cause },
             LifecycleDirective::Leave {
-                cause: cause.clone(),
+                cause,
                 forced: false,
             },
             LifecycleDirective::Leave {
-                cause: cause.clone(),
+                cause,
                 forced: true,
             },
         ] {
