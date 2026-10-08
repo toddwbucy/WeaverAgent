@@ -256,7 +256,8 @@ and writes nothing is the failure this step exists to catch, and the worker's ow
 are in `<territory>/worker.log`, the state member's in `<territory>/state/state.log`.
 
 `deploy/verify-lifecycle.sh --agent <throwaway>` verifies a whole lifecycle end to end (create, load, seed, save
-points, restore, force-unload, crash recovery, take-down) on a throwaway agent it creates; it plans unless given `--apply`.
+points, restore, force-unload, crash recovery, take-down) on a throwaway agent it creates; it plans unless given `--apply`,
+and `--keep` stops it before the take-down so the checks it cannot make are made against the loaded agent.
 
 `load` never ends a run that stands: it answers `agent_running` and leaves the decision
 to its caller, who reads `show` and issues `unload`.

@@ -2693,6 +2693,33 @@ esac
         self.assertIn("OFF BY DEFAULT: step 8 runs update-stack.sh --install", usage.stdout)
         self.assertIn("which touches every agent on the box", usage.stdout)
 
+    def test_lifecycle_keep_stops_before_the_take_down_with_the_checks(self):
+        # **The checks with no command are made against a loaded agent**
+        # (Codex on #104, round 1): with --keep the plan stops before step 9,
+        # prints the checks and the exact --cleanup line; without it the
+        # checks come before step 9 and the run says they were not made. The
+        # usage recommends --keep for a first live run, and --keep with
+        # --cleanup refuses. Perturbations: print the checks after step 9
+        # again; run step 9 under --keep.
+        kept = self.lifecycle("--keep")
+        self.assertEqual(kept.returncode, 0, kept.stderr)
+        self.assertNotIn("== step 9 (", kept.stdout)
+        checks = kept.stdout.index("checks with no command today")
+        self.assertLess(kept.stdout.index("== step 7 ("), checks)
+        self.assertIn("kept: m1 stands loaded for the checks above", kept.stdout)
+        self.assertIn("deploy/verify-lifecycle.sh --agent m1 --cleanup --apply", kept.stdout)
+        self.assert_unprivileged()
+        plain = self.lifecycle()
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertLess(plain.stdout.index("checks with no command today"),
+                        plain.stdout.index("== step 9 ("))
+        self.assertIn("the checks above were not made", plain.stdout)
+        usage = self.run_script("verify-lifecycle.sh", "--help")
+        self.assertIn("RECOMMENDED for a first live run", usage.stdout)
+        both = self.lifecycle("--keep", "--cleanup")
+        self.assertNotEqual(both.returncode, 0)
+        self.assertIn("pass one", both.stderr)
+
     def test_lifecycle_refuses_before_acting(self):
         # Each refusal fires with its message before sudo is asked for: a name
         # create-agent would refuse, an agent that stands, a run as root or
@@ -2818,6 +2845,70 @@ def lifecycle_functions(script, *names):
             end = next(i for i in range(start, len(lines)) if lines[i] == "}")
             out.extend(lines[start:end + 1])
     return "\n".join(out) + "\n"
+
+
+class LifecycleTeardownTests(unittest.TestCase):
+    """**A take-down of a run stopped inside step 8** (Codex on #104, round
+    1): the root step 8 staged makes admin refuse `config_invalid` for every
+    verb, the force included, so the take-down goes on only where no process
+    of the agent's four accounts runs, and otherwise stops naming them.
+    `unload_for_teardown` is run alone with admin and pgrep as stand-ins.
+    Perturbation: proceed with a process standing, and the busy case
+    passes."""
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix="weaver-teardown-")
+        self.addCleanup(self.scratch.cleanup)
+        root = Path(self.scratch.name)
+        self.bin_dir = root / "bin"
+        self.bin_dir.mkdir()
+        sudo = self.bin_dir / "sudo"
+        sudo.write_text('#!/bin/sh\n[ "$1" = "-n" ] && shift\nexec env "$@"\n')
+        sudo.chmod(0o755)
+        admin = self.bin_dir / "weaver-admin"
+        admin.write_text("#!/bin/sh\nprintf '%s\\n' '{\"kind\":\"config_invalid\"}'\n")
+        admin.chmod(0o755)
+        pgrep = self.bin_dir / "pgrep"
+        pgrep.write_text('#!/bin/sh\n[ "$2" = "${BUSY_USER:-}" ]\n')
+        pgrep.chmod(0o755)
+        self.root_dir = root / "m1"
+        self.root_dir.mkdir()
+        (self.root_dir / "declaration-directory").write_text("/old\n")
+        script = (DEPLOY / "verify-lifecycle.sh").read_text()
+        self.program = ("set -euo pipefail\n"
+                        + 'STEP_LABEL="step 9 (test)"; A=m1; AU=weaver-m1\n'
+                        + f'R={shlex.quote(str(self.root_dir))}; ADMIN_BASE=/nonexistent; ADMIN={shlex.quote(str(admin))}\n'
+                        + lifecycle_functions(script, "fail", "pass", "measured", "expect_eq", "json_at",
+                                              "answered_state", "ask", "expect_state", "expect_kind",
+                                              "expect_unloaded_alone", "staged_root_quiet",
+                                              "unload_for_teardown")
+                        + "unload_for_teardown\necho GOES-ON\n")
+
+    def run_teardown(self, busy=""):
+        env = {**os.environ, "PATH": str(self.bin_dir) + os.pathsep + os.environ["PATH"],
+               "BUSY_USER": busy}
+        env.pop("BASH_ENV", None)
+        return subprocess.run(["bash", "-c", self.program], env=env, text=True,
+                              capture_output=True, timeout=20)
+
+    def test_a_staged_root_with_no_process_goes_on(self):
+        result = self.run_teardown()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("MEASURED step 9 (test): admin cannot read the root step 8 staged", result.stdout)
+        self.assertIn("GOES-ON", result.stdout)
+
+    def test_a_staged_root_with_a_process_stops_naming_it(self):
+        result = self.run_teardown(busy="weaver-m1-relay")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("found:    weaver-m1-relay", result.stderr)
+        self.assertNotIn("GOES-ON", result.stdout)
+
+    def test_a_root_not_staged_still_needs_the_force(self):
+        (self.root_dir / "territory").write_text("/somewhere\n")
+        result = self.run_teardown()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("force-unload answers the unloaded state", result.stderr)
+        self.assertNotIn("GOES-ON", result.stdout)
 
 
 class LifecycleNearMissTests(unittest.TestCase):

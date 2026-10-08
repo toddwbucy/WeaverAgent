@@ -76,6 +76,10 @@ creates (step 1, create-agent.sh) and takes down (step 9). Plan only unless
   --cleanup               only take the agent down (step 9), for a run that
                           stopped part way; refused for an agent this script
                           did not create
+  --keep                  stop before step 9 with the agent loaded, print the
+                          checks with no command for you to make against it,
+                          then the --cleanup line that takes it down.
+                          RECOMMENDED for a first live run
   --apply                 act; without it, print the plan and act on nothing
   -h, --help              this text
 
@@ -103,6 +107,7 @@ APPLY=0
 WITH_MIGRATION=0
 ALLOW_OTHERS=0
 CLEANUP=0
+KEEP=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --agent)        [ $# -ge 2 ] || die "--agent needs a name"; AGENT=$2; shift ;;
@@ -115,6 +120,7 @@ while [ $# -gt 0 ]; do
     --with-migration)     WITH_MIGRATION=1 ;;
     --allow-other-agents) ALLOW_OTHERS=1 ;;
     --cleanup)      CLEANUP=1 ;;
+    --keep)         KEEP=1 ;;
     --apply)        APPLY=1 ;;
     -h|--help)      usage; exit 0 ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
@@ -123,6 +129,7 @@ while [ $# -gt 0 ]; do
 done
 
 # ------------------------------------------------------------ refusals
+[ "$KEEP" -eq 0 ] || [ "$CLEANUP" -eq 0 ] || die "--keep stops a full run before its take-down, and --cleanup is the take-down: pass one"
 # Every refusal below is made before anything acts and before sudo is asked
 # for, except those that need root to look, which follow the credential.
 
@@ -1002,6 +1009,53 @@ step_8b() {
 ARCHIVE_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 TERRITORY_TAR="${ARCHIVE%/}/$AU-territory-$ARCHIVE_STAMP.tar"
 ROOT_TAR="${ARCHIVE%/}/$AU-root-$ARCHIVE_STAMP.tar"
+# **staged_root_quiet**: whether the root stands as step 8 stages it (no
+# `territory` key, a `declaration-directory` key), which admin cannot read,
+# and no process of the agent's four accounts runs. Answers 0 where both
+# hold; 1, printing the accounts that still run a process, where it is
+# staged but not quiet; 2 where it is not the staged shape.
+staged_root_quiet() {
+  [ ! -e "$R/territory" ] && [ -e "$R/declaration-directory" ] || return 2
+  local u busy=""
+  for u in "$AU" "$AU-state" "$AU-relay" "$AU-admincon"; do
+    if pgrep -u "$u" >/dev/null 2>&1; then busy="$busy${busy:+ }$u"; fi
+  done
+  [ -z "$busy" ] && return 0
+  printf '%s' "$busy"
+  return 1
+}
+
+# **unload_for_teardown**: the run ended before the take-down, by `unload`,
+# else `force-unload`. A run stopped inside step 8 leaves the root staged
+# for the migration, which admin refuses `config_invalid` for every verb,
+# the force included (#101): there the take-down goes on only when no
+# process of the agent's accounts runs, and otherwise stops naming them
+# (Codex on #104, round 1).
+unload_for_teardown() {
+  ask unload
+  if answered_state "$ANSWER" unloaded; then
+    pass "unload answers the unloaded state"
+    expect_unloaded_alone
+    return 0
+  fi
+  ask force-unload
+  if answered_state "$ANSWER" unloaded; then
+    pass "force-unload answers the unloaded state"
+    expect_unloaded_alone
+    return 0
+  fi
+  if [ "$(json_at "$ANSWER" kind)" = config_invalid ]; then
+    local busy rc=0
+    busy=$(staged_root_quiet) || rc=$?
+    case $rc in
+      0) measured "admin cannot read the root step 8 staged (config_invalid), and no process of $AU's four accounts runs, so the take-down goes on"
+         return 0 ;;
+      1) fail "no process of $AU's accounts runs, which a take-down admin cannot verify requires" "none" "$busy" ;;
+    esac
+  fi
+  expect_state force-unload unloaded
+}
+
 step_9() {
   begin_step 9 "HowToDeployANewAgent.md section 7" "take $A down alone, archived first"
   run_line "weaver-admin unload $A (force-unload where it refuses); weaver-admin show $A"
@@ -1018,13 +1072,7 @@ step_9() {
   want "never decommission.sh, which takes every agent off the box; no other agent is touched"
   [ "$APPLY" -eq 1 ] || return 0
   if sudo -n test -d "$R"; then
-    ask unload
-    if ! answered_state "$ANSWER" unloaded; then
-      ask force-unload; expect_state force-unload unloaded
-    else
-      pass "unload answers the unloaded state"
-    fi
-    expect_unloaded_alone
+    unload_for_teardown
   else
     measured "no root at $R, so no verb was asked"
   fi
@@ -1075,8 +1123,9 @@ manual_checks() {
   plan "   member's held state or compares it with the decoder's cache, so judge the answer turn.py printed."
   plan "2. A published file's stamp position against the trace's save_point event sequence (step 3): only"
   plan "   the digest is compared here; read the stamp inside the published file and the event's sequence."
-  plan "3. A loaded constituent's descriptor audit (step 2): verify-load.sh checks account and cgroup"
-  plan "   only; list each constituent's /proc/<pid>/fd and confirm it holds no descriptor beyond its gifts."
+  plan "3. A loaded constituent's descriptor audit: verify-load.sh checks account and cgroup only; with"
+  plan "   the agent loaded, list each constituent show names, /proc/<pid>/fd, and confirm it holds no"
+  plan "   descriptor beyond its gifts."
 }
 
 # ------------------------------------------------------------ the run
@@ -1133,8 +1182,31 @@ else
   skip 8 "the layout migration runs update-stack.sh --install, which touches every agent on the box; pass --with-migration to run it"
   skip 8b "it measures the migrated agent with step 8; pass --with-migration to run it"
 fi
-step_9
+# **The checks with no command are made against a loaded agent** (Codex on
+# #104, round 1): with --keep the run stops before step 9 with the agent
+# loaded and prints how to take it down; without it the checks are printed
+# and the run goes on, saying they were not made.
+if [ "$KEEP" -eq 1 ]; then
+  STEP_LABEL="keep (the checks with no command)"
+  if [ "$APPLY" -eq 1 ]; then
+    ask show
+    if ! answered_state "$ANSWER" idle; then
+      ask load; expect_state load idle
+    fi
+  fi
+  manual_checks
+  say "kept: $A stands loaded for the checks above; when they are made, take it down with"
+  plan "deploy/verify-lifecycle.sh --agent $A --cleanup --apply${ARCHIVE:+ --archive $ARCHIVE}"
+  if [ "$APPLY" -eq 1 ]; then
+    say "PASS: every step of $A's lifecycle before the take-down answered as expected"
+  else
+    say "plan only: nothing was acted on; rerun with --artifact <path> --apply --keep to act"
+  fi
+  exit 0
+fi
 manual_checks
+say "the checks above were not made: the run goes on to take $A down; rerun with --keep to make them against a loaded agent"
+step_9
 if [ "$APPLY" -eq 1 ]; then
   say "PASS: every step of $A's lifecycle answered as expected"
 else
