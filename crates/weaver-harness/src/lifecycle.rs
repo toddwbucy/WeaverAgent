@@ -2192,11 +2192,14 @@ impl Harness {
         exchange: &ExchangeId,
         answer: LifecycleAnswer,
     ) -> Result<(), ChannelFault> {
-        connection.send(&OrganEnvelope {
-            exchange: exchange.clone(),
-            position: Position::Close,
-            payload: weaver_types::Payload::Answer(answer),
-        })
+        deliver(
+            connection,
+            &OrganEnvelope {
+                exchange: exchange.clone(),
+                position: Position::Close,
+                payload: weaver_types::Payload::Answer(answer),
+            },
+        )
     }
 
     fn refuse(
@@ -2205,12 +2208,33 @@ impl Harness {
         exchange: &ExchangeId,
         refusal: LifecycleRefusal,
     ) -> Result<(), ChannelFault> {
-        connection.send(&OrganEnvelope {
-            exchange: exchange.clone(),
-            position: Position::Close,
-            payload: weaver_types::Payload::Refusal(refusal),
-        })
+        deliver(
+            connection,
+            &OrganEnvelope {
+                exchange: exchange.clone(),
+                position: Position::Close,
+                payload: weaver_types::Payload::Refusal(refusal),
+            },
+        )
     }
+}
+
+/// **An answer the dialer is not there to take ends nothing** (the operator's
+/// ruling of 2026-10-08 on #99, N4): the verb's caller went away, an
+/// operator's interrupt, a connector's own timeout or a killed invocation,
+/// and the run it asked about stands as the directive left it. The send's
+/// failure is said on standard error and the serve loop returns to its wait,
+/// where the dead connection reads closed, as a verb answered and closed
+/// does; only the listener's loss ends service. A run's end is the directive
+/// that ended it, never a failed write to the party that asked.
+fn deliver(connection: &OrganChannel, envelope: &OrganEnvelope) -> Result<(), ChannelFault> {
+    if let Err(fault) = connection.send(envelope) {
+        eprintln!(
+            "weaver-harness: the answer to exchange {} was not delivered ({fault:?}); the dialer is gone and the run stands as the directive left it",
+            envelope.exchange.ordinal
+        );
+    }
+    Ok(())
 }
 
 /// Leave runs the reverse order and drains before it answers: lower the gate
@@ -3444,6 +3468,9 @@ mod tests {
         /// The `SavePoint` directive against the entered run, then the
         /// fixture's own unwind: the answer captured is the save point's.
         SavePoint,
+        /// As `SavePoint`, with admin's end of the connection closed before
+        /// the directive is dispatched: the caller went away mid-verb.
+        SavePointAbandoned,
         /// An unforced `Leave` with a frame the gate stand-in queued before
         /// it, untaken by the loop (Codex on #94, round 13).
         QueuedFrame,
@@ -3621,6 +3648,7 @@ mod tests {
                     }
                     LeaveMode::Directive { .. }
                     | LeaveMode::SavePoint
+                    | LeaveMode::SavePointAbandoned
                     | LeaveMode::QueuedFrame
                     | LeaveMode::FrameDuringLower => {
                         // The fixture's SPU never admitted, its exec having
@@ -3753,10 +3781,17 @@ mod tests {
                                 cause: weaver_types::Cause { uid: 1000 },
                             },
                         };
-                        harness
-                            .dispatch_on(&connection, test_exchange(), directive, None, None)
-                            .expect("the directive dispatches");
-                        answer = Some(admin_peer.recv().expect("the leave answers").payload);
+                        if matches!(mode, LeaveMode::SavePointAbandoned) {
+                            drop(admin_peer);
+                            harness
+                                .dispatch_on(&connection, test_exchange(), directive, None, None)
+                                .expect("an undelivered answer is no fault of the run");
+                        } else {
+                            harness
+                                .dispatch_on(&connection, test_exchange(), directive, None, None)
+                                .expect("the directive dispatches");
+                            answer = Some(admin_peer.recv().expect("the leave answers").payload);
+                        }
                         still_entered = matches!(harness.state, ChannelState::Entered(_));
                         if let ChannelState::Entered(run) =
                             std::mem::replace(&mut harness.state, ChannelState::Left)
@@ -4050,6 +4085,28 @@ mod tests {
         assert!(
             !events.iter().any(|e| e["kind"] == "save_point"),
             "nothing is recorded"
+        );
+    }
+
+    /// **A save point whose caller went away leaves the run standing** (the
+    /// operator's ruling of 2026-10-08 on #99, N4): admin's end closes
+    /// before the answer, so the answer is not delivered, and the dispatch
+    /// returns as a delivered one does, the run still entered and the save
+    /// point recorded, never an unwind. Perturbation: answer a failed send
+    /// with its fault again and the dispatch errs.
+    #[test]
+    fn a_save_point_whose_caller_went_away_leaves_the_run_standing() {
+        let (events, _, _, answer, still_entered) = enter_against_a_member_leaving(
+            None,
+            false,
+            EMPTY_RESTORED,
+            LeaveMode::SavePointAbandoned,
+        );
+        assert_eq!(answer, None, "nobody was there to take the answer");
+        assert!(still_entered, "the run stands");
+        assert!(
+            events.iter().any(|e| e["kind"] == "save_point"),
+            "the save point is recorded"
         );
     }
 
