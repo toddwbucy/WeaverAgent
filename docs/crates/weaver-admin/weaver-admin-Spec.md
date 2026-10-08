@@ -2367,7 +2367,14 @@ value that fails to read fails the invocation as `ConfigInvalid` with no field.
 `roles.toml`, `run-tool` and `control-tool` retiring with the init system they reached
 on 2026-10-03 (#50), the boundary file of section 9 below. Optional: `headroom-bytes`,
 `library-path`, per section 6, and `load-bound-seconds`, per section 2, the
-`state-store-socket` key having retired with the service engine. **Every path a key names is
+`state-store-socket` key having retired with the service engine. **A root holding a key
+of an older layout refuses by its name**, for every verb, the force included, on the
+operator's ruling of 2026-10-08 on #1 that an agent of an older layout is recreated and
+never migrated: `declaration-directory` (the layout of before 2026-10-07), and
+`agent.toml`, `run-tool`, `control-tool`, `unit-properties`, `log-path` and
+`log-directory` (the layout of before #50) each refuse `ConfigInvalid` naming the key,
+and the diagnostic says to recreate the agent with `deploy/create-agent.sh` after its
+take-down by `deploy/HowToDeployANewAgent.md` section 7. **Every path a key names is
 absolute**, `worker-binary`, `spu-binary`, `gate-binary`, `coordination-root`,
 `territory` and `library-path` alike, and a relative
 value fails the read naming the key, so no read resolves against the directory a caller
@@ -2932,6 +2939,9 @@ directive is asserted where the run happens.
 
 - The root check: the binary run as a non-root uid refuses before touching any
   agent, confirmed by watching a verb proceed when the check is removed.
+- A root holding a key of an older layout refuses naming it, per section 9, for every
+  verb and the force, confirmed by watching a root holding one load when the judgment is
+  removed (`a_root_holding_a_retired_key_refuses_by_its_name`).
 - The territory is root's and closed, per section 9 as of 2026-10-08: a directory of
   any mode but `0710`, the earlier `0711` among them, one under any group but the state
   group, one named through a link above it, one

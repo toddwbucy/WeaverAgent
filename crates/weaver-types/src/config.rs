@@ -40,9 +40,9 @@ pub struct AgentConfig {
     pub tool_set: Vec<ToolName>,
     pub permission_mode: weaver_traits::PermissionMode,
     /// What this load is for, per `weaver-types-Spec` section 2 and
-    /// `weaver-agent-PRD` section 6: absence means serving, so a declaration
-    /// written before the member existed declares what it always meant. Admin
-    /// resolves the absence at inventory, the one site, per
+    /// `weaver-agent-PRD` section 6: absence means serving, the ruled
+    /// meaning of the field's absence. Admin resolves the absence at
+    /// inventory, the one site, per
     /// `weaver-admin-Spec` section 7.
     #[serde(default)]
     pub binding_kind: Option<BindingKind>,
@@ -63,9 +63,9 @@ pub struct AgentConfig {
     /// The store the state member stands on, per `weaver-types-Spec` section
     /// 2 and the ruling of 2026-09-04 that the store is a port: absent means
     /// the embedded engine with the member standing, and the cross-field
-    /// rules - no `database` or `role` for any engine this build provides,
-    /// and no election beside `none` - are admin's at inventory, this parse
-    /// checking each field alone, beside refusing an unprovided engine.
+    /// rule - no election beside `none` - is admin's at inventory, this
+    /// parse checking each field alone, beside refusing an unprovided
+    /// engine.
     #[serde(default)]
     pub state_store: Option<StateStore>,
     /// The agent's loop file, per `weaver-types-Spec` section 2 and the
@@ -99,18 +99,14 @@ pub struct Restore {
 }
 
 /// The store election, per `weaver-types-Spec` section 2: which port the
-/// deployment elects. `database` and `role` belonged to the service engine,
-/// retired on the operator's ruling of 2026-10-02 on #1; they stay in the
-/// grammar and on the wire so no consumer's shape moves, and no engine
-/// takes them, the inventory refusing them where they are set.
+/// deployment elects. The service engine's `database` and `role` retired
+/// with it (the operator's ruling of 2026-10-02 on #1) and left the grammar
+/// on the ruling of 2026-10-08 on #1, so a declaration carrying either
+/// refuses at the parse as an unknown field.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct StateStore {
     pub engine: StoreEngine,
-    #[serde(default)]
-    pub database: Option<String>,
-    #[serde(default)]
-    pub role: Option<String>,
 }
 
 impl Default for StateStore {
@@ -118,8 +114,6 @@ impl Default for StateStore {
     fn default() -> Self {
         StateStore {
             engine: StoreEngine::Sqlite,
-            database: None,
-            role: None,
         }
     }
 }
@@ -263,8 +257,7 @@ pub struct DecoderInstruction {
     /// 2026-08-21 and the default posture is now the smaller record, with
     /// the generation's perplexity standing in its place. `default` is
     /// therefore `false` and means the vector is not produced, which is
-    /// also what a declaration written before the election existed says by
-    /// omitting the field.
+    /// what omitting the field says.
     #[serde(default)]
     pub surprisal_election: bool,
     /// The re-feed drive's permission, per `weaver-spu-PRD` section 13.14:

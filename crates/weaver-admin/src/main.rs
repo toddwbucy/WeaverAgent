@@ -2421,6 +2421,7 @@ fn load_service_config_judged(
     judge_root(&root, owner)?;
     let root = judge_ancestors(&root, &[owner, 0])?;
     judge_entries(&root, owner)?;
+    refuse_retired_keys(&root, agent)?;
     let mut config = load_service_config_from(&root, agent).map_err(|failure| {
         diag!("weaver-admin: {failure}");
         // A value of the root's failing names no field; the boundary file is
@@ -2527,6 +2528,44 @@ fn judge_entries(root: &std::path::Path, owner: u32) -> Result<(), LifecycleRefu
                 entry.path().display()
             );
             return Err(LifecycleRefusal::BoundaryUnverified);
+        }
+    }
+    Ok(())
+}
+
+/// **The root keys of layouts this build no longer reads**, each refused by
+/// name (the operator's ruling of 2026-10-08 on #1: an agent of an older
+/// layout is recreated, never migrated), with the layout each belonged to.
+const RETIRED_ROOT_KEYS: [(&str, &str); 7] = [
+    (
+        "declaration-directory",
+        "the layout of before 2026-10-07, the declaration in the operator's directory",
+    ),
+    (
+        "agent.toml",
+        "the layout of before #50, the declaration in the root",
+    ),
+    ("run-tool", "the layout of before #50, under systemd"),
+    ("control-tool", "the layout of before #50, under systemd"),
+    ("unit-properties", "the layout of before #50, under systemd"),
+    ("log-path", "the layout of before #50, under systemd"),
+    ("log-directory", "the layout of before #50, under systemd"),
+];
+
+/// **A root holding a retired key refuses by its name**, per Spec section
+/// 9, for every verb: nothing of an older layout is read or tolerated, and
+/// the agent is recreated with `deploy/create-agent.sh` after its take-down.
+fn refuse_retired_keys(root: &std::path::Path, agent: &str) -> Result<(), LifecycleRefusal> {
+    for (key, layout) in RETIRED_ROOT_KEYS {
+        if std::fs::symlink_metadata(root.join(key)).is_ok() {
+            diag!(
+                "weaver-admin: {agent}'s root holds {key}, a key of {layout}. Nothing \
+                 migrates it: recreate {agent} with deploy/create-agent.sh after its \
+                 take-down by deploy/HowToDeployANewAgent.md section 7"
+            );
+            return Err(LifecycleRefusal::ConfigInvalid {
+                field: Some(FieldName(key.to_string())),
+            });
         }
     }
     Ok(())
@@ -3566,6 +3605,57 @@ mod tests {
             Some(LifecycleRefusal::BoundaryUnverified),
             "a link named agent.toml"
         );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_root_holding_a_retired_key_refuses_by_its_name() {
+        // **Nothing of an older layout is read or tolerated** (the operator's
+        // ruling of 2026-10-08 on #1): each retired key refuses
+        // `ConfigInvalid` naming it, whatever else the root holds, and the
+        // force with it. Perturbation: drop `refuse_retired_keys` from the
+        // judgment and a root holding one loads.
+        use std::os::unix::fs::PermissionsExt;
+        let me = nix::unistd::getuid().as_raw();
+        let base =
+            std::env::temp_dir().join(format!("weaver-admin-retired-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("alpha");
+        write_root(&root);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let gid = nix::unistd::getegid().as_raw();
+        assert!(load_and_read(&base, "alpha", me, gid).is_ok());
+        for (key, _) in RETIRED_ROOT_KEYS {
+            let stale = root.join(key);
+            std::fs::write(&stale, "/old\n").unwrap();
+            std::fs::set_permissions(&stale, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert_eq!(
+                load_and_read(&base, "alpha", me, gid).err(),
+                Some(LifecycleRefusal::ConfigInvalid {
+                    field: Some(FieldName(key.to_string())),
+                }),
+                "{key} refuses by its name"
+            );
+            assert_eq!(
+                load_service_config_judged(
+                    &base,
+                    "alpha",
+                    me,
+                    Some(TerritoryGroups {
+                        access: gid,
+                        state: gid
+                    }),
+                    true
+                )
+                .err(),
+                Some(LifecycleRefusal::ConfigInvalid {
+                    field: Some(FieldName(key.to_string())),
+                }),
+                "{key} refuses the force too"
+            );
+            std::fs::remove_file(&stale).unwrap();
+        }
+        assert!(load_and_read(&base, "alpha", me, gid).is_ok());
         let _ = std::fs::remove_dir_all(&base);
     }
 
