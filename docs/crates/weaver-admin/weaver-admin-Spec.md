@@ -900,7 +900,11 @@ territory are one kernel fact, and a declaration naming it would be a second pla
 and a value the operator could move under a running agent. A box lacking the
 account refuses `BoundaryUnverified` naming the account, exactly as a box
 lacking the member's binary does and for the same reason, the provisioning
-being what is absent.
+being what is absent. **The account's primary group is the state group** of the
+same derived name, resolved by name, and is not gid 0: the member passes the
+territory by its primary group and section 9 judges the territory against the state
+group, so a box where the two differ, or where the state group does not resolve,
+refuses `BoundaryUnverified` at the inventory rather than at every load.
 
 ```graph
 node: admin-member-account-required-at-inventory
@@ -2234,7 +2238,8 @@ it with `O_NOFOLLOW` so a link planted at the name is refused rather than follow
 non-blocking and judged a regular file before a line is written, so a FIFO planted at
 the name neither holds the verb nor takes a line. `worker.log` is opened and owned the
 same way, and the member's `state.log` in its own room is opened without following a
-link and judged a regular file. **The worker's own output is not
+link and judged a regular file, and set to root and the member's group, `0640`, so the
+member reads what it wrote. **The worker's own output is not
 this log**: the start step points the worker's standard output and error at `worker.log`
 beside it, per section 6, because the worker holds that descriptor and an agent holding
 a writable handle to the boundary's record could write into it. What this Spec adds is
@@ -2377,8 +2382,8 @@ the prompt draft `system-prompt.md`, which this crate never reads; `admin.log` a
 section 5; and the member's room `state/`, per section 6. One ownership: root reads and
 writes root's files in root's directory, so no other principal's choice reaches what a
 root step reads. **The access group reads and never writes**: `weaver-<agent>-admin`,
-the connector's, is the territory's group and reads the logs and the published save
-points, and the operator joins it to read without sudo; the state member is never in it; a declaration, a draft or a manifest the group could write
+the connector's, groups the files beneath the territory, whose own group is the state
+group, and reads the logs and the published save points, and the operator joins it to read without sudo; the state member is never in it; a declaration, a draft or a manifest the group could write
 refuses, since the connector must not be able to rewrite the declaration. **Removing
 the manifest is root's act**, and doing so makes every published save point
 unloadable, a file no line names being not loadable, until a `restore` names one,
@@ -2437,8 +2442,10 @@ or hands the worker to start, `worker-binary`, `spu-binary` and `gate-binary`, s
 the root, root-owned and judged as above, and the declaration stands in the territory,
 root's as the root is, so there is no directory another principal could choose and no
 file another principal could write among what a root step reads. The value of
-`territory` is resolved once to its canonical path, the look not following a link at
-the directory itself. **The territory is held as a descriptor for the verb's life**:
+`territory` must already be its canonical path, a value reached through a link above
+it refusing `BoundaryUnverified`, since the directory is opened by the value and the
+logs are made at the canonical path, and the look does not follow a link at the
+directory itself. **The territory is held as a descriptor for the verb's life**:
 opened once at the judgment with no link followed, judged on that descriptor a
 directory owned by uid 0, mode `0710` exactly and grouped to the state group
 `weaver-<agent>-state`, judged by name, on the operator's ruling of 2026-10-08 on #1,
@@ -2469,7 +2476,7 @@ a declaration saved invalid while a run stands never strands it: `agent.toml` is
 with no link followed and without blocking, and judged on its descriptor a regular file, owned by uid 0, grouped to the
 access group and mode `0640` exactly, so the access group reads it and never rewrites it
 and no other uid reads it; a declaration at any other owner, group or mode refuses
-`ConfigInvalid` naming it.
+`BoundaryUnverified`, the provisioning being wrong rather than the declaration.
 Other entries are not read, `system-prompt.md`, the operator's draft of the prompt that
 the seeding step reads and this crate never opens, among
 them, save `admin.log` and `worker.log`, the two this crate creates and appends to,
@@ -2925,7 +2932,7 @@ directive is asserted where the run happens.
   agent, confirmed by watching a verb proceed when the check is removed.
 - The territory is root's and closed, per section 9 as of 2026-10-08: a directory of
   any mode but `0710`, the earlier `0711` among them, one under any group but the state
-  group, one carrying an access-control entry, one
+  group, one named through a link above it, one carrying an access-control entry, one
   whose `save-points/` carries one, one not root's, one holding
   no `save-points/` or one of any mode but `0750`, an `operator` key absent or naming no
   uid, a declaration that is a link or of any owner, group or mode but root, the access
@@ -2953,7 +2960,8 @@ group and `0640`, and an ancestor
 - The member's own account: an inventory run against a box carrying no
   `weaver-<name>-state` account refuses every election but `none`, confirmed
   by watching the same declaration pass the inventory when the arm is removed,
-  a load then standing a member under this crate's identity.
+  a load then standing a member under this crate's identity; and an account
+  whose primary group is not the state group, or is gid 0, refuses too.
 - The territory is the member's: a prepared territory is `0700` and owned by
   the member's account, and a room widened between loads is closed again,
   confirmed by watching the mode read `0750` when the group-owned preparation

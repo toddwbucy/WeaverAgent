@@ -127,8 +127,9 @@ struct ServiceConfig {
     /// The operator's uid, the box's own fact about whose data defines the
     /// agent, per section 9: the harness admits the seeding line from it.
     operator: u32,
-    /// The access group's gid, the territory's group, which the logs and the
-    /// published save points take so the operator and the connector read
+    /// The access group's gid, the group of the files beneath the territory
+    /// (the territory's own is the state group), which the declaration, the
+    /// logs and the published save points take so the operator and the connector read
     /// them and nothing else does, per sections 6 and 8.
     access_gid: u32,
     /// The boundary file, `roles.toml`, as read: its sha256 hex and its one
@@ -440,6 +441,12 @@ fn well_formed(agent: &str) -> bool {
 /// section 2: a fixed convention between this crate and the member.
 const SAVE_POINT_FD: std::os::fd::RawFd = 4;
 
+/// `state.log`'s owner: root's, and the member's group, `0640`, so the
+/// member reads its own stderr and never writes past root's append.
+fn state_log_owner(member: inventory::MemberAccount) -> (u32, u32) {
+    (0, member.gid)
+}
+
 fn stand_state_member(
     config: &ServiceConfig,
     inventory: &inventory::Inventory,
@@ -478,8 +485,12 @@ fn stand_state_member(
     .ok()?;
     // **Opened as root in the member's own room, so never through a link**:
     // the member could otherwise aim root's append at any file, and a FIFO
-    // could hold the load.
-    let log = log::open_append(&territory.join("state.log"), None);
+    // could hold the load. Grouped to the member, so the scripts that read
+    // it as the member find what it wrote (#99 area 2, K12).
+    let log = log::open_append(
+        &territory.join("state.log"),
+        Some(state_log_owner(member_account)),
+    );
     let mut member = std::process::Command::new(&binary);
     member
         .args(member_vector(&territory, &inventory.binding))
@@ -934,6 +945,10 @@ fn take_inventory_from(
                 uid: user.uid.as_raw(),
                 gid: user.gid.as_raw(),
             }),
+        member_group: nix::unistd::Group::from_name(&inventory::member_identity_for(agent))
+            .ok()
+            .flatten()
+            .map(|group| group.gid.as_raw()),
     };
     inventory::take_inventory(agent, source, &boundary)
 }
@@ -2301,17 +2316,19 @@ fn load_service_config(agent: &AgentName, forced: bool) -> Result<ServiceConfig,
     let state_name = inventory::member_identity_for(agent);
     let access = nix::unistd::Group::from_name(&group_name).ok().flatten();
     let state = nix::unistd::Group::from_name(&state_name).ok().flatten();
-    let groups = match (access, state) {
-        (Some(access), Some(state)) => Some(TerritoryGroups {
+    let resolved = match (access, state) {
+        (Some(access), Some(state)) => TerritoryGroups {
             access: access.gid.as_raw(),
             state: state.gid.as_raw(),
-        }),
-        (access, _) => {
-            if access.is_none() {
-                diag!("weaver-admin: the access group {group_name} is not provisioned");
-            } else {
-                diag!("weaver-admin: the state group {state_name} is not provisioned");
-            }
+        }
+        .distinct(),
+        (None, _) => Err(format!("the access group {group_name} is not provisioned")),
+        (_, None) => Err(format!("the state group {state_name} is not provisioned")),
+    };
+    let groups = match resolved {
+        Ok(groups) => Some(groups),
+        Err(cause) => {
+            diag!("weaver-admin: {cause}");
             // **A force does not wait on the territory** (K5): without its
             // groups the territory cannot be judged, and the force goes on
             // without it.
@@ -2333,6 +2350,22 @@ fn load_service_config(agent: &AgentName, forced: bool) -> Result<ServiceConfig,
 struct TerritoryGroups {
     access: u32,
     state: u32,
+}
+
+impl TerritoryGroups {
+    /// **The two groups are two, and neither is root's** (#99 area 2, H2):
+    /// one gid for both would let the member read the declaration, the logs
+    /// and every published save point, every judgment still passing.
+    fn distinct(self) -> Result<Self, String> {
+        if self.access == self.state || self.access == 0 || self.state == 0 {
+            return Err(format!(
+                "the access group (gid {}) and the state group (gid {}) are not two \
+                 groups apart from root's",
+                self.access, self.state
+            ));
+        }
+        Ok(self)
+    }
 }
 
 /// The judgments under one group for both, as the suite's own uid holds no
@@ -2362,6 +2395,7 @@ fn load_service_config_at(
 /// values read, then the agent's territory judged against `groups`, which
 /// production resolves by name and a test sets to its own, and
 /// `library-path` judged as the root is.
+#[cfg(test)]
 fn load_service_config_with(
     base: &std::path::Path,
     agent: &str,
@@ -2629,6 +2663,12 @@ fn judge_territory(
         return Err(refuse("is not grouped to the state group"));
     }
     let canonical = judge_ancestors(directory, &[own, 0])?;
+    // **Named by its canonical path** (#99 area 2, H3): the territory is
+    // opened by the key and the logs are made at the canonical path, so the
+    // two must be one name.
+    if canonical != directory {
+        return Err(refuse("is not named by its canonical path"));
+    }
     let save_points = nix::fcntl::openat(
         opened.as_fd(),
         "save-points",
@@ -2888,6 +2928,31 @@ fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<Servi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **`state.log` is root's and the member's group** (#99 area 2, K12):
+    /// verify-load and update-stack read it as the member, and a log
+    /// `root:root` reads empty to them. Perturbation: answer root's group
+    /// and this fails.
+    /// **The territory's two groups are two, and neither is gid 0** (#99
+    /// area 2, H2). Perturbation: drop either half of the comparison and
+    /// this fails.
+    #[test]
+    fn the_territory_groups_are_two_and_not_roots() {
+        let groups = |access, state| TerritoryGroups { access, state }.distinct();
+        assert!(groups(1001, 1002).is_ok());
+        assert!(groups(1001, 1001).is_err(), "one gid for both refuses");
+        assert!(groups(0, 1002).is_err(), "an access group of gid 0 refuses");
+        assert!(groups(1001, 0).is_err(), "a state group of gid 0 refuses");
+    }
+
+    #[test]
+    fn the_state_log_is_grouped_to_the_member() {
+        let member = inventory::MemberAccount {
+            uid: 4242,
+            gid: 4343,
+        };
+        assert_eq!(state_log_owner(member), (0, 4343));
+    }
 
     /// **The cause is the uid sudo reports, parsed strictly**, per
     /// `weaver-admin-Spec` section 2: absent is a root shell and uid 0, a
@@ -3451,6 +3516,7 @@ mod tests {
             home: territory.clone(),
             member_binary: None,
             member_account: None,
+            member_group: None,
         };
         assert!(
             !inventory::agent_can_traverse(&territory, &boundary),
@@ -3598,6 +3664,19 @@ mod tests {
             load_and_read(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
             "a link at the territory's own name"
+        );
+        // **A link above the territory's name** (#99 area 2, H3): the open
+        // follows it and the logs would be made at the canonical path, so
+        // a key that is not canonical refuses. Perturbation: drop the
+        // canonical comparison and this loads.
+        let via = base.join("via");
+        std::os::unix::fs::symlink(territory.parent().unwrap(), &via).unwrap();
+        let through = via.join(territory.file_name().unwrap());
+        std::fs::write(root.join("territory"), through.display().to_string()).unwrap();
+        assert_eq!(
+            load_and_read(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a territory named through a link above it"
         );
         let _ = std::fs::remove_dir_all(&base);
     }
