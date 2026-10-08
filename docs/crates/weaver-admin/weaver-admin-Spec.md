@@ -642,17 +642,20 @@ the room. **The marker closes clean only for this run's own save point** (the pu
 of 197e80b): a report whose `event_run` is not the run the marker stands open on, the
 reference this crate minted, publishes and leaves the marker open, so the next load
 records the reset. The report's covered `run` is not compared, a run restored and left
-with no turn covering the prior run's position; where the run is so ended and found
-already gone, its file reads as not its own and the marker stays open, a reset recorded
-rather than a clean unload claimed. **A verb that finds the run already ended, the lock free, publishes the room
-first** (the #94 survey's S11): a publication that refuses or leaves a file refuses
-`SavePointNotTaken` naming the publication again; one that published a file this run
-took, its stamp naming the run the marker stands open on, closes the marker clean for
-either verb, the leave's save point having been taken, so a force records no
-`ForcedUnload` over the save point it published; a file recovered from an older run
-publishes and makes no run clean. Where the room held none of this run's, a forced verb
-closes the marker as forced where it stands open, and an unforced one closes
-nothing, a run that ended on its own being the unclean stop the next load records. A
+with no turn covering the prior run's position. **A verb that finds the run already
+ended, the lock free, publishes the room first** (the #94 survey's S11): a publication
+that refuses or leaves a file refuses `SavePointNotTaken` naming the publication again.
+**It never closes the marker clean** (Codex on #94 at 197e80b), on the rule that nothing
+is lost silently, a `Closed` marker meaning a save point of this run's state published:
+with the
+run gone, nothing tells a leave whose publication failed from a run that crashed with
+an on-demand save point in its room, and a published file proves no leave. So a forced
+verb closes the marker as forced where it stands open, the operator's choice, and an
+unforced one closes nothing, the next load recording `NoCleanUnload`. A conservative
+label is never a false one. The survey's aim that a force record no `ForcedUnload` over
+a leave's save point it published yields to that rule: a retry after `published` records a
+reset, forced or not, over a leave that did take its save point, until the leave's
+provenance in the marker, the lifecycle act's, can tell the two apart. A
 forced leave the harness refuses past its `Left`, its organs going down behind the
 refusal, closes it the same inside the after-left wait before the refusal returns, so
 the next load records `ForcedUnload` and never `NoCleanUnload` for a run the operator

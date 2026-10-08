@@ -1899,18 +1899,17 @@ fn open_run(config: &ServiceConfig) -> Result<Option<String>, LifecycleRefusal> 
 /// (the #94 survey's S11), per Spec section 3: after an unload refused
 /// `SavePointNotTaken` naming `published`, the leave's save point stands in
 /// the room and the operator retries, plainly or forced. A publication that
-/// refuses or leaves a file refuses `published` again. **Where it published
-/// a file this run took**, its stamp naming the run the marker stands open
-/// on (the push review of 197e80b), the leave's save point existed, so the
-/// marker closes clean for either verb and a force records no
-/// `ForcedUnload` over a save point it published. A file recovered from an
-/// older run publishes and makes nothing clean: then, as where the room held
-/// none, a forced verb closes the marker as forced, the operator's choice
-/// (Codex on #94, round 6), and an unforced one closes nothing, a run that
-/// ended on its own being the unclean stop the next load records. A run
-/// restored and ended with no turn takes a save point stamped with the prior
-/// run, which reads as not its own; the marker then stays open, a reset
-/// recorded rather than a clean unload claimed.
+/// refuses or leaves a file refuses `published` again. **The marker never
+/// closes clean here** (Codex on #94 at 197e80b), on the rule that nothing
+/// is lost silently, a `Closed` marker meaning a save point of this run's
+/// state published: with the run gone, nothing tells a leave whose
+/// publication failed from a run that crashed with an on-demand save point
+/// in its room, and a published file proves no leave. So a forced verb closes the marker as forced, the
+/// operator's choice (Codex on #94, round 6), and an unforced one closes
+/// nothing, the next load recording `NoCleanUnload`: a conservative label,
+/// never a false one. A retry after `published` may so record a reset over
+/// a leave that did take its save point; the leave's provenance in the
+/// marker is the lifecycle act's.
 fn conclude_ended(
     config: &ServiceConfig,
     forced: bool,
@@ -1925,18 +1924,12 @@ fn conclude_ended(
             missed: weaver_types::SavePointLeg::Published,
         }
     };
-    let (lines, deferred) = publish_from_room_noting(config, &AgentName(config.agent.clone()), &[])
+    let (_, deferred) = publish_from_room_noting(config, &AgentName(config.agent.clone()), &[])
         .map_err(|_| not_published())?;
     if deferred {
         return Err(not_published());
     }
-    let open = open_run(config)?;
-    let own = lines
-        .iter()
-        .any(|line| open.as_deref() == Some(line.stamp.run.as_str()));
-    if own {
-        close_marker(config, false)?;
-    } else if forced {
+    if forced {
         close_marker(config, true)?;
     }
     Ok(unloaded_answer())
@@ -4634,10 +4627,10 @@ mod tests {
     /// **A retry on a run already ended publishes the room first** (the #94
     /// survey's S11): after an unload refused `published`, the leave's save
     /// point stands in the room; a `force-unload` with the run lock free
-    /// publishes it and closes the marker clean, recording no
-    /// `ForcedUnload` over the save point it published. Perturbation: drop
-    /// the publication from the lock-free branch and the marker closes as
-    /// forced with the file still in the room.
+    /// publishes it and closes the marker as forced, never clean, since a
+    /// published file proves no leave (Codex on #94 at 197e80b).
+    /// Perturbation: drop the publication from the lock-free branch and the
+    /// file stays in the room.
     #[test]
     fn a_retry_on_an_ended_run_publishes_the_room_first() {
         let (config, report, base) = territory_with_one_room_file("ended-retry");
@@ -4653,7 +4646,33 @@ mod tests {
         assert_eq!(manifest_digests(&config), [report.save_point]);
         assert_eq!(
             save_points::read_marker(&config.root),
-            Some(save_points::Marker::Closed { run: "r-1".into() })
+            Some(save_points::Marker::Forced { run: "r-1".into() })
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **A run ended with its own on-demand save point in the room
+    /// concludes open** (Codex on #94 at 197e80b): the file is
+    /// this run's, its stamp naming the run the marker stands open on, but
+    /// no leave answered, so a plain unload publishes it and the marker
+    /// stays open for the next load's `NoCleanUnload`. Perturbation: close
+    /// the marker clean on this run's own file and it reads closed.
+    #[test]
+    fn a_run_ended_with_its_own_demand_file_concludes_open() {
+        let (config, report, base) = territory_with_one_room_file("own-demand");
+        save_points::write_marker(
+            &config.root,
+            Some(&save_points::Marker::Open { run: "r-1".into() }),
+        )
+        .unwrap();
+        assert_eq!(
+            unload_within(&config, TEST_UNLOAD_BOUNDS, false),
+            Ok(unloaded_answer())
+        );
+        assert_eq!(manifest_digests(&config), [report.save_point]);
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Open { run: "r-1".into() })
         );
         let _ = std::fs::remove_dir_all(&base);
     }
