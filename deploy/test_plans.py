@@ -36,6 +36,19 @@ if name == 'stat':
         print(0 if path.is_relative_to(root) else st.st_uid, os.environ.get('TRACE_GROUP_AS', 'nobody-group'),
               format(st.st_mode & 0o7777, 'o'))
         sys.exit(0)
+    if args[:1] == ['-c'] and args[1] == '%u:%G:%a':
+        # The territory's look (#99 area 2 review, N1): root under the
+        # fixture; the group LAYOUT_GROUPS names for the path, or else the
+        # one the law names (a territory `weaver-<a>` the state group's, its
+        # `save-points` the access group's); the mode the directory's own.
+        path = pathlib.Path(args[-1])
+        st = os.lstat(path)
+        groups = json.loads(os.environ.get('LAYOUT_GROUPS', '{}'))
+        if str(path) in groups: group = groups[str(path)]
+        elif path.name == 'save-points': group = path.parent.name + '-admin'
+        else: group = path.name + '-state'
+        print(f"{0 if path.is_relative_to(root) else st.st_uid}:{group}:{format(st.st_mode & 0o7777, 'o')}")
+        sys.exit(0)
     if args[:1] == ['-c'] and args[1] == '%u %a':
         path = pathlib.Path(args[-1])
         st = os.lstat(path)
@@ -162,7 +175,7 @@ elif name == 'sudo':
             print(f"{uid}:{uid}", format(st.st_mode & 0o7777, 'o'))
         else:
             print(os.environ.get('TERRITORY_GROUP_AS', 'fixture-group'), format(st.st_mode & 0o7777, 'o'))
-    elif op in ('cat', 'tail', 'wc') or (op == 'test' and not identity):
+    elif op in ('cat', 'tail', 'wc', 'getfacl') or (op == 'test' and not identity):
         # The install's reads under a territory, made as root (Codex on #94,
         # round 8): run on the scratch file with the privilege wrapper, so a
         # territory the test locked reads here and nowhere else.
@@ -193,7 +206,7 @@ elif name == 'sudo':
             assert not destination.exists(), destination
             source.rename(destination)
         privileged([source, destination], move)
-    elif op == 'chmod' and os.environ.get('LOCK_TERRITORY') and rest[:1] == ['0710'] \
+    elif op == 'chmod' and os.environ.get('LOCK_TERRITORY') and rest[:1] == ['00710'] \
             and pathlib.Path(mapped(rest[-1])) == pathlib.Path(os.environ['LOCK_TERRITORY']):
         # **The migration's regroup closes the territory to this process**, as
         # the real one does to a shell that has not taken the new login: the
@@ -215,6 +228,11 @@ elif name == 'sudo':
         else: made.touch()
         print(template.replace('XXXXXX', 'fixture'))
     elif op == 'visudo': sys.exit(1 if os.environ.get('VISUDO_FAIL') else 0)
+    elif op.startswith('WEAVER_ADMIN_CONFIG=') and os.environ.get('FIXTURE_ADMIN'):
+        # **Admin as a test stands it in** (#99 area 2 review, N5): the
+        # verb and the agent handed to the script FIXTURE_ADMIN names.
+        assert rest[0].endswith('/weaver-admin'), rest
+        sys.exit(subprocess.run([os.environ['FIXTURE_ADMIN'], *rest[1:]]).returncode)
     elif op == 'rm':
         target = pathlib.Path(mapped(rest[-1]))
         assert target.is_relative_to(root), target
@@ -250,9 +268,18 @@ else: sys.exit(99)
 STAND_IN_SUDO = (
     "#!/bin/sh\n"
     "printf '%s\\n' \"$*\" >> {recorded}\n"
+    "[ \"$1\" = -n ] && shift\n"
     "case \"$1\" in\n"
     "  chown|chgrp|usermod) exit 0 ;;\n"
-    "  install) for last; do :; done; mkdir -p \"$last\"; exit 0 ;;\n"
+    # install runs for real, its owner and group dropped, so the mode it
+    # leaves is the one the script asked for (#99 area 2 review, N1).
+    "  install) shift; n=$#; skip=0\n"
+    "    for a do\n"
+    "      if [ \"$skip\" = 1 ]; then skip=0\n"
+    "      elif [ \"$a\" = -o ] || [ \"$a\" = -g ]; then skip=1\n"
+    "      else set -- \"$@\" \"$a\"; fi\n"
+    "    done\n"
+    "    shift \"$n\"; exec install \"$@\" ;;\n"
     "  *) exec \"$@\" ;;\n"
     "esac\n"
 )
@@ -327,7 +354,7 @@ class PlanTests(unittest.TestCase):
         for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
                      "VISUDO_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
                      "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS", "GROUP_WRITES", "LOCK_TERRITORY",
-                     "TERRITORY_GROUP_AS"):
+                     "TERRITORY_GROUP_AS", "LAYOUT_GROUPS", "FIXTURE_ADMIN"):
             self.env.pop(name, None)
         # Redirect even shell builtin /home probes into the fixture. The
         # production scripts have no test-only path switches and never read
@@ -1655,8 +1682,9 @@ esac
         # drop the preflight, and the run reaches the build.
         decl = self.existing_territory / "agent.toml"
         # A path holding a space and a substitution, which a TOML string
-        # carries and the printed command must quote.
-        trace = self.root / "agents" / "a trace $(id).ndjson"
+        # carries and the printed command must quote, in the territory, where
+        # admin requires the sink (#99 area 2 review, N1).
+        trace = self.existing_territory / "a trace $(id).ndjson"
         trace.write_text("")
         trace.chmod(0o640)
         decl.write_text(f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "file"\npath = "{trace}"\ncreate = true\n')
@@ -1771,20 +1799,21 @@ esac
         (stand_in / "sudo").write_text(STAND_IN_SUDO.replace("{recorded}", str(recorded)))
         (stand_in / "sudo").chmod(0o755)
         text = (self.repo / "deploy" / "update-stack.sh").read_text()
-        program = (shell_function(text, "chmod_nofollow") + shell_function(text, "move_no_clobber")
-                   + shell_function(text, "migrate_layout")
+        program = (lay_functions(text) + shell_function(text, "migrate_layout")
                    + 'MOVED=(); declare -A MOVED_FILES=(); rollback() { echo "ROLLBACK: $1" >&2; exit 1; }\n'
-                   + 'migrate_layout "$1"; printf \'%s\\n\' "${MOVED[@]}"')
+                   + 'migrate_layout "$1"; printf \'%s\\n\' "${MOVED[@]}" "${LAID[@]}"')
         env = {**os.environ, "PATH": f"{stand_in}{os.pathsep}{os.environ['PATH']}",
                "ADMIN_BASE": str(self.config), "OPERATOR_NAME": "fixture-no-home"}
         env.pop("BASH_ENV", None)
         ran = subprocess.run(["bash", "-c", program, "bash", f"old|{old_dir}|{territory}"],
                              env=env, text=True, capture_output=True, timeout=20)
         self.assertEqual(ran.returncode, 0, ran.stderr)
-        registered = ran.stdout.splitlines()[-1]
-        self.assertTrue(registered.startswith(f"old|{old_dir}|{territory}|"), registered)
-        group, mode = registered.split("|")[3:]
+        moved, laid = ran.stdout.splitlines()[-2:]
+        self.assertEqual(moved, f"old|{old_dir}|{territory}")
+        self.assertTrue(laid.startswith(f"old|{territory}|"), laid)
+        group, mode, save_points = laid.split("|")[2:]
         self.assertTrue(group and mode.isdigit(), "registered with the territory's group and mode for the rollback")
+        self.assertEqual(save_points, "made", "a save-points/ the run made is registered as made")
         for name in ("agent.toml", "system-prompt.md", "admin.log", "worker.log"):
             self.assertTrue((territory / name).exists(), name)
             self.assertFalse((old_dir / name).exists(), name)
@@ -1804,7 +1833,9 @@ esac
         self.assertNotIn("usermod -aG weaver-old-admin weaver-old-state", said)
         self.assertIn("usermod -aG weaver-old-state,weaver-old-admin fixture-no-home", said)
         self.assertIn(f"chgrp weaver-old-state {territory}", said)
-        self.assertIn(f"chmod 0710 {territory}", said)
+        self.assertIn(f"chmod 00710 {territory}", said)
+        self.assertEqual(territory.stat().st_mode & 0o7777, 0o710)
+        self.assertEqual((territory / "save-points").stat().st_mode & 0o7777, 0o750)
         # After the move the plan reads the declaration from the territory
         # and names no migration (the fixture's build directory cleared, as a
         # second build in one fixture needs).
@@ -1844,8 +1875,9 @@ esac
         (old_root / "declaration-directory").write_text(str(old_dir) + "\n")
         territory = self.root / "agents" / "weaver-old"
         territory.mkdir()
-        # As create-agent laid it out before the ruling: root:weaver-old-state 0710.
-        territory.chmod(0o710)
+        # Laid out before the ruling, at a mode the law does not hold, so the
+        # restore's chmod is told apart from the lay's.
+        territory.chmod(0o750)
         shutil.rmtree(self.config / "existing")
         (self.root / "installed").mkdir(exist_ok=True)
         self.env.update(ALLOW_APPLY_CHECKS="1", LOCK_TERRITORY=str(territory), TERRITORY_GROUP_AS="weaver-old-state")
@@ -1859,7 +1891,7 @@ esac
         self.assertNotIn("could be verified", result.stderr)
         self.assertIn("old refuses and this script will not guess the fix", result.stderr)
         calls = self.calls()
-        after = calls.index(["sudo", "chmod", "0710", str(territory)])
+        after = calls.index(["sudo", "chmod", "00710", str(territory)])
         self.assertIn(["sudo", "-n", "test", "-f", str(territory / "agent.toml")], calls[after:])
         self.assertIn(["sudo", "-n", "cat", "--", str(territory / "agent.toml")], calls[after:])
         # The rollback put the files back through the same privilege.
@@ -1873,7 +1905,7 @@ esac
         # is missing after the regroup.
         self.assertIn(["sudo", "stat", "-c", "%G %a", "--", str(territory)], calls[:after])
         self.assertIn(["sudo", "chgrp", "weaver-old-state", str(territory)], calls[after:])
-        self.assertIn(["sudo", "chmod", "710", str(territory)], calls[after:])
+        self.assertIn(["sudo", "chmod", "00750", str(territory)], calls[after:])
         regroups = [i for i, c in enumerate(calls) if c == ["sudo", "chgrp", "weaver-old-state", str(territory)]]
         self.assertEqual(len(regroups), 2, "the migration's regroup, then the restore's")
         self.assertLess(regroups[0], after)
@@ -1960,7 +1992,8 @@ esac
         admin = self.root / "bin" / "weaver-admin"
         admin.parent.mkdir(parents=True, exist_ok=True)
         program = ('sudo() { [ "$1" = -n ] && shift; shift; "$@"; }\n'
-                   + shell_function(text, "unload_verified") + 'unload_verified m1')
+                   + shell_function(text, "unload_verified") + shell_function(text, "answered_state")
+                   + 'unload_verified m1')
         env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
         env.update(BIN_DIR=str(admin.parent), ADMIN_BASE=str(self.config))
         for answer, verified in (('{"kind":"state","state":"unloaded"}', True),
@@ -2100,6 +2133,213 @@ esac
         self.assertIn(str(closed) + " is closed to", result.stderr)
         self.assertFalse([c for c in self.calls() if c[:2] == ["cargo", "build"]], self.calls())
 
+    def test_the_lay_brings_a_setgid_territory_with_access_entries_to_the_law(self):
+        """**The lay leaves exactly what admin judges** (#99 area 2 review,
+        N1): a setgid territory carrying access and default entries comes out
+        0710 with none, and `save-points/` 0750 with none, whether the run
+        makes it or finds it setgid with entries of its own; the lay is
+        registered with what stood, and the restore puts that back, the setgid
+        bit and the entries with it. Run on real directories through the
+        stand-in sudo. Perturbations: `chmod 0710` again and the territory
+        reads 2710; `install -d ... -m 0750` again and a found save-points/
+        reads 2750; drop either `setfacl -b` and an entry survives."""
+        setfacl = shutil.which("setfacl", path="/usr/bin:/bin")
+        if not setfacl:
+            self.skipTest("no setfacl on this box")
+        text = (DEPLOY / "update-stack.sh").read_text()
+        stand_in = self.root / "stand-in"
+        stand_in.mkdir()
+        recorded = self.root / "recorded"
+        (stand_in / "sudo").write_text(STAND_IN_SUDO.replace("{recorded}", str(recorded)))
+        (stand_in / "sudo").chmod(0o755)
+        env = {**os.environ, "PATH": f"{stand_in}{os.pathsep}{os.environ['PATH']}"}
+        env.pop("BASH_ENV", None)
+        me = str(os.getuid())
+        look = ('python3 -c \'import os, sys\n'
+                'for p in sys.argv[1:]:\n'
+                '    acl = [n for n in os.listxattr(p, follow_symlinks=False) if n.startswith("system.posix_acl")]\n'
+                '    print("LOOK", p, format(os.lstat(p).st_mode & 0o7777, "o"), ",".join(acl) or "-")\' "$@"\n')
+
+        def entries(path):
+            return [n for n in os.listxattr(path, follow_symlinks=False) if n.startswith("system.posix_acl")]
+
+        for found in (False, True):
+            with self.subTest(save_points_found=found):
+                territory = self.root / f"lay-{found}" / "weaver-old"
+                territory.mkdir(parents=True)
+                territory.chmod(0o2770)
+                if territory.stat().st_mode & 0o7777 != 0o2770:
+                    self.skipTest("this filesystem keeps no setgid bit for this user")
+                save_points = territory / "save-points"
+                if found:
+                    save_points.mkdir()
+                    save_points.chmod(0o2750)
+                    subprocess.run([setfacl, "-m", f"u:{me}:r", str(save_points)], check=True)
+                subprocess.run([setfacl, "-m", f"u:{me}:x", "-m", f"d:u:{me}:rx", str(territory)], check=True)
+                program = (lay_functions(text)
+                           + 'rollback() { echo "ROLLBACK: $1" >&2; exit 1; }\n'
+                           + 'lay_territory old "$1"\n'
+                           + 'look() { ' + look + '}\n'
+                           + 'look "$1" "$1/save-points"\n'
+                           + 'printf \'LAID %s\\n\' "${LAID[@]}"\n'
+                           + 'printf \'ACL %s\\n\' "${!LAID_ACL[@]}"\n'
+                           + 'IFS="|" read -r a t g m sp <<< "${LAID[0]}"\n'
+                           + 'restore_directory "$t" "$g" "$m"\n'
+                           + '[ "$sp" = made ] || restore_directory "$t/save-points" "${sp%%:*}" "${sp##*:}"\n')
+                ran = subprocess.run(["bash", "-c", program, "bash", str(territory)],
+                                     env=env, text=True, capture_output=True, timeout=20)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                looks = {line.split()[1]: line.split()[2:] for line in ran.stdout.splitlines() if line.startswith("LOOK ")}
+                self.assertEqual(looks[str(territory)], ["710", "-"], ran.stdout)
+                self.assertEqual(looks[str(save_points)], ["750", "-"], ran.stdout)
+                laid = next(line for line in ran.stdout.splitlines() if line.startswith("LAID "))
+                fields = laid.removeprefix("LAID ").split("|")
+                self.assertEqual(fields[:2], ["old", str(territory)])
+                self.assertEqual(fields[3], "2770", "the mode as found, setgid and all")
+                self.assertEqual(fields[4].split(":")[-1] if found else fields[4], "2750" if found else "made")
+                acls = sorted(line.removeprefix("ACL ") for line in ran.stdout.splitlines() if line.startswith("ACL "))
+                self.assertEqual(acls, sorted([str(territory)] + ([str(save_points)] if found else [])))
+                # The restore put back what stood: the setgid bit and the entries.
+                self.assertEqual(territory.stat().st_mode & 0o7777, 0o2770)
+                self.assertTrue(entries(territory), "the territory's entries are set again")
+                if found:
+                    self.assertEqual(save_points.stat().st_mode & 0o7777, 0o2750)
+                    self.assertTrue(entries(save_points))
+
+    def test_the_plan_judges_every_territory_and_sink_as_admin_does(self):
+        """**Every territory a root names is judged before the build as admin
+        judges it** (#99 area 2 review, N1): a setgid mode, an access entry,
+        a missing `save-points/` are named in the plan as what the install
+        lays; a lawful territory plans nothing; a link at the territory or at
+        `save-points/`, and a sink whose directory is not the canonical
+        territory, refuse by name before anything is built. Perturbations:
+        compare the mode masked to three digits and 2710 goes unnamed; drop
+        the access look and the entry goes unnamed; drop the sink comparison
+        and the plan runs on."""
+        setfacl = shutil.which("setfacl", path="/usr/bin:/bin")
+        territory = self.existing_territory
+        territory.chmod(0o2710)
+        if territory.stat().st_mode & 0o7777 != 0o2710:
+            self.skipTest("this filesystem keeps no setgid bit for this user")
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        line = next(l for l in result.stdout.splitlines() if l.startswith("  existing     territory:"))
+        self.assertIn("mode 2710", line)
+        self.assertIn("no save-points/", line)
+        self.assertIn("the install lays it root:weaver-existing-state 0710", line)
+        # Lawful: nothing planned.
+        territory.chmod(0o710)
+        (territory / "save-points").mkdir()
+        (territory / "save-points").chmod(0o750)
+        shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("every territory a root names stands as admin judges it", result.stdout)
+        if setfacl:
+            subprocess.run([setfacl, "-m", f"u:{os.getuid()}:x", str(territory)], check=True)
+            shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+            result = self.run_script("update-stack.sh")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("carrying access entries", "".join(
+                l for l in result.stdout.splitlines() if l.startswith("  existing     territory:")))
+            subprocess.run([setfacl, "-b", str(territory)], check=True)
+        # A sink elsewhere, and one under a link to the agent directory, refuse
+        # before the build, naming the canonical territory.
+        decl = territory / "agent.toml"
+        link = self.root / "agents-link"
+        link.symlink_to(self.root / "agents")
+        for sink in (self.root / "elsewhere" / "trace.ndjson", link / "weaver-existing" / "trace.ndjson"):
+            with self.subTest(sink=str(sink)):
+                decl.write_text(f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "file"\npath = "{sink}"\n')
+                self.log.unlink(missing_ok=True)
+                result = self.run_script("update-stack.sh")
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(f"its trace sink {sink} does not stand in its canonical territory {territory.resolve()}",
+                              result.stderr)
+                self.assertFalse([c for c in self.calls() if c[:2] == ["cargo", "build"]], self.calls())
+        decl.write_text('[state-store]\nengine = "none"\n')
+        # A link at save-points/, and a territory that is a link, refuse.
+        (territory / "save-points").rmdir()
+        (territory / "save-points").symlink_to(self.root)
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(f"{territory}/save-points is a link", result.stderr)
+        (territory / "save-points").unlink()
+        moved = self.root / "agents" / "weaver-existing-real"
+        territory.rename(moved)
+        territory.symlink_to(moved)
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(f"its territory {territory} does not stand as a directory, or is a link", result.stderr)
+
+    def test_the_install_lays_a_root_naming_its_territory_and_the_rollback_puts_it_back(self):
+        """**A root already naming its territory is laid when it is off the
+        law, and the lay is registered for the restore** (#99 area 2 review,
+        N1): the install regroups it, sets 00710, drops its entries and lays
+        `save-points/` 00750, having read its group and mode first; the
+        fixture's admin answers nothing, so the run rolls back and the
+        restore sets the group and the mode, setgid included, as found.
+        Perturbations: drop the lay step and no 00710 is set; drop the
+        registration and the restore never sets 02750."""
+        territory = self.existing_territory
+        territory.chmod(0o2750)
+        if territory.stat().st_mode & 0o7777 != 0o2750:
+            self.skipTest("this filesystem keeps no setgid bit for this user")
+        (self.root / "installed").mkdir(exist_ok=True)
+        self.env.update(ALLOW_APPLY_CHECKS="1", TERRITORY_GROUP_AS="weaver-existing-old")
+        result = self.run_script("update-stack.sh", "--install")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("existing refuses and this script will not guess the fix", result.stderr)
+        self.assertIn("== lay territories", result.stdout)
+        calls = self.calls()
+        lay = calls.index(["sudo", "chmod", "00710", str(territory)])
+        self.assertIn(["sudo", "stat", "-c", "%G %a", "--", str(territory)], calls[:lay])
+        self.assertIn(["sudo", "chgrp", "weaver-existing-state", str(territory)], calls[:lay])
+        self.assertIn(["sudo", "setfacl", "-b", "--", str(territory)], calls[lay:])
+        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-existing-admin", "-m", "00750",
+                       str(territory / "save-points")], calls[lay:])
+        self.assertIn(["sudo", "chgrp", "weaver-existing-old", str(territory)], calls[lay:])
+        self.assertIn(["sudo", "chmod", "02750", str(territory)], calls[lay:])
+
+    def test_the_verify_load_must_answer_the_idle_state(self):
+        """**The verify step reads the load's answer** (#99 area 2 review,
+        N5): a load admin refuses after the harness wrote `load` naming its
+        composer leaves the sink grown and the unload answering unloaded, and
+        still rolls the install back, naming the answer; a load answering
+        idle verifies. Perturbation: call `admin_answer load` without reading
+        its answer again and the refused load reports the box current."""
+        territory = self.existing_territory.resolve()
+        sink = territory / "trace.ndjson"
+        (territory / "agent.toml").write_text(
+            f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "file"\npath = "{sink}"\n')
+        (self.root / "installed").mkdir(exist_ok=True)
+        admin = self.root / "fixture-admin"
+        for answer, verified in (('{"kind":"refused","reason":"no_residency"}', False),
+                                 ('{"kind":"state","state":"idle"}', True)):
+            with self.subTest(answer=answer):
+                admin.write_text(
+                    "#!/bin/sh\n"
+                    "case \"$1\" in\n"
+                    "  validate) echo '{\"kind\":\"validated\"}' ;;\n"
+                    "  unload) echo '{\"kind\":\"state\",\"state\":\"unloaded\"}' ;;\n"
+                    f"  load) echo '{{\"kind\":\"load\",\"payload\":{{\"composer\":\"x\"}}}}' >> '{sink}'\n"
+                    f"        echo '{answer}' ;;\n"
+                    "  *) exit 2 ;;\n"
+                    "esac\n")
+                admin.chmod(0o755)
+                sink.unlink(missing_ok=True)
+                self.log.unlink(missing_ok=True)
+                shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+                self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_ADMIN=str(admin))
+                result = self.run_script("update-stack.sh", "--install")
+                if verified:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("the box is at", result.stdout)
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn(f"the verify load answered {answer}, not the idle state", result.stderr)
+                    self.assertNotIn("the box is at", result.stdout)
+
     def test_stack_build_failure_cannot_claim_a_plan(self):
         self.env["BUILD_FAIL"] = "1"
         result = self.run_script("update-stack.sh")
@@ -2117,6 +2357,18 @@ def shell_function(script, name):
     start = lines.index(f"{name}() {{")
     end = next(i for i in range(start, len(lines)) if lines[i] == "}")
     return "\n".join(lines[start:end + 1]) + "\n"
+
+
+def lay_functions(script):
+    """update-stack.sh's territory lay and what it calls, as the script
+    defines them, with root's reads through the stand-in sudo
+    (`PRIVILEGED=1`) and the registries the restore reads declared."""
+    as_root = next(line for line in script.splitlines() if line.startswith("as_root() {"))
+    return ("PRIVILEGED=1\n" + as_root + "\n"
+            + shell_function(script, "carries_access_entries")
+            + shell_function(script, "chmod_nofollow") + shell_function(script, "move_no_clobber")
+            + shell_function(script, "lay_territory") + shell_function(script, "restore_directory")
+            + "LAID=(); declare -A LAID_ACL=()\n")
 
 
 class DecommissionTests(unittest.TestCase):
@@ -2200,16 +2452,42 @@ class DecommissionTests(unittest.TestCase):
             # compare the strings as written and the first lists nothing.
             dotted_out = f"{base}/../srv-elsewhere/weaver-b"
             dotted_in = f"{base}/../{base.name}/weaver-a"
-            for name, territory in (("d", dotted_out), ("e", dotted_in)):
-                root = roots / name
-                root.mkdir()
+            dotted = Path(scratch) / "admin-dotted"
+            for name, territory in (("b", dotted_out), ("a", dotted_in)):
+                root = dotted / name
+                root.mkdir(parents=True)
                 (root / "territory").write_text(f"{territory}\n")
             listed = self.run_fn("territories_outside", str(base), "--",
-                                 str(roots / "d"), str(roots / "e"))
+                                 str(dotted / "b"), str(dotted / "a"))
             self.assertEqual(listed.splitlines(), [str(custom.resolve())])
         self.assertIn('for d in "${OWN_TERRITORIES[@]}"; do archive_path "$(archive_name territory "$d")" "$d"; done',
                       self.script)
         self.assertIn('mapfile -t OWN_TERRITORIES < <(territories_outside', self.script)
+
+    def test_a_territory_key_not_naming_its_agent_is_never_purged(self):
+        """**A root's `territory` key is listed for the archive and the purge
+        only where it names `weaver-<agent>`** (#99 area 2 review, H4): a key
+        mistyped as a parent directory (`/var/lib`) is said and skipped, never
+        put on the purge list. Perturbation: drop the name check and the
+        stand-in `/var/lib` is listed."""
+        with tempfile.TemporaryDirectory() as scratch:
+            base = Path(scratch) / "var-lib-weaver-agent"
+            base.mkdir()
+            wrong = Path(scratch) / "var-lib"
+            wrong.mkdir()
+            other = Path(scratch) / "srv" / "weaver-b"
+            other.mkdir(parents=True)
+            roots = Path(scratch) / "admin"
+            for name, territory in (("a", wrong), ("c", other)):
+                (roots / name).mkdir(parents=True)
+                (roots / name / "territory").write_text(f"{territory}\n")
+            run = subprocess.run(["bash", "-c", shell_function(self.script, "territories_outside")
+                                  + 'territories_outside "$@"', "x", str(base), "--",
+                                  str(roots / "a"), str(roots / "c")],
+                                 text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.stdout, "", "neither key names its own agent's territory")
+            self.assertIn(f"{roots / 'a'}/territory names {wrong.resolve()}, not weaver-a", run.stderr)
+            self.assertIn(f"{roots / 'c'}/territory names {other.resolve()}, not weaver-c", run.stderr)
 
     def test_a_running_agent_refuses_the_archive_and_the_purge(self):
         guard = '[ ${#RUNNING[@]} -eq 0 ] || die "agents still run or cannot be read'
@@ -2568,7 +2846,7 @@ class AdminAnswerTests(unittest.TestCase):
 
     def test_both_call_sites_reach_the_helper(self):
         self.assertIn('validate() {\n  admin_answer validate "$1"\n}', self.script)
-        self.assertIn('  admin_answer load "$AGENT"\n', self.script)
+        self.assertIn('  verdict=$(admin_answer load "$AGENT")\n  answered_state "$verdict" idle \\\n', self.script)
         admin_lines = [line for line in self.script.splitlines()
                        if "/weaver-admin\"" in line and not line.lstrip().startswith("#")]
         self.assertFalse([line for line in admin_lines if "tail -1" in line], admin_lines)

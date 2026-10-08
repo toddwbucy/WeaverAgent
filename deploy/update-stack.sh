@@ -47,16 +47,25 @@ read_key() { cat "$STACK/$1" 2>/dev/null || true; }
 unload_verified() {
   local said
   said=$(sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" unload "$1" 2>/dev/null | sed -n '$p') || true
-  if python3 -c 'import json, sys
-try:
-    d = json.loads(sys.argv[1])
-except ValueError:
-    sys.exit(1)
-sys.exit(0 if isinstance(d, dict) and d.get("kind") == "state" and d.get("state") == "unloaded" else 1)' "$said"; then
+  if answered_state "$said" unloaded; then
     return 0
   fi
   printf '  admin answered the unload of %s: %s\n' "$1" "${said:-nothing}" >&2
   return 1
+}
+
+# **answered_state ANSWER STATE: admin's answer is the state named**, read as
+# JSON and never matched as text: 0 where ANSWER is `{"kind":"state",
+# "state":STATE}`, non-zero for a refusal, an empty answer or one that does
+# not parse. The unload's reader (S22) and the verify load's (#99 area 2
+# review, N5) are this one.
+answered_state() {
+  python3 -c 'import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except ValueError:
+    sys.exit(1)
+sys.exit(0 if isinstance(d, dict) and d.get("kind") == "state" and d.get("state") == sys.argv[2] else 1)' "$1" "$2"
 }
 
 # **chmod_nofollow MODE PATH: root sets a moved file's mode through a
@@ -167,6 +176,28 @@ declared_in() {
   local text
   text=$(read_declaration "$1") || return 1
   printf '%s\n' "$text" | declared "$2" "$3" "$1"
+}
+
+# **carries_access_entries PATH: admin's access-control look** (#99 area 2
+# review, N1), as weaver-admin's `carries_access_entries` judges the territory
+# and `save-points/`: either POSIX ACL attribute standing on PATH, read
+# without following a link, is an entry, and admin refuses any. Answers 0
+# where one stands, 1 where none does, and 2 where the look cannot answer,
+# which every caller refuses rather than reading as none. Through privilege
+# once the install holds it, as every read under a territory is.
+carries_access_entries() {
+  as_root python3 -c '
+import errno, os, sys
+for name in ("system.posix_acl_access", "system.posix_acl_default"):
+    try:
+        os.getxattr(sys.argv[1], name, follow_symlinks=False)
+    except OSError as e:
+        if e.errno in (errno.ENODATA, errno.EOPNOTSUPP):
+            continue
+        sys.exit(2)
+    sys.exit(0)
+sys.exit(1)
+' "$1"
 }
 
 # Reads a run's new trace lines on stdin and prints what the load event says
@@ -349,6 +380,83 @@ for agent in $AGENTS; do
     [ ! -e "$old/$f" ] || [ -f "$old/$f" ] || die "$agent: $old/$f is not a regular file, which the migration does not move; remove it, then rerun (deploy/REDEPLOY.md section 8, step 7)"
   done
   LAYOUT+=("$agent|$old|$territory")
+done
+
+# **Every agent's territory and sink are judged as the admin this installs
+# judges them, before anything is built** (#99 area 2 review, N1): admin
+# refuses at every verb a territory that is not root's, grouped to the state
+# group, at exactly 0710 (a setgid bit refuses), with no access entry, under
+# directories root holds closed, holding a `save-points/` root's at the access
+# group, exactly 0750, with no access entry; and it refuses `config_invalid`
+# a sink whose directory is not the canonical territory. What the install can
+# lay to the law (the group, the mode, the entries, `save-points/`) is
+# planned here and laid by `lay_territory` below, for a root naming its
+# territory as for one the migration moves (whose territory is always laid);
+# what it cannot (a link, another owner, a sink elsewhere, an open ancestor)
+# refuses by name. A `save-points/` this user cannot pass to is judged as
+# root at the install. Asked as the operator, who passes the territory by
+# the state group.
+LAY=()
+declare -A LAY_WHY=()
+for agent in $AGENTS; do
+  territory=$(territory_of "$agent") || exit 1
+  [ -d "$territory" ] && [ ! -L "$territory" ] \
+    || die "$agent: its territory $territory does not stand as a directory, or is a link, which admin refuses at every verb (deploy/REDEPLOY.md section 8, step 3)"
+  canonical=$(realpath -e -- "$territory") || die "$agent: its territory $territory does not resolve"
+  bad=$(held_closed "$(dirname -- "$canonical")") \
+    || die "$agent: $bad, above its territory, is not held closed by root, which admin refuses at every verb"
+  IFS=: read -r t_owner t_group t_mode < <(stat -c '%u:%G:%a' -- "$territory" 2>/dev/null) \
+    || die "$agent: cannot read the owner, group and mode of its territory $territory as $OPERATOR_NAME"
+  [ "$t_owner" = 0 ] \
+    || die "$agent: its territory $territory is uid $t_owner's, and admin requires root's; this script re-lays no territory another account owns"
+  off=()
+  [ "$t_group" = "weaver-$agent-state" ] || off+=("grouped $t_group")
+  [ "$t_mode" = 710 ] || off+=("mode $t_mode")
+  rc=0; carries_access_entries "$territory" || rc=$?
+  case $rc in
+    0) off+=("carrying access entries") ;;
+    1) ;;
+    *) die "$agent: whether its territory $territory carries access entries cannot be read" ;;
+  esac
+  sp=$territory/save-points
+  if [ -L "$sp" ]; then
+    die "$agent: $sp is a link, which admin refuses; remove it, then rerun"
+  elif [ -e "$sp" ]; then
+    [ -d "$sp" ] || die "$agent: $sp is not a directory, which admin refuses; remove it, then rerun"
+    IFS=: read -r s_owner s_group s_mode < <(stat -c '%u:%G:%a' -- "$sp" 2>/dev/null) \
+      || die "$agent: cannot read the owner, group and mode of $sp as $OPERATOR_NAME"
+    [ "$s_owner" = 0 ] || die "$agent: $sp is uid $s_owner's, and admin requires root's; remove it, then rerun"
+    [ "$s_group" = "weaver-$agent-admin" ] || off+=("save-points/ grouped $s_group")
+    [ "$s_mode" = 750 ] || off+=("save-points/ mode $s_mode")
+    rc=0; carries_access_entries "$sp" || rc=$?
+    case $rc in
+      0) off+=("save-points/ carrying access entries") ;;
+      1) ;;
+      *) die "$agent: whether $sp carries access entries cannot be read" ;;
+    esac
+  elif [ -x "$territory" ]; then
+    off+=("no save-points/")
+  else
+    off+=("save-points/ not visible to $OPERATOR_NAME")
+  fi
+  # The sink's directory, as admin's `sink_within_territory` takes it: the
+  # declared path's parent, compared component by component with the
+  # canonical territory, whatever the sink's kind.
+  decl=$(declaration_of "$agent") || exit 1
+  rc=0
+  sink=$(declared_in "$decl" trace-sink.path string) || rc=$?
+  case $rc in
+    0) python3 -c 'import pathlib, sys; sys.exit(pathlib.PurePosixPath(sys.argv[1]).parent != pathlib.PurePosixPath(sys.argv[2]))' "$sink" "$canonical" \
+         || die "$agent: its trace sink $sink does not stand in its canonical territory $canonical, which admin refuses (config_invalid, naming trace-sink). Rewrite its [trace-sink] path to $canonical/<file>, then rerun." ;;
+    3) ;;
+    *) die "$agent: the declaration's trace-sink.path does not read, see above" ;;
+  esac
+  [ -z "$(root_path "$agent" declaration-directory)" ] || continue
+  if [ ${#off[@]} -gt 0 ]; then
+    LAY+=("$agent|$territory")
+    why=$(printf '%s, ' "${off[@]}")
+    LAY_WHY["$agent"]=${why%, }
+  fi
 done
 
 # **Where cargo builds is asked rather than assumed.** This box sets
@@ -576,6 +684,12 @@ for entry in "${LAYOUT[@]}"; do
   printf '  %-12s layout: agent.toml, system-prompt.md, admin.log and worker.log move from %s into %s, root'"'"'s, with save-points/ beside them; the root takes the territory key\n' "$agent" "$old" "$territory"
 done
 [ ${#LAYOUT[@]} -gt 0 ] || printf '  layout        every declaration stands in its territory\n'
+for entry in "${LAY[@]}"; do
+  IFS='|' read -r agent territory <<< "$entry"
+  printf '  %-12s territory: %s stands %s; the install lays it root:weaver-%s-state 0710 with no access entries, and save-points/ root:weaver-%s-admin 0750 with none\n' \
+    "$agent" "$territory" "${LAY_WHY[$agent]}" "$agent" "$agent"
+done
+[ ${#LAY[@]} -gt 0 ] || printf '  territories   every territory a root names stands as admin judges it\n'
 
 # --------------------------------------------------------------- 2. update main
 say "tree"
@@ -729,15 +843,22 @@ refuse_legacy_units
 # ------------------------------------------------------------------ 7. install
 PATCHED=()
 ADDED=()
-# The layout moves this run made, each "agent|old directory|territory|group|
-# mode", the territory's group and mode as found before the move, put back
-# by the restore: the four files moved back as they were, the root's keys as
-# they were, and the territory regrouped and remoded as it stood (Codex on
-# #94, round 9), since the admin from before the ruling of 2026-10-07 drops
-# the member to its primary group alone, so a territory left grouped to the
-# access group is one the rolled-back member cannot traverse to its room. The
-# group memberships stay, being reads the ruling grants either way.
+# The layout moves this run made, each "agent|old directory|territory", put
+# back by the restore: the four files moved back as they were and the root's
+# keys as they were. The territory's own group, mode and access entries are
+# `LAID`'s, below. The group memberships stay, being reads the ruling grants
+# either way.
 MOVED=()
+# **The territories this run laid to the law**, each "agent|territory|group|
+# mode|save-points", the territory's group and mode as found, and
+# `save-points/`'s as "group:mode", or `made` where this run made it (#99
+# area 2 review, N1), put back by the restore as they stood (Codex on #94,
+# round 9): the admin a rollback reinstates may be one from before the
+# ruling of 2026-10-08, whose member passes only a territory laid as it laid
+# it. `LAID_ACL` holds, keyed by path, the access entries a laid directory
+# carried, as `getfacl` printed them, for the restore to set again.
+LAID=()
+declare -A LAID_ACL=()
 # **Each moved file's owner and mode as found**, keyed "agent|file" (Codex on
 # #94, round 12): a parallel array rather than more fields on the entry, since
 # which of the four files stood varies per agent and the entry keeps one
@@ -789,18 +910,24 @@ restore() {
   fi
   if [ ${#MOVED[@]} -gt 0 ]; then
     for entry in "${MOVED[@]}"; do
-      IFS='|' read -r agent old territory group mode <<< "$entry"
+      IFS='|' read -r agent old territory <<< "$entry"
       printf '  moving %s'"'"'s files back from %s into %s\n' "$agent" "$territory" "$old" >&2
       move_files_back "$agent" "$old" "$territory" || failed=1
-      # **The territory reads as it did**: its group and mode as the move
-      # found them, so the pre-ruling admin's member, holding no supplementary
-      # group, passes to its room again.
-      sudo chgrp "$group" "$territory" && sudo chmod "$mode" "$territory" \
-        || { printf '  FAILED to restore the group and mode of %s\n' "$territory" >&2; failed=1; }
       printf '%s\n' "$old" | sudo tee "$ADMIN_BASE/$agent/declaration-directory" >/dev/null \
         && sudo chmod 0644 "$ADMIN_BASE/$agent/declaration-directory" \
         && sudo rm -f "$ADMIN_BASE/$agent/territory" \
         || { printf '  FAILED to restore %s'"'"'s root keys\n' "$agent" >&2; failed=1; }
+    done
+  fi
+  # **The territory reads as it did**: its group, mode and access entries as
+  # the lay found them, and `save-points/`'s where it stood, so the member of
+  # the admin the rollback reinstates passes to its room again.
+  if [ ${#LAID[@]} -gt 0 ]; then
+    for entry in "${LAID[@]}"; do
+      IFS='|' read -r agent territory group mode sp <<< "$entry"
+      printf '  re-laying %s as it stood\n' "$territory" >&2
+      restore_directory "$territory" "$group" "$mode" || failed=1
+      [ "$sp" = made ] || restore_directory "$territory/save-points" "${sp%%:*}" "${sp##*:}" || failed=1
     done
   fi
   if [ ${#PATCHED[@]} -gt 0 ]; then
@@ -854,7 +981,7 @@ rollback() {
 # three replaced and nothing registered to put them back.
 on_exit() {
   local rc=$?
-  if [ "$COMPLETED" -eq 0 ] && { [ "$INSTALL_DONE" -eq 1 ] || [ ${#PATCHED[@]} -gt 0 ] || [ ${#MOVED[@]} -gt 0 ]; }; then
+  if [ "$COMPLETED" -eq 0 ] && { [ "$INSTALL_DONE" -eq 1 ] || [ ${#PATCHED[@]} -gt 0 ] || [ ${#MOVED[@]} -gt 0 ] || [ ${#LAID[@]} -gt 0 ]; }; then
     printf '\n  the run did not complete (exit %d)\n' "$rc" >&2
     restore
   fi
@@ -936,20 +1063,70 @@ move_files_back() {
   return "$failed"
 }
 
+# **lay_territory AGENT TERRITORY: the territory laid to the law admin
+# judges** (#99 area 2 review, N1): root's, grouped weaver-<agent>-state at
+# 00710 with no access entry, and `save-points/` root:weaver-<agent>-admin at
+# 00750 with none. The fifth digit is the point: GNU chmod and install keep a
+# directory's setgid bit under a four-digit mode (measured: 2770 becomes
+# 2710, and a directory made in a setgid one comes out 2750), and admin
+# refuses both exactly. `setfacl -b` drops every access entry, access and
+# default, since admin refuses any. What stood is recorded and registered in
+# `LAID` before the first change, so the restore puts it back (Codex on #94,
+# round 9). A `save-points/` that is a link, or not a directory, refuses as
+# admin would, looked at as root here since the preflight may not have seen
+# it. The territory is root's in a directory root holds closed (the
+# preflight's judgment), so no other principal changes either name between
+# the look and the act.
+lay_territory() {
+  local agent=$1 territory=$2 group mode sp=made sgroup smode d rc acl
+  read -r group mode < <(sudo stat -c '%G %a' -- "$territory") \
+    || rollback "$agent: cannot read the group and mode of $territory"
+  [ -n "$group" ] && [ -n "$mode" ] || rollback "$agent: cannot read the group and mode of $territory"
+  ! sudo test -L "$territory/save-points" \
+    || rollback "$agent: $territory/save-points is a link, which admin refuses; remove it, then rerun"
+  if sudo test -e "$territory/save-points"; then
+    sudo test -d "$territory/save-points" \
+      || rollback "$agent: $territory/save-points is not a directory, which admin refuses; remove it, then rerun"
+    read -r sgroup smode < <(sudo stat -c '%G %a' -- "$territory/save-points") \
+      || rollback "$agent: cannot read the group and mode of $territory/save-points"
+    [ -n "$sgroup" ] && [ -n "$smode" ] || rollback "$agent: cannot read the group and mode of $territory/save-points"
+    sp="$sgroup:$smode"
+  fi
+  for d in "$territory" "$territory/save-points"; do
+    [ "$d" = "$territory" ] || [ "$sp" != made ] || continue
+    rc=0; carries_access_entries "$d" || rc=$?
+    case $rc in
+      0) acl=$(sudo getfacl -c -p -- "$d") || rollback "$agent: cannot read the access entries of $d"
+         LAID_ACL["$d"]=$acl ;;
+      1) ;;
+      *) rollback "$agent: whether $d carries access entries cannot be read" ;;
+    esac
+  done
+  LAID+=("$agent|$territory|$group|$mode|$sp")
+  sudo chgrp "weaver-$agent-state" "$territory" && sudo chmod 00710 "$territory" \
+    && sudo setfacl -b -- "$territory" \
+    || rollback "$agent: the territory could not take the state group at 0710 with no access entry"
+  sudo install -d -o root -g "weaver-$agent-admin" -m 00750 "$territory/save-points" \
+    && sudo setfacl -b -- "$territory/save-points" \
+    || rollback "$agent: $territory/save-points could not be laid root:weaver-$agent-admin 0750 with no access entry"
+}
+
+# **restore_directory DIR GROUP MODE: a laid directory put back as it
+# stood**, its group, its mode in five digits so a setgid bit it had comes
+# back and one it lacked stays off, and its access entries where it carried
+# any. Answers non-zero, naming it, where any step fails.
+restore_directory() {
+  sudo chgrp "$2" "$1" && sudo chmod "$(printf '%05d' "$3")" "$1" \
+    && { [ -z "${LAID_ACL[$1]:-}" ] || printf '%s\n' "${LAID_ACL[$1]}" | sudo setfacl --set-file=- -- "$1"; } \
+    || { printf '  FAILED to restore the group, mode and access entries of %s\n' "$1" >&2; return 1; }
+}
+
 # migrate_layout "AGENT|OLD|TERRITORY"...
 migrate_layout() {
-  local entry agent old territory f group mode owner fmode
+  local entry agent old territory f owner fmode
   for entry in "$@"; do
     IFS='|' read -r agent old territory <<< "$entry"
-    # **What the territory was is recorded before anything changes**, its
-    # group and mode as they stand, so the restore puts them back (Codex on
-    # #94, round 9).
-    read -r group mode < <(sudo stat -c '%G %a' -- "$territory") \
-      || rollback "$agent: cannot read the group and mode of $territory"
-    [ -n "$group" ] && [ -n "$mode" ] || rollback "$agent: cannot read the group and mode of $territory"
-    MOVED+=("$entry|$group|$mode")
-    sudo install -d -o root -g "weaver-$agent-admin" -m 0750 "$territory/save-points" \
-      || rollback "$agent: cannot make $territory/save-points"
+    MOVED+=("$entry")
     # Each file's owner and mode recorded before it moves, for the restore.
     for f in agent.toml system-prompt.md admin.log worker.log; do
       [ -e "$old/$f" ] || continue
@@ -982,8 +1159,9 @@ migrate_layout() {
       sudo usermod -aG "weaver-$agent-state" "weaver-$agent-admincon" \
         || rollback "$agent: the connector could not join weaver-$agent-state"
     fi
-    sudo chgrp "weaver-$agent-state" "$territory" && sudo chmod 0710 "$territory" \
-      || rollback "$agent: the territory could not take the state group"
+    # The territory laid to the law, whatever it stood as: grouped to the
+    # state group, which the operator and the connector have just joined.
+    lay_territory "$agent" "$territory"
     printf '%s\n' "$territory" | sudo tee "$ADMIN_BASE/$agent/territory" >/dev/null \
       && sudo chmod 0644 "$ADMIN_BASE/$agent/territory" \
       && sudo rm -f "$ADMIN_BASE/$agent/declaration-directory" \
@@ -995,6 +1173,18 @@ migrate_layout() {
 if [ ${#LAYOUT[@]} -gt 0 ]; then
   say "migrate layout"
   migrate_layout "${LAYOUT[@]}"
+fi
+# **A root already naming its territory is laid too, where the preflight
+# found it off the law** (#99 area 2 review, N1), the same lay the migration
+# makes and registered for the restore the same way.
+if [ ${#LAY[@]} -gt 0 ]; then
+  say "lay territories"
+  for entry in "${LAY[@]}"; do
+    IFS='|' read -r agent territory <<< "$entry"
+    lay_territory "$agent" "$territory"
+    printf '  %s: %s laid root:weaver-%s-state 0710, save-points/ root:weaver-%s-admin 0750, no access entries\n' \
+      "$agent" "$territory" "$agent" "$agent"
+  done
 fi
 
 if [ ${#CHANGED[@]} -gt 0 ]; then
@@ -1136,7 +1326,15 @@ for AGENT in $AGENTS; do
   # Claimed before the load rather than after it, so a load that comes up and
   # then dies on its read-back is still a load the restore knows to undo.
   LOADED_AGENT="$AGENT"
-  admin_answer load "$AGENT"
+  # **The load's answer is read, and only the idle state is a load** (#99
+  # area 2 review, N5): a load admin rolls back after the harness authored
+  # `load` (`no_residency` past the load bound, an enter that refuses, a
+  # marker that does not open) leaves a `load` event naming the composer on
+  # the trace and a free run lock, so the sink's growth and the unload below
+  # would both pass a load that never stood.
+  verdict=$(admin_answer load "$AGENT")
+  answered_state "$verdict" idle \
+    || rollback "$AGENT: the verify load answered ${verdict:-nothing}, not the idle state, so no load under this install stood"
   LATER=$(sink_lines "$SINK") || rollback "$AGENT: $SINK is not a regular file, and this step reads the load event back out of one"
   NEW=$(( LATER - LINES ))
   # **A sink that gained nothing points at the sink, and the fault is rarely

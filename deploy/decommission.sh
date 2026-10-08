@@ -333,6 +333,10 @@ territories_outside() {
   for r in "$@"; do
     v=$(cat "$r/territory" 2>/dev/null || true); v=${v%%$'\n'*}; [ -n "$v" ] && [ -d "$v" ] && [ ! -L "$v" ] || continue
     v=$(realpath -e -- "$v" 2>/dev/null) || continue
+    # **A key is a territory only by its name** (#99 area 2 review, H4): what
+    # this lists is archived and `rm -rf`'d, so a key naming anything but its
+    # own agent's `weaver-<agent>` (a typo for `/var/lib`) is said and skipped.
+    [ "${v##*/}" = "weaver-${r##*/}" ] || { printf 'skipped: %s names %s, not weaver-%s\n' "$r/territory" "$v" "${r##*/}" >&2; continue; }
     covered=0
     for b in "${bases[@]}"; do case "$v" in "$b"/*) covered=1;; esac; done
     [ "$covered" = 0 ] && printf '%s\n' "$v"
