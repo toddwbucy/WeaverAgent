@@ -193,7 +193,7 @@ elif name == 'sudo':
             assert not destination.exists(), destination
             source.rename(destination)
         privileged([source, destination], move)
-    elif op == 'chmod' and os.environ.get('LOCK_TERRITORY') and rest[:1] == ['0710'] \
+    elif op == 'chmod' and os.environ.get('LOCK_TERRITORY') and rest[:1] == ['0711'] \
             and pathlib.Path(mapped(rest[-1])) == pathlib.Path(os.environ['LOCK_TERRITORY']):
         # **The migration's regroup closes the territory to this process**, as
         # the real one does to a shell that has not taken the new login: the
@@ -737,25 +737,27 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertEqual(self.calls(), [])
 
     def test_the_territory_holds_the_declaration_the_draft_and_the_save_points(self):
-        # The operator's ruling of 2026-10-07 on #1: the territory is
-        # root:weaver-<name>-admin 0710, the declaration and the draft root
-        # 0644 in it, save-points/ root:weaver-<name>-admin 0750 beside the
-        # state room, the member and the operator in the access group, and the
-        # root names the territory. Perturbations: write the draft into the
-        # operator's home again, group the territory to the member, or drop
-        # the save-points directory, and this fails.
+        # The operator's rulings of 2026-10-07 and 2026-10-08 on #1: the
+        # territory is root:weaver-<name>-admin 0711, the declaration and the
+        # draft root 0644 in it, save-points/ root:weaver-<name>-admin 0750
+        # beside the state room, the operator in the access group and the
+        # member never (the custody audit's G11), and the root names the
+        # territory. Perturbations: write the draft into the operator's home
+        # again, group the territory to the member, join the member to the
+        # access group again, or drop the save-points directory, and this
+        # fails.
         self.env["ALLOW_APPLY_CHECKS"] = "1"
         result = self.create("--apply")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_agent_root("sqlite")
         calls = self.calls()
         territory = str(self.decl)
-        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-admin", "-m", "0710", territory], calls)
+        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-admin", "-m", "0711", territory], calls)
         self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-admin", "-m", "0750",
                        territory + "/save-points"], calls)
         self.assertIn(["sudo", "tee", territory + "/agent.toml"], calls)
         self.assertIn(["sudo", "tee", territory + "/system-prompt.md"], calls)
-        self.assertIn(["sudo", "usermod", "-aG", "weaver-m1-admin", "weaver-m1-state"], calls)
+        self.assertNotIn(["sudo", "usermod", "-aG", "weaver-m1-admin", "weaver-m1-state"], calls)
         self.assertIn(["sudo", "usermod", "-aG", "weaver-m1,weaver-m1-trace,weaver-m1-admin", "fixture-no-home"], calls)
         self.assertFalse([c for c in calls if any(a.startswith(str(self.operator_home)) for a in c)],
                          "no call reaches the operator's home")
@@ -1015,9 +1017,9 @@ esac
 
     def test_the_territory_is_passage_for_the_member_and_the_trace_is_not_its_to_read(self):
         # The operator's ruling of 2026-10-02 (#28) as refined on #56 and by the
-        # ruling of 2026-10-07 on #1: the member passes through a
-        # root:weaver-<name>-admin 0710 territory (no setgid, no listing) to its
-        # 0700 room by the access group it holds, and the trace is made before
+        # rulings of 2026-10-07 and 2026-10-08 on #1: the member passes through
+        # a root:weaver-<name>-admin 0711 territory (no setgid, no listing) to
+        # its 0700 room by the passage every uid has, and the trace is made before
         # the first load as root:weaver-<name>-trace 0640, so the member, outside
         # that group, cannot read it. The operator joins the agent's group, the
         # trace group and the access group, and no access entry is set or
@@ -1029,7 +1031,7 @@ esac
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.calls()
         territory = str(self.root / "agents" / "weaver-m1")
-        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-admin", "-m", "0710", territory], calls)
+        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-admin", "-m", "0711", territory], calls)
         self.assertIn(["sudo", "install", "-o", "root", "-g", "weaver-m1-trace", "-m", "0640", "/dev/null",
                        territory + "/trace.ndjson"], calls)
         self.assertIn(["sudo", "install", "-d", "-o", "weaver-m1-state", "-g", "weaver-m1-state", "-m", "0700",
@@ -1761,10 +1763,11 @@ esac
         self.assertIn(f"chown -h root:weaver-old-admin {territory}/admin.log", said)
         self.assertIn(f"0640 {territory}/admin.log", said)
         self.assertEqual((territory / "admin.log").stat().st_mode & 0o7777, 0o640)
-        self.assertIn("usermod -aG weaver-old-admin weaver-old-state", said)
+        # The member is not joined (the custody audit's G11); the operator is.
+        self.assertNotIn("usermod -aG weaver-old-admin weaver-old-state", said)
         self.assertIn("usermod -aG weaver-old-admin fixture-no-home", said)
         self.assertIn(f"chgrp weaver-old-admin {territory}", said)
-        self.assertIn(f"chmod 0710 {territory}", said)
+        self.assertIn(f"chmod 0711 {territory}", said)
         # After the move the plan reads the declaration from the territory
         # and names no migration (the fixture's build directory cleared, as a
         # second build in one fixture needs).
@@ -1779,7 +1782,9 @@ esac
         # access group, a login fact this running shell does not acquire, and
         # regroups the territory, so every read of a declaration or a sink
         # after it goes through sudo and never through the operator's groups.
-        # The fake sudo locks the territory at the migration's chmod 0710
+        # The fake sudo locks the territory at the migration's chmod 0711,
+        # harder than the real 0711 does, which lists nothing to an operator
+        # shell that has not taken the new login
         # (LOCK_TERRITORY) and reopens it for its own reads alone, so the
         # reconcile step reaches the declaration and refuses on the fixture's
         # unanswering admin, which is as far as this fixture can take an
@@ -1817,7 +1822,7 @@ esac
         self.assertNotIn("could be verified", result.stderr)
         self.assertIn("old refuses and this script will not guess the fix", result.stderr)
         calls = self.calls()
-        after = calls.index(["sudo", "chmod", "0710", str(territory)])
+        after = calls.index(["sudo", "chmod", "0711", str(territory)])
         self.assertIn(["sudo", "-n", "test", "-f", str(territory / "agent.toml")], calls[after:])
         self.assertIn(["sudo", "-n", "cat", "--", str(territory / "agent.toml")], calls[after:])
         # The rollback put the files back through the same privilege.
@@ -1846,6 +1851,40 @@ esac
             self.assertTrue(any(c[:3] == ["sudo", "python3", "-c"] and c[-2:] == ["600", str(old_dir / name)]
                                 for c in calls[after:]), name)
             self.assertEqual((old_dir / name).stat().st_mode & 0o7777, 0o600, name)
+
+    def test_the_rollback_keeps_what_stands_in_the_old_directory(self):
+        """**The layout rollback replaces nothing in the operator's directory**
+        (the custody audit's G10): a file the operator's tooling made in the
+        old directory during the install stands when the rollback moves the
+        territory's copy back, and the move back declines, keeps both, names
+        both and answers failure, as the move in does. Perturbation: move back
+        with a plain `mv -T` again and the operator's file is replaced and the
+        rollback answers success."""
+        text = (DEPLOY / "update-stack.sh").read_text()
+        old = self.root / "old-directory"
+        territory = self.root / "territory"
+        old.mkdir()
+        territory.mkdir()
+        (territory / "agent.toml").write_text("moved\n")
+        (old / "agent.toml").write_text("the operator's\n")
+        stand_in = self.root / "stand-in"
+        stand_in.mkdir()
+        recorded = self.root / "recorded"
+        (stand_in / "sudo").write_text(STAND_IN_SUDO.replace("{recorded}", str(recorded)))
+        (stand_in / "sudo").chmod(0o755)
+        program = (shell_function(text, "chmod_nofollow") + shell_function(text, "move_no_clobber")
+                   + shell_function(text, "move_files_back")
+                   + 'declare -A MOVED_FILES=(["old|agent.toml"]="0:0 644")\n'
+                   + 'move_files_back old "$1" "$2"')
+        env = {**os.environ, "PATH": f"{stand_in}{os.pathsep}{os.environ['PATH']}"}
+        env.pop("BASH_ENV", None)
+        ran = subprocess.run(["bash", "-c", program, "bash", str(old), str(territory)],
+                             env=env, text=True, capture_output=True, timeout=20)
+        self.assertNotEqual(ran.returncode, 0, "a declined move back is a failure")
+        self.assertEqual((old / "agent.toml").read_text(), "the operator's\n")
+        self.assertEqual((territory / "agent.toml").read_text(), "moved\n")
+        self.assertIn(str(territory / "agent.toml"), ran.stderr)
+        self.assertIn(str(old / "agent.toml"), ran.stderr)
 
     def test_a_move_that_would_replace_fails_and_keeps_the_destination(self):
         """**A move onto an occupied destination fails, loudly, and replaces

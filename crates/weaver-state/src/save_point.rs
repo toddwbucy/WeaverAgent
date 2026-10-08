@@ -263,13 +263,29 @@ impl SavePoint {
         if number("image")? != image.len() as u64 {
             return Err(malformed("image length disagrees with the stamp"));
         }
+        // **The run id and the schema digest are bounded** (the operator's
+        // ruling of 2026-10-08 on #1, the custody audit's G2), as admin's
+        // judgment bounds them: a run id of at most 128 printable ASCII
+        // bytes, a schema of exactly 64 lowercase hex.
+        let run = text("run")?;
+        if run.len() > 128 || !run.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
+            return Err(malformed("run is not at most 128 printable ASCII bytes"));
+        }
+        let schema = text("schema")?;
+        if schema.len() != 64
+            || !schema
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err(malformed("schema is not 64 lowercase hex"));
+        }
         let parsed = SavePoint {
             stamp: Stamp {
-                run: text("run")?,
+                run,
                 sequence: number("sequence")?,
                 turn: number("turn")?,
             },
-            schema: text("schema")?,
+            schema,
             image: image.to_vec(),
             header: header_line,
         };

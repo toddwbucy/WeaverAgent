@@ -14,7 +14,7 @@
 
 use std::io::{Read, Write};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use sha2::Digest;
 use weaver_types::{LifecycleRefusal, SavePointReport};
@@ -81,18 +81,23 @@ fn sync_path(directory: &Path) -> std::io::Result<()> {
 }
 
 /// The names the directory holds, read through its descriptor.
-fn list_directory(directory: BorrowedFd<'_>) -> Vec<String> {
-    let Ok(duplicate) = nix::unistd::dup(directory) else {
-        return Vec::new();
-    };
-    let Ok(mut dir) = nix::dir::Dir::from_fd(duplicate) else {
-        return Vec::new();
-    };
-    dir.iter()
-        .flatten()
-        .filter_map(|entry| entry.file_name().to_str().ok().map(str::to_string))
-        .filter(|name| name != "." && name != "..")
-        .collect()
+fn list_directory(directory: BorrowedFd<'_>) -> nix::Result<Vec<String>> {
+    // **A listing that fails is never an empty directory** (the custody
+    // audit's G9): a failed `dup`, open or read of an entry answers the error,
+    // so a refusal that rests on the directory's contents fails closed.
+    let duplicate = nix::unistd::dup(directory)?;
+    let mut dir = nix::dir::Dir::from_fd(duplicate)?;
+    let mut names = Vec::new();
+    for entry in dir.iter() {
+        let entry = entry?;
+        if let Ok(name) = entry.file_name().to_str()
+            && name != "."
+            && name != ".."
+        {
+            names.push(name.to_string());
+        }
+    }
+    Ok(names)
 }
 
 /// Whether an entry of the name stands in the directory, a link included.
@@ -167,7 +172,10 @@ fn open_manifest(
     let file = match nix::fcntl::openat(
         directory,
         MANIFEST,
-        nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_NOFOLLOW | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::fcntl::OFlag::O_RDONLY
+            | nix::fcntl::OFlag::O_NOFOLLOW
+            | nix::fcntl::OFlag::O_NONBLOCK
+            | nix::fcntl::OFlag::O_CLOEXEC,
         nix::sys::stat::Mode::empty(),
     ) {
         Ok(fd) => std::fs::File::from(fd),
@@ -303,6 +311,17 @@ pub fn judge(bytes: &[u8]) -> Result<Judged, String> {
         .and_then(|v| v.as_str())
         .ok_or("the stamp names no schema")?
         .to_string();
+    // **The member's strings are bounded as the member's parse bounds them**
+    // (the operator's ruling of 2026-10-08 on #1, the custody audit's G2):
+    // a run id of at most 128 printable ASCII bytes and a schema digest of
+    // exactly 64 lowercase hex, so a stamp cannot carry a string the size of
+    // the file into root's memory, the manifest and the enter.
+    if !run_id_sound(&run) {
+        return Err("the stamp's run is not at most 128 printable ASCII bytes".into());
+    }
+    if !schema_sound(&schema) {
+        return Err("the stamp's schema is not 64 lowercase hex".into());
+    }
     let length = object
         .get("image")
         .and_then(|v| v.as_u64())
@@ -455,6 +474,21 @@ fn read_within(source: &mut impl Read, bound: u64) -> std::io::Result<Option<Vec
     let mut bytes = Vec::new();
     source.take(bound + 1).read_to_end(&mut bytes)?;
     Ok((bytes.len() as u64 <= bound).then_some(bytes))
+}
+
+/// A stamp's run id: at most 128 bytes, each printable ASCII, per
+/// `weaver-state-Spec` section 3.
+fn run_id_sound(run: &str) -> bool {
+    run.len() <= 128 && run.bytes().all(|b| (0x20..=0x7e).contains(&b))
+}
+
+/// A stamp's schema digest: exactly 64 lowercase hex, per `weaver-state-Spec`
+/// section 3.
+fn schema_sound(schema: &str) -> bool {
+    schema.len() == 64
+        && schema
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// **Read the manifest**, per `weaver-admin-Spec` section 4: absent is an
@@ -636,33 +670,61 @@ struct RoomEntry {
 /// descriptor without following links, a regular file owned by the member's
 /// uid under a finished name, its bytes judged; anything else is left in
 /// place and named.
-fn read_room(room: &Path, member_uid: u32) -> Option<(OwnedFd, Vec<RoomEntry>)> {
-    let dir = nix::fcntl::open(
-        room,
-        nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_DIRECTORY | nix::fcntl::OFlag::O_CLOEXEC,
-        nix::sys::stat::Mode::empty(),
-    )
-    .ok()?;
-    // The listing by path yields names alone; every open and every removal
-    // below goes through the descriptor, so a component the member swapped
-    // under the path between the two cannot be followed.
-    let listing = std::fs::read_dir(room).ok()?;
+fn read_room(room: BorrowedFd<'_>, member_uid: u32) -> Result<Vec<RoomEntry>, LifecycleRefusal> {
+    // **Listed through the room's own descriptor** (the custody audit's
+    // G12), the descriptor `open_room` opened without following a link, so
+    // the listing and every open and removal below resolve the one
+    // directory judged and never the path again.
+    let names = list_directory(room).map_err(|e| {
+        diag!("weaver-admin: the room does not list ({e}); nothing is published");
+        LifecycleRefusal::BoundaryUnverified
+    })?;
     let mut found = Vec::new();
-    for entry in listing.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
+    for name in names {
         if !is_finished_name(&name) {
             continue;
         }
         // Judged and dropped: the bytes are read again, and judged again,
         // when this entry is copied.
-        if let Some((_, judged)) = judge_room_file(dir.as_fd(), &name, member_uid) {
+        if let Some((_, judged)) = judge_room_file(room, &name, member_uid) {
             found.push(RoomEntry { name, judged });
         }
     }
     // The listing's order is the filesystem's and means nothing; by name
     // it is the same on every box, and `publish` orders by the clock.
     found.sort_by(|a, b| a.name.cmp(&b.name));
-    Some((dir, found))
+    Ok(found)
+}
+
+/// The room's name in the territory.
+pub const ROOM: &str = "state";
+
+/// **The member's room, opened through the territory's descriptor without
+/// following a link** (the custody audit's G12), per Spec section 6: the
+/// territory's `state` entry as a directory. Absent is no room, said in the
+/// log; anything else that does not open, a link among them, refuses.
+pub fn open_room(territory: BorrowedFd<'_>) -> Result<Option<OwnedFd>, LifecycleRefusal> {
+    match nix::fcntl::openat(
+        territory,
+        ROOM,
+        nix::fcntl::OFlag::O_RDONLY
+            | nix::fcntl::OFlag::O_DIRECTORY
+            | nix::fcntl::OFlag::O_NOFOLLOW
+            | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::empty(),
+    ) {
+        Ok(fd) => Ok(Some(fd)),
+        Err(nix::errno::Errno::ENOENT) => {
+            diag!("weaver-admin: the territory holds no room; nothing is published");
+            Ok(None)
+        }
+        Err(e) => {
+            diag!(
+                "weaver-admin: the territory's room does not open as a directory without following a link ({e})"
+            );
+            Err(LifecycleRefusal::BoundaryUnverified)
+        }
+    }
 }
 
 /// **One room file, opened and judged through the room's descriptor**: a
@@ -675,7 +737,13 @@ fn judge_room_file(dir: BorrowedFd<'_>, name: &str, member_uid: u32) -> Option<(
     let Ok(fd) = nix::fcntl::openat(
         dir,
         name,
-        nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_NOFOLLOW | nix::fcntl::OFlag::O_CLOEXEC,
+        // **Never blocking on the open** (the custody audit's G1): a FIFO
+        // the member made under a finished name would hold this root open
+        // until a writer came, wedging the verb; the type is judged below.
+        nix::fcntl::OFlag::O_RDONLY
+            | nix::fcntl::OFlag::O_NOFOLLOW
+            | nix::fcntl::OFlag::O_NONBLOCK
+            | nix::fcntl::OFlag::O_CLOEXEC,
         nix::sys::stat::Mode::empty(),
     ) else {
         diag!("weaver-admin: the room's {name} does not open and is left in place");
@@ -683,6 +751,7 @@ fn judge_room_file(dir: BorrowedFd<'_>, name: &str, member_uid: u32) -> Option<(
     };
     let mut file = std::fs::File::from(fd);
     let Ok(metadata) = file.metadata() else {
+        diag!("weaver-admin: the room's {name} does not stat and is left in place");
         return None;
     };
     if !metadata.is_file() || metadata.uid() != member_uid {
@@ -711,7 +780,10 @@ fn judge_room_file(dir: BorrowedFd<'_>, name: &str, member_uid: u32) -> Option<(
             );
             return None;
         }
-        Err(_) => return None,
+        Err(e) => {
+            diag!("weaver-admin: the room's {name} does not read ({e}) and is left in place");
+            return None;
+        }
     };
     match judge(&bytes) {
         Ok(judged) if format!("{}{SUFFIX}", judged.digest) == name => Some((bytes, judged)),
@@ -735,7 +807,7 @@ fn judge_room_file(dir: BorrowedFd<'_>, name: &str, member_uid: u32) -> Option<(
 /// carries the event's position and the report's arrival, and any other file
 /// is a recovered one. Answers the lines appended.
 pub fn publish(
-    room: &Path,
+    room: BorrowedFd<'_>,
     member_uid: u32,
     directory: BorrowedFd<'_>,
     file_owner: (u32, u32),
@@ -749,27 +821,57 @@ pub fn publish(
         file_owner,
         owner,
         reports,
-        &mut || {},
+        &mut PublishHooks {
+            after_scan: &mut || {},
+            available: &mut available_bytes,
+            cap: PUBLISH_CAP,
+        },
     )
 }
 
-/// `publish` with a hook run between the room's scan and the first copy, so
-/// a test can change the room there as a running member could.
+/// **At most this many room files are published by one verb** (the custody
+/// audit's G23), this act's election: the rest stay in the room, named in
+/// the log, for the next verb, so a member that fills its room cannot hold a
+/// verb, and the invocation lock with it, for the time of reading thousands
+/// of files.
+pub const PUBLISH_CAP: usize = 32;
+
+/// **The space a copy leaves free on the save-points filesystem** (the
+/// custody audit's G23), this act's election: a copy is made only where the
+/// file's size and this much more stand free, so a member's files never fill
+/// the filesystem root's other writes share.
+pub const PUBLISH_RESERVE: u64 = 64 * 1024 * 1024;
+
+/// The space free to an unprivileged writer on the directory's filesystem.
+fn available_bytes(directory: BorrowedFd<'_>) -> std::io::Result<u64> {
+    let stat = nix::sys::statvfs::fstatvfs(directory).map_err(std::io::Error::from)?;
+    Ok(stat.blocks_available() as u64 * stat.fragment_size() as u64)
+}
+
+/// What a test may vary in a publication: a hook run between the room's scan
+/// and the first copy, the free-space look, and the per-verb cap.
+struct PublishHooks<'a> {
+    after_scan: &'a mut dyn FnMut(),
+    available: &'a mut dyn FnMut(BorrowedFd<'_>) -> std::io::Result<u64>,
+    cap: usize,
+}
+
+/// `publish` with its hooks a parameter, so a test can change the room
+/// between the scan and the copies as a running member could, and set the
+/// free space and the cap.
 fn publish_with(
-    room: &Path,
+    room: BorrowedFd<'_>,
     member_uid: u32,
     directory: BorrowedFd<'_>,
     file_owner: (u32, u32),
     owner: Owner,
     reports: &[(SavePointReport, Arrival)],
-    after_scan: &mut dyn FnMut(),
+    hooks: &mut PublishHooks<'_>,
 ) -> Result<Vec<ManifestLine>, LifecycleRefusal> {
     let mut lines = read_manifest(directory, owner)?;
     let mut appended = Vec::new();
-    let Some((room_dir, mut entries)) = read_room(room, member_uid) else {
-        return Ok(appended);
-    };
-    after_scan();
+    let mut entries = read_room(room, member_uid)?;
+    (hooks.after_scan)();
     // **Several entries publish recovered first, then reported, the clock
     // ordering within a kind** (Codex on #94, rounds 5 and 6), per Spec
     // section 6: a reported save point was taken last by construction, so
@@ -792,13 +894,25 @@ fn publish_with(
             .then_with(|| a.judged.digest.cmp(&b.judged.digest))
     });
     let remove_from_room = |name: &str| {
-        let _ = nix::unistd::unlinkat(
-            room_dir.as_fd(),
-            name,
-            nix::unistd::UnlinkatFlags::NoRemoveDir,
-        );
+        let _ = nix::unistd::unlinkat(room, name, nix::unistd::UnlinkatFlags::NoRemoveDir);
     };
-    for entry in entries {
+    // **The cap and the free-space look stop the verb, never skip an entry**
+    // (the custody audit's G23): entries go oldest first and the reported
+    // one last, and the latest a load selects is the highest ordinal, so a
+    // file deferred past a newer one would outrank it when published later.
+    // Stopping at the first entry declined keeps every file published older
+    // than every file deferred; a leave's own save point deferred so leaves
+    // its unload refusing, as one that did not publish does.
+    let total = entries.len();
+    for (at, entry) in entries.into_iter().enumerate() {
+        if at == hooks.cap {
+            diag!(
+                "weaver-admin: the room holds {total} finished save points; {} are left for the next verb, past this one's cap of {}",
+                total - at,
+                hooks.cap
+            );
+            break;
+        }
         let (position, arrived) = reports
             .iter()
             .find(|(report, _)| report.save_point == entry.judged.digest)
@@ -854,8 +968,7 @@ fn publish_with(
         // no other read of them, are what is copied. The member can still
         // write its room, so a verdict from the scan is never trusted for a
         // later read; a file that changed since is refused and left in place.
-        let Some((bytes, judged)) = judge_room_file(room_dir.as_fd(), &entry.name, member_uid)
-        else {
+        let Some((bytes, judged)) = judge_room_file(room, &entry.name, member_uid) else {
             continue;
         };
         if judged.digest != entry.judged.digest {
@@ -864,6 +977,22 @@ fn publish_with(
                 entry.name
             );
             continue;
+        }
+        match (hooks.available)(directory) {
+            Ok(free) if free >= bytes.len() as u64 + PUBLISH_RESERVE => {}
+            Ok(free) => {
+                diag!(
+                    "weaver-admin: the save-points filesystem has {free} bytes free, under the room's {} and the reserve of {PUBLISH_RESERVE}; it and every later save point are left for the next verb",
+                    entry.name
+                );
+                break;
+            }
+            Err(e) => {
+                diag!(
+                    "weaver-admin: the save-points filesystem's free space does not read ({e}); the room's save points are left for the next verb"
+                );
+                break;
+            }
         }
         let temporary = format!(".publishing-{}", entry.judged.digest);
         let remove_temporary = || {
@@ -1009,7 +1138,10 @@ fn open_judged(
     let fd = match nix::fcntl::openat(
         directory,
         name,
-        nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_NOFOLLOW | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::fcntl::OFlag::O_RDONLY
+            | nix::fcntl::OFlag::O_NOFOLLOW
+            | nix::fcntl::OFlag::O_NONBLOCK
+            | nix::fcntl::OFlag::O_CLOEXEC,
         nix::sys::stat::Mode::empty(),
     ) {
         Ok(fd) => fd,
@@ -1090,13 +1222,31 @@ pub fn select(
     restore: Option<&str>,
     owner: Owner,
 ) -> Result<Option<Selected>, LifecycleRefusal> {
+    select_with(directory, file_owner, restore, owner, &mut list_directory)
+}
+
+/// `select` with the directory's listing a parameter, so a test can make it
+/// fail.
+fn select_with(
+    directory: BorrowedFd<'_>,
+    file_owner: (u32, u32),
+    restore: Option<&str>,
+    owner: Owner,
+    list: &mut dyn FnMut(BorrowedFd<'_>) -> nix::Result<Vec<String>>,
+) -> Result<Option<Selected>, LifecycleRefusal> {
     let lines = read_manifest(directory, owner)?;
     // **A manifest absent beside published files refuses**, per Spec
     // section 4: what is loadable cannot be said, and the files are not
-    // loadable without it; no manifest and no file is the first load.
+    // loadable without it; no manifest and no file is the first load. A
+    // listing that fails refuses as well (the custody audit's G9), never
+    // read as an empty directory and so a first load.
     if lines.is_empty()
         && !entry_stands(directory, MANIFEST)
-        && list_directory(directory)
+        && list(directory)
+            .map_err(|e| {
+                diag!("weaver-admin: the save-points directory does not list ({e})");
+                LifecycleRefusal::BoundaryUnverified
+            })?
             .iter()
             .any(|name| name.ends_with(SUFFIX))
     {
@@ -1235,6 +1385,10 @@ pub fn name_at_restore(
     } else {
         let wanted = format!("-{named}{SUFFIX}");
         let mut matches: Vec<String> = list_directory(directory)
+            .map_err(|e| {
+                diag!("weaver-admin: the save-points directory does not list ({e})");
+                LifecycleRefusal::BoundaryUnverified
+            })?
             .into_iter()
             .filter(|name| name.ends_with(&wanted))
             .collect();
@@ -1301,23 +1455,71 @@ pub enum Marker {
     Forced { run: String },
 }
 
-/// Read the marker, `None` where none stands or it does not read as one.
+/// The bound on the marker's size this crate reads: a run reference and a
+/// state, a few hundred bytes at the most.
+const MARKER_BOUND: u64 = 4096;
+
+/// **Read the marker, failing closed** (the custody audit's G8), per Spec
+/// section 4: `Ok(None)` where none stands, the first load's case, and the
+/// marker where it reads as one; a marker that stands and does not read, a
+/// link, a torn or foreign text or one past the bound, is an error, never
+/// read as absent, since an absent marker resolves no reset and a run left
+/// open would load without its `NoCleanUnload`.
+pub fn load_marker(root: &Path) -> Result<Option<Marker>, String> {
+    let file = match nix::fcntl::open(
+        &root.join(MARKER),
+        nix::fcntl::OFlag::O_RDONLY
+            | nix::fcntl::OFlag::O_NOFOLLOW
+            | nix::fcntl::OFlag::O_NONBLOCK
+            | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::empty(),
+    ) {
+        Ok(fd) => std::fs::File::from(fd),
+        Err(nix::errno::Errno::ENOENT) => return Ok(None),
+        Err(e) => return Err(format!("the marker does not open: {e}")),
+    };
+    let mut file = file;
+    let bytes = read_within(&mut file, MARKER_BOUND)
+        .map_err(|e| format!("the marker does not read: {e}"))?
+        .ok_or("the marker is past its bound")?;
+    let text = String::from_utf8(bytes).map_err(|_| "the marker is not text")?;
+    let value: serde_json::Value =
+        serde_json::from_str(text.trim()).map_err(|e| format!("the marker does not parse: {e}"))?;
+    let run = value
+        .get("run")
+        .and_then(|v| v.as_str())
+        .ok_or("the marker names no run")?
+        .to_string();
+    Ok(Some(match value.get("state").and_then(|v| v.as_str()) {
+        Some("open") => Marker::Open { run },
+        Some("closed") => Marker::Closed { run },
+        Some("forced") => Marker::Forced { run },
+        _ => return Err("the marker names no state it can be".into()),
+    }))
+}
+
+/// The marker as the tests read it: `None` where none stands or it does not
+/// read.
+#[cfg(test)]
 pub fn read_marker(root: &Path) -> Option<Marker> {
-    let text = std::fs::read_to_string(root.join(MARKER)).ok()?;
-    let value: serde_json::Value = serde_json::from_str(text.trim()).ok()?;
-    let run = value.get("run")?.as_str()?.to_string();
-    Some(match value.get("state")?.as_str()? {
-        "open" => Marker::Open { run },
-        "closed" => Marker::Closed { run },
-        "forced" => Marker::Forced { run },
-        _ => return None,
-    })
+    load_marker(root).ok().flatten()
 }
 
 /// Write the marker whole, root-owned, through a temporary name and a rename,
 /// or remove it where `None` is written, which restores an absent prior
 /// state in a rollback.
 pub fn write_marker(root: &Path, marker: Option<&Marker>) -> std::io::Result<()> {
+    write_marker_with(root, marker, &mut |_| {})
+}
+
+/// `write_marker` with a hook run on the temporary right after its creation,
+/// before its owner and mode are set, so a test can read what a crash there
+/// would leave.
+fn write_marker_with(
+    root: &Path,
+    marker: Option<&Marker>,
+    after_create: &mut dyn FnMut(&std::fs::File),
+) -> std::io::Result<()> {
     let path = root.join(MARKER);
     let Some(marker) = marker else {
         return match std::fs::remove_file(&path) {
@@ -1336,7 +1538,22 @@ pub fn write_marker(root: &Path, marker: Option<&Marker>) -> std::io::Result<()>
     // marker survives the loss of power it exists to record.
     let temporary = root.join(".run.marker.new");
     {
-        let mut file = std::fs::File::create(&temporary)?;
+        // **Created narrow and never through a link** (the custody audit's
+        // G14): at `0600` whatever the umask, so a crash before the mode is
+        // set leaves no group- or world-writable entry in the root for
+        // `judge_entries` to refuse every verb over, and `O_NOFOLLOW` keeps a
+        // link at the name from being followed.
+        let mut file = {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC)
+                .open(&temporary)?
+        };
+        after_create(&file);
         // **Root's group set, never the invoker's** (Codex on #94), as a
         // defence: nothing judges the marker's group, but every file this
         // crate creates takes its owner explicitly, so none depends on the
@@ -1385,14 +1602,51 @@ pub fn reset_from(marker: Option<&Marker>) -> Option<weaver_types::Reset> {
     }
 }
 
-/// The member's room under its territory root, `<sink directory>/state/`,
-/// per `weaver-state-Spec` section 2.
-pub fn room_of(territory_root: &Path) -> PathBuf {
-    territory_root.join("state")
-}
-
 #[cfg(test)]
 mod tests {
+    /// **The marker's temporary is created narrow** (the custody audit's
+    /// G14): read right after its creation, before its owner and mode are
+    /// set, it carries no group or other bit, so a crash there leaves nothing
+    /// a later verb's judgment of the root would refuse. Perturbation: create
+    /// it with `File::create` again and it carries the umask's bits.
+    #[test]
+    fn the_marker_temporary_is_created_narrow() {
+        let scratch = crate::scratch::Scratch(
+            std::env::temp_dir().join(format!("weaver-admin-marker-narrow-{}", std::process::id())),
+        );
+        let root = scratch.0.clone();
+        std::fs::create_dir_all(&root).unwrap();
+        let mut seen = None;
+        write_marker_with(
+            &root,
+            Some(&Marker::Open { run: "r-1".into() }),
+            &mut |file| {
+                use std::os::unix::fs::PermissionsExt;
+                seen = Some(file.metadata().unwrap().permissions().mode() & 0o777);
+            },
+        )
+        .unwrap();
+        let mode = seen.expect("the hook ran");
+        assert_eq!(mode & 0o077, 0, "created at {mode:o}");
+        assert_eq!(read_marker(&root), Some(Marker::Open { run: "r-1".into() }));
+    }
+
+    /// **A marker that stands and does not read fails closed** (the custody
+    /// audit's G8): a torn marker is an error, never no marker; absent is
+    /// none. Perturbation: map the error back to `None` and the torn one
+    /// reads as absent.
+    #[test]
+    fn a_marker_that_does_not_read_is_an_error() {
+        let scratch = crate::scratch::Scratch(
+            std::env::temp_dir().join(format!("weaver-admin-marker-torn-{}", std::process::id())),
+        );
+        let root = scratch.0.clone();
+        std::fs::create_dir_all(&root).unwrap();
+        assert_eq!(load_marker(&root), Ok(None), "absent is none");
+        std::fs::write(root.join(MARKER), "{\"run\":").unwrap();
+        assert!(load_marker(&root).is_err(), "a torn marker is an error");
+    }
+
     /// **A new manifest takes its owner and group explicitly** (Codex on
     /// #94): the first line creates the manifest and sets its owner and
     /// group to the expected owner's, whatever the creating process's
@@ -1724,7 +1978,7 @@ mod tests {
             position: 9,
         };
         let lines = publish(
-            &room,
+            open_directory(&room).unwrap().as_fd(),
             me,
             dir_fd.as_fd(),
             owner,
@@ -1778,7 +2032,7 @@ mod tests {
             position: 4,
         };
         let lines = publish(
-            &room,
+            open_directory(&room).unwrap().as_fd(),
             me,
             dir_fd.as_fd(),
             owner,
@@ -1799,6 +2053,204 @@ mod tests {
             .unwrap()
             .expect("a latest");
         assert_eq!(latest.line.digest, behind_digest);
+    }
+
+    /// **A FIFO in the room does not wedge the publication** (the custody
+    /// audit's G1): the member makes a FIFO under a finished name; the
+    /// publication opens it without blocking, refuses it as no regular file,
+    /// appends nothing and leaves it in place, answering at once. Run on a
+    /// thread with a bound, so a perturbed open fails the test rather than
+    /// hanging it. Perturbation: open without `O_NONBLOCK` and the thread
+    /// never answers.
+    #[test]
+    fn a_fifo_in_the_room_does_not_wedge_the_publication() {
+        let scratch = crate::scratch::Scratch(
+            std::env::temp_dir().join(format!("weaver-admin-room-fifo-{}", std::process::id())),
+        );
+        let base = scratch.0.clone();
+        let room = base.join("room");
+        let dir = base.join("published");
+        std::fs::create_dir_all(&room).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = room.join(format!("{}{SUFFIX}", "a".repeat(64)));
+        nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::from_bits_truncate(0o600)).unwrap();
+        let me = nix::unistd::getuid().as_raw();
+        let mine = Owner {
+            uid: me,
+            gid: nix::unistd::getgid().as_raw(),
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (room_path, dir_path) = (room.clone(), dir.clone());
+        std::thread::spawn(move || {
+            let room_fd = open_directory(&room_path).unwrap();
+            let dir_fd = open_directory(&dir_path).unwrap();
+            let answered = publish(
+                room_fd.as_fd(),
+                me,
+                dir_fd.as_fd(),
+                (mine.uid, mine.gid),
+                mine,
+                &[],
+            )
+            .map(|lines| lines.len());
+            let _ = tx.send(answered);
+        });
+        let answered = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("the publication answers, never blocked on the FIFO");
+        assert_eq!(answered, Ok(0), "nothing appended");
+        assert!(fifo.exists(), "the FIFO is left in place");
+    }
+
+    /// **A listing that fails refuses the selection** (the custody audit's
+    /// G9): with no manifest, `select` lists the directory to tell a first
+    /// load from files with no manifest, and a listing that fails is never
+    /// an empty directory. Perturbation: read the failure as an empty listing
+    /// and the selection answers a first load.
+    #[test]
+    fn a_listing_that_fails_refuses_the_selection() {
+        let scratch = crate::scratch::Scratch(
+            std::env::temp_dir().join(format!("weaver-admin-list-fails-{}", std::process::id())),
+        );
+        let dir = scratch.0.clone();
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_fd = open_directory(&dir).unwrap();
+        let mine = Owner {
+            uid: nix::unistd::getuid().as_raw(),
+            gid: nix::unistd::getgid().as_raw(),
+        };
+        let mut failing =
+            |_: BorrowedFd<'_>| -> nix::Result<Vec<String>> { Err(nix::errno::Errno::EIO) };
+        assert!(
+            select_with(
+                dir_fd.as_fd(),
+                (mine.uid, mine.gid),
+                None,
+                mine,
+                &mut failing
+            )
+            .is_err()
+        );
+        assert!(matches!(
+            select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine),
+            Ok(None)
+        ));
+    }
+
+    /// **The room opens through the territory without following a link**
+    /// (the custody audit's G12): a `state` that is a link to a directory
+    /// holding a save point refuses; a real one opens; an absent one is no
+    /// room. Perturbation: drop `O_NOFOLLOW` and the link opens.
+    #[test]
+    fn the_room_opens_without_following_a_link() {
+        let scratch = crate::scratch::Scratch(
+            std::env::temp_dir().join(format!("weaver-admin-room-link-{}", std::process::id())),
+        );
+        let territory = scratch.0.join("territory");
+        let elsewhere = scratch.0.join("elsewhere");
+        std::fs::create_dir_all(&territory).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let territory_fd = open_directory(&territory).unwrap();
+        assert!(matches!(open_room(territory_fd.as_fd()), Ok(None)));
+        std::os::unix::fs::symlink(&elsewhere, territory.join(ROOM)).unwrap();
+        assert!(open_room(territory_fd.as_fd()).is_err(), "a link refuses");
+        std::fs::remove_file(territory.join(ROOM)).unwrap();
+        std::fs::create_dir(territory.join(ROOM)).unwrap();
+        assert!(matches!(open_room(territory_fd.as_fd()), Ok(Some(_))));
+    }
+
+    /// A room of `count` finished save points, their clocks ascending, and a
+    /// published directory beside it; answers the room, the directory, the
+    /// owner and the room's names and digests oldest first.
+    fn room_of_save_points(
+        tag: &str,
+        count: u64,
+    ) -> (
+        crate::scratch::Scratch,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        Owner,
+        Vec<(String, String)>,
+    ) {
+        let scratch = crate::scratch::Scratch(
+            std::env::temp_dir().join(format!("weaver-admin-{tag}-{}", std::process::id())),
+        );
+        let room = scratch.0.join("room");
+        let dir = scratch.0.join("published");
+        std::fs::create_dir_all(&room).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let mine = Owner {
+            uid: nix::unistd::getuid().as_raw(),
+            gid: nix::unistd::getgid().as_raw(),
+        };
+        let mut names = Vec::new();
+        for sequence in 1..=count {
+            let bytes = save_point("r-1", sequence, 0, sequence * 1_000_000_000, b"room");
+            let judged = judge(&bytes).unwrap();
+            let name = format!("{}{SUFFIX}", judged.digest);
+            std::fs::write(room.join(&name), &bytes).unwrap();
+            names.push((name, judged.digest));
+        }
+        (scratch, room, dir, mine, names)
+    }
+
+    /// **A verb publishes at most its cap, oldest first, and stops** (the
+    /// custody audit's G23): a room of three under a cap of two publishes the
+    /// two oldest and leaves the newest for the next verb, which publishes
+    /// it; the newest is never published before an older one, so the
+    /// highest ordinal stays the last taken. Perturbation: drop the cap and
+    /// all three publish at once.
+    #[test]
+    fn a_verb_publishes_at_most_its_cap_oldest_first() {
+        let (_scratch, room, dir, mine, names) = room_of_save_points("room-cap", 3);
+        let dir_fd = open_directory(&dir).unwrap();
+        let publish_capped = |cap| {
+            publish_with(
+                open_directory(&room).unwrap().as_fd(),
+                mine.uid,
+                dir_fd.as_fd(),
+                (mine.uid, mine.gid),
+                mine,
+                &[],
+                &mut PublishHooks {
+                    after_scan: &mut || {},
+                    available: &mut available_bytes,
+                    cap,
+                },
+            )
+            .unwrap()
+        };
+        let first: Vec<String> = publish_capped(2).into_iter().map(|l| l.digest).collect();
+        assert_eq!(first, [names[0].1.clone(), names[1].1.clone()]);
+        assert!(room.join(&names[2].0).exists(), "the newest waits");
+        let second: Vec<String> = publish_capped(2).into_iter().map(|l| l.digest).collect();
+        assert_eq!(second, [names[2].1.clone()], "and goes next, highest");
+    }
+
+    /// **A copy is made only where the space stands free** (the custody
+    /// audit's G23): with the filesystem reading less free than a file and
+    /// the reserve, nothing is copied and every room file stays for the next
+    /// verb. Perturbation: drop the free-space look and the files publish.
+    #[test]
+    fn a_copy_is_made_only_where_the_space_stands_free() {
+        let (_scratch, room, dir, mine, names) = room_of_save_points("room-space", 2);
+        let dir_fd = open_directory(&dir).unwrap();
+        let lines = publish_with(
+            open_directory(&room).unwrap().as_fd(),
+            mine.uid,
+            dir_fd.as_fd(),
+            (mine.uid, mine.gid),
+            mine,
+            &[],
+            &mut PublishHooks {
+                after_scan: &mut || {},
+                available: &mut |_| Ok(PUBLISH_RESERVE),
+                cap: PUBLISH_CAP,
+            },
+        )
+        .unwrap();
+        assert!(lines.is_empty(), "nothing copied");
+        assert!(names.iter().all(|(name, _)| room.join(name).exists()));
     }
 
     /// **The room is copied one file at a time, from bytes judged in the same
@@ -1845,13 +2297,17 @@ mod tests {
         let swapped = room.join(&names[0].0);
         let other = save_point("r-1", 9, 0, 9_000_000_000, b"other");
         let lines = publish_with(
-            &room,
+            open_directory(&room).unwrap().as_fd(),
             me,
             dir_fd.as_fd(),
             (mine.uid, mine.gid),
             mine,
             &[],
-            &mut || std::fs::write(&swapped, &other).unwrap(),
+            &mut PublishHooks {
+                after_scan: &mut || std::fs::write(&swapped, &other).unwrap(),
+                available: &mut available_bytes,
+                cap: PUBLISH_CAP,
+            },
         )
         .unwrap();
         let published: Vec<&str> = lines.iter().map(|line| line.digest.as_str()).collect();
@@ -1895,7 +2351,15 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
         }
-        let lines = publish(&room, me, dir_fd.as_fd(), owner, mine, &[]).unwrap();
+        let lines = publish(
+            open_directory(&room).unwrap().as_fd(),
+            me,
+            dir_fd.as_fd(),
+            owner,
+            mine,
+            &[],
+        )
+        .unwrap();
         assert_eq!(
             lines.len(),
             1,
@@ -1918,7 +2382,15 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&impostor, std::fs::Permissions::from_mode(0o640)).unwrap();
         }
-        let lines = publish(&room, me, dir_fd.as_fd(), owner, mine, &[]).unwrap();
+        let lines = publish(
+            open_directory(&room).unwrap().as_fd(),
+            me,
+            dir_fd.as_fd(),
+            owner,
+            mine,
+            &[],
+        )
+        .unwrap();
         assert!(lines.is_empty(), "no line for the impostor's name");
         assert!(
             room.join(format!("{}{SUFFIX}", other_judged.digest))
@@ -1935,7 +2407,15 @@ mod tests {
         // last sound copy with the target still gone.
         std::fs::write(room.join(&room_name), &bytes).unwrap();
         std::fs::remove_file(&target).unwrap();
-        let lines = publish(&room, me, dir_fd.as_fd(), owner, mine, &[]).unwrap();
+        let lines = publish(
+            open_directory(&room).unwrap().as_fd(),
+            me,
+            dir_fd.as_fd(),
+            owner,
+            mine,
+            &[],
+        )
+        .unwrap();
         assert!(lines.is_empty(), "no second line for a standing one");
         assert!(target.exists(), "the target is recreated under its line");
         assert!(
@@ -1945,7 +2425,15 @@ mod tests {
         assert_eq!(read_manifest(dir_fd.as_fd(), mine).unwrap().len(), 1);
         std::fs::write(room.join(&room_name), &bytes).unwrap();
         std::fs::write(&target, b"damaged").unwrap();
-        let lines = publish(&room, me, dir_fd.as_fd(), owner, mine, &[]).unwrap();
+        let lines = publish(
+            open_directory(&room).unwrap().as_fd(),
+            me,
+            dir_fd.as_fd(),
+            owner,
+            mine,
+            &[],
+        )
+        .unwrap();
         assert!(lines.is_empty());
         assert!(room.join(&room_name).exists(), "the last sound copy stays");
         std::fs::write(&target, &bytes).unwrap();
@@ -2365,7 +2853,14 @@ mod tests {
         let judged = judge(&bytes).unwrap();
         std::fs::write(room.join(format!("{}{SUFFIX}", judged.digest)), &bytes).unwrap();
         let before = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o077));
-        let published = publish(&room, me, dir_fd.as_fd(), owner, mine, &[]);
+        let published = publish(
+            open_directory(&room).unwrap().as_fd(),
+            me,
+            dir_fd.as_fd(),
+            owner,
+            mine,
+            &[],
+        );
         nix::sys::stat::umask(before);
         let lines = published.unwrap();
         assert_eq!(lines.len(), 1, "the copy published under the umask");
@@ -2410,7 +2905,15 @@ mod tests {
         let aside = base.join("decl-judged");
         std::fs::rename(&dir, &aside).unwrap();
         std::fs::create_dir_all(&dir).unwrap();
-        let lines = publish(&room, me, dir_fd.as_fd(), owner, mine, &[]).unwrap();
+        let lines = publish(
+            open_directory(&room).unwrap().as_fd(),
+            me,
+            dir_fd.as_fd(),
+            owner,
+            mine,
+            &[],
+        )
+        .unwrap();
         assert_eq!(lines.len(), 1);
         assert!(
             aside.join(&lines[0].name).exists() && aside.join(MANIFEST).exists(),

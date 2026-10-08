@@ -230,7 +230,7 @@ plan "cp -a ${#LIBS[@]} library files and links -> $PREFIX/lib"
 plan "write $LDSO_CONF = $PREFIX/lib and $CUDA_LIB_DIR, then ldconfig"
 plan "write $STACK/{worker-binary,spu-binary,gate-binary,coordination-root,library-path,prefix,agent-directory}  (root, 0755 / 0644)"
 plan "install -d $ADMIN_BASE (root:root 0755): empty; create-agent.sh adds one root per agent"
-plan "install -d $AGENT_DIR (root:root 0755): territories, each root:weaver-<name>-state 0710, not setgid, its trace root:weaver-<name>-trace 0640"
+plan "install -d $AGENT_DIR (root:root 0755): territories, each root:weaver-<name>-admin 0711, not setgid, its trace root:weaver-<name>-trace 0640"
 [ -d "$PREFIX/models" ] && plan "$PREFIX/models stands: $(ls "$PREFIX/models" | wc -l) entries" || plan "$PREFIX/models is absent: copy the artifacts before declaring an agent"
 [ "$INSTALL" -eq 1 ] || { say "plan only. rerun with --install"; exit 0; }
 

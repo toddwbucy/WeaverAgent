@@ -7,5 +7,10 @@ nonce-missing-member.save-point refuses
 nonce-wall-clock-overlong.save-point refuses
 nonce-wall-clock-signed.save-point refuses
 nonce-wrong-type.save-point refuses
+run-not-ascii.save-point refuses
+run-overlong.save-point refuses
+schema-long.save-point refuses
+schema-short.save-point refuses
+schema-uppercase.save-point refuses
 sound.save-point sound
 version-wrong.save-point refuses

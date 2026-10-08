@@ -356,7 +356,11 @@ decimal digits that fit an unsigned 64-bit count of nanoseconds since the epoch,
 together tell two save points of one position apart whatever the clock does; a stamp
 line with a member absent, extra or of another type is not this format and is refused
 before any digest or name is computed from it, and so is a wall clock past what a clock
-can be, the rule every reader of this format holds alike. The check line names sha256 over the stamp line, its newline and the
+can be, the rule every reader of this format holds alike. **The run and the schema are
+bounded**, on the operator's ruling of 2026-10-08 on #1: the run is at most 128 bytes,
+each printable ASCII, and the schema digest is exactly 64 lowercase hex, so no reader
+holds a string of the stamp the size of the file, and a stamp outside either is refused
+as one of another type is; the workspace's save-point corpus carries a case of each. The check line names sha256 over the stamp line, its newline and the
 image, so a stamp altered, an image flipped or a file torn short all read as corrupt.
 The digest is sha256 over the whole file and the name is the digest with the suffix
 `.save-point`, so two save points with different bytes never share a name and two

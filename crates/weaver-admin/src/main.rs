@@ -458,7 +458,7 @@ fn stand_state_member(
     // `none` before this load reached here.
     let member_account = inventory.member_account?;
     let territory_root = inventory::sink_directory(&inventory.config.trace_sink);
-    let territory = prepare_territory(territory_root, member_account)?;
+    let territory = prepare_territory(config.territory_fd().ok()?, territory_root, member_account)?;
     // **The first door is a socketpair this crate creates and speaks on
     // never**, per the operator's ruling of 2026-08-26: both ends
     // close-on-exec atomically at creation like every descriptor this crate
@@ -523,7 +523,6 @@ fn stand_state_member(
     // between fork and exec.
     unsafe {
         use std::os::unix::process::CommandExt;
-        let access_gid = config.access_gid;
         member.pre_exec(move || {
             // **The member takes its own session and resets the invocation's
             // ignored signals**, per Spec section 6, and holds the run lock's
@@ -540,7 +539,7 @@ fn stand_state_member(
                 start::seal_except(&[3, start::RUN_LOCK_FD])?;
             }
             start::detach_and_reset()?;
-            become_member(member_account, access_gid)?;
+            become_member(member_account)?;
             arm_member_end(raw_member_end)
         });
     }
@@ -581,25 +580,47 @@ fn stand_state_member(
 ///
 /// conforms: admin-member-territory-is-the-members-own
 fn prepare_territory(
+    territory_fd: std::os::fd::BorrowedFd<'_>,
     root: &std::path::Path,
     member: inventory::MemberAccount,
 ) -> Option<std::path::PathBuf> {
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-    let territory = root.join("state");
-    // The mode rides the creation itself, so the directory never stands a
-    // moment wider than it ends.
-    if std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&territory)
-        .is_err()
-        && !territory.is_dir()
-    {
-        return None;
+    use std::os::fd::AsFd;
+    // **Made, opened and handed over through the territory's descriptor**
+    // (the custody audit's G13), per Spec section 9: the room is created
+    // beneath the descriptor the judgment holds, at the mode it ends with so
+    // it never stands wider, then opened without following a link and given
+    // its owner and mode on that descriptor, so a link or a file at `state`
+    // is refused and never has its target's owner or mode changed.
+    match nix::sys::stat::mkdirat(
+        territory_fd,
+        save_points::ROOM,
+        nix::sys::stat::Mode::from_bits_truncate(0o700),
+    ) {
+        Ok(()) | Err(nix::errno::Errno::EEXIST) => {}
+        Err(_) => return None,
     }
-    std::os::unix::fs::chown(&territory, Some(member.uid), Some(member.gid)).ok()?;
-    std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(0o700)).ok()?;
-    Some(territory)
+    let room = nix::fcntl::openat(
+        territory_fd,
+        save_points::ROOM,
+        nix::fcntl::OFlag::O_RDONLY
+            | nix::fcntl::OFlag::O_DIRECTORY
+            | nix::fcntl::OFlag::O_NOFOLLOW
+            | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::empty(),
+    )
+    .ok()?;
+    nix::unistd::fchown(
+        room.as_fd(),
+        Some(nix::unistd::Uid::from_raw(member.uid)),
+        Some(nix::unistd::Gid::from_raw(member.gid)),
+    )
+    .ok()?;
+    nix::sys::stat::fchmod(
+        room.as_fd(),
+        nix::sys::stat::Mode::from_bits_truncate(0o700),
+    )
+    .ok()?;
+    Some(root.join(save_points::ROOM))
 }
 
 /// **The privilege drop at the member's spawn**, run in the pre-exec while
@@ -617,25 +638,23 @@ fn prepare_territory(
 /// a member this crate could not unprivilege does not run at all.
 ///
 /// conforms: admin-member-spawn-drops-to-its-account
-fn become_member(member: inventory::MemberAccount, access_gid: u32) -> std::io::Result<()> {
+fn become_member(member: inventory::MemberAccount) -> std::io::Result<()> {
     // The drop lives in `inventory::drop_to` since issue #675, so the order
     // described above is implemented once.
-    inventory::drop_to(member.uid, &member_groups(member, access_gid))
+    inventory::drop_to(member.uid, &member_groups(member))
 }
 
-/// **The member's group set: its own group first, the access group beside
-/// it**, per Spec section 6 on the operator's ruling of 2026-10-07 on #1
-/// (Codex on #94, round 8): the territory is root's and grouped to the access
-/// group, and `drop_to` sets the supplementary set from this slice alone,
-/// never from the account database, so the passage through the territory to
-/// the member's own room is granted here from the territory's group as
-/// judged, whatever the account's memberships say. Nothing else: the trace's
-/// group is not among them, so the member cannot read the record.
-fn member_groups(member: inventory::MemberAccount, access_gid: u32) -> [nix::libc::gid_t; 2] {
-    [
-        member.gid as nix::libc::gid_t,
-        access_gid as nix::libc::gid_t,
-    ]
+/// **The member's group set is its own group alone**, per Spec section 6 on
+/// the operator's ruling of 2026-10-08 on #1 (the custody audit's G11): the
+/// territory is `0711`, so the member passes to its own room by the bit
+/// every uid has and needs no group for it, and the access group, which
+/// reads `admin.log`, `worker.log` and the published save points, is not
+/// the member's. `drop_to` sets the supplementary set from this slice alone,
+/// never from the account database, so no membership the account carries
+/// reaches the member. The trace's group is not among them either, so the
+/// member cannot read the record.
+fn member_groups(member: inventory::MemberAccount) -> [nix::libc::gid_t; 1] {
+    [member.gid as nix::libc::gid_t]
 }
 
 /// **The arming, the one deliberate gift**, per `weaver-admin-Spec` section
@@ -787,8 +806,22 @@ fn take_inventory(
     config: &ServiceConfig,
     agent: &AgentName,
 ) -> Result<inventory::Inventory, LifecycleRefusal> {
-    admissible(config, agent)?;
     judge_reader(&config.require_boundary()?.reader, agent)?;
+    room_inventory(config, agent)
+}
+
+/// **The inventory a verb that starts nothing derives**, the publication's
+/// and `restore`'s (Codex on #94, at 9fa18b4): the name admitted, the
+/// declaration read and the sink held to the territory, and no boundary
+/// judgment, which Spec section 9 asks of `validate` and `load` alone. An
+/// unload whose run is already gone publishes its save point whatever
+/// `roles.toml` says; `take_inventory` adds the boundary to this for the two
+/// verbs that start a run.
+fn room_inventory(
+    config: &ServiceConfig,
+    agent: &AgentName,
+) -> Result<inventory::Inventory, LifecycleRefusal> {
+    admissible(config, agent)?;
     let source = read_declaration(config)?;
     let inventory = take_inventory_from(config, agent, &source)?;
     // **The sink's directory is the territory** (Codex on #94, round 10),
@@ -1074,6 +1107,11 @@ fn run_load(
     standing: &mut Standing,
 ) -> Result<(), LifecycleRefusal> {
     let run_directory = config.run_directory();
+    // **The marker is read before anything stands, and a marker that does
+    // not read refuses the load** (the custody audit's G8): it is the reset
+    // the enter carries, and read as absent it would load a run left open
+    // without its `NoCleanUnload`.
+    let prior_marker = read_marker_or_refuse(config)?;
     let Some(run_lock) = start::take_run_lock(&run_directory)? else {
         // **Any answer, a refusal among them, is a run that stands**: only
         // silence is `Unanswered`, per Spec section 3.
@@ -1231,7 +1269,7 @@ fn run_load(
                 // **The reset is the marker's**, per Spec section 4: the
                 // prior run still open, or forced closed without its save
                 // point, rides the enter beside the lineage.
-                reset: save_points::reset_from(save_points::read_marker(&config.root).as_ref()),
+                reset: save_points::reset_from(prior_marker.as_ref()),
                 stack,
                 // The boundary file's digest, the cause and the judged
                 // libraries, per `weaver-types-Spec` section 4 as of
@@ -1288,7 +1326,13 @@ fn open_marker(
     standing: &mut Standing,
     run: &str,
 ) -> Result<(), LifecycleRefusal> {
-    standing.marker_before = Some(save_points::read_marker(root));
+    standing.marker_before = Some(save_points::load_marker(root).map_err(|why| {
+        diag!(
+            "weaver-admin: the clean-unload marker in {}: {why}",
+            root.display()
+        );
+        LifecycleRefusal::BoundaryUnverified
+    })?);
     let marker = save_points::Marker::Open {
         run: run.to_string(),
     };
@@ -1396,7 +1440,7 @@ fn save_point(
 /// load.
 fn restore(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer, LifecycleRefusal> {
     let _invocation = start::take_invocation_lock(&config.run_directory())?;
-    let inventory = take_inventory(config, agent)?;
+    let inventory = room_inventory(config, agent)?;
     let Some(named) = inventory.config.restore.as_ref() else {
         diag!(
             "weaver-admin: config invalid: the declaration names no restore, and this verb names what the declaration names"
@@ -1790,7 +1834,7 @@ fn publish_from_room(
     agent: &AgentName,
     reports: &[(weaver_types::SavePointReport, save_points::Arrival)],
 ) -> Result<Vec<save_points::ManifestLine>, LifecycleRefusal> {
-    let inventory = match take_inventory(config, agent) {
+    let inventory = match room_inventory(config, agent) {
         Ok(inventory) => inventory,
         Err(refusal) => {
             record(
@@ -1807,7 +1851,20 @@ fn publish_from_room(
     let Some(member) = inventory.member_account else {
         return Ok(Vec::new());
     };
-    let room = save_points::room_of(inventory::sink_directory(&inventory.config.trace_sink));
+    // The room is the territory's own entry, the sink held to the territory
+    // by `room_inventory`, opened through the territory's descriptor.
+    let room = match config.territory_fd().and_then(save_points::open_room) {
+        Ok(Some(room)) => room,
+        Ok(None) => return Ok(Vec::new()),
+        Err(refusal) => {
+            record(
+                config,
+                "publish",
+                &format!("refused: {}", surface::render_refusal(&refusal)),
+            );
+            return Err(refusal);
+        }
+    };
     let directory = match config.save_points_fd() {
         Ok(directory) => directory,
         Err(refusal) => {
@@ -1820,7 +1877,7 @@ fn publish_from_room(
         }
     };
     match save_points::publish(
-        &room,
+        std::os::fd::AsFd::as_fd(&room),
         member.uid,
         directory,
         config.file_owner(),
@@ -1862,10 +1919,26 @@ fn line_arrival(line: &save_points::ManifestLine) -> &'static str {
     }
 }
 
+/// **The marker, or the verb's refusal** (the custody audit's G8): a marker
+/// that stands and does not read refuses `BoundaryUnverified` naming it, at
+/// the load and at the unload alike, never read as no marker.
+fn read_marker_or_refuse(
+    config: &ServiceConfig,
+) -> Result<Option<save_points::Marker>, LifecycleRefusal> {
+    save_points::load_marker(&config.root).map_err(|why| {
+        diag!(
+            "weaver-admin: the clean-unload marker in {}: {why}",
+            config.root.display()
+        );
+        record(config, "marker", &format!("does not read: {why}"));
+        LifecycleRefusal::BoundaryUnverified
+    })
+}
+
 /// Close the marker on a clean unload, or leave it open under `ForcedUnload`
 /// where the leave was forced, per Spec section 4.
 fn close_marker(config: &ServiceConfig, forced: bool) -> Result<(), LifecycleRefusal> {
-    let run = match save_points::read_marker(&config.root) {
+    let run = match read_marker_or_refuse(config)? {
         Some(save_points::Marker::Open { run }) | Some(save_points::Marker::Forced { run }) => run,
         Some(save_points::Marker::Closed { .. }) | None => return Ok(()),
     };
@@ -2190,9 +2263,11 @@ struct JudgedTerritory {
 /// **The territory is judged before any value in it is read, on its
 /// descriptor**, per Spec section 9 on the operator's ruling of 2026-10-07 on
 /// #1: opened once with no link followed, a directory owned by this process's
-/// uid, root in production and the suite's own under test, mode `0710`
-/// exactly, grouped to the access group, which passes by name and never
-/// lists, nothing for other, so neither of the agent's uids enters; carrying
+/// uid, root in production and the suite's own under test, mode `0711`
+/// exactly on the operator's ruling of 2026-10-08 on #1, passage and no
+/// listing for every other principal, the member reaching its room by it and
+/// the files beneath keeping their own modes as the wall; grouped to the
+/// access group, which is judged by name; carrying
 /// no access-control entry beyond its mode; every directory above it held
 /// closed by root as the root's ancestors are. `save-points/` beneath it is
 /// opened through that descriptor and judged the same way at mode `0750` and
@@ -2230,9 +2305,9 @@ fn judge_territory(
     if metadata.uid() != own {
         return Err(refuse("is not root's"));
     }
-    if metadata.mode() & 0o7777 != 0o710 {
+    if metadata.mode() & 0o7777 != 0o711 {
         return Err(refuse(
-            "is not mode 0710, root's with passage for the access group and nothing for other",
+            "is not mode 0711, root's with passage and no listing for every other principal",
         ));
     }
     if carries_access_entries(directory) {
@@ -2276,6 +2351,24 @@ fn judge_territory(
     if metadata.mode() & 0o7777 != 0o750 {
         return Err(refuse("holds a save-points that is not mode 0750"));
     }
+    // **Judged for access-control entries as the territory is** (the custody
+    // audit's G7), per Spec section 9's "judged the same way": a default
+    // entry on `save-points/` would be inherited by every published copy
+    // and the manifest, granting a principal outside the access group read.
+    // Looked at on the descriptor, and a look that cannot answer refuses.
+    match carries_access_entries_fd(save_points.as_fd()) {
+        Ok(false) => {}
+        Ok(true) => {
+            return Err(refuse(
+                "holds a save-points carrying an access-control entry beyond its mode",
+            ));
+        }
+        Err(e) => {
+            return Err(refuse(&format!(
+                "holds a save-points whose access-control entries cannot be read ({e})"
+            )));
+        }
+    }
     // **A territory holding no `agent.toml` is no agent**, `NoSuchAgent` as a
     // root holding none was, and one holding a declaration that is not a
     // closed regular file of root's is the provisioning, refused: judged here
@@ -2291,6 +2384,35 @@ fn judge_territory(
 
 /// Whether a path carries a POSIX access-control list, access or default,
 /// read without following a link.
+/// **Whether a directory carries an access-control entry, on its
+/// descriptor** (the custody audit's G7): either ACL attribute present is
+/// an entry; a filesystem without ACLs, or a directory without the
+/// attribute, carries none; any other failure to look is answered as the
+/// error, never as none.
+fn carries_access_entries_fd(directory: std::os::fd::BorrowedFd<'_>) -> nix::Result<bool> {
+    use std::os::fd::AsRawFd;
+    for name in [c"system.posix_acl_access", c"system.posix_acl_default"] {
+        // SAFETY: a size query with no buffer, on a descriptor this frame
+        // borrows and a NUL-terminated name.
+        let size = unsafe {
+            nix::libc::fgetxattr(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if size >= 0 {
+            return Ok(true);
+        }
+        match nix::errno::Errno::last() {
+            nix::errno::Errno::ENODATA | nix::errno::Errno::EOPNOTSUPP => {}
+            other => return Err(other),
+        }
+    }
+    Ok(false)
+}
+
 fn carries_access_entries(path: &std::path::Path) -> bool {
     let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()) else {
         return true;
@@ -2743,7 +2865,7 @@ mod tests {
 
     /// The values every root carries, written into a scratch root, with the
     /// agent's territory beside it, `<root>.territory`, laid out as the
-    /// judgment asks with this test's uid in root's place: mode 0710, its
+    /// judgment asks with this test's uid in root's place: mode 0711, its
     /// `save-points/` 0750, and an empty `agent.toml` 0644. Answers the
     /// territory.
     fn write_root(root: &std::path::Path) -> std::path::PathBuf {
@@ -2763,7 +2885,7 @@ mod tests {
             std::fs::Permissions::from_mode(0o644),
         )
         .unwrap();
-        std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(0o710)).unwrap();
+        std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(0o711)).unwrap();
         let operator = nix::unistd::getuid().as_raw().to_string();
         let territory_path = territory.display().to_string();
         for (name, text) in [
@@ -2984,15 +3106,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// **The territory is root's at mode 0710, its `save-points/` 0750 and
+    /// **The territory is root's at mode 0711, its `save-points/` 0750 and
     /// its declaration closed to writers, and never a link at its own name**,
-    /// per Spec section 9 on the operator's ruling of 2026-10-07 on #1, with
-    /// this test's uid in root's place. Perturbations: test only the write
-    /// bits and the 0750 territory reads; drop the save-points judgment and
-    /// the 0770 one reads; drop the declaration's mode check and the
-    /// group-writable declaration reads.
+    /// per Spec section 9 on the operator's rulings of 2026-10-07 and
+    /// 2026-10-08 on #1, with this test's uid in root's place: the mode
+    /// before the second ruling, 0710, refuses now, as does every other.
+    /// Perturbations: test only the write bits and the 0750 territory reads;
+    /// judge 0710 again and the 0711 territory refuses; drop the save-points
+    /// judgment and the 0770 one reads; drop the declaration's mode check and
+    /// the group-writable declaration reads.
     #[test]
-    fn the_territory_is_roots_at_0710_and_never_a_link() {
+    fn the_territory_is_roots_at_0711_and_never_a_link() {
         use std::os::unix::fs::PermissionsExt;
         let me = nix::unistd::getuid().as_raw();
         let base = std::env::temp_dir().join(format!("weaver-admin-decl-{}", std::process::id()));
@@ -3003,15 +3127,15 @@ mod tests {
         assert!(
             load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).is_ok()
         );
-        for open in [0o750, 0o711, 0o700, 0o770, 0o1710] {
+        for open in [0o750, 0o710, 0o700, 0o770, 0o1711] {
             std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(open)).unwrap();
             assert_eq!(
                 load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
                 Some(LifecycleRefusal::BoundaryUnverified),
-                "{open:o} is not the territory's 0710"
+                "{open:o} is not the territory's 0711"
             );
         }
-        std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(0o710)).unwrap();
+        std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(0o711)).unwrap();
         let save_points = territory.join("save-points");
         for open in [0o770, 0o755, 0o700] {
             std::fs::set_permissions(&save_points, std::fs::Permissions::from_mode(open)).unwrap();
@@ -3049,6 +3173,84 @@ mod tests {
             "a link at the territory's own name"
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **`save-points/` is judged for access-control entries as the
+    /// territory is** (the custody audit's G7): a default entry granting a
+    /// principal outside the access group read refuses the territory. Skips,
+    /// naming why, where `setfacl` cannot set the entry. Perturbation: drop
+    /// the look and the territory reads.
+    #[test]
+    fn a_save_points_carrying_an_access_entry_refuses() {
+        use std::os::unix::fs::PermissionsExt;
+        let me = nix::unistd::getuid().as_raw();
+        let base = std::env::temp_dir().join(format!("weaver-admin-acl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("alpha");
+        write_root(&root);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let save_points = root.with_extension("territory").join("save-points");
+        let set = std::process::Command::new("setfacl")
+            .args(["-d", "-m", "u:nobody:r"])
+            .arg(&save_points)
+            .status();
+        if !set.is_ok_and(|status| status.success()) {
+            eprintln!("SKIP: setfacl could not set a default entry here");
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+        assert_eq!(
+            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "an access-control entry on save-points refuses"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(root.with_extension("territory"));
+    }
+
+    /// **The publication does not ask the boundary file** (Codex on #94, at
+    /// 9fa18b4), per Spec section 9, which asks it of `validate` and `load`
+    /// alone: with `roles.toml` gone, the load's inventory refuses naming it,
+    /// and the publication an unload runs over a run already gone, and
+    /// `restore`, derive the room without it. This box holds no agent
+    /// accounts, so the publication stops at the account lookup either way;
+    /// what it must never answer is the boundary's refusal. Perturbation:
+    /// derive the publication's inventory through `take_inventory` again and
+    /// it refuses naming `roles.toml`.
+    #[test]
+    fn the_publication_does_not_ask_the_boundary_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let me = nix::unistd::getuid().as_raw();
+        let base =
+            std::env::temp_dir().join(format!("weaver-admin-room-only-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("alpha");
+        write_root(&root);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::remove_file(root.join("roles.toml")).unwrap();
+        let config = load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw())
+            .expect("the root reads without its boundary file");
+        let agent = AgentName("alpha".into());
+        let boundary = LifecycleRefusal::ConfigInvalid {
+            field: Some(weaver_types::FieldName("roles.toml".into())),
+        };
+        assert_eq!(
+            take_inventory(&config, &agent).err(),
+            Some(boundary.clone()),
+            "the load's inventory asks the boundary"
+        );
+        assert_ne!(
+            room_inventory(&config, &agent).err(),
+            Some(boundary.clone())
+        );
+        assert_ne!(
+            publish_from_room(&config, &agent, &[]).err(),
+            Some(boundary.clone()),
+            "the publication never refuses for the boundary"
+        );
+        assert_ne!(restore(&config, &agent).err(), Some(boundary));
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(root.with_extension("territory"));
     }
 
     /// **A missing or malformed boundary file refuses naming it, at the verbs
@@ -3842,19 +4044,19 @@ mod tests {
         );
     }
 
-    /// **The member's group set carries the access group beside its own**,
-    /// per Spec section 6 on the operator's ruling of 2026-10-07 on #1 (Codex
-    /// on #94, round 8): the territory is `0710` to the access group, and the
-    /// drop sets the supplementary set from this slice alone, so a member
-    /// dropped to its own group alone could not reach its room. Perturbation:
-    /// answer the member's group alone and the assertion fails.
+    /// **The member's group set is its own group alone**, per Spec section 6
+    /// on the operator's ruling of 2026-10-08 on #1 (the custody audit's
+    /// G11): the territory is `0711`, so the member needs no group to reach
+    /// its room, and the access group, which reads the logs and the
+    /// published save points, is not the member's. Perturbation: put the
+    /// access group back beside the member's own and the assertion fails.
     #[test]
-    fn the_members_group_set_carries_the_access_group() {
+    fn the_members_group_set_carries_no_access_group() {
         let member = inventory::MemberAccount {
             uid: 1501,
             gid: 1501,
         };
-        assert_eq!(member_groups(member, 1600), [1501, 1600]);
+        assert_eq!(member_groups(member), [1501]);
     }
 
     /// **A clean unload whose leave save point did not publish does not
@@ -4340,6 +4542,7 @@ mod tests {
     /// conforms: admin-member-territory-is-the-members-own
     #[test]
     fn the_territory_is_owned_by_the_member_and_closed_on_every_load() {
+        use std::os::fd::AsFd;
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let root = crate::scratch::Scratch(
             std::env::temp_dir().join(format!("wt-territory-{}", std::process::id())),
@@ -4351,7 +4554,9 @@ mod tests {
             gid: nix::unistd::getgid().as_raw(),
         };
 
-        let territory = prepare_territory(&root, member).expect("the territory is made");
+        let root_fd = save_points::open_directory(&root).unwrap();
+        let territory =
+            prepare_territory(root_fd.as_fd(), &root, member).expect("the territory is made");
         let made = std::fs::metadata(&territory).expect("it stands");
         assert_eq!(
             made.mode() & 0o777,
@@ -4364,12 +4569,29 @@ mod tests {
         // for: the operator, another tool, or an earlier build of this crate.
         std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(0o755))
             .expect("widen it");
-        let again = prepare_territory(&root, member).expect("the second load");
+        let again = prepare_territory(root_fd.as_fd(), &root, member).expect("the second load");
         assert_eq!(again, territory, "the same room, not a second one");
         assert_eq!(
             std::fs::metadata(&again).expect("it stands").mode() & 0o777,
             0o700,
             "a load closes a room that was left open"
+        );
+        // **A link at the room's name is refused and its target untouched**
+        // (the custody audit's G13). Perturbation: make the room by path
+        // again and the link's target is chowned and narrowed to 0700.
+        std::fs::remove_dir(&territory).unwrap();
+        let elsewhere = root.0.join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &territory).unwrap();
+        assert!(
+            prepare_territory(root_fd.as_fd(), &root, member).is_none(),
+            "a link at the room's name refuses the leg"
+        );
+        assert_eq!(
+            std::fs::metadata(&elsewhere).unwrap().mode() & 0o777,
+            0o755,
+            "the link's target keeps its mode"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -4492,8 +4714,11 @@ mod tests {
             member_account: Some(member),
         };
         let mut service = unread_config();
-        // The territory's access group as judged, which rides the drop.
+        // The territory's access group as judged, which no longer rides the
+        // drop (the custody audit's G11), and the territory's descriptor, as
+        // the judgment opens it, through which the room is made.
         service.access_gid = 4244;
+        service.territory_fd = Some(save_points::open_directory(&sink).unwrap());
         service.worker = bin.join("weaver-worker");
         let run_directory = sink.join("run");
         std::fs::create_dir_all(&run_directory).unwrap();
@@ -4524,8 +4749,8 @@ mod tests {
         assert_eq!(line("Gid:"), "4243 4243 4243 4243", "every gid its group's");
         assert_eq!(
             line("Groups:"),
-            "4243 4244",
-            "its group and the territory's access group, none of root's"
+            "4243",
+            "its own group alone: not the access group, none of root's"
         );
         let fd3 = std::fs::read_to_string(territory.join("fd3")).expect("the end was read");
         assert!(

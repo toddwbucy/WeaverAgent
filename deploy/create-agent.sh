@@ -116,7 +116,7 @@ while [ $# -gt 0 ]; do
     --member-identity) die "--member-identity is retired as of 2026-09-15, issue #545. The
    member's account is weaver-<name>-state, derived by weaver-admin from the
    agent's name. Lay an agent made before this date out as create-agent.sh now
-   makes one: root:weaver-<name>-state 0710, its trace root:weaver-<name>-trace
+   makes one: root:weaver-<name>-admin 0711, its trace root:weaver-<name>-trace
    0640 (deploy/REDEPLOY.md, existing territories)." ;;
     --engine)   [ $# -ge 2 ] || die "--engine needs a name"; ENGINE=$2; shift ;;
     --spu)      [ $# -ge 2 ] || die "--spu needs a path"; SPU_OVERRIDE=$2; shift ;;
@@ -305,10 +305,10 @@ judge_names || exit 1
 # access entries** (operator's ruling of 2026-10-02, #28). The base is the stack
 # record's `agent-directory`, which bootstrap-stack.sh makes root 0755: it must
 # stand, be held closed by admin's rule, and let no other principal make a name
-# in it, since the territory is a new name there. Each territory is root-owned
-# and grouped to its state member, 0710, so the member passes to its room by
-# group and the agent's uid, in no group of it, cannot enter; the trace has a
-# group of its own (below). No ACL is asked of the
+# in it, since the territory is a new name there. Each territory is root-owned,
+# grouped to the access group, 0711: every uid passes and none lists, and the
+# files' own modes are the wall (the operator's ruling of 2026-10-08 on #1);
+# the trace has a group of its own (below). No ACL is asked of the
 # filesystem, so a box whose datasets carry none deploys as any other.
 [ -d "$AGENT_DIR" ] || die "the stack record's agent-directory $AGENT_DIR does not stand: bootstrap-stack.sh makes it, root 0755"
 bad=$(creatable_in "$AGENT_DIR") || die "the stack record's agent-directory $AGENT_DIR is not a root-held base no other principal can make a name in ($bad)"
@@ -446,7 +446,7 @@ plan "access group    $ACCESS_GROUP    (system group: the territory's and the tr
 plan "connector       $CONNECTOR_USER  (system, nologin, no home, holds $ACCESS_GROUP, the trace reader)"
 plan "operator        $OPERATOR joins groups $AGENT_USER, $TRACE_GROUP and $ACCESS_GROUP"
 plan "home            /home/$AGENT_USER        the agent's own, where its tools run"
-plan "territory       $HOME_DIR        root:$ACCESS_GROUP 0710, passage only, no listing"
+plan "territory       $HOME_DIR        root:$ACCESS_GROUP 0711, passage only, no listing"
 plan "trace           $HOME_DIR/trace.ndjson  root:$TRACE_GROUP 0640, made before the first load"
 plan "state room      $STATE_DIR       $MEMBER_USER 0700, which the agent's uid cannot enter"
 plan "store           sqlite in memory, its save points in the state room"
@@ -514,13 +514,10 @@ sudo useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group
 # **The connector holds the access group and nothing of the agent's**: it
 # reaches the trace through the door alone, never by the trace group.
 sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group --groups "$ACCESS_GROUP" "$CONNECTOR_USER"
-# **The member holds the access group too**, for passage alone: the territory
-# has one group, the access group, which must pass to the declaration, the
-# draft and the save points, and the member must pass to its own room, so the
-# member joins it (the operator's ruling of 2026-10-07 on #1). What the member
-# then reads beyond its room is root's published copies of its own save points
-# and the declaration, never the trace, whose group is the trace group alone.
-sudo usermod -aG "$ACCESS_GROUP" "$MEMBER_USER"
+# **The member holds no group of the territory** (the operator's ruling of
+# 2026-10-08 on #1): the territory is 0711, so the member passes to its own
+# room by the bit every uid has, and the access group, which reads admin.log,
+# worker.log and the published save points, is not the member's.
 # **The operator reads without sudo through the access group**: the gate's
 # socket by the agent's group, the trace by its group, and the territory with
 # the declaration, the draft, the logs and the save points by the access
@@ -535,11 +532,12 @@ printf '   %s uid %s, %s uid %s, %s uid %s, %s uid %s\n' \
 say "territory"
 # **The whole agent lives here, and the group passes and never writes** (the
 # operator's ruling of 2026-10-07 on #1, refining 2026-10-02's #28 and #56).
-# The territory is root's, grouped to the access group, 0710 and not setgid:
-# the group may pass to what stands in it but not list, and nothing written
-# here takes its group. Admin makes the member's room at `<sink
-# directory>/state`, so the member traverses the directory holding the trace
-# by the access group it holds, and the protection sits on the trace file:
+# The territory is root's, grouped to the access group, 0711 and not setgid:
+# every uid may pass to what stands in it by name but none may list, and
+# nothing written here takes its group (the operator's ruling of 2026-10-08
+# on #1). Admin makes the member's room at `<sink directory>/state`, so the
+# member traverses the directory holding the trace by that passage, and the
+# protection sits on each file's own mode, the trace's first:
 # made here, before the first load, root:$TRACE_GROUP 0640, the layout admin
 # checks at every load (#62): admin opens it append-only, never through a
 # link, and refuses a trace that stands otherwise, so the member, outside that
@@ -550,7 +548,7 @@ say "territory"
 # `save-points/`, root:$ACCESS_GROUP 0750, where admin writes each copy 0640
 # to the group and the manifest root 0644, so the group reads a save point and
 # rewrites none.
-sudo install -d -o root -g "$ACCESS_GROUP" -m 0710 "$HOME_DIR"
+sudo install -d -o root -g "$ACCESS_GROUP" -m 0711 "$HOME_DIR"
 sudo install -o root -g "$TRACE_GROUP" -m 0640 /dev/null "$HOME_DIR/trace.ndjson"
 sudo install -d -o "$MEMBER_USER" -g "$MEMBER_USER" -m 0700 "$STATE_DIR"
 sudo install -d -o root -g "$ACCESS_GROUP" -m 0750 "$SAVE_POINTS"

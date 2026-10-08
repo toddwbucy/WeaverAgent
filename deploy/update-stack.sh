@@ -293,8 +293,11 @@ done
 # operator's own directory holding `agent.toml`, `system-prompt.md`,
 # `admin.log` and `worker.log`, which move into the territory, root's, with
 # `save-points/` made beside them, the root's `territory` key written and the
-# old key removed, the member and the operator joined to the access group,
-# and the territory grouped to it. The plan names the move and does nothing. A
+# old key removed, the operator joined to the access group, and the territory
+# grouped to it at 0711 (the operator's ruling of 2026-10-08 on #1). The
+# member is not joined: the territory's passage is every uid's, and a member
+# an earlier install joined keeps a membership the admin no longer hands it
+# at its spawn. The plan names the move and does nothing. A
 # territory already holding any of the four files refuses, naming it (Codex on
 # #94): two declarations of one agent is not a state this script can choose
 # between, and a move onto a prompt draft or a log would destroy its bytes.
@@ -762,21 +765,7 @@ restore() {
     for entry in "${MOVED[@]}"; do
       IFS='|' read -r agent old territory group mode <<< "$entry"
       printf '  moving %s'"'"'s files back from %s into %s\n' "$agent" "$territory" "$old" >&2
-      for f in agent.toml system-prompt.md admin.log worker.log; do
-        sudo test -e "$territory/$f" || continue
-        sudo mv -T -- "$territory/$f" "$old/$f" \
-          || { printf '  FAILED to move %s back\n' "$territory/$f" >&2; failed=1; continue; }
-        # **Given back as it was**: the owner and mode the move found, so the
-        # operator reads and edits it as before the install.
-        read -r owner fmode <<< "${MOVED_FILES["$agent|$f"]:-}"
-        # chown never follows a link (-h), and the mode is set through a
-        # descriptor opened O_NOFOLLOW (chmod_nofollow): the file has just
-        # been given back to the operator in the operator's directory, and a
-        # name made a link here changes no target.
-        [ -n "$owner" ] && [ -n "$fmode" ] \
-          && sudo chown -h "$owner" -- "$old/$f" && chmod_nofollow "$fmode" "$old/$f" \
-          || { printf '  FAILED to restore the owner and mode of %s\n' "$old/$f" >&2; failed=1; }
-      done
+      move_files_back "$agent" "$old" "$territory" || failed=1
       # **The territory reads as it did**: its group and mode as the move
       # found them, so the pre-ruling admin's member, holding no supplementary
       # group, passes to its room again.
@@ -889,6 +878,36 @@ move_no_clobber() {
   sudo mv -n -T -- "$1" "$2" && ! sudo test -e "$1"
 }
 
+# **The four files given back to the operator's directory, replacing
+# nothing** (the custody audit's G10): the move back goes through
+# move_no_clobber as the move in does, so a file the operator's tooling made
+# in the old directory during the install is kept and the territory's copy
+# left where it stands, both named, rather than one silently replacing the
+# other. Answers non-zero if any file did not come back as it was.
+# move_files_back AGENT OLD TERRITORY
+move_files_back() {
+  local agent=$1 old=$2 territory=$3 f owner fmode failed=0
+  for f in agent.toml system-prompt.md admin.log worker.log; do
+    sudo test -e "$territory/$f" || continue
+    if ! move_no_clobber "$territory/$f" "$old/$f"; then
+      printf '  FAILED to move %s back: %s stands; both are left in place\n' "$territory/$f" "$old/$f" >&2
+      failed=1
+      continue
+    fi
+    # **Given back as it was**: the owner and mode the move found, so the
+    # operator reads and edits it as before the install.
+    read -r owner fmode <<< "${MOVED_FILES["$agent|$f"]:-}"
+    # chown never follows a link (-h), and the mode is set through a
+    # descriptor opened O_NOFOLLOW (chmod_nofollow): the file has just been
+    # given back to the operator in the operator's directory, and a name made
+    # a link here changes no target.
+    [ -n "$owner" ] && [ -n "$fmode" ] \
+      && sudo chown -h "$owner" -- "$old/$f" && chmod_nofollow "$fmode" "$old/$f" \
+      || { printf '  FAILED to restore the owner and mode of %s\n' "$old/$f" >&2; failed=1; }
+  done
+  return "$failed"
+}
+
 # migrate_layout "AGENT|OLD|TERRITORY"...
 migrate_layout() {
   local entry agent old territory f group mode owner fmode
@@ -927,10 +946,9 @@ migrate_layout() {
         && chmod_nofollow 0640 "$territory/$f" \
         || rollback "$agent: $old/$f did not move into the territory as a regular file"
     done
-    sudo usermod -aG "weaver-$agent-admin" "weaver-$agent-state" \
-      && sudo usermod -aG "weaver-$agent-admin" "$OPERATOR_NAME" \
-      || rollback "$agent: the member and the operator could not join weaver-$agent-admin"
-    sudo chgrp "weaver-$agent-admin" "$territory" && sudo chmod 0710 "$territory" \
+    sudo usermod -aG "weaver-$agent-admin" "$OPERATOR_NAME" \
+      || rollback "$agent: the operator could not join weaver-$agent-admin"
+    sudo chgrp "weaver-$agent-admin" "$territory" && sudo chmod 0711 "$territory" \
       || rollback "$agent: the territory could not take the access group"
     printf '%s\n' "$territory" | sudo tee "$ADMIN_BASE/$agent/territory" >/dev/null \
       && sudo chmod 0644 "$ADMIN_BASE/$agent/territory" \

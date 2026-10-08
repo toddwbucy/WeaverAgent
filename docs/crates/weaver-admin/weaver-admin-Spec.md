@@ -897,7 +897,9 @@ opened and judged as the load judges it below before the verb answers, gone refu
 `restore`, as the load would, so `RestoreNamed` means named and judged loadable now, never
 a line whose file has since gone or changed. A manifest that stands beside published
 files and does not read, or a named line whose file is absent, refuses `BoundaryUnverified` naming
-the manifest, and no manifest and no file is an agent's first load. **The selected save
+the manifest, and no manifest and no file is an agent's first load; a listing of
+`save-points/` that fails refuses the same way and is never read as an empty directory
+(the custody audit's G9). **The selected save
 point's bytes are judged here**, before any process exists, under this crate's custody
 through the descriptor it opens and never by path: the entry judgment of section 9 (a
 regular file, not a link, root's, mode 0640, grouped to the access group (judged by
@@ -942,7 +944,12 @@ marker naming a run still open resolves the enter's `reset`, which rides apart f
 lineage and whether or not a save point stands, to that run with `NoCleanUnload`, or
 with `ForcedUnload` where `force-unload` closed that run without its save point, per
 `weaver-types-Spec` section 4. An agent's first load finds no marker and resolves no
-reset. Branching from a record is the builder's, outside the agent, and this crate never
+reset. **A marker that stands and does not read refuses** (the custody audit's G8): one
+that is a link, torn, foreign or past a few hundred bytes refuses the load before any
+process stands and the unload before it writes, `BoundaryUnverified` naming the marker,
+never read as no marker, since an absent marker resolves no reset and a run left open
+would load without its `NoCleanUnload`. The marker's temporary is created `0600`
+without following a link, root and gid 0 set on it, and only then given its `0644`. Branching from a record is the builder's, outside the agent, and this crate never
 reads a record for a load. **The judgment is this crate's because the save point is**,
 per charter section 4.3's custody rule: a look at a thing admin holds, taken at the
 load's cheapest moment before any process exists, and an ask of nobody. **The
@@ -1101,8 +1108,8 @@ than narrowed: a diagnostic sink is a sink.
 member could replace, or a link root would follow, would hand the worker a file other
 than the record, and since #80 the relay would read that file back out to the trace
 reader. **The trace's directory is judged first**: resolved once, owned by root or the
-admin principal and writable by no group or other, the territory's 0710 pass-through for
-the access group, the member among its members, being no write, and every directory above it held by section 9's
+admin principal and writable by no group or other, the territory's 0711 pass-through
+being no write, and every directory above it held by section 9's
 rule. **The open goes through that directory** write-only with `O_APPEND`, `O_CLOEXEC`,
 `O_NOFOLLOW` and `O_NONBLOCK`, so a link at the trace's name refuses and a FIFO there
 never blocks, and the descriptor must be a regular file. **An existing trace stands as
@@ -1466,19 +1473,20 @@ to: admin-member-spawn-drops-to-its-account
 
 **The drop's record is perturbation, as of 2026-09-26** (#673 item 6). What it asserts
 is that the spawned process runs as the member and holds no group root left it - the
-supplementary set narrowed to the member's own group and the territory's access group,
-then the gids, then the uids, in that order, because the two narrowings need the
-privilege the last one gives away. **The access group rides the drop from the
-territory's group as judged**, on the operator's ruling of 2026-10-07 on #1: the
-territory is root's and `0710` to that group, the drop sets the supplementary set from
-this crate's slice and never from the account database, so the member's passage to its
-own room is this crate's grant and no login fact, and the trace's group is not among
-them, so the member cannot read the record. The
+supplementary set narrowed to the member's own group alone, then the gids, then the
+uids, in that order, because the two narrowings need the privilege the last one gives
+away. **The member holds no group of the territory**, on the operator's ruling of
+2026-10-08 on #1 (the custody audit's G11): the territory is `0711`, so the member
+passes to its own room by the bit every uid has, and the drop sets the supplementary set
+from this crate's slice and never from the account database, so no membership the
+account carries reaches the member. Neither the access group, which reads `admin.log`,
+`worker.log` and the published save points, nor the trace's group is among them, so the
+member reads none of those. The
 instrument drives `stand_state_member` itself inside a user namespace, where the test
 runs as root over the invoking user's subordinate ids: a stand-in member beside the
 worker records the identity it runs under into the territory the real path prepared, and
 the kernel's status after exec must read every uid the member's, every gid its group's,
-and the supplementary set that group and the access group alone. **It stood at review
+and the supplementary set that group alone. **It stood at review
 until then** on the
 reading that an unprivileged suite could only assert the three calls' refusal. The store
 probe's namespaced watch of 2026-09-24 disproved that reading, the same calls succeeding
@@ -1593,7 +1601,21 @@ following links, requires a regular file owned by the member's uid that carries 
 save-point format and a finished name, a part name being an unacknowledged save point
 that is never published, refuses and leaves in place any entry that fails, naming it,
 and copies only from the descriptor it judged, so a link or a planted file in the room
-cannot make a root step read a path the member chose. The copy is written under a
+cannot make a root step read a path the member chose. **The room is opened through the
+territory's descriptor without following a link and listed through its own**, and each
+entry opened without blocking, so a FIFO the member makes under a finished name is
+refused as no regular file rather than holding the verb (the custody audit's G1 and
+G12). **The scan keeps no bytes**: each entry is judged and dropped, and opened and
+judged again at its own copy, the bytes copied being the bytes judged in that read, so
+at most one image stands in this root process's memory and a file the member changes
+after the scan is refused. **One verb publishes at most 32 room files, and copies one
+only where its size and 64 MiB more stand free** on the save-points filesystem, this
+act's elections (the custody audit's G23); entries go oldest first and the reported one
+last, and the cap or the space stops the verb at the first entry it declines rather than
+skipping it, so every file published is older than every file left for the next verb and
+the highest ordinal stays the last taken. A leave's own save point so deferred leaves
+its unload refusing `SavePointNotTaken` naming the publication, as one that did not
+publish does, until later verbs drain the room. The copy is written under a
 temporary name, root's, grouped to the access group and mode `0640`, the mode set
 through the descriptor so the invoking shell's umask narrows nothing, so the operator
 and the connector read it and nothing writes it but this crate, its owner and mode
@@ -2251,9 +2273,8 @@ the prompt draft `system-prompt.md`, which this crate never reads; `admin.log` a
 section 5; and the member's room `state/`, per section 6. One ownership: root reads and
 writes root's files in root's directory, so no other principal's choice reaches what a
 root step reads. **The access group reads and never writes**: `weaver-<agent>-admin`,
-the connector's, is the territory's group, with passage by name through the territory
-and read on the draft, the logs and the published save points, and the operator joins
-it to read without sudo; a declaration, a draft or a manifest the group could write
+the connector's, is the territory's group and reads the logs and the published save
+points, and the operator joins it to read without sudo; the state member is never in it; a declaration, a draft or a manifest the group could write
 refuses, since the connector must not be able to rewrite the declaration. **Removing
 the manifest is root's act**, and doing so makes every published save point
 unloadable, a file no line names being not loadable, until a `restore` names one,
@@ -2314,9 +2335,14 @@ file another principal could write among what a root step reads. The value of
 `territory` is resolved once to its canonical path, the look not following a link at
 the directory itself. **The territory is held as a descriptor for the verb's life**:
 opened once at the judgment with no link followed, judged on that descriptor a
-directory owned by uid 0, mode `0710` exactly, grouped to the access group, which passes
-by name and never lists, nothing for other, so neither of the agent's uids enters, and
-carrying no access-control entry beyond its mode; `save-points/` beneath it is opened
+directory owned by uid 0, mode `0711` exactly on the operator's ruling of 2026-10-08 on
+#1, passage by name for every uid and listing for none, grouped to the access group as
+judged by name, and carrying no access-control entry beyond its mode. **The wall is
+each file's own mode**: the member's room is the member's `0700`, the trace is
+`root:weaver-<agent>-trace 0640`, the logs and `save-points/` are the access group's
+and closed to other, and `agent.toml` and `system-prompt.md` are root's `0644`, so any
+uid that names them reads the declaration and the prompt draft, the agent's uid
+among them, which the territory's passage no longer bars; `save-points/` beneath it is opened
 through that descriptor and judged the same way at mode `0750` and the territory's
 group; and every read and every write after goes through those descriptors and never
 through the path again: `agent.toml` opened beneath the territory's, and section 6's
@@ -2330,7 +2356,7 @@ custody, group and archive cover. **The one entry this
 crate reads is held closed**: `agent.toml` is a regular file and never a link, root's,
 and writable by no group or other, so the access group that reads it never rewrites it.
 Other entries are not read, `system-prompt.md`, the operator's draft of the prompt that
-the seeding step reads through the access group and this crate never opens, among
+the seeding step reads and this crate never opens, among
 them, save `admin.log` and `worker.log`, the two this crate creates and appends to,
 without following a link, per section 8. **Every directory above it is held closed as
 the root's ancestors are**, each owned by uid 0 and writable by no group or other
@@ -2782,8 +2808,9 @@ directive is asserted where the run happens.
 
 - The root check: the binary run as a non-root uid refuses before touching any
   agent, confirmed by watching a verb proceed when the check is removed.
-- The territory is root's and closed, per section 9 as of 2026-10-07: a directory of
-  any mode but `0710`, one carrying an access-control entry, one not root's, one holding
+- The territory is root's and closed, per section 9 as of 2026-10-08: a directory of
+  any mode but `0711`, the earlier `0710` among them, one carrying an access-control entry, one
+  whose `save-points/` carries one, one not root's, one holding
   no `save-points/` or one of any mode but `0750`, an `operator` key absent or naming no
   uid, a declaration that is a link or writable by group or other, and an ancestor
   another principal can write each refuse `BoundaryUnverified` before a value is read,
@@ -2816,8 +2843,8 @@ directive is asserted where the run happens.
   is restored.
 - The member's spawn drops to its account: `stand_state_member` run as root
   inside a user namespace stands a member whose every uid and every gid are its
-  account's and whose supplementary set is its group and the territory's access group
-  alone, confirmed by watching the member run as uid 0 when `become_member` is removed
+  account's and whose supplementary set is its own group alone, the access group not
+  among it, confirmed by watching the member run as uid 0 when `become_member` is removed
   from the spawn's pre-exec, and carry root's group when `drop_to` is handed it beside
   the member's.
 - One write is one read: two envelopes are written back to back on the
