@@ -89,7 +89,7 @@ pub struct AgentConfig {
 
 /// The restore election, per `weaver-types-Spec` section 2 as of A3.2 on the
 /// operator's rulings of 2026-10-06 on #1: the save point the next load
-/// restores, by its published name in the declaration's own directory or by
+/// restores, by its published name in the territory's `save-points/` or by
 /// its digest, which admin resolves through its manifest. The record-and-cut
 /// form of before A3.2 retired with the record restore.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

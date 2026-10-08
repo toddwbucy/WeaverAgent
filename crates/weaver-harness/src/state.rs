@@ -29,8 +29,9 @@ pub(crate) const ANSWER_BOUND_MS: u64 = 2_000;
 /// **The bound on the snapshot's answer leg**, per `weaver-harness-Spec`
 /// section 6 on the operator's ruling of 2026-10-08: the member writes the
 /// image before it answers, so the leg is waited on for 120 seconds, enough
-/// to write a 1 GiB image. The ask leg and the finished leg, and every
-/// other ask, keep `ANSWER_BOUND_MS`.
+/// to write a 1 GiB image. The ask leg and the finished leg, and the small
+/// asks, keep `ANSWER_BOUND_MS`; `restored` and the parked asks have their
+/// own bounds below.
 pub(crate) const SNAPSHOT_ANSWER_BOUND_MS: u64 = 120_000;
 
 /// **The bound on the `restored` answer**, per `weaver-harness-Spec` section
@@ -42,11 +43,12 @@ pub(crate) const SNAPSHOT_ANSWER_BOUND_MS: u64 = 120_000;
 pub(crate) const RESTORED_ANSWER_BOUND_MS: u64 = 120_000;
 
 /// The bound on an ask that parks at the member until the driver seals,
-/// per `weaver-harness-state-contract` section 2: the enter's identity and
-/// recall asks under a diagnostic binding or a restoring load wait on a
-/// preload the operator runs beside the load, so the bound is the replay
-/// ask's generous one and not the two seconds a member answering from
-/// holdings at rest takes.
+/// per `weaver-harness-state-contract` section 2: the enter's asks under a
+/// diagnostic binding wait on a preload the operator runs beside the load,
+/// so the bound is the replay ask's generous one and not the two seconds a
+/// member answering from holdings at rest takes. A restoring load parks
+/// nothing: its save point arrives on a descriptor at the member's start,
+/// and its `restored` answer has its own bound above.
 pub(crate) const PARKED_ASK_BOUND_MS: u64 = 600_000;
 
 /// The bound on the answer's size, one mebibyte per

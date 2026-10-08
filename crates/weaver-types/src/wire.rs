@@ -215,9 +215,10 @@ pub enum LifecycleDirective {
     /// The cause rides each change, per `weaver-types-Spec` section 3.1, and
     /// the harness records it on the unload event. **`forced` is admin's
     /// `force-unload`**, as of A3.2 on the operator's ruling of 2026-10-06 on
-    /// #1: the harness then leaves without its leave save point and records
-    /// on the `unload` event that it was not taken; false, the leave does not
-    /// complete without one.
+    /// #1, **and a load's rollback** (the #94 survey's S10), which undoes a
+    /// run that never served: the harness then leaves without its leave save
+    /// point and records on the `unload` event that it was not taken; false,
+    /// the leave does not complete without one.
     Leave {
         cause: crate::Cause,
         #[serde(default)]
@@ -586,8 +587,10 @@ pub struct Reset {
     pub reason: ResetReason,
 }
 
-/// Why a load resets, one reason today: the marker says the prior run never
-/// unloaded cleanly. `UnitFailed` retired with the unit on 2026-10-03 (#50).
+/// Why a load resets: the marker says the prior run never unloaded cleanly,
+/// or that admin's `force-unload` ended it. Rendered kebab-case, which is
+/// how the record writes it too. `UnitFailed` retired with the unit on
+/// 2026-10-03 (#50).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ResetReason {

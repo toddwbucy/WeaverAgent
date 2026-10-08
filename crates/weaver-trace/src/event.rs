@@ -561,9 +561,12 @@ pub struct UnloadClose {
     pub grant_surface: Option<GrantSurface>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cause: Option<Cause>,
-    /// True where admin's `force-unload` ended the run without its leave save
-    /// point, as of A3.2 on the operator's ruling of 2026-10-06 on #1 (A3.0
-    /// item 6), so the record says the loss was the operator's choice.
+    /// True where the run ended without its leave save point at admin's
+    /// direction, as of A3.2 on the operator's ruling of 2026-10-06 on #1
+    /// (A3.0 item 6): the operator's `force-unload`, or a load's rollback
+    /// undoing a run that never served (the #94 survey's S10), the `unload`
+    /// then carrying the load's cause. The record says the loss was
+    /// directed, never a fault.
     pub forced: bool,
 }
 
