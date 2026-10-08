@@ -161,6 +161,24 @@ held_closed() {
   done
 }
 
+# **closed_to_others PATH**: every component of PATH's canonical path owned
+# by root or the operator and writable by neither group nor other, a sticky
+# directory excepted; answers non-zero and prints the first that is not.
+closed_to_others() {
+  local at owner mode me
+  me=$(id -u)
+  at=$(realpath -e -- "$1" 2>/dev/null) || { printf '%s' "$1"; return 1; }
+  while :; do
+    read -r owner mode < <(stat -c '%u %a' -- "$at" 2>/dev/null) || { printf '%s' "$at"; return 1; }
+    if { [ "$owner" != 0 ] && [ "$owner" != "$me" ]; } \
+      || { (( 8#$mode & 8#022 )) && ! { [ -d "$at" ] && (( 8#$mode & 8#1000 )); }; }; then
+      printf '%s' "$at"; return 1
+    fi
+    [ "$at" = / ] && return 0
+    at=$(dirname -- "$at")
+  done
+}
+
 trim() {
   local value=$1
   value=${value#"${value%%[![:space:]]*}"}
@@ -250,6 +268,15 @@ done
 if [ "$APPLY" -eq 1 ]; then
   [ -n "$ARCHIVE" ] || die "--apply needs --archive <dir>: step 9 archives the territory and the root there before it removes them"
   [ -d "$ARCHIVE" ] || die "the archive directory $ARCHIVE does not stand"
+  # **The archive is written as root into a directory no other principal
+  # writes** (the commit security review of 36f1374): a directory another
+  # user could write would let them plant a link at the archive's name for
+  # root's tar to follow, and the archive holds the territory's custodied
+  # files. Every component of its path is root's or the operator's and
+  # writable by neither group nor other, a sticky directory excepted.
+  bad=$(closed_to_others "$ARCHIVE") \
+    || die "the archive directory $ARCHIVE is writable by another principal at $bad: name one only root and you can write"
+  ARCHIVE=$(realpath -e -- "$ARCHIVE")
   if [ "$CLEANUP" -eq 0 ]; then
     [ -n "$ARTIFACT" ] || die "--apply needs --artifact <path>: step 1's create-agent.sh binds it"
     if [ -n "$OTHERS" ] && [ "$ALLOW_OTHERS" -eq 0 ]; then
@@ -991,13 +1018,15 @@ step_9() {
   sudo -n rm -f -- "$RULE"
   sudo -n find /etc/sudoers.d -maxdepth 1 -type f -name ".$AU.*" -delete
   if sudo -n test -d "$T" && ! sudo -n test -L "$T"; then
-    sudo -n tar --acls --xattrs -C "$AGENT_DIR" -cpf "$TERRITORY_TAR" "$AU"
+    # Under umask 077, so the archive of the custodied territory is root's
+    # 0600 and readable by no one the territory was closed to.
+    sudo -n sh -c 'umask 077 && exec tar --acls --xattrs -C "$1" -cpf "$2" "$3"' sh "$AGENT_DIR" "$TERRITORY_TAR" "$AU"
     expect_eq "the territory's archive reads back" yes "$(sudo -n tar -tf "$TERRITORY_TAR" 2>/dev/null | grep -q . && echo yes || echo no)"
   else
     measured "no territory at $T to archive"
   fi
   if sudo -n test -d "$R"; then
-    sudo -n tar -C "$ADMIN_BASE" -cpf "$ROOT_TAR" "$A"
+    sudo -n sh -c 'umask 077 && exec tar -C "$1" -cpf "$2" "$3"' sh "$ADMIN_BASE" "$ROOT_TAR" "$A"
     expect_eq "the root's archive reads back" yes "$(sudo -n tar -tf "$ROOT_TAR" 2>/dev/null | grep -q . && echo yes || echo no)"
   else
     measured "no root at $R to archive"
@@ -1062,7 +1091,7 @@ if [ "$APPLY" -eq 1 ]; then
     if sudo -n test -e "$RULE"; then die "the sudo rule $RULE already exists: this script verifies a throwaway agent it creates at step 1"; fi
   fi
   for t in "$TERRITORY_TAR" "$ROOT_TAR"; do
-    if sudo -n test -e "$t"; then die "the archive $t already exists, and no archive is written over another"; fi
+    if sudo -n test -e "$t" || sudo -n test -L "$t"; then die "the archive $t already exists, and no archive is written over another"; fi
   done
   LOGDIR=$(mktemp -d "${TMPDIR:-/tmp}/verify-lifecycle-$A.XXXXXX")
 fi

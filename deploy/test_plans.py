@@ -2702,6 +2702,13 @@ esac
         archive = self.root / "archive"
         archive.mkdir()
         apply = ["--apply", "--archive", str(archive), "--artifact", str(self.artifact)]
+        # **An archive directory another principal writes refuses** (the
+        # commit security review of 36f1374): root's tar would follow a link
+        # planted at the archive's name. Perturbation: drop the closed walk.
+        open_archive = self.root / "open-archive"
+        open_archive.mkdir()
+        open_archive.chmod(0o777)
+        open_apply = ["--apply", "--archive", str(open_archive), "--artifact", str(self.artifact)]
         marker = self.stack / "verify-lifecycle-m1"
         cases = (
             ("bad name", {}, None, ["--agent", "M1"], "lowercase letters and digits"),
@@ -2714,6 +2721,7 @@ esac
             ("no stack record", {}, "stack", [], "no stack record"),
             ("other agents", {}, None, apply, "Step 8's update-stack.sh --install touches every agent on the box"),
             ("no archive", {}, None, ["--apply", "--artifact", str(self.artifact)], "--apply needs --archive"),
+            ("open archive", {}, None, open_apply, "is writable by another principal"),
             ("earlier marker", {}, "marker", [], "take that agent down first with --cleanup"),
         )
         self.install_stack()
@@ -2741,6 +2749,15 @@ esac
                 self.assertIn("REFUSED: ", result.stderr)
                 self.assertIn(said, result.stderr)
                 self.assertFalse([c for c in self.calls() if c[0] == "sudo"], self.calls())
+        # **Every archive root writes is written under umask 077**, so the
+        # territory's custodied files are not exposed by their archive (the
+        # commit security review of 36f1374). Perturbation: drop the umask
+        # from either tar.
+        script = (self.repo / "deploy" / "verify-lifecycle.sh").read_text()
+        writes = [l for l in script.splitlines() if "sudo -n" in l and " -cpf " in l]
+        self.assertEqual(len(writes), 2, writes)
+        for line in writes:
+            self.assertIn("umask 077 && exec tar", line)
         # With --allow-other-agents the run passes every refusal and asks for
         # sudo first, and nothing else privileged.
         self.env.update(ALLOW_APPLY_CHECKS="1", SUDO_FAIL="1")
