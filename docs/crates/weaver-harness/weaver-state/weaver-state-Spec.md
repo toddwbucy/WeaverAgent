@@ -82,10 +82,11 @@ on the operator's `save-point`, under a manifest it keeps there, per `weaver-adm
 section 6.
 **The save point a load restores arrives as a descriptor and never as a path**, per
 `weaver-admin-Spec` section 6: admin opens the chosen save point in the territory's
-directory for reading, the latest by default or the one `restore` names, and the member
+`save-points/` for reading, the latest by default or the one `restore` names, and the member
 inherits it at its spawn the way it inherits the first door's end. Where no save point
-exists the descriptor is absent, which is an agent's first load or every save point
-deleted, and the load of section 3 rebuilds. **The descriptor's number is 4**, beside
+stands, the manifest naming none, the descriptor is absent, which is an agent's first
+load, and the member stands empty, per section 3; a manifest whose latest file is gone
+refuses the load, per `weaver-admin-Spec` section 4. **The descriptor's number is 4**, beside
 the first door's 3, a fixed convention between this crate and admin elected by the
 save-point act of 2026-10-05, and it is probed before it is adopted, by the rule below
 and before this process opens anything of its own, a regular file open for reading: a
@@ -104,17 +105,14 @@ member refuses any flag by name.
 The first door's end arrives with the process, per the operator's ruling of 2026-08-26:
 admin creates the pair at the spawn and this member inherits its end, so the peer is
 authenticated by possession and no credential is judged on this door, the one party that
-can hold the other end being the one the enter handed it to. The end's number is the
-code act's to elect, a fixed convention between this crate and admin rather than a value
-the vector carries, so the vector is the territory and the preload path alone, with no
+can hold the other end being the one the enter handed it to. The end's number is 3, a
+fixed convention between this crate and admin rather than a value the vector carries, so the vector is the territory and the preload path alone, with no
 flag, per `weaver-admin-Spec` section 6.
 **The number is probed before it is adopted**: the member reads the number's socket type
 and refuses, with a named fault, a number holding no stream socket, because a hand-run
 process holds whatever its shell left there and an adoption would read it as seam
 traffic and close it on exit. The probe borrows and owns nothing, so the refusal closes
-nothing that is not this process's own. The choreography election below is narrowed once
-already by section 4 and now again by the ruling: what remains that act's is the number
-and the probe's mechanics. The preload door's name arrives on the vector under a
+nothing that is not this process's own. The preload door's name arrives on the vector under a
 diagnostic binding alone, the record restore of issue #432 retiring on the operator's
 rulings of 2026-10-02 on #58, this member binding whatever name it is given and none it
 is not, and binds under this member's own territory, the credential judgment of section
@@ -136,9 +134,10 @@ as it would, naming the absence on its standard error so it is never silent.
 ## 3. The store
 
 **The store is a port and one engine stands behind it, per the operator's ruling of
-2026-10-02 on issue #1.** `src/store.rs` declares `Store`, the port: open with the
-loop's schema, load a save point, land a distillate whole, build the elected indexes,
-answer the asks, and write a save point. The ingest and serve of section 4 speak to the
+2026-10-02 on issue #1.** `src/store.rs` declares `Store`, the port: land a distillate
+whole, build the elected indexes, retire a preloaded session, answer the asks, judge and
+adopt a save point's image, and yield the image, schema and position a save point is
+written from. The ingest and serve of section 4 speak to the
 port and never to an engine, so the seam's traffic is the same whatever answers it.
 **One engine stands**, `Sqlite`, an embedded database opened in memory in this process,
 one database and never more, with no file of its own, no server, no network and no
@@ -327,8 +326,9 @@ the rows a distillate of that kind lands as. It crosses the seam in the opener, 
 `weaver-harness-state-contract` section 2, so a restarted member stands the identical
 schema with its reopened channel exactly as it builds the identical indexes. **What the
 schema does not admit has nowhere to land**: a distillate whose landing the schema's
-constraints refuse rolls back whole, by the transaction rule of section 4, and stands
-in the trace and in the neutral substrate and nowhere else. The store applies the
+constraints refuse rolls back whole, by the transaction rule of section 4, the landing
+being one transaction that includes the event row, and answers `LandingRefused`: the
+trace keeps the event and the store holds nothing of it. The store applies the
 schema mechanically and holds no opinion about it, so a schema is never this crate's
 to write, repair or extend. **A save point carries the schema it was taken under**, and
 a load whose opener carries a different schema is a save point that disagrees, so the
@@ -341,7 +341,8 @@ the live store pays no disk write per landing: it holds its rows in memory, and 
 crash cost is what landed since the latest save point, which the record keeps and no
 default replays. **A save point is the whole database serialized**, written as a new
 file in the member's room when the harness asks for one with the contract's `snapshot`
-ask, at every serving leave and on the operator's demand, never under a diagnostic
+ask, at every serving leave that is not forced and whose tee still stands and on the
+operator's demand, never under a diagnostic
 binding and never on the store's own initiative. **It is stamped with the trace position
 it covers**, the run and the sequence of the last distillate landed in it and the last
 turn that run's holdings carry, and with a check over its own bytes, so a save point
@@ -414,7 +415,7 @@ connection is touched exactly once, last; and a failure anywhere leaves the hold
 they stood and the `restored` ask answering the refusal. So the engine,
 which adopts lazily and faults on first use, deserializes the image on a scratch
 connection, requires its own check to pass and the event table to stand, reads the
-image's own catalog, last landing and seated prefix and refuses a stamp that disagrees
+image's own catalog and last landing and refuses a stamp that disagrees
 with either fact, drops every index in the election's generated form from the scratch
 copy and builds the active election's in their place, so the index set after adoption
 is exactly this load's, and only then swaps the finished image in whole. **A value the stamp cannot represent refuses the image and
@@ -432,12 +433,13 @@ election, no run and sequence zero, pending the operator's ruling on the carried
 r4170886146 in A3.0, the member learning no run until a distillate lands.
 
 **A load restores a save point and replays no tail.** At the spawn the member reads the
-save point through the descriptor into its in-memory database and holds its stamp, per
-the operator's rulings of 2026-10-02 on #58. After an unclean stop that is the latest
-known-good save point, and the harness records the reset on the trace, so a rebuild
+save point through the descriptor and checks it; once the opener lands it judges the
+image against the opener and seats it, holding the stamp, per the operator's rulings of
+2026-10-02 on #58. After an unclean stop that is the latest published save point, and the harness records the reset on the trace, so a rebuild
 honours it, and nothing the record holds past the stamp lands by default. **A save point
-whose bytes fail never reaches the member**: admin judges its check and stamp at the
-inventory, per `weaver-admin-Spec` section 4, and refuses the load. **A save point that
+whose bytes fail does not load**: admin judges its check and stamp at the inventory, per
+`weaver-admin-Spec` section 4, and refuses the load, and one that reaches the member
+anyway refuses the member's start, per section 2. **A save point that
 disagrees with the opener's schema is refused on the `restored` ask**: the member holds
 the restore's outcome from the opener on, and answers the enter's `restored` ask of the
 contract's section 2 with the restored lineage or with a refusal naming the schema
@@ -549,7 +551,9 @@ judges the descriptor's save point against the opener's schema when the opener l
 holds the outcome, and answers `{"answer":{"restored":{"lineage":{...}}}}` with the
 stamp it restored, its `lineage` carrying `digest`, `run`, `sequence` and `turn`,
 `{"answer":{"restored":{}}}` where it stood empty, or
-`{"answer":{"restored":{"refused":"schema-mismatch"}}}`, immediately and parking never.
+`{"answer":{"restored":{"refused":"<reason>"}}}`, the reason among them `schema-mismatch`
+where the save point's schema is not the opener's and `stamp disagrees with the image`
+where the image's own last landing is not the stamp's, immediately and parking never.
 **The `snapshot` ask
 writes a save point and answers its stamp, and the finished name follows the
 acknowledgement**, per the contract's sixth ask of 2026-10-02 as amended by the
@@ -616,9 +620,8 @@ binding alone, the record restore of issue #432 retiring on the operator's rulin
 2026-10-02 on #58, holding the resolved kind from the inventory per `weaver-admin-Spec`
 section 4. **That party is `weaver-admin` and the name rides the vector**, per that
 Spec's section 6 as amended 2026-08-25, no exchange this member holds carrying a path.
-**Section 2's election is narrowed rather than closed**: the descriptor choreography it
-leaves to the code act is still that act's, and what is settled here is only that a name
-arrives on the vector and not on a descriptor. The credential judgment is this member's
+**Section 2's choreography is closed**: the numbers are fixed and probed, and what is
+settled here is that a name arrives on the vector and not on a descriptor. The credential judgment is this member's
 one, the first door authenticating by possession per the operator's ruling of
 2026-08-26: the accept on the preload name admits the operator principal and refuses
 every other peer before any byte is read, the agent's among them and no longer knowable
@@ -748,17 +751,18 @@ reads is a data-shaped empty joint.
 
 ## 5. What is enforced, and by which instrument
 
-**This crate holds no `tests/` target** and every test it has stands in an
-in-file `#[cfg(test)]` suite beside the unit it watches, so Document Format
+**This crate's tests stand in in-file `#[cfg(test)]` suites beside the units they
+watch, and one integration target, `tests/run_lock.rs`, starts the member binary as
+admin does**, so Document Format
 section 5's review rule reaches this crate at the item where an instrument sits
 rather than at a directory, which is the scope that rule states. **No claim here
 is cited at a test.** Every `conforms:` line in the crate sits at a `//!` file
 header but one, the line inside `stand_preload_name`, which is a function the
-binary runs, so none of the nine is a sighting under that rule.
+binary runs, so none of them is a sighting under that rule.
 
-**Requiring a perturbation-verified test.** Fifteen claims stand today, each watched
-where the behaviour sits, the store primitive's four landed on 2026-10-05 as instruments
-of the `preload_door` suite beside the room's own unit tests.
+**Requiring a perturbation-verified test.** The claims below stand today, each watched
+where the behaviour sits, the store primitive's landed on 2026-10-05 as instruments of
+the `preload_door` suite beside the room's own unit tests.
 
 - The member holds the run lock for its life, watched by the member binary started as
   admin starts it, a stream socket at 3 and a stand-in lock at 9, and read from outside
@@ -767,8 +771,8 @@ of the `preload_door` suite beside the room's own unit tests.
   descriptor, and a load killed before its worker starts leaves a member the next load
   cannot find.
 
-- The standing asks restrict to the opener's session, watched by dropping any of the
-  three `WHERE session` predicates the reads carry, which returns an earlier
+- The standing asks restrict to the opener's session, watched by dropping the
+  `WHERE session` predicate from any standing read, which returns an earlier
   session's runs to a shape answer and an earlier session's rows to a recall. The
   claim is now each ask's definition rather than the store's boundary, per section
   4, and it moves with the asks when the loop's schema takes them.
@@ -841,16 +845,37 @@ of the `preload_door` suite beside the room's own unit tests.
   section 4. The perturbation drops the check, and the flipped save point starts the
   member.
 - A save point under another schema is refused on the `restored` ask, watched by a
-  load whose opener carries a schema the save point does not: the answer must name the
-  mismatch. The perturbation answers the restored lineage regardless, and the enter
+  load handed a save point taken under a schema the store does not stand: the answer
+  must name the mismatch. The perturbation answers the restored lineage regardless, and the enter
   stands on holdings the schema does not admit.
 - A save point is never overwritten, watched by two `snapshot` asks on unchanged
   holdings answering two names with both files standing. The perturbation writes
   to a fixed name, and the first file is lost.
-- What the schema does not admit lands nowhere, watched by a distillate whose
-  landing the loop schema's constraint refuses: the landing rolls back whole and
-  the neutral substrate holds the event. The perturbation drops the constraint from
-  the schema the store stands, and the row lands.
+- What the schema does not admit lands nowhere, watched today by a trigger standing in
+  for the loop schema's constraint in `a_distillate_lands_whole_or_not_at_all`: the
+  landing rolls back whole, the event row with it, and answers `LandingRefused`, not a
+  store fault. The perturbation answers every error `LandingFailed`.
+- No save point is taken over holdings that lack what the trace holds, watched by
+  `a_landing_that_fails_refuses_every_later_snapshot`: a landing that fails on a fault
+  of the store leaves every later `snapshot` unanswered. The perturbations discard the
+  landing's result in the drain, or drop the custody's note or the snapshot's look at
+  it, and the snapshot answers.
+- A schema's refusal poisons nothing, watched by
+  `a_landing_the_schema_refuses_poisons_nothing`: after a landing the schema refuses,
+  the next `snapshot` still answers. The perturbation holds every landing error as a
+  store fault, and the snapshot answers nothing.
+- A save point past the bound is never written, watched by
+  `a_save_point_past_the_bound_writes_no_part` at the room and by
+  `a_snapshot_past_the_bound_answers_nothing_and_leaves_no_part` at the ask: with the
+  bound lowered under the file, no part stands and the ask answers nothing. The
+  perturbation drops the bound check from `write_part_within`, and a part stands.
+- A stamp the readers would refuse is never written, watched by
+  `a_stamp_the_readers_refuse_writes_no_part` at the room and by
+  `a_snapshot_over_a_run_past_the_bound_answers_nothing` at the ask. The perturbation
+  drops the `stamp_bounds` call from `write_part_within`, and a part stands.
+- An adopted image carries no one-gibibyte cap, watched in
+  `a_distillate_lands_whole_and_survives_by_image`: the restored store's size limit
+  reads unbounded. The perturbation drops the lift, and the limit reads 1073741824.
 
 **The service engine's suites are retired with it**: the scratch PostgreSQL suites of
 PR #644, the statement suite over the index naming, and the `--features postgres`
@@ -900,7 +925,7 @@ the walk.
 
 **Where the records sit.** The assertion records are at the clauses that argue
 the claims, across sections 1 through 4 rather than gathered here, per Document
-Format section 6. The three claims the store primitive adds carry no record, the
+Format section 6. The claims the store primitive adds carry no record, the
 assertion record being required of nothing new until release.
 
 ## 6. Open elections
@@ -934,9 +959,10 @@ operator's ruling of 2026-10-02 moves that landing toward the loop's schema.
 - **The retirement of an agent's holdings.** A session's close no longer retires
   anything, state carrying across sessions per the charter's section 3, so what
   remains is what an operator does to retire an agent's state: the save points are
-  files in the operator's own directory and the member's room, and deleting them
-  makes the next load a full rebuild rather than an empty store, the trace still
-  holding everything. A fresh state is a new agent, on the operator's ruling of
+  files in the territory's `save-points/` and the member's room, and a load with no
+  manifest line stands an empty store, while a manifest whose latest file is gone
+  refuses the load, per `weaver-admin-Spec` section 4; a rebuild is the offline
+  builder's, the trace still holding everything. A fresh state is a new agent, on the operator's ruling of
   2026-10-02 on #58.
 - **The member's account name and the territory's exact key.** Deployment
   facts, elected where the spawn path lands, the way every path in the

@@ -130,8 +130,8 @@ fires on a condition, watches a threshold, or acts unasked, a save point include
 harness asks for one, per section 4. A loop that consults state is the compiled loop in
 the harness's seat, per the tool boundary ruling's placement of control loops, and
 this crate is a place that loop reaches rather than a place one lives. What it holds is
-what the loop's schema admits and nothing else, so the shape of the holdings is the
-schema's and never this crate's own.
+the neutral substrate and, once the loop provides its schema, what that schema admits,
+so the shape of the holdings is never this crate's own.
 
 **It is not the trace and does not compete with it.** The trace is the primary
 artifact and the one authoritative record, per apex section 1, and what this
@@ -161,9 +161,9 @@ assembly and its loop's decisions, and the model receives only what the loop
 serves it as composed context, the same wall `weaver-harness-PRD` section 5
 holds for the trace. There is no model-facing read path and no tool that opens
 one. **The agent never reaches its own raw trace or its save points**, per the
-operator's ruling of 2026-10-02: a save point is a file in root's custody that
-this member writes without a path the agent's uid holds, per section 4, and nothing
-the agent's uid holds names it or opens it.
+operator's ruling of 2026-10-02: a save point is a file the member writes in its
+own room, which the agent's uid cannot enter, and admin publishes as root into
+`save-points/`, per section 4, and nothing the agent's uid holds names it or opens it.
 
 ## 3. The seam
 
@@ -250,7 +250,7 @@ die while the session lives, and the session goes on: the trace is the
 authoritative record, this crate holds a working derivative of it, and a
 harness whose state member is gone serves turns the way it did before the leg
 existed. **The holdings live in memory, so an unclean stop costs what landed since the
-latest known-good save point**, and nothing more: the next load resets to that save
+latest published save point**, and nothing more: the next load resets to that save
 point and records the reset on the trace, which save point and which position, and no
 tail replays by default, on the operator's ruling of 2026-10-02. Everything the
 holdings distilled is still in the record, and a full rebuild from it honours the
@@ -350,8 +350,9 @@ the loop on a setting, a later admin verb or WeaverWeb through admin-con under a
 is later work, and the primitive supports the ask. **A load restores a chosen save
 point, the latest by default**, chosen through the declaration's existing `restore`
 member pointed at a save point, data in `agent.toml`, so admin's verbs and answers stay
-as they are. **After an unclean stop, the load resets to the latest known-good save
-point**, and the reset is recorded on the trace, so a full rebuild honours it, and there
+as they are. **After an unclean stop, the load resets to the latest published save
+point**, a latest that does not stand refusing the load rather than restoring an older
+one, and the reset is recorded on the trace, so a full rebuild honours it, and there
 is no tail replay by default. **With no save point, state is rebuilt from the trace**,
 by the offline builder landing every distillate the record holds through the preload
 door of section 3 and writing a save point the next load restores, so deleting save

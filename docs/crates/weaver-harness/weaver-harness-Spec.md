@@ -1845,14 +1845,15 @@ ask and its own composed re-entry.
 **A lifecycle refusal reaches the record where the run stands.** An enter
 refused after its bracket has been authored is clerked into that run, which
 **stays entered**: a bracket that stands is a run in place, holding what the
-fan-out forked, and what unwinds it is the operator's `leave` arriving later
-as its own directive. So the record carries why the enter was refused, and
+fan-out forked, and what unwinds it is the forced leave admin's rollback directs
+within the same load, per `weaver-admin-Spec` section 3, so the next load records the
+reset. So the record carries why the enter was refused, and
 the close that ends the bracket is the leave's rather than this arm's.
 
-**One site clerks all thirteen refusal paths**, the aggregate's own arm,
+**One site clerks every after-load refusal path**, the aggregate's own arm,
 rather than each `after_load` naming its
-own: a refusal is one kind of event whatever raised it, and thirteen sites
-authoring separately would be thirteen chances to author differently.
+own: a refusal is one kind of event whatever raised it, and a site per path would be a
+chance per path to author differently.
 
 **An enter refused before its bracket stands reaches no record**, the load
 event being what opens the run. This crate authors nothing there because
@@ -2056,7 +2057,7 @@ own kind by the act that makes it, per `weaver-trace-Spec` section 3, so the sta
 store rebuilds holds the judgment as the record holds it and never asks a model again.
 **The save point is the loop's to time**: the store initiates nothing, so this crate
 sends the `snapshot` ask of `weaver-harness-state-contract` section 2 once at a serving
-leave, so that every serving unload takes one, and on the operator's demand under a
+leave, so that every clean serving unload takes one, and on the operator's demand under a
 serving binding. **A diagnostic binding takes no save point**, at the leave or on
 demand: its holdings are a preloaded replay the diagnostic loop manages no state over,
 and a save point of them would be published and could be selected by a later serving
@@ -2102,7 +2103,9 @@ save point and a rebuild to its position hold the same; a save point is never
 overwritten, so each answer names a new one. **The answer leg has its own bound**, on
 the operator's ruling of 2026-10-08: 120 seconds (`SNAPSHOT_ANSWER_BOUND_MS`), enough for
 the member to write a 1 GiB image before it answers, while the ask, the `finished` leg
-and every other ask keep the two seconds of `ANSWER_BOUND_MS`. **Where any leg misses, the leave does not
+and the small asks keep the two seconds of `ANSWER_BOUND_MS`, `restored` having its own
+120 seconds (section 6.1) and a parked ask (`replay`, or `identity` under a diagnostic
+binding) the parked bound of 600 seconds. **Where any leg misses, the leave does not
 complete**: this crate authors no `unload`, answers admin `SavePointNotTaken` naming
 which leg, the answer (a member's failed write among its causes), the
 acknowledgement's answer, or the member being dead, and stays entered at rest with the run open, so the operator retries with
@@ -2125,7 +2128,7 @@ only a line that is neither the awaited answer nor such a frame misses it. A
 late finished answer's file stands in the room unrecorded and is published as recovered
 at the next publication, the leave's at the latest. A missed write, the ask itself unsent, is the dead peer as every send failure is.
 **A forced leave takes no save point**: the `Leave` directive's `forced` member, set by admin's
-`force-unload` alone, has this crate author `unload` with `forced` true, recording that
+`force-unload` and by a load's rollback, which leaves a run it undoes forced, has this crate author `unload` with `forced` true, recording that
 the leave's save point was not taken, so the next load, restoring the latest published
 save point, carries the reset admin resolves from its marker. **A save point on demand
 is the `SavePoint` directive's**, admin's `save-point` verb over the coordination
@@ -2148,7 +2151,7 @@ publishes it at once with its trace position. **The live
 reload of state, made only at a load through the save point admin hands the member at
 spawn, and this crate sends no `restore` ask. The live restore belongs to A5, with the
 decode seam's `Reopen`: the decode seam has no close or reopen today, its directives
-being `Open`, `AppendAndGenerate`, `ReFeed`, `Cancel` and `Flush`, and the flush, the
+being `Open`, `AppendAndGenerate`, `ReFeed`, `Cancel`, `Flush` and `Elide`, and the flush, the
 reopen on a differing prefix and the rebuild of the prefix alone (the operator's
 clarification of 2026-10-06, #1) are that act's to charter.
 
@@ -2235,14 +2238,14 @@ Within the seeding residency the prompt is appended context and not the session'
 prefix, so a flush there would drop it from the context, which is why the runbook ends
 that residency at the save point: load, seed, save point, unload, and the production
 session is the next load. The first save point taken after the seeding is the agent's
-starting state, per `weaver-state-PRD` section 4, taken on the operator's demand once
-A3.2's `save-point` verb lands and by the first leave's snapshot until then. **Because the seeding turn generates, the agent's starting state
+starting state, per `weaver-state-PRD` section 4, taken on the operator's demand with
+admin's `save-point` verb, or by the first leave's snapshot. **Because the seeding turn generates, the agent's starting state
 holds the model's first answer beside the prompt**: that answer is on the record as
 every `message.assistant` is, the tee lands it, and a save point taken after the
 seeding carries both, by design and not by leak. The line's bound is the gate's, 32 kibibytes of octets before the
 delimiter per `weaver-gate-Spec` section 4, which a prompt written as prose sits well
 inside. A refused open is a refused enter, returned through the
-fan-out's after-load failure so the authored bracket stands for the leave to unwind, the
+fan-out's after-load failure so the authored bracket stands for the forced leave of admin's rollback to unwind, the
 aggregate naming the decode seam as where the fan-out stopped. **Under a restoring load
 the store answers from the save point**, per the operator's rulings of 2026-10-02 on
 #58: admin hands the member the save point at spawn, per `weaver-admin-Spec`, the member
@@ -2421,7 +2424,7 @@ door as much as any: an empty prefix is the empty turn by another route. **The s
 rule has no exception**: the record restore of issue #432, which wrote a restored
 conversation through this door as `message.restored`, retires with the operator's
 rulings of 2026-10-02 on #58, and a restoring load seats the identity alone, per section
-6.1, where the save-point event records where its state came from.
+6.1, where the `load` event's lineage records where its state came from.
 
 ```graph
 node: harness-identity-door-writes-system-only

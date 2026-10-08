@@ -196,10 +196,11 @@ ask, in the order the asks arrived, and speaks at no other time. **An ask
 is answered against exactly the holdings the seam carried before it**,
 which is what makes a served fact attributable to a position in the stream:
 every distillate sent ahead of the ask is in the answer's view and nothing
-sent after it is. The parked replay ask of the paragraph below is this
-clause's one exception, its view being the seal's position rather than the
-ask's: it parks precisely because the holdings it is for arrive after it,
-so every distillate received through the seal is in its answer's view. The
+sent after it is. The parked asks of the paragraph below, `replay` and, under a
+diagnostic load, the enter's `identity`, are this clause's exceptions, their
+view being the seal's position rather than the ask's: they park precisely
+because the holdings they are for arrive after them, so every distillate
+received through the seal is in their answer's view. The
 shape and recall asks keep the pre-ask view without exception.
 
 **State carries across sessions, and each ask's definition says which sessions its
@@ -321,9 +322,10 @@ last residency that seeded and its prefix is the one in force, a later residency
 seeding replacing it and two seedings in one residency served both, each served as the
 distillate's own shape, envelope and pairs, the pairs being the prefix's
 payload whole because that kind crosses the tee whole under every election. An empty
-list is an answer and not a miss: it says the preloaded record holds no prefix for the
-session, and the open seats the empty identity. **Under a diagnostic load this is one
-of the two asks the dead-peer clause of section 5 does not convert**, `restored` being
+list is an answer and not a miss: under a serving load it is an agent not yet seeded,
+and under a diagnostic load a preloaded record holding no prefix for the session; the
+open seats the empty identity. **This is one of the two asks the dead-peer clause of
+section 5 does not convert**, under either binding, `restored` at a serving enter being
 the other: a missed answer refuses the enter, because a replay whose bounding cannot be
 read is not a replay with no bounding. **Where the preload door stands the ask parks on
 the seal**, per the clause on the parked replay ask above, so it never answers from a
@@ -335,7 +337,7 @@ name follows the harness's acknowledgement**, added 2026-10-02 on the operator's
 on issue #1, shaped by the rulings of the same day on #58, and amended on the operator's
 ruling of 2026-10-06 on #1 (A3.0 item 4) to write, answer, acknowledge: the store
 initiates nothing, so a save point is taken when the harness asks, at every serving
-leave and on the operator's demand, and never under a diagnostic binding, per
+leave that is not forced and whose tee still stands, and on the operator's demand, and never under a diagnostic binding, per
 `weaver-harness-Spec` section 6. **The ask carries one member, `ask`, the harness's
 ordinal for the exchange**, counted per residency from 1 (Codex on #94, round 10), so a
 late answer is told from the retry's by its number: the custodian echoes it on the
@@ -345,8 +347,10 @@ waiting inside its bound. **A frame of this protocol is never another ask's answ
 one that lands while the harness awaits any other ask is dropped and the wait goes on
 inside that ask's bound. **The answer leg's bound is 120 seconds**, on the operator's
 ruling of 2026-10-08, since the custodian writes the image before it answers and 120
-seconds covers a 1 GiB image; the `finished` answer and every other ask are awaited
-inside the harness's two seconds, per `weaver-harness-Spec` section 6. The custodian writes the
+seconds covers a 1 GiB image; the ask, the `finished` answer and the small asks
+(`shape`, `recall`, `grants`, a serving `identity`) are awaited inside the harness's two
+seconds; `restored` is awaited 120 seconds, and a parked ask (`replay`, or `identity`
+under a diagnostic load) 600 seconds, per `weaver-harness-Spec` sections 6 and 6.1. The custodian writes the
 whole of its holdings with the schema they stand under as a part in its own room, the
 territory's `state/`, never overwriting one that stands, per `weaver-state-PRD` section
 4. The answer carries six members: `ask`, the ordinal echoed, `save-point`, the finished
@@ -362,7 +366,10 @@ unload or at once on the operator's demand, so a save point whose answer or
 acknowledgement was lost never has a finished name, is never published and is never
 restored, and the trace names only finished files. It answers against the holdings the
 stream carried before it, like `shape`, and parks never. A write that fails is not
-answered and leaves no file under a finished name, the asker's bound converting the
+answered, and neither is any `snapshot` after a distillate failed to land on a fault of
+the store (a schema's refusal excepted), per `weaver-state-Spec` section 3, so no save
+point is taken over holdings that lack what the trace holds; an unanswered write leaves
+no file under a finished name, the asker's bound converting the
 silence into the missing answer of section 5, and the harness records no save point for
 it; an acknowledgement the custodian cannot honour is answered by nothing and the part
 is removed. The answer is a stamp and never the holdings: no byte of a save point
@@ -376,8 +383,10 @@ members. The answer carries either `lineage`, the stamp of the save point the me
 restored, its digest, run, sequence and last turn, which the harness compares with the
 same four members of the enter's lineage and never with the members admin alone
 resolves, or nothing where it stood empty with
-no save point handed to it, or `refused` with a reason, `schema-mismatch` where the save
-point's schema is not the opener's. The member judges the save point at the opener,
+no save point handed to it, or `refused` with a reason string, among them `schema-mismatch`
+where the save point's schema is not the opener's and `stamp disagrees with the image`
+where the image's own last landing is not the stamp's; the harness refuses the enter on
+any reason. The member judges the save point at the opener,
 seats it, holds the outcome, and answers it once that is done, parking never; the
 harness waits 120 seconds for the answer (the operator's ruling of 2026-10-08 on #99), the
 judgment and the seating of an image up to the save point's 1 GiB bound coming first,
@@ -465,7 +474,7 @@ section 7 and does not exist until it merges there.
 the harness observes closure, drops what it would have sent, and serves turns
 exactly as it did before the leg existed, per the loss clause of
 `weaver-state-PRD` section 3. The holdings meanwhile stand in the latest save point and
-the record, and the next load resets to the latest known-good save point and records
+the record, and the next load resets to the latest published save point and records
 the reset on the trace, the distillates landed since it kept by the record and replayed
 by no default, per `weaver-state-PRD` section 4. There is no buffering, no
 retry, and no backpressure onto the turn path: the derivative is rebuildable

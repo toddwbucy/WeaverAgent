@@ -180,6 +180,9 @@ response path, as extensions to this page rather than replacements of it.
 - A peer that fails the predicate is refused at accept, before any content is read.
 - A request while the hook is lowered finds no listener, which is refusal by absence
   and not a typed answer.
+- A leave refused at its save point leaves the run loaded with the hook lowered until
+  the operator retries the unload or forces it, per `weaver-harness-Spec` section 6, so
+  a request in that window also finds no listener.
 - A request the gate admitted while the agent is unloading, accepted before the hook
   came down, is recorded on the trace as refused, and its connection closes with no
   answer: the gate drops every served connection when it is lowered, per

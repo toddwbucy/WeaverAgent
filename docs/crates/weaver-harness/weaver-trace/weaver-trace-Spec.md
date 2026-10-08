@@ -659,7 +659,8 @@ organ's own account of what it turned away. `session.closed` and `turn.started` 
 stood, its cause where a leave directive asked, and, as of A3.2 on the operator's
 ruling of 2026-10-06 on #1 (A3.0 item 6), `forced`, true where admin's `force-unload`
 ended the run without its leave save point, so the record says the loss was the
-operator's choice. `load` carries `Elections`. The five
+operator's choice, or where a load's rollback left the run it undid, which has nothing
+to keep. `load` carries `Elections`. The five
 message kinds carry `Message`. `turn.closed` carries `TurnClosed`. `fault` carries
 `Fault`. `flush` carries `FlushCounts`, the resident token counts before and after, both
 plain integers. **`elision` carries `ElisionSpan` and not those counts**: an elision
@@ -820,7 +821,7 @@ session as `parent`, the run the cut falls in as `run`, and the turn the holding
 at as `through`. `reset` stands beside `lineage` and apart from it, present only where
 the agent's last run did not end in a clean unload, whether or not a save point stands,
 and carries that run as `prior_run` and the reason as admin resolved it,
-`no_clean_unload` or, as of A3.2, `forced_unload` where the operator's `force-unload`
+`no-clean-unload` or, as of A3.2, `forced-unload` where the operator's `force-unload`
 closed that run without its leave save point. Both are copied from the enter per `weaver-types-Spec`
 section 4 and never the save point's path, which the
 harness does not hold. `stack` is the digests of the organ binaries admin started and of
@@ -1676,7 +1677,7 @@ to: trace-append-failed-no-recovery
 
 **Enforced by the compiler.**
 
-- The kind enum is exhaustive, so a twenty-fifth kind breaks every consumer's match.
+- The kind enum is exhaustive, so a further kind breaks every consumer's match.
 - `WorkingStructure` exposes no mutation surface: every public accessor yields a
   shared reference and the append is crate-private, so alteration after landing is
   unrepresentable rather than merely forbidden. This is the signature half of the

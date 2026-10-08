@@ -9,8 +9,8 @@ and this document starts where that one ends.
 
 Every command runs from the WeaverAgent tree, as the operator, never under sudo. The
 scripts ask for sudo where a step needs it. `<name>` is the agent's name: a unix user, a
-database role, a database and a directory, so `create-agent.sh` takes lowercase letters
-and digits, 2 to 16 characters. Paths below are the defaults, and a box's real values
+group and a directory, so `create-agent.sh` takes lowercase letters and digits, 2 to 16
+characters. Paths below are the defaults, and a box's real values
 are in the stack record `/etc/weaver/stack/`, one file per key, which
 `bootstrap-stack.sh` wrote and the scripts read, and in each agent's own root
 `/etc/weaver/admin/<name>/`, which is all admin reads besides the territory that root
@@ -22,8 +22,10 @@ state room and the trace, root's, and nothing of the agent is in your home.
 
 ## 0. What an agent is, on disk
 
-Admin creates none of this. It verifies the boundary the operator built and refuses a
-load where any piece is missing, so the pieces are made first and admin is asked last.
+Admin makes none of the boundary: the accounts, groups, territory, declaration and root
+are the operator's. It verifies them and refuses a load where any piece is missing, so
+the pieces are made first and admin is asked last; what admin does make is named in the
+table.
 
 | Piece | Path | Owner and mode |
 |---|---|---|
@@ -69,9 +71,10 @@ group in one shell.
 - The artifact is on the box, under `/opt/weaver/models`, and its hash is known. An
   agent's identity is its artifact as much as its prompt, so record the sha256 in the
   run log with the declaration's.
-- The name collides with nothing: `id weaver-<name>`, `id weaver-<name>-relay`, `id
-  weaver-<name>-admincon` and `getent group weaver-<name>-trace weaver-<name>-admin`
-  fail, `<agent-directory>/weaver-<name>`, `/etc/weaver/admin/<name>`,
+- The name collides with nothing: `id weaver-<name>`, `id weaver-<name>-state`, `id
+  weaver-<name>-relay`, `id weaver-<name>-admincon` and `getent group weaver-<name>
+  weaver-<name>-state weaver-<name>-admincon weaver-<name>-trace weaver-<name>-admin`
+  fail, `/home/weaver-<name>`, `<agent-directory>/weaver-<name>`, `/etc/weaver/admin/<name>`,
   `/etc/weaver/admin/.<name>.partial` and `/etc/sudoers.d/weaver-<name>` are absent. The
   script checks all of this and refuses rather than merging, because a half-made agent
   that looks whole is worse than an absent one.
@@ -122,8 +125,9 @@ Both files are root:weaver-<name>-admin 0640: `sudoedit /var/lib/weaver-agent/we
 one, and you read either through the access group. The fields are in
 `docs/technical/weaver-agent/agent-declaration.md`, a snapshot of 2026-08-25 that still
 shows an identity table, and `docs/crates/weaver-types/weaver-types-Spec.md` section 2
-is the authority. Nothing defaults, so an absent or misspelled key refuses the parse by
-name.
+is the authority. A required key absent, or any key misspelled, refuses the parse by
+name; the optional keys (`binding-kind`, `gate-instruction`, `state-election`,
+`state-store`, `loop-file`, `restore`) carry the absence their Spec rules.
 
 ## 3. An agent without a store
 
@@ -243,7 +247,8 @@ sudo deploy/verify-load.sh <name>
 ```
 
 `validate` answers `{"kind":"validated"}` or a refusal naming the field or the boundary
-piece. `verify-load.sh` validates, loads, counts the events that arrive in the sink,
+piece. `verify-load.sh` validates, first unloads the agent (taking its leave save
+point where a run stands), then loads, counts the events that arrive in the sink,
 prints their kinds and the load event, then reads `show`'s constituents and checks each:
 it runs as the agent's, the member's or the relay's account, it sits in the invoker's own
 cgroup, and a relay stands among them for a file sink. It then unloads, and checks that
@@ -327,8 +332,9 @@ under a name computed from its own bytes, `<YYYYMMDDTHHMMSSZ>-<digest>.save-poin
 root:weaver-<name>-admin 0640, and names it on one line of `save-points.manifest`
 there, root 0644: the ordinal, the digest, the position it covers, where the trace
 names it, and how it arrived. You read both through the access group and write
-neither. The next load restores the latest the manifest names whose file still stands
-and digests to its line. A file the manifest does not name is not loadable. To start
+neither. The next load restores the latest line of the manifest, the highest ordinal;
+where its file is gone or does not digest to its line, the load refuses rather than
+restore an older one, and `restore` names another. A file the manifest does not name is not loadable. To start
 from another state, put the file in the directory as root, root:weaver-<name>-admin
 0640, its name the one its bytes compute, since `restore` refuses any other owner, group
 or mode:
@@ -353,11 +359,14 @@ points, rather than restore the older state over the newer. Remove `[restore]` w
 the named one.
 
 **An unload that cannot take its save point does not complete.** It answers
-`{"kind":"save_point_not_taken","missed":...}` naming the leg that missed, the run stays
-loaded with its lock, and nothing is lost: retry with `save-point` and `unload` if the
+`{"kind":"save_point_not_taken","missed":...}` naming the leg that missed. Before the
+`published` leg the run stays loaded with its lock, and nothing is lost: retry with `save-point` and `unload` if the
 member is alive, or `force-unload` if it is dead, which leaves without the save point
 and records on the trace that it was not taken; the next load then restores the latest
-published save point with the reset recorded. The loss is your recorded choice.
+published save point with the reset recorded. The loss is your recorded choice. Where
+`missed` is `published`, the run has already ended and the save point waits in the
+member's room: retry `unload`, which publishes it first, and read `admin.log` if it
+refuses again.
 
 Or `sudo deploy/verify-load.sh <name> --keep` to load with the read-back and leave it
 serving. No unit and no init system is involved. The worker, the state member and the
