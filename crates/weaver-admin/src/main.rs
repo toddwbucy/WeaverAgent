@@ -2000,18 +2000,29 @@ fn load_service_config(agent: &AgentName) -> Result<ServiceConfig, LifecycleRefu
     let base = std::env::var_os("WEAVER_ADMIN_CONFIG")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_BASE));
-    load_service_config_at(&base, &agent.0, 0)
+    // **The access group is resolved by name** (Codex on #94), as the trace
+    // door and the reader's judgment resolve it: the territory's own group is
+    // judged against it and never taken as it stands, since that gid becomes
+    // the state member's supplementary group.
+    let group_name = format!("{}-admin", inventory::identity_for(agent));
+    let Some(access) = nix::unistd::Group::from_name(&group_name).ok().flatten() else {
+        diag!("weaver-admin: the access group {group_name} is not provisioned");
+        return Err(LifecycleRefusal::BoundaryUnverified);
+    };
+    load_service_config_at(&base, &agent.0, 0, access.gid.as_raw())
 }
 
 /// The judgments in Spec section 9's order, against `owner` for the root's
 /// files, which production fixes at uid 0 and a test sets to its own uid: the
 /// root admitted and closed, its ancestors closed, its entries closed, its
-/// values read, then the agent's territory judged against the
-/// `operator` the root names and `library-path` judged as the root is.
+/// values read, then the agent's territory judged against `access_gid`, the
+/// access group production resolves by name and a test sets to its own, and
+/// `library-path` judged as the root is.
 fn load_service_config_at(
     base: &std::path::Path,
     agent: &str,
     owner: u32,
+    access_gid: u32,
 ) -> Result<ServiceConfig, LifecycleRefusal> {
     let root = base.join(agent);
     judge_root(&root, owner)?;
@@ -2023,7 +2034,7 @@ fn load_service_config_at(
         // named where it is required, at `validate` and `load`.
         LifecycleRefusal::ConfigInvalid { field: None }
     })?;
-    let judged = judge_territory(&config.territory)?;
+    let judged = judge_territory(&config.territory, access_gid)?;
     config.territory = judged.canonical;
     config.access_gid = judged.access_gid;
     config.territory_fd = Some(judged.territory);
@@ -2188,7 +2199,10 @@ struct JudgedTerritory {
 /// the territory's group. The ancestors' walk and the access-control look
 /// stay by path, being about the path; everything read after is through the
 /// descriptors.
-fn judge_territory(directory: &std::path::Path) -> Result<JudgedTerritory, LifecycleRefusal> {
+fn judge_territory(
+    directory: &std::path::Path,
+    access_gid: u32,
+) -> Result<JudgedTerritory, LifecycleRefusal> {
     use std::os::fd::AsFd;
     use std::os::unix::fs::MetadataExt;
     let refuse = |what: &str| {
@@ -2224,7 +2238,13 @@ fn judge_territory(directory: &std::path::Path) -> Result<JudgedTerritory, Lifec
     if carries_access_entries(directory) {
         return Err(refuse("carries an access-control entry beyond its mode"));
     }
-    let access_gid = metadata.gid();
+    // **Grouped to the access group by name, never taken as it stands**
+    // (Codex on #94): the territory's gid becomes the state member's
+    // supplementary group, so a territory misprovisioned as `root:root`
+    // would hand the unprivileged member gid 0.
+    if metadata.gid() != access_gid {
+        return Err(refuse("is not grouped to the access group"));
+    }
     let canonical = judge_ancestors(directory, &[own, 0])?;
     let save_points = nix::fcntl::openat(
         opened.as_fd(),
@@ -2861,7 +2881,7 @@ mod tests {
         for open in [0o775, 0o757, 0o777] {
             base_mode(open);
             assert_eq!(
-                load_service_config_at(&base, "alpha", me).err(),
+                load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
                 Some(LifecycleRefusal::BoundaryUnverified),
                 "a base of mode {open:o} lets another principal swap the root"
             );
@@ -2869,7 +2889,7 @@ mod tests {
         for closed in [0o755, 0o1777] {
             base_mode(closed);
             assert!(
-                load_service_config_at(&base, "alpha", me).is_ok(),
+                load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).is_ok(),
                 "a base of mode {closed:o} admits"
             );
         }
@@ -2881,12 +2901,43 @@ mod tests {
         std::fs::set_permissions(&deeper, std::fs::Permissions::from_mode(0o755)).unwrap();
         base_mode(0o777);
         assert_eq!(
-            load_service_config_at(&deeper, "beta", me).err(),
+            load_service_config_at(&deeper, "beta", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
             "a writable grandparent"
         );
         base_mode(0o755);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **The territory is grouped to the access group by name** (Codex on
+    /// #94), per Spec section 9: its gid is judged against the access group
+    /// production resolves by name and is never taken as it stands, since it
+    /// becomes the state member's supplementary group; a territory that
+    /// stood as `root:root` would have handed the unprivileged member gid 0.
+    /// The territory stands under this test's own gid and the judgment is
+    /// given a gid one off, so the case needs no supplementary group and
+    /// never skips: one off refuses, its own reads. Perturbation: take the
+    /// territory's gid as it stands again and the one-off case reads.
+    #[test]
+    fn a_territory_under_another_group_than_the_access_group_refuses() {
+        use std::os::unix::fs::PermissionsExt;
+        let me = nix::unistd::getuid().as_raw();
+        let mine = nix::unistd::getegid().as_raw();
+        let base =
+            std::env::temp_dir().join(format!("weaver-admin-territory-gid-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("alpha");
+        write_root(&root);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            load_service_config_at(&base, "alpha", me, mine.wrapping_add(1)).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a territory under another group than the access group refuses"
+        );
+        let config = load_service_config_at(&base, "alpha", me, mine).expect("its own group reads");
+        assert_eq!(config.access_gid, mine);
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(base.join("alpha").with_extension("territory"));
     }
 
     /// **A territory with no `agent.toml` is no agent, and one
@@ -2903,7 +2954,8 @@ mod tests {
         let root = base.join("alpha");
         let declarations = write_root(&root);
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let config = load_service_config_at(&base, "alpha", me).expect("a declared agent reads");
+        let config = load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw())
+            .expect("a declared agent reads");
         assert_eq!(config.agent, "alpha");
         assert_eq!(
             config.territory,
@@ -2911,13 +2963,13 @@ mod tests {
         );
         std::fs::remove_file(declarations.join("agent.toml")).unwrap();
         assert_eq!(
-            load_service_config_at(&base, "alpha", me).err(),
+            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::NoSuchAgent),
             "no agent.toml is no agent"
         );
         std::fs::create_dir(declarations.join("agent.toml")).unwrap();
         assert_eq!(
-            load_service_config_at(&base, "alpha", me).err(),
+            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
             "a directory named agent.toml"
         );
@@ -2925,7 +2977,7 @@ mod tests {
         std::os::unix::fs::symlink(declarations.join("gone"), declarations.join("agent.toml"))
             .unwrap();
         assert_eq!(
-            load_service_config_at(&base, "alpha", me).err(),
+            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
             "a link named agent.toml"
         );
@@ -2948,11 +3000,13 @@ mod tests {
         let root = base.join("alpha");
         let territory = write_root(&root);
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(load_service_config_at(&base, "alpha", me).is_ok());
+        assert!(
+            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).is_ok()
+        );
         for open in [0o750, 0o711, 0o700, 0o770, 0o1710] {
             std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(open)).unwrap();
             assert_eq!(
-                load_service_config_at(&base, "alpha", me).err(),
+                load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
                 Some(LifecycleRefusal::BoundaryUnverified),
                 "{open:o} is not the territory's 0710"
             );
@@ -2962,7 +3016,7 @@ mod tests {
         for open in [0o770, 0o755, 0o700] {
             std::fs::set_permissions(&save_points, std::fs::Permissions::from_mode(open)).unwrap();
             assert_eq!(
-                load_service_config_at(&base, "alpha", me).err(),
+                load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
                 Some(LifecycleRefusal::BoundaryUnverified),
                 "{open:o} is not save-points' 0750"
             );
@@ -2970,7 +3024,7 @@ mod tests {
         std::fs::set_permissions(&save_points, std::fs::Permissions::from_mode(0o750)).unwrap();
         std::fs::rename(&save_points, territory.join("aside")).unwrap();
         assert_eq!(
-            load_service_config_at(&base, "alpha", me).err(),
+            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
             "no save-points directory is the provisioning incomplete"
         );
@@ -2978,17 +3032,19 @@ mod tests {
         let declaration = territory.join("agent.toml");
         std::fs::set_permissions(&declaration, std::fs::Permissions::from_mode(0o664)).unwrap();
         assert_eq!(
-            load_service_config_at(&base, "alpha", me).err(),
+            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
             "a declaration the group could write"
         );
         std::fs::set_permissions(&declaration, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(load_service_config_at(&base, "alpha", me).is_ok());
+        assert!(
+            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).is_ok()
+        );
         let link = base.join("linked.territory");
         std::os::unix::fs::symlink(&territory, &link).unwrap();
         std::fs::write(root.join("territory"), link.display().to_string()).unwrap();
         assert_eq!(
-            load_service_config_at(&base, "alpha", me).err(),
+            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
             "a link at the territory's own name"
         );
@@ -3022,15 +3078,16 @@ mod tests {
                 None => std::fs::remove_file(root.join("roles.toml")).unwrap(),
                 Some(text) => std::fs::write(root.join("roles.toml"), text).unwrap(),
             }
-            let config = load_service_config_at(&base, "alpha", me)
-                .unwrap_or_else(|e| panic!("{why}: the root still reads, got {e:?}"));
+            let config =
+                load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw())
+                    .unwrap_or_else(|e| panic!("{why}: the root still reads, got {e:?}"));
             assert_eq!(config.boundary_digest(), None, "{why}: no digest to log");
             assert_eq!(config.require_boundary().map(|_| ()), named, "{why}");
         }
         std::fs::write(root.join("roles.toml"), "trace-reader = \"x\"\n").unwrap();
         std::fs::remove_file(root.join("spu-binary")).unwrap();
         assert_eq!(
-            load_service_config_at(&base, "alpha", me).err(),
+            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::ConfigInvalid { field: None }),
             "another value names nothing"
         );
@@ -3060,7 +3117,7 @@ mod tests {
         };
         let root = fresh();
         assert!(
-            load_service_config_at(&base, "alpha", me).is_ok(),
+            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).is_ok(),
             "a closed root reads"
         );
         std::fs::set_permissions(
@@ -3069,7 +3126,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            load_service_config_at(&base, "alpha", me).err(),
+            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
             "a world-writable key"
         );
@@ -3078,14 +3135,14 @@ mod tests {
         std::fs::write(base.join("elsewhere"), "/opt/weaver/bin/weaver-gate").unwrap();
         std::os::unix::fs::symlink(base.join("elsewhere"), root.join("gate-binary")).unwrap();
         assert_eq!(
-            load_service_config_at(&base, "alpha", me).err(),
+            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
             "a key that is a link"
         );
         let root = fresh();
         std::fs::create_dir(root.join("stray")).unwrap();
         assert_eq!(
-            load_service_config_at(&base, "alpha", me).err(),
+            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
             "a directory inside the root"
         );
@@ -4224,6 +4281,7 @@ mod tests {
         // SAFETY: the child calls only async-signal-safe functions.
         match unsafe { nix::unistd::fork() }.unwrap() {
             nix::unistd::ForkResult::Child => {
+                start::close_inherited_except(Some(std::os::fd::AsRawFd::as_raw_fd(&ready_write)));
                 // SAFETY: open, fcntl, write and pause are async-signal-safe.
                 unsafe {
                     let fd = nix::libc::open(

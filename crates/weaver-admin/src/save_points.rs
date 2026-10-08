@@ -53,6 +53,26 @@ fn sync_directory(directory: BorrowedFd<'_>) -> std::io::Result<()> {
     Ok(())
 }
 
+/// **Adopt an entry that stands in the save-points directory, durably**
+/// (Codex on #94): judged through the directory as a load judges it, then,
+/// where it stands, the directory synced, so the entry is durable before a
+/// manifest line names it, as the publication's own rename is. A retry that
+/// adopts what an interrupted publication renamed, and a `restore` naming a
+/// file placed by hand, both come through here. `sync` is the directory's
+/// sync, a parameter so a test can count it.
+fn adopt_durably(
+    directory: BorrowedFd<'_>,
+    name: &str,
+    file_owner: (u32, u32),
+    sync: &mut dyn FnMut(BorrowedFd<'_>) -> std::io::Result<()>,
+) -> Result<Option<(std::fs::File, Judged)>, String> {
+    let judged = open_judged(directory, name, file_owner)?;
+    if judged.is_some() {
+        sync(directory).map_err(|e| format!("the save-points directory does not sync: {e}"))?;
+    }
+    Ok(judged)
+}
+
 /// Sync a directory named by path: the config root's, this crate's own
 /// root-owned directory where the marker lives, per Spec section 4, which
 /// no other principal can swap.
@@ -839,7 +859,7 @@ pub fn publish(
                 // bytes refuses the rename and is left in place, named.
                 Err(nix::errno::Errno::EEXIST) => {
                     remove_temporary();
-                    match open_judged(directory, &name, file_owner) {
+                    match adopt_durably(directory, &name, file_owner, &mut sync_directory) {
                         Ok(Some((_, standing))) if standing.digest == entry.judged.digest => Ok(()),
                         Ok(Some(_)) => Err(std::io::Error::other(
                             "an entry of other bytes stands under the published name",
@@ -1164,7 +1184,7 @@ pub fn name_at_restore(
     // The file is judged through the directory as a load judges one; the
     // digest and the stamp are its own, and the name must be the one its
     // bytes compute, so a renamed file does not enter.
-    let judged = match open_judged(directory, named, file_owner) {
+    let judged = match adopt_durably(directory, named, file_owner, &mut sync_directory) {
         Ok(Some((_, judged))) => judged,
         Ok(None) => {
             diag!(
@@ -1282,6 +1302,49 @@ pub fn room_of(territory_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    /// **An adopted entry is judged, then made durable** (Codex on #94): an
+    /// entry that stands is judged as a load judges it and the directory
+    /// synced once before any manifest line can name it; a name with no
+    /// entry is answered none and syncs nothing. The sync is counted through
+    /// the helper's seam. Perturbation: drop the sync and the count reads
+    /// zero for the standing entry.
+    #[test]
+    fn an_adopted_entry_is_judged_then_synced() {
+        let scratch = crate::scratch::Scratch(
+            std::env::temp_dir().join(format!("weaver-admin-adopt-durably-{}", std::process::id())),
+        );
+        let dir = scratch.0.clone();
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_fd = open_directory(&dir).unwrap();
+        let mine = (
+            nix::unistd::getuid().as_raw(),
+            nix::unistd::getgid().as_raw(),
+        );
+        let bytes = save_point("r-8", 8, 0, 8_000_000_000, b"adopted");
+        let name = published_name(&judge(&bytes).unwrap());
+        std::fs::write(dir.join(&name), &bytes).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir.join(&name), std::fs::Permissions::from_mode(0o640))
+                .unwrap();
+        }
+        let mut syncs = 0;
+        let mut counting = |_: BorrowedFd<'_>| -> std::io::Result<()> {
+            syncs += 1;
+            Ok(())
+        };
+        let adopted = adopt_durably(dir_fd.as_fd(), &name, mine, &mut counting)
+            .expect("the standing entry judges")
+            .expect("it stands");
+        assert_eq!(adopted.1.digest, judge(&bytes).unwrap().digest);
+        assert!(
+            adopt_durably(dir_fd.as_fd(), "absent.save-point", mine, &mut counting)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(syncs, 1, "synced once, for the entry that stands");
+    }
+
     /// **A published file is judged by its group as by its owner** (Codex on
     /// #94): a save point that stands under another group than the access
     /// group, which the operator and the connector could not read, is refused
