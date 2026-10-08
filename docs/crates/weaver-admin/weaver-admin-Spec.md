@@ -659,8 +659,14 @@ provenance in the marker, the lifecycle act's, can tell the two apart. A
 forced leave the harness refuses past its `Left`, its organs going down behind the
 refusal, closes it the same inside the after-left wait before the refusal returns, so
 the next load records `ForcedUnload` and never `NoCleanUnload` for a run the operator
-forced. `force-unload` is `unload` in every
-other respect, the same waits and the same escalation.
+forced. **A force does not depend on the territory** (the operator's ruling of
+2026-10-08 on #99): where the territory does not judge, or its groups do not resolve,
+`force-unload` still ends the run, through the same leave, waits and escalation, but
+writes nothing into the unjudged territory and reads nothing from it: no `admin.log`
+line, which goes to standard error alone, and no publication, the room's files waiting
+for a load, which judges the territory first. The marker, in the root, closes `Forced`,
+so the next load records the loss. Force always works. `force-unload` is `unload` in
+every other respect, the same waits and the same escalation.
 
 **The leave has a bound of its own, 150 seconds from the verb's start**, once the
 invocation lock is held: past the harness's 120 seconds for the save point's answer leg
@@ -2423,7 +2429,8 @@ by file name and `weaver-analysis` carries it into a run's code identity by thos
 No new refusal names any of them, the configuration's failure having no lifecycle case
 to be.
 
-**The territory is judged before any value in it is read, on its descriptor**, on the
+**The territory is judged before any value in it is read, on its descriptor**, for every
+verb but a `force-unload`, which goes on without it (section 3), on the
 operator's ruling of 2026-10-07 on #1, which retires the 2026-10-02 split of the
 declaration into the operator's home: the keys that name the programs this crate starts
 or hands the worker to start, `worker-binary`, `spu-binary` and `gate-binary`, stay in
