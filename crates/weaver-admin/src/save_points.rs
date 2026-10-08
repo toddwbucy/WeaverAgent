@@ -1,7 +1,7 @@
 //! Admin's side of the save points, per `weaver-admin-Spec` sections 3, 4
 //! and 6 on the operator's rulings of 2026-10-06 on #1 (the A3.0 items):
-//! the publication of the member's finished save points into the operator's
-//! directory under a root-owned manifest, the selection of the save point a
+//! the publication of the member's finished save points into the territory's
+//! save-points directory under a root-owned manifest, the selection of the save point a
 //! load restores and the descriptor the member inherits, the judgment of a
 //! save point's bytes, and the clean-unload marker.
 //!
@@ -27,8 +27,7 @@ pub const MARKER: &str = "run.marker";
 pub const SUFFIX: &str = ".save-point";
 /// The bound on a save point's size this crate reads whole, one gibibyte,
 /// this act's election: a file past it is left in place and named, never
-/// read into root's memory, since the room is the member's to write and the
-/// directory the operator's.
+/// read into root's memory, since the room is the member's to write.
 pub const SAVE_POINT_BOUND: u64 = 1024 * 1024 * 1024;
 
 /// **Open a directory once, to be held as a descriptor**, per
@@ -96,10 +95,10 @@ pub const ROOT: Owner = Owner { uid: 0, gid: 0 };
 /// **The manifest is judged on its descriptor before a byte is read or
 /// written**, per `weaver-admin-Spec` section 6: a regular file, the expected
 /// owner's uid and gid, mode `0644` exactly, link count one. The directory is
-/// the operator's, who can pre-create or replace the entry, so an entry the
-/// operator owns refuses by uid, a second link refuses by count, and a link
-/// never opens, `O_NOFOLLOW` refusing it before this is reached; what is
-/// found is named.
+/// root's in the territory under the layout ruling of 2026-10-07; the
+/// judgment stands all the same, so an entry another principal owns refuses
+/// by uid, a second link refuses by count, and a link never opens,
+/// `O_NOFOLLOW` refusing it before this is reached; what is found is named.
 fn judge_manifest(file: &std::fs::File, owner: Owner) -> Result<(), LifecycleRefusal> {
     use std::os::unix::fs::MetadataExt;
     let refuse = |what: &str| {
@@ -669,10 +668,10 @@ fn read_room(room: &Path, member_uid: u32) -> Option<(OwnedFd, Vec<RoomEntry>)> 
     Some((dir, found))
 }
 
-/// **Publish the member's finished save points into the operator's
-/// directory**, per `weaver-admin-Spec` section 6, under the lock the caller
-/// holds: each is copied under a temporary name owned by the operator and
-/// mode `0600`, renamed to its published name, named on one manifest line,
+/// **Publish the member's finished save points into the territory's
+/// save-points directory**, per `weaver-admin-Spec` section 6, under the lock
+/// the caller holds: each is copied under a temporary name owned by
+/// `file_owner`, root and the access group in production, and mode `0600`, renamed to its published name, named on one manifest line,
 /// and only then removed from the room. `reports` are what the harness
 /// reported of the save points it recorded, so a file the report names
 /// carries the event's position and the report's arrival, and any other file
@@ -681,7 +680,7 @@ pub fn publish(
     room: &Path,
     member_uid: u32,
     directory: BorrowedFd<'_>,
-    operator: (u32, u32),
+    file_owner: (u32, u32),
     owner: Owner,
     reports: &[(SavePointReport, Arrival)],
 ) -> Result<Vec<ManifestLine>, LifecycleRefusal> {
@@ -744,7 +743,7 @@ pub fn publish(
             .find(|line| line.digest == entry.judged.digest)
             .cloned();
         if let Some(line) = &standing {
-            match open_published(directory, line, operator.0) {
+            match open_published(directory, line, file_owner.0) {
                 Ok(Some(_)) => {
                     remove_from_room(&entry.name);
                     continue;
@@ -765,7 +764,7 @@ pub fn publish(
         // **Every step goes through the directory's descriptor** (Codex on
         // #94, round 7), per Spec section 9: the temporary is made, renamed
         // and the directory synced against the descriptor opened at the
-        // judgment, so a directory the operator swaps under the path between
+        // judgment, so a directory swapped under the path between
         // steps is not followed and a link put at the path has this root
         // process create nothing where it points.
         let temporary = format!(".publishing-{}", entry.judged.digest);
@@ -800,8 +799,8 @@ pub fn publish(
             file.write_all(&entry.bytes)?;
             nix::unistd::fchown(
                 file.as_fd(),
-                Some(nix::unistd::Uid::from_raw(operator.0)),
-                Some(nix::unistd::Gid::from_raw(operator.1)),
+                Some(nix::unistd::Uid::from_raw(file_owner.0)),
+                Some(nix::unistd::Gid::from_raw(file_owner.1)),
             )
             .map_err(std::io::Error::from)?;
             // Synced after the ownership change, so the owner is as durable
@@ -809,12 +808,12 @@ pub fn publish(
             file.sync_all()?;
             let metadata = file.metadata()?;
             use std::os::unix::fs::MetadataExt;
-            if metadata.uid() != operator.0 || metadata.mode() & 0o777 != 0o640 {
+            if metadata.uid() != file_owner.0 || metadata.mode() & 0o777 != 0o640 {
                 return Err(std::io::Error::other(
                     "the copy is not root's 0640, read by the access group",
                 ));
             }
-            // **The rename replaces nothing**: an entry the operator put
+            // **The rename replaces nothing**: an entry anyone put
             // under the published name, a link among them, refuses the
             // rename rather than being replaced or followed, the temporary
             // then removed and the room's copy left for the next verb.
@@ -837,7 +836,7 @@ pub fn publish(
                 // bytes refuses the rename and is left in place, named.
                 Err(nix::errno::Errno::EEXIST) => {
                     remove_temporary();
-                    match open_judged(directory, &name, operator.0) {
+                    match open_judged(directory, &name, file_owner.0) {
                         Ok(Some((_, standing))) if standing.digest == entry.judged.digest => Ok(()),
                         Ok(Some(_)) => Err(std::io::Error::other(
                             "an entry of other bytes stands under the published name",
@@ -897,13 +896,13 @@ pub struct Selected {
 
 /// Open and judge one file of the territory's save-points directory through
 /// its descriptor, per `weaver-admin-Spec` section 4: a regular
-/// file, not a link, the operator's, closed to group and other, under the
-/// size bound, whose bytes judge sound and whose published name is the one
+/// file, not a link, `file_owner`'s (root's in production), mode `0640` and
+/// read by the access group, under the size bound, whose bytes judge sound and whose published name is the one
 /// its bytes compute. `Ok(None)` is no entry. The file is answered rewound.
 fn open_judged(
     directory: BorrowedFd<'_>,
     name: &str,
-    operator: u32,
+    file_owner: u32,
 ) -> Result<Option<(std::fs::File, Judged)>, String> {
     use std::os::unix::fs::MetadataExt;
     let fd = match nix::fcntl::openat(
@@ -923,7 +922,7 @@ fn open_judged(
     if !metadata.is_file() {
         return Err(format!("{name} is not a regular file"));
     }
-    if metadata.uid() != operator {
+    if metadata.uid() != file_owner {
         return Err(format!("{name} is not root's"));
     }
     if metadata.mode() & 0o7777 != 0o640 {
@@ -937,9 +936,15 @@ fn open_judged(
             metadata.len()
         ));
     }
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|e| format!("{name} does not read: {e}"))?;
+    // **Bounded through the read as well, as a defence** (Codex on #94): the
+    // file is judged root's above and root alone writes it, so it cannot grow
+    // under this read today; the bound holds through the read all the same,
+    // so it stays true if the ownership ever changes.
+    let bytes = read_within(&mut file, SAVE_POINT_BOUND)
+        .map_err(|e| format!("{name} does not read: {e}"))?
+        .ok_or_else(|| {
+            format!("{name} grew past the bound of {SAVE_POINT_BOUND} as it was read")
+        })?;
     let judged = judge(&bytes).map_err(|why| format!("{name} is not a save point: {why}"))?;
     if published_name(&judged) != name {
         return Err(format!("{name} is not the name its bytes compute"));
@@ -954,9 +959,9 @@ fn open_judged(
 fn open_published(
     directory: BorrowedFd<'_>,
     line: &ManifestLine,
-    operator: u32,
+    file_owner: u32,
 ) -> Result<Option<OwnedFd>, String> {
-    let Some((file, judged)) = open_judged(directory, &line.name, operator)? else {
+    let Some((file, judged)) = open_judged(directory, &line.name, file_owner)? else {
         return Ok(None);
     };
     if judged.digest != line.digest {
@@ -973,7 +978,7 @@ fn open_published(
 /// manifest with nothing named.
 pub fn select(
     directory: BorrowedFd<'_>,
-    operator: u32,
+    file_owner: u32,
     restore: Option<&str>,
     owner: Owner,
 ) -> Result<Option<Selected>, LifecycleRefusal> {
@@ -1014,7 +1019,7 @@ pub fn select(
             );
             return Err(refuse_config());
         };
-        return match open_published(directory, line, operator) {
+        return match open_published(directory, line, file_owner) {
             Ok(Some(descriptor)) => Ok(Some(Selected {
                 descriptor,
                 lineage: lineage_of(line),
@@ -1035,7 +1040,7 @@ pub fn select(
     let mut ordered: Vec<&ManifestLine> = lines.iter().collect();
     ordered.sort_by_key(|line| std::cmp::Reverse(line.ordinal));
     for line in ordered {
-        match open_published(directory, line, operator) {
+        match open_published(directory, line, file_owner) {
             Ok(Some(descriptor)) => {
                 return Ok(Some(Selected {
                     descriptor,
@@ -1067,7 +1072,7 @@ pub fn select(
 /// naming it is appended, marked as arrived by restore, with no position.
 pub fn name_at_restore(
     directory: BorrowedFd<'_>,
-    operator: u32,
+    file_owner: u32,
     named: &str,
     owner: Owner,
 ) -> Result<ManifestLine, LifecycleRefusal> {
@@ -1076,8 +1081,8 @@ pub fn name_at_restore(
         field: Some(weaver_types::FieldName("restore".into())),
     };
     // **A listed name is judged before the verb answers** (Codex on #94,
-    // round 4), per Spec section 4: the operator owns the published file
-    // and it may have gone or changed since its line, so the verb opens
+    // round 4), per Spec section 4: the published file may have gone or
+    // changed since its line, so the verb opens
     // and judges it as the load does, refusing as the load would, and
     // `RestoreNamed` means named and judged loadable now.
     if let Some(line) = lines
@@ -1085,7 +1090,7 @@ pub fn name_at_restore(
         .rev()
         .find(|line| line.name == named || line.digest == named)
     {
-        return match open_published(directory, line, operator) {
+        return match open_published(directory, line, file_owner) {
             Ok(Some(_)) => Ok(line.clone()),
             Ok(None) => {
                 diag!(
@@ -1149,7 +1154,7 @@ pub fn name_at_restore(
     // The file is judged through the directory as a load judges one; the
     // digest and the stamp are its own, and the name must be the one its
     // bytes compute, so a renamed file does not enter.
-    let judged = match open_judged(directory, named, operator) {
+    let judged = match open_judged(directory, named, file_owner) {
         Ok(Some((_, judged))) => judged,
         Ok(None) => {
             diag!(
