@@ -883,28 +883,84 @@ mod tests {
         );
     }
 
-    /// Everything outside the drawn vocabulary refuses as out of order.
+    /// Every directive the gate does not draw, but `Enter` and `Admit`,
+    /// whose payloads are the harness's and the SPU's instructions and
+    /// which the same arm refuses.
+    fn undrawn() -> Vec<LifecycleDirective> {
+        let cause = weaver_types::Cause { uid: 0 };
+        let agent = || AgentName("alpha".into());
+        vec![
+            LifecycleDirective::Leave {
+                cause,
+                forced: false,
+            },
+            LifecycleDirective::Leave {
+                cause,
+                forced: true,
+            },
+            LifecycleDirective::SavePoint { cause },
+            LifecycleDirective::Stop { cause },
+            LifecycleDirective::Observe,
+            LifecycleDirective::Release,
+            LifecycleDirective::Load { agent: agent() },
+            LifecycleDirective::Unload { agent: agent() },
+            LifecycleDirective::Validate { agent: agent() },
+            LifecycleDirective::Show { agent: agent() },
+            LifecycleDirective::SavePointVerb { agent: agent() },
+            LifecycleDirective::Restore { agent: agent() },
+            LifecycleDirective::ForceUnload { agent: agent() },
+        ]
+    }
+
+    /// **Everything outside the drawn vocabulary refuses as out of order,
+    /// before the raise and while raised** (#99 area 3, G01 and G02): a
+    /// raised gate that lowered on a `Leave` or a `ForceUnload`, or answered
+    /// a `SavePoint` or a `Restore`, would close the world's door on a
+    /// directive the contract never gave it. The position is unchanged after
+    /// each. Perturbation: give `(Raised, Leave)` the lower's arm, or answer
+    /// `SavePoint` with `GateStopped`, and this fails.
     #[test]
     fn a_directive_outside_the_drawn_vocabulary_refuses() {
         let mut state = HookState::BeforeRaise;
-        for case in [
-            LifecycleDirective::Leave {
-                cause: weaver_types::Cause { uid: 0 },
-                forced: false,
-            },
-            LifecycleDirective::Stop {
-                cause: weaver_types::Cause { uid: 0 },
-            },
-            LifecycleDirective::Release,
-            LifecycleDirective::Show {
-                agent: AgentName("alpha".into()),
-            },
-        ] {
+        for case in undrawn() {
+            let named = format!("{case:?}");
             assert_eq!(
                 dispatch(&mut state, &opened(case)),
-                Payload::Refusal(LifecycleRefusal::OutOfOrder)
+                Payload::Refusal(LifecycleRefusal::OutOfOrder),
+                "{named} before the raise"
+            );
+            assert!(
+                matches!(state, HookState::BeforeRaise),
+                "{named}: not queued"
             );
         }
+        let socket = scratch("vocabulary");
+        assert_eq!(
+            dispatch(
+                &mut state,
+                &opened(LifecycleDirective::Raise {
+                    instruction: instruction(),
+                    socket: socket.to_path_buf(),
+                })
+            ),
+            Payload::Answer(LifecycleAnswer::GateReady)
+        );
+        for case in undrawn() {
+            let named = format!("{case:?}");
+            assert_eq!(
+                dispatch(&mut state, &opened(case)),
+                Payload::Refusal(LifecycleRefusal::OutOfOrder),
+                "{named} while raised"
+            );
+            assert!(
+                matches!(state, HookState::Raised(_, _)),
+                "{named}: the gate stays raised"
+            );
+        }
+        assert_eq!(
+            dispatch(&mut state, &opened(LifecycleDirective::Lower)),
+            Payload::Answer(LifecycleAnswer::GateStopped)
+        );
     }
 
     /// A mis-shapen exchange is refused before the directive's case is read.

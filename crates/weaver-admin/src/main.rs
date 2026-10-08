@@ -837,13 +837,12 @@ fn take_inventory(
     room_inventory(config, agent)
 }
 
-/// **The inventory a verb that starts nothing derives**, the publication's
-/// and `restore`'s (Codex on #94, at 9fa18b4): the name admitted, the
+/// **The inventory a verb that starts nothing derives**, `restore`'s
+/// (Codex on #94, at 9fa18b4): the name admitted, the
 /// declaration read and the sink held to the territory, and no boundary
-/// judgment, which Spec section 9 asks of `validate` and `load` alone. An
-/// unload whose run is already gone publishes its save point whatever
-/// `roles.toml` says; `take_inventory` adds the boundary to this for the two
-/// verbs that start a run.
+/// judgment, which Spec section 9 asks of `validate` and `load` alone;
+/// `take_inventory` adds the boundary to this for the two verbs that start a
+/// run. The publication reads no declaration and takes no inventory.
 fn room_inventory(
     config: &ServiceConfig,
     agent: &AgentName,
@@ -3624,9 +3623,9 @@ mod tests {
             "a declaration the group could write"
         );
         // **Root's and the access group's, 0640 exactly** (the operator's
-        // ruling of 2026-10-08 on #1): the territory's passage is every
-        // uid's, so a declaration any uid could read refuses, and one read
-        // by the access group alone reads. Perturbation: judge the write
+        // ruling of 2026-10-08 on #1): the territory's passage is the state
+        // group's, whose member must not read the declaration, so one any uid
+        // could read refuses, and one read by the access group alone reads. Perturbation: judge the write
         // bits alone again and the 0644 declaration reads.
         std::fs::set_permissions(&declaration, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert_eq!(

@@ -1208,6 +1208,51 @@ fn a_restored_message_is_turnless_and_carries_the_message_whole() {
     );
 }
 
+/// **A save point is turnless and carries its own payload**, per
+/// `weaver-trace-Spec` section 10 (#99 area 3, R01 and R04): it is taken at
+/// the leave or between turns, so a turn on it is refused, and an absent or
+/// foreign payload is refused as for every licensed kind.
+///
+/// Perturbations: take `Kind::SavePoint` out of `turn_forbidden` and the
+/// turned submission is admitted; let `pairing_licensed` admit any payload
+/// for it and the foreign one is admitted.
+#[test]
+fn a_save_point_is_turnless_and_carries_its_own_payload() {
+    let (mut r, _path) = recorder();
+    r.submit(event(Kind::Load, None, Some(elections())))
+        .unwrap();
+    let taken = || {
+        Some(Payload::SavePoint(weaver_trace::SavePointTaken {
+            save_point: "ab".into(),
+            run: "r-0".into(),
+            sequence: 5,
+            turn: 1,
+            name: "ab.save-point".into(),
+            cause: None,
+        }))
+    };
+    r.submit(event(Kind::SavePoint, None, taken()))
+        .expect("a turnless save point with its report is the ordinary case");
+    assert!(
+        r.submit(event(Kind::SavePoint, Some("t-3"), taken()))
+            .is_err(),
+        "a save point carrying a turn is refused"
+    );
+    assert!(
+        r.submit(event(Kind::SavePoint, None, None)).is_err(),
+        "a save point carrying nothing is refused"
+    );
+    let counts = Some(Payload::Flush(weaver_trace::FlushCounts {
+        resident_before: 27196,
+        resident_after: 712,
+    }));
+    assert!(
+        r.submit(event(Kind::SavePoint, None, counts)).is_err(),
+        "and one carrying another kind's payload is refused"
+    );
+    r.drain().unwrap();
+}
+
 /// **A score is turnless and carries the verdict and the ratio's terms**, per
 /// `weaver-trace-Spec` section 3's score clause (#523). The predicate and
 /// whether it held render in declared order, the ratio as its two integer

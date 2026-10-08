@@ -464,7 +464,7 @@ fn turn_required(kind: Kind) -> bool {
         | Kind::MessageRestored
         // A score is the task's verdict at the run's close, between turns.
         | Kind::Score
-        // A save point is taken at the leave, after `unload`, or on the
+        // A save point is taken at the leave, before `unload`, or on the
         // operator's demand between turns, so it belongs to none.
         | Kind::SavePoint
         | Kind::ClassifyRequest

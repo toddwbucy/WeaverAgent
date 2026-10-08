@@ -560,4 +560,22 @@ fn the_cause_and_the_constituents_render_as_stated() {
         serde_json::to_string(&LifecycleRefusal::Unanswered).unwrap(),
         r#"{"kind":"unanswered"}"#
     );
+    // **The wire's defaults** (#99 area 3, T02 and T03): a leave written
+    // before `forced` existed reads unforced, and a `Left` that names no save
+    // point renders bare. Perturbation: drop `forced`'s `serde(default)` and
+    // the old leave does not read; drop `Left.save_point`'s
+    // `skip_serializing_if` and it renders a null.
+    let old: LifecycleDirective = serde_json::from_str(r#"{"kind":"leave","cause":{"uid":1000}}"#)
+        .expect("an old leave reads");
+    assert_eq!(
+        old,
+        LifecycleDirective::Leave {
+            cause: weaver_types::Cause { uid: 1000 },
+            forced: false,
+        }
+    );
+    assert_eq!(
+        serde_json::to_string(&LifecycleAnswer::Left { save_point: None }).unwrap(),
+        r#"{"kind":"left"}"#
+    );
 }

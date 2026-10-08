@@ -1852,48 +1852,74 @@ mod tests {
     }
 
     /// **Only admit and release cross this seam.** Every other case of the
-    /// floor's closed set refuses as out of order.
+    /// floor's closed set refuses as out of order, at every position, the
+    /// position unchanged (#99 area 3, S01): an admitted SPU that answered a
+    /// `SavePoint`, a `ForceUnload` or a `Restore` would claim a part of a
+    /// protocol the contract never gave it. `Enter` is the harness's whole
+    /// instruction and is refused by the same arm.
     ///
     /// Perturbation: answer `Stop` with `AtRest` in `dispatch` and this test
-    /// fails on the `Stop` case. Watched under exactly that addition.
+    /// fails on the `Stop` case; answer `SavePoint` or `ForceUnload` while
+    /// admitted and it fails on that case.
     #[test]
     fn a_directive_outside_the_drawn_vocabulary_refuses_out_of_order() {
-        let mut residency = Residency::new();
-        let mut position = SeamPosition::BeforeAdmit;
-        let outside = [
-            LifecycleDirective::Leave {
-                cause: weaver_types::Cause { uid: 0 },
-                forced: false,
-            },
-            LifecycleDirective::Stop {
-                cause: weaver_types::Cause { uid: 0 },
-            },
-            LifecycleDirective::Lower,
-            LifecycleDirective::Load {
-                agent: AgentName("alpha".into()),
-            },
-            LifecycleDirective::Unload {
-                agent: AgentName("alpha".into()),
-            },
-            LifecycleDirective::Validate {
-                agent: AgentName("alpha".into()),
-            },
-            LifecycleDirective::Show {
-                agent: AgentName("alpha".into()),
-            },
-        ];
-        for case in outside {
-            assert_eq!(
-                dispatch(
-                    &mut position,
-                    &mut residency,
-                    &directive(case.clone()),
-                    &mut None,
-                    HEADROOM_BYTES
-                ),
-                Payload::Refusal(LifecycleRefusal::OutOfOrder),
-                "{case:?} is outside this seam's vocabulary"
-            );
+        let cause = weaver_types::Cause { uid: 0 };
+        let agent = || AgentName("alpha".into());
+        let outside = || {
+            vec![
+                LifecycleDirective::Leave {
+                    cause,
+                    forced: false,
+                },
+                LifecycleDirective::Leave {
+                    cause,
+                    forced: true,
+                },
+                LifecycleDirective::SavePoint { cause },
+                LifecycleDirective::Stop { cause },
+                LifecycleDirective::Observe,
+                LifecycleDirective::Raise {
+                    instruction: weaver_types::GateInstruction {
+                        access_rule: weaver_types::AccessRule {
+                            allowed_uids: Default::default(),
+                            allowed_gids: Default::default(),
+                            denied_uids: Default::default(),
+                        },
+                    },
+                    socket: "/nonexistent/gate.sock".into(),
+                },
+                LifecycleDirective::Lower,
+                LifecycleDirective::Load { agent: agent() },
+                LifecycleDirective::Unload { agent: agent() },
+                LifecycleDirective::Validate { agent: agent() },
+                LifecycleDirective::Show { agent: agent() },
+                LifecycleDirective::SavePointVerb { agent: agent() },
+                LifecycleDirective::Restore { agent: agent() },
+                LifecycleDirective::ForceUnload { agent: agent() },
+            ]
+        };
+        for (start, name) in [
+            (SeamPosition::BeforeAdmit, "before the admit"),
+            (SeamPosition::AdmitRefused, "after a refused admit"),
+            (SeamPosition::Admitted, "while admitted"),
+            (SeamPosition::Released, "after the release"),
+        ] {
+            let mut position = start;
+            let mut residency = Residency::new();
+            for case in outside() {
+                assert_eq!(
+                    dispatch(
+                        &mut position,
+                        &mut residency,
+                        &directive(case.clone()),
+                        &mut None,
+                        HEADROOM_BYTES
+                    ),
+                    Payload::Refusal(LifecycleRefusal::OutOfOrder),
+                    "{case:?} {name} is outside this seam's vocabulary"
+                );
+                assert_eq!(position, start, "{case:?} {name}: not queued");
+            }
         }
     }
 

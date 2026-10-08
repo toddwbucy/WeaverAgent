@@ -67,8 +67,7 @@ it runs under the relay account and never as root. No library surface is publish
 nothing links admin, per the charter's section 7, and a `lib.rs` would be an API for a
 consumer the topology forbids. The instrument reads Cargo's target inventory, which
 includes both explicit declarations and targets found by convention.
-`one_binary_and_no_library_surface` of `crates/weaver-admin/tests/manifest.rs` becomes
-`two_binaries_and_no_library_surface` in the code act: it requires exactly the binaries
+`two_binaries_and_no_library_surface` of `crates/weaver-admin/tests/manifest.rs` requires exactly the binaries
 `weaver-admin` and `weaver-trace-relay`, permits integration test targets, and refuses
 every other target, including a library, build script, example or bench.
 A comment or alternate TOML spacing cannot change the inventory. The reverse
@@ -245,7 +244,8 @@ lifecycle for the operator, it does so through a rule the operator installs as t
 own boundary, which names this agent's admin-con user, names the exact `weaver-admin
 <verb> <agent>` command lines for this agent, and allows no caller-chosen argument.
 **The role split of #50 is which command lines a role's rule grants**: an observer's
-grants `show`, and an operator's adds `validate`, `load`, `unload` and `stop`. **Nothing
+grants `show`, and an operator's adds `validate`, `load`, `unload`, `stop`,
+`save-point`, `restore` and `force-unload`. **Nothing
 is read from the caller**: no argument the caller chose, which the rule forbids, and
 nothing on standard input, which this crate never reads. **The cause is the uid sudo
 reports and nothing else**: where the invocation runs as root under sudo, this crate
@@ -268,7 +268,7 @@ admin-con can do is start and stop this agent**, and the threat that matters, a 
 binary, configuration or state swapped and then loaded, is
 #71's to answer, independently of this mechanism, the declaration pin being required
 wherever the lifecycle is delegated. **Every verb is a command line, `show` included,
-and the running-agent verbs too once A3 grants them**, so a connector never speaks on
+and the running-agent verbs A3.2 granted**, so a connector never speaks on
 the coordination channel: that channel sits in a directory only root enters and checks
 its peer at accept, per section 7, so only a root-run `weaver-admin` dials it, and the
 connector's one direct contact with the agent is the trace door. **The only lines
@@ -283,8 +283,9 @@ a password, used with `sudo -n`. The operator's human account is never used by t
 machine, and the operator's own sudo keeps asking for a password. The reasoning is three
 rules at once. **Human and machine accounts stay separate**, so nothing the machine does
 runs as the person. **Least privilege**: the connector holds the fixed lines and nothing
-else, and since the operator's account owns the declaration, the prompt and the
-published save points, a compromised connector can write none of them. **Two audit
+else, and since root owns the declaration, the prompt draft and the published save
+points and the access group only reads them, a compromised connector can write none of
+them. **Two audit
 records each answer their own question**: WeaverWeb's audit names the operator as the
 person who asked, and the box's record carries the service uid sudo reports as the
 account that ran it. The same service user is the boundary file's `trace-reader`, per
@@ -2391,7 +2392,8 @@ which appends the line that makes it loadable again; the recovery is the verb an
 a hand edit of a root-owned file. **Nothing replaces or writes one**: a manifest that
 is not root's own, by uid, gid, mode, link count or kind, refuses at the inventory and
 at every publication, per section 6, so a planted line never names a loadable file. A
-territory holding no `agent.toml` answers `NoSuchAgent`, as a root holding none did. **`operator` names the operator's uid**, on
+`validate`, `load` or `restore` of a territory holding no `agent.toml` answers
+`NoSuchAgent`, as a root holding none did. **`operator` names the operator's uid**, on
 the operator's ruling of 2026-10-02 on this act's first question: a root-owned key
 `create-agent.sh` writes once, the box's own fact, set by root, about whose data defines
 the agent, and independent of who invokes a verb. The coordination name changed hands
@@ -2399,14 +2401,15 @@ with the operator socket on 2026-08-05: the operator places it, the harness bind
 and admin dials it, so one value reaches two crates and the root is where they agree.
 These values are not the agent config and no seam carries them, which is why the root
 takes no contract of its own. **The file and its values part company at the start step,
-and the distinction is worth holding.** This crate is the only one that reads the root.
+and the distinction is worth holding.** This crate is the only program of the agent that reads the root; the deploy
+scripts and `deploy/turn.py` read keys of it as the operator, and no organ does.
 Three of the values do not stay in it: the coordination socket's name and the two organ
 binary paths reach the worker in section 6's argument vector, at the start step's exec
 rather than over any seam. What is fixed here is that these values exist, that they are
 the operator's to place, and that none of them is discovered at runtime by searching.
 
 **Nothing in one agent's root is read for another.** The box-wide values, the binaries,
-the tools, the coordination root and the headroom, are copied into each root by the
+the coordination root, the library path, the headroom and the load bound, are copied into each root by the
 deployment scripts from a stack record of their own that this crate never reads, so an
 agent's configuration is that agent's even where two roots carry the same values. The
 installed program files may stand once on disk and be named by every root, while the
@@ -2477,10 +2480,10 @@ with no link followed and without blocking, and judged on its descriptor a regul
 access group and mode `0640` exactly, so the access group reads it and never rewrites it
 and no other uid reads it; a declaration at any other owner, group or mode refuses
 `BoundaryUnverified`, the provisioning being wrong rather than the declaration.
-Other entries are not read, `system-prompt.md`, the operator's draft of the prompt that
-the seeding step reads and this crate never opens, among
-them, save `admin.log` and `worker.log`, the two this crate creates and appends to,
-without following a link, per section 8. **Every directory above it is held closed as
+Of the territory's other entries this crate reads `save-points/` and the member's room
+only as sections 4 and 6 say, creates and appends to `admin.log` and `worker.log`
+without following a link, per section 8, and never opens `system-prompt.md`, the
+operator's draft of the prompt that the seeding step reads. **Every directory above it is held closed as
 the root's ancestors are**, each owned by uid 0 and writable by no group or other
 unless its sticky bit is set. Any failure refuses `BoundaryUnverified`, naming the path
 on stderr, before a value is read, and a territory that does not exist, is not a
@@ -2498,9 +2501,9 @@ to name and never taken from a server ("the box decides", toddwbucy/WeaverTools#
 **Admin reads the declaration as root and the agent never reads it.** What crosses to
 the agent's processes is what the parse yields and the enter carries, never a path into
 the territory's files and never a handle to them, the same discipline the sink's path
-keeps. The ruling's reading of a system prompt is that one: the model receives the text
-as its identity prefix at load, and that gives the agent process no read of the file
-and no way to change it.
+keeps. The system prompt is state and never crosses here: admin reads no prompt, the seeding
+turn enters it through the gate, and each load seats the prefix the state member holds,
+on the operator's ruling of 2026-10-06.
 
 **An optional value is absent only where nothing stands at its path.** Every optional
 value of this section, `headroom-bytes`, `library-path` and `load-bound-seconds`, reads
@@ -2656,7 +2659,7 @@ on #73's first item, the deliberate gifts of section 6 and nothing else:
   sink stood a relay, the relay's lifetime pipe's write end at 8.
 - **the state member**: its standard streams, its own end of the first door
   at 3, the run lock's description at 9 and, under a restore, the save point
-  at the number its act elects.
+  at 4.
 - **the trace relay**: its standard streams at `/dev/null`, the listener at 3,
   the sink's read-only descriptor at 4, the operations log at 5, the lifetime
   pipe's read end at 6 and the run lock's description at 9.
@@ -2721,8 +2724,7 @@ floor-link under gate H2, and no direct `weaver-traits` line exists, which
 is the charter's declared non-link as a checkable absence. No async runtime,
 no bus crate, and no logging crate in the resolved tree, by the build-time
 `cargo tree` assertion the floor Specs share. Two binaries and no library surface,
-read from Cargo's target inventory by `two_binaries_and_no_library_surface` once the
-code act renames it. The watch requires the two named binaries and permits integration
+read from Cargo's target inventory by `two_binaries_and_no_library_surface`. The watch requires the two named binaries and permits integration
 test targets alone beside them, as section 1 states. Explicit
 and convention-discovered targets pass through the same check.
 
@@ -2881,8 +2883,8 @@ count to thirty-four: that one, then `admin-kind-mismatch-refused-at-inventory` 
 forty, the boundary act's three of 2026-08-28 that the tag census names, then
 `admin-granted-permission-refused-at-inventory` on 2026-08-31,
 `admin-restore-cut-judged-at-the-inventory` on 2026-09-06, and
-`admin-missing-home-refuses-and-builds-nothing` on 2026-09-07. Four more reach the
-forty-four this section counts above, all on 2026-09-15 with the member's own
+`admin-missing-home-refuses-and-builds-nothing` on 2026-09-07. Four more reach
+forty-four, which, less the store gate's retirement, are the forty-three counted above, all on 2026-09-15 with the member's own
 account: `admin-member-account-required-at-inventory`,
 `admin-member-territory-is-the-members-own`, `admin-store-gate-asks-as-the-member`,
 and `admin-member-spawn-drops-to-its-account`, the third of them retiring with the
@@ -2932,16 +2934,16 @@ directive is asserted where the run happens.
   agent, confirmed by watching a verb proceed when the check is removed.
 - The territory is root's and closed, per section 9 as of 2026-10-08: a directory of
   any mode but `0710`, the earlier `0711` among them, one under any group but the state
-  group, one named through a link above it, one carrying an access-control entry, one
-  whose `save-points/` carries one, one not root's, one holding
-  no `save-points/` or one of any mode but `0750`, an `operator` key absent or naming no
-  uid, a declaration that is a link or of any owner, group or mode but root, the access
+  group, one named through a link above it, one
+  whose `save-points/` carries an access-control entry, one not root's, one holding
+  no `save-points/` or one of any mode but `0750`, a declaration that is a link or of any owner, group or mode but root, the access
 group and `0640`, and an ancestor
   another principal can write each refuse `BoundaryUnverified` before a value is read,
   confirmed by watching each pass and its declaration parse when its arm of the
-  judgment is removed. The enter's `operator` is
-  the root's `operator` key and never the caller's uid, confirmed by watching the two
-  come out equal when the cause is copied in its place.
+  judgment is removed. A territory itself carrying an access-control entry and an
+  `operator` key absent or naming no uid refuse by the same judgment, and no test pins
+  either yet; nor does any test yet pin that the enter's `operator` is the root's
+  `operator` key and never the caller's uid.
 - The answer and the exit status agree: a refusal exits non-zero and an answer
   exits zero, confirmed by watching a refusal exit zero when the status is
   taken from the wrong branch.
@@ -2952,8 +2954,9 @@ group and `0640`, and an ancestor
   `ENXIO` mapped to its case, confirmed by watching the load hang when the
   nonblocking open is made blocking.
 - The rollback's account: a load failed at each step leaves exactly what
-  charter section 5 names and the log records what was undone, confirmed by
-  watching the account go silent when logging moves off the rollback path.
+  charter section 5 names and the log records what was undone. Only the marker's
+  part is pinned, by `the_rollback_restores_the_marker_it_found`, whose perturbation
+  skips the marker in `roll_back`; no test yet pins the log's account of the rollback.
 - Truncation is a fault: an over-bound envelope on the coordination channel
   produces the fault and no directive, confirmed by watching a silently
   shortened answer decode when the `MSG_TRUNC` check is removed.
@@ -2962,7 +2965,7 @@ group and `0640`, and an ancestor
   by watching the same declaration pass the inventory when the arm is removed,
   a load then standing a member under this crate's identity; and an account
   whose primary group is not the state group, or is gid 0, refuses too.
-- The territory is the member's: a prepared territory is `0700` and owned by
+- The room is the member's: a prepared room is `0700` and owned by
   the member's account, and a room widened between loads is closed again,
   confirmed by watching the mode read `0750` when the group-owned preparation
   is restored.
@@ -2994,10 +2997,10 @@ perturbation-verified:
 - **The worker runs as the agent and holds no group root left it**, watched by a
   stand-in worker recording its credentials after the start step's exec. The
   perturbation skips the supplementary narrowing, and the worker holds root's groups.
-- **A concurrent invocation refuses while one is in flight**, watched by an `unload`
-  issued while a `load` is still admitting its model: it answers `InvocationInFlight`
-  and the load completes. The perturbation drops the invocation lock, and the unload
-  ends the healthy start.
+- **A concurrent invocation refuses while one is in flight**, pinned today at the lock
+  alone by `an_exclusive_invocation_lock_refuses_every_other_take`, whose perturbation
+  takes the exclusive lock shared and a second take succeeds. No test yet drives an
+  `unload` against a `load` still admitting its model.
 - **A load meeting a live worker refuses**, watched by a `load` of an agent whose worker
   answers `Idle`: it answers `AgentRunning` and starts nothing. The perturbation skips
   the run lock's take, and a second worker starts.
@@ -3023,10 +3026,10 @@ perturbation-verified:
   expires, and a following `unload` takes the invocation lock. The perturbation drops
   the observation's bound, `show` never returns, and its shared hold keeps every
   exclusive verb refusing `InvocationInFlight`.
-- **A wedged stop is bounded**, watched by a stand-in worker that accepts stop and
-  never answers: the verb refuses `Unanswered` once the stop's bound expires and a
-  following `unload` takes the invocation lock. The perturbation drops the stop's
-  bound, the verb never returns, and every later verb refuses `InvocationInFlight`.
+- **A wedged stop is bounded**: the verb refuses `Unanswered` once the stop's bound
+  expires and a following `unload` takes the invocation lock. No test pins it yet; the
+  instrument owed is a stand-in worker that accepts stop and never answers, its
+  perturbation dropping the stop's bound so the verb never returns.
 - **A wedged leave is bounded**, watched by a stand-in worker that accepts leave and
   never answers: the `unload` escalates once the leave's bound expires and answers when
   the lock is free. The perturbation drops the leave's bound, the verb never returns,
@@ -3040,26 +3043,30 @@ perturbation-verified:
   and a stand-in process given its pid before the signal: the stand-in survives. The
   perturbation drops the descriptor's re-check after `pidfd_open`, and the stand-in is
   killed.
-- **The cause is the uid sudo reports**, watched by a `load` under sudo whose `load`
-  event names `SUDO_UID`. The perturbation reads the uid from standard input, and a
-  caller names any uid it likes.
+- **The cause is the uid sudo reports**, pinned today at the parse alone by
+  `the_cause_is_sudo_uid_parsed_strictly`, whose perturbation answers uid 0 for a value
+  that does not parse. No test yet runs a `load` under sudo and reads `SUDO_UID` on its
+  `load` event.
 - **The trace relay admits only its declared reader**, watched by a member of the
   socket's group that is not the reader: refused and logged. The perturbation admits
   any member of the socket's group, and that member receives the record.
-- **The agent cannot reach the trace door**, watched by the agent's uid connecting:
-  refused at `connect` by the socket's mode. The perturbation binds the socket `0666`,
-  and the agent's connection reaches the relay.
+- **The agent cannot reach the trace door**, pinned at the socket's mode by
+  `the_relay_spawn_lands_its_identity_and_allowlist_as_root`, which asserts the door
+  `0660` and root's, so binding it `0666` fails it. No test yet connects as the agent's
+  uid.
 - **The newest reader connection replaces the old**, watched by the declared reader
   connecting twice: the first follower ends with a reason. The perturbation keeps both.
 - **The relay dies with the worker**, watched by killing the worker with `SIGKILL`: the
   relay exits on the pipe's end-of-file. The perturbation leaves the write end open in
   the start step, and the relay outlives the worker.
-- **A verb finishes when its caller disappears**, watched by a `load` whose caller is
-  killed after the start step: the agent loads and `admin.log` records the outcome. The
-  perturbation leaves `SIGHUP` at its default, and the load dies part way.
-- **A second file-sink load binds its trace door**, watched by two loads in sequence
-  with an unload between: the second binds `trace.sock`. The perturbation skips the
-  stale name's removal, and the second load fails its bind.
+- **A verb finishes when its caller disappears**: a `load` whose caller is killed after
+  the start step still loads, and `admin.log` records the outcome. Only a broken
+  standard stream is pinned, by `a_broken_standard_output_never_ends_the_verb` and
+  `a_broken_standard_error_never_ends_the_verb` in `tests/invocation.rs`; no test yet
+  kills the caller or leaves `SIGHUP` at its default.
+- **A second file-sink load binds its trace door**: after an unload, the next load
+  removes the stale `trace.sock` and binds it again. No test pins it yet; the instrument
+  owed is two loads in sequence, its perturbation skipping the stale name's removal.
 - **A caller's hangup ends no child**, watched by a load whose terminal hangs up after
   the relay and the member are forked: both stand. The perturbation drops their
   `setsid`, and the hangup kills them.

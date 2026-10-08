@@ -1237,11 +1237,18 @@ impl<'a> Ports<'a> {
                                     ),
                                 });
                             }
-                            // A second stop, a leave, and everything
-                            // else are out of order for a turn in
-                            // flight, refused and not queued.
+                            // A leave and a save point are refused as not
+                            // at rest; a second stop and everything else
+                            // are out of order for a turn in flight,
+                            // refused and not queued.
+                            // A save point is taken at rest, per the
+                            // admin-harness contract section 3: mid-turn it
+                            // is refused as not at rest, which tells the
+                            // caller to retry, and never `OutOfOrder`, which
+                            // reads as a run that takes none (#99 area 3, C2).
                             weaver_types::Payload::Directive(
-                                weaver_types::LifecycleDirective::Leave { .. },
+                                weaver_types::LifecycleDirective::Leave { .. }
+                                | weaver_types::LifecycleDirective::SavePoint { .. },
                             ) => {
                                 let _ = connection.send(&weaver_types::OrganEnvelope {
                                     exchange,
@@ -3349,13 +3356,6 @@ mod tests {
         }
     }
 
-    /// **The stop is heard mid-stream, per Spec 6.1.** The streaming wait
-    /// spans the decode channel and the verb connection at once, the stop
-    /// cancels the turn at the seam, the partial stands in the close with
-    /// the directive's reason, and the stop is answered with the turn's
-    /// fate after the record. Perturbation: collapse the streaming wait to
-    /// the decode channel alone and the cancel this scripted peer waits
-    /// for never arrives.
     /// **An observation dialed mid-stream is answered from inside the turn**,
     /// per `weaver-admin-harness-contract` section 3: the streaming poll takes
     /// it between tokens and answers `Active` with the load's facts, the stream
@@ -3364,6 +3364,74 @@ mod tests {
     /// gives; answer `Idle` there and the match below fails.
     #[test]
     fn an_observation_dialed_mid_stream_answers_active_and_disturbs_nothing() {
+        let (outcome, answer, close) = dial_mid_stream(weaver_types::LifecycleDirective::Observe);
+        assert!(!outcome.aborted, "an observation aborts nothing");
+        assert_eq!(
+            outcome.emission, "par",
+            "the turn completed as it would have"
+        );
+        match answer {
+            weaver_types::Payload::Answer(weaver_types::LifecycleAnswer::State {
+                state: weaver_types::AgentState::Active,
+                load: Some(load),
+                ..
+            }) => assert_eq!(load.run.0, "r-1", "the load's facts ride beside the state"),
+            other => {
+                panic!("an observation mid-stream answers active with its load, got {other:?}")
+            }
+        }
+        assert!(
+            close.contains(r#""close":"clean""#),
+            "the close is the turn's own: {close}"
+        );
+    }
+
+    /// **A save point or a leave demanded mid-turn is refused as not at
+    /// rest**, per the admin-harness contract section 3 and harness Spec
+    /// section 6 (#99 area 3, C2, and the pins P09 and P10): the engine reads
+    /// a directive that arrives mid-turn, so its arm is the one production
+    /// takes, and the turn runs to its own close. Perturbation: drop
+    /// `SavePoint` from the arm and the wildcard answers `OutOfOrder`; drop
+    /// `Leave` and the same.
+    #[test]
+    fn a_save_point_or_a_leave_mid_turn_is_refused_not_at_rest() {
+        let cause = weaver_types::Cause { uid: 0 };
+        for directive in [
+            weaver_types::LifecycleDirective::SavePoint { cause },
+            weaver_types::LifecycleDirective::Leave {
+                cause,
+                forced: false,
+            },
+            weaver_types::LifecycleDirective::Leave {
+                cause,
+                forced: true,
+            },
+        ] {
+            let named = format!("{directive:?}");
+            let (outcome, answer, close) = dial_mid_stream(directive);
+            assert!(
+                matches!(
+                    answer,
+                    weaver_types::Payload::Refusal(
+                        weaver_types::LifecycleRefusal::ActivityNotAtRest
+                    )
+                ),
+                "{named} mid-turn is refused not at rest, got {answer:?}"
+            );
+            assert!(!outcome.aborted, "{named} aborts nothing");
+            assert!(
+                close.contains(r#""close":"clean""#),
+                "{named}: the turn closes as its own: {close}"
+            );
+        }
+    }
+
+    /// One turn streamed with `directive` already on the admin connection,
+    /// the way the poll's readiness would deliver it mid-stream: the turn's
+    /// outcome, the directive's answer, and the turn's close line.
+    fn dial_mid_stream(
+        directive: weaver_types::LifecycleDirective,
+    ) -> (TurnOutcome, weaver_types::Payload, String) {
         let (near, far) = socketpair(
             AddressFamily::Unix,
             SockType::SeqPacket,
@@ -3376,8 +3444,8 @@ mod tests {
         let (verb_end, admin_end) = crate::channel::OrganChannel::pair().expect("pair");
         let admin = admin_end.into_channel();
 
-        // The operator's stop is already on the connection when the turn
-        // begins, the way the poll's readiness would deliver it mid-stream.
+        // The directive is already on the connection when the turn begins,
+        // the way the poll's readiness would deliver it mid-stream.
         admin
             .send(&weaver_types::OrganEnvelope {
                 exchange: weaver_types::ExchangeId {
@@ -3385,9 +3453,7 @@ mod tests {
                     ordinal: 9,
                 },
                 position: weaver_types::Position::Open,
-                payload: weaver_types::Payload::Directive(
-                    weaver_types::LifecycleDirective::Observe,
-                ),
+                payload: weaver_types::Payload::Directive(directive),
             })
             .expect("the observe sends");
 
@@ -3494,22 +3560,7 @@ mod tests {
         };
         peer.join().expect("the decode peer finishes");
 
-        assert!(!outcome.aborted, "an observation aborts nothing");
-        assert_eq!(
-            outcome.emission, "par",
-            "the turn completed as it would have"
-        );
-
-        match admin.recv().expect("the observation's answer").payload {
-            weaver_types::Payload::Answer(weaver_types::LifecycleAnswer::State {
-                state: weaver_types::AgentState::Active,
-                load: Some(load),
-                ..
-            }) => assert_eq!(load.run.0, "r-1", "the load's facts ride beside the state"),
-            other => {
-                panic!("an observation mid-stream answers active with its load, got {other:?}")
-            }
-        }
+        let answer = admin.recv().expect("the directive's answer").payload;
         let close = recorder
             .structure()
             .expect("the serving record")
@@ -3518,10 +3569,7 @@ mod tests {
             .expect("the close authored")
             .line
             .to_string();
-        assert!(
-            close.contains(r#""close":"clean""#),
-            "the close is the turn's own: {close}"
-        );
+        (outcome, answer, close)
     }
 
     /// conforms: harness-stop-polled-during-the-invocation
@@ -3859,6 +3907,13 @@ mod tests {
         }
     }
 
+    /// **The stop is heard mid-stream, per Spec 6.1.** The streaming wait
+    /// spans the decode channel and the verb connection at once, the stop
+    /// cancels the turn at the seam, the partial stands in the close with
+    /// the directive's reason, and the stop is answered with the turn's
+    /// fate after the record. Perturbation: collapse the streaming wait to
+    /// the decode channel alone and the cancel this scripted peer waits
+    /// for never arrives.
     #[test]
     fn a_stop_dialed_mid_stream_cancels_the_turn() {
         let (near, far) = socketpair(

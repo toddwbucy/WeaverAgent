@@ -23,8 +23,8 @@ party may open an exchange by the channel's mechanics, and the two-initiator cha
 what makes admin an organ: an organ owns a domain and holds a two-initiator channel with
 the harness, both properties and not either, and admin owns the lifecycle domain. The
 property is the channel's rather than the exchange census's, the same reading the
-half-chartered organ seams take, so the census standing at four exchanges since the
-observation exchange of 2026-09-04, all admin's since the fault-carrier ruling of
+half-chartered organ seams take, so the census standing at five exchanges since the
+save point exchange of A3.2 (2026-10-06), all admin's since the fault-carrier ruling of
 2026-08-01 rerouted the fault to the stream, retires no half of what makes admin an
 organ. The invariant is authored in the apex and this document is downstream of it.
 
@@ -170,7 +170,7 @@ loss ends service, and a run ends only by the directive that ends it.
 
 ## 3. The exchanges
 
-Four, and no others, all opened by admin.
+Five, and no others, all opened by admin.
 
 **Save a point, and leave with or without one**, as of A3.2 on the operator's rulings
 of 2026-10-06 on #1. `SavePoint`, opened by admin, carries the cause; the harness, at
@@ -370,8 +370,9 @@ record can both name what they were built from, the operator's uid as the root's
 `operator` key names it, as of 2026-10-06, so the harness admits the seeding line of
 `weaver-gate-world-contract` section 2 from the operator alone, the boundary file's
 digest, so the record declares who could read the run without that file
-joining the tuple, the cause of every load, unload and stop, the uid sudo reports, and
-the intent to stop. Admin never writes the trace: it hands these facts to the harness,
+joining the tuple, the cause of every load, unload, save point and stop, the uid sudo reports, whether
+a leave is forced (by `force-unload` or by a load's rollback), the engine libraries'
+directory where the agent's root names one, and the intent to stop. Admin never writes the trace: it hands these facts to the harness,
 the single writer, as it hands the declaration's digest.
 
 **Admin guarantees** that the trace sink handle it passes refers to the sink the
@@ -385,7 +386,10 @@ guarantee is of verification rather than of authorship, since the boundary is th
 operator's artifact. It guarantees that no directive carries work of any kind.
 
 **The harness supplies** its readiness as the aggregate of the enter fan-out, its
-confirmation of departure, and the turn's fate on a stop.
+confirmation of departure naming the leave's save point where it took one, a save
+point's report (digest, finished name, covered position and the event's trace position)
+or the leg that missed, the turn's fate on a stop, and its state with the load's facts
+on an observation.
 
 **The harness guarantees** that every connection is credential-checked at its
 accept, before any byte is read, and that a peer that is not root is refused, per

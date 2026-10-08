@@ -98,9 +98,10 @@ to keep authorship away from the agent, and this one has no authorship to keep.
 
 ## 2. What this crate owns
 
-**Authorization of lifecycle intent.** Whether a given operator principal may run a
-given verb against a given agent. This is external authorization, it happens before
-anything else is touched, and a refusal leaves the system exactly as it found it.
+**The admission of the named agent.** The kernel admits the invoker as root, and the
+box's sudo rule decides which fixed command lines a caller may run; what this crate owns
+is the name check and the agent's root, before anything else is touched, and a refusal
+leaves the system exactly as it found it.
 
 **Verification of the boundary, which is a different thing from its authorship.**
 Per section 1, the OS identity, the home directory that is the agent's sandbox, and
@@ -110,8 +111,9 @@ with the ownership and modes a load requires, and that the trace directory is
 root-owned and not searchable by the agent uid. A boundary that fails any of these
 refuses the load, and nothing here is repaired.
 
-**Validation of the agent's configuration file.** The operator writes it and both this
-crate and the harness read it, per `weaver-types-PRD` section 2.1. It is declarative,
+**Validation of the agent's configuration file.** The operator writes it, this crate
+alone reads it, and the harness receives what the parse yields in the enter, per
+`weaver-types-PRD` section 2.1. It is declarative,
 read at load, and fixed for the run, carrying the model binding, the tool set, the
 permission mode, and the two elections. Validating it before a process exists is this
 crate's, because a file that is malformed, or that leaves unnamed what a load needs,
@@ -133,9 +135,9 @@ pointed at the wrong artifact. The record above and `weaver-types-PRD` section
 
 **Standing the state member, which this charter has never said and the code
 has done since the ingest act.** The custodian of `weaver-state-PRD` runs under
-its own account over its own subdirectory of the operator's territory, and the
+its own account over its own subdirectory of the agent's territory, and the
 party that starts it has to hold three things before any process exists: the
-operator's territory, the binding kind the inventory settled, and the enter,
+agent's territory, the binding kind the inventory settled, and the enter,
 the one exchange the harness's end of the pair can cross, which only this
 crate opens. This crate holds all three at
 that moment and no other party holds any of them, so the member is this
@@ -170,10 +172,9 @@ per the contract's dead-peer clause. A member whose spawn failed puts no end
 on the enter, and one that died after the spawn answers the first traffic as
 a closed pair, the leg not standing either way rather than a refused load.
 
-**The start falls between steps 5 and 6 and takes no step number of its own.**
-The worker is started at step 5 and the enter is directed at step 6, and
-the member is started between them, the pair in hand before the enter that
-carries its harness end. It takes no number because
+**The start precedes the worker's and takes no step number of its own.**
+The member starts before the worker, after the run lock is taken and the relay stands,
+so the pair is in hand before the worker and the enter that carries its harness end. It takes no number because
 section 5's rollback discriminates by step and no step of the load turns on the
 member: the leg either stands or does not, and section 4's sequencing is
 unchanged either way.
@@ -260,11 +261,12 @@ operator's rulings of 2026-10-03 on #63 and #50, moved from the root's `log-path
 of 2026-10-07 on #1, moved with the declaration from the operator's home. It is written by root, appended
 without following a link, and it never lands inside an agent home, which is the
 load-bearing half. The named adversary is the agent uid, and it is excluded by the
-directory, which is closed to every uid but the operator's, so the agent cannot reach
-the file to try. An agent that could read this file would read the record of its own
+territory, root's at 0710 under the state group, which the agent's uid does not hold,
+and by the file's own mode, root:weaver-<a>-admin 0640, so the agent cannot reach the
+file to try. An agent that could read this file would read the record of its own
 supervision, which is the same class of hole the trace directory's search bit exists to
 close. The worker's own output goes to `worker.log` beside it and never into this one,
-the worker holding that descriptor. The operator reads it from its own directory, per
+the worker holding that descriptor. The operator reads it through the access group, per
 section 7.
 
 **The stream's sink and this log are secured against the agent and against nothing

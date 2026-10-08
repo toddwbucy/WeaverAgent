@@ -1552,10 +1552,10 @@ fn a_reloaded_store_equals_a_full_replay() {
 /// `restore` ask that once read the room by name is retired (the operator's
 /// ruling of 2026-10-08 on #99): a restore is a reload, made only here.
 ///
-/// Perturbations: skip the schema comparison in `adopt_judged` and the
+/// Perturbations: skip the schema comparison in `judge_save_point` and the
 /// foreign save point restores, the first assertion failing; skip the check
 /// in `SavePoint::parse` and the flipped file starts the member; drop the
-/// election from both `adopt_judged` and the opener's `index_election` and
+/// election from both `Store::adopt` and the opener's `index_election` and
 /// the elected index is gone from the restored holdings.
 #[test]
 #[ignore = "needs the preload credential; run inside a user namespace by the watch below"]
@@ -1605,7 +1605,7 @@ fn a_damaged_or_foreign_save_point_never_reaches_the_holdings() {
     );
     // A stamp written to agree cannot carry a foreign image past the rule:
     // the image's own catalog has the extra table, whatever the stamp names.
-    // Perturbation: drop the image's schema comparison in `adopt_judged`
+    // Perturbation: drop the image's schema comparison in `judge_save_point`
     // and this restores.
     let lying = {
         let mut store = Sqlite::stand().expect("stands");

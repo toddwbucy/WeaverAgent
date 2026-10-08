@@ -210,6 +210,18 @@ fn author_refusal_on(run: &mut Run, asked: weaver_types::LifecycleAsk, refusal: 
 /// sentence cannot say something the record does not. It stays lossy, a
 /// client being owed a sentence rather than four integers, and what it stops
 /// being is independent.
+/// **A reset's reason as the record writes it: the wire's own spelling**
+/// (#99 area 3, C5), `no-clean-unload` or `forced-unload`, taken from the
+/// enum's serde so the record and the enter cannot drift apart. A unit
+/// variant always renders as a string; the debug name stands only where it
+/// would not.
+fn reset_reason(reason: weaver_types::ResetReason) -> String {
+    match serde_json::to_value(reason) {
+        Ok(serde_json::Value::String(spelled)) => spelled,
+        _ => format!("{reason:?}"),
+    }
+}
+
 fn refusal_reason(refusal: &weaver_types::TokenRefusal) -> &'static str {
     match refusal {
         weaver_types::TokenRefusal::NotOpen => "the session is not open",
@@ -1225,9 +1237,9 @@ impl Harness {
                         // admin contract's clause of 2026-08-22: a bracket
                         // that stands is a run whose record can say why its
                         // enter was refused, and the answer alone leaves
-                        // nothing behind. This is the one site for all
-                        // thirteen paths that raise a lifecycle refusal, a
-                        // refusal being one kind of event whatever raised
+                        // nothing behind. This is the one site for every
+                        // after-load path that raises a lifecycle refusal,
+                        // a refusal being one kind of event whatever raised
                         // it.
                         author_lifecycle_refusal(&mut run, &refusal);
                         // The bracket stands, so the run stays in place for
@@ -1587,10 +1599,7 @@ impl Harness {
             }),
             reset: payload.reset.as_ref().map(|reset| weaver_trace::Reset {
                 prior_run: reset.prior_run.0.clone(),
-                reason: match reset.reason {
-                    weaver_types::ResetReason::NoCleanUnload => "no-clean-unload".to_string(),
-                    weaver_types::ResetReason::ForcedUnload => "forced-unload".to_string(),
-                },
+                reason: reset_reason(reset.reason),
             }),
             stack: payload.stack.clone(),
             // **Boundary, cause and libraries are admin's facts**, per
@@ -3151,21 +3160,13 @@ mod tests {
     /// from the enter path rather than assembled, so the record it carries
     /// is the record that would have been written.
     ///
-    /// **What this pins and what it does not.** It pins the shape: that a
+    /// **It pins the shape and the call site** (#99 area 3, P15): the enter
+    /// is driven through `dispatch_on`, the arm the serve loop takes, so a
     /// lifecycle refusal reaching a standing run becomes a `refusal` naming
     /// the seam and the ask, carrying the seam's own case, belonging to no
-    /// turn, and closing nothing. **It does not pin the call site.** The
-    /// clerking happens in the serve loop's after-load arm, which needs a
-    /// coordination connection to reach, and this test calls the authoring
-    /// directly, so removing the call from that arm leaves this test
-    /// passing. Watched under exactly that removal, which is how the gap is
-    /// known rather than assumed.
-    ///
-    /// The call site is one line in one arm and the arm is read in review.
-    /// A test that drove it would drive the whole serve loop, which is the
-    /// shape `the_turn_rehearses_on_the_device` already carries for the
-    /// turn, and it is the honest place to add this if the arm ever grows a
-    /// second path.
+    /// turn and closing nothing, and is answered to the caller after it is
+    /// clerked. Perturbation: remove `author_lifecycle_refusal` from the
+    /// after-load arm and no refusal is on the record.
     #[test]
     fn a_refused_enter_leaves_its_reason_in_the_record() {
         let dir = crate::scratch::dir(format!(
@@ -3230,16 +3231,27 @@ mod tests {
         };
         // The fan-out fails after-load at the SPU exec, which is the arm
         // this test exists for: the bracket stands and the refusal is the
-        // enter's own.
-        let (mut run, refusal) = match harness.enter(payload, Some(sink), None) {
-            Err(EnterFailure::AfterLoad(run, refusal)) => (*run, refusal),
-            Ok(_) => panic!("the bogus fan-out cannot succeed"),
-            Err(EnterFailure::BeforeLoad(refusal)) => {
-                panic!("failed before the load: {refusal:?}")
-            }
+        // enter's own, answered to the caller.
+        let (harness_end, peer_end) = OrganChannel::pair().expect("pair");
+        harness
+            .dispatch_on(
+                &harness_end,
+                test_exchange(),
+                LifecycleDirective::Enter {
+                    payload: Box::new(payload),
+                },
+                Some(sink),
+                None,
+            )
+            .expect("the enter dispatches");
+        let refusal = match peer_end.into_channel().recv().expect("answer").payload {
+            weaver_types::Payload::Refusal(refusal) => refusal,
+            other => panic!("the bogus fan-out is refused after the load, got {other:?}"),
         };
-
-        author_lifecycle_refusal(&mut run, &refusal);
+        let ChannelState::Entered(run) = &mut harness.state else {
+            panic!("an after-load refusal leaves the run entered for its leave")
+        };
+        let run = run.as_mut();
 
         let refusals: Vec<&weaver_trace::Record> = run
             .recorder
@@ -3281,7 +3293,7 @@ mod tests {
             "a refused enter closes no turn"
         );
 
-        let _ = leave(&mut run, None, false);
+        let _ = leave(run, None, false);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -4455,6 +4467,31 @@ mod tests {
         );
     }
 
+    /// **A gate that hung up counts as pending, as a queued frame does**
+    /// (#99 area 3, P14): the leave then refuses not at rest and the loop
+    /// meets the hang-up next, rather than lowering a dead gate after the
+    /// save point. Measured on Linux 2026-10-08: a Unix socket whose peer
+    /// closed polls `POLLIN` with `POLLHUP`, so the hang-up flags in the
+    /// mask are defensive and no test tells them apart from `POLLIN` alone.
+    /// Perturbation: answer `false` on readiness and the hang-up and the
+    /// frame both read as at rest.
+    #[test]
+    fn a_hung_up_or_framed_gate_counts_as_pending_and_a_quiet_one_does_not() {
+        let (near, far) = OrganChannel::pair().expect("pair");
+        assert!(!channel_has_pending(&near), "a quiet gate is at rest");
+        let far = far.into_channel();
+        far.send(&weaver_types::OrganEnvelope {
+            exchange: test_exchange(),
+            position: weaver_types::Position::Open,
+            payload: weaver_types::Payload::Directive(LifecycleDirective::Observe),
+        })
+        .expect("a frame sends");
+        assert!(channel_has_pending(&near), "a queued frame is pending");
+        let (near, far) = OrganChannel::pair().expect("pair");
+        drop(far);
+        assert!(channel_has_pending(&near), "a hung-up gate is pending");
+    }
+
     /// **A leave with a frame queued at the gate refuses `ActivityNotAtRest`**,
     /// per `weaver-harness-Spec` section 6 (Codex on #94, round 13): the gate
     /// admitted a frame the loop has not taken when the leave arrives, so the
@@ -5085,6 +5122,40 @@ mod tests {
         );
     }
 
+    /// **The reset reason reaches the record kebab-case, both of them**
+    /// (#99 area 3, C5 and the pin P16): the record's `load.reset.reason`
+    /// is what a reader matches on. Perturbation: drop the wire enum's
+    /// `rename_all`, or map `ForcedUnload` to the other, and this fails.
+    #[test]
+    fn the_reset_reason_is_written_as_the_wire_spells_it() {
+        assert_eq!(
+            reset_reason(weaver_types::ResetReason::NoCleanUnload),
+            "no-clean-unload"
+        );
+        assert_eq!(
+            reset_reason(weaver_types::ResetReason::ForcedUnload),
+            "forced-unload"
+        );
+    }
+
+    /// A harness at `state`, its coordination listener in a scratch
+    /// directory and no organ to fork.
+    fn harness_at(state: ChannelState) -> (Harness, crate::scratch::Scratch) {
+        let (coordination, dir) = test_listener();
+        let harness = Harness {
+            coordination,
+            organs: OrganBinaries {
+                classify: None,
+                spu: "/nonexistent/spu".into(),
+                gate: "/nonexistent/gate".into(),
+            },
+            parameters: OrganParameters::default(),
+            state,
+            composer: Some(weaver_trace::LoopIdentity::compiled("test")),
+        };
+        (harness, dir)
+    }
+
     /// A stop places the turn's close event and answers `TurnAborted`.
     ///
     /// **This test proves both effects happened, not that the record preceded
@@ -5107,21 +5178,6 @@ mod tests {
     /// count below moves.
     #[test]
     fn observe_answers_from_any_position_and_authors_nothing() {
-        fn harness_at(state: ChannelState) -> (Harness, crate::scratch::Scratch) {
-            let (coordination, dir) = test_listener();
-            let harness = Harness {
-                coordination,
-                organs: OrganBinaries {
-                    classify: None,
-                    spu: "/nonexistent/spu".into(),
-                    gate: "/nonexistent/gate".into(),
-                },
-                parameters: OrganParameters::default(),
-                state,
-                composer: Some(weaver_trace::LoopIdentity::compiled("test")),
-            };
-            (harness, dir)
-        }
         fn observed(harness: &mut Harness) -> LifecycleAnswer {
             let (harness_end, peer_end) = OrganChannel::pair().expect("pair");
             harness
@@ -5176,6 +5232,50 @@ mod tests {
                 ..
             } => {}
             other => panic!("at rest observes idle with its load, got {other:?}"),
+        }
+    }
+
+    /// **`dispatch_on` refuses a save point or a leave while a turn stands**
+    /// (#99 area 3, P09 and P10). Mid-turn the engine's arm answers first
+    /// (`a_save_point_or_a_leave_mid_turn_is_refused_not_at_rest`); this is
+    /// the loop's own guard for a run left with a turn in flight, refusing
+    /// `ActivityNotAtRest`, authoring nothing and leaving the run entered.
+    /// Perturbation: drop either turn-in-flight check and the directive
+    /// proceeds to the save point or the lower.
+    #[test]
+    fn a_save_point_or_a_leave_with_a_turn_in_flight_is_refused_not_at_rest() {
+        let cause = weaver_types::Cause { uid: 0 };
+        for directive in [
+            LifecycleDirective::SavePoint { cause },
+            LifecycleDirective::Leave {
+                cause,
+                forced: false,
+            },
+            LifecycleDirective::Leave {
+                cause,
+                forced: true,
+            },
+        ] {
+            let named = format!("{directive:?}");
+            let (run, _spare, _sink_path) = entered_run(Some("t-1"));
+            let before = run.recorder.structure().expect("record").len();
+            let (mut harness, _dir) = harness_at(ChannelState::Entered(Box::new(run)));
+            let (harness_end, peer_end) = OrganChannel::pair().expect("pair");
+            harness
+                .dispatch_on(&harness_end, test_exchange(), directive, None, None)
+                .expect("the directive dispatches");
+            match peer_end.into_channel().recv().expect("answer").payload {
+                weaver_types::Payload::Refusal(LifecycleRefusal::ActivityNotAtRest) => {}
+                other => panic!("{named} with a turn in flight refuses not at rest, got {other:?}"),
+            }
+            let ChannelState::Entered(run) = &harness.state else {
+                panic!("{named}: the position stays entered")
+            };
+            assert_eq!(
+                run.recorder.structure().expect("record").len(),
+                before,
+                "{named}: a refusal for activity authors nothing"
+            );
         }
     }
 

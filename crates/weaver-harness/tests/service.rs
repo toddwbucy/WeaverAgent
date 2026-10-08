@@ -672,9 +672,36 @@ fn the_load_names_what_serve_was_handed_and_what_the_enter_carried() {
         let sink = OwnedFd::from(std::fs::File::create(&sink_path).expect("sink"));
         let ends = standing.then(|| std::os::unix::net::UnixStream::pair().expect("pair"));
         let mut descriptors = vec![sink.as_raw_fd()];
-        if let Some((near, _)) = &ends {
+        // **The member's end is answered as a member answers** (#99 area 3):
+        // since A3.2 the enter asks the member `restored` before the load,
+        // waiting its 120 s bound, and an end that never answers leaves the
+        // enter refused with no organ forked whose death would end service,
+        // so the join below never returns. The stand-in answers the grants,
+        // an unseeded identity and an empty restore, as `lifecycle`'s own
+        // member stub does, and the enter goes on to the fan-out.
+        let member = ends.as_ref().map(|(near, far)| {
             descriptors.push(near.as_raw_fd());
-        }
+            let far = far.try_clone().expect("the member's end clones");
+            std::thread::spawn(move || {
+                use std::io::{BufRead, BufReader, Write};
+                let mut answers = far.try_clone().expect("clone");
+                for line in BufReader::new(far).lines() {
+                    let Ok(line) = line else { break };
+                    let answer = if line.starts_with(r#"{"ask":{"grants""#) {
+                        r#"{"answer":{"grants":{"surface":[]}}}"#
+                    } else if line.starts_with(r#"{"ask":{"identity""#) {
+                        r#"{"answer":{"identity":{"messages":[]}}}"#
+                    } else if line.starts_with(r#"{"ask":{"restored""#) {
+                        r#"{"answer":{"restored":{}}}"#
+                    } else {
+                        continue;
+                    };
+                    if answers.write_all(format!("{answer}\n").as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            })
+        });
         peer.send_with(1, serving_enter("s-named"), &descriptors);
         match peer.try_read() {
             Ok(Some(Payload::Refusal(_))) => {}
@@ -714,5 +741,126 @@ fn the_load_names_what_serve_was_handed_and_what_the_enter_carried() {
         assert_eq!(load["payload"]["composer"]["file"], "/deployed/loop.py");
         assert_eq!(load["payload"]["composer"]["sha256"], "ef".repeat(32));
         drop(peer);
+        drop(ends);
+        if let Some(member) = member {
+            member
+                .join()
+                .expect("the member stand-in ends with its end");
+        }
     }
+}
+
+/// The bound on the watch's inner run: the suite takes well under a second
+/// inside the namespace, so two minutes is a hang and never a slow box.
+const WATCH_BOUND: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// **The watch for this suite** (#99 area 3): every test above that needs a
+/// root dialer skips as a non-root uid, which is how every gate runs, so
+/// this re-executes the suite inside `unshare --map-root-user`, where the
+/// caller is uid 0 and `SO_PEERCRED` reads 0, and requires every test to
+/// run there and none to skip for want of root. Where no user namespace can
+/// be entered, it prints a SKIP naming why and passes, as the preload door's
+/// watch does. Run as root, the suite runs in place and this does nothing.
+/// Perturbation: have `dispatch_on` answer a leave before any enter with
+/// `Left`, and this fails from a non-root run, naming
+/// `leave_before_enter_is_refused`.
+#[test]
+fn the_service_suite_is_watched_inside_a_user_namespace() {
+    if nix::unistd::getuid().is_root() {
+        return;
+    }
+    let exe = std::env::current_exe().expect("the test binary names itself");
+    let spawned = std::process::Command::new("unshare")
+        .arg("--map-root-user")
+        .arg(&exe)
+        .args([
+            "--skip",
+            "the_service_suite_is_watched_inside_a_user_namespace",
+            "--nocapture",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn();
+    let mut child = match spawned {
+        Ok(child) => child,
+        Err(e) => {
+            eprintln!("SKIP service watch: unshare could not run: {e}");
+            return;
+        }
+    };
+    // **The inner run is bounded** (the Planner's grade of a5d7b3e): a hang
+    // inside the namespace kills the run and fails this test at the bound,
+    // printing what the run had said, so it names the test that hung and
+    // never stalls the gates. Each stream is read on its own thread into a
+    // shared buffer, so a full pipe never holds the child and a descendant
+    // holding a pipe open never holds this test.
+    let collect = |stream: Box<dyn std::io::Read + Send>| {
+        let held = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let into = held.clone();
+        std::thread::spawn(move || {
+            let mut stream = stream;
+            let mut chunk = [0u8; 4096];
+            while let Ok(n) = std::io::Read::read(&mut stream, &mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                into.lock().unwrap().extend_from_slice(&chunk[..n]);
+            }
+        });
+        held
+    };
+    let out = collect(Box::new(child.stdout.take().expect("piped")));
+    let err = collect(Box::new(child.stderr.take().expect("piped")));
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() < WATCH_BOUND => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                panic!(
+                    "the service suite did not finish inside the namespace within {WATCH_BOUND:?}, \
+                     and was killed\nstdout so far:\n{}\nstderr so far:\n{}",
+                    String::from_utf8_lossy(&out.lock().unwrap()),
+                    String::from_utf8_lossy(&err.lock().unwrap())
+                );
+            }
+        }
+    };
+    // The streams close with the child; a short grace lets the readers take
+    // the last of them.
+    let drained = std::time::Instant::now();
+    while std::sync::Arc::strong_count(&out) > 1 || std::sync::Arc::strong_count(&err) > 1 {
+        if drained.elapsed() > std::time::Duration::from_secs(5) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let output = std::process::Output {
+        status,
+        stdout: out.lock().unwrap().clone(),
+        stderr: err.lock().unwrap().clone(),
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.starts_with("unshare:") {
+        eprintln!(
+            "SKIP service watch: no user namespace here: {}",
+            stderr.trim()
+        );
+        return;
+    }
+    assert!(
+        output.status.success() && stdout.contains("test result: ok. 9 passed"),
+        "the service suite failed inside the namespace\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("the harness accepts root alone"),
+        "a test skipped for want of root inside the namespace\nstderr:\n{stderr}"
+    );
 }

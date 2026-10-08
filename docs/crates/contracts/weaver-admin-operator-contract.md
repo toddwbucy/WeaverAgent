@@ -135,7 +135,8 @@ agent's configuration, validated by admin at load like every other field, and th
 stream is connected to it under root, the role's principal. A file, a pipe, and a socket
 into the operator's tooling are all conforming sinks, and the program treats them
 alike: it writes the stream and holds no opinion about what stands behind the
-handle. The mechanism is the Spec's. **The declaration itself lives in the agent's
+handle. Whatever its kind, the sink stands in the agent's territory, and only a file
+sink is served through the trace door. The mechanism is the Spec's. **The declaration itself lives in the agent's
 territory**, `/var/lib/weaver-agent/weaver-<agent>/agent.toml`, root's, on the operator's
 ruling of 2026-10-07 on #1: the operator edits it with `sudoedit`, the connector reads
 it through the access group and never writes it, and admin reads it through the
