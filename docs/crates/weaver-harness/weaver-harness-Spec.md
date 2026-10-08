@@ -2135,7 +2135,12 @@ the event, its own run and sequence, since after a restore the covered position 
 prior run's until a distillate lands and the event is this run's, which admin's
 manifest records; while a turn runs it refuses
 `ActivityNotAtRest`, as `Stop` would not, because a save point of a turn in flight would
-hold half of it. **A run that takes no save point refuses the demand `OutOfOrder`**: a
+hold half of it. **No save point is taken after the tee was lost** (the operator's
+ruling of 2026-10-08 on #99): the tee detaches silently on a stalled or broken seam, and
+the recorder marks it lost; the seam, a clone of the same socket, may still answer, but
+the holdings stopped growing at the detach, so the save point refuses
+`SavePointNotTaken` naming the member dead, the clean unload with it, and a force ends
+the run with the reset recorded. **A run that takes no save point refuses the demand `OutOfOrder`**: a
 diagnostic binding, or a serving run with no member seam, has no member to ask, and
 `SavePointNotTaken` naming the member dead would report a healthy member dead. The `Left` answer names the leave's save point the same way, so admin
 publishes it at once with its trace position. **A

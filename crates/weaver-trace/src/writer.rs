@@ -247,6 +247,12 @@ pub struct Recorder {
     structure: WorkingStructure,
     writer: Writer,
     tee: Option<Tee>,
+    /// **Whether an attached tee has detached**, set once and never cleared
+    /// (the operator's ruling of 2026-10-08 on #99, R1): a detached tee drops
+    /// every distillate after it while the state seam, a clone of the same
+    /// socket, still answers, so the harness asks this before it takes a
+    /// save point and refuses one over holdings that stopped growing.
+    tee_lost: bool,
 }
 
 impl Recorder {
@@ -262,6 +268,7 @@ impl Recorder {
             structure: WorkingStructure::new(),
             writer: Writer::start(sink),
             tee: None,
+            tee_lost: false,
         })
     }
 
@@ -272,6 +279,11 @@ impl Recorder {
     /// turn, per the contract's dead-peer clause.
     pub fn attach_tee(&mut self, tee: Tee) {
         self.tee = Some(tee);
+    }
+
+    /// Whether a tee once attached has detached, its distillates since lost.
+    pub fn tee_lost(&self) -> bool {
+        self.tee_lost
     }
 
     /// The four steps of the charter's emit path, in order, always: admit or
@@ -317,6 +329,7 @@ impl Recorder {
             && !tee.feed(&line)
         {
             self.tee = None;
+            self.tee_lost = true;
         }
         self.writer.enqueue(sequence, line);
         // **The event has landed and the answer says so**, per

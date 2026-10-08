@@ -237,11 +237,14 @@ impl Tee {
     /// waiting on it would be backpressure, so `WouldBlock` is treated as
     /// the same breakage a closed peer is.
     ///
-    /// A partial write followed by `false` is safe only because the caller
-    /// detaches the tee and the drop closes the channel: the reader hits
-    /// end-of-stream and discards the truncated tail as an unfinished line.
-    /// A caller that kept the channel open after `false` would risk the
-    /// peer parsing that tail against the next frame.
+    /// After `false` the caller detaches the tee. **The drop does not close
+    /// the channel where the harness's state seam holds a clone of the same
+    /// socket**, as every serving run's does, so a truncated tail can stand
+    /// ahead of the seam's next ask, and every distillate after the detach is
+    /// lost while the seam still answers. The recorder therefore marks the
+    /// tee lost, and the harness takes no save point after it (the
+    /// operator's ruling of 2026-10-08 on #99, R1): the holdings stopped
+    /// growing at the detach, and a save point of them would be stale.
     fn send(&mut self, mut bytes: &[u8]) -> bool {
         while !bytes.is_empty() {
             match self.channel.write(bytes) {

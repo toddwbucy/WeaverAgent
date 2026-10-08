@@ -212,7 +212,7 @@ pub struct StateSeam {
     /// The snapshot answer leg's bound, `SNAPSHOT_ANSWER_BOUND_MS` on every
     /// seam the crate builds; a test that needs the leg to miss shortens it
     /// rather than waiting two minutes out.
-    snapshot_answer_bound_ms: u64,
+    pub(crate) snapshot_answer_bound_ms: u64,
     /// The `restored` ask's bound, `RESTORED_ANSWER_BOUND_MS` on every seam
     /// the crate builds; a test that needs it to miss shortens it.
     restored_answer_bound_ms: u64,

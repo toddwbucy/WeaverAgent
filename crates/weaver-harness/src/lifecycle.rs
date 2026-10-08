@@ -2675,6 +2675,20 @@ fn take_save_point(
     let Some(seam) = run.state.as_mut() else {
         return Ok(None);
     };
+    // **No save point after the tee was lost** (the operator's ruling of
+    // 2026-10-08 on #99, R1): the tee detaches silently on a stalled or
+    // broken seam, and every distillate since is missing from the holdings,
+    // while the seam, a clone of the same socket, still answers. A snapshot
+    // now would be stale state published as whole, so the leg is the dead
+    // member's: the save point and the clean unload refuse, and a force
+    // ends the run with the reset recorded.
+    if run
+        .recorder
+        .serving()
+        .is_some_and(weaver_trace::Recorder::tee_lost)
+    {
+        return Err(weaver_types::SavePointLeg::MemberDead);
+    }
     let taken = seam.ask_snapshot()?;
     let position = run
         .author
@@ -4085,6 +4099,66 @@ mod tests {
         assert!(
             !events.iter().any(|e| e["kind"] == "save_point"),
             "nothing is recorded"
+        );
+    }
+
+    /// **No save point is taken after the tee was lost** (the operator's
+    /// ruling of 2026-10-08 on #99, R1): the member stops reading, the
+    /// socket's buffer fills and the tee detaches, its distillates since
+    /// lost; the member then drains and the seam would answer, but the save
+    /// point refuses as the dead member's and no snapshot is asked, so stale
+    /// holdings are never published as whole. Perturbation: drop the look
+    /// at the lost tee and the snapshot is asked and misses its answer.
+    #[test]
+    fn a_save_point_after_the_tee_was_lost_is_refused() {
+        use std::io::Read;
+        let (mut run, _spare, _sink) = entered_run(None);
+        let (state_end, mut member_end) =
+            std::os::unix::net::UnixStream::pair().expect("the member's pair");
+        state_end.set_nonblocking(true).expect("nonblocking");
+        let mut seam = crate::state::StateSeam::new(state_end.try_clone().expect("clone"));
+        seam.snapshot_answer_bound_ms = 50;
+        run.state = Some(seam);
+        run.recorder.serving_mut().expect("serving").attach_tee(
+            weaver_trace::Tee::open(
+                state_end,
+                "s-1".into(),
+                weaver_trace::Election {
+                    all_kinds: true,
+                    keys: Vec::new(),
+                },
+            )
+            .expect("the tee opens"),
+        );
+        // The member reads nothing, so the buffer fills and the tee goes.
+        let mut authored = 0;
+        while !run.recorder.serving().expect("serving").tee_lost() {
+            authored += 1;
+            assert!(authored < 1_000_000, "the tee never detached");
+            let key = TurnKey(format!("t-{authored}"));
+            run.author
+                .author(
+                    &mut run.recorder,
+                    Kind::TurnStarted,
+                    Subsystem::Harness,
+                    Some(&key),
+                    None,
+                )
+                .expect("authored");
+        }
+        // The member catches up: the seam could carry an ask again.
+        member_end.set_nonblocking(true).expect("nonblocking");
+        let mut drained = vec![0u8; 1 << 16];
+        while matches!(member_end.read(&mut drained), Ok(n) if n > 0) {}
+        assert_eq!(
+            take_save_point(&mut run, None),
+            Err(weaver_types::SavePointLeg::MemberDead)
+        );
+        let mut after = Vec::new();
+        let _ = member_end.read_to_end(&mut after);
+        assert!(
+            !String::from_utf8_lossy(&after).contains(r#"{"ask":{"snapshot""#),
+            "no snapshot is asked over lost distillates"
         );
     }
 

@@ -499,7 +499,11 @@ the reset on the trace, the distillates landed since it kept by the record and r
 by no default, per `weaver-state-PRD` section 4. There is no buffering, no
 retry, and no backpressure onto the turn path: the derivative is rebuildable
 from the record, so the cheapest honest answer to a broken seam is to stop
-distilling until the next load.
+distilling until the next load. **A broken seam takes no save point** (the operator's
+ruling of 2026-10-08 on #99): where the tee has stopped distilling, the holdings miss
+what came after, so the harness asks no snapshot; the save point and the clean unload
+refuse, and the next load records the reset, never a stale save point published as
+whole.
 
 **A malformed distillate is the sender's defect.** State refuses it by
 closing nothing: the event is dropped, the defect is state's to surface when
