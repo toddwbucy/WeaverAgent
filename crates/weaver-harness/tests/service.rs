@@ -672,9 +672,36 @@ fn the_load_names_what_serve_was_handed_and_what_the_enter_carried() {
         let sink = OwnedFd::from(std::fs::File::create(&sink_path).expect("sink"));
         let ends = standing.then(|| std::os::unix::net::UnixStream::pair().expect("pair"));
         let mut descriptors = vec![sink.as_raw_fd()];
-        if let Some((near, _)) = &ends {
+        // **The member's end is answered as a member answers** (#99 area 3):
+        // since A3.2 the enter asks the member `restored` before the load,
+        // waiting its 120 s bound, and an end that never answers leaves the
+        // enter refused with no organ forked whose death would end service,
+        // so the join below never returns. The stand-in answers the grants,
+        // an unseeded identity and an empty restore, as `lifecycle`'s own
+        // member stub does, and the enter goes on to the fan-out.
+        let member = ends.as_ref().map(|(near, far)| {
             descriptors.push(near.as_raw_fd());
-        }
+            let far = far.try_clone().expect("the member's end clones");
+            std::thread::spawn(move || {
+                use std::io::{BufRead, BufReader, Write};
+                let mut answers = far.try_clone().expect("clone");
+                for line in BufReader::new(far).lines() {
+                    let Ok(line) = line else { break };
+                    let answer = if line.starts_with(r#"{"ask":{"grants""#) {
+                        r#"{"answer":{"grants":{"surface":[]}}}"#
+                    } else if line.starts_with(r#"{"ask":{"identity""#) {
+                        r#"{"answer":{"identity":{"messages":[]}}}"#
+                    } else if line.starts_with(r#"{"ask":{"restored""#) {
+                        r#"{"answer":{"restored":{}}}"#
+                    } else {
+                        continue;
+                    };
+                    if answers.write_all(format!("{answer}\n").as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            })
+        });
         peer.send_with(1, serving_enter("s-named"), &descriptors);
         match peer.try_read() {
             Ok(Some(Payload::Refusal(_))) => {}
@@ -714,5 +741,63 @@ fn the_load_names_what_serve_was_handed_and_what_the_enter_carried() {
         assert_eq!(load["payload"]["composer"]["file"], "/deployed/loop.py");
         assert_eq!(load["payload"]["composer"]["sha256"], "ef".repeat(32));
         drop(peer);
+        drop(ends);
+        if let Some(member) = member {
+            member
+                .join()
+                .expect("the member stand-in ends with its end");
+        }
     }
+}
+
+/// **The watch for this suite** (#99 area 3): every test above that needs a
+/// root dialer skips as a non-root uid, which is how every gate runs, so
+/// this re-executes the suite inside `unshare --map-root-user`, where the
+/// caller is uid 0 and `SO_PEERCRED` reads 0, and requires every test to
+/// run there and none to skip for want of root. Where no user namespace can
+/// be entered, it prints a SKIP naming why and passes, as the preload door's
+/// watch does. Run as root, the suite runs in place and this does nothing.
+/// Perturbation: have `dispatch_on` answer a leave before any enter with
+/// `Left`, and this fails from a non-root run, naming
+/// `leave_before_enter_is_refused`.
+#[test]
+fn the_service_suite_is_watched_inside_a_user_namespace() {
+    if nix::unistd::getuid().is_root() {
+        return;
+    }
+    let exe = std::env::current_exe().expect("the test binary names itself");
+    let ran = std::process::Command::new("unshare")
+        .arg("--map-root-user")
+        .arg(&exe)
+        .args([
+            "--skip",
+            "the_service_suite_is_watched_inside_a_user_namespace",
+            "--nocapture",
+        ])
+        .stdin(std::process::Stdio::null())
+        .output();
+    let output = match ran {
+        Ok(output) => output,
+        Err(e) => {
+            eprintln!("SKIP service watch: unshare could not run: {e}");
+            return;
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.starts_with("unshare:") {
+        eprintln!(
+            "SKIP service watch: no user namespace here: {}",
+            stderr.trim()
+        );
+        return;
+    }
+    assert!(
+        output.status.success() && stdout.contains("test result: ok. 9 passed"),
+        "the service suite failed inside the namespace\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("the harness accepts root alone"),
+        "a test skipped for want of root inside the namespace\nstderr:\n{stderr}"
+    );
 }
