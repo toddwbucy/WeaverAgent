@@ -428,6 +428,16 @@ fn parse_line(text: &str) -> Option<ManifestLine> {
     })
 }
 
+/// **Reads at most `bound` bytes**, the read stopping one byte past it: the
+/// bytes where the source ended within the bound, `None` where it reached
+/// past, so a file another principal grows while it is read never makes
+/// this root process read without limit.
+fn read_within(source: &mut impl Read, bound: u64) -> std::io::Result<Option<Vec<u8>>> {
+    let mut bytes = Vec::new();
+    source.take(bound + 1).read_to_end(&mut bytes)?;
+    Ok((bytes.len() as u64 <= bound).then_some(bytes))
+}
+
 /// **Read the manifest**, per `weaver-admin-Spec` section 4: absent is an
 /// empty manifest; one that does not read, or a line that does not parse,
 /// refuses `BoundaryUnverified` naming it, since what is loadable can then
@@ -628,10 +638,21 @@ fn read_room(room: &Path, member_uid: u32) -> Option<(OwnedFd, Vec<RoomEntry>)> 
             );
             continue;
         }
-        let mut bytes = Vec::new();
-        if file.read_to_end(&mut bytes).is_err() {
-            continue;
-        }
+        // **The bound holds through the read** (Codex on #94): the member
+        // owns this file and may still be running at a `save-point`, so it
+        // can grow the file after the length above was read; the read stops
+        // one byte past the bound and a file that reached it is refused as
+        // the length check refuses it.
+        let bytes = match read_within(&mut file, SAVE_POINT_BOUND) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => {
+                diag!(
+                    "weaver-admin: the room's {name} grew past the bound of {SAVE_POINT_BOUND} as it was read, and is left in place"
+                );
+                continue;
+            }
+            Err(_) => continue,
+        };
         match judge(&bytes) {
             Ok(judged) if format!("{}{SUFFIX}", judged.digest) == name => found.push(RoomEntry {
                 name,
@@ -1246,6 +1267,50 @@ pub fn room_of(territory_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    /// **The size bound holds through the read** (Codex on #94): a source
+    /// that ends within the bound reads whole, one that reaches past it is
+    /// refused, however long it runs, as a room file its member grows after
+    /// the length check would, and reads no more of it than one byte past
+    /// the bound. The bound is a parameter here so the test needs no
+    /// gibibyte. Perturbation: read without the `take` and the whole long
+    /// source is pulled into memory.
+    #[test]
+    fn a_read_past_the_bound_is_refused_however_long_the_source() {
+        let bound = 16u64;
+        let mut within = std::io::Cursor::new(vec![7u8; 16]);
+        assert_eq!(
+            read_within(&mut within, bound).unwrap(),
+            Some(vec![7u8; 16])
+        );
+        let mut past = std::io::Cursor::new(vec![7u8; 17]);
+        assert_eq!(read_within(&mut past, bound).unwrap(), None);
+        // A source far longer than the bound, as a file its member keeps
+        // growing: the read takes at most one byte past the bound.
+        struct Counting {
+            left: u64,
+            pulled: u64,
+        }
+        impl Read for Counting {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                let n = (buffer.len() as u64).min(self.left) as usize;
+                buffer[..n].fill(7);
+                self.left -= n as u64;
+                self.pulled += n as u64;
+                Ok(n)
+            }
+        }
+        let mut long = Counting {
+            left: 1 << 20,
+            pulled: 0,
+        };
+        assert_eq!(read_within(&mut long, bound).unwrap(), None);
+        assert!(
+            long.pulled <= bound + 1,
+            "read {} bytes of a source past a bound of {bound}",
+            long.pulled
+        );
+    }
+
     use super::*;
 
     /// A save point in the member's format, built here as the member builds
