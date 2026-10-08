@@ -516,6 +516,30 @@ pub(crate) fn seal_except(keep: &[RawFd]) -> std::io::Result<()> {
     close_on_exec_range(low, u32::MAX)
 }
 
+/// **A test's forked child closes what it inherited**, every descriptor
+/// above standard error but `keep`, as its first act: a fork without an exec
+/// carries every descriptor the test process held at that instant, another
+/// test's run-lock description among them, so the child would hold that
+/// run's lock, and the escalation of that test, finding it among the
+/// holders, would end it. Async-signal-safe: raw `close_range` calls only.
+#[cfg(test)]
+pub(crate) fn close_inherited_except(keep: Option<RawFd>) {
+    let close = |first: u32, last: u32| {
+        if first <= last {
+            // SAFETY: close_range closes a range of this process's
+            // descriptors and is async-signal-safe.
+            unsafe { nix::libc::syscall(nix::libc::SYS_close_range, first, last, 0u32) };
+        }
+    };
+    match keep {
+        Some(kept) if kept >= 3 => {
+            close(3, kept as u32 - 1);
+            close(kept as u32 + 1, u32::MAX);
+        }
+        _ => close(3, u32::MAX),
+    }
+}
+
 fn close_on_exec_range(first: u32, last: u32) -> std::io::Result<()> {
     // SAFETY: close_range with CLOSE_RANGE_CLOEXEC marks a range of this
     // process's descriptors and is async-signal-safe.
@@ -574,7 +598,7 @@ pub struct WorkerStart<'a> {
     pub gid: u32,
     pub home: &'a Path,
     pub library_path: Option<&'a Path>,
-    /// The worker log, `worker.log` in the declaration directory, never the
+    /// The worker log, `worker.log` in the territory, never the
     /// operations log.
     pub log: &'a std::fs::File,
     pub run_lock: &'a RunLock,
@@ -1098,6 +1122,7 @@ mod tests {
         // SAFETY: the child only calls async-signal-safe functions.
         match unsafe { nix::unistd::fork() }.unwrap() {
             nix::unistd::ForkResult::Child => {
+                close_inherited_except(None);
                 // SAFETY: open and fcntl are async-signal-safe.
                 let code = unsafe {
                     let fd = nix::libc::open(c_path.as_ptr(), nix::libc::O_RDWR);
@@ -1134,6 +1159,7 @@ mod tests {
         // SAFETY: the child calls only async-signal-safe functions.
         match unsafe { nix::unistd::fork() }.unwrap() {
             nix::unistd::ForkResult::Child => {
+                close_inherited_except(Some(ready_write.as_raw_fd()));
                 // SAFETY: open, fcntl, write, nanosleep and _exit are
                 // async-signal-safe.
                 unsafe {

@@ -326,23 +326,43 @@ the seal**, per the clause on the parked replay ask above, so it never answers f
 store the driver has not yet sealed. Where no door stands it answers immediately,
 parking never, like `shape`.
 
-**The `snapshot` ask writes a save point and answers where it stands**, added 2026-10-02
-on the operator's ruling on issue #1 and shaped by the rulings of the same day on #58:
-the store initiates nothing, so a save point is taken when the harness asks, at every
-serving leave and on the operator's demand, and never under a diagnostic binding, per
-`weaver-harness-Spec` section 6. The ask carries no members. The custodian writes the
-whole of its holdings with the schema they stand under as a new file in its own room,
-the territory's `state/`, never overwriting one that stands, per `weaver-state-PRD`
-section 4, and admin publishes each finished one into the operator's directory at the
-next load or unload. The answer carries five members: `save-point`, the name it wrote,
-`run` and `sequence`, the trace position of the last distillate it holds, `turn`, the
-last turn that run's holdings carry, and `digest`, the digest of its bytes, which the
-harness records on the trace as the `save_point` event of `weaver-trace-PRD` section 3. It answers against the
-holdings the stream carried before it, like `shape`, and parks never. A write that fails
-is not answered and leaves no file under a finished name, the asker's bound converting
-the silence into the missing answer of section 5, and the harness records no save point
-for it. The answer is a stamp and never the holdings: no byte of a save point crosses
-this seam.
+**The `snapshot` ask writes a save point and answers where it stands, and the finished
+name follows the harness's acknowledgement**, added 2026-10-02 on the operator's ruling
+on issue #1, shaped by the rulings of the same day on #58, and amended on the operator's
+ruling of 2026-10-06 on #1 (A3.0 item 4) to write, answer, acknowledge: the store
+initiates nothing, so a save point is taken when the harness asks, at every serving
+leave and on the operator's demand, and never under a diagnostic binding, per
+`weaver-harness-Spec` section 6. **The ask carries one member, `ask`, the harness's
+ordinal for the exchange**, counted per residency from 1 (Codex on #94, round 10), so a
+late answer is told from the retry's by its number: the custodian echoes it on the
+answer and on the `finished` answer, matches the acknowledgement to the part by number
+and digest both, and the harness drops an answer carrying another number and keeps
+waiting inside its bound. **A frame of this protocol is never another ask's answer**:
+one that lands while the harness awaits any other ask is dropped and the wait goes on
+inside that ask's bound. **The answer leg's bound is 120 seconds**, on the operator's
+ruling of 2026-10-08, since the custodian writes the image before it answers and 120
+seconds covers a 1 GiB image; the `finished` answer and every other ask are awaited
+inside the harness's two seconds, per `weaver-harness-Spec` section 6. The custodian writes the
+whole of its holdings with the schema they stand under as a part in its own room, the
+territory's `state/`, never overwriting one that stands, per `weaver-state-PRD` section
+4. The answer carries six members: `ask`, the ordinal echoed, `save-point`, the finished
+name the file will take, `run` and `sequence`, the trace position of the last distillate
+it holds, `turn`, the last turn that run's holdings carry, and `digest`, the digest of
+its bytes. **The harness then sends `acknowledge`**, the one message on this seam that
+is not an ask, `{"acknowledge":{"snapshot":{"ask":N,"digest":...}}}` naming the ordinal
+and the digest it was answered, and the custodian gives the file its finished name and
+answers `{"answer":{"finished":{"ask":N,"save-point":...}}}`, on which the harness
+records the `save_point` event of
+`weaver-trace-PRD` section 3; admin publishes finished names alone, at the next load or
+unload or at once on the operator's demand, so a save point whose answer or
+acknowledgement was lost never has a finished name, is never published and is never
+restored, and the trace names only finished files. It answers against the holdings the
+stream carried before it, like `shape`, and parks never. A write that fails is not
+answered and leaves no file under a finished name, the asker's bound converting the
+silence into the missing answer of section 5, and the harness records no save point for
+it; an acknowledgement the custodian cannot honour is answered by nothing and the part
+is removed. The answer is a stamp and never the holdings: no byte of a save point
+crosses this seam.
 
 **The `restore` ask replaces the holdings from a save point in the member's room**,
 added 2026-10-02 on the operator's ruling on #58 that a live restore swaps state without
@@ -361,14 +381,18 @@ distillate the stream carries after the ask lands on the restored holdings. The 
 parks never, and a restore that fails is not answered, the asker's bound converting the
 silence into the missing answer of section 5: the harness then flushes nothing, records
 the miss, and serves on the holdings the member still holds. An answer lost after the
-member swapped its holdings leaves the restore indeterminate, the holdings restored and
-the decode cache not flushed. What an indeterminate restore owes, a stopped run or a
-commit step that keeps the swap invisible until acknowledged, is a named design item
-of the save-point code act, carried on #1. On its answer the harness
+member swapped its holdings is a reload that did not complete, on the operator's ruling
+of 2026-10-06 on #1 that a restore is a reload of the agent's state, never a patch into
+a running session: the harness stops the run, and the next load restores the latest
+published save point with the reset recorded; the custodian's holdings are either the
+prior ones or the restored ones, never a mixture, the swap being its commit step. The
+harness performs a restore only at a turn boundary, as a reload: flush the decode cache,
+ask, rebuild the prefix from the restored holdings, which needs the decode seam's
+`Reopen` and is the loop act's (A5). On its answer the harness
 flushes the decode session to `keep = 0` through `weaver-harness-spu-decode-contract`'s
 existing cut, or, where the answered `identity` differs from the seated prefix, closes
 and reopens the decode session with it, per `weaver-harness-Spec` section 6, and this
-seam carries nothing of the flush. A save point only in the operator's directory
+seam carries nothing of the flush. A save point only in the territory's `save-points/`
 restores at a load, through the descriptor admin hands the member at spawn, and never
 through this ask.
 
@@ -388,7 +412,8 @@ does not convert it: an enter that cannot say what its state was restored from m
 author a `load` event that says it. The opener stays one-way, and the save point's bytes
 never reach this ask, admin having judged them at the inventory.
 
-A further ask name is a change under section 7 and does not exist until it merges there.
+A further ask name, or a further message such as `acknowledge`, is a change under
+section 7 and does not exist until it merges there.
 
 ## 3. What the harness owes
 

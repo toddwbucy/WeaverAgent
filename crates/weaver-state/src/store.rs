@@ -159,26 +159,50 @@ pub enum Ask {
     /// decode open, per the contract as of 2026-09-04. Carries no members.
     Identity,
     /// Write a save point and answer its stamp, per the contract's sixth
-    /// ask of 2026-10-02. Carries no members.
-    Snapshot,
+    /// ask of 2026-10-02. Carries `ask`, the harness's ordinal for this
+    /// exchange, per residency from 1 (Codex on #94, round 10), which the
+    /// answer and the `finished` answer echo, so a late answer is told from
+    /// the retry's by its number.
+    Snapshot { ordinal: u64 },
     /// Replace the holdings from a save point in the member's room, per the
     /// contract's seventh ask of 2026-10-02. Carries the name.
     Restore { save_point: String },
     /// What the load restored, per the contract's eighth ask of 2026-10-02.
     /// Carries no members.
     Restored,
+    /// **The harness's acknowledgement of a `snapshot` answer**, the one
+    /// message on the seam that is not an ask, per the contract as of A3.2
+    /// (the operator's ruling of 2026-10-06 on #1): names the ordinal and
+    /// the digest it was answered, and the member gives the part its
+    /// finished name where both match and answers `finished`.
+    Acknowledge { ordinal: u64, digest: String },
 }
 
 /// Parse a seam frame as an ask, or nothing where it is not one. **An ask
 /// frame is one recognized name and no other, and its body is exactly what
-/// the contract gives that ask**: an empty object for the six asks that
-/// carry no members, exactly `save-point` as a string for `restore`, and at
-/// most `last-turns` as a count for `recall`. A frame naming two asks, or a
+/// the contract gives that ask**: an empty object for the five asks that
+/// carry no members, exactly `ask` as a count for `snapshot`, exactly
+/// `save-point` as a string for `restore`, and at most `last-turns` as a
+/// count for `recall`. A frame naming two asks, or a
 /// body carrying anything else, is malformed and answers nothing, per the
 /// contract's silence rule, which matters most for `snapshot`, the one ask
 /// with a filesystem side effect: presence of its name is not an ask.
 pub fn parse_ask(frame: &str) -> Option<Ask> {
     let value: serde_json::Value = serde_json::from_str(frame).ok()?;
+    if let Some(acknowledge) = value.get("acknowledge") {
+        // `{"acknowledge":{"snapshot":{"ask":N,"digest":"..."}}}` and nothing else.
+        let acknowledge = acknowledge.as_object()?;
+        if acknowledge.len() != 1 || value.as_object()?.len() != 1 {
+            return None;
+        }
+        let body = acknowledge.get("snapshot")?.as_object()?;
+        if body.len() != 2 {
+            return None;
+        }
+        let ordinal = body.get("ask")?.as_u64()?;
+        let digest = body.get("digest")?.as_str()?.to_string();
+        return Some(Ask::Acknowledge { ordinal, digest });
+    }
     let ask = value.get("ask")?.as_object()?;
     if ask.len() != 1 {
         return None;
@@ -191,7 +215,13 @@ pub fn parse_ask(frame: &str) -> Option<Ask> {
         "replay" => empty().map(|()| Ask::Replay),
         "grants" => empty().map(|()| Ask::Grants),
         "identity" => empty().map(|()| Ask::Identity),
-        "snapshot" => empty().map(|()| Ask::Snapshot),
+        "snapshot" => {
+            if body.len() != 1 {
+                return None;
+            }
+            let ordinal = body.get("ask")?.as_u64()?;
+            Some(Ask::Snapshot { ordinal })
+        }
         "restored" => empty().map(|()| Ask::Restored),
         "restore" => {
             if body.len() != 1 {
@@ -317,10 +347,23 @@ fn stamp_members(answer: &SavePointAnswer) -> serde_json::Map<String, serde_json
 
 /// The snapshot answer, per the contract:
 /// `{"answer":{"snapshot":{"save-point":..,"run":..,"sequence":..,"turn":..,"digest":..}}}`.
-pub fn render_snapshot_answer(answer: &SavePointAnswer) -> String {
+/// The `finished` answer to the harness's acknowledgement, per the contract as
+/// of A3.2: `{"answer":{"finished":{"save-point":"<name>"}}}`.
+pub fn render_finished_answer(name: &str, ordinal: u64) -> String {
     let mut frame =
-        serde_json::json!({"answer": {"snapshot": serde_json::Value::Object(stamp_members(answer))}})
+        serde_json::json!({"answer": {"finished": {"ask": ordinal, "save-point": name}}})
             .to_string();
+    frame.push('\n');
+    frame
+}
+
+/// The snapshot answer echoes the ask's ordinal beside the stamp's five
+/// members (Codex on #94, round 10).
+pub fn render_snapshot_answer(answer: &SavePointAnswer, ordinal: u64) -> String {
+    let mut members = stamp_members(answer);
+    members.insert("ask".into(), ordinal.into());
+    let mut frame =
+        serde_json::json!({"answer": {"snapshot": serde_json::Value::Object(members)}}).to_string();
     frame.push('\n');
     frame
 }
@@ -541,4 +584,37 @@ pub(crate) fn assert_branch_recall(whole: &[RecalledEvent], bounded: &[RecalledE
         ["message.user", "message.assistant"],
         "a bounded recall answers the newest turn and no turnless row"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The numbered snapshot frames parse whole or not at all** (Codex on
+    /// #94, round 10): the ask with its ordinal, the acknowledgement with
+    /// its ordinal and digest; an ask without the ordinal, or an
+    /// acknowledgement with one member, is not this ask.
+    #[test]
+    fn the_numbered_snapshot_frames_parse_whole_or_not_at_all() {
+        assert_eq!(
+            parse_ask(r#"{"ask":{"snapshot":{"ask":2}}}"#),
+            Some(Ask::Snapshot { ordinal: 2 })
+        );
+        assert_eq!(parse_ask(r#"{"ask":{"snapshot":{}}}"#), None);
+        assert_eq!(
+            parse_ask(r#"{"acknowledge":{"snapshot":{"ask":2,"digest":"ab"}}}"#),
+            Some(Ask::Acknowledge {
+                ordinal: 2,
+                digest: "ab".into()
+            })
+        );
+        assert_eq!(
+            parse_ask(r#"{"acknowledge":{"snapshot":{"digest":"ab"}}}"#),
+            None
+        );
+        assert!(
+            render_finished_answer("x.save-point", 2)
+                .starts_with(r#"{"answer":{"finished":{"ask":2,"save-point":"x.save-point"}}}"#)
+        );
+    }
 }

@@ -30,11 +30,14 @@
 # in transition, or that it cannot answer for refuses by name. The units of the
 # layout before #50 are still checked as before.
 #
-# **The operator's declaration directories stay**, as the models do: each is
-# the operator's own data (`agent.toml`, the prompt, `admin.log`,
-# `worker.log`), archived and never purged. The sudo rules
-# `/etc/sudoers.d/weaver-*` and the run directories under each coordination
-# root go with the agent.
+# **The territory is archived whole**: since the operator's ruling of
+# 2026-10-07 on #1 it holds the declaration, the prompt draft, the two logs and
+# the published save points beside the state room and the trace, so they ride
+# in the territories' archive and go with the agent. The operator's home is
+# never touched: a box from before that ruling keeps its `~/.weaveragent/`
+# directories where they stand, unarchived and unpurged, the operator's own.
+# The sudo rules `/etc/sudoers.d/weaver-*` and the run directories under each
+# coordination root go with the agent.
 #
 # **Three modes, because the archive is verified before anything is removed.**
 # `--archive` writes tarballs, dumps, a box-facts file and a SHA256SUMS, then
@@ -97,11 +100,11 @@ read_key() { cat "$1/$2" 2>/dev/null || true; }
 
 # Every path admin's configs name, so the install tree is the one the box
 # actually ran and not the one this script remembers.
-declare -A BIN_DIRS=() AGENT_DIRS=() LOG_PATHS=() DECL_DIRS=() COORD_ROOTS=()
+declare -A BIN_DIRS=() AGENT_DIRS=() LOG_PATHS=() COORD_ROOTS=()
 ALLOWED=""
 # **The per-agent roots**: every directory under a base, named as admin's name
-# check admits it, a link never one. Each names its binaries, its declaration
-# directory and its coordination root.
+# check admits it, a link never one. Each names its binaries, its territory
+# and its coordination root.
 AGENT_ROOTS=()
 for base in "${CONFIG_ROOTS[@]}"; do
   for root in "$base"/*/; do
@@ -112,7 +115,6 @@ for base in "${CONFIG_ROOTS[@]}"; do
     for k in worker-binary spu-binary gate-binary; do
       v=$(read_key "$root" "$k"); [ -n "$v" ] && BIN_DIRS["$(dirname "$v")"]=1
     done
-    v=$(read_key "$root" declaration-directory); [ -n "$v" ] && DECL_DIRS["$v"]=1
     v=$(read_key "$root" coordination-root); [ -n "$v" ] && COORD_ROOTS["$v"]=1
     ALLOWED="$ALLOWED ${root##*/}"
   done
@@ -160,8 +162,7 @@ mapfile -t SUDO_RULES < <(find /etc/sudoers.d -maxdepth 1 -type f \( -name 'weav
 say "config roots"
 for r in "${CONFIG_ROOTS[@]}"; do plan "$r  (allow-list: $(read_key "$r" allow-list | tr '\n' ' '))"; done
 [ ${#CONFIG_ROOTS[@]} -gt 0 ] || plan "none under /etc/weaver"
-for r in "${AGENT_ROOTS[@]}"; do plan "$r  (declaration-directory: $(read_key "$r" declaration-directory))"; done
-for d in "${!DECL_DIRS[@]}"; do plan "$d  KEPT: the operator's declaration directory, archived and not purged"; done
+for r in "${AGENT_ROOTS[@]}"; do plan "$r  (territory: $(read_key "$r" territory))"; done
 for f in "${SUDO_RULES[@]}"; do plan "$f  (sudo rule)"; done
 
 say "install prefixes (models excluded from every mode)"
@@ -309,6 +310,36 @@ for d in "${!AGENT_DIRS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan 
 declare -A TERRITORY_BASES=([/var/lib/weaver-agent]=1)
 v=$(read_key /etc/weaver/stack agent-directory); [ -n "$v" ] && TERRITORY_BASES["$v"]=1
 for d in /var/lib/weaver "${!TERRITORY_BASES[@]}" "${!LOG_PATHS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"; done
+# **territories_outside BASE... -- ROOT...: each root's own territory that no
+# base covers**, read from the root's `territory` key (the operator's ruling of
+# 2026-10-07 on #1), one per line. Under the new layout a territory is the
+# declaration, the draft, the logs and the published save points as well as
+# the trace and the state room, so one the bases miss, a custom territory or
+# one made under an agent-directory the stack record no longer names, would
+# be the agent unarchived at its takedown (Codex on #94, round 8). A root
+# without the key, the pre-ruling layout, is archived by the bases as before;
+# a territory under a base is archived with its base and not twice.
+# Paths are compared canonical (Codex on #94, round 12): a territory written
+# as `<base>/../elsewhere` is outside the base however it is spelled, and a
+# base or a territory that does not resolve is left out of the comparison,
+# an absent base covering nothing and an absent territory archiving nothing.
+territories_outside() {
+  local bases=() b r v c covered
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do
+    c=$(realpath -e -- "$1" 2>/dev/null) && bases+=("$c")
+    shift
+  done
+  [ "${1:-}" = -- ] && shift
+  for r in "$@"; do
+    v=$(cat "$r/territory" 2>/dev/null || true); v=${v%%$'\n'*}; [ -n "$v" ] && [ -d "$v" ] && [ ! -L "$v" ] || continue
+    v=$(realpath -e -- "$v" 2>/dev/null) || continue
+    covered=0
+    for b in "${bases[@]}"; do case "$v" in "$b"/*) covered=1;; esac; done
+    [ "$covered" = 0 ] && printf '%s\n' "$v"
+  done | sort -u
+}
+mapfile -t OWN_TERRITORIES < <(territories_outside "${!TERRITORY_BASES[@]}" -- "${AGENT_ROOTS[@]}")
+for d in "${OWN_TERRITORIES[@]}"; do TERRITORY_PATHS+=("$d") && plan "$d  (a root's own territory, outside the bases) $(du -sh "$d" 2>/dev/null | cut -f1)"; done
 HOMES=()
 for u in "${WEAVER_USERS[@]}"; do
   h=$(getent passwd "$u" | cut -d: -f6)
@@ -437,13 +468,6 @@ if [ "$MODE" = archive ]; then
 
   [ -d /etc/weaver ] && archive_path etc-weaver /etc/weaver
   [ ${#SUDO_RULES[@]} -gt 0 ] && archive_path sudoers-weaver "${SUDO_RULES[@]}"
-  # The operator's declaration directories are archived and then dropped
-  # from the purge list: they are the operator's to keep.
-  if [ ${#DECL_DIRS[@]} -gt 0 ]; then
-    kept=${#PURGE[@]}
-    archive_path declaration-directories "${!DECL_DIRS[@]}"
-    PURGE=("${PURGE[@]:0:$kept}")
-  fi
   [ ${#LDSO_CONFS[@]} -gt 0 ] && archive_path ld-so-conf "${LDSO_CONFS[@]}"
   for p in "${!PREFIXES[@]}"; do
     parts=()
@@ -456,6 +480,8 @@ if [ "$MODE" = archive ]; then
   for d in "${!TERRITORY_BASES[@]}"; do
     [ -e "$d" ] && archive_path "$(archive_name territories "$d")" "$d"
   done
+  # Each root's own territory the bases miss, by the path its root names.
+  for d in "${OWN_TERRITORIES[@]}"; do archive_path "$(archive_name territory "$d")" "$d"; done
   for d in "${!LOG_PATHS[@]}"; do archive_path "$(archive_name log "$d")" "$d"; done
   for d in "${!AGENT_DIRS[@]}"; do archive_path "$(archive_name agent-config "$d")" "$d"; done
   [ ${#HOMES[@]} -gt 0 ] && archive_path home-weaver-users "${HOMES[@]}"

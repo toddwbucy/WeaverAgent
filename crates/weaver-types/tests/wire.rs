@@ -521,10 +521,11 @@ fn no_label_refusal_reads_as_an_answer() {
 fn the_cause_and_the_constituents_render_as_stated() {
     let leave = LifecycleDirective::Leave {
         cause: weaver_types::Cause { uid: 1000 },
+        forced: false,
     };
     assert_eq!(
         serde_json::to_string(&leave).unwrap(),
-        r#"{"kind":"leave","cause":{"uid":1000}}"#
+        r#"{"kind":"leave","cause":{"uid":1000},"forced":false}"#
     );
     let stop = LifecycleDirective::Stop {
         cause: weaver_types::Cause { uid: 0 },

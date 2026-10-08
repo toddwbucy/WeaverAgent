@@ -30,7 +30,7 @@ path = "src/bin/weaver-trace-relay.rs"
 [dependencies]
 weaver-types = { path = "../weaver-types", features = ["config"] }
 serde_json.workspace = true
-nix = { version = "0.31", features = ["socket", "fs", "process", "uio", "user"] }
+nix = { version = "0.31", features = ["socket", "fs", "process", "uio", "user", "dir"] }
 # The declaration's digest, supplied on the enter per weaver-admin-Spec section 1
 # as of 2026-09-04, so the run and the record name what they were built from.
 sha2 = "0.10"

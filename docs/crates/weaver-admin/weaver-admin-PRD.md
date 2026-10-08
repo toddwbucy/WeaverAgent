@@ -255,9 +255,9 @@ because deferring a format is not a reason to leave the sole record of the privi
 half of the lifecycle invisible to it.
 
 **Custody, stated because every other artifact in this corpus has its access argued.**
-The log is the agent's own, one per agent, `admin.log` in the agent's declaration
-directory, `~/.weaveragent/<agent>/` by default, on the operator's rulings of 2026-10-03
-on #63 and #50, moved from the root's `log-path`. It is written by root, appended
+The log is the agent's own, one per agent, `admin.log` in the agent's territory, on the
+operator's rulings of 2026-10-03 on #63 and #50, moved from the root's `log-path`, and
+of 2026-10-07 on #1, moved with the declaration from the operator's home. It is written by root, appended
 without following a link, and it never lands inside an agent home, which is the
 load-bearing half. The named adversary is the agent uid, and it is excluded by the
 directory, which is closed to every uid but the operator's, so the agent cannot reach

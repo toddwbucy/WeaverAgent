@@ -266,7 +266,9 @@ fn take_inventory_against(
     // or remove the file admin opened - and custody of where the record leaves
     // the system is admin's by charter. Ownership does not by itself deny a
     // traversal that mode grants, and denial does not by itself establish
-    // custody, so both are checked.
+    // custody, so both are checked. The directory is the territory, root's at
+    // `0710` under the state group, which the agent's uid does not hold (the
+    // operator's ruling of 2026-10-08 on #1).
     let directory = sink_directory(&config.trace_sink);
     if agent_can_traverse(directory, boundary) {
         return Err(LifecycleRefusal::BoundaryUnverified);
@@ -304,29 +306,12 @@ fn take_inventory_against(
         return Err(LifecycleRefusal::BoundaryUnverified);
     }
 
-    // **A restore names a save point, and this crate does not yet judge
-    // one**, per `weaver-admin-Spec` section 4 on the operator's rulings of
-    // 2026-10-02 on #58, which retired the record restore this walk resolved
-    // until the save-point act (#1, A3): selecting the save point, judging
-    // its bytes and stamp, resolving the lineage and the reset from the
-    // clean-unload marker, and handing the member its descriptor are admin's
-    // save-point act, A3.2. Until it lands a declaration naming `restore`
-    // refuses `ConfigInvalid` naming `restore`, said on the diagnostic
-    // stream, so no load names holdings nobody restored, and every load
-    // carries no lineage and no reset.
-    let lineage = match config.restore.as_ref() {
-        None => None,
-        Some(_) => {
-            diag!(
-                "config invalid: restore names a save point, and admin's save-point act \
-                 (A3.2 on #1) is what selects, judges and hands one to the member; \
-                 until it lands no declaration may elect a restore"
-            );
-            return Err(LifecycleRefusal::ConfigInvalid {
-                field: Some(FieldName("restore".into())),
-            });
-        }
-    };
+    // **A restore names a save point, and the selection is the load's**, per
+    // `weaver-admin-Spec` section 4 as of A3.2: this walk parses the name and
+    // judges nothing of it; `main`'s load selects the save point through the
+    // manifest, judges its bytes and resolves the lineage, so the inventory
+    // carries none here and the load fills it.
+    let lineage = None;
 
     // **The access rule is checked against the mode that will carry it**, per
     // `weaver-admin-Spec` section 6 and the operator's ruling of 2026-08-28.
@@ -397,7 +382,14 @@ fn take_inventory_against(
         declaration: declaration_digest(source),
         binding,
         lineage,
-        member_account: boundary.member_account,
+        // **The member is the election's, not the box's** (the #94 survey's
+        // S2): a box carries the member's account whatever the engine, and
+        // every consumer reads this as "a member stands", so a `none` agent
+        // answers none and never waits on, restores to or publishes for a
+        // member it does not stand.
+        member_account: (store.engine != StoreEngine::None)
+            .then_some(boundary.member_account)
+            .flatten(),
     })
 }
 
@@ -1282,6 +1274,16 @@ mod tests {
             take_inventory(&name, &embedded, &boundary(&sink_dir, 65533)).is_ok(),
             "and a box carrying the account passes, so the refusal is the account's"
         );
+        // **A `none` agent reports no member though the box carries the
+        // account** (the #94 survey's S2): every consumer reads the report's
+        // account as "a member stands". Perturbation: answer the box's
+        // account whatever the engine and this reads it.
+        let provisioned = boundary(&sink_dir, 65533);
+        assert!(provisioned.member_account.is_some());
+        let report = take_inventory(&name, &declined, &provisioned).expect("none reads");
+        assert_eq!(report.member_account, None, "none stands no member");
+        let report = take_inventory(&name, &embedded, &provisioned).expect("sqlite reads");
+        assert_eq!(report.member_account, provisioned.member_account);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1668,19 +1670,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// **A declaration naming `restore` refuses at the inventory until admin's
-    /// save-point act lands**, per `weaver-admin-Spec` section 4 on the
-    /// rulings of 2026-10-02 on #58: the record restore is retired, the save
-    /// point is A3.2's to select and judge, and a load that cannot resolve a
-    /// lineage from one carries none rather than a lineage read from a record.
-    /// The refusal names `restore`, and a declaration naming none resolves no
-    /// lineage.
+    /// **A declaration naming `restore` parses here and resolves no lineage
+    /// here**, per `weaver-admin-Spec` section 4 as of A3.2: the selection,
+    /// the judgment of the bytes and the lineage are the load's, through the
+    /// manifest, so the inventory carries the name parsed and nothing more;
+    /// the record form of before A3.2 refuses by name at the parse.
     ///
-    /// Perturbation: resolve `None` for a present `restore` instead of
-    /// refusing and the first assertion fails, a load electing a restore it
-    /// silently does not perform. Watched under exactly that change.
+    /// Perturbation: resolve a lineage here from the name and the first
+    /// assertion fails, a lineage nobody judged.
     #[test]
-    fn a_restore_refuses_until_the_save_point_act_lands() {
+    fn a_restore_parses_at_the_inventory_and_the_load_selects_it() {
         let root = scratch("restore");
         let sink_dir = root.join("sink");
         std::fs::create_dir_all(&sink_dir).expect("sink dir");
@@ -1690,17 +1689,28 @@ mod tests {
         let name = AgentName("alpha".into());
         let bound = boundary(&home, 65533);
         let source = format!(
+            "{}\n[restore]\nsave-point = \"20261006T000000Z-ab.save-point\"\n",
+            config_source(&sink_dir)
+        );
+        let taken = take_inventory(&name, &source, &bound).expect("admits");
+        assert!(
+            taken.lineage.is_none(),
+            "the lineage is the load's to resolve"
+        );
+        assert_eq!(
+            taken.config.restore.map(|r| r.save_point).as_deref(),
+            Some("20261006T000000Z-ab.save-point")
+        );
+        let record = format!(
             "{}\n[restore]\nrecord = \"{}\"\n",
             config_source(&sink_dir),
             root.join("s-1.ndjson").display()
         );
-        let refused = take_inventory(&name, &source, &bound);
+        let refused = take_inventory(&name, &record, &bound);
         assert!(
-            matches!(refused, Err(LifecycleRefusal::ConfigInvalid { field: Some(ref f) }) if f.0 == "restore"),
-            "a restore refuses naming the field, got {refused:?}"
+            matches!(refused, Err(LifecycleRefusal::ConfigInvalid { field: Some(ref f) }) if f.0 == "record"),
+            "the record form refuses by name, got {refused:?}"
         );
-        let taken = take_inventory(&name, &config_source(&sink_dir), &bound).expect("admits");
-        assert!(taken.lineage.is_none(), "no restore, no lineage");
         let _ = std::fs::remove_dir_all(&root);
     }
 

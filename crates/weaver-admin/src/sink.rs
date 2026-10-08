@@ -175,7 +175,7 @@ fn open_file(
 
 /// **The trace's directory, judged before the open**: resolved once, held by
 /// one of the custody's owners and writable by no group or other (the
-/// territory's 0710 pass-through for the member's group is no write), and
+/// territory's 0710 passage is no write), and
 /// every directory above it held by section 9's rule. Answers the resolved
 /// directory, through which the open goes.
 fn judge_trace_directory(
@@ -472,7 +472,7 @@ mod tests {
     }
 
     /// **The trace's directory is held closed**: one a group may write is
-    /// refused before the open, the territory's 0710 pass-through being no
+    /// refused before the open, the territory's 0710 passage being no
     /// write. Perturbation: drop the directory's mode test and the open
     /// proceeds.
     #[test]
@@ -487,7 +487,7 @@ mod tests {
             Some(LifecycleRefusal::BoundaryUnverified)
         );
         std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(0o710)).unwrap();
-        drop(open(&file(&path, false), &custody()).expect("the 0710 pass-through holds"));
+        drop(open(&file(&path, false), &custody()).expect("the 0710 passage holds"));
     }
 
     /// **A trace not laid out as the territory lays it out is not appended

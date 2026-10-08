@@ -741,9 +741,51 @@ impl Member {
     }
     fn ask(&mut self, ask: &str, last: Option<usize>) -> String {
         let body = last.map(|n| json!({"last-turns":n})).unwrap_or(json!({}));
+        self.ask_with(ask, body)
+    }
+    fn ask_with(&mut self, ask: &str, body: Value) -> String {
         self.send(&format!("{}\n", json!({"ask":{ask:body}})));
         self.receive(WAIT)
             .unwrap_or_else(|| panic!("missing {ask} answer: {}", self.log()))
+    }
+    /// The next snapshot ordinal this driver sends, per residency from 1 as
+    /// the harness counts it; one counter for the process serves every
+    /// driver here, the member matching and never sequencing.
+    fn next_snapshot_ordinal() -> u64 {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+    /// **The four-leg snapshot**, per the contract as of A3.2: the ask with
+    /// its ordinal, the answer echoing it, this driver's acknowledgement of
+    /// the ordinal and the digest, and the member's `finished` answer naming
+    /// the file and echoing the ordinal, which stands under its finished
+    /// name only now. Answers the snapshot answer's line.
+    fn snapshot(&mut self) -> String {
+        let ordinal = Self::next_snapshot_ordinal();
+        let answer = self.ask_with("snapshot", json!({"ask": ordinal}));
+        let stamp = stamp_of(&answer, "snapshot");
+        let answered: Value = serde_json::from_str(&answer).expect("the snapshot answer parses");
+        assert_eq!(
+            answered["answer"]["snapshot"]["ask"], ordinal,
+            "the answer echoes the ask's ordinal"
+        );
+        self.send(&format!(
+            "{}\n",
+            json!({"acknowledge":{"snapshot":{"ask":ordinal,"digest":stamp.digest}}})
+        ));
+        let finished = self
+            .receive(WAIT)
+            .unwrap_or_else(|| panic!("missing finished answer: {}", self.log()));
+        let finished: Value = serde_json::from_str(&finished).expect("the finished answer parses");
+        assert_eq!(
+            finished["answer"]["finished"]["save-point"], stamp.name,
+            "the finished answer names the file the snapshot answer named"
+        );
+        assert_eq!(
+            finished["answer"]["finished"]["ask"], ordinal,
+            "the finished answer echoes the ask's ordinal"
+        );
+        answer
     }
     /// The live `restore` ask, naming a save point in the member's room.
     fn ask_restore(&mut self, name: &str) -> String {
@@ -759,7 +801,7 @@ impl Member {
     /// through the engine's own deserialize into a fresh connection. The
     /// elected indexes are read too, by name.
     fn tables(&mut self) -> Vec<Vec<String>> {
-        let answer = stamp_of(&self.ask("snapshot", None), "snapshot");
+        let answer = stamp_of(&self.snapshot(), "snapshot");
         let bytes = std::fs::read(self.directory.0.join(&answer.name)).expect("the save point");
         let save_point = SavePoint::parse(&bytes).expect("a sound save point");
         assert_eq!(
@@ -1371,7 +1413,7 @@ fn a_reloaded_store_equals_a_full_replay() {
 
     let mut live = Member::new(rule.clone(), false, SESSION);
     live.feed(&lines[..cut]);
-    let taken = stamp_of(&live.ask("snapshot", None), "snapshot");
+    let taken = stamp_of(&live.snapshot(), "snapshot");
     let replayed = answer_events(&live.ask("replay", None), "replay");
     let last = replayed.last().expect("holdings");
     assert_eq!(
@@ -1383,7 +1425,7 @@ fn a_reloaded_store_equals_a_full_replay() {
         "the stamp names the last event the holdings cover"
     );
     assert_eq!(taken.turn, 1, "and that run's last turn");
-    let again = stamp_of(&live.ask("snapshot", None), "snapshot");
+    let again = stamp_of(&live.snapshot(), "snapshot");
     assert_ne!(again.name, taken.name, "two asks give two files");
     assert_eq!(
         (&again.run, again.sequence, again.turn),
@@ -1392,6 +1434,59 @@ fn a_reloaded_store_equals_a_full_replay() {
     for name in [&taken.name, &again.name] {
         assert!(live.directory.0.join(name).is_file(), "{name} stands");
     }
+    // **An unacknowledged save point never has a finished name**, per
+    // `weaver-state-Spec` section 3 on the operator's ruling of 2026-10-06 on
+    // #1 (A3.0 item 4): the answer names the file it will take, the part
+    // stands dotted, no file stands under the finished name, and the next
+    // snapshot removes the part, so the room holds at most one; an
+    // acknowledgement naming another digest finishes nothing and removes the
+    // part too. Perturbations: finish in the write and the finished file
+    // stands before any acknowledgement; keep the part and two stand.
+    let unacknowledged = stamp_of(
+        &live.ask_with("snapshot", json!({"ask": 900_000})),
+        "snapshot",
+    );
+    assert!(
+        !live.directory.0.join(&unacknowledged.name).exists(),
+        "no finished name without the acknowledgement"
+    );
+    assert!(
+        live.directory
+            .0
+            .join(format!(".part-{}", unacknowledged.name))
+            .is_file(),
+        "the part stands"
+    );
+    let replaced = stamp_of(
+        &live.ask_with("snapshot", json!({"ask": 900_001})),
+        "snapshot",
+    );
+    assert!(
+        !live
+            .directory
+            .0
+            .join(format!(".part-{}", unacknowledged.name))
+            .exists(),
+        "the next snapshot removes the earlier part"
+    );
+    live.send(&format!(
+        "{}\n",
+        json!({"acknowledge":{"snapshot":{"ask":900_001,"digest":"not-the-part"}}})
+    ));
+    assert!(
+        live.receive(std::time::Duration::from_millis(300))
+            .is_none(),
+        "an acknowledgement naming another digest is answered by nothing"
+    );
+    assert!(
+        !live
+            .directory
+            .0
+            .join(format!(".part-{}", replaced.name))
+            .exists()
+            && !live.directory.0.join(&replaced.name).exists(),
+        "and the part is removed, no finished name given"
+    );
     live.feed(&lines[cut..r_two]);
 
     // The second load restores through the descriptor and says so.
@@ -1425,7 +1520,7 @@ fn a_reloaded_store_equals_a_full_replay() {
         assert_eq!(load["kind"], "load");
         load["payload"]["lineage"] = json!({
             "save_point": taken.digest, "run": taken.run, "sequence": taken.sequence,
-            "turn": taken.turn, "operator_supplied": false,
+            "turn": taken.turn, "named_at_restore": false,
         });
         load["payload"]["reset"] = json!({"prior_run": "r-one", "reason": "no-clean-unload"});
         next[0] = serde_json::to_string(&load).unwrap() + "\n";
@@ -1637,7 +1732,7 @@ fn a_damaged_or_foreign_save_point_never_reaches_the_holdings() {
 
     // A live restore of a damaged save point leaves the holdings standing.
     member.feed(&lines[..record.cut]);
-    let taken = stamp_of(&member.ask("snapshot", None), "snapshot");
+    let taken = stamp_of(&member.snapshot(), "snapshot");
     let before = member.tables();
     let sound = std::fs::read(member.directory.0.join(&taken.name)).unwrap();
     let mut flipped = sound.clone();

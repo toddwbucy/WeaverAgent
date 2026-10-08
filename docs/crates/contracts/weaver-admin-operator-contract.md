@@ -77,12 +77,14 @@ none breaches anything Gate holds, on the grounds `weaver-admin-PRD` section 3 s
 
 **A granted command line, and nothing else from the caller.** The verbs are `show`,
 `validate`, `load`, `unload` and `stop`, each with the agent's name, on the operator's
-rulings of 2026-10-03 on #50. Two more, `save-point` and `restore` against a running
-agent, are owed to #58's code act (A3), which shapes their exchange, and no rule grants
-them until it lands.
+rulings of 2026-10-03 on #50, and, as of A3.2 on the operator's rulings of 2026-10-06 on
+#1, `save-point`, which takes a save point of the running agent and publishes it at
+once, `restore`, which names the save point the next load restores, the one the
+declaration's `[restore]` names and never one the caller chooses, and `force-unload`,
+the unload that completes without its leave save point and records the loss.
 **Which lines a caller may run is the rule the operator installs**: an observer's rule
-grants `show`, and an operator's adds `validate`, `load`, `unload` and `stop`, the role
-split of #50 mapped onto command lines. Nothing else crosses in:
+grants `show`, and an operator's adds `validate`, `load`, `unload`, `stop`, `save-point`,
+`restore` and `force-unload`, the role split of #50 mapped onto command lines. Nothing else crosses in:
 no argument the caller chooses, no standard input, which the program never reads, and no
 claim of who asked. **The cause the record carries is the uid sudo reports**, and which
 person asked is WeaverWeb's record and never the agent's. **The rule opens no login
@@ -133,7 +135,11 @@ agent's configuration, validated by admin at load like every other field, and th
 stream is connected to it under root, the role's principal. A file, a pipe, and a socket
 into the operator's tooling are all conforming sinks, and the program treats them
 alike: it writes the stream and holds no opinion about what stands behind the
-handle. The mechanism is the Spec's.
+handle. The mechanism is the Spec's. **The declaration itself lives in the agent's
+territory**, `/var/lib/weaver-agent/weaver-<agent>/agent.toml`, root's, on the operator's
+ruling of 2026-10-07 on #1: the operator edits it with `sudoedit`, the connector reads
+it through the access group and never writes it, and admin reads it through the
+territory's descriptor, per `weaver-admin-Spec` section 9.
 
 **Custody survives the ruling and survives the recut.** The agent principal does not
 reach
@@ -215,7 +221,13 @@ never ending an existing run, whether or not that run ever entered. A missing or
 malformed boundary file refuses `ConfigInvalid` naming `roles.toml`. An `unload` that
 cannot pin the run lock's holder refuses `LockHolderUnknown`, and one whose worker still
 holds the run lock after the escalation refuses `WorkerWouldNotExit` and answers no
-state. A `stop` or a `show` whose answer does not arrive within its bound refuses
+state. An `unload` whose leave save point was reported and did not publish refuses
+`SavePointNotTaken` naming `published`, admin's own leg, and leaves the marker open for
+the next load's reset, per `weaver-admin-Spec` section 3: unlike every other leg, the
+run has ended and the save point stands unpublished in the member's room. A
+`save-point` whose publication does not land refuses `SavePointNotTaken` naming
+`published` too, the run still open. `force-unload` reports no save point and is
+unchanged. A `stop` or a `show` whose answer does not arrive within its bound refuses
 `Unanswered`, and so does a `load` meeting a run whose worker is silent, each leaving
 the run as it stands for `unload`. **Recovery from a killed invocation is the
 caller's**: admin-con reads `show`'s facts and issues `unload`, which ends whatever

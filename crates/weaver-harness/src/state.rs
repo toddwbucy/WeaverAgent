@@ -8,8 +8,8 @@
 //! the serving thread itself - the tee's feed and this ask both run on it,
 //! so no ask can interleave a distillate's octets - and the member's
 //! answers are the only traffic that ever flows toward this crate, so
-//! whatever the wait reads is the answer or is malformed, with no third
-//! case to disambiguate.
+//! whatever the wait reads is the answer, a snapshot-protocol frame owed to
+//! a missed save-point leg and dropped by its kind, or malformed.
 //!
 //! **The open itself is `lifecycle.rs`'s**, which cites `harness-session-
 //! opens-at-enter` for the enter's fan-out. This unit holds the ask the open
@@ -25,6 +25,13 @@ use std::os::unix::net::UnixStream;
 /// holdings, and an expiry is the dead peer converted into the same absence
 /// a missing leg serves.
 pub(crate) const ANSWER_BOUND_MS: u64 = 2_000;
+
+/// **The bound on the snapshot's answer leg**, per `weaver-harness-Spec`
+/// section 6 on the operator's ruling of 2026-10-08: the member writes the
+/// image before it answers, so the leg is waited on for 120 seconds, enough
+/// to write a 1 GiB image. The ask leg and the finished leg, and every
+/// other ask, keep `ANSWER_BOUND_MS`.
+pub(crate) const SNAPSHOT_ANSWER_BOUND_MS: u64 = 120_000;
 
 /// The bound on an ask that parks at the member until the driver seals,
 /// per `weaver-harness-state-contract` section 2: the enter's identity and
@@ -171,8 +178,33 @@ pub struct StateSeam {
     /// after a timed-out ask would be read as the next ask's answer,
     /// mis-attributing its position in the stream, so a seam that failed
     /// one ask answers no later one. The ingest direction is the tee's
-    /// and is unaffected.
+    /// and is unaffected. **The snapshot's answer and finished legs are
+    /// the exception**, per `weaver-harness-Spec` section 6: a miss there
+    /// leaves the run entered for the operator's retry, so the seam stays
+    /// alive and settles instead, below.
     dead: bool,
+    /// A snapshot leg missed its bound with the member alive: whatever the
+    /// member sends late, a whole line or part of one, is owed to no ask,
+    /// so the next ask drains it before it is sent, per
+    /// `weaver-harness-Spec` section 6, and the retry's answer is read as
+    /// the retry's. A frame landing after the drain is dropped by the wait:
+    /// by its number at a snapshot ask, by its kind at every other.
+    unsettled: bool,
+    /// **The next snapshot ask's ordinal**, per residency from 1 (Codex on
+    /// #94, round 10): the ask carries it, the member echoes it on the answer
+    /// and the finished answer, and an answer carrying another number is a
+    /// late one and is dropped by its number rather than by timing, so a
+    /// slow member's answer to the ask before never passes as the retry's.
+    snapshot_ordinal: u64,
+    /// Bytes read past the last answered line, kept for the next await: an
+    /// answer that arrived in the same read as the one before it is the next
+    /// exchange's, never dropped, which the four-leg save point of A3.2
+    /// depends on where the member answers ahead.
+    residual: Vec<u8>,
+    /// The snapshot answer leg's bound, `SNAPSHOT_ANSWER_BOUND_MS` on every
+    /// seam the crate builds; a test that needs the leg to miss shortens it
+    /// rather than waiting two minutes out.
+    snapshot_answer_bound_ms: u64,
 }
 
 impl StateSeam {
@@ -182,6 +214,10 @@ impl StateSeam {
         StateSeam {
             channel,
             dead: false,
+            unsettled: false,
+            snapshot_ordinal: 1,
+            residual: Vec::new(),
+            snapshot_answer_bound_ms: SNAPSHOT_ANSWER_BOUND_MS,
         }
     }
 
@@ -205,8 +241,7 @@ impl StateSeam {
         if !self.send(b"{\"ask\":{\"shape\":{}}}\n") {
             return None;
         }
-        let line = self.await_line(ANSWER_BOUND_MS)?;
-        parse_shape_answer(&line)
+        self.await_answer(ANSWER_BOUND_MS, parse_shape_answer)
     }
 
     /// The recall ask, per the contract: the conversation as custody holds
@@ -232,8 +267,7 @@ impl StateSeam {
         if !self.send(b"{\"ask\":{\"grants\":{}}}\n") {
             return None;
         }
-        let line = self.await_line(ANSWER_BOUND_MS)?;
-        parse_grants_answer(&line)
+        self.await_answer(ANSWER_BOUND_MS, parse_grants_answer)
     }
 
     /// The session's seated prefix as custody holds it, per the contract's
@@ -257,8 +291,7 @@ impl StateSeam {
         if !self.send(b"{\"ask\":{\"identity\":{}}}\n") {
             return None;
         }
-        let line = self.await_line(bound_ms)?;
-        parse_identity_answer(&line)
+        self.await_answer(bound_ms, parse_identity_answer)
     }
 
     pub(crate) fn ask_recall(&mut self, last_turns: Option<u64>) -> Option<Vec<Recalled>> {
@@ -285,32 +318,74 @@ impl StateSeam {
         if !self.send(b"{\"ask\":{\"restored\":{}}}\n") {
             return None;
         }
-        let line = self.await_line(ANSWER_BOUND_MS)?;
-        parse_restored_answer(&line)
+        self.await_answer(ANSWER_BOUND_MS, parse_restored_answer)
     }
 
-    /// The `snapshot` ask, per the contract's sixth ask of 2026-10-02: the
-    /// member writes a save point and answers where it stands. Sent once at
-    /// every serving leave after `unload`, and on the operator's demand. A
-    /// miss costs the save point and never the leave, under the dead-peer
-    /// conversion, the missed-leave election being carried on #1.
-    pub(crate) fn ask_snapshot(&mut self) -> Option<SavePointTaken> {
+    /// **The `snapshot` ask's four legs**, per the contract's sixth ask of
+    /// 2026-10-02 as amended on the operator's ruling of 2026-10-06 on #1
+    /// (A3.0 item 4): the ask, the answer naming the finished name the part
+    /// will take and its stamp, this end's `acknowledge` of the digest, and
+    /// the member's `finished` answer, on which the caller authors the
+    /// `save_point` event. Sent at every serving leave before `unload`, and
+    /// on the operator's demand. **A missed leg names itself**, since the
+    /// leave does not complete without its save point and the operator reads
+    /// which leg missed: the member dead before the ask, the answer, or the
+    /// `finished` answer; the write's own failure reaches this end as the
+    /// answer missing, the member answering nothing for it. **A missed
+    /// answer or finished leg retires nothing** (Codex on #94, round 4):
+    /// the member is alive and the operator retries, per the Spec, so the
+    /// seam marks itself unsettled and the next ask drains what arrived
+    /// late before it is sent; a late frame landing after that drain is
+    /// dropped by its number at a snapshot ask and by its kind at every
+    /// other. **The answer leg waits `SNAPSHOT_ANSWER_BOUND_MS`**, the
+    /// image being written before it, and the finished leg the small
+    /// asks' bound. A write that does not send is the dead peer as every
+    /// send failure is.
+    pub(crate) fn ask_snapshot(&mut self) -> Result<SavePointTaken, weaver_types::SavePointLeg> {
+        use weaver_types::SavePointLeg;
         if self.dead {
-            return None;
+            return Err(SavePointLeg::MemberDead);
         }
-        let answered = self.snapshot_exchange();
-        if answered.is_none() {
+        let ordinal = self.snapshot_ordinal;
+        self.snapshot_ordinal += 1;
+        let ask = format!(
+            "{}\n",
+            serde_json::json!({"ask": {"snapshot": {"ask": ordinal}}})
+        );
+        if !self.send(ask.as_bytes()) {
             self.dead = true;
+            return Err(SavePointLeg::MemberDead);
         }
-        answered
-    }
-
-    fn snapshot_exchange(&mut self) -> Option<SavePointTaken> {
-        if !self.send(b"{\"ask\":{\"snapshot\":{}}}\n") {
-            return None;
+        // **An answer is read by its number**: one carrying another ordinal
+        // is a late answer to an ask before, dropped and said, and the wait
+        // goes on inside the one bound; a line that is no snapshot answer at
+        // all misses the leg as before. The leg is the image's write, so it
+        // has its own bound.
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_millis(self.snapshot_answer_bound_ms);
+        let Some(answered) = self.await_numbered(deadline, ordinal, parse_snapshot_answer) else {
+            self.unsettled = true;
+            return Err(SavePointLeg::Answer);
+        };
+        let acknowledge = format!(
+            "{}\n",
+            serde_json::json!({"acknowledge": {"snapshot": {"ask": ordinal, "digest": answered.stamp.digest}}})
+        );
+        if !self.send(acknowledge.as_bytes()) {
+            self.dead = true;
+            return Err(SavePointLeg::MemberDead);
         }
-        let line = self.await_line(ANSWER_BOUND_MS)?;
-        parse_snapshot_answer(&line)
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_millis(ANSWER_BOUND_MS);
+        let Some(finished) = self.await_numbered(deadline, ordinal, parse_finished_answer) else {
+            self.unsettled = true;
+            return Err(SavePointLeg::Finished);
+        };
+        if finished != answered.name {
+            self.unsettled = true;
+            return Err(SavePointLeg::Finished);
+        }
+        Ok(answered)
     }
 
     /// The `restore` ask, per the contract's seventh ask of 2026-10-02: the
@@ -338,8 +413,7 @@ impl StateSeam {
         if !self.send(format!("{ask}\n").as_bytes()) {
             return None;
         }
-        let line = self.await_line(ANSWER_BOUND_MS)?;
-        parse_restore_answer(&line)
+        self.await_answer(ANSWER_BOUND_MS, parse_restore_answer)
     }
 
     /// The recall ask inside a caller's bound, the parked one at the enter
@@ -383,8 +457,7 @@ impl StateSeam {
         if !self.send(b"{\"ask\":{\"replay\":{}}}\n") {
             return None;
         }
-        let line = self.await_line(bound_ms)?;
-        parse_replay_answer(&line)
+        self.await_answer(bound_ms, parse_replay_answer)
     }
 
     fn recall_exchange(&mut self, last_turns: Option<u64>, bound_ms: u64) -> Option<Vec<Recalled>> {
@@ -395,14 +468,43 @@ impl StateSeam {
         if !self.send(ask.as_bytes()) {
             return None;
         }
-        let line = self.await_line(bound_ms)?;
-        parse_recall_answer(&line)
+        self.await_answer(bound_ms, parse_recall_answer)
     }
 
     /// One frame whole or nothing, the tee's own economics: the channel is
     /// nonblocking - the flag rides the shared open file description the
     /// tee set - and a peer that cannot take a frame now is not waited on.
+    /// **Settle the seam before an ask**, per `weaver-harness-Spec` section
+    /// 6: after a missed snapshot leg, whatever the member sent late is
+    /// read without blocking and discarded, the residual with it, and one
+    /// line says how much, so the ask that follows reads its own answer.
+    fn settle(&mut self) {
+        if !self.unsettled {
+            return;
+        }
+        self.unsettled = false;
+        let mut discarded = std::mem::take(&mut self.residual);
+        let mut chunk = [0u8; 65536];
+        loop {
+            match self.channel.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(count) => discarded.extend_from_slice(&chunk[..count]),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+        if !discarded.is_empty() {
+            let lines = discarded.iter().filter(|&&b| b == b'\n').count();
+            let partial = usize::from(discarded.last().is_some_and(|&b| b != b'\n'));
+            eprintln!(
+                "weaver-harness: the state seam drained {} bytes the member sent late after a missed save-point leg, {lines} whole lines and {partial} partial, owed to no ask",
+                discarded.len()
+            );
+        }
+    }
+
     fn send(&mut self, mut bytes: &[u8]) -> bool {
+        self.settle();
         while !bytes.is_empty() {
             match self.channel.write(bytes) {
                 Ok(0) => return false,
@@ -420,15 +522,68 @@ impl StateSeam {
         remaining.as_millis().min(u128::from(POLL_CEILING_MS)) as u16
     }
 
-    /// Await one line inside the bound. The channel shares the tee's
-    /// nonblocking flag, so the wait is a poll deadline rather than a read
-    /// timeout.
-    fn await_line(&mut self, bound_ms: u64) -> Option<String> {
+    /// **Await a non-snapshot ask's answer inside the bound**, per
+    /// `weaver-harness-Spec` section 6: a snapshot-protocol frame is never
+    /// another ask's answer, so one landing late after a missed save-point
+    /// leg, past the drain, is dropped and said and the wait goes on inside
+    /// the same deadline; any other line is the answer or the ask missed.
+    /// The channel shares the tee's nonblocking flag, so the wait is a poll
+    /// deadline rather than a read timeout.
+    fn await_answer<T>(&mut self, bound_ms: u64, parse: fn(&str) -> Option<T>) -> Option<T> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(bound_ms);
-        let mut buffer: Vec<u8> = Vec::new();
+        loop {
+            let line = self.await_line_until(deadline)?;
+            let Some(carried) = protocol_ordinal(&line) else {
+                return parse(&line);
+            };
+            eprintln!(
+                "weaver-harness: the state seam dropped a snapshot-protocol answer carrying ask {carried} while waiting for another ask's answer, a late answer to a missed save-point leg"
+            );
+        }
+    }
+
+    /// **Await the answer numbered `ordinal`** inside the deadline: a line
+    /// that is a numbered answer of the snapshot protocol, of either kind,
+    /// carrying another ordinal is dropped and said, the wait going on
+    /// (Codex on #94, rounds 10 and 11: a late `finished` frame of the ask
+    /// before, landing after the drain while the retry's answer is awaited,
+    /// is dropped by its number like a late answer); a line that is the
+    /// kind awaited with this ordinal is the answer; a line that is no
+    /// numbered answer of the protocol at all is the leg missed, as a
+    /// malformed answer always was.
+    fn await_numbered<T>(
+        &mut self,
+        deadline: std::time::Instant,
+        ordinal: u64,
+        parse: fn(&str) -> Option<(u64, T)>,
+    ) -> Option<T> {
+        loop {
+            let line = self.await_line_until(deadline)?;
+            if let Some((carried, answer)) = parse(&line)
+                && carried == ordinal
+            {
+                return Some(answer);
+            }
+            let carried = protocol_ordinal(&line)?;
+            if carried == ordinal {
+                // The right number on the other kind: the member answered
+                // out of order for this very exchange, which is the leg
+                // missed, never a frame to wait past.
+                return None;
+            }
+            eprintln!(
+                "weaver-harness: the state seam dropped a snapshot-protocol answer carrying ask {carried} while waiting for ask {ordinal}, a late answer to an ask before"
+            );
+        }
+    }
+
+    fn await_line_until(&mut self, deadline: std::time::Instant) -> Option<String> {
+        let mut buffer: Vec<u8> = std::mem::take(&mut self.residual);
         loop {
             if let Some(position) = buffer.iter().position(|&b| b == b'\n') {
-                return Some(String::from_utf8_lossy(&buffer[..position]).into_owned());
+                let line = String::from_utf8_lossy(&buffer[..position]).into_owned();
+                self.residual = buffer[position + 1..].to_vec();
+                return Some(line);
             }
             if buffer.len() > ANSWER_BOUND_BYTES {
                 return None;
@@ -522,10 +677,33 @@ fn parse_stamped(body: &serde_json::Value) -> Option<SavePointTaken> {
 }
 
 /// Parse the snapshot answer, per the contract:
-/// `{"answer":{"snapshot":{"save-point":..,"run":..,"sequence":..,"turn":..,"digest":..}}}`.
-fn parse_snapshot_answer(line: &str) -> Option<SavePointTaken> {
+/// `{"answer":{"snapshot":{"ask":N,"save-point":..,"run":..,"sequence":..,"turn":..,"digest":..}}}`,
+/// answering the ordinal it carries beside the stamp.
+fn parse_snapshot_answer(line: &str) -> Option<(u64, SavePointTaken)> {
     let value: serde_json::Value = serde_json::from_str(line).ok()?;
-    parse_stamped(value.get("answer")?.get("snapshot")?)
+    let body = value.get("answer")?.get("snapshot")?;
+    Some((body.get("ask")?.as_u64()?, parse_stamped(body)?))
+}
+/// The ordinal any snapshot-protocol answer carries, the `snapshot` answer's
+/// or the `finished` answer's, or none where the line is neither.
+fn protocol_ordinal(line: &str) -> Option<u64> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let answer = value.get("answer")?;
+    answer
+        .get("snapshot")
+        .or_else(|| answer.get("finished"))?
+        .get("ask")?
+        .as_u64()
+}
+/// Parse the finished answer, `{"answer":{"finished":{"ask":N,"save-point":..}}}`,
+/// answering the ordinal it carries beside the name.
+fn parse_finished_answer(line: &str) -> Option<(u64, String)> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let body = value.get("answer")?.get("finished")?;
+    Some((
+        body.get("ask")?.as_u64()?,
+        body.get("save-point")?.as_str()?.to_string(),
+    ))
 }
 
 /// Parse the restore answer: the snapshot's members and `identity`.
@@ -835,11 +1013,40 @@ mod tests {
         ] {
             assert_eq!(parse_restored_answer(answer), expected, "{answer}");
         }
+        // The four legs: both answers stand in advance, and what was asked
+        // is the snapshot ask followed by the acknowledgement of the digest.
         let (parsed, asked) = exchange(
-            r#"{"answer":{"snapshot":{"save-point":"ab.save-point","run":"r-1","sequence":41,"turn":2,"digest":"ab"}}}"#,
-            &|seam| seam.ask_snapshot().map(|a| format!("{a:?}")),
+            concat!(
+                r#"{"answer":{"snapshot":{"ask":1,"save-point":"ab.save-point","run":"r-1","sequence":41,"turn":2,"digest":"ab"}}}"#,
+                "\n",
+                r#"{"answer":{"finished":{"ask":1,"save-point":"ab.save-point"}}}"#
+            ),
+            &|seam| seam.ask_snapshot().ok().map(|a| format!("{a:?}")),
         );
-        assert_eq!(asked, "{\"ask\":{\"snapshot\":{}}}\n");
+        assert_eq!(
+            asked,
+            concat!(
+                "{\"ask\":{\"snapshot\":{\"ask\":1}}}\n",
+                "{\"acknowledge\":{\"snapshot\":{\"ask\":1,\"digest\":\"ab\"}}}\n"
+            )
+        );
+        // A finished answer naming another file, or none, is the finished
+        // leg missed. Perturbation: skip the name's comparison and the first
+        // case parses.
+        let (parsed_other, _) = exchange(
+            concat!(
+                r#"{"answer":{"snapshot":{"ask":1,"save-point":"ab.save-point","run":"r-1","sequence":41,"turn":2,"digest":"ab"}}}"#,
+                "\n",
+                r#"{"answer":{"finished":{"ask":1,"save-point":"other.save-point"}}}"#
+            ),
+            &|seam| seam.ask_snapshot().err().map(|leg| format!("{leg:?}")),
+        );
+        assert_eq!(parsed_other.as_deref(), Some("Finished"));
+        let (parsed_none, _) = exchange(
+            r#"{"answer":{"snapshot":{"ask":1,"save-point":"ab.save-point","run":"r-1","sequence":41,"turn":2,"digest":"ab"}}}"#,
+            &|seam| seam.ask_snapshot().err().map(|leg| format!("{leg:?}")),
+        );
+        assert_eq!(parsed_none.as_deref(), Some("Finished"));
         let taken = SavePointTaken {
             name: "ab.save-point".into(),
             stamp: SavePointStamp {
@@ -852,10 +1059,17 @@ mod tests {
         assert_eq!(parsed, Some(format!("{taken:?}")));
         assert!(
             parse_snapshot_answer(
-                r#"{"answer":{"snapshot":{"save-point":"x","run":"r","sequence":1,"digest":"d"}}}"#
+                r#"{"answer":{"snapshot":{"ask":1,"save-point":"x","run":"r","sequence":1,"digest":"d"}}}"#
             )
             .is_none(),
             "a stamp without its turn is malformed"
+        );
+        assert!(
+            parse_snapshot_answer(
+                r#"{"answer":{"snapshot":{"save-point":"x","run":"r","sequence":1,"turn":1,"digest":"d"}}}"#
+            )
+            .is_none(),
+            "an answer without its ordinal is malformed (Codex on #94, round 10)"
         );
         let (parsed, asked) = exchange(
             concat!(
@@ -1083,5 +1297,339 @@ mod tests {
             parse_replay_answer("{\"answer\":{\"recall\":{\"events\":[]}}}").is_none(),
             "the two answers stay apart by name"
         );
+    }
+
+    /// **A missed snapshot leg leaves the seam alive and the next ask drains
+    /// what arrived late**, per `weaver-harness-Spec` section 6 (Codex on
+    /// #94, round 4): the member answering past the bound costs the answer
+    /// leg, the late answer and the part of a line behind it are drained at
+    /// the retry, and the retry reads its own answer. Perturbation: keep the
+    /// dead flag on the missed answer and the retry answers `MemberDead`;
+    /// skip the drain and the retry acknowledges the late digest and misses
+    /// its finished leg.
+    #[test]
+    fn a_missed_snapshot_leg_is_retried_over_a_drained_seam() {
+        use std::io::BufRead;
+        let (ours, theirs) = UnixStream::pair().expect("pair");
+        ours.set_nonblocking(true).expect("nonblocking");
+        let mut seam = StateSeam::new(ours);
+        seam.snapshot_answer_bound_ms = ANSWER_BOUND_MS;
+        let (to_peer, at_peer) = std::sync::mpsc::channel::<()>();
+        let (to_us, at_us) = std::sync::mpsc::channel::<()>();
+        let peer = std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(theirs.try_clone().expect("clone"));
+            let mut writer = theirs;
+            let mut asked = Vec::new();
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("the first ask");
+            asked.push(line.clone());
+            at_peer.recv().expect("told the bound expired");
+            writer
+                .write_all(
+                    concat!(
+                        r#"{"answer":{"snapshot":{"ask":1,"save-point":"late.save-point","run":"r-1","sequence":1,"turn":1,"digest":"late"}}}"#,
+                        "\n",
+                        "{\"part"
+                    )
+                    .as_bytes(),
+                )
+                .expect("the late answer and a part of a line");
+            to_us.send(()).expect("says so");
+            line.clear();
+            reader.read_line(&mut line).expect("the retry");
+            asked.push(line.clone());
+            writer
+                .write_all(
+                    concat!(
+                        r#"{"answer":{"snapshot":{"ask":2,"save-point":"fresh.save-point","run":"r-1","sequence":1,"turn":1,"digest":"fresh"}}}"#,
+                        "\n"
+                    )
+                    .as_bytes(),
+                )
+                .expect("answers the retry");
+            line.clear();
+            reader.read_line(&mut line).expect("the acknowledgement");
+            asked.push(line.clone());
+            writer
+                .write_all(
+                    b"{\"answer\":{\"finished\":{\"ask\":2,\"save-point\":\"fresh.save-point\"}}}\n",
+                )
+                .expect("finishes");
+            asked
+        });
+        assert!(matches!(
+            seam.ask_snapshot(),
+            Err(weaver_types::SavePointLeg::Answer)
+        ));
+        to_peer.send(()).unwrap();
+        at_us.recv().unwrap();
+        let taken = seam
+            .ask_snapshot()
+            .expect("the retry is read as its own over the drained seam");
+        assert_eq!(taken.stamp.digest, "fresh");
+        let asked = peer.join().unwrap();
+        assert_eq!(
+            asked,
+            vec![
+                "{\"ask\":{\"snapshot\":{\"ask\":1}}}\n".to_string(),
+                "{\"ask\":{\"snapshot\":{\"ask\":2}}}\n".to_string(),
+                "{\"acknowledge\":{\"snapshot\":{\"ask\":2,\"digest\":\"fresh\"}}}\n".to_string(),
+            ]
+        );
+    }
+
+    /// **A late answer is dropped by its number, not by timing**, per
+    /// `weaver-harness-Spec` section 6 (Codex on #94, round 10): the member
+    /// answers the first ask only after the retry's ask has arrived, past
+    /// the drain, then answers the retry; the harness reads past the answer
+    /// carrying ask 1 to the one carrying ask 2 and acknowledges that one,
+    /// so a slow member never leaves the retry one answer behind.
+    /// Perturbation: ignore the ordinal and the stale answer is taken as the
+    /// retry's, the acknowledgement names "late" and the finished leg misses.
+    #[test]
+    fn a_late_answer_is_dropped_by_its_number_and_the_retrys_is_read() {
+        use std::io::BufRead;
+        let (ours, theirs) = UnixStream::pair().expect("pair");
+        ours.set_nonblocking(true).expect("nonblocking");
+        let mut seam = StateSeam::new(ours);
+        seam.snapshot_answer_bound_ms = ANSWER_BOUND_MS;
+        let peer = std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(theirs.try_clone().expect("clone"));
+            let mut writer = theirs;
+            let mut asked = Vec::new();
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("the first ask");
+            asked.push(line.clone());
+            // Silent past the bound: the first ask misses.
+            line.clear();
+            reader.read_line(&mut line).expect("the retry");
+            asked.push(line.clone());
+            // The late answer to ask 1 lands after the retry's ask, past any
+            // drain, then the retry's own.
+            writer
+                .write_all(
+                    concat!(
+                        r#"{"answer":{"snapshot":{"ask":1,"save-point":"late.save-point","run":"r-1","sequence":1,"turn":1,"digest":"late"}}}"#,
+                        "\n",
+                        r#"{"answer":{"snapshot":{"ask":2,"save-point":"fresh.save-point","run":"r-1","sequence":1,"turn":1,"digest":"fresh"}}}"#,
+                        "\n"
+                    )
+                    .as_bytes(),
+                )
+                .expect("answers late and then the retry");
+            line.clear();
+            reader.read_line(&mut line).expect("the acknowledgement");
+            asked.push(line.clone());
+            writer
+                .write_all(
+                    b"{\"answer\":{\"finished\":{\"ask\":2,\"save-point\":\"fresh.save-point\"}}}\n",
+                )
+                .expect("finishes the retry's");
+            asked
+        });
+        assert!(matches!(
+            seam.ask_snapshot(),
+            Err(weaver_types::SavePointLeg::Answer)
+        ));
+        let taken = seam
+            .ask_snapshot()
+            .expect("the retry reads past the late answer to its own");
+        assert_eq!(taken.stamp.digest, "fresh");
+        let asked = peer.join().unwrap();
+        assert_eq!(
+            asked[2],
+            "{\"acknowledge\":{\"snapshot\":{\"ask\":2,\"digest\":\"fresh\"}}}\n"
+        );
+    }
+
+    /// **A late `finished` frame of the ask before is dropped by its number
+    /// while the retry's answer is awaited**, per `weaver-harness-Spec`
+    /// section 6 (Codex on #94, round 11): the member finishes ask 1 only
+    /// after the retry's ask arrived, past the drain, then answers ask 2;
+    /// the harness drops the finished frame carrying ask 1 and reads ask
+    /// 2's answer. Perturbation: judge the awaited kind alone again and the
+    /// retry misses its answer leg on the finished frame.
+    #[test]
+    fn a_late_finished_frame_is_dropped_by_its_number_while_the_retry_is_awaited() {
+        use std::io::BufRead;
+        let (ours, theirs) = UnixStream::pair().expect("pair");
+        ours.set_nonblocking(true).expect("nonblocking");
+        let mut seam = StateSeam::new(ours);
+        let peer = std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(theirs.try_clone().expect("clone"));
+            let mut writer = theirs;
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("the first ask");
+            // Ask 1 is answered at once; its finished frame comes only after
+            // the retry's ask.
+            writer
+                .write_all(
+                    concat!(
+                        r#"{"answer":{"snapshot":{"ask":1,"save-point":"one.save-point","run":"r-1","sequence":1,"turn":1,"digest":"one"}}}"#,
+                        "\n"
+                    )
+                    .as_bytes(),
+                )
+                .expect("answers ask 1");
+            line.clear();
+            reader
+                .read_line(&mut line)
+                .expect("the acknowledgement of ask 1");
+            // Silent past the bound: the finished leg misses.
+            line.clear();
+            reader.read_line(&mut line).expect("the retry's ask");
+            writer
+                .write_all(
+                    concat!(
+                        r#"{"answer":{"finished":{"ask":1,"save-point":"one.save-point"}}}"#,
+                        "\n",
+                        r#"{"answer":{"snapshot":{"ask":2,"save-point":"two.save-point","run":"r-1","sequence":1,"turn":1,"digest":"two"}}}"#,
+                        "\n"
+                    )
+                    .as_bytes(),
+                )
+                .expect("finishes ask 1 late, then answers ask 2");
+            line.clear();
+            reader
+                .read_line(&mut line)
+                .expect("the acknowledgement of ask 2");
+            writer
+                .write_all(
+                    b"{\"answer\":{\"finished\":{\"ask\":2,\"save-point\":\"two.save-point\"}}}\n",
+                )
+                .expect("finishes ask 2");
+            line
+        });
+        assert!(matches!(
+            seam.ask_snapshot(),
+            Err(weaver_types::SavePointLeg::Finished)
+        ));
+        let taken = seam
+            .ask_snapshot()
+            .expect("the retry reads past the late finished frame to its own answer");
+        assert_eq!(taken.stamp.digest, "two");
+        assert_eq!(
+            peer.join().unwrap(),
+            "{\"acknowledge\":{\"snapshot\":{\"ask\":2,\"digest\":\"two\"}}}\n"
+        );
+    }
+
+    /// **A late snapshot-protocol frame is never another ask's answer**,
+    /// per `weaver-harness-Spec` section 6: the answer leg of snapshot ask
+    /// 1 misses, the seam settles, and only after the recall ask has
+    /// arrived does the member send the late answer for ask 1 and then the
+    /// recall's; the recall reads past the late frame to its own answer
+    /// inside the same bound and the seam stays alive for the snapshot ask
+    /// that follows. Perturbation: take the first line as the answer again
+    /// and the recall misses on the late frame, retiring the seam.
+    #[test]
+    fn a_late_snapshot_frame_is_dropped_by_a_later_ask_of_another_kind() {
+        use std::io::BufRead;
+        let (ours, theirs) = UnixStream::pair().expect("pair");
+        ours.set_nonblocking(true).expect("nonblocking");
+        let mut seam = StateSeam::new(ours);
+        seam.snapshot_answer_bound_ms = ANSWER_BOUND_MS;
+        let peer = std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(theirs.try_clone().expect("clone"));
+            let mut writer = theirs;
+            let mut asked = Vec::new();
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("the snapshot ask");
+            asked.push(line.clone());
+            // Silent past the bound: the answer leg misses.
+            line.clear();
+            reader.read_line(&mut line).expect("the recall ask");
+            asked.push(line.clone());
+            writer
+                .write_all(
+                    concat!(
+                        r#"{"answer":{"snapshot":{"ask":1,"save-point":"late.save-point","run":"r-1","sequence":1,"turn":1,"digest":"late"}}}"#,
+                        "\n",
+                        r#"{"answer":{"recall":{"events":[]}}}"#,
+                        "\n"
+                    )
+                    .as_bytes(),
+                )
+                .expect("answers ask 1 late, then the recall");
+            line.clear();
+            reader
+                .read_line(&mut line)
+                .expect("the second snapshot ask");
+            asked.push(line.clone());
+            writer
+                .write_all(
+                    concat!(
+                        r#"{"answer":{"snapshot":{"ask":2,"save-point":"two.save-point","run":"r-1","sequence":1,"turn":1,"digest":"two"}}}"#,
+                        "\n"
+                    )
+                    .as_bytes(),
+                )
+                .expect("answers ask 2");
+            line.clear();
+            reader.read_line(&mut line).expect("the acknowledgement");
+            writer
+                .write_all(
+                    b"{\"answer\":{\"finished\":{\"ask\":2,\"save-point\":\"two.save-point\"}}}\n",
+                )
+                .expect("finishes ask 2");
+            asked
+        });
+        assert!(matches!(
+            seam.ask_snapshot(),
+            Err(weaver_types::SavePointLeg::Answer)
+        ));
+        let recalled = seam
+            .ask_recall(None)
+            .expect("the recall reads past the late snapshot frame to its own answer");
+        assert!(recalled.is_empty());
+        let taken = seam
+            .ask_snapshot()
+            .expect("the seam is alive for the snapshot ask that follows");
+        assert_eq!(taken.stamp.digest, "two");
+        let asked = peer.join().unwrap();
+        assert_eq!(asked[1], "{\"ask\":{\"recall\":{}}}\n");
+    }
+
+    /// **The snapshot's answer leg has its own bound**, per
+    /// `weaver-harness-Spec` section 6 on the operator's ruling of
+    /// 2026-10-08: a member that answers the snapshot two and a half seconds
+    /// after the ask, past the small asks' two, is read as taken, the image
+    /// being written before the answer. Perturbation: wait the answer leg
+    /// on `ANSWER_BOUND_MS` again and the leg misses as `Answer`.
+    #[test]
+    fn a_snapshot_answered_past_the_small_bound_is_taken() {
+        use std::io::BufRead;
+        assert_eq!(SNAPSHOT_ANSWER_BOUND_MS, 120_000);
+        let (ours, theirs) = UnixStream::pair().expect("pair");
+        ours.set_nonblocking(true).expect("nonblocking");
+        let mut seam = StateSeam::new(ours);
+        let peer = std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(theirs.try_clone().expect("clone"));
+            let mut writer = theirs;
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("the snapshot ask");
+            std::thread::sleep(std::time::Duration::from_millis(ANSWER_BOUND_MS + 500));
+            writer
+                .write_all(
+                    concat!(
+                        r#"{"answer":{"snapshot":{"ask":1,"save-point":"slow.save-point","run":"r-1","sequence":1,"turn":1,"digest":"slow"}}}"#,
+                        "\n"
+                    )
+                    .as_bytes(),
+                )
+                .expect("answers past the small bound");
+            line.clear();
+            reader.read_line(&mut line).expect("the acknowledgement");
+            writer
+                .write_all(
+                    b"{\"answer\":{\"finished\":{\"ask\":1,\"save-point\":\"slow.save-point\"}}}\n",
+                )
+                .expect("finishes");
+        });
+        let taken = seam
+            .ask_snapshot()
+            .expect("the slow answer is inside the answer leg's own bound");
+        assert_eq!(taken.stamp.digest, "slow");
+        peer.join().unwrap();
     }
 }

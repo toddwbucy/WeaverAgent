@@ -2063,19 +2063,82 @@ and a save point of them would be published and could be selected by a later ser
 load as production state. The offline builder's save point is the builder's write, per
 `weaver-state-PRD` section 3, and never a diagnostic load's. The asks go under the
 dead-peer conversion every state ask takes, per the operator's rulings of 2026-10-02 on
-#58. **The leave's save point is taken last**: this crate sends the leave's `snapshot`
-ask only after it has authored the `unload` event and the tee has sent that event's
-distillate where the election names it, and before it closes the state channel, so the
-ask, answered against the holdings the stream carried before it, holds every elected
-event of the run and the next load, replaying no tail, loses none. **A leave whose save
-point is not answered is an open design item**, carried on #1 to the save-point code
-act: under the dead-peer conversion the unload would still finish clean and the next
-load would restore an older save point with no reset recorded, so whether a missed leave
-save point refuses the leave or keeps the run marked unclean is that act's to elect. A
-save point is never overwritten, so each answer names a new one, and this crate authors
-the `save_point` event that records it, per `weaver-trace-Spec` section 3, the save
-point by digest and the position it covers, an event the tee never sends to state under
-any election, so the save point and a rebuild to its position hold the same. **A
+#58. **The leave's save point is taken at rest, before the `unload` event, and the leave
+does not complete without it**, on the operator's rulings of 2026-10-06 on #1 (A3.0
+items 4 and 6), which close the open item that stood here. **The gate is lowered first**
+(Codex on #94, round 12): this crate lowers the gate, then sends the leave's `snapshot`
+ask, then authors `unload`, so no turn is admitted while the save point is taken and
+none the lower would drop ever crosses the at-rest boundary; and traffic the gate has
+sent that this loop has not yet taken is activity (Codex on #94, round 13), the leave
+refusing `ActivityNotAtRest` as for a turn in flight rather than lowering a gate whose
+admitted frame would be dropped untraced and unanswered, the loop taking the frame next
+and the operator retrying. **And the lower reads its channel until the gate's own
+answer** (Codex on #94, round 14): a frame the gate admits between that look and the
+`Lower` reaches the channel ahead of `GateStopped`, and the lower authors it as a
+refusal of the leave, so no admitted request goes unrecorded. **It sends no response
+for it** (Codex on #94, round 15): the gate drops its relay and every served connection
+when it takes the `Lower`, before it answers, so a response would be discarded and the
+request's client reads the end of its connection. Answering such a request is the
+drain's, which is the lifecycle protocol's act and not this one. The two are not one
+check twice: the look refuses the whole leave while traffic already stands, so a queued
+turn is served and not refused, and the reading loop covers only the window between the
+look and the lower, which no look can close; a leave refused at its save
+point leaves the run entered at rest with the gate lowered, which the retry or the force
+finds so. This crate sends the leave's
+`snapshot` ask after the last turn and before it authors `unload`, so the save point
+holds every elected event of the run but the `unload` event's own distillate, which is
+lifecycle provenance the record keeps and no holding needs, and the next load replays no
+tail; the holdings restored at a load therefore never carry the prior run's `unload`
+event, and a rebuild through the preload door to the stamp stops before it too, so the
+member's restore-equals-rebuild instrument, `a_reloaded_store_equals_a_full_replay`,
+stays equal by construction. **A save point has four legs**, per `weaver-harness-state-contract` section 2:
+the ask, carrying its ordinal, counted per residency from 1 (Codex on #94, round 10),
+the answer echoing it and naming the finished name and the digest, this crate's
+`acknowledge` of that ordinal and that digest, and the member's `finished` answer
+echoing the ordinal, on which this crate authors the
+`save_point` event, per `weaver-trace-Spec` section 3, the save point by digest and the
+position it covers, an event the tee never sends to state under any election, so the
+save point and a rebuild to its position hold the same; a save point is never
+overwritten, so each answer names a new one. **The answer leg has its own bound**, on
+the operator's ruling of 2026-10-08: 120 seconds (`SNAPSHOT_ANSWER_BOUND_MS`), enough for
+the member to write a 1 GiB image before it answers, while the ask, the `finished` leg
+and every other ask keep the two seconds of `ANSWER_BOUND_MS`. **Where any leg misses, the leave does not
+complete**: this crate authors no `unload`, answers admin `SavePointNotTaken` naming
+which leg, the answer (a member's failed write among its causes), the
+acknowledgement's answer, or the member being dead, and stays entered at rest with the run open, so the operator retries with
+`save-point` and `unload` or, where the member is dead, forces the unload; nothing is
+silent and the dead-peer conversion does not apply to this ask at the leave. **The seam
+stays alive across the miss**: a missed answer or finished leg retires nothing, and before
+its next ask the seam drains, without blocking, whatever lines or part of one the member
+sent late, discarding them and saying so in one diagnostic line with the count, the
+resync for every ask; **and a late answer is dropped by its number**: the retry's ask
+carries the next ordinal, and an answer of either kind, the `snapshot` answer or the
+`finished` answer, that arrives past the drain carrying the ordinal of an ask before is
+dropped and said while the wait goes on inside the bound, so a
+member whose every snapshot outruns the bound never leaves the retry one answer behind,
+which a longer bound would not close, the race being one of order and not of time.
+**A snapshot-protocol frame is never another ask's answer**: one that lands past the
+drain while any other ask is awaited, `recall`, `grants`, `shape`, `identity`, `replay`,
+`restored` or `restore`, is dropped and said and the wait goes on inside that ask's own
+bound, so a late save-point frame never misses the next ask and never retires the seam;
+only a line that is neither the awaited answer nor such a frame misses it. A
+late finished answer's file stands in the room unrecorded and is published as recovered
+at the next publication, the leave's at the latest. A missed write, the ask itself unsent, is the dead peer as every send failure is.
+**A forced leave takes no save point**: the `Leave` directive's `forced` member, set by admin's
+`force-unload` alone, has this crate author `unload` with `forced` true, recording that
+the leave's save point was not taken, so the next load, restoring the latest published
+save point, carries the reset admin resolves from its marker. **A save point on demand
+is the `SavePoint` directive's**, admin's `save-point` verb over the coordination
+channel: at rest, the same four legs, the same event, and the answer `SavePointTaken`
+naming the digest, the finished name, the position covered and the trace position of
+the event, its own run and sequence, since after a restore the covered position is the
+prior run's until a distillate lands and the event is this run's, which admin's
+manifest records; while a turn runs it refuses
+`ActivityNotAtRest`, as `Stop` would not, because a save point of a turn in flight would
+hold half of it. **A run that takes no save point refuses the demand `OutOfOrder`**: a
+diagnostic binding, or a serving run with no member seam, has no member to ask, and
+`SavePointNotTaken` naming the member dead would report a healthy member dead. The `Left` answer names the leave's save point the same way, so admin
+publishes it at once with its trace position. **A
 live restore is the loop's to trigger**: on the operator's demand this crate sends the
 `restore` ask naming a save point in the member's room, and on its answer flushes the
 decode session to `keep = 0` through the decode contract's existing cut before the next
@@ -2122,7 +2185,7 @@ included, so such an agent is seeded in every residency, as its first turn, and 
 seeding turn is admitted there as anywhere, since it is the one way the prompt enters. The
 declaration carries no identity and the enter no prompt, per `weaver-types-Spec`
 sections 2 and 4, so this crate holds no file, no path and no handle into the
-operator's directory. **The load writes none of what it seats to the record**, on
+territory's declaration or draft. **The load writes none of what it seats to the record**, on
 the operator's ruling of 2026-10-06 (later, #1) that a session's trace and the state it loaded from are not tied together once the agent is unloaded: the `load` event's lineage names the save point the session started from, the
 `recall` of the identity ask names the events the member handed back for seating, and
 the prompt's text is on the trace where it was entered, at the seeding turn, and
@@ -2198,7 +2261,7 @@ per `weaver-state-PRD` section 4. **Every serving enter where the member stands 
 the ruling of 2026-10-02 on #58's fourth review round: the answered stamp, the save
 point's digest, run, sequence and last turn, must equal the same four members of the
 enter's `Lineage`, or be absent where the enter names none, the other members,
-`operator_supplied` and `built_from`, being admin's resolution and never the member's to
+`named_at_restore` and `built_from`, being admin's resolution and never the member's to
 answer, and a refusal, a miss, or a disagreement refuses the enter before it authors
 `load`, through the fan-out's before-load refusal with the stream still clean, so no
 `load` event names state the member did not restore. **The reset rides the `load`

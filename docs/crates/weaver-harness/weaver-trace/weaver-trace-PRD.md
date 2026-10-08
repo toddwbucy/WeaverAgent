@@ -317,7 +317,7 @@ its closure.
 | `recall` | an answered ask on the state seam, what was asked and the identities of the events custody answered with, never their contents |
 | `message.restored` | one message of a restored conversation, seated at a restoring load's open ahead of every turn, the message whole |
 | `score` | a task's verdict on its run at the run's close, the predicate answered and whether it held, and the ratio over the task's denominator as its two terms where one exists |
-| `save_point` | a save point taken, by digest, with the trace position it covers and the name the member wrote it under, authored after the holdings it names were taken |
+| `save_point` | a save point taken, by digest, with the trace position it covers, the name the member wrote it under and the cause that asked for it, authored after the holdings it names were taken |
 
 Twenty-five kinds. Adding one is an edit to this charter and to every contract whose
 vocabulary clause names the set, because consumers key on the closure.
@@ -367,12 +367,16 @@ rule against a reserved slot.
 2026-10-02 on #58's fourth question. Taking a save point, restoring one, at a load or
 live, and resetting to one after an unclean stop each author an event naming which save
 point, by digest, and which trace position it covers, so a rebuild from this record
-arrives where the store did and honours every reset. A save point the operator edited
-is marked operator-supplied on the event that restores it, its digest recorded and the
-file kept as an input. A live restore's KV flush is recorded as the `flush` it is. Each
+arrives where the store did and honours every reset. There is no operator-supplied save point, on the operator's ruling of 2026-10-06 on #1
+(A3.0 item 3): starting from another state is a restore named through admin, judged as
+any load's save point is, and the `load` event's lineage marks it as named at a
+restore. A live restore's KV flush is recorded as the `flush` it is. Each
 of these kinds is named and shaped by the act that lands its emitter, on the rule
-above, and added here then: the take landed as `save_point` on 2026-10-05, and the
-restore's event with its operator-supplied mark is admin's save-point act's, the reset
+above, and added here then: the take landed as `save_point` on 2026-10-05; a restore at a load is a load and rides
+the `load` event's lineage with its named-at-restore mark, and a forced unload is an
+unload and rides the `unload` event's `forced`, both as of A3.2 (2026-10-06), no kind
+being named ahead of its emitter, so the live restore's own event, a reload within a
+residency, is the loop act's (A5) to name with its `Reopen`; the reset
 riding the `load` event per `weaver-trace-Spec` section 3. **These kinds never cross the tee into
 state**, whatever the election: they are provenance about the holdings, authored after
 the holdings they name were taken, so a save point could never hold its own event and a

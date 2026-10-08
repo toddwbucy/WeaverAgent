@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Create one agent on this box: its accounts, its territory, the state store
-# behind its member's seam, its declaration directory, its root of admin
-# configuration, and the sudo rule its connector runs the verbs through.
+# Create one agent on this box: its accounts, its territory with the state
+# store behind its member's seam, the declaration and the prompt draft in it,
+# its root of admin configuration, and the sudo rule its connector runs the
+# verbs through.
 #
 #   ./deploy/create-agent.sh fred --engine sqlite --artifact /path/to.gguf            plan only
 #   ./deploy/create-agent.sh fred --engine sqlite --artifact /path/to.gguf --apply    act
@@ -9,38 +10,43 @@
 # Options: --engine sqlite (the default, and the one engine since the service
 # engine retired on the operator's ruling of 2026-10-02 on #1), --session <name>
 # (default <name>-001), --spu <path> (this agent's SPU, in place of the
-# stack record's `spu-binary`), --declaration-directory <path> (default
-# `~/.weaveragent/<name>` in the operator's home), --connector-role
-# operator|observer (default operator: which command lines the connector's
-# sudo rule grants).
+# stack record's `spu-binary`), --connector-role operator|observer (default
+# operator: which command lines the connector's sudo rule grants).
 #
-# Run it as the operator, never under sudo: the declaration directory is the
-# operator's own, made and written as the operator, and `--apply` asks for
-# sudo itself for every root step.
+# Run it as the operator, never under sudo: the root's `operator` key names
+# the uid this script runs as, and `--apply` asks for sudo itself for every
+# root step. Nothing is written into the operator's home.
 #
 # **The agent's root is `<admin base>/<name>/` and it is the admission.**
 # Admin reads that directory and nothing shared, so this script writes every
 # key admin requires into it, copied from the stack record `bootstrap-stack.sh`
 # wrote at `/etc/weaver/stack/` (which admin never reads), plus the agent's own
-# `declaration-directory`, `operator` and `roles.toml`, per weaver-admin-Spec
-# section 9. The root is staged under a dot-name admin's name check refuses,
-# and moved into place last, so a run that stops part way leaves no root admin
-# would admit.
+# `territory`, `operator` and `roles.toml`, per weaver-admin-Spec section 9.
+# The root is staged under a dot-name admin's name check refuses, and moved
+# into place last, so a run that stops part way leaves no root admin would
+# admit.
 #
-# **The declaration stands in the operator's directory and not in the root**
-# (operator's ruling of 2026-10-02): `agent.toml` is written there, as the
-# operator, in a directory only the operator can enter, and admin reads it as
-# root through the judgment of weaver-admin-Spec section 9. Admin's own
-# `admin.log` and `worker.log` land beside it at the first verb.
+# **The whole agent lives in its territory** (the operator's ruling of
+# 2026-10-07 on #1): `<agent-directory>/weaver-<name>/`, root's, holds the
+# declaration `agent.toml` (root:weaver-<name>-admin 0640, which the
+# operator edits with `sudoedit`), the prompt draft `system-prompt.md`
+# (root:weaver-<name>-admin 0640), admin's own
+# `admin.log` and `worker.log` once a verb has run, `save-points/` for the
+# published save points and their manifest, beside the state room and the
+# trace. Root reads and writes root's files in root's directory, so no file
+# admin writes stands where another principal could choose it. The access
+# group `weaver-<name>-admin` reads all of it and never writes: it is the
+# territory's group, for passage, and the published save points' group, so
+# the connector reads the declaration and a save point and can rewrite
+# neither. The operator joins that group to read without sudo.
 #
 # **The system prompt is state and not a field** (operator's ruling of
 # 2026-10-06): the declaration carries no identity, admin reads no prompt, and
 # the prompt enters the agent through its gate as the operator's seeding turn,
 # `deploy/turn.py <name> --system`, after the first load. This script writes
-# the draft that turn reads, `system-prompt.md` beside the declaration, the
-# operator's to edit, and never opens the gate itself: seeding is a turn
-# against a loaded agent, and this script makes an agent that is not yet
-# loaded.
+# the draft that turn reads, `system-prompt.md` beside the declaration, and
+# never opens the gate itself: seeding is a turn against a loaded agent, and
+# this script makes an agent that is not yet loaded.
 #
 # **Three accounts and two groups beyond the agent's own**, per
 # weaver-admin-Spec sections 4, 6 and 9 (the operator's rulings of 2026-10-03
@@ -98,7 +104,6 @@ SESSION=""
 # two engines standing side by side) and 2026-10-05 (#86).
 ENGINE=sqlite
 SPU_OVERRIDE=""
-DECL_DIR=""
 CONNECTOR_ROLE=operator
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -116,7 +121,9 @@ while [ $# -gt 0 ]; do
    0640 (deploy/REDEPLOY.md, existing territories)." ;;
     --engine)   [ $# -ge 2 ] || die "--engine needs a name"; ENGINE=$2; shift ;;
     --spu)      [ $# -ge 2 ] || die "--spu needs a path"; SPU_OVERRIDE=$2; shift ;;
-    --declaration-directory) [ $# -ge 2 ] || die "--declaration-directory needs a path"; DECL_DIR=$2; shift ;;
+    --declaration-directory) die "--declaration-directory is retired on the operator's ruling of 2026-10-07 on #1:
+   the declaration lives in the agent's territory, <agent-directory>/weaver-<name>/agent.toml,
+   root's, edited with sudoedit, and nothing is written into the operator's home." ;;
     --connector-role) [ $# -ge 2 ] || die "--connector-role needs operator or observer"; CONNECTOR_ROLE=$2; shift ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -154,14 +161,14 @@ if [ -n "$SPU_OVERRIDE" ]; then
   [[ "$SPU_OVERRIDE" =~ [[:cntrl:]] ]] && die "--spu carries a control character, which a key file cannot hold as one line"
 fi
 case "$CONNECTOR_ROLE" in
-  operator) VERBS="show validate load unload stop" ;;
+  operator) VERBS="show validate load unload stop save-point restore force-unload" ;;
   observer) VERBS="show" ;;
   *) die "--connector-role is operator or observer: '$CONNECTOR_ROLE'" ;;
 esac
-# **The operator is the account running this script**, never root: the
-# declaration directory is theirs, made and written as them, and the root's
-# `operator` key names their uid.
-[ "$(id -u)" -ne 0 ] || die "run as the operator, not under sudo: the declaration directory is the operator's own, and --apply asks for sudo itself"
+# **The operator is the account running this script**, never root: the root's
+# `operator` key names their uid, the gate admits them by it, and every root
+# step below asks for sudo itself.
+[ "$(id -u)" -ne 0 ] || die "run as the operator, not under sudo: the root's operator key names this uid, and --apply asks for sudo itself"
 
 
 # **An engine this script cannot provision is refused here rather than written
@@ -178,24 +185,18 @@ esac
 
 OPERATOR=$(id -un)
 OPERATOR_UID=$(id -u)
-OPERATOR_HOME=$(getent passwd "$OPERATOR" | cut -d: -f6)
-[ -n "$OPERATOR_HOME" ] || die "cannot read the operator $OPERATOR's home from the account database"
-DECL_DIR=${DECL_DIR:-$OPERATOR_HOME/.weaveragent/$NAME}
-[[ "$DECL_DIR" == /* ]] || die "--declaration-directory takes an absolute path: '$DECL_DIR'"
-[[ "$DECL_DIR" =~ [[:cntrl:]] ]] && die "the declaration directory carries a control character, which a key file cannot hold as one line"
 AGENT_USER="weaver-$NAME"          # the agent's own uid: the worker's identity
-MEMBER_USER="weaver-$NAME-state"   # the member's uid: holds the territory
+MEMBER_USER="weaver-$NAME-state"   # the member's uid: owns the state room
+STATE_GROUP="$MEMBER_USER"         # the member's primary group: the territory's, passage alone
 TRACE_GROUP="weaver-$NAME-trace"   # the trace's readers: the operator and the relay, never the member
 RELAY_USER="weaver-$NAME-relay"    # the trace relay's uid, its one group the trace group
-ACCESS_GROUP="weaver-$NAME-admin"  # the trace door's group, which the declared reader holds
+ACCESS_GROUP="weaver-$NAME-admin"  # the territory's files' group and the trace door's: reads, never writes
 CONNECTOR_USER="weaver-$NAME-admincon"  # the connector's service user: the reader, and the sudo rule's one user
 SUDO_RULE="/etc/sudoers.d/weaver-$NAME"
 ADMIN_BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
 STACK=${WEAVER_STACK_RECORD:-/etc/weaver/stack}
 AGENT_ROOT="$ADMIN_BASE/$NAME"
 STAGE="$ADMIN_BASE/.$NAME.partial"
-DECLARATION="$DECL_DIR/agent.toml"
-PROMPT="$DECL_DIR/system-prompt.md"
 
 # **held_closed PATH: admin's rule for what a root process may trust**, per
 # weaver-admin-Spec section 9 (`judge_ancestors`). PATH, resolved to its
@@ -228,27 +229,6 @@ creatable_in() {
   read -r _ mode < <(stat -c '%u %a' -- "$(realpath -e -- "$1")" 2>/dev/null) || { printf '%s' "$1"; return 1; }
   (( 8#$mode & 8#022 )) && { printf '%s' "$1"; return 1; }
   return 0
-}
-
-# **held_for_operator PATH: admin's rule for the declaration directory's
-# ancestors**, per weaver-admin-Spec section 9: from the nearest directory that
-# stands up to `/`, each owned by uid 0 or by the operator and writable by no
-# group or other unless sticky. Fails printing the first component that is
-# not so. The directory itself, where it stands, is judged apart: the
-# operator's, granting group and other nothing.
-held_for_operator() {
-  local at owner mode
-  at=$1
-  while [ ! -e "$at" ] && [ ! -L "$at" ]; do at=$(dirname -- "$at"); done
-  at=$(realpath -e -- "$at" 2>/dev/null) || { printf '%s' "$1"; return 1; }
-  while :; do
-    read -r owner mode < <(stat -c '%u %a' -- "$at" 2>/dev/null) || { printf '%s' "$at"; return 1; }
-    if { [ "$owner" != 0 ] && [ "$owner" != "$OPERATOR_UID" ]; } || { (( 8#$mode & 8#022 )) && ! { [ -d "$at" ] && (( 8#$mode & 8#1000 )); }; }; then
-      printf '%s' "$at"; return 1
-    fi
-    [ "$at" = / ] && return 0
-    at=$(dirname -- "$at")
-  done
 }
 
 trim() {
@@ -327,31 +307,26 @@ judge_names || exit 1
 # access entries** (operator's ruling of 2026-10-02, #28). The base is the stack
 # record's `agent-directory`, which bootstrap-stack.sh makes root 0755: it must
 # stand, be held closed by admin's rule, and let no other principal make a name
-# in it, since the territory is a new name there. Each territory is root-owned
-# and grouped to its state member, 0710, so the member passes to its room by
-# group and the agent's uid, in no group of it, cannot enter; the trace has a
-# group of its own (below). No ACL is asked of the
+# in it, since the territory is a new name there. Each territory is root-owned,
+# grouped to the state group, 0710: the state group passes and none lists, the
+# agent's own uid passes not, and the files' own modes are the wall beneath
+# (the operator's ruling of 2026-10-08 on #1); the trace has a group of its
+# own (below). No ACL is asked of the
 # filesystem, so a box whose datasets carry none deploys as any other.
 [ -d "$AGENT_DIR" ] || die "the stack record's agent-directory $AGENT_DIR does not stand: bootstrap-stack.sh makes it, root 0755"
 bad=$(creatable_in "$AGENT_DIR") || die "the stack record's agent-directory $AGENT_DIR is not a root-held base no other principal can make a name in ($bad)"
+# **The territory's path is canonical** (the #94 survey's S23): admin
+# compares the declaration's sink directory with the canonical territory, so
+# a link in the base's path written here would refuse every verb.
+AGENT_DIR=$(realpath -e -- "$AGENT_DIR") || die "the stack record's agent-directory $AGENT_DIR does not resolve"
 HOME_DIR="$AGENT_DIR/$AGENT_USER"
 STATE_DIR="$HOME_DIR/state"
-
-# **The declaration directory is judged as admin will judge it**, before
-# anything is provisioned (weaver-admin-Spec section 9): every directory above
-# it root's or the operator's and closed, and the directory itself, where it
-# stands, the operator's, no link, granting group and other nothing, and
-# holding no `agent.toml` yet. Where it does not stand it is made 0700 as the
-# operator at the apply.
-bad=$(held_for_operator "$(dirname -- "$DECL_DIR")") || die "the declaration directory $DECL_DIR stands under $bad, which another principal could write, so admin would refuse it"
-if [ -e "$DECL_DIR" ] || [ -L "$DECL_DIR" ]; then
-  { [ ! -L "$DECL_DIR" ] && [ -d "$DECL_DIR" ]; } || die "the declaration directory $DECL_DIR is a link or not a directory"
-  read -r d_owner d_mode < <(stat -c '%u %a' -- "$DECL_DIR")
-  [ "$d_owner" = "$OPERATOR_UID" ] || die "the declaration directory $DECL_DIR is not $OPERATOR's"
-  (( 8#$d_mode & 8#077 )) && die "the declaration directory $DECL_DIR grants group or other access (mode $d_mode), and admin requires it closed to everyone but its owner"
-  { [ ! -e "$DECLARATION" ] && [ ! -L "$DECLARATION" ]; } || die "a declaration already stands at $DECLARATION"
-  { [ ! -e "$PROMPT" ] && [ ! -L "$PROMPT" ]; } || die "a prompt draft already stands at $PROMPT"
-fi
+# **The declaration, the draft and the save points stand in the territory**
+# (the operator's ruling of 2026-10-07 on #1), which is refused below where it
+# already stands, so no declaration is ever written over.
+DECLARATION="$HOME_DIR/agent.toml"
+PROMPT="$HOME_DIR/system-prompt.md"
+SAVE_POINTS="$HOME_DIR/save-points"
 
 # **The declaration is rendered once, here, and parse-checked before anything
 # is provisioned**, so a value that breaks it refuses before an account or a
@@ -471,24 +446,25 @@ bad=$(creatable_in "$ADMIN_BASE") || die "the admin base $ADMIN_BASE lets anothe
 
 say "plan for agent '$NAME'"
 plan "agent account   $AGENT_USER      (system, nologin, the worker's uid)"
-plan "member account  $MEMBER_USER     (system, nologin, owns the state territory)"
+plan "member account  $MEMBER_USER     (system, nologin, owns the state room, passes the territory by its own group $STATE_GROUP)"
 plan "trace group     $TRACE_GROUP     (system group: the trace's readers, never the member)"
 plan "relay account   $RELAY_USER      (system, nologin, no home, its one group $TRACE_GROUP)"
-plan "access group    $ACCESS_GROUP    (system group: the trace door's, which the reader holds)"
-plan "connector       $CONNECTOR_USER  (system, nologin, no home, holds $ACCESS_GROUP, the trace reader)"
-plan "operator        $OPERATOR joins groups $AGENT_USER, $MEMBER_USER and $TRACE_GROUP"
+plan "access group    $ACCESS_GROUP    (system group: the territory's files' and the trace door's, reads and never writes)"
+plan "connector       $CONNECTOR_USER  (system, nologin, no home, holds $STATE_GROUP and $ACCESS_GROUP, the trace reader)"
+plan "operator        $OPERATOR joins groups $AGENT_USER, $TRACE_GROUP, $STATE_GROUP and $ACCESS_GROUP"
 plan "home            /home/$AGENT_USER        the agent's own, where its tools run"
-plan "directory       $HOME_DIR        root:$MEMBER_USER 0710, passage only, no listing"
+plan "territory       $HOME_DIR        root:$STATE_GROUP 0710, passage for the state group alone"
 plan "trace           $HOME_DIR/trace.ndjson  root:$TRACE_GROUP 0640, made before the first load"
-plan "state territory $STATE_DIR       $MEMBER_USER 0700, which the agent's uid cannot enter"
-plan "store           sqlite in memory, its save points in the state territory"
+plan "state room      $STATE_DIR       $MEMBER_USER 0700, which the agent's uid cannot enter"
+plan "store           sqlite in memory, its save points in the state room"
+plan "save points     $SAVE_POINTS     root:$ACCESS_GROUP 0750, the published copies and their manifest"
 plan "agent root      $AGENT_ROOT      root 0755, keys 0644, copied from $STACK"
 plan "spu-binary      $SPU_BINARY$( [ -n "$SPU_OVERRIDE" ] && printf '  (--spu, in place of the stack record'"'"'s)' )"
 plan "operator key    $OPERATOR_UID ($OPERATOR)"
 plan "roles.toml      trace-reader = $CONNECTOR_USER"
-plan "declaration dir $DECL_DIR      $OPERATOR 0700, where admin.log and worker.log land"
-plan "declaration     $DECLARATION     session $SESSION, artifact $ARTIFACT"
-plan "prompt draft    $PROMPT     $OPERATOR 0600, sent by deploy/turn.py $NAME --system after the first load"
+plan "declaration     $DECLARATION     root:$ACCESS_GROUP 0640, session $SESSION, artifact $ARTIFACT; edited with sudoedit"
+plan "prompt draft    $PROMPT     root:$ACCESS_GROUP 0640, sent by deploy/turn.py $NAME --system after the first load"
+plan "logs            $HOME_DIR/admin.log and worker.log, made by admin at the first verb"
 plan "sudo rule       $SUDO_RULE      $CONNECTOR_USER, $CONNECTOR_ROLE: $VERBS, !pam_session"
 plan "store engine    $ENGINE         which the deployed member must carry"
 
@@ -544,47 +520,70 @@ sudo groupadd --system "$ACCESS_GROUP"
 sudo useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group --gid "$TRACE_GROUP" "$RELAY_USER"
 # **The connector holds the access group and nothing of the agent's**: it
 # reaches the trace through the door alone, never by the trace group.
-sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group --groups "$ACCESS_GROUP" "$CONNECTOR_USER"
-sudo usermod -aG "$AGENT_USER,$MEMBER_USER,$TRACE_GROUP" "$OPERATOR"
+sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group --groups "$STATE_GROUP,$ACCESS_GROUP" "$CONNECTOR_USER"
+# **The member holds its own group alone** (the operator's ruling of
+# 2026-10-08 on #1): the territory is 0710 under that group, so the member
+# passes to its own room by it, and the access group, which reads admin.log,
+# worker.log, the declaration, the draft and the published save points, is
+# not the member's.
+# **The operator reads without sudo through the access group**: the gate's
+# socket by the agent's group, the trace by its group, and the territory with
+# the declaration, the draft, the logs and the save points by the access
+# group. The member's own group, the state group, buys the operator passage
+# of the territory and nothing more, the state room being the member's alone.
+sudo usermod -aG "$AGENT_USER,$TRACE_GROUP,$STATE_GROUP,$ACCESS_GROUP" "$OPERATOR"
 sudo chmod 2750 "/home/$AGENT_USER"
 printf '   %s uid %s, %s uid %s, %s uid %s, %s uid %s\n' \
   "$AGENT_USER" "$(id -u "$AGENT_USER")" "$MEMBER_USER" "$(id -u "$MEMBER_USER")" \
   "$RELAY_USER" "$(id -u "$RELAY_USER")" "$CONNECTOR_USER" "$(id -u "$CONNECTOR_USER")"
 
 say "territory"
-# **The member passes through; the trace is not its to read** (operator's ruling
-# of 2026-10-02, #28, as refined on #56). Admin makes the member's room at
-# `<sink directory>/state`, so the member must traverse the directory holding
-# the trace, and the protection sits on the trace file rather than on the
-# directory. The territory is root's, grouped to the member, 0710 and not
-# setgid: the member may pass to its room but not list, and nothing written
-# here takes the member's group. The trace is made here, before the first load,
-# root:$TRACE_GROUP 0640, the layout admin checks at every load (#62): admin
-# opens it append-only, never through a link, and refuses a trace that stands
-# otherwise, so the member, outside that group, cannot read it, and the
-# operator reads it through the group. Were the file ever removed, admin
-# recreates it at this same layout where the declaration elects creation. The
-# agent's uid, in no group of either, cannot enter. The state subdirectory is the member's own.
-sudo install -d -o root -g "$MEMBER_USER" -m 0710 "$HOME_DIR"
+# **The whole agent lives here, and the group passes and never writes** (the
+# operator's ruling of 2026-10-07 on #1, refining 2026-10-02's #28 and #56).
+# The territory is root's, grouped to the state group, 0710 and not setgid
+# (the operator's ruling of 2026-10-08 on #1): the state group passes to what
+# stands in it by name and lists nothing. The member holds that group as its
+# primary group, and the operator and the connector join it for passage. The
+# agent's own uid holds it not, so it cannot pass to the trace, which is the
+# denial admin's load asks of the sink's directory. Nothing written here
+# takes the territory's group. Admin makes the member's room at
+# `<sink directory>/state`, and the protection beneath sits on each file's
+# own mode, the trace's first:
+# made here, before the first load, root:$TRACE_GROUP 0640, the layout admin
+# checks at every load (#62): admin opens it append-only, never through a
+# link, and refuses a trace that stands otherwise, so the member, outside that
+# group, cannot read it, and the operator reads it through the group. Were the
+# file ever removed, admin recreates it at this same layout where the
+# declaration elects creation. The agent's uid, in no group of either, cannot
+# enter. The state room is the member's own. The published save points go in
+# `save-points/`, root:$ACCESS_GROUP 0750, where admin writes each copy 0640
+# to the group and the manifest root 0644, so the group reads a save point and
+# rewrites none.
+sudo install -d -o root -g "$STATE_GROUP" -m 0710 "$HOME_DIR"
 sudo install -o root -g "$TRACE_GROUP" -m 0640 /dev/null "$HOME_DIR/trace.ndjson"
 sudo install -d -o "$MEMBER_USER" -g "$MEMBER_USER" -m 0700 "$STATE_DIR"
+sudo install -d -o root -g "$ACCESS_GROUP" -m 0750 "$SAVE_POINTS"
 
 
 say "declaration"
-# **Made and written as the operator**, never as root: the directory is the
-# operator's own, 0700, and the declaration in it the operator's, so every
-# later edit is the operator's without a privileged write.
-( umask 077; mkdir -p -- "$DECL_DIR" )
-chmod 0700 -- "$DECL_DIR"
-( umask 077; printf '%s\n' "$DECLARATION_TEXT" > "$DECLARATION" )
-( umask 077; printf '%s' "$PROMPT_TEXT" > "$PROMPT" )
-printf '   %s and %s written, %s 0700\n' "$DECLARATION" "$PROMPT" "$DECL_DIR"
+# **Written as root into root's directory**, root:$ACCESS_GROUP 0640 each:
+# the declaration the operator edits from here with `sudoedit`, and the draft
+# `deploy/turn.py --system` reads through the access group. Neither is read
+# by a uid outside the access group, and admin refuses a declaration grouped
+# or moded otherwise (weaver-admin-Spec section 9). Nothing lands in the operator's
+# home. The territory was refused above where it stood, so neither file is
+# written over.
+printf '%s\n' "$DECLARATION_TEXT" | sudo tee "$DECLARATION" >/dev/null
+printf '%s' "$PROMPT_TEXT" | sudo tee "$PROMPT" >/dev/null
+sudo chown root:"$ACCESS_GROUP" "$DECLARATION" "$PROMPT"
+sudo chmod 0640 "$DECLARATION" "$PROMPT"
+printf '   %s and %s written, root:%s 0640\n' "$DECLARATION" "$PROMPT" "$ACCESS_GROUP"
 
 say "agent root, staged"
 # **Root-owned and not group- or world-writable, or admin refuses it**, so it
 # is made by root at 0755 with its files 0644. Every key the stack record
 # holds is copied as written. `spu-binary` is this agent's `--spu` where given,
-# and `declaration-directory`, `operator` and `roles.toml` are the agent's own.
+# and `territory`, `operator` and `roles.toml` are the agent's own.
 sudo install -d -o root -g root -m 0755 "$STAGE"
 for key in $REQUIRED_KEYS $OPTIONAL_KEYS; do
   [ -e "$STACK/$key" ] || continue
@@ -594,7 +593,7 @@ for key in $REQUIRED_KEYS $OPTIONAL_KEYS; do
     sudo cp -- "$STACK/$key" "$STAGE/$key"
   fi
 done
-printf '%s\n' "$DECL_DIR" | sudo tee "$STAGE/declaration-directory" >/dev/null
+printf '%s\n' "$HOME_DIR" | sudo tee "$STAGE/territory" >/dev/null
 printf '%s\n' "$OPERATOR_UID" | sudo tee "$STAGE/operator" >/dev/null
 # **The boundary file names the trace door's one reader**, the connector's
 # user, in the shape of weaver-types-Spec section 3.1 and nothing else.
@@ -625,15 +624,42 @@ if sudo -u "$MEMBER_USER" test -r "$HOME_DIR/trace.ndjson"; then
 else
   printf "   the member cannot read the trace, which is the boundary the state charter asks for\n"
 fi
+# **The member reads none of the access group's files**: it passes the
+# territory by its own group and holds not the access group.
+if sudo -u "$MEMBER_USER" test -r "$DECLARATION"; then
+  die "THE MEMBER $MEMBER_USER CAN READ THE DECLARATION $DECLARATION: it holds the access group, or the file's mode is open"
+fi
+# **The agent's own uid cannot pass the territory** (the #94 survey's S1):
+# admin's load refuses a sink whose directory the agent's uid can traverse,
+# so a territory it could pass would refuse every load.
+if sudo -u "$AGENT_USER" test -x "$HOME_DIR"; then
+  die "THE AGENT'S UID CAN PASS THE TERRITORY $HOME_DIR: its group or mode is open, and admin would refuse every load"
+else
+  printf "   the agent's own uid cannot pass the territory, which is the trace's denial admin checks\n"
+fi
+
+# **The access group reads and never writes** (the operator's ruling of
+# 2026-10-07 on #1): the connector, which holds it, reads the declaration and
+# cannot rewrite it, the draft or the save points directory, since a connector
+# that could rewrite the declaration would choose what admin loads.
+sudo -u "$CONNECTOR_USER" test -r "$DECLARATION" \
+  || die "the connector $CONNECTOR_USER cannot read the declaration $DECLARATION through $ACCESS_GROUP: the territory's group or mode is wrong"
+for f in "$DECLARATION" "$PROMPT" "$SAVE_POINTS"; do
+  if sudo -u "$CONNECTOR_USER" test -w "$f"; then
+    die "THE ACCESS GROUP CAN WRITE $f: the connector could rewrite what admin loads"
+  fi
+done
+printf '   %s reads the declaration and writes nothing of the territory\n' "$CONNECTOR_USER"
 
 # **The relay and the connector hold exactly their groups**: the relay the
-# trace group alone, the connector its own and the access group, and neither
-# any group of the agent's or the member's.
+# trace group alone, the connector its own, the state group for passage and
+# the access group for reading, and neither any group of the agent's.
 relay_groups=$(id -Gn "$RELAY_USER")
 [ "$relay_groups" = "$TRACE_GROUP" ] || die "the relay account $RELAY_USER holds '$relay_groups', not the trace group alone"
 connector_groups=" $(id -Gn "$CONNECTOR_USER") "
 [[ "$connector_groups" == *" $ACCESS_GROUP "* ]] || die "the connector $CONNECTOR_USER does not hold $ACCESS_GROUP, so the trace door would turn it away"
-for g in "$AGENT_USER" "$MEMBER_USER" "$TRACE_GROUP"; do
+[[ "$connector_groups" == *" $STATE_GROUP "* ]] || die "the connector $CONNECTOR_USER does not hold $STATE_GROUP, so it cannot pass the territory"
+for g in "$AGENT_USER" "$TRACE_GROUP"; do
   [[ "$connector_groups" != *" $g "* ]] || die "the connector $CONNECTOR_USER holds $g, which reaches the agent's territory or trace by group"
 done
 printf '   %s holds %s alone, %s holds%s\n' "$RELAY_USER" "$TRACE_GROUP" "$CONNECTOR_USER" "${connector_groups% }"
@@ -678,8 +704,10 @@ say "made"
 # the account and not a session already running, so a shell that predates this
 # run cannot reach the gate's socket until it takes the group (#673, measured
 # on the W4a run of 2026-09-25).
-printf '   %s joined groups %s, %s and %s: a session that predates this run needs a new\n' "$OPERATOR" "$AGENT_USER" "$MEMBER_USER" "$TRACE_GROUP"
+printf '   %s joined groups %s, %s, %s and %s: a session that predates this run needs a new\n' "$OPERATOR" "$AGENT_USER" "$TRACE_GROUP" "$STATE_GROUP" "$ACCESS_GROUP"
 printf '   login before the groups apply (`newgrp` selects one group in one shell)\n'
+printf '   the declaration %s is root'"'"'s: edit it with sudoedit, and read it, the draft, the logs and\n' "$DECLARATION"
+printf '   the save points under %s through %s\n' "$HOME_DIR" "$ACCESS_GROUP"
 # **probe_connector VERB: the connector reaches a line through its rule**, as
 # the stand-in for admin-con: the operator's sudo becomes the connector's user,
 # and that user runs `sudo -n`, which only the rule can satisfy. It succeeds

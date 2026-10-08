@@ -25,8 +25,9 @@ use std::io::Read;
 use weaver_state::save_point::{Room, SavePoint, schema_digest};
 use weaver_state::{
     Ask, Election, Restored, SavePointAnswer, Store, parse_ask, parse_distillate,
-    render_grants_answer, render_identity_answer, render_recall_answer, render_replay_answer,
-    render_restore_answer, render_restored_answer, render_shape_answer, render_snapshot_answer,
+    render_finished_answer, render_grants_answer, render_identity_answer, render_recall_answer,
+    render_replay_answer, render_restore_answer, render_restored_answer, render_shape_answer,
+    render_snapshot_answer,
 };
 
 /// The first door's end arrives at this descriptor number, the fixed
@@ -300,8 +301,16 @@ fn member_entry(
         session: &session,
         election: &election,
         restored,
+        pending: None,
+        save_point_bound: weaver_state::save_point::SAVE_POINT_BOUND,
     };
-    serve(lines, preload, preload_socket, &mut custody)
+    let code = serve(lines, preload, preload_socket, &mut custody);
+    // **An unacknowledged part does not outlive the member**, per
+    // `weaver-state-Spec` section 3: whatever part still stands at the exit
+    // is removed, so a save point whose acknowledgement never came is never
+    // published.
+    room.clear_parts();
+    code
 }
 
 /// **The one rule of a save point's adoption**, per `weaver-state-Spec`
@@ -367,6 +376,20 @@ struct Custody<'a> {
     /// indexes on the restored holdings.
     election: &'a Election,
     restored: Restored,
+    /// The part the last `snapshot` wrote and the harness has not yet
+    /// acknowledged: its finished name and its digest. At most one stands,
+    /// per `weaver-state-Spec` section 3.
+    pending: Option<PendingSavePoint>,
+    /// The size past which a `snapshot` writes nothing, per
+    /// `weaver-state-Spec` section 3: `SAVE_POINT_BOUND` at every standing,
+    /// held here so a test can lower it.
+    save_point_bound: u64,
+}
+
+struct PendingSavePoint {
+    ordinal: u64,
+    name: String,
+    digest: String,
 }
 
 /// The member's vector, parsed: the territory and, under a diagnostic
@@ -601,11 +624,18 @@ fn drain_harness_lines(
         // A store that cannot answer, like an answer past the bound, is
         // silence the harness's bound converts, per the contract: custody
         // never invents an answer shape for a fault.
-        if let Ok(frame) = answer_frame(&ask, custody)
-            && frame.len() <= ANSWER_BOUND
-            && !harness.respond(frame.as_bytes())
-        {
-            return Some(std::process::ExitCode::SUCCESS);
+        match answer_frame(&ask, custody) {
+            Ok(frame) if frame.len() <= ANSWER_BOUND => {
+                if !harness.respond(frame.as_bytes()) {
+                    return Some(std::process::ExitCode::SUCCESS);
+                }
+            }
+            Ok(_) => {
+                eprintln!("weaver-state: {ask:?} answered nothing: the answer is past the bound")
+            }
+            // Silence on the seam, said on stderr: custody never invents an
+            // answer shape for a fault, and the operator reads why.
+            Err(fault) => eprintln!("weaver-state: {ask:?} answered nothing: {fault:?}"),
         }
     }
     None
@@ -652,9 +682,11 @@ fn answer_frame(
         // stamped with the position of the last distillate landed before this
         // ask and the schema it stands under, written under a finished name
         // only once the write is whole. A write that fails answers nothing
-        // and leaves no file under a finished name. An empty store has no
+        // and leaves no file under a finished name, and **a save point past
+        // the bound answers nothing and leaves no part**, on the operator's
+        // ruling of 2026-10-08 that both readers enforce it. An empty store has no
         // position and its stamp names no run and sequence zero.
-        Ask::Snapshot => {
+        Ask::Snapshot { ordinal } => {
             let stamp = custody
                 .store
                 .position()?
@@ -666,15 +698,55 @@ fn answer_frame(
             let schema = custody.store.schema()?;
             let image = custody.store.image()?;
             let save_point = SavePoint::take(stamp.clone(), &schema, image);
+            // **Written as a part, the finished name given on the
+            // acknowledgement alone**, per `weaver-state-Spec` section 3 on
+            // the operator's ruling of 2026-10-06 on #1 (A3.0 item 4): the
+            // answer names the finished name the file will take, and a part
+            // whose acknowledgement never comes is never published.
+            custody.pending = None;
             let name = custody
                 .room
-                .write(&save_point)
+                .write_part_within(&save_point, custody.save_point_bound)
                 .map_err(|e| CustodyFault::SavePoint(e.to_string()))?;
-            Ok(render_snapshot_answer(&SavePointAnswer {
-                name,
-                stamp,
-                digest: save_point.digest(),
-            }))
+            let digest = save_point.digest();
+            custody.pending = Some(PendingSavePoint {
+                ordinal: *ordinal,
+                name: name.clone(),
+                digest: digest.clone(),
+            });
+            Ok(render_snapshot_answer(
+                &SavePointAnswer {
+                    name,
+                    stamp,
+                    digest,
+                },
+                *ordinal,
+            ))
+        }
+        // **The acknowledgement gives the part its finished name**: one
+        // naming the pending part's ordinal and digest both finishes it and
+        // answers the name; any other is answered by nothing and the part is
+        // removed, so a finished name is given only once and never to an
+        // acknowledgement meant for another exchange (Codex on #94, round
+        // 10).
+        Ask::Acknowledge { ordinal, digest } => {
+            let Some(pending) = custody.pending.take() else {
+                return Err(CustodyFault::SavePoint(
+                    "an acknowledgement names no part this member holds".into(),
+                ));
+            };
+            if pending.digest != *digest || pending.ordinal != *ordinal {
+                custody.room.discard_part(&pending.name);
+                return Err(CustodyFault::SavePoint(format!(
+                    "the acknowledgement names ask {ordinal} digest {digest} and the part is ask {} digest {}",
+                    pending.ordinal, pending.digest
+                )));
+            }
+            custody
+                .room
+                .finish(&pending.name)
+                .map_err(|e| CustodyFault::SavePoint(e.to_string()))?;
+            Ok(render_finished_answer(&pending.name, pending.ordinal))
         }
         // **The restore reads its own room by name**, per the Spec: a name
         // that is not a plain entry of the room, a file that fails its check
@@ -1426,6 +1498,54 @@ mod tests {
             stand_preload_name(&path).is_some(),
             "and a named one stands"
         );
+    }
+
+    /// **A snapshot past the save point's bound answers nothing and leaves
+    /// no part**, per `weaver-state-Spec` section 3 on the operator's ruling
+    /// of 2026-10-08: with the custody's bound lowered under the file, the
+    /// `snapshot` ask is an `Err`, which the drain says on standard error and
+    /// answers with silence, no part is pending and the room holds no file,
+    /// the part the snapshot before it left cleared too; at the standing
+    /// bound the same holdings answer. Perturbation: drop the bound check
+    /// from `Room::write_part_within` and the lowered snapshot answers.
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn a_snapshot_past_the_bound_answers_nothing_and_leaves_no_part() {
+        let scratch = Scratch(std::env::temp_dir().join(format!(
+            "weaver-state-snapshot-bound-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        )));
+        std::fs::create_dir_all(&scratch.0).expect("room");
+        let room = Room::open(&scratch.0).expect("opens");
+        let mut store = weaver_state::engine::sqlite::Sqlite::stand().expect("stands");
+        let election = Election::default();
+        let mut custody = Custody {
+            store: &mut store,
+            room: &room,
+            session: "s-1",
+            election: &election,
+            restored: weaver_state::Restored::Empty,
+            pending: None,
+            save_point_bound: weaver_state::save_point::SAVE_POINT_BOUND,
+        };
+        let answered = answer_frame(&Ask::Snapshot { ordinal: 1 }, &mut custody)
+            .expect("at the standing bound the snapshot answers");
+        assert!(answered.contains("\"ask\":1"), "{answered}");
+        assert!(custody.pending.is_some(), "a part is pending");
+        custody.save_point_bound = 16;
+        let refused = answer_frame(&Ask::Snapshot { ordinal: 2 }, &mut custody)
+            .expect_err("past the bound the snapshot answers nothing");
+        assert!(
+            format!("{refused:?}").contains("past the bound of 16"),
+            "{refused:?}"
+        );
+        assert!(custody.pending.is_none(), "no part is pending");
+        let left: Vec<_> = std::fs::read_dir(&scratch.0)
+            .expect("lists")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        assert!(left.is_empty(), "the room holds no file: {left:?}");
     }
 
     /// The operator's 2026-09-22 ruling admits trace only as test scaffolding.

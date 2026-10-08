@@ -390,6 +390,12 @@ pub struct SavePointTaken {
     pub sequence: u64,
     pub turn: u64,
     pub name: String,
+    /// Who asked, the uid admin's directive carried, as `unload` carries
+    /// its cause (Codex on #94, round 7): a save point on demand is
+    /// attributed to the account that asked for it, the leave's to the
+    /// leave's cause.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cause: Option<Cause>,
 }
 
 /// The ratio's two terms: what the run measured over what the task supplies,
@@ -555,6 +561,10 @@ pub struct UnloadClose {
     pub grant_surface: Option<GrantSurface>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cause: Option<Cause>,
+    /// True where admin's `force-unload` ended the run without its leave save
+    /// point, as of A3.2 on the operator's ruling of 2026-10-06 on #1 (A3.0
+    /// item 6), so the record says the loss was the operator's choice.
+    pub forced: bool,
 }
 
 /// What the leave found, in the envelope the confirm drivers carry: the
@@ -711,16 +721,19 @@ pub struct Cause {
 
 /// A save point's lineage as the load event names it, per `weaver-trace-Spec`
 /// section 3: `save_point` is the digest, `run` and `sequence` the position
-/// it covers, `turn` the last turn that run holds in it, `operator_supplied`
-/// whether the operator supplied it, and `built_from`, present only where the
-/// offline builder made it from a record, that record's session and cut.
+/// it covers, `turn` the last turn that run holds in it, `named_at_restore`
+/// whether the operator named it through admin's `restore` verb rather than
+/// the inventory selecting the latest published (as of A3.2, replacing
+/// `operator_supplied` on the operator's ruling of 2026-10-06 on #1), and
+/// `built_from`, present only where the offline builder made it from a
+/// record, that record's session and cut.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Lineage {
     pub save_point: String,
     pub run: String,
     pub sequence: u64,
     pub turn: u64,
-    pub operator_supplied: bool,
+    pub named_at_restore: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub built_from: Option<Branch>,
 }
@@ -796,14 +809,14 @@ mod lineage_tests {
             run: "r-a".into(),
             sequence: 41,
             turn: 2,
-            operator_supplied: false,
+            named_at_restore: false,
             built_from: None,
         }))))
         .expect("renders");
         assert!(
             rendered.contains(concat!(
                 "\"lineage\":{\"save_point\":\"ab12\",\"run\":\"r-a\",",
-                "\"sequence\":41,\"turn\":2,\"operator_supplied\":false}"
+                "\"sequence\":41,\"turn\":2,\"named_at_restore\":false}"
             )),
             "{rendered}"
         );

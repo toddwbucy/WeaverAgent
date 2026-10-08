@@ -77,9 +77,11 @@ member's memory. The subdirectory, the territory's `state/`, is the member's roo
 holds the preload door's name where one stands and **the save points the member
 writes**, a new file each and never one rewritten, per the operator's ruling of
 2026-10-02 on #58 and `weaver-state-PRD` section 4, and admin, as root, publishes each
-finished one into the operator's declaration directory at the next load or unload.
+finished one into the territory's `save-points/` at the next load or unload or at once
+on the operator's `save-point`, under a manifest it keeps there, per `weaver-admin-Spec`
+section 6.
 **The save point a load restores arrives as a descriptor and never as a path**, per
-`weaver-admin-Spec` section 6: admin opens the chosen save point in the operator's
+`weaver-admin-Spec` section 6: admin opens the chosen save point in the territory's
 directory for reading, the latest by default or the one `restore` names, and the member
 inherits it at its spawn the way it inherits the first door's end. Where no save point
 exists the descriptor is absent, which is an agent's first load or every save point
@@ -349,18 +351,39 @@ three parts in one file: a stamp line, a check line, and the engine's image. The
 line is one JSON object carrying exactly seven members, the format's version, the run,
 sequence and turn, the digest of the schema text the image stands under, the image's
 length, and `taken`, which carries exactly three, the writing process, that process's
-own count of save points taken, which it never repeats, and the wall clock, which
+own count of save points taken, which it never repeats, and the wall clock, a string of
+decimal digits that fit an unsigned 64-bit count of nanoseconds since the epoch, which
 together tell two save points of one position apart whatever the clock does; a stamp
 line with a member absent, extra or of another type is not this format and is refused
-before any digest or name is computed from it. The check line names sha256 over the stamp line, its newline and the
+before any digest or name is computed from it, and so is a wall clock past what a clock
+can be, the rule every reader of this format holds alike. **The run and the schema are
+bounded**, on the operator's ruling of 2026-10-08 on #1: the run is at most 128 bytes,
+each printable ASCII, and the schema digest is exactly 64 lowercase hex, so no reader
+holds a string of the stamp the size of the file, and a stamp outside either is refused
+as one of another type is; the workspace's save-point corpus carries a case of each. The check line names sha256 over the stamp line, its newline and the
 image, so a stamp altered, an image flipped or a file torn short all read as corrupt.
 The digest is sha256 over the whole file and the name is the digest with the suffix
 `.save-point`, so two save points with different bytes never share a name and two
 `snapshot` asks on unchanged holdings, differing in `taken`, give two files by
-construction. A whole write earns its finished name by a link: the bytes go to a part
-name created exclusively, are synced, and are linked under the finished name, a link
-refusing an existing entry where a rename would replace it, so no path writes over a
-file; a failed write removes the part and leaves no file under a finished name. **The
+construction; **the published name admin gives it is computable from the same bytes**,
+`<YYYYMMDDTHHMMSSZ>-<digest>.save-point`, the stamp's `taken.wall_ns` rendered in UTC
+to the second before the digest, per `weaver-admin-Spec` section 6 on the operator's
+ruling of 2026-10-06 on #1, so either name is checked against the file and never
+trusted. **A whole write earns its finished name by a link, and only once the harness
+has acknowledged it**, on the same ruling (A3.0 item 4): the bytes go to a part name
+created exclusively, dotted so publication never reads it, are synced, and the
+`snapshot` answer names the finished name the file will take; the link under the
+finished name, refusing an existing entry where a rename would replace it so no path
+writes over a file, is made only on the harness's `acknowledge` of that answer, per
+`weaver-harness-state-contract` section 2, and answered `finished`; a failed write, or
+an acknowledgement that never arrives, leaves no file under a finished name, the part
+removed on the failure, at the member's exit, or by the next `snapshot`, so the room
+holds at most one part and an unacknowledged save point is never published. **A save
+point is at most one gibibyte**, 1073741824 bytes of rendered file, on the operator's
+ruling of 2026-10-08 that both readers enforce the bound admin's inventory holds: a
+`snapshot` whose save point would exceed it answers nothing, the reason said on the
+member's standard error, and leaves no part, so the harness's bound converts the silence
+as it does any failed write. **The
 schema the stamp names is the store's own**: every object of the catalog with its
 statement, in a fixed order, exempting only an object of type index whose statement is
 exactly the election's generated form, `CREATE INDEX field_elected_<hex of the key path>
@@ -518,13 +541,28 @@ stamp it restored, its `lineage` carrying `digest`, `run`, `sequence` and `turn`
 `{"answer":{"restored":{}}}` where it stood empty, or
 `{"answer":{"restored":{"refused":"schema-mismatch"}}}`, immediately and parking never.
 **The `snapshot` ask
-writes a save point and answers its stamp**, per the contract's sixth ask of 2026-10-02:
-the member serializes the whole database with its schema and its stamp, writes it as a
-new file in its room, never over one that stands, and answers
-`{"answer":{"snapshot":{"save-point":...,"run":...,"sequence":...,"turn":...,"digest":...}}}`
-naming the file, the position it covers with the last turn that run's holdings carry,
-and the digest of its bytes, or drops the ask unanswered where the write failed, the
-silence converting at the harness into a missing answer like every other. It runs in stream order like every ask, so the save point
+writes a save point and answers its stamp, and the finished name follows the
+acknowledgement**, per the contract's sixth ask of 2026-10-02 as amended by the
+operator's ruling of 2026-10-06 on #1: the ask carries `ask`, the harness's ordinal for
+the exchange (Codex on #94, round 10), and the member serializes the whole database with
+its schema and its stamp, writes it as a part in its room, never over one that stands,
+and answers
+`{"answer":{"snapshot":{"ask":N,"save-point":...,"run":...,"sequence":...,"turn":...,"digest":...}}}`
+echoing the ordinal and naming the finished name the file will take, the position it
+covers with the last turn that run's holdings carry, and the digest of its bytes, or
+drops the ask unanswered where the write failed, the silence converting at the harness
+into a missing answer like every other; on the harness's
+`{"acknowledge":{"snapshot":{"ask":N,"digest":...}}}` naming that ordinal and that
+digest both it links the finished name and answers
+`{"answer":{"finished":{"ask":N,"save-point":...}}}`, and an acknowledgement naming no
+part it holds, or one whose ordinal or digest is not the part's, or a link that fails,
+is answered by nothing, the part removed. An ask without its ordinal is not this ask and
+answers nothing. **The leave's
+save point is taken before the `unload` event**, per `weaver-harness-Spec` section 6 as
+of A3.2, so the holdings a load restores never carry the prior run's `unload` event,
+lifecycle provenance the record keeps, and a rebuild through the preload door to the
+save point's stamp stops before it too, which is what keeps the restore-equals-rebuild
+instrument, `a_reloaded_store_equals_a_full_replay`, equal by construction. It runs in stream order like every ask, so the save point
 covers exactly the distillates the stream carried before it, and a write that failed
 part way is what the load's check exists to catch. **The `restore` ask replaces the
 holdings from a save point in the room**, per the contract's seventh ask of 2026-10-02:
@@ -839,11 +877,11 @@ Format section 5.
   stands. Nothing holds that signature in place, so a later act widening one of
   them to a concrete engine compiles and this claim goes quiet. What would buy
   it is a compile-fail pin over an ingest path that names an engine.
-- **The member sees a descriptor and never the operator's path** is read off the vector
-  and the spawn: no positional or flag names a save point in the operator's directory,
-  and the member opens files by name only inside its own room. What would buy it is a
-  test over the vector admin composes refusing any member naming the declaration
-  directory, which is admin's side and its Spec's.
+- **The member sees a descriptor and never a path into `save-points/`** is read off the
+  vector and the spawn: no positional or flag names a published save point, and the
+  member opens files by name only inside its own room. What would buy it is a test over
+  the vector admin composes refusing any member naming `save-points/`, which is admin's
+  side and its Spec's.
 
 **The walks the seam's conformance asks for are not in this tree.** The contract's
 section 8 names them and says both directions land with the acts that open the seam and
@@ -856,8 +894,8 @@ those properties through the port or through the unit that holds them rather tha
 the seam, which is the cheaper instrument and not the one the contract names, and **the
 dead-peer clause is reached by nothing here in either direction**. The save points'
 custody is owed the same kind of walk, the agent's uid asked to open one in the member's
-room and in the operator's directory and refused, and the member's own process asked to
-open the operator's copy by path and refused. The `grants` ask reports the room's owner
+room and in the territory's `save-points/` and refused, and the member's own process
+asked to write a published copy and refused. The `grants` ask reports the room's owner
 and mode and asserts nothing about either, so it is a surface for that walk rather than
 the walk.
 

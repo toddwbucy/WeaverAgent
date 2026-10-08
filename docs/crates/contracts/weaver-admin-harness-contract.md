@@ -167,6 +167,27 @@ second dial waiting at the listener rather than being answered concurrently.
 
 Four, and no others, all opened by admin.
 
+**Save a point, and leave with or without one**, as of A3.2 on the operator's rulings
+of 2026-10-06 on #1. `SavePoint`, opened by admin, carries the cause; the harness, at
+rest, asks the member for a save point through `weaver-harness-state-contract` section
+2's four legs, authors the `save_point` event, and answers `SavePointTaken` naming the
+digest, the finished name, the position the save point covers and the trace position of
+the event, its own run and sequence, or refuses `ActivityNotAtRest` where a turn runs, or `SavePointNotTaken`
+naming which leg missed, or `OutOfOrder` where the run takes no save point, a diagnostic
+binding or a serving run with no member seam, which has no member to ask and is never
+reported as the member dead. `Leave` carries `forced` beside its cause: the harness takes the
+leave's save point before it authors `unload`, and answers `Left` naming it as
+`SavePointTaken` does so admin publishes it under the same ordinal rule; where the save
+point is not finished and `forced` is false it answers `SavePointNotTaken` and stays
+entered, the run open, and where `forced` is true it leaves without one and the `unload`
+event says so. The legs the harness names are the answer, the finished answer and the
+member dead, a member's failed write arriving as the answer missed; admin names a fourth
+of its own, `published`, at the unload and the `save-point` verb, where the save point
+was reported and its publication did not land, per
+`weaver-admin-operator-contract` section 3. A `Left` with no save point is a forced leave, a leave under a
+diagnostic binding, or a leave of a serving run with no member seam, the last two taking
+none.
+
 **Enter the run.** Opened by admin. Admin directs the harness to enter, supplying the
 session identity, the run reference, the kind of the binding, the trace sink handle, the
 state channel's end where the member stands, the SPU instruction, the gate instruction
@@ -174,8 +195,9 @@ where the kind declares a Gate, the state election the tee applies, the store el
 the member stands on, resolved to the embedded engine where the declaration is silent,
 per `weaver-state-PRD` section 4, the lineage of the save point the load restores,
 whether the declaration's `restore` names it or the inventory selected the latest
-published by default, and none where no save point stands, beside it and apart from it
-the reset, where the agent's last run did not end in a clean unload, that run and the
+published by default, marked where it was named at a restore, and none where no save
+point stands, beside it and apart from it the reset, where the agent's last run did not
+end in a clean unload or was forced to end without its save point, that run and the
 reason, whether or not a save point stands, the digests of the organ binaries admin
 started and of the two it hands the worker to fork, the agent's SPU and the gate, the
 digest of the declaration, as of 2026-10-03 the digest of the agent's boundary file, `roles.toml`, marked boundary and
@@ -330,11 +352,12 @@ the state election the tee applies, resolved to the ruled default where the decl
 is silent, the store election the member stands on, resolved to the embedded engine
 where the declaration is silent, the
 lineage of the save point the load restores, its digest, the run, sequence and last turn
-it covers, whether the operator supplied it, where the offline builder made it from a
-record that record's session and the run and turn of its cut, resolved by admin and
-never the save point's path, beside it and apart from it the reset, where the agent's
-last run did not end in a clean unload, that run and the reason, whether or not a save
-point stands, on the operator's rulings of 2026-10-02 on #58, so the harness names where
+it covers, whether it was named at a restore, where the offline builder made it from a
+record that record's session and the run and turn of its cut, resolved by admin from the
+save point's stamp and the manifest's line and never the save point's path, beside it
+and apart from it the reset, where the agent's last run did not end in a clean unload or
+was forced to end without its leave save point, that run and the reason, whether or not
+a save point stands, on the operator's rulings of 2026-10-02 on #58, so the harness names where
 its state came from without opening anything, the digests of the organ binaries admin
 started and of the agent's SPU and the gate it hands the worker, keyed by name, the
 declaration's digest as this crate read the file at the inventory, so the run and the

@@ -7,8 +7,11 @@
 # WEAVER_ADMIN_CONFIG), rather than written here, so the same script serves
 # either seat. The agents are the roots under the base: admin admits an agent
 # by its root existing, and this script serves the same set. Each agent's
-# declaration is read from the directory its root's `declaration-directory`
-# names, the operator's own, as the operator running this script.
+# declaration is `agent.toml` in the territory its root's `territory` key
+# names, root:weaver-<agent>-admin 0640, read as the operator running this script through
+# the access group (the operator's ruling of 2026-10-07 on #1). A root still
+# naming a `declaration-directory`, the layout before that ruling, is
+# migrated by `--install`, its files moved into the territory.
 #
 #   ./deploy/update-stack.sh            plan only; refreshes refs, tests and builds, no install
 #   ./deploy/update-stack.sh --install  plan, then install what changed
@@ -33,6 +36,55 @@ say() { printf '\n== %s\n' "$*"; }
 die() { printf '\nREFUSED: %s\n' "$*" >&2; exit 1; }
 
 read_key() { cat "$STACK/$1" 2>/dev/null || true; }
+
+# **An unload is read from admin's answer, never assumed** (the #94 survey's
+# S22): since A3.2 an unload can refuse with the run still standing
+# (`activity_not_at_rest`, `save_point_not_taken`), or after it ended with
+# the marker open, so an exit taken as done would leave a verified agent
+# serving or a false reset for the next load. Answers 0 where admin's last
+# line is the unloaded state, and names the answer otherwise.
+# unload_verified AGENT
+unload_verified() {
+  local said
+  said=$(sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" unload "$1" 2>/dev/null | sed -n '$p') || true
+  if python3 -c 'import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except ValueError:
+    sys.exit(1)
+sys.exit(0 if isinstance(d, dict) and d.get("kind") == "state" and d.get("state") == "unloaded" else 1)' "$said"; then
+    return 0
+  fi
+  printf '  admin answered the unload of %s: %s\n' "$1" "${said:-nothing}" >&2
+  return 1
+}
+
+# **chmod_nofollow MODE PATH: root sets a moved file's mode through a
+# descriptor opened O_NOFOLLOW** (Codex on #94, round 14). chmod has no
+# no-dereference form, and a check that the name is no link followed by a
+# chmod of the name is two path resolutions, between which a link could be
+# put in its place; opening the name once with O_NOFOLLOW and setting the
+# mode on what was opened leaves no window. A link refuses by name (ELOOP),
+# and so does anything but a regular file, the open being non-blocking so a
+# FIFO under the name never holds the run. Run as root, through python3,
+# which this script already needs for tomllib.
+chmod_nofollow() {
+  sudo python3 -c '
+import errno, os, stat, sys
+mode, path = int(sys.argv[1], 8), sys.argv[2]
+try:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+except OSError as e:
+    sys.exit(f"{path} is a link, and root sets no mode through one" if e.errno == errno.ELOOP
+             else f"{path} does not open: {e.strerror}")
+try:
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        sys.exit(f"{path} is not a regular file")
+    os.fchmod(fd, mode)
+finally:
+    os.close(fd)
+' "$1" "$2"
+}
 
 # **held_closed PATH: admin's rule for what a root process may trust**, per
 # weaver-admin-Spec section 9 (`judge_ancestors`). PATH, resolved to its
@@ -70,13 +122,17 @@ done
 # mangled the rest. It prints the string at a dotted path, or checks that a
 # table stands there, and answers 3 where the path is absent. A file that does
 # not parse, or a value of another kind than asked, refuses by name.
+# **`declared KEY KIND [NAME]` reads the document on stdin**, never a path of
+# its own: who may open a declaration is the caller's question (below), and
+# this reader answers only what the text says. NAME is what a refusal calls
+# the document.
 declared() {
   python3 -c '
 import sys, tomllib
-path, key, want = sys.argv[1], sys.argv[2], sys.argv[3]
+key, want = sys.argv[1], sys.argv[2]
+path = sys.argv[3] if len(sys.argv) > 3 else "the declaration"
 try:
-    with open(path, "rb") as fh:
-        value = tomllib.load(fh)
+    value = tomllib.load(sys.stdin.buffer)
 except (OSError, tomllib.TOMLDecodeError) as e:
     sys.exit(f"{path} is not a TOML 1.0 document, the grammar every reader in the suite shares (weaver-types-Spec section 2): {e}")
 for part in key.split("."):
@@ -88,6 +144,29 @@ if want == "string" and isinstance(value, str):
 elif not (want == "table" and isinstance(value, dict)):
     sys.exit(f"{path}: {key} is not a {want}")
 ' "$@"
+}
+
+# **Every read of a declaration or a trace under a territory goes through
+# privilege once the install holds it** (Codex on #94, round 8), never through
+# the operator's groups: group membership is a login fact, and the layout
+# migration below joins this operator to the access group and regroups the
+# territory to it in one run, which a shell already running does not acquire,
+# so the reads that follow the migration would find the territory closed to
+# them, read every migrated declaration as absent, verify nothing and roll the
+# whole install back. In plan mode, and in the install before its credential,
+# nothing has moved and the reads are the operator's own, as before.
+# `PRIVILEGED` turns where the install takes its credential.
+PRIVILEGED=0
+as_root() { if [ "$PRIVILEGED" -eq 1 ]; then sudo -n "$@"; else "$@"; fi; }
+read_declaration() { as_root cat -- "$1"; }           # the declaration's text
+path_stands() { as_root test -f "$1"; }               # a regular file stands there
+path_exists() { as_root test -e "$1"; }
+# `declared_in DECL KEY KIND`: the declaration read whole first, so a read that
+# fails is a failure and never an empty document that reads as absence.
+declared_in() {
+  local text
+  text=$(read_declaration "$1") || return 1
+  printf '%s\n' "$text" | declared "$2" "$3" "$1"
 }
 
 # Reads a run's new trace lines on stdin and prints what the load event says
@@ -161,8 +240,10 @@ refuse_legacy_units
 # **The agents are the roots under the base**, named as admin's name check
 # admits them (ASCII letters, digits, `-` and `_`), so a staged root
 # `create-agent.sh` left under a dot-name is not one. A symlink is not a root.
-# A root naming a `declaration-directory` is an agent, and its declaration is
-# `agent.toml` there. **A root of the layout before #50 refuses by name**: one
+# A root naming a `territory` is an agent, and its declaration is `agent.toml`
+# there; one naming a `declaration-directory` instead is an agent of the
+# layout before 2026-10-07, which this run migrates (below) before anything
+# else changes. **A root of the layout before #50 refuses by name**: one
 # holding `agent.toml` itself, or the retired `run-tool`, `control-tool`,
 # `unit-properties` or `log-path`, is migrated by hand first (deploy/REDEPLOY.md
 # section 8), since the admin this script installs reads none of them and would
@@ -188,25 +269,86 @@ for root in "$ADMIN_BASE"/*/; do
   for retired in agent.toml run-tool control-tool unit-properties log-path; do
     [ ! -e "$root/$retired" ] || die "$root holds $retired: it is on the layout before #50. Migrate it first (deploy/REDEPLOY.md section 8), then rerun."
   done
-  [ -f "$root/declaration-directory" ] || continue
+  [ -f "$root/territory" ] || [ -f "$root/declaration-directory" ] || continue
   AGENTS="$AGENTS $agent"
 done
 [ -n "$AGENTS" ] || die "no agent root under $ADMIN_BASE: make one with create-agent.sh first"
 
-# **Each agent's declaration, read as the operator.** The root names the
-# directory, which create-agent.sh made the operator's own and closed, so the
-# operator running this script reads it without privilege. One it cannot read
+# **One key of an agent's root, trimmed, an absolute path**, or a refusal by
+# name; empty where the key does not stand.
+root_path() { # root_path AGENT KEY
+  local value
+  [ -e "$ADMIN_BASE/$1/$2" ] || return 0
+  value=$(cat "$ADMIN_BASE/$1/$2" 2>/dev/null) || die "$1: its root's $2 does not read"
+  value=${value#"${value%%[![:space:]]*}"}; value=${value%"${value##*[![:space:]]}"}
+  [[ "$value" == /* ]] || die "$1: its root's $2 is not an absolute path"
+  printf '%s' "$value"
+}
+# **The territory is the stack's layout fact**: `<agent-directory>/weaver-<a>`,
+# as create-agent.sh lays it out, which is where a migrated agent's files go.
+AGENT_DIR=$(read_key agent-directory)
+# **Canonical** (the #94 survey's S23), as create-agent.sh writes it: admin
+# compares the declaration's sink directory with the canonical territory.
+[ -z "$AGENT_DIR" ] || AGENT_DIR=$(realpath -m -- "$AGENT_DIR")
+territory_of() { # territory_of AGENT: prints its territory
+  local t
+  t=$(root_path "$1" territory) || exit 1
+  if [ -n "$t" ]; then printf '%s' "$t"; return 0; fi
+  [ -n "$AGENT_DIR" ] || die "no agent-directory in the stack record $STACK, so $1's territory cannot be named"
+  printf '%s/weaver-%s' "$AGENT_DIR" "$1"
+}
+# **Each agent's declaration, read as the operator.** It is `agent.toml` in the
+# territory, root:weaver-<agent>-admin 0640, which the operator reads through the access
+# group; or, on a root the layout migration below has not yet moved, in the
+# directory the root's `declaration-directory` names. One it cannot read
 # refuses by name and is never left out, on the ground the root's check gives.
 declaration_of() { # declaration_of AGENT: prints the path of its agent.toml
   local dir
-  dir=$(cat "$ADMIN_BASE/$1/declaration-directory" 2>/dev/null) || die "$1: its root's declaration-directory does not read"
-  dir=${dir#"${dir%%[![:space:]]*}"}; dir=${dir%"${dir##*[![:space:]]}"}
-  [[ "$dir" == /* ]] || die "$1: its root's declaration-directory is not an absolute path"
+  dir=$(root_path "$1" territory) || exit 1
+  [ -n "$dir" ] || dir=$(root_path "$1" declaration-directory) || exit 1
+  [ -n "$dir" ] || die "$1: its root names neither a territory nor a declaration-directory"
   printf '%s/agent.toml' "$dir"
 }
 for agent in $AGENTS; do
   decl=$(declaration_of "$agent") || exit 1
-  [ -r "$decl" ] || die "$agent: its declaration $decl cannot be read by $OPERATOR_NAME. It is the operator's own: run this script as the operator who owns it."
+  [ -r "$decl" ] || die "$agent: its declaration $decl cannot be read by $OPERATOR_NAME. It stands in the territory, which the state group weaver-$agent-state passes and the access group weaver-$agent-admin reads: join both (create-agent.sh adds the operator to them), and take a new login before they apply."
+done
+# **A root of the layout before 2026-10-07 is migrated by the install**, on the
+# operator's ruling of that date on #1: its `declaration-directory` names the
+# operator's own directory holding `agent.toml`, `system-prompt.md`,
+# `admin.log` and `worker.log`, which move into the territory, root's, with
+# `save-points/` made beside them, the root's `territory` key written and the
+# old key removed, the operator joined to the state group for passage and the
+# access group for reading, the connector to the state group, and the
+# territory grouped to the state group at 0710 (the operator's ruling of
+# 2026-10-08 on #1). The member is not joined to the access group: it passes
+# by its own primary group, the state group, and a member an earlier install
+# joined keeps a membership the admin no longer hands it at its spawn. The
+# plan names the move and does nothing. A
+# territory already holding any of the four files refuses, naming it (Codex on
+# #94): two declarations of one agent is not a state this script can choose
+# between, and a move onto a prompt draft or a log would destroy its bytes.
+LAYOUT=()
+for agent in $AGENTS; do
+  old=$(root_path "$agent" declaration-directory) || exit 1
+  [ -n "$old" ] || continue
+  [ -z "$(root_path "$agent" territory)" ] || die "$agent: its root names both a territory and a declaration-directory; remove the key that is wrong, then rerun"
+  territory=$(territory_of "$agent") || exit 1
+  [ -d "$territory" ] && [ ! -L "$territory" ] || die "$agent: its territory $territory does not stand, so its declaration cannot move there (deploy/REDEPLOY.md section 8, step 7)"
+  for f in agent.toml system-prompt.md admin.log worker.log; do
+    [ ! -e "$territory/$f" ] && [ ! -L "$territory/$f" ] || die "$agent: its territory $territory already holds an $f while its root still names $old; remove the one that is wrong, then rerun (deploy/REDEPLOY.md section 8, step 7)"
+  done
+  # **Every entry the move would take is a regular file and not a link**,
+  # judged here before anything moves, in the plan as in the install (Codex
+  # on #94, round 13): chmod has no no-dereference form, so a link must never
+  # reach the root chmod the move and the rollback apply, which would set the
+  # mode of whatever file it names. The link is asked of first, since a
+  # dangling one is a link that nothing else sees.
+  for f in agent.toml system-prompt.md admin.log worker.log; do
+    [ ! -L "$old/$f" ] || die "$agent: $old/$f is a link, which the migration does not move; replace it with the file itself, then rerun (deploy/REDEPLOY.md section 8, step 7)"
+    [ ! -e "$old/$f" ] || [ -f "$old/$f" ] || die "$agent: $old/$f is not a regular file, which the migration does not move; remove it, then rerun (deploy/REDEPLOY.md section 8, step 7)"
+  done
+  LAYOUT+=("$agent|$old|$territory")
 done
 
 # **Where cargo builds is asked rather than assumed.** This box sets
@@ -355,12 +497,12 @@ fi
 # the other and the run refuses by name before it spends the build.
 for agent in $AGENTS; do
   decl=$(declaration_of "$agent") || exit 1
-  [ -f "$decl" ] || continue
+  path_stands "$decl" || continue
   # The engine at `state-store.engine`, read by `declared` as the string
   # admin decodes, and an absent election means the crate's own default
   # rather than none.
   rc=0
-  elected=$(declared "$decl" state-store.engine string) || rc=$?
+  elected=$(declared_in "$decl" state-store.engine string) || rc=$?
   case $rc in
     0) ;;
     3) elected=sqlite ;;
@@ -388,9 +530,9 @@ printf '  elected store every agent under the base elects one this build carries
 for agent in $AGENTS; do
   decl=$(declaration_of "$agent") || exit 1
   rc=0
-  kind=$(declared "$decl" trace-sink.kind string) || rc=$?
+  kind=$(declared_in "$decl" trace-sink.kind string) || rc=$?
   [ "$rc" -eq 0 ] && [ "$kind" = file ] || continue
-  sink=$(declared "$decl" trace-sink.path string) || die "$agent: the declaration's trace-sink.path does not read"
+  sink=$(declared_in "$decl" trace-sink.path string) || die "$agent: the declaration's trace-sink.path does not read"
   [ -e "$sink" ] || [ -L "$sink" ] || continue
   # The type by predicate, never by `%F`'s words, which call a zero-byte file
   # "regular empty file" (Codex on #82).
@@ -421,7 +563,7 @@ printf '  traces        every file sink stands as the territory lays it out\n'
 MIGRATE=()
 for agent in $AGENTS; do
   decl=$(declaration_of "$agent") || exit 1
-  [ -f "$decl" ] || continue
+  path_stands "$decl" || continue
   plan=$(python3 "$REPO/deploy/migrate-identity.py" "$decl") \
     || die "$agent: its declaration carries an identity this run cannot move into system-prompt.md; see above and deploy/REDEPLOY.md section 8, step 2"
   [ -n "$plan" ] || continue
@@ -429,6 +571,11 @@ for agent in $AGENTS; do
   MIGRATE+=("$decl")
 done
 [ ${#MIGRATE[@]} -gt 0 ] || printf '  identity      no declaration carries the inline identity of before 2026-10-06\n'
+for entry in "${LAYOUT[@]}"; do
+  IFS='|' read -r agent old territory <<< "$entry"
+  printf '  %-12s layout: agent.toml, system-prompt.md, admin.log and worker.log move from %s into %s, root'"'"'s, with save-points/ beside them; the root takes the territory key\n' "$agent" "$old" "$territory"
+done
+[ ${#LAYOUT[@]} -gt 0 ] || printf '  layout        every declaration stands in its territory\n'
 
 # --------------------------------------------------------------- 2. update main
 say "tree"
@@ -576,11 +723,29 @@ fi
 # connector's rule names its own user), so a repair run that installs nothing
 # needs the credential as much as one that installs everything (Codex on #79).
 sudo -v || die "--install needs sudo: reconcile and verify run admin as root"
+PRIVILEGED=1
 refuse_legacy_units
 
 # ------------------------------------------------------------------ 7. install
 PATCHED=()
 ADDED=()
+# The layout moves this run made, each "agent|old directory|territory|group|
+# mode", the territory's group and mode as found before the move, put back
+# by the restore: the four files moved back as they were, the root's keys as
+# they were, and the territory regrouped and remoded as it stood (Codex on
+# #94, round 9), since the admin from before the ruling of 2026-10-07 drops
+# the member to its primary group alone, so a territory left grouped to the
+# access group is one the rolled-back member cannot traverse to its room. The
+# group memberships stay, being reads the ruling grants either way.
+MOVED=()
+# **Each moved file's owner and mode as found**, keyed "agent|file" (Codex on
+# #94, round 12): a parallel array rather than more fields on the entry, since
+# which of the four files stood varies per agent and the entry keeps one
+# shape for the restore to parse. The pre-ruling layout was the operator's
+# own files in the operator's directory, and a rollback gives them back as
+# they were: a group the operator's shell has not taken is no substitute for
+# a file the operator owned.
+declare -A MOVED_FILES=()
 # The agent the verify step has loaded right now, empty whenever none is. Every
 # rollback from inside that step happens with a worker running, and a restore
 # that leaves it running puts the old declaration and the old binaries under a
@@ -608,7 +773,7 @@ BACKUP=""
 restore() {
   [ "$RESTORED" -eq 0 ] || return 0
   RESTORED=1
-  local failed=0
+  local failed=0 owner fmode
   # **The running agent goes down before the files move under it.** A load that
   # succeeded and then failed its read-back left a worker serving while the
   # declaration it came up on and the binaries it was exec'd from were both
@@ -618,15 +783,32 @@ restore() {
   # to perform.
   if [ -n "$LOADED_AGENT" ]; then
     printf '  unloading %s before the restore\n' "$LOADED_AGENT" >&2
-    sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" \
-      unload "$LOADED_AGENT" >/dev/null 2>&1 \
+    unload_verified "$LOADED_AGENT" \
       || { printf '  %s WOULD NOT UNLOAD. It is still serving, and the files below go back under it. Unload it by hand before loading anything.\n' "$LOADED_AGENT" >&2; failed=1; }
     LOADED_AGENT=""
+  fi
+  if [ ${#MOVED[@]} -gt 0 ]; then
+    for entry in "${MOVED[@]}"; do
+      IFS='|' read -r agent old territory group mode <<< "$entry"
+      printf '  moving %s'"'"'s files back from %s into %s\n' "$agent" "$territory" "$old" >&2
+      move_files_back "$agent" "$old" "$territory" || failed=1
+      # **The territory reads as it did**: its group and mode as the move
+      # found them, so the pre-ruling admin's member, holding no supplementary
+      # group, passes to its room again.
+      sudo chgrp "$group" "$territory" && sudo chmod "$mode" "$territory" \
+        || { printf '  FAILED to restore the group and mode of %s\n' "$territory" >&2; failed=1; }
+      printf '%s\n' "$old" | sudo tee "$ADMIN_BASE/$agent/declaration-directory" >/dev/null \
+        && sudo chmod 0644 "$ADMIN_BASE/$agent/declaration-directory" \
+        && sudo rm -f "$ADMIN_BASE/$agent/territory" \
+        || { printf '  FAILED to restore %s'"'"'s root keys\n' "$agent" >&2; failed=1; }
+    done
   fi
   if [ ${#PATCHED[@]} -gt 0 ]; then
     for entry in "${PATCHED[@]}"; do
       printf '  restoring declaration %s\n' "${entry%%|*}" >&2
-      cp -a "${entry##*|}" "${entry%%|*}" \
+      # As root: the declaration is root's in root's territory (the ruling of
+      # 2026-10-07), and a backup beside it is root's too.
+      sudo cp -a "${entry##*|}" "${entry%%|*}" \
         || { printf '  FAILED to restore %s\n' "${entry%%|*}" >&2; failed=1; }
     done
   fi
@@ -672,7 +854,7 @@ rollback() {
 # three replaced and nothing registered to put them back.
 on_exit() {
   local rc=$?
-  if [ "$COMPLETED" -eq 0 ] && { [ "$INSTALL_DONE" -eq 1 ] || [ ${#PATCHED[@]} -gt 0 ]; }; then
+  if [ "$COMPLETED" -eq 0 ] && { [ "$INSTALL_DONE" -eq 1 ] || [ ${#PATCHED[@]} -gt 0 ] || [ ${#MOVED[@]} -gt 0 ]; }; then
     printf '\n  the run did not complete (exit %d)\n' "$rc" >&2
     restore
   fi
@@ -682,16 +864,137 @@ trap on_exit EXIT
 # **The identity moves before the binaries**, as the operator, each
 # declaration backed up and registered so a rollback puts it back under the
 # old admin, which requires the table the new one refuses.
+# **The identity moves before the layout does**, since migrate-identity.py
+# writes the draft beside the declaration as this user, which it can do in
+# the operator's directory of the layout before 2026-10-07 and not in the
+# territory; a declaration already in its territory is root's, and the move
+# is made there as root.
 if [ ${#MIGRATE[@]} -gt 0 ]; then
   say "migrate identities"
   for decl in "${MIGRATE[@]}"; do
-    cp -a "$decl" "$decl.pre-$AFTER-bak"
-    PATCHED+=("$decl|$decl.pre-$AFTER-bak")
-    python3 "$REPO/deploy/migrate-identity.py" "$decl" --apply >/dev/null \
-      || rollback "the identity of $decl did not move; see above"
+    if [ -w "$decl" ]; then
+      cp -a "$decl" "$decl.pre-$AFTER-bak"
+      PATCHED+=("$decl|$decl.pre-$AFTER-bak")
+      python3 "$REPO/deploy/migrate-identity.py" "$decl" --apply >/dev/null \
+        || rollback "the identity of $decl did not move; see above"
+    else
+      sudo cp -a "$decl" "$decl.pre-$AFTER-bak"
+      PATCHED+=("$decl|$decl.pre-$AFTER-bak")
+      sudo python3 "$REPO/deploy/migrate-identity.py" "$decl" --apply >/dev/null \
+        || rollback "the identity of $decl did not move; see above"
+      # The territory is weaver-<agent>, its access group weaver-<agent>-admin.
+      sudo chown "root:$(basename "$(dirname "$decl")")-admin" "$decl" "$(dirname "$decl")/system-prompt.md"
+      sudo chmod 0640 "$decl" "$(dirname "$decl")/system-prompt.md"
+    fi
     printf '  %s: identity moved into system-prompt.md beside it (backup %s); seed it after the load with deploy/turn.py <agent> --system\n' \
       "$decl" "$(basename "$decl.pre-$AFTER-bak")"
   done
+fi
+
+# **The layout moves next, as root, before the binaries** (the operator's
+# ruling of 2026-10-07 on #1): each file moved and made root's, the logs
+# grouped to the access group as admin makes them, the save points directory
+# made, the root's keys swapped, the groups joined, the territory regrouped.
+# Each entry is registered before its first step, so a death inside the loop
+# still puts the files back. A function, so the plan tests run it against a
+# stand-in sudo.
+# **A move that never replaces** (Codex on #94): `mv -n` declines an occupied
+# destination, and since it may decline in silence, the source still standing
+# after it is the move having failed. The preflight refused an occupied
+# destination already; this holds the line against one made since.
+move_no_clobber() {
+  sudo mv -n -T -- "$1" "$2" && ! sudo test -e "$1"
+}
+
+# **The four files given back to the operator's directory, replacing
+# nothing** (the custody audit's G10): the move back goes through
+# move_no_clobber as the move in does, so a file the operator's tooling made
+# in the old directory during the install is kept and the territory's copy
+# left where it stands, both named, rather than one silently replacing the
+# other. Answers non-zero if any file did not come back as it was.
+# move_files_back AGENT OLD TERRITORY
+move_files_back() {
+  local agent=$1 old=$2 territory=$3 f owner fmode failed=0
+  for f in agent.toml system-prompt.md admin.log worker.log; do
+    sudo test -e "$territory/$f" || continue
+    if ! move_no_clobber "$territory/$f" "$old/$f"; then
+      printf '  FAILED to move %s back: %s stands; both are left in place\n' "$territory/$f" "$old/$f" >&2
+      failed=1
+      continue
+    fi
+    # **Given back as it was**: the owner and mode the move found, so the
+    # operator reads and edits it as before the install.
+    read -r owner fmode <<< "${MOVED_FILES["$agent|$f"]:-}"
+    # chown never follows a link (-h), and the mode is set through a
+    # descriptor opened O_NOFOLLOW (chmod_nofollow): the file has just been
+    # given back to the operator in the operator's directory, and a name made
+    # a link here changes no target.
+    [ -n "$owner" ] && [ -n "$fmode" ] \
+      && sudo chown -h "$owner" -- "$old/$f" && chmod_nofollow "$fmode" "$old/$f" \
+      || { printf '  FAILED to restore the owner and mode of %s\n' "$old/$f" >&2; failed=1; }
+  done
+  return "$failed"
+}
+
+# migrate_layout "AGENT|OLD|TERRITORY"...
+migrate_layout() {
+  local entry agent old territory f group mode owner fmode
+  for entry in "$@"; do
+    IFS='|' read -r agent old territory <<< "$entry"
+    # **What the territory was is recorded before anything changes**, its
+    # group and mode as they stand, so the restore puts them back (Codex on
+    # #94, round 9).
+    read -r group mode < <(sudo stat -c '%G %a' -- "$territory") \
+      || rollback "$agent: cannot read the group and mode of $territory"
+    [ -n "$group" ] && [ -n "$mode" ] || rollback "$agent: cannot read the group and mode of $territory"
+    MOVED+=("$entry|$group|$mode")
+    sudo install -d -o root -g "weaver-$agent-admin" -m 0750 "$territory/save-points" \
+      || rollback "$agent: cannot make $territory/save-points"
+    # Each file's owner and mode recorded before it moves, for the restore.
+    for f in agent.toml system-prompt.md admin.log worker.log; do
+      [ -e "$old/$f" ] || continue
+      read -r owner fmode < <(sudo stat -c '%u:%g %a' -- "$old/$f") \
+        || rollback "$agent: cannot read the owner and mode of $old/$f"
+      [ -n "$owner" ] && [ -n "$fmode" ] || rollback "$agent: cannot read the owner and mode of $old/$f"
+      MOVED_FILES["$agent|$f"]="$owner $fmode"
+    done
+    # **The judgment held at the step**: the mode is set through a descriptor
+    # opened O_NOFOLLOW (chmod_nofollow), since chmod has no no-dereference
+    # form and a link made between the preflight and here would otherwise
+    # have root set its target's mode; the open refuses a link by name.
+    for f in agent.toml system-prompt.md; do
+      [ -e "$old/$f" ] || continue
+      move_no_clobber "$old/$f" "$territory/$f" && sudo chown -h "root:weaver-$agent-admin" "$territory/$f" \
+        && chmod_nofollow 0640 "$territory/$f" \
+        || rollback "$agent: $old/$f did not move into the territory as a regular file"
+    done
+    for f in admin.log worker.log; do
+      [ -e "$old/$f" ] || continue
+      move_no_clobber "$old/$f" "$territory/$f" && sudo chown -h "root:weaver-$agent-admin" "$territory/$f" \
+        && chmod_nofollow 0640 "$territory/$f" \
+        || rollback "$agent: $old/$f did not move into the territory as a regular file"
+    done
+    sudo usermod -aG "weaver-$agent-state,weaver-$agent-admin" "$OPERATOR_NAME" \
+      || rollback "$agent: the operator could not join weaver-$agent-state and weaver-$agent-admin"
+    # The connector passes the territory by the state group; one this box
+    # never made is create-agent's to make.
+    if id -u "weaver-$agent-admincon" >/dev/null 2>&1; then
+      sudo usermod -aG "weaver-$agent-state" "weaver-$agent-admincon" \
+        || rollback "$agent: the connector could not join weaver-$agent-state"
+    fi
+    sudo chgrp "weaver-$agent-state" "$territory" && sudo chmod 0710 "$territory" \
+      || rollback "$agent: the territory could not take the state group"
+    printf '%s\n' "$territory" | sudo tee "$ADMIN_BASE/$agent/territory" >/dev/null \
+      && sudo chmod 0644 "$ADMIN_BASE/$agent/territory" \
+      && sudo rm -f "$ADMIN_BASE/$agent/declaration-directory" \
+      || rollback "$agent: the root's keys did not change over"
+    printf '  %s: declaration, draft and logs moved from %s into %s; %s joined %s and %s, take a new login before they apply\n' \
+      "$agent" "$old" "$territory" "$OPERATOR_NAME" "weaver-$agent-state" "weaver-$agent-admin"
+  done
+}
+if [ ${#LAYOUT[@]} -gt 0 ]; then
+  say "migrate layout"
+  migrate_layout "${LAYOUT[@]}"
 fi
 
 if [ ${#CHANGED[@]} -gt 0 ]; then
@@ -753,7 +1056,7 @@ validate() {
 say "reconcile declarations"
 for agent in $AGENTS; do
   decl=$(declaration_of "$agent") || exit 1
-  if [ ! -f "$decl" ]; then
+  if ! path_stands "$decl"; then
     printf '  %-12s no declaration at %s\n' "$agent" "$decl"
     continue
   fi
@@ -765,15 +1068,18 @@ for agent in $AGENTS; do
   # The one reconciliation this script knows how to make, and only where the
   # box cannot stand a leg at all. Anything else is the operator's.
   rc=0
-  declared "$decl" state-store table || rc=$?
+  declared_in "$decl" state-store table || rc=$?
   if [ ! -f "$STATE_BINARY" ] && [ "$rc" -eq 3 ]; then
     printf '  %-12s %s\n' "$agent" "$verdict"
-    # **The declaration is the operator's, so the operator patches it**,
-    # without privilege, in the operator's own closed directory: no root step
-    # writes a file another principal could choose.
-    cp -a "$decl" "$decl.pre-$AFTER-bak"
+    # **The declaration is root's in root's territory, so root patches it**
+    # (the operator's ruling of 2026-10-07 on #1): a write of root's own file
+    # in root's own directory, which no other principal can choose. The text
+    # is read whole before the write replaces it, never through a pipe that
+    # would truncate what it reads.
+    sudo cp -a "$decl" "$decl.pre-$AFTER-bak"
     PATCHED+=("$decl|$decl.pre-$AFTER-bak")
-    printf '\n[state-store]\nengine = "none"\n' >> "$decl"
+    patched=$(read_declaration "$decl"; printf '\n[state-store]\nengine = "none"\n')
+    printf '%s\n' "$patched" | sudo tee "$decl" >/dev/null
     verdict=$(validate "$agent")
     if [ "$verdict" != '{"kind":"validated"}' ]; then
       rollback "$agent still refuses after the declaration: $verdict"
@@ -799,10 +1105,11 @@ done
 # fifo would block until something closed it. This answers the caller rather
 # than exiting, because both calls sit inside a command substitution where an
 # exit would leave only the subshell and the install standing.
+# Through privilege, as every read under a territory in the install is.
 sink_lines() {
-  if [ ! -e "$1" ]; then printf '0\n'; return 0; fi
-  [ -f "$1" ] || return 1
-  wc -l < "$1"
+  if ! path_exists "$1"; then printf '0\n'; return 0; fi
+  path_stands "$1" || return 1
+  as_root wc -l -- "$1" | awk '{print $1}'
 }
 
 # -------------------------------------------------------------------- 9. verify
@@ -816,16 +1123,16 @@ say "verify"
 VERIFIED=0
 for AGENT in $AGENTS; do
   decl=$(declaration_of "$AGENT") || exit 1
-  if [ ! -f "$decl" ]; then
+  if ! path_stands "$decl"; then
     printf '  %-12s no declaration, not verified\n' "$AGENT"
     continue
   fi
   rc=0
-  SINK=$(declared "$decl" trace-sink.path string) || rc=$?
+  SINK=$(declared_in "$decl" trace-sink.path string) || rc=$?
   [ "$rc" -eq 0 ] && [ -n "$SINK" ] || rollback "cannot find the trace sink for $AGENT"
   printf '  %s\n' "$AGENT"
   LINES=$(sink_lines "$SINK") || rollback "$AGENT: $SINK is not a regular file, and this step reads the load event back out of one"
-  sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" unload "$AGENT" >/dev/null 2>&1 || true
+  unload_verified "$AGENT" || rollback "$AGENT: the unload before the verify load did not answer unloaded, so its load would not be this install's"
   # Claimed before the load rather than after it, so a load that comes up and
   # then dies on its read-back is still a load the restore knows to undo.
   LOADED_AGENT="$AGENT"
@@ -847,10 +1154,10 @@ for AGENT in $AGENTS; do
     [ -n "$said" ] && printf '  the state member last said:\n%s\n' "$said" >&2
     rollback "$AGENT: the load wrote no events to $SINK"
   fi
-  if ! tail -n "$NEW" "$SINK" | weaver_read_load; then
+  if ! as_root tail -n "$NEW" -- "$SINK" | weaver_read_load; then
     rollback "$AGENT: the load event does not name its composer; the install did not take"
   fi
-  sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" unload "$AGENT" >/dev/null 2>&1 || true
+  unload_verified "$AGENT" || rollback "$AGENT: the verify load's unload did not answer unloaded"
   LOADED_AGENT=""
   VERIFIED=$((VERIFIED + 1))
 done

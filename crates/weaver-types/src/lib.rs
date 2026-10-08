@@ -42,12 +42,18 @@
 //!         LifecycleDirective::Validate { .. } => "validate",
 //!         LifecycleDirective::Show { .. } => "show",
 //!         LifecycleDirective::Observe => "observe",
+//!         LifecycleDirective::SavePoint { .. } => "save_point",
+//!         LifecycleDirective::SavePointVerb { .. } => "save_point_verb",
+//!         LifecycleDirective::Restore { .. } => "restore",
+//!         LifecycleDirective::ForceUnload { .. } => "force_unload",
 //!     }
 //! }
 //! fn answer_name(a: &LifecycleAnswer) -> &'static str {
 //!     match a {
 //!         LifecycleAnswer::Ready => "ready",
-//!         LifecycleAnswer::Left => "left",
+//!         LifecycleAnswer::Left { .. } => "left",
+//!         LifecycleAnswer::SavePointTaken { .. } => "save_point_taken",
+//!         LifecycleAnswer::RestoreNamed { .. } => "restore_named",
 //!         LifecycleAnswer::TurnAborted { .. } => "turn_aborted",
 //!         LifecycleAnswer::AtRest => "at_rest",
 //!         LifecycleAnswer::Admitted => "admitted",
@@ -81,6 +87,7 @@
 //!         LifecycleRefusal::Unanswered => "unanswered",
 //!         LifecycleRefusal::OrganRefused { .. } => "organ_refused",
 //!         LifecycleRefusal::ActivityNotAtRest => "activity_not_at_rest",
+//!         LifecycleRefusal::SavePointNotTaken { .. } => "save_point_not_taken",
 //!     }
 //! }
 //! ```
@@ -90,7 +97,7 @@ mod identity;
 mod wire;
 
 pub use config::{
-    AgentConfig, ArtifactRef, BindingKind, ClassifyInstruction, ConfigError, ConfigErrorKind, Cut,
+    AgentConfig, ArtifactRef, BindingKind, ClassifyInstruction, ConfigError, ConfigErrorKind,
     DecoderInstruction, DeviceOrdinal, ElectedKindConfig, FieldElection, FieldName,
     GateInstruction, ModelBinding, Restore, SpuInstruction, StateElection, StateStore, StoreEngine,
     ToolName, TraceSink,
@@ -106,7 +113,7 @@ pub use wire::{
     EnterPayload, ExchangeId, FaultCase, FaultReport, Finish, Generation, KillCause, LabelAnswer,
     LabelDirective, LabelRefusal, LifecycleAnswer, LifecycleAsk, LifecycleDirective,
     LifecycleRefusal, Lineage, LoadFacts, MAX_ENVELOPE_BYTES, Opener, OrganEnvelope, Payload,
-    Position, RefusalRecord, RefusingOrgan, Reset, ResetReason, RunId, ScoredLabel,
-    SegmentPreamble, SessionId, TokenAnswer, TokenAsk, TokenDirective, TokenRefusal, ToolExecution,
-    ToolOutcome, TurnFrame, TurnKey, TurnRequest,
+    Position, RefusalRecord, RefusingOrgan, Reset, ResetReason, RunId, SavePointLeg,
+    SavePointReport, ScoredLabel, SegmentPreamble, SessionId, TokenAnswer, TokenAsk,
+    TokenDirective, TokenRefusal, ToolExecution, ToolOutcome, TurnFrame, TurnKey, TurnRequest,
 };

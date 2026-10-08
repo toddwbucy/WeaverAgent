@@ -17,15 +17,20 @@ the agent's trace, not this script's output.
 
 **`--system` is the seeding turn**, per weaver-gate-world-contract section 2 on the
 operator's ruling of 2026-10-06 that the system prompt is state: it reads the
-operator's draft, `<declaration directory>/system-prompt.md` (the root's
-`declaration-directory` key, as admin reads it), and sends it as the one line
-`{"role": "system", "text": ...}`. The harness admits a system line from the
+operator's draft, `<territory>/system-prompt.md` (the root's `territory` key, as
+admin reads it; the file is root:weaver-<agent>-admin, 0640, and the operator reads it through the
+access group `weaver-<agent>-admin`, on the ruling of 2026-10-07 that the whole
+agent lives in its territory), and sends it as the one line
+`{"role": "system", "text": ...}`. The territory is taken from the root's key and
+derived from nothing: this script already reads the root's keys as the operator,
+`coordination-root` among them, so the mechanism is the one it has. The harness admits a system line from the
 operator's uid alone, authors the prompt as the session's prefix and turns on it,
 so the model's first answer comes back and the prompt is state from then on. The
 file is a draft: the agent holds the prompt the gate carried, in its state, and the
 file is only what the operator will send next. Load, seed, save point, unload, and
 the production session is the next load (deploy/HowToDeployANewAgent.md section 4).
 """
+import grp
 import json
 import os
 import socket
@@ -54,6 +59,20 @@ def read_key(base: str, agent: str, key: str) -> str | None:
     return value
 
 
+def access_note(agent: str) -> str:
+    """Whether this session holds the agent's access group, through which the
+    territory's declaration and draft are read."""
+    access = f"weaver-{agent}-admin"
+    try:
+        gid = grp.getgrnam(access).gr_gid
+    except KeyError:
+        return f"no group {access} stands on this box, so the agent was not created here"
+    if gid in os.getgroups() or os.getegid() == gid:
+        return f"this session holds {access}, so the file's group or mode is wrong"
+    return (f"this session does not hold {access}, through which the draft is read; create-agent.sh adds "
+            f"the operator to it, and a session that predates that needs a new login")
+
+
 def main() -> int:
     args = sys.argv[1:]
     system = "--system" in args
@@ -70,13 +89,13 @@ def main() -> int:
     raw = "--raw" in args[1:]
     base = os.environ.get("WEAVER_ADMIN_CONFIG") or "/etc/weaver/admin"
     if system:
-        # The draft stands in the operator's declaration directory, the one
-        # admin's root names, beside agent.toml. A text given with --system
-        # would be two prompts, so the flag takes none.
+        # The draft stands in the agent's territory, the one admin's root
+        # names, beside agent.toml. A text given with --system would be two
+        # prompts, so the flag takes none.
         if any(not a.startswith("--") for a in args[1:]):
             print("--system reads the prompt draft and takes no text", file=sys.stderr)
             return 2
-        directory = read_key(base, agent, "declaration-directory")
+        directory = read_key(base, agent, "territory")
         if directory is None:
             return 1
         draft = os.path.join(directory, "system-prompt.md")
@@ -88,6 +107,12 @@ def main() -> int:
         try:
             with open(draft, "rb") as f:
                 text = f.read().decode("utf-8")
+        except PermissionError as e:
+            # **The draft is read through the access group**, the file being
+            # root:weaver-<agent>-admin 0640, so a refusal names whether this
+            # session holds the group rather than leaving a bare EACCES.
+            print(f"cannot read the prompt draft {draft}: {e.strerror or e}; {access_note(agent)}", file=sys.stderr)
+            return 1
         except OSError as e:
             print(f"cannot read the prompt draft {draft}: {e.strerror or e}", file=sys.stderr)
             return 1

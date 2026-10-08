@@ -24,7 +24,7 @@
 //! file's digest,
 //! and the check line itself is covered by the digest: **the digest is sha256
 //! over the whole file** and is the save point's identity on the trace and
-//! in the operator's directory. **The name is the digest**, so two save points
+//! in the territory's `save-points/`. **The name is the digest**, so two save points
 //! with different bytes can never share one, and the stamp's `taken` member,
 //! the writing process, a counter that process never repeats, and the wall
 //! clock, makes two save points of the same holdings at the same position
@@ -48,6 +48,13 @@ use std::io::{Read, Write};
 use std::os::fd::{AsFd, OwnedFd};
 
 use sha2::Digest;
+
+/// **The save point's bound, one gibibyte of rendered file**, per
+/// `weaver-state-Spec` section 3 on the operator's ruling of 2026-10-08 that
+/// both readers enforce it: admin's `SAVE_POINT_BOUND` holds the same number
+/// under its own watch, the two crates seeing neither's constant, and the
+/// member writes no save point past it.
+pub const SAVE_POINT_BOUND: u64 = 1024 * 1024 * 1024;
 
 /// The trace position a save point covers, per `weaver-state-Spec` section
 /// 3: the run and sequence of the last distillate landed in it, and the last
@@ -76,6 +83,9 @@ pub enum SavePointFault {
     /// The bytes under the name are a sound save point whose own name,
     /// its digest, is another: an alias, which is not this save point.
     NameDisagrees,
+    /// The rendered save point is past [`SAVE_POINT_BOUND`], so it is never
+    /// written: the file's size and the bound it exceeds.
+    PastBound { size: u64, bound: u64 },
 }
 
 impl std::fmt::Display for SavePointFault {
@@ -87,6 +97,9 @@ impl std::fmt::Display for SavePointFault {
             SavePointFault::NotAPlainName => write!(f, "save point name is not a plain entry"),
             SavePointFault::NameDisagrees => {
                 write!(f, "save point name is not the digest's, an alias")
+            }
+            SavePointFault::PastBound { size, bound } => {
+                write!(f, "save point is {size} bytes, past the bound of {bound}")
             }
         }
     }
@@ -163,6 +176,11 @@ impl SavePoint {
         out
     }
 
+    /// The length of the file's bytes, counted without rendering them.
+    pub fn rendered_len(&self) -> u64 {
+        (self.header.len() + self.check_line().len() + self.image.len() + 2) as u64
+    }
+
     /// The save point's digest, sha256 hex over the whole file, which is its
     /// name in the room and its identity on the trace.
     pub fn digest(&self) -> String {
@@ -230,8 +248,14 @@ impl SavePoint {
             && taken.get("pid").is_some_and(|v| v.as_u64().is_some())
             && taken.get("ordinal").is_some_and(|v| v.as_u64().is_some())
             && taken.get("wall_ns").is_some_and(|v| {
-                v.as_str()
-                    .is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+                // Digits alone, and digits that fit an unsigned 64-bit count
+                // of nanoseconds, what a clock can be: `u64`'s own parse
+                // admits a sign, so the digit rule stands beside it.
+                v.as_str().is_some_and(|s| {
+                    !s.is_empty()
+                        && s.bytes().all(|b| b.is_ascii_digit())
+                        && s.parse::<u64>().is_ok()
+                })
             });
         if !nonce_sound {
             return Err(malformed(
@@ -257,13 +281,29 @@ impl SavePoint {
         if number("image")? != image.len() as u64 {
             return Err(malformed("image length disagrees with the stamp"));
         }
+        // **The run id and the schema digest are bounded** (the operator's
+        // ruling of 2026-10-08 on #1, the custody audit's G2), as admin's
+        // judgment bounds them: a run id of at most 128 printable ASCII
+        // bytes, a schema of exactly 64 lowercase hex.
+        let run = text("run")?;
+        if run.len() > 128 || !run.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
+            return Err(malformed("run is not at most 128 printable ASCII bytes"));
+        }
+        let schema = text("schema")?;
+        if schema.len() != 64
+            || !schema
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err(malformed("schema is not 64 lowercase hex"));
+        }
         let parsed = SavePoint {
             stamp: Stamp {
-                run: text("run")?,
+                run,
                 sequence: number("sequence")?,
                 turn: number("turn")?,
             },
-            schema: text("schema")?,
+            schema,
             image: image.to_vec(),
             header: header_line,
         };
@@ -312,7 +352,9 @@ impl Room {
             nix::sys::stat::Mode::empty(),
         )
         .map_err(|e| SavePointFault::Io(format!("open room: {e}")))?;
-        Ok(Room { dir })
+        let room = Room { dir };
+        room.clear_parts();
+        Ok(room)
     }
 
     /// The boundary as the room states it, per the contract's `grants` ask:
@@ -327,15 +369,42 @@ impl Room {
         ])
     }
 
-    /// Write a save point as a new file and answer its finished name. The
-    /// bytes go to a part name created exclusively, are synced, and are linked
-    /// under the finished name; the link refuses an existing entry, so nothing
-    /// here overwrites; and the room is synced so the entry is durable before
-    /// the name is answered. Every failure removes the part, a failed room
-    /// sync removes the finished name too, and no file stands under a
-    /// finished name the answer did not give.
+    /// Write a save point as a new file and answer its finished name: the
+    /// part written and finished in one call, for a writer that needs no
+    /// acknowledgement, the offline builder's case.
     pub fn write(&self, save_point: &SavePoint) -> Result<String, SavePointFault> {
+        let name = self.write_part(save_point)?;
+        self.finish(&name)?;
+        Ok(name)
+    }
+
+    /// **Write a save point as a part and answer the finished name it will
+    /// take**, per `weaver-state-Spec` section 3 on the operator's ruling of
+    /// 2026-10-06 on #1 (A3.0 item 4): the bytes go to a part name created
+    /// exclusively, dotted so publication never reads it, and are synced;
+    /// the finished name is given by [`Room::finish`] on the harness's
+    /// acknowledgement alone. Any part standing before this write is
+    /// removed first, so the room holds at most one.
+    pub fn write_part(&self, save_point: &SavePoint) -> Result<String, SavePointFault> {
+        self.write_part_within(save_point, SAVE_POINT_BOUND)
+    }
+
+    /// **A save point past the bound is refused before any part is
+    /// created**, per `weaver-state-Spec` section 3: the standing part is
+    /// cleared as for any write, the refusal leaves the room holding none,
+    /// and the caller answers nothing. The bound is a parameter so a test
+    /// can lower it; every writer passes [`SAVE_POINT_BOUND`].
+    pub fn write_part_within(
+        &self,
+        save_point: &SavePoint,
+        bound: u64,
+    ) -> Result<String, SavePointFault> {
         use nix::fcntl::OFlag;
+        self.clear_parts();
+        let size = save_point.rendered_len();
+        if size > bound {
+            return Err(SavePointFault::PastBound { size, bound });
+        }
         let name = save_point.name();
         let part = format!(".part-{name}");
         let io = |what: &str, e: nix::errno::Errno| SavePointFault::Io(format!("{what}: {e}"));
@@ -351,22 +420,40 @@ impl Room {
             file.write_all(&save_point.bytes())
                 .map_err(|e| SavePointFault::Io(format!("write part: {e}")))?;
             file.sync_all()
-                .map_err(|e| SavePointFault::Io(format!("sync part: {e}")))?;
-            nix::unistd::linkat(
-                self.dir.as_fd(),
-                part.as_str(),
-                self.dir.as_fd(),
-                name.as_str(),
-                nix::fcntl::AtFlags::empty(),
-            )
-            .map_err(|e| io("link finished name", e))
+                .map_err(|e| SavePointFault::Io(format!("sync part: {e}")))
         })();
+        if outcome.is_err() {
+            self.discard_part(&name);
+        }
+        outcome?;
+        Ok(name)
+    }
+
+    /// **Give a part its finished name**, on the harness's acknowledgement:
+    /// the part is linked under the finished name, the link refusing an
+    /// existing entry so nothing here overwrites, the part is unlinked, and
+    /// the room is synced so the entry is durable before the name is
+    /// answered. A failed link removes the part, a failed room sync removes
+    /// the finished name too, and no file stands under a finished name the
+    /// answer did not give.
+    pub fn finish(&self, name: &str) -> Result<(), SavePointFault> {
+        let part = format!(".part-{name}");
+        let io = |what: &str, e: nix::errno::Errno| SavePointFault::Io(format!("{what}: {e}"));
+        let linked = nix::unistd::linkat(
+            self.dir.as_fd(),
+            part.as_str(),
+            self.dir.as_fd(),
+            name,
+            nix::fcntl::AtFlags::empty(),
+        )
+        .map_err(|e| io("link finished name", e));
         let _ = nix::unistd::unlinkat(
             self.dir.as_fd(),
             part.as_str(),
             nix::unistd::UnlinkatFlags::NoRemoveDir,
         );
-        outcome?;
+        linked?;
+        let name = name.to_string();
         if let Err(e) = nix::unistd::fsync(self.dir.as_fd()) {
             if let Err(why) = self.remove_finished(&name) {
                 eprintln!(
@@ -379,7 +466,47 @@ impl Room {
             }
             return Err(io("sync room", e));
         }
-        Ok(name)
+        Ok(())
+    }
+
+    /// Remove a part that will not be finished: a failed write, an
+    /// acknowledgement that never came, or a part a dead member left.
+    pub fn discard_part(&self, name: &str) {
+        let part = format!(".part-{name}");
+        let _ = nix::unistd::unlinkat(
+            self.dir.as_fd(),
+            part.as_str(),
+            nix::unistd::UnlinkatFlags::NoRemoveDir,
+        );
+    }
+
+    /// Remove every part standing in the room, read through the room's own
+    /// descriptor: at the open, so a dead member's part does not outlive it,
+    /// and before each write, so the room holds at most one.
+    pub fn clear_parts(&self) {
+        let Ok(mut listing) = nix::dir::Dir::openat(
+            self.dir.as_fd(),
+            ".",
+            nix::fcntl::OFlag::O_RDONLY
+                | nix::fcntl::OFlag::O_DIRECTORY
+                | nix::fcntl::OFlag::O_CLOEXEC,
+            nix::sys::stat::Mode::empty(),
+        ) else {
+            return;
+        };
+        let parts: Vec<String> = listing
+            .iter()
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| entry.file_name().to_str().ok().map(str::to_string))
+            .filter(|entry| entry.starts_with(".part-"))
+            .collect();
+        for part in parts {
+            let _ = nix::unistd::unlinkat(
+                self.dir.as_fd(),
+                part.as_str(),
+                nix::unistd::UnlinkatFlags::NoRemoveDir,
+            );
+        }
     }
 
     /// Remove a finished name and sync the room so the removal is durable,
@@ -521,6 +648,32 @@ mod tests {
     /// flipped in the stamp, and a check line altered each refuse.
     /// Perturbation: skip the check comparison in `parse` and the flipped
     /// cases parse as sound.
+    /// **The corpus holds the two readers equal**, per `weaver-admin-Spec`
+    /// section 4: every file of the workspace's save-point corpus parses to
+    /// the verdict the corpus gives it, so a case this parse admits and
+    /// admin's judgment refuses, or the reverse, fails here or in admin's
+    /// own corpus test. Perturbation: relax any one rule of `parse` and its
+    /// case parses sound against a `refuses` verdict.
+    #[test]
+    fn the_corpus_holds_the_parse_equal_to_admins_judgment() {
+        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../weaver-types/tests/fixtures/save-points");
+        let verdicts = std::fs::read_to_string(corpus.join("verdicts.txt")).expect("the verdicts");
+        let mut cases = 0;
+        for line in verdicts.lines().filter(|l| !l.trim().is_empty()) {
+            let (name, verdict) = line.split_once(' ').expect("name and verdict");
+            let bytes = std::fs::read(corpus.join(name)).expect(name);
+            let parsed = SavePoint::parse(&bytes);
+            match verdict {
+                "sound" => assert!(parsed.is_ok(), "{name} parses sound: {parsed:?}"),
+                "refuses" => assert!(parsed.is_err(), "{name} refuses"),
+                other => panic!("{name}: verdict {other} is not sound or refuses"),
+            }
+            cases += 1;
+        }
+        assert!(cases >= 10, "the corpus holds its cases: {cases}");
+    }
+
     #[test]
     fn a_torn_or_damaged_save_point_is_refused() {
         let sound = taken("r-1", 41, b"a longer image so a cut lands inside it");
@@ -694,6 +847,59 @@ mod tests {
         assert_eq!(surface.len(), 2);
         assert!(surface[0].starts_with("owner "));
         assert!(surface[1].starts_with("mode 0"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **The save point's bound is the ruling's number, named**, per
+    /// `weaver-state-Spec` section 3 on the operator's ruling of 2026-10-08:
+    /// admin's `SAVE_POINT_BOUND` is pinned to the same literal under its own
+    /// watch, so the two readers are held equal by the number and neither
+    /// links the other. Perturbation: change the constant and this fails.
+    #[test]
+    fn the_save_point_bound_is_one_gibibyte() {
+        assert_eq!(SAVE_POINT_BOUND, 1_073_741_824);
+    }
+
+    /// **A save point past the bound writes no part**: with the bound
+    /// lowered under the file's size the write is refused naming the size,
+    /// the part a previous write left is cleared, and the room holds no
+    /// file; at its own size the same save point writes. The size is the
+    /// rendered file's, counted without rendering it. Perturbation: drop the
+    /// bound check from `write_part_within` and the lowered write stands a
+    /// part.
+    #[test]
+    fn a_save_point_past_the_bound_writes_no_part() {
+        let dir = std::env::temp_dir().join(format!(
+            "weaver-state-bound-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("room");
+        let room = Room::open(&dir).expect("opens");
+        let save_point = taken("r-1", 41, b"an image of some bytes");
+        let size = save_point.bytes().len() as u64;
+        assert_eq!(save_point.rendered_len(), size, "the count is the file's");
+        let earlier = room
+            .write_part(&taken("r-1", 40, b"earlier"))
+            .expect("an earlier part");
+        assert!(dir.join(format!(".part-{earlier}")).exists());
+        assert_eq!(
+            room.write_part_within(&save_point, size - 1),
+            Err(SavePointFault::PastBound {
+                size,
+                bound: size - 1
+            })
+        );
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .expect("lists")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        assert!(left.is_empty(), "the refusal leaves no file: {left:?}");
+        let name = room
+            .write_part_within(&save_point, size)
+            .expect("at the bound it writes");
+        assert!(dir.join(format!(".part-{name}")).exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

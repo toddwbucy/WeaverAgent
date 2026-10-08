@@ -372,31 +372,40 @@ fn the_loop_file_is_optional_and_names_a_path_when_present() {
 /// **The restore is optional and names a record and a cut**, per
 /// `weaver-types-Spec` section 2 as of 2026-09-04 and issue #432: absent
 /// means the load stands from nothing, so every declaration written before
-/// the member existed still parses, and present it names the record and,
-/// where the session stands on a prefix, the cut by run and turn.
+/// the member existed still parses, and present it names a save point by its
+/// published name or its digest, a bare name, per `weaver-types-Spec` section
+/// 2 as of A3.2; the record-and-cut form refuses by name, and a name that is
+/// not bare refuses `BadValue` naming `restore.save-point`. Perturbation: drop
+/// `check_restore_name` from `parse` and the four bad names parse.
 #[test]
-fn the_restore_is_optional_and_names_a_record_and_a_cut() {
+fn the_restore_is_optional_and_names_a_save_point_by_a_bare_name() {
     let config = parse(&full_config()).expect("parses");
     assert_eq!(config.restore, None);
-    let whole = format!(
+    for name in ["20261006T221404Z-ab12cd.save-point", "ab12cd"] {
+        let named = format!("{}\n[restore]\nsave-point = \"{name}\"\n", full_config());
+        let config = parse(&named).expect("parses");
+        assert_eq!(config.restore.expect("present").save_point, name);
+    }
+    // The control character is written as TOML's own escape, since a raw
+    // one is not a TOML string at all and refuses as malformed before this
+    // check is reached.
+    for bad in ["", ".", "..", "a/b", "a\\u0007b"] {
+        let named = format!("{}\n[restore]\nsave-point = \"{bad}\"\n", full_config());
+        let err = parse(&named).expect_err("refuses");
+        assert_eq!(err.kind, ConfigErrorKind::BadValue, "{bad:?}");
+        assert_eq!(
+            err.field,
+            Some(FieldName("restore.save-point".into())),
+            "{bad:?}"
+        );
+    }
+    let record = format!(
         "{}\n[restore]\nrecord = \"/var/lib/weaver/s-1.ndjson\"\n",
         full_config()
     );
-    let config = parse(&whole).expect("parses");
-    let restore = config.restore.expect("present");
-    assert_eq!(
-        restore.record,
-        std::path::PathBuf::from("/var/lib/weaver/s-1.ndjson")
-    );
-    assert_eq!(restore.through, None, "no cut, the record whole");
-    let cut = format!(
-        "{}\n[restore]\nrecord = \"/var/lib/weaver/s-1.ndjson\"\nthrough = {{ run = \"r-a\", turn = 2 }}\n",
-        full_config()
-    );
-    let config = parse(&cut).expect("parses");
-    let through = config.restore.expect("present").through.expect("the cut");
-    assert_eq!(through.run.0, "r-a");
-    assert_eq!(through.turn, 2);
+    let err = parse(&record).expect_err("the record form refuses");
+    assert_eq!(err.kind, ConfigErrorKind::UnknownField);
+    assert_eq!(err.field, Some(FieldName("record".into())));
 }
 
 /// A present election parses whole, keys meaningful beside all-kinds true.
@@ -614,12 +623,6 @@ fn a_path_carrying_a_control_character_refuses_by_name() {
     );
     let err = parse(&looped).expect_err("refuses");
     assert_eq!(err.field, Some(FieldName("loop-file".into())));
-    let restored = format!(
-        "{}\n[restore]\nrecord = \"/var/lib/weaver/s-1\\u0007.ndjson\"\n",
-        full_config()
-    );
-    let err = parse(&restored).expect_err("refuses");
-    assert_eq!(err.field, Some(FieldName("restore.record".into())));
     // A path with no control character parses as it did: a space, a quote and
     // a non-ASCII character are not control characters.
     let plain = full_config().replace(
