@@ -260,9 +260,10 @@ the declaration `agent.toml` (edited with `sudoedit`), the prompt draft
 `system-prompt.md`, `admin.log`, `worker.log`, `save-points/` with the published save
 points and their manifest, the trace and the member's room. The territory is
 `root:weaver-<agent>-state 0710`: the member passes to its own room by that group, and
-the operator and the connector join it for passage; the files in it are grouped to the
-access group `weaver-<agent>-admin`, which reads them and never writes, and which the
-member is not in. Each agent runs under its own OS user, started by admin's
+the operator and the connector join it for passage. The declaration, the prompt draft,
+the logs and `save-points/` are grouped to the access group `weaver-<agent>-admin`, which
+reads them and never writes, and which the member is not in; the trace is
+`root:weaver-<agent>-trace 0640`, and the member's room is the member's own, `0700`. Each agent runs under its own OS user, started by admin's
 start step, with no systemd unit. `create-agent.sh` writes the connector's strict sudo
 rule. Taking down a single agent is by hand, `HowToDeployANewAgent.md` section 7 (#35).
 **No old layout is carried forward** (the operator's ruling of 2026-10-08, #1): an agent
@@ -308,7 +309,9 @@ this file and `AGENTS.md`, which are the Planner's, also go through a pull reque
    threads, sometimes a minute after the summary row flips: wait past the flip, then
    list the threads created since the push from the GraphQL thread graph (the REST
    comment listing paginates at thirty). `main` requires every conversation resolved, so
-   an answered thread is resolved by id; a BLOCKED merge state is an unresolved thread.
+   an answered thread is resolved by id. `BLOCKED` means only that some protection
+   holds the merge: here, with no required reviews or checks, it is usually an
+   unresolved thread, but read the branch protection when it is not.
 4. Every finding is graded and answered on the pull request, fixed or declined with the
    reason. A finding names one site of its class: grep every consumer of the same
    shape in every file of the act and table each site in the body before the next
