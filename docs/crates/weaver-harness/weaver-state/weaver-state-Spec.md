@@ -385,12 +385,15 @@ point is at most one gibibyte**, 1073741824 bytes of rendered file, on the opera
 ruling of 2026-10-08 that both readers enforce the bound admin's inventory holds: a
 `snapshot` whose save point would exceed it answers nothing, the reason said on the
 member's standard error, and leaves no part, so the harness's bound converts the silence
-as it does any failed write. **No save point is taken over a landing that did not land**
-(the operator's ruling of 2026-10-08 on #99): a distillate whose landing fails rolls back
-whole, so the holdings lack what the trace holds; the failure is said on standard error
-as a `state_fault` line, never dropped, and every later `snapshot` of that member answers
-nothing, so the leave refuses `SavePointNotTaken` and the operator forces, the next load
-recording the reset. **An adopted image grows as a first run's store does**: the engine's
+as it does any failed write. **No save point is taken over a landing the store failed**
+(the operator's ruling of 2026-10-08 on #99): a distillate whose landing fails on a
+fault of the store itself, the engine full or past its size limit, an I/O fault or
+damage, rolls back whole, so the holdings lack what the trace holds; the failure is said
+on standard error as a `state_fault` line, never dropped, and every later `snapshot` of
+that member answers nothing, so the leave refuses `SavePointNotTaken` and the operator
+forces, the next load recording the reset. **A distillate the schema refuses is not
+one**: its landing rolls back by the schema's own constraint, the designed outcome of the
+schema slot above, and it notes nothing and poisons no later save point. **An adopted image grows as a first run's store does**: the engine's
 in-memory file for a deserialized database is capped at one gibibyte, which a store stood
 empty never meets, so after every deserialize at an adoption the member lifts that cap to
 the largest the engine admits, and the save point's bound stays the one ceiling. **The

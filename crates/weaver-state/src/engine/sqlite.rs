@@ -75,10 +75,7 @@ impl Store for Sqlite {
     /// any failure, because a distillate held in part would be an
     /// attributable envelope over missing pairs.
     fn land(&mut self, distillate: &Distillate) -> Result<(), CustodyFault> {
-        let transaction = self
-            .connection
-            .transaction()
-            .map_err(|e| CustodyFault::LandingFailed(e.to_string()))?;
+        let transaction = self.connection.transaction().map_err(landing_fault)?;
         // The two inserts ride cached statements: one prepare per schema
         // for the store's life rather than one per event, with the
         // transaction boundary unchanged.
@@ -88,7 +85,7 @@ impl Store for Sqlite {
                     "INSERT INTO event (session, run, turn, kind, sequence)
                      VALUES (?1, ?2, ?3, ?4, ?5)",
                 )
-                .map_err(|e| CustodyFault::LandingFailed(e.to_string()))?;
+                .map_err(landing_fault)?;
             insert_event
                 .execute(rusqlite::params![
                     distillate.session,
@@ -97,7 +94,7 @@ impl Store for Sqlite {
                     distillate.kind,
                     distillate.sequence
                 ])
-                .map_err(|e| CustodyFault::LandingFailed(e.to_string()))?;
+                .map_err(landing_fault)?;
         }
         let event_id = transaction.last_insert_rowid();
         // The named members land typed and the rest verbatim, per
@@ -106,18 +103,15 @@ impl Store for Sqlite {
         {
             let mut insert_field = transaction
                 .prepare_cached("INSERT INTO field (event_id, key, value) VALUES (?1, ?2, ?3)")
-                .map_err(|e| CustodyFault::LandingFailed(e.to_string()))?;
+                .map_err(landing_fault)?;
             for (key, value) in &verbatim {
                 insert_field
                     .execute(rusqlite::params![event_id, key, value])
-                    .map_err(|e| CustodyFault::LandingFailed(e.to_string()))?;
+                    .map_err(landing_fault)?;
             }
         }
-        land_typed(&transaction, event_id, &typed)
-            .map_err(|e| CustodyFault::LandingFailed(e.to_string()))?;
-        transaction
-            .commit()
-            .map_err(|e| CustodyFault::LandingFailed(e.to_string()))
+        land_typed(&transaction, event_id, &typed).map_err(landing_fault)?;
+        transaction.commit().map_err(landing_fault)
     }
 
     /// **Retire the declared session's holdings and record the opener in one
@@ -652,6 +646,22 @@ fn size_limit(connection: &Connection) -> i64 {
     limit
 }
 
+/// **A refused landing is the schema's, a failed one the store's** (the #99
+/// area 1 grade of N2): a constraint the schema stands, `SQLITE_CONSTRAINT`
+/// (a `RAISE(ABORT)` trigger among them), refusing a distillate is the
+/// designed outcome of `weaver-state-Spec` section 3 and answers
+/// `LandingRefused`; anything else, the engine full or past its size limit,
+/// an I/O fault or a damaged image, is a fault of the store and answers
+/// `LandingFailed`.
+fn landing_fault(e: rusqlite::Error) -> CustodyFault {
+    match e.sqlite_error_code() {
+        Some(rusqlite::ErrorCode::ConstraintViolation) => {
+            CustodyFault::LandingRefused(e.to_string())
+        }
+        _ => CustodyFault::LandingFailed(e.to_string()),
+    }
+}
+
 /// Land one event's typed rows inside the caller's transaction.
 fn land_typed(
     connection: &rusqlite::Connection,
@@ -945,7 +955,13 @@ mod tests {
             sequence: 1,
             pairs: vec![("fine".into(), "1".into()), ("poison".into(), "2".into())],
         });
-        assert!(refused.is_err(), "the forced failure refuses the landing");
+        // **A constraint's refusal is the schema's, never the store's** (the
+        // #99 area 1 grade of N2). Perturbation: answer every error
+        // `LandingFailed` and this reads the store's fault.
+        assert!(
+            matches!(refused, Err(CustodyFault::LandingRefused(_))),
+            "the schema's refusal: {refused:?}"
+        );
         assert_eq!(
             count(&store, "SELECT COUNT(*) FROM event"),
             1,

@@ -390,10 +390,16 @@ struct Custody<'a> {
 }
 
 /// **Land one distillate, or say it did not land and remember it** (N2):
-/// never silent. The fault goes to standard error as a `state_fault` line,
-/// and the first one is held on the custody, so the next `snapshot` refuses.
+/// never silent. A fault of the store goes to standard error as a
+/// `state_fault` line, and the first one is held on the custody, so the next
+/// `snapshot` refuses. **A distillate the schema refuses is not one**: that
+/// is the designed outcome of `weaver-state-Spec` section 3, what the schema
+/// does not admit landing nowhere, and it notes nothing and poisons nothing
+/// (the #99 area 1 grade).
 fn land_or_note(custody: &mut Custody<'_>, distillate: &weaver_state::Distillate) {
-    if let Err(fault) = custody.store.land(distillate) {
+    if let Err(fault @ weaver_state::CustodyFault::LandingFailed(_)) =
+        custody.store.land(distillate)
+    {
         eprintln!(
             "{}",
             serde_json::json!({"state_fault": format!(
@@ -1548,7 +1554,10 @@ mod tests {
     /// A store whose landings all fail, the rest delegated to the embedded
     /// engine, for the watch on a landing that does not land.
     #[cfg(feature = "sqlite")]
-    struct RefusingLand(weaver_state::engine::sqlite::Sqlite);
+    struct RefusingLand(
+        weaver_state::engine::sqlite::Sqlite,
+        fn() -> weaver_state::CustodyFault,
+    );
 
     #[cfg(feature = "sqlite")]
     impl weaver_state::Store for RefusingLand {
@@ -1556,9 +1565,7 @@ mod tests {
             self.0.index_election(e)
         }
         fn land(&mut self, _: &weaver_state::Distillate) -> Result<(), weaver_state::CustodyFault> {
-            Err(weaver_state::CustodyFault::LandingFailed(
-                "database or disk is full".into(),
-            ))
+            Err((self.1)())
         }
         fn retire_and_index(
             &mut self,
@@ -1618,6 +1625,52 @@ mod tests {
         }
     }
 
+    /// **A distillate the schema refuses poisons nothing** (the #99 area 1
+    /// grade of N2): the schema's refusal is `weaver-state-Spec` section 3's
+    /// designed outcome, so it notes nothing and the next `snapshot` still
+    /// answers; only a fault of the store does not. Perturbation: hold every
+    /// landing error as a store fault and the snapshot answers nothing.
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn a_landing_the_schema_refuses_poisons_nothing() {
+        let scratch = Scratch(std::env::temp_dir().join(format!(
+            "weaver-state-refused-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        )));
+        std::fs::create_dir_all(&scratch.0).expect("room");
+        let room = Room::open(&scratch.0).expect("opens");
+        let mut store = RefusingLand(
+            weaver_state::engine::sqlite::Sqlite::stand().expect("stands"),
+            || weaver_state::CustodyFault::LandingRefused("CHECK constraint failed".into()),
+        );
+        let mut custody = Custody {
+            store: &mut store,
+            room: &room,
+            session: "s-1",
+            restored: weaver_state::Restored::Empty,
+            pending: None,
+            save_point_bound: weaver_state::save_point::SAVE_POINT_BOUND,
+            unlanded: None,
+        };
+        let (mut ours, _theirs) = std::os::unix::net::UnixStream::pair().expect("pair");
+        let mut reader = LineReader::new(&mut ours);
+        reader.buffer = concat!(
+            r#"{"envelope":{"session":"s-1","run":"r-1","kind":"turn.started","sequence":"1"}}"#,
+            "\n"
+        )
+        .as_bytes()
+        .to_vec();
+        let mut parking = ReplayParking::new(false);
+        drain_harness_lines(&mut reader, &mut custody, &mut parking);
+        assert!(
+            custody.unlanded.is_none(),
+            "the schema's refusal is no fault"
+        );
+        answer_frame(&Ask::Snapshot { ordinal: 1 }, &mut custody)
+            .expect("the snapshot still answers");
+    }
+
     /// **A landing that does not land is never silent, and no save point is
     /// taken over it** (the operator's ruling of 2026-10-08 on #99, N2): the
     /// fault is held on the custody, and the next `snapshot` answers
@@ -1636,8 +1689,10 @@ mod tests {
         )));
         std::fs::create_dir_all(&scratch.0).expect("room");
         let room = Room::open(&scratch.0).expect("opens");
-        let mut store =
-            RefusingLand(weaver_state::engine::sqlite::Sqlite::stand().expect("stands"));
+        let mut store = RefusingLand(
+            weaver_state::engine::sqlite::Sqlite::stand().expect("stands"),
+            || weaver_state::CustodyFault::LandingFailed("database or disk is full".into()),
+        );
         let mut custody = Custody {
             store: &mut store,
             room: &room,

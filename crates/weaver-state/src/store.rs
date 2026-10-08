@@ -55,8 +55,15 @@ pub struct Distillate {
 pub enum CustodyFault {
     /// The store could not open or the schema could not stand.
     StoreUnavailable(String),
-    /// A distillate failed to land. The transaction rolled back whole.
+    /// A distillate failed to land on a fault of the store itself, the
+    /// engine full, its size limit, an I/O fault or damage. The transaction
+    /// rolled back whole, and the holdings now lack what the trace holds.
     LandingFailed(String),
+    /// **A distillate the schema's constraints refuse**, per
+    /// `weaver-state-Spec` section 3: the designed outcome for what the
+    /// schema does not admit, the transaction rolled back whole. Never a
+    /// fault of the store (the #99 area 1 grade of N2).
+    LandingRefused(String),
     /// A save point could not be taken, written, read or adopted. The
     /// holdings stand as they stood, and the ask goes unanswered.
     SavePoint(String),
