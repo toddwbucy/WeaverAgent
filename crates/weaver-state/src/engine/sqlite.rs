@@ -370,6 +370,8 @@ impl Store for Sqlite {
     /// read exactly as the live store's are, so the facts a stamp claims
     /// can be held against the bytes before anything is adopted.
     fn judge_image(&self, image: &[u8], session: &str) -> Result<ImageFacts, CustodyFault> {
+        #[cfg(test)]
+        JUDGED.with(|count| count.set(count.get() + 1));
         let fault =
             |what: &str, e: rusqlite::Error| CustodyFault::SavePoint(format!("{what}: {e}"));
         let mut probe = Connection::open_in_memory().map_err(|e| fault("probe", e))?;
@@ -402,11 +404,14 @@ impl Store for Sqlite {
     /// live holdings standing and the swap itself takes an image already
     /// proven to deserialize. The statement cache is dropped after the swap
     /// because every cached statement was prepared against the holdings that
-    /// left.
+    /// left. **The image is the one `judge_image` passed**: the member judges
+    /// a save point before it commits one, so the commit does not run the
+    /// engine's whole-image check a second time over up to a gibibyte (the
+    /// operator's ruling of 2026-10-08 on #99, N1); an image that is no
+    /// database still refuses here, at the index rebuild.
     fn adopt(&mut self, image: &[u8], election: &Election) -> Result<(), CustodyFault> {
         let fault =
             |what: &str, e: rusqlite::Error| CustodyFault::SavePoint(format!("{what}: {e}"));
-        self.judge_image(image, "")?;
         let mut scratch = Connection::open_in_memory().map_err(|e| fault("scratch", e))?;
         scratch
             .deserialize_read_exact(rusqlite::MAIN_DB, image, image.len(), false)
@@ -839,6 +844,13 @@ fn quoted(text: &str) -> String {
     format!("'{}'", text.replace('\'', "''"))
 }
 
+// Whole-image judgments on this thread, for the test that holds a restore
+// to one.
+#[cfg(test)]
+thread_local! {
+    static JUDGED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1167,7 +1179,18 @@ mod tests {
         drop(store);
         let mut restored = Sqlite::stand().expect("stands empty");
         assert_eq!(restored.held().expect("held"), 0);
+        // **A restore judges the image once** (the operator's ruling of
+        // 2026-10-08 on #99, N1): the member judges before it commits, so
+        // the commit runs no second whole-image check. Perturbation: judge
+        // again in `adopt` and the count reads two.
+        JUDGED.with(|count| count.set(0));
+        restored.judge_image(&image, "alpha-1").expect("judged");
         restored.adopt(&image, &election).expect("adopts");
+        assert_eq!(
+            JUDGED.with(std::cell::Cell::get),
+            1,
+            "one judgment per restore"
+        );
         assert_eq!(
             restored.held().expect("held"),
             1,

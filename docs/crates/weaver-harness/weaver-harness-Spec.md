@@ -2264,7 +2264,12 @@ enter's `Lineage`, or be absent where the enter names none, the other members,
 `named_at_restore` and `built_from`, being admin's resolution and never the member's to
 answer, and a refusal, a miss, or a disagreement refuses the enter before it authors
 `load`, through the fan-out's before-load refusal with the stream still clean, so no
-`load` event names state the member did not restore. **The reset rides the `load`
+`load` event names state the member did not restore. **The `restored` answer is waited
+on for 120 seconds** (`RESTORED_ANSWER_BOUND_MS`, the operator's ruling of 2026-10-08 on
+#99): the member judges and seats the save point only after the opener reaches it, up to
+the save point's 1 GiB bound, and answers after that, so the two seconds of the small
+asks would refuse every load of a large save point. Admin's load bound
+(`load-bound-seconds`, 900 by default) spends this wait with the rest of the enter. **The reset rides the `load`
 event**: where the enter carries `reset`, beside its lineage and whether or not a save
 point stands, resolved by admin from its clean-unload marker per `weaver-admin-Spec`
 section 4, this crate copies it onto the `load` event beside the lineage, per

@@ -33,6 +33,14 @@ pub(crate) const ANSWER_BOUND_MS: u64 = 2_000;
 /// other ask, keep `ANSWER_BOUND_MS`.
 pub(crate) const SNAPSHOT_ANSWER_BOUND_MS: u64 = 120_000;
 
+/// **The bound on the `restored` answer**, per `weaver-harness-Spec` section
+/// 6.1 on the operator's ruling of 2026-10-08 on #99 (N1): the member
+/// restores the save point admin handed only after the opener reaches it,
+/// judging and seating an image of up to the save point's 1 GiB bound, and
+/// answers `restored` after that, so the ask is waited on as the snapshot's
+/// answer leg is, 120 seconds, and never on the small asks' two.
+pub(crate) const RESTORED_ANSWER_BOUND_MS: u64 = 120_000;
+
 /// The bound on an ask that parks at the member until the driver seals,
 /// per `weaver-harness-state-contract` section 2: the enter's identity and
 /// recall asks under a diagnostic binding or a restoring load wait on a
@@ -205,6 +213,9 @@ pub struct StateSeam {
     /// seam the crate builds; a test that needs the leg to miss shortens it
     /// rather than waiting two minutes out.
     snapshot_answer_bound_ms: u64,
+    /// The `restored` ask's bound, `RESTORED_ANSWER_BOUND_MS` on every seam
+    /// the crate builds; a test that needs it to miss shortens it.
+    restored_answer_bound_ms: u64,
 }
 
 impl StateSeam {
@@ -218,6 +229,7 @@ impl StateSeam {
             snapshot_ordinal: 1,
             residual: Vec::new(),
             snapshot_answer_bound_ms: SNAPSHOT_ANSWER_BOUND_MS,
+            restored_answer_bound_ms: RESTORED_ANSWER_BOUND_MS,
         }
     }
 
@@ -318,7 +330,7 @@ impl StateSeam {
         if !self.send(b"{\"ask\":{\"restored\":{}}}\n") {
             return None;
         }
-        self.await_answer(ANSWER_BOUND_MS, parse_restored_answer)
+        self.await_answer(self.restored_answer_bound_ms, parse_restored_answer)
     }
 
     /// **The `snapshot` ask's four legs**, per the contract's sixth ask of
@@ -1588,6 +1600,32 @@ mod tests {
         assert_eq!(taken.stamp.digest, "two");
         let asked = peer.join().unwrap();
         assert_eq!(asked[1], "{\"ask\":{\"recall\":{}}}\n");
+    }
+
+    /// **The `restored` ask has its own bound** (the operator's ruling of
+    /// 2026-10-08 on #99, N1): a member that answers `restored` two and a
+    /// half seconds after the ask, past the small asks' two, as a member
+    /// still seating a large image does, is read as answered. Perturbation:
+    /// wait it on `ANSWER_BOUND_MS` again and the ask answers nothing.
+    #[test]
+    fn a_restored_answer_past_the_small_bound_is_read() {
+        use std::io::BufRead;
+        assert_eq!(RESTORED_ANSWER_BOUND_MS, 120_000);
+        let (ours, theirs) = UnixStream::pair().expect("pair");
+        ours.set_nonblocking(true).expect("nonblocking");
+        let mut seam = StateSeam::new(ours);
+        let peer = std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(theirs.try_clone().expect("clone"));
+            let mut writer = theirs;
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("the restored ask");
+            std::thread::sleep(std::time::Duration::from_millis(ANSWER_BOUND_MS + 500));
+            writer
+                .write_all(b"{\"answer\":{\"restored\":{}}}\n")
+                .expect("answers past the small bound");
+        });
+        assert_eq!(seam.ask_restored(), Some(RestoredAnswer::Empty));
+        peer.join().unwrap();
     }
 
     /// **The snapshot's answer leg has its own bound**, per

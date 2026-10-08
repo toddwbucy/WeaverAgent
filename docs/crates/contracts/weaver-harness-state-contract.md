@@ -406,7 +406,10 @@ same four members of the enter's lineage and never with the members admin alone
 resolves, or nothing where it stood empty with
 no save point handed to it, or `refused` with a reason, `schema-mismatch` where the save
 point's schema is not the opener's. The member judges the save point at the opener,
-holds the outcome, and answers it immediately, parking never. **A refusal or a miss
+seats it, holds the outcome, and answers it once that is done, parking never; the
+harness waits 120 seconds for the answer (the operator's ruling of 2026-10-08 on #99), the
+judgment and the seating of an image up to the save point's 1 GiB bound coming first,
+and the member judges the image once, its commit running no second whole-image check. **A refusal or a miss
 refuses the enter**, on the identity ask's rule that the dead-peer clause of section 5
 does not convert it: an enter that cannot say what its state was restored from must not
 author a `load` event that says it. The opener stays one-way, and the save point's bytes
