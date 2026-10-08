@@ -593,10 +593,14 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
                         "declaration-directory"):
             self.assertFalse((root / retired).exists(), retired)
             self.assertFalse((self.config / retired).exists(), retired)
-        # The declaration and the draft are root's, 0644, in the territory,
-        # and nothing landed in the operator's home.
+        # The declaration and the draft are root:weaver-m1-admin 0640 in the
+        # territory, read by the access group alone, and nothing landed in
+        # the operator's home. Perturbation: write them 0644 and the chmod
+        # is not found.
         calls = self.calls()
-        self.assertIn(["sudo", "chmod", "0644", str(self.decl / "agent.toml"), str(self.decl / "system-prompt.md")], calls)
+        decl, draft = str(self.decl / "agent.toml"), str(self.decl / "system-prompt.md")
+        self.assertIn(["sudo", "chown", "root:weaver-m1-admin", decl, draft], calls)
+        self.assertIn(["sudo", "chmod", "0640", decl, draft], calls)
         self.assertEqual(sorted(p.name for p in self.operator_home.iterdir()), [], "nothing in the operator's home")
         import tomllib
         declaration = tomllib.loads((self.decl / "agent.toml").read_text())
@@ -739,7 +743,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
     def test_the_territory_holds_the_declaration_the_draft_and_the_save_points(self):
         # The operator's rulings of 2026-10-07 and 2026-10-08 on #1: the
         # territory is root:weaver-<name>-admin 0711, the declaration and the
-        # draft root 0644 in it, save-points/ root:weaver-<name>-admin 0750
+        # draft root:weaver-<name>-admin 0640 in it, save-points/ root:weaver-<name>-admin 0750
         # beside the state room, the operator in the access group and the
         # member never (the custody audit's G11), and the root names the
         # territory. Perturbations: write the draft into the operator's home
@@ -1194,6 +1198,19 @@ esac
         self.assertIn("is not UTF-8", result.stderr)
         self.assertIn(str(draft), result.stderr)
         self.assertNotIn("no gate at", result.stderr)
+        # A draft this session cannot read names the access group it is read
+        # through, the draft being root:weaver-<agent>-admin 0640, here a
+        # group the test box does not hold. Perturbation: drop the note and
+        # the refusal names no group.
+        if os.geteuid() != 0:
+            draft.chmod(0o000)
+            try:
+                result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
+            finally:
+                draft.chmod(0o640)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("weaver-m1-admin", result.stderr)
+            self.assertNotIn("no gate at", result.stderr)
 
     def test_turn_system_sends_the_drafts_bytes_verbatim(self):
         # The draft's line endings reach the gate as they stand: a CRLF draft
@@ -1757,9 +1774,10 @@ esac
         self.assertEqual((old_root / "territory").read_text(), str(territory) + "\n")
         self.assertFalse((old_root / "declaration-directory").exists())
         said = recorded.read_text()
-        self.assertIn(f"chown -h root:root {territory}/agent.toml", said)
-        self.assertIn(f"0644 {territory}/agent.toml", said)
-        self.assertEqual((territory / "agent.toml").stat().st_mode & 0o7777, 0o644)
+        for name in ("agent.toml", "system-prompt.md"):
+            self.assertIn(f"chown -h root:weaver-old-admin {territory}/{name}", said)
+            self.assertIn(f"0640 {territory}/{name}", said)
+            self.assertEqual((territory / name).stat().st_mode & 0o7777, 0o640)
         self.assertIn(f"chown -h root:weaver-old-admin {territory}/admin.log", said)
         self.assertIn(f"0640 {territory}/admin.log", said)
         self.assertEqual((territory / "admin.log").stat().st_mode & 0o7777, 0o640)

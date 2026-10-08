@@ -281,6 +281,38 @@ pub fn judge(bytes: &[u8]) -> Result<Judged, String> {
         .ok_or("no check line")?;
     let check_line = &rest[..second];
     let image = &rest[second + 1..];
+    let (stamp, length) = judge_stamp(header)?;
+    if image.len() as u64 != length {
+        return Err(format!(
+            "the image is {} bytes and the stamp says {length}",
+            image.len()
+        ));
+    }
+    // **The check line is the member's canonical rendering, byte for
+    // byte**: `{"check":"<hex>"}` and nothing else, as the member's parse
+    // compares it, so whitespace or a member beside it refuses here as
+    // there.
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(header);
+    hasher.update(b"\n");
+    hasher.update(image);
+    let canonical = serde_json::json!({"check": hex(&hasher.finalize())}).to_string();
+    if check_line != canonical.as_bytes() {
+        return Err(
+            "the check line is not the check over the bytes in its canonical rendering".into(),
+        );
+    }
+    Ok(Judged {
+        stamp,
+        digest: hex(&sha2::Sha256::digest(bytes)),
+    })
+}
+
+/// **Judge a stamp line alone**, per `weaver-state-Spec` section 3: the
+/// seven members, the version, the run and schema bounds, the nonce, and the
+/// image length the stamp states. Answers the stamp and that length; the
+/// check and the digest are the whole file's and `judge`'s.
+fn judge_stamp(header: &[u8]) -> Result<(Stamp, u64), String> {
     let stamp: serde_json::Value = serde_json::from_slice(header)
         .map_err(|e| format!("the stamp line does not parse: {e}"))?;
     let object = stamp.as_object().ok_or("the stamp line is not an object")?;
@@ -352,36 +384,16 @@ pub fn judge(bytes: &[u8]) -> Result<Judged, String> {
         // `nonce-wall-clock-overlong` case): what a clock can be.
         .and_then(|v| v.parse::<u64>().ok())
         .ok_or("the stamp's taken names no wall clock")?;
-    if image.len() as u64 != length {
-        return Err(format!(
-            "the image is {} bytes and the stamp says {length}",
-            image.len()
-        ));
-    }
-    // **The check line is the member's canonical rendering, byte for
-    // byte**: `{"check":"<hex>"}` and nothing else, as the member's parse
-    // compares it, so whitespace or a member beside it refuses here as
-    // there.
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(header);
-    hasher.update(b"\n");
-    hasher.update(image);
-    let canonical = serde_json::json!({"check": hex(&hasher.finalize())}).to_string();
-    if check_line != canonical.as_bytes() {
-        return Err(
-            "the check line is not the check over the bytes in its canonical rendering".into(),
-        );
-    }
-    Ok(Judged {
-        stamp: Stamp {
+    Ok((
+        Stamp {
             run,
             sequence,
             turn,
             schema,
             wall_ns,
         },
-        digest: hex(&sha2::Sha256::digest(bytes)),
-    })
+        length,
+    ))
 }
 
 /// The published name, computable from the bytes alone, per
@@ -662,7 +674,10 @@ fn append_line_with(
 /// never holds more than the one being copied in this root process's memory.
 struct RoomEntry {
     name: String,
-    judged: Judged,
+    /// The digest the finished name carries, which the copy's whole
+    /// judgment holds the bytes to.
+    digest: String,
+    stamp: Stamp,
 }
 
 /// **Read the member's room through its own descriptor**, per
@@ -684,10 +699,18 @@ fn read_room(room: BorrowedFd<'_>, member_uid: u32) -> Result<Vec<RoomEntry>, Li
         if !is_finished_name(&name) {
             continue;
         }
-        // Judged and dropped: the bytes are read again, and judged again,
-        // when this entry is copied.
-        if let Some((_, judged)) = judge_room_file(room, &name, member_uid) {
-            found.push(RoomEntry { name, judged });
+        // **Only the stamp line is read at the scan** (Codex on #94, at
+        // ab8acef, and the custody review): enough for the order and the
+        // name, a few KiB at the most, so a room of many files costs the
+        // scan little and the per-verb cap bounds the whole reads, which
+        // happen at the copy alone, each judging the bytes it copies.
+        if let Some(stamp) = scan_room_file(room, &name, member_uid) {
+            let digest = name.trim_end_matches(SUFFIX).to_string();
+            found.push(RoomEntry {
+                name,
+                digest,
+                stamp,
+            });
         }
     }
     // The listing's order is the filesystem's and means nothing; by name
@@ -727,12 +750,81 @@ pub fn open_room(territory: BorrowedFd<'_>) -> Result<Option<OwnedFd>, Lifecycle
     }
 }
 
+// Whole reads of room files on this thread, for the tests that bound them.
+#[cfg(test)]
+thread_local! {
+    static WHOLE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The bound on a stamp line the scan reads: the seven members with the run
+/// and schema bounded, far under a KiB, and room to spare.
+const STAMP_LINE_BOUND: u64 = 4096;
+
+/// **One room file's stamp, read at the scan**: opened as the copy opens it,
+/// without following a link and without blocking, a regular file of the
+/// member's under the size bound, its first line read within
+/// `STAMP_LINE_BOUND` and judged as a stamp. The image, the check and the
+/// digest are judged at the copy, from the bytes it copies.
+fn scan_room_file(dir: BorrowedFd<'_>, name: &str, member_uid: u32) -> Option<Stamp> {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(fd) = nix::fcntl::openat(
+        dir,
+        name,
+        nix::fcntl::OFlag::O_RDONLY
+            | nix::fcntl::OFlag::O_NOFOLLOW
+            | nix::fcntl::OFlag::O_NONBLOCK
+            | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::empty(),
+    ) else {
+        diag!("weaver-admin: the room's {name} does not open and is left in place");
+        return None;
+    };
+    let mut file = std::fs::File::from(fd);
+    let Ok(metadata) = file.metadata() else {
+        diag!("weaver-admin: the room's {name} does not stat and is left in place");
+        return None;
+    };
+    if !metadata.is_file() || metadata.uid() != member_uid {
+        diag!(
+            "weaver-admin: the room's {name} is not the member's regular file and is left in place"
+        );
+        return None;
+    }
+    if metadata.len() > SAVE_POINT_BOUND {
+        diag!(
+            "weaver-admin: the room's {name} is {} bytes, past the bound of {SAVE_POINT_BOUND}, and is left in place",
+            metadata.len()
+        );
+        return None;
+    }
+    let mut head = Vec::new();
+    if let Err(e) = (&mut file).take(STAMP_LINE_BOUND).read_to_end(&mut head) {
+        diag!("weaver-admin: the room's {name} does not read ({e}) and is left in place");
+        return None;
+    }
+    let Some(end) = head.iter().position(|&b| b == b'\n') else {
+        diag!(
+            "weaver-admin: the room's {name} carries no stamp line within {STAMP_LINE_BOUND} bytes and is left in place"
+        );
+        return None;
+    };
+    match judge_stamp(&head[..end]) {
+        Ok((stamp, _)) => Some(stamp),
+        Err(why) => {
+            diag!("weaver-admin: the room's {name} is not a save point ({why})");
+            None
+        }
+    }
+}
+
 /// **One room file, opened and judged through the room's descriptor**: a
 /// regular file owned by the member's uid, under the bound through the read,
 /// whose bytes judge sound and digest to its finished name. The bytes and the
 /// judgment are answered together, from one read, so what is copied is what
 /// was judged; anything else is left in place and named.
 fn judge_room_file(dir: BorrowedFd<'_>, name: &str, member_uid: u32) -> Option<(Vec<u8>, Judged)> {
+    #[cfg(test)]
+    WHOLE_READS.with(|count| count.set(count.get() + 1));
     use std::os::unix::fs::MetadataExt;
     let Ok(fd) = nix::fcntl::openat(
         dir,
@@ -806,6 +898,7 @@ fn judge_room_file(dir: BorrowedFd<'_>, name: &str, member_uid: u32) -> Option<(
 /// reported of the save points it recorded, so a file the report names
 /// carries the event's position and the report's arrival, and any other file
 /// is a recovered one. Answers the lines appended.
+#[cfg(test)]
 pub fn publish(
     room: BorrowedFd<'_>,
     member_uid: u32,
@@ -814,6 +907,21 @@ pub fn publish(
     owner: Owner,
     reports: &[(SavePointReport, Arrival)],
 ) -> Result<Vec<ManifestLine>, LifecycleRefusal> {
+    publish_noting_deferral(room, member_uid, directory, file_owner, owner, reports)
+        .map(|(lines, _)| lines)
+}
+
+/// `publish`, answering besides the lines whether it left any room file for
+/// a later verb, past the cap or the free space (Codex on #94, at ab8acef):
+/// a load must not select while a newer save point waits in the room.
+pub fn publish_noting_deferral(
+    room: BorrowedFd<'_>,
+    member_uid: u32,
+    directory: BorrowedFd<'_>,
+    file_owner: (u32, u32),
+    owner: Owner,
+    reports: &[(SavePointReport, Arrival)],
+) -> Result<(Vec<ManifestLine>, bool), LifecycleRefusal> {
     publish_with(
         room,
         member_uid,
@@ -867,7 +975,7 @@ fn publish_with(
     owner: Owner,
     reports: &[(SavePointReport, Arrival)],
     hooks: &mut PublishHooks<'_>,
-) -> Result<Vec<ManifestLine>, LifecycleRefusal> {
+) -> Result<(Vec<ManifestLine>, bool), LifecycleRefusal> {
     let mut lines = read_manifest(directory, owner)?;
     let mut appended = Vec::new();
     let mut entries = read_room(room, member_uid)?;
@@ -885,13 +993,13 @@ fn publish_with(
     let reported = |entry: &RoomEntry| {
         reports
             .iter()
-            .any(|(report, _)| report.save_point == entry.judged.digest)
+            .any(|(report, _)| report.save_point == entry.digest)
     };
     entries.sort_by(|a, b| {
         reported(a)
             .cmp(&reported(b))
-            .then_with(|| a.judged.stamp.wall_ns.cmp(&b.judged.stamp.wall_ns))
-            .then_with(|| a.judged.digest.cmp(&b.judged.digest))
+            .then_with(|| a.stamp.wall_ns.cmp(&b.stamp.wall_ns))
+            .then_with(|| a.digest.cmp(&b.digest))
     });
     let remove_from_room = |name: &str| {
         let _ = nix::unistd::unlinkat(room, name, nix::unistd::UnlinkatFlags::NoRemoveDir);
@@ -904,8 +1012,10 @@ fn publish_with(
     // than every file deferred; a leave's own save point deferred so leaves
     // its unload refusing, as one that did not publish does.
     let total = entries.len();
+    let mut deferred = false;
     for (at, entry) in entries.into_iter().enumerate() {
         if at == hooks.cap {
+            deferred = true;
             diag!(
                 "weaver-admin: the room holds {total} finished save points; {} are left for the next verb, past this one's cap of {}",
                 total - at,
@@ -915,7 +1025,7 @@ fn publish_with(
         }
         let (position, arrived) = reports
             .iter()
-            .find(|(report, _)| report.save_point == entry.judged.digest)
+            .find(|(report, _)| report.save_point == entry.digest)
             .map(|(report, arrival)| {
                 // The manifest's position is the event's: its run and its
                 // sequence, never the covered position's run beside the
@@ -926,7 +1036,10 @@ fn publish_with(
                 )
             })
             .unwrap_or((None, Arrival::Recovered));
-        let name = published_name(&entry.judged);
+        let name = published_name(&Judged {
+            stamp: entry.stamp.clone(),
+            digest: entry.digest.clone(),
+        });
         // **A line standing for the room's copy is judged before the copy
         // goes** (Codex on #94, round 9): the copy goes only where the line's
         // target stands and digests to the line; a target gone is recreated
@@ -935,7 +1048,7 @@ fn publish_with(
         // is then the last sound copy, and named in the log.
         let standing = lines
             .iter()
-            .find(|line| line.digest == entry.judged.digest)
+            .find(|line| line.digest == entry.digest)
             .cloned();
         if let Some(line) = &standing {
             match open_published(directory, line, file_owner) {
@@ -971,7 +1084,7 @@ fn publish_with(
         let Some((bytes, judged)) = judge_room_file(room, &entry.name, member_uid) else {
             continue;
         };
-        if judged.digest != entry.judged.digest {
+        if judged.digest != entry.digest {
             diag!(
                 "weaver-admin: the room's {} changed after it was judged and is left in place",
                 entry.name
@@ -985,16 +1098,18 @@ fn publish_with(
                     "weaver-admin: the save-points filesystem has {free} bytes free, under the room's {} and the reserve of {PUBLISH_RESERVE}; it and every later save point are left for the next verb",
                     entry.name
                 );
+                deferred = true;
                 break;
             }
             Err(e) => {
                 diag!(
                     "weaver-admin: the save-points filesystem's free space does not read ({e}); the room's save points are left for the next verb"
                 );
+                deferred = true;
                 break;
             }
         }
-        let temporary = format!(".publishing-{}", entry.judged.digest);
+        let temporary = format!(".publishing-{}", entry.digest);
         let remove_temporary = || {
             let _ = nix::unistd::unlinkat(
                 directory,
@@ -1067,7 +1182,7 @@ fn publish_with(
                 Err(nix::errno::Errno::EEXIST) => {
                     remove_temporary();
                     match adopt_durably(directory, &name, file_owner, &mut sync_directory) {
-                        Ok(Some((_, standing))) if standing.digest == entry.judged.digest => Ok(()),
+                        Ok(Some((_, standing))) if standing.digest == entry.digest => Ok(()),
                         Ok(Some(_)) => Err(std::io::Error::other(
                             "an entry of other bytes stands under the published name",
                         )),
@@ -1097,9 +1212,9 @@ fn publish_with(
         }
         let line = ManifestLine {
             ordinal: next_ordinal(&lines),
-            digest: entry.judged.digest.clone(),
+            digest: entry.digest.clone(),
             name,
-            stamp: entry.judged.stamp.clone(),
+            stamp: entry.stamp.clone(),
             position,
             arrived,
         };
@@ -1111,7 +1226,7 @@ fn publish_with(
         // next verb.
         remove_from_room(&entry.name);
     }
-    Ok(appended)
+    Ok((appended, deferred))
 }
 
 // -------------------------------------------------------------- selection
@@ -2220,11 +2335,45 @@ mod tests {
             )
             .unwrap()
         };
-        let first: Vec<String> = publish_capped(2).into_iter().map(|l| l.digest).collect();
+        let (first, deferred) = publish_capped(2);
+        let first: Vec<String> = first.into_iter().map(|l| l.digest).collect();
         assert_eq!(first, [names[0].1.clone(), names[1].1.clone()]);
+        assert!(deferred, "the verb says it left one");
         assert!(room.join(&names[2].0).exists(), "the newest waits");
-        let second: Vec<String> = publish_capped(2).into_iter().map(|l| l.digest).collect();
+        let (second, deferred) = publish_capped(2);
+        let second: Vec<String> = second.into_iter().map(|l| l.digest).collect();
         assert_eq!(second, [names[2].1.clone()], "and goes next, highest");
+        assert!(!deferred, "the room drained");
+    }
+
+    /// **The scan reads stamps, and the whole reads stop at the cap** (Codex
+    /// on #94, at ab8acef, and the custody review): a room of forty finished
+    /// files under the cap of 32 reads each one's stamp line at the scan and
+    /// reads whole only the 32 it copies, so the time a member's files cost a
+    /// verb is bounded by the cap and not by the room. Counted through a
+    /// test-only tally of whole reads. Perturbation: judge each file whole at
+    /// the scan again and the tally passes the cap.
+    #[test]
+    fn the_whole_reads_stop_at_the_cap() {
+        let (_scratch, room, dir, mine, _) = room_of_save_points("room-forty", 40);
+        let dir_fd = open_directory(&dir).unwrap();
+        WHOLE_READS.with(|count| count.set(0));
+        let (lines, deferred) = publish_noting_deferral(
+            open_directory(&room).unwrap().as_fd(),
+            mine.uid,
+            dir_fd.as_fd(),
+            (mine.uid, mine.gid),
+            mine,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(lines.len(), PUBLISH_CAP);
+        assert!(deferred);
+        let whole = WHOLE_READS.with(|count| count.get());
+        assert!(
+            whole <= PUBLISH_CAP,
+            "{whole} whole reads for a cap of {PUBLISH_CAP}"
+        );
     }
 
     /// **A copy is made only where the space stands free** (the custody
@@ -2249,7 +2398,9 @@ mod tests {
             },
         )
         .unwrap();
+        let (lines, deferred) = lines;
         assert!(lines.is_empty(), "nothing copied");
+        assert!(deferred, "and the verb says so");
         assert!(names.iter().all(|(name, _)| room.join(name).exists()));
     }
 
@@ -2309,7 +2460,8 @@ mod tests {
                 cap: PUBLISH_CAP,
             },
         )
-        .unwrap();
+        .unwrap()
+        .0;
         let published: Vec<&str> = lines.iter().map(|line| line.digest.as_str()).collect();
         assert_eq!(published, [names[1].1.as_str(), names[2].1.as_str()]);
         assert!(swapped.exists(), "the replaced file is left in place");

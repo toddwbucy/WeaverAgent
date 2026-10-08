@@ -1605,17 +1605,27 @@ cannot make a root step read a path the member chose. **The room is opened throu
 territory's descriptor without following a link and listed through its own**, and each
 entry opened without blocking, so a FIFO the member makes under a finished name is
 refused as no regular file rather than holding the verb (the custody audit's G1 and
-G12). **The scan keeps no bytes**: each entry is judged and dropped, and opened and
-judged again at its own copy, the bytes copied being the bytes judged in that read, so
-at most one image stands in this root process's memory and a file the member changes
-after the scan is refused. **One verb publishes at most 32 room files, and copies one
+G12). **The scan reads only the stamp line** (Codex on #94, round 30): each entry is
+judged by its owner, its size against the save point's bound and its first line, read
+to at most 4 KiB, and the whole file is read only at its own copy, where it is opened
+and judged again in full and its digest checked against its name, the bytes copied
+being the bytes judged in that read. So the scan's reading is bounded by the room's
+entry count and not by its aggregate size, a whole image is read only for a file the
+cap admits, at most one image stands in this root process's memory, and a file the
+member changes after the scan is refused. **One verb publishes at most 32 room files, and copies one
 only where its size and 64 MiB more stand free** on the save-points filesystem, this
 act's elections (the custody audit's G23); entries go oldest first and the reported one
 last, and the cap or the space stops the verb at the first entry it declines rather than
 skipping it, so every file published is older than every file left for the next verb and
 the highest ordinal stays the last taken. A leave's own save point so deferred leaves
 its unload refusing `SavePointNotTaken` naming the publication, as one that did not
-publish does, until later verbs drain the room. The copy is written under a
+publish does, until later verbs drain the room. **A load whose publication deferred
+any entry refuses `BoundaryUnverified`** (Codex on #94, round 30) after publishing what
+it published and before it selects, naming the room in `admin.log`: selection would
+otherwise restore a save point older than the room's newest, and a later save point
+taken from that stale run would carry a higher ordinal than the holdings left in the
+room. Each refused load publishes the next oldest entries, so repeated loads drain the
+room and the load that finds it drained selects. The copy is written under a
 temporary name, root's, grouped to the access group and mode `0640`, the mode set
 through the descriptor so the invoking shell's umask narrows nothing, so the operator
 and the connector read it and nothing writes it but this crate, its owner and mode
@@ -2340,9 +2350,9 @@ directory owned by uid 0, mode `0711` exactly on the operator's ruling of 2026-1
 judged by name, and carrying no access-control entry beyond its mode. **The wall is
 each file's own mode**: the member's room is the member's `0700`, the trace is
 `root:weaver-<agent>-trace 0640`, the logs and `save-points/` are the access group's
-and closed to other, and `agent.toml` and `system-prompt.md` are root's `0644`, so any
-uid that names them reads the declaration and the prompt draft, the agent's uid
-among them, which the territory's passage no longer bars; `save-points/` beneath it is opened
+and closed to other, and `agent.toml` and `system-prompt.md` are
+`root:weaver-<agent>-admin 0640`, read through the access group alone, which the member
+does not hold (the custody audit's G11); `save-points/` beneath it is opened
 through that descriptor and judged the same way at mode `0750` and the territory's
 group; and every read and every write after goes through those descriptors and never
 through the path again: `agent.toml` opened beneath the territory's, and section 6's
@@ -2353,8 +2363,11 @@ derived from the sink's directory, and the territory is the agent whole, so a
 declaration whose sink's directory is not the judged territory refuses `ConfigInvalid`
 naming `trace-sink`, never standing the trace or the room outside what the territory's
 custody, group and archive cover. **The one entry this
-crate reads is held closed**: `agent.toml` is a regular file and never a link, root's,
-and writable by no group or other, so the access group that reads it never rewrites it.
+crate reads is held closed**: `agent.toml` is opened with no link followed and without
+blocking, and judged on its descriptor a regular file, owned by uid 0, grouped to the
+access group and mode `0640` exactly, so the access group reads it and never rewrites it
+and no other uid reads it; a declaration at any other owner, group or mode refuses
+`ConfigInvalid` naming it.
 Other entries are not read, `system-prompt.md`, the operator's draft of the prompt that
 the seeding step reads and this crate never opens, among
 them, save `admin.log` and `worker.log`, the two this crate creates and appends to,

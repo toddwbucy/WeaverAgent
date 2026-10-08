@@ -49,7 +49,7 @@ something this runbook does not mention, the runbook is what gets amended.
 | Model artifacts, hash-pinned | `<prefix>/models/` | operator, by hand |
 | The python SPU prefix and zipapp | `<prefix>/python-spu/` | `python-spu/README.md` |
 | Accounts: the agent's `weaver-<name>` (home `/home/weaver-<name>`, 2750), the member's `weaver-<name>-state`, the relay's `weaver-<name>-relay`, the connector's `weaver-<name>-admincon`, and the groups `weaver-<name>-trace` and `weaver-<name>-admin` | passwd | create-agent |
-| Territory `weaver-<name>/` (root:weaver-<name>-admin 0711, passage only) with `agent.toml` and `system-prompt.md` (root 0644), `admin.log` and `worker.log` once admin has run a verb (root:weaver-<name>-admin 0640), `save-points/` (root:weaver-<name>-admin 0750, the published save points 0640 and the manifest root 0644), `state/` (member 0700) and `trace.ndjson` (root:weaver-<name>-trace 0640); the whole agent, on the operator's ruling of 2026-10-07 on #1 | the stack record's `agent-directory`,  default `/var/lib/weaver-agent` | create-agent, admin for the logs and the save points |
+| Territory `weaver-<name>/` (root:weaver-<name>-admin 0711, passage only) with `agent.toml` and `system-prompt.md` (root:weaver-<name>-admin 0640), `admin.log` and `worker.log` once admin has run a verb (root:weaver-<name>-admin 0640), `save-points/` (root:weaver-<name>-admin 0750, the published save points 0640 and the manifest root 0644), `state/` (member 0700) and `trace.ndjson` (root:weaver-<name>-trace 0640); the whole agent, on the operator's ruling of 2026-10-07 on #1 | the stack record's `agent-directory`,  default `/var/lib/weaver-agent` | create-agent, admin for the logs and the save points |
 | Run directory: `run.lock`, `admin.lock` and the trace door `trace.sock` | `<coordination-root>/weaver.run/<name>/` (root 0755, on tmpfs under `/run`) | admin, at its first verb |
 
 No unit and no init system is part of a stack. Admin's start step stands the worker, its
@@ -195,7 +195,7 @@ operator's ruling of 2026-10-02 on #1). The script makes the four accounts and t
 groups, the territory (root:weaver-<name>-admin 0711 under the stack record's
 `agent-directory`, passage for every uid and listing for none, with no access entries), its trace
 (root:weaver-<name>-trace 0640, which the member cannot read), the declaration and the
-prompt draft in the territory (root 0644; `sudoedit` edits the declaration) and
+prompt draft in the territory (root:weaver-<name>-admin 0640; `sudoedit` edits the declaration) and
 `save-points/` beside them, and the agent root staged under a dot-name: every key
 copied from the stack record, `territory`, `operator` and `roles.toml`. It then proves
 the boundary (the member cannot read the trace, the relay holds the trace group alone
@@ -271,8 +271,8 @@ before the new admin is installed:
 2. For each agent in the old `allow-list`, make its root under `/etc/weaver/admin/<a>/`
    with the binary keys and `coordination-root` copied from the old base, its own
    `spu-binary` (its `agent-spu` choice resolved through `spu-implementations`, where it
-   had one), and install its declaration `<agent-config-directory>/<a>.toml` as root
-   0644 at `<territory>/agent.toml` (section 8, step 7, for the territory's layout).
+   had one), and install its declaration `<agent-config-directory>/<a>.toml` as
+   root:weaver-<a>-admin 0640 at `<territory>/agent.toml` (section 8, step 7, for the territory's layout).
    Then finish it as section 8, steps 2 to 4, describe, step 2's move already made.
 3. Remove the old top-level files, so that the base holds only agent roots: `sudo find
    /etc/weaver/admin -maxdepth 1 -type f -delete`.
@@ -300,7 +300,7 @@ install prefix, `/opt/weaver` by default.
 
    ```sh
    A=<a>; R=/etc/weaver/admin/$A; T=/var/lib/weaver-agent/weaver-$A
-   sudo install -o root -g root -m 0644 "$R/agent.toml" "$T/agent.toml"
+   sudo install -o root -g weaver-$A-admin -m 0640 "$R/agent.toml" "$T/agent.toml"
    sudo cp -a "$R" "/etc/weaver/admin.before-50-$A"      # outside the base, a dot-free name admin never reads
    sudo rm -f "$R/agent.toml" "$R/run-tool" "$R/control-tool" "$R/unit-properties" "$R/log-path"
    echo "$T" | sudo tee "$R/territory" >/dev/null
@@ -391,8 +391,8 @@ install prefix, `/opt/weaver` by default.
    territory and the operator's `~/.weaveragent/<a>/` directory is retired.
    `update-stack.sh --install` makes this move for every agent whose root still names
    a `declaration-directory`, before the binaries and registered for rollback: it
-   moves `agent.toml` and `system-prompt.md` into the territory as root 0644, and
-   `admin.log` and `worker.log` as root:weaver-<a>-admin 0640; makes `save-points/`
+   moves `agent.toml`, `system-prompt.md`, `admin.log` and `worker.log` into the
+   territory as root:weaver-<a>-admin 0640; makes `save-points/`
    (root:weaver-<a>-admin 0750); joins the operator to the access group
    `weaver-<a>-admin`, the member never; regroups the territory to the access group
    at 0711; writes the root's `territory` key and removes `declaration-directory`. The

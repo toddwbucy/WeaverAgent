@@ -751,7 +751,7 @@ fn stack_digests(
 /// fails is the provisioning, refusing `BoundaryUnverified`.
 fn read_declaration(config: &ServiceConfig) -> Result<String, LifecycleRefusal> {
     use std::io::Read;
-    let mut file = open_declaration(config.territory_fd()?, &config.territory)?;
+    let mut file = open_declaration(config.territory_fd()?, &config.territory, config.access_gid)?;
     let mut source = String::new();
     file.read_to_string(&mut source).map_err(|_| {
         diag!(
@@ -765,9 +765,14 @@ fn read_declaration(config: &ServiceConfig) -> Result<String, LifecycleRefusal> 
 
 /// Open `agent.toml` beneath the territory's descriptor and judge it, as
 /// `read_declaration` says; `directory` names the territory in the refusal.
+/// **Root's, grouped to the access group, mode `0640` exactly**, on the
+/// operator's ruling of 2026-10-08 on #1: the territory's `0711` passage is
+/// every uid's, so the declaration's own mode is its wall, read by the access
+/// group alone and written by no one but root.
 fn open_declaration(
     territory: std::os::fd::BorrowedFd<'_>,
     directory: &std::path::Path,
+    access_gid: u32,
 ) -> Result<std::fs::File, LifecycleRefusal> {
     use std::os::unix::fs::MetadataExt;
     let refuse = |what: &str| {
@@ -780,7 +785,10 @@ fn open_declaration(
     let fd = match nix::fcntl::openat(
         territory,
         "agent.toml",
-        nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_NOFOLLOW | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::fcntl::OFlag::O_RDONLY
+            | nix::fcntl::OFlag::O_NOFOLLOW
+            | nix::fcntl::OFlag::O_NONBLOCK
+            | nix::fcntl::OFlag::O_CLOEXEC,
         nix::sys::stat::Mode::empty(),
     ) {
         Ok(fd) => fd,
@@ -796,8 +804,13 @@ fn open_declaration(
     if metadata.uid() != nix::unistd::geteuid().as_raw() {
         return Err(refuse("is not root's"));
     }
-    if metadata.mode() & 0o022 != 0 {
-        return Err(refuse("is writable by group or other"));
+    if metadata.gid() != access_gid {
+        return Err(refuse("is not grouped to the access group"));
+    }
+    if metadata.mode() & 0o7777 != 0o640 {
+        return Err(refuse(
+            "is not mode 0640, root's and read by the access group alone",
+        ));
     }
     Ok(file)
 }
@@ -1127,7 +1140,8 @@ fn run_load(
     // Refused here only where the manifest or the directory refuses, which
     // the selection below would refuse too; a room with nothing to publish
     // is no refusal.
-    publish_from_room(config, agent, &[])?;
+    let (_, deferred) = publish_from_room_noting(config, agent, &[])?;
+    load_may_select(config, deferred)?;
     // **The selection**, per Spec section 4: the save point `restore` names
     // or the latest the manifest names, judged through the descriptor the
     // member will inherit; no member elected selects nothing, and a restore
@@ -1344,6 +1358,28 @@ fn open_marker(
         return Err(LifecycleRefusal::BoundaryUnverified);
     }
     Ok(())
+}
+
+/// **A load selects only once the room is published whole** (Codex on #94,
+/// at ab8acef): where the publication left room files for a later verb, past
+/// the cap or the free space, a newer save point than the manifest's latest
+/// may wait in the room, and a load that selected now would restore stale
+/// state and let the next save point outrank the newer one waiting. It
+/// refuses `BoundaryUnverified` instead, saying so; each load publishes up to
+/// the cap more, so the room drains and a later load stands.
+fn load_may_select(config: &ServiceConfig, deferred: bool) -> Result<(), LifecycleRefusal> {
+    if !deferred {
+        return Ok(());
+    }
+    diag!(
+        "weaver-admin: the room holds save points not yet published; this load published what it could and refuses, and the next load continues"
+    );
+    record(
+        config,
+        "load",
+        "refused: the room holds save points not yet published; the next load continues",
+    );
+    Err(LifecycleRefusal::BoundaryUnverified)
 }
 
 /// **Select the save point this load restores**, per Spec section 4: nothing
@@ -1824,8 +1860,8 @@ fn unpublished_leave(
         .cloned()
 }
 
-/// **Publish the member's finished save points into the operator's
-/// directory**, per Spec section 6, from the room the declaration's
+/// **Publish the member's finished save points into the territory's
+/// save-points directory**, per Spec section 6, from the room the declaration's
 /// territory holds: the member's uid and the room are the inventory's, and
 /// an inventory that does not read leaves the files for the next load,
 /// said in the log. The lines appended are logged.
@@ -1834,6 +1870,17 @@ fn publish_from_room(
     agent: &AgentName,
     reports: &[(weaver_types::SavePointReport, save_points::Arrival)],
 ) -> Result<Vec<save_points::ManifestLine>, LifecycleRefusal> {
+    publish_from_room_noting(config, agent, reports).map(|(lines, _)| lines)
+}
+
+/// `publish_from_room`, answering besides the lines whether the room still
+/// holds save points the publication left for a later verb, past the cap or
+/// the free space (Codex on #94, at ab8acef).
+fn publish_from_room_noting(
+    config: &ServiceConfig,
+    agent: &AgentName,
+    reports: &[(weaver_types::SavePointReport, save_points::Arrival)],
+) -> Result<(Vec<save_points::ManifestLine>, bool), LifecycleRefusal> {
     let inventory = match room_inventory(config, agent) {
         Ok(inventory) => inventory,
         Err(refusal) => {
@@ -1849,13 +1896,13 @@ fn publish_from_room(
         }
     };
     let Some(member) = inventory.member_account else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), false));
     };
     // The room is the territory's own entry, the sink held to the territory
     // by `room_inventory`, opened through the territory's descriptor.
     let room = match config.territory_fd().and_then(save_points::open_room) {
         Ok(Some(room)) => room,
-        Ok(None) => return Ok(Vec::new()),
+        Ok(None) => return Ok((Vec::new(), false)),
         Err(refusal) => {
             record(
                 config,
@@ -1876,7 +1923,7 @@ fn publish_from_room(
             return Err(refusal);
         }
     };
-    match save_points::publish(
+    match save_points::publish_noting_deferral(
         std::os::fd::AsFd::as_fd(&room),
         member.uid,
         directory,
@@ -1884,7 +1931,7 @@ fn publish_from_room(
         save_points::ROOT,
         reports,
     ) {
-        Ok(lines) => {
+        Ok((lines, deferred)) => {
             for line in &lines {
                 record(
                     config,
@@ -1897,7 +1944,7 @@ fn publish_from_room(
                     ),
                 );
             }
-            Ok(lines)
+            Ok((lines, deferred))
         }
         Err(refusal) => {
             record(
@@ -2373,7 +2420,7 @@ fn judge_territory(
     // root holding none was, and one holding a declaration that is not a
     // closed regular file of root's is the provisioning, refused: judged here
     // through the descriptor, as the inventory reads it.
-    drop(open_declaration(opened.as_fd(), directory)?);
+    drop(open_declaration(opened.as_fd(), directory, access_gid)?);
     Ok(JudgedTerritory {
         canonical,
         territory: opened,
@@ -2866,7 +2913,7 @@ mod tests {
     /// The values every root carries, written into a scratch root, with the
     /// agent's territory beside it, `<root>.territory`, laid out as the
     /// judgment asks with this test's uid in root's place: mode 0711, its
-    /// `save-points/` 0750, and an empty `agent.toml` 0644. Answers the
+    /// `save-points/` 0750, and an empty `agent.toml` 0640. Answers the
     /// territory.
     fn write_root(root: &std::path::Path) -> std::path::PathBuf {
         use std::os::unix::fs::PermissionsExt;
@@ -2882,7 +2929,7 @@ mod tests {
         std::fs::write(territory.join("agent.toml"), "").unwrap();
         std::fs::set_permissions(
             territory.join("agent.toml"),
-            std::fs::Permissions::from_mode(0o644),
+            std::fs::Permissions::from_mode(0o640),
         )
         .unwrap();
         std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(0o711)).unwrap();
@@ -3107,14 +3154,16 @@ mod tests {
     }
 
     /// **The territory is root's at mode 0711, its `save-points/` 0750 and
-    /// its declaration closed to writers, and never a link at its own name**,
+    /// its declaration the access group's at 0640, and never a link at its
+    /// own name**,
     /// per Spec section 9 on the operator's rulings of 2026-10-07 and
     /// 2026-10-08 on #1, with this test's uid in root's place: the mode
     /// before the second ruling, 0710, refuses now, as does every other.
     /// Perturbations: test only the write bits and the 0750 territory reads;
     /// judge 0710 again and the 0711 territory refuses; drop the save-points
-    /// judgment and the 0770 one reads; drop the declaration's mode check and
-    /// the group-writable declaration reads.
+    /// judgment and the 0770 one reads; judge the declaration's write bits
+    /// alone and the 0644 one reads; drop its group comparison and one under
+    /// another group reads.
     #[test]
     fn the_territory_is_roots_at_0711_and_never_a_link() {
         use std::os::unix::fs::PermissionsExt;
@@ -3160,10 +3209,42 @@ mod tests {
             Some(LifecycleRefusal::BoundaryUnverified),
             "a declaration the group could write"
         );
+        // **Root's and the access group's, 0640 exactly** (the operator's
+        // ruling of 2026-10-08 on #1): the territory's passage is every
+        // uid's, so a declaration any uid could read refuses, and one read
+        // by the access group alone reads. Perturbation: judge the write
+        // bits alone again and the 0644 declaration reads.
         std::fs::set_permissions(&declaration, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a declaration every uid could read"
+        );
+        std::fs::set_permissions(&declaration, std::fs::Permissions::from_mode(0o640)).unwrap();
         assert!(
             load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).is_ok()
         );
+        // **Grouped to the access group**: a declaration at 0640 under any
+        // other group is read by that group, so it refuses. Set to another
+        // of this uid's own groups, and skipped, naming why, where it holds
+        // none. Perturbation: drop the group comparison and it reads.
+        let mine = nix::unistd::getegid();
+        match nix::unistd::getgroups()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|g| *g != mine)
+        {
+            Some(other) => {
+                nix::unistd::chown(&declaration, None, Some(other)).unwrap();
+                assert_eq!(
+                    load_service_config_at(&base, "alpha", me, mine.as_raw()).err(),
+                    Some(LifecycleRefusal::BoundaryUnverified),
+                    "a declaration grouped to another group than the access group"
+                );
+                nix::unistd::chown(&declaration, None, Some(mine)).unwrap();
+            }
+            None => eprintln!("skipped the declaration's group case: this uid holds one group"),
+        }
         let link = base.join("linked.territory");
         std::os::unix::fs::symlink(&territory, &link).unwrap();
         std::fs::write(root.join("territory"), link.display().to_string()).unwrap();
@@ -3206,6 +3287,22 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&base);
         let _ = std::fs::remove_dir_all(root.with_extension("territory"));
+    }
+
+    /// **A load with save points still waiting in the room refuses** (Codex
+    /// on #94, at ab8acef): the publication's deferral, past the cap or the
+    /// free space, stops the load before its selection; nothing deferred, it
+    /// goes on. The deferral itself is `publish_with`'s and is pinned there
+    /// with a cap of two over three files. Perturbation: ignore the flag and
+    /// the deferred load selects.
+    #[test]
+    fn a_load_with_save_points_waiting_in_the_room_refuses() {
+        let (config, _scratch) = scratch_config("load-deferred");
+        assert_eq!(
+            load_may_select(&config, true),
+            Err(LifecycleRefusal::BoundaryUnverified)
+        );
+        assert_eq!(load_may_select(&config, false), Ok(()));
     }
 
     /// **The publication does not ask the boundary file** (Codex on #94, at

@@ -28,8 +28,9 @@
 #
 # **The whole agent lives in its territory** (the operator's ruling of
 # 2026-10-07 on #1): `<agent-directory>/weaver-<name>/`, root's, holds the
-# declaration `agent.toml` (root 0644, which the operator edits with
-# `sudoedit`), the prompt draft `system-prompt.md` (root 0644), admin's own
+# declaration `agent.toml` (root:weaver-<name>-admin 0640, which the
+# operator edits with `sudoedit`), the prompt draft `system-prompt.md`
+# (root:weaver-<name>-admin 0640), admin's own
 # `admin.log` and `worker.log` once a verb has run, `save-points/` for the
 # published save points and their manifest, beside the state room and the
 # trace. Root reads and writes root's files in root's directory, so no file
@@ -455,8 +456,8 @@ plan "agent root      $AGENT_ROOT      root 0755, keys 0644, copied from $STACK"
 plan "spu-binary      $SPU_BINARY$( [ -n "$SPU_OVERRIDE" ] && printf '  (--spu, in place of the stack record'"'"'s)' )"
 plan "operator key    $OPERATOR_UID ($OPERATOR)"
 plan "roles.toml      trace-reader = $CONNECTOR_USER"
-plan "declaration     $DECLARATION     root 0644, session $SESSION, artifact $ARTIFACT; edited with sudoedit"
-plan "prompt draft    $PROMPT     root 0644, sent by deploy/turn.py $NAME --system after the first load"
+plan "declaration     $DECLARATION     root:$ACCESS_GROUP 0640, session $SESSION, artifact $ARTIFACT; edited with sudoedit"
+plan "prompt draft    $PROMPT     root:$ACCESS_GROUP 0640, sent by deploy/turn.py $NAME --system after the first load"
 plan "logs            $HOME_DIR/admin.log and worker.log, made by admin at the first verb"
 plan "sudo rule       $SUDO_RULE      $CONNECTOR_USER, $CONNECTOR_ROLE: $VERBS, !pam_session"
 plan "store engine    $ENGINE         which the deployed member must carry"
@@ -555,15 +556,18 @@ sudo install -d -o root -g "$ACCESS_GROUP" -m 0750 "$SAVE_POINTS"
 
 
 say "declaration"
-# **Written as root into root's directory**, 0644 each: the declaration the
-# operator edits from here with `sudoedit`, and the draft `deploy/turn.py
-# --system` reads through the access group. Nothing lands in the operator's
+# **Written as root into root's directory**, root:$ACCESS_GROUP 0640 each:
+# the declaration the operator edits from here with `sudoedit`, and the draft
+# `deploy/turn.py --system` reads through the access group. Neither is read
+# by a uid outside the access group, and admin refuses a declaration grouped
+# or moded otherwise (weaver-admin-Spec section 9). Nothing lands in the operator's
 # home. The territory was refused above where it stood, so neither file is
 # written over.
 printf '%s\n' "$DECLARATION_TEXT" | sudo tee "$DECLARATION" >/dev/null
 printf '%s' "$PROMPT_TEXT" | sudo tee "$PROMPT" >/dev/null
-sudo chmod 0644 "$DECLARATION" "$PROMPT"
-printf '   %s and %s written, root 0644\n' "$DECLARATION" "$PROMPT"
+sudo chown root:"$ACCESS_GROUP" "$DECLARATION" "$PROMPT"
+sudo chmod 0640 "$DECLARATION" "$PROMPT"
+printf '   %s and %s written, root:%s 0640\n' "$DECLARATION" "$PROMPT" "$ACCESS_GROUP"
 
 say "agent root, staged"
 # **Root-owned and not group- or world-writable, or admin refuses it**, so it

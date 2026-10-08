@@ -8,7 +8,7 @@
 # either seat. The agents are the roots under the base: admin admits an agent
 # by its root existing, and this script serves the same set. Each agent's
 # declaration is `agent.toml` in the territory its root's `territory` key
-# names, root's and 0644, read as the operator running this script through
+# names, root:weaver-<agent>-admin 0640, read as the operator running this script through
 # the access group (the operator's ruling of 2026-10-07 on #1). A root still
 # naming a `declaration-directory`, the layout before that ruling, is
 # migrated by `--install`, its files moved into the territory.
@@ -273,7 +273,7 @@ territory_of() { # territory_of AGENT: prints its territory
   printf '%s/weaver-%s' "$AGENT_DIR" "$1"
 }
 # **Each agent's declaration, read as the operator.** It is `agent.toml` in the
-# territory, root's and 0644, which the operator reads through the access
+# territory, root:weaver-<agent>-admin 0640, which the operator reads through the access
 # group; or, on a root the layout migration below has not yet moved, in the
 # directory the root's `declaration-directory` names. One it cannot read
 # refuses by name and is never left out, on the ground the root's check gives.
@@ -856,7 +856,9 @@ if [ ${#MIGRATE[@]} -gt 0 ]; then
       PATCHED+=("$decl|$decl.pre-$AFTER-bak")
       sudo python3 "$REPO/deploy/migrate-identity.py" "$decl" --apply >/dev/null \
         || rollback "the identity of $decl did not move; see above"
-      sudo chmod 0644 "$decl" "$(dirname "$decl")/system-prompt.md"
+      # The territory is weaver-<agent>, its access group weaver-<agent>-admin.
+      sudo chown "root:$(basename "$(dirname "$decl")")-admin" "$decl" "$(dirname "$decl")/system-prompt.md"
+      sudo chmod 0640 "$decl" "$(dirname "$decl")/system-prompt.md"
     fi
     printf '  %s: identity moved into system-prompt.md beside it (backup %s); seed it after the load with deploy/turn.py <agent> --system\n' \
       "$decl" "$(basename "$decl.pre-$AFTER-bak")"
@@ -936,8 +938,8 @@ migrate_layout() {
     # have root set its target's mode; the open refuses a link by name.
     for f in agent.toml system-prompt.md; do
       [ -e "$old/$f" ] || continue
-      move_no_clobber "$old/$f" "$territory/$f" && sudo chown -h root:root "$territory/$f" \
-        && chmod_nofollow 0644 "$territory/$f" \
+      move_no_clobber "$old/$f" "$territory/$f" && sudo chown -h "root:weaver-$agent-admin" "$territory/$f" \
+        && chmod_nofollow 0640 "$territory/$f" \
         || rollback "$agent: $old/$f did not move into the territory as a regular file"
     done
     for f in admin.log worker.log; do

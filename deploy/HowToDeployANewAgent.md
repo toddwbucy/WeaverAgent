@@ -36,8 +36,8 @@ load where any piece is missing, so the pieces are made first and admin is asked
 | Territory | `<agent-directory>/weaver-<name>/`, the stack record's `agent-directory` (default `/var/lib/weaver-agent`, root 0755) | root:weaver-<name>-admin 0711, not setgid: every uid passes to what stands in it by name, none lists, the files' own modes are the wall, and no access entry is set |
 | State room (agents with a store) | `<territory>/state/`, where the member writes its save points | member 0700, unreachable by the agent's uid |
 | Trace sink | `<territory>/trace.ndjson` | made by create-agent before the first load, root:weaver-<name>-trace 0640, so the member cannot read it, and admin opens it append-only at load and leaves its owner and mode alone |
-| Declaration | `<territory>/agent.toml` | root 0644, written by create-agent as root; you edit it with `sudoedit` |
-| Prompt draft | `<territory>/system-prompt.md` | root 0644, written by create-agent; `deploy/turn.py <name> --system` reads it through the access group |
+| Declaration | `<territory>/agent.toml` | root:weaver-<name>-admin 0640, written by create-agent as root; you edit it with `sudoedit`, and admin refuses any other owner, group or mode |
+| Prompt draft | `<territory>/system-prompt.md` | root:weaver-<name>-admin 0640, written by create-agent; `deploy/turn.py <name> --system` reads it through the access group |
 | Operations and worker logs | `<territory>/admin.log` and `worker.log` | made by admin at the first verb, root:weaver-<name>-admin 0640 |
 | Published save points and their manifest | `<territory>/save-points/`: `<YYYYMMDDTHHMMSSZ>-<digest>.save-point` and `save-points.manifest` | the directory root:weaver-<name>-admin 0750; each save point root:weaver-<name>-admin 0640, the manifest root 0644, all written by admin |
 | Agent root, which is the admission | `/etc/weaver/admin/<name>/`: `worker-binary`, `spu-binary`, `gate-binary`, `coordination-root` (and `library-path`, `headroom-bytes`, `load-bound-seconds` where the stack record has them), copied from the stack record, plus `territory` (the territory's path), `operator` (the operator's uid) and `roles.toml` (`trace-reader = "weaver-<name>-admincon"`) | root, directory 0755, files 0644, and admin refuses a root that is not root-owned or is group- or world-writable |
@@ -112,7 +112,7 @@ operator's ruling of 2026-10-06, and enters the agent through its gate as the se
 turn of section 4, after the first load. Beside the declaration the script writes the
 draft that turn sends, `<territory>/system-prompt.md`, a plain prompt that is yours to
 edit before seeding; edit `agent.toml` for a wider context or `ask` before validating.
-Both files are root's, 0644: `sudoedit /var/lib/weaver-agent/weaver-<name>/agent.toml` edits
+Both files are root:weaver-<name>-admin 0640: `sudoedit /var/lib/weaver-agent/weaver-<name>/agent.toml` edits
 one, and you read either through the access group. The fields are in
 `docs/technical/weaver-agent/agent-declaration.md`, a snapshot of 2026-08-25 that still
 shows an identity table, and `docs/crates/weaver-types/weaver-types-Spec.md` section 2
@@ -142,8 +142,8 @@ T=/var/lib/weaver-agent/weaver-$N      # the stack record's agent-directory, the
 sudo install -d -o root -g weaver-$N-admin -m 0711 "$T"
 sudo install -o root -g weaver-$N-trace -m 0640 /dev/null "$T/trace.ndjson"
 sudo install -d -o root -g weaver-$N-admin -m 0750 "$T/save-points"
-sudo install -o root -g root -m 0644 $N.toml "$T/agent.toml"
-sudo install -o root -g root -m 0644 $N-prompt.md "$T/system-prompt.md"
+sudo install -o root -g weaver-$N-admin -m 0640 $N.toml "$T/agent.toml"
+sudo install -o root -g weaver-$N-admin -m 0640 $N-prompt.md "$T/system-prompt.md"
 R=/etc/weaver/admin/.$N.partial
 sudo install -d -o root -g root -m 0755 "$R"
 for k in worker-binary spu-binary gate-binary coordination-root \
