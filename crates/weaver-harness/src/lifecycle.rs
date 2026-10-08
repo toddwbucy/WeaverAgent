@@ -3160,21 +3160,13 @@ mod tests {
     /// from the enter path rather than assembled, so the record it carries
     /// is the record that would have been written.
     ///
-    /// **What this pins and what it does not.** It pins the shape: that a
+    /// **It pins the shape and the call site** (#99 area 3, P15): the enter
+    /// is driven through `dispatch_on`, the arm the serve loop takes, so a
     /// lifecycle refusal reaching a standing run becomes a `refusal` naming
     /// the seam and the ask, carrying the seam's own case, belonging to no
-    /// turn, and closing nothing. **It does not pin the call site.** The
-    /// clerking happens in the serve loop's after-load arm, which needs a
-    /// coordination connection to reach, and this test calls the authoring
-    /// directly, so removing the call from that arm leaves this test
-    /// passing. Watched under exactly that removal, which is how the gap is
-    /// known rather than assumed.
-    ///
-    /// The call site is one line in one arm and the arm is read in review.
-    /// A test that drove it would drive the whole serve loop, which is the
-    /// shape `the_turn_rehearses_on_the_device` already carries for the
-    /// turn, and it is the honest place to add this if the arm ever grows a
-    /// second path.
+    /// turn and closing nothing, and is answered to the caller after it is
+    /// clerked. Perturbation: remove `author_lifecycle_refusal` from the
+    /// after-load arm and no refusal is on the record.
     #[test]
     fn a_refused_enter_leaves_its_reason_in_the_record() {
         let dir = crate::scratch::dir(format!(
@@ -3239,16 +3231,27 @@ mod tests {
         };
         // The fan-out fails after-load at the SPU exec, which is the arm
         // this test exists for: the bracket stands and the refusal is the
-        // enter's own.
-        let (mut run, refusal) = match harness.enter(payload, Some(sink), None) {
-            Err(EnterFailure::AfterLoad(run, refusal)) => (*run, refusal),
-            Ok(_) => panic!("the bogus fan-out cannot succeed"),
-            Err(EnterFailure::BeforeLoad(refusal)) => {
-                panic!("failed before the load: {refusal:?}")
-            }
+        // enter's own, answered to the caller.
+        let (harness_end, peer_end) = OrganChannel::pair().expect("pair");
+        harness
+            .dispatch_on(
+                &harness_end,
+                test_exchange(),
+                LifecycleDirective::Enter {
+                    payload: Box::new(payload),
+                },
+                Some(sink),
+                None,
+            )
+            .expect("the enter dispatches");
+        let refusal = match peer_end.into_channel().recv().expect("answer").payload {
+            weaver_types::Payload::Refusal(refusal) => refusal,
+            other => panic!("the bogus fan-out is refused after the load, got {other:?}"),
         };
-
-        author_lifecycle_refusal(&mut run, &refusal);
+        let ChannelState::Entered(run) = &mut harness.state else {
+            panic!("an after-load refusal leaves the run entered for its leave")
+        };
+        let run = run.as_mut();
 
         let refusals: Vec<&weaver_trace::Record> = run
             .recorder
@@ -3290,7 +3293,7 @@ mod tests {
             "a refused enter closes no turn"
         );
 
-        let _ = leave(&mut run, None, false);
+        let _ = leave(run, None, false);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
