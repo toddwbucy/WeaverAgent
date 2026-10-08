@@ -127,8 +127,9 @@ line is a Unix domain socket, and there is no listening network socket anywhere.
 
 Cargo edges run downward only: every crate links at most the floor, the harness links
 its two members, `weaver-state` links `weaver-trace`, and no organ links another organ.
-Every crate but `weaver-state` has a `tests/manifest.rs` that reads its own manifest to
-pin its part of that shape; `weaver-state`'s edges are pinned by no test.
+Each crate's manifest test reads its own manifest to pin its part of that shape: a
+`tests/manifest.rs` in every crate but `weaver-state`, whose test is
+`trace_is_a_dev_dependency_only` in `src/main.rs`.
 
 ### Where the documents are
 
@@ -320,9 +321,9 @@ this file and `AGENTS.md`, which are the Planner's, also go through a pull reque
    bite in normal use, lose state or restore stale state silently, or cross a privilege
    boundary is fixed; documentation and consistency findings are batched; crash windows
    and exotic races are filed. Each finding is sorted into one of those five buckets as
-   it lands. Codex runs at most two rounds before the pull request goes to the operator
-   with the merge decision. Before each push, name the new surface the fix creates (a
-   limit, a refusal, a state) and trace every caller of it.
+   it lands, and the rounds' convergence is judged by the Working Process's rule. Before
+   each push, name the new surface the fix creates (a limit, a refusal, a state) and
+   trace every caller of it.
 6. **A design change during review is its own pull request.** A ruling that adds a
    layout, a protocol or a limit mid-review is parked on a branch and landed separately;
    #94 carried three such changes and ran thirty rounds. A cross-process protocol gets
