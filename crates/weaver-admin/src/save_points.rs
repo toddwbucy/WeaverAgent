@@ -1519,6 +1519,24 @@ fn select_with(
             );
             return Err(refuse_config());
         };
+        // **`[restore]` is honoured only while its save point is the latest**
+        // (the operator's ruling of 2026-10-08 on #99, N6): the `restore`
+        // verb makes the named save point the manifest's latest, and a newer
+        // save point published since means the key was left behind; loading
+        // the named one then would silently restore older state. The load
+        // refuses and names both: remove `[restore]`, or run `restore` again.
+        if let Some(latest) = lines.iter().max_by_key(|line| line.ordinal)
+            && latest.ordinal != line.ordinal
+        {
+            diag!(
+                "weaver-admin: restore names {} (ordinal {}), and the manifest's latest is {} (ordinal {}); remove [restore] to load the latest, or run restore again to continue from the named one",
+                line.name,
+                line.ordinal,
+                latest.name,
+                latest.ordinal
+            );
+            return Err(refuse_config());
+        }
         return match open_published(directory, line, file_owner) {
             Ok(Some(descriptor)) => Ok(Some(Selected {
                 descriptor,
@@ -1572,8 +1590,11 @@ fn select_with(
 
 /// **Name a save point at a restore**, the `restore` verb's judgment, per
 /// `weaver-admin-Spec` section 4: a file the manifest already names answers
-/// its line; otherwise the file is judged as a load judges one and a line
-/// naming it is appended, marked as arrived by restore, with no position.
+/// its line where that line is the latest, and is named again under the next
+/// ordinal where a newer line outranks it (the operator's ruling of
+/// 2026-10-08 on #99, N6); otherwise the file is judged as a load judges one
+/// and a line naming it is appended, marked as arrived by restore, with no
+/// position. Either way the named save point is the latest after the verb.
 pub fn name_at_restore(
     directory: BorrowedFd<'_>,
     file_owner: (u32, u32),
@@ -1595,7 +1616,23 @@ pub fn name_at_restore(
         .find(|line| line.name == named || line.digest == named)
     {
         return match open_published(directory, line, file_owner) {
-            Ok(Some(_)) => Ok(line.clone()),
+            // **The named save point becomes the latest** (N6): a listed one
+            // that a newer line outranks is named again under the next
+            // ordinal, marked as named at a restore, so the load that follows
+            // continues from it and a `[restore]` naming it is honoured.
+            Ok(Some(_)) if lines.iter().all(|other| other.ordinal <= line.ordinal) => {
+                Ok(line.clone())
+            }
+            Ok(Some(_)) => {
+                let again = ManifestLine {
+                    ordinal: next_ordinal(&lines),
+                    position: None,
+                    arrived: Arrival::Restore,
+                    ..line.clone()
+                };
+                append_line(directory, owner, &again)?;
+                Ok(again)
+            }
             Ok(None) => {
                 diag!(
                     "weaver-admin: restore names {named}, whose file is gone from the save-points directory"
@@ -3390,32 +3427,17 @@ pub(crate) mod tests {
             std::fs::set_permissions(&third, std::fs::Permissions::from_mode(0o640)).unwrap();
         }
         // **The latest gone or differing refuses, never passed over** (the
-        // Planner's ruling of 2026-10-08 on #94): the third's file goes and
-        // the load refuses, the next ordinal still four; `restore` naming
-        // the second loads it; the third standing again with other sound
-        // bytes refuses too, and `restore` naming the first by its digest
-        // loads it. Perturbation: pass over to an older line again and the
-        // two refusals answer the second and the first.
+        // Planner's ruling of 2026-10-08 on #94): the third standing with
+        // other sound bytes refuses, and gone it refuses, the next ordinal
+        // still four. **A `[restore]` naming an older line refuses too**
+        // (the operator's ruling of 2026-10-08 on #99, N6), naming both, and
+        // the `restore` verb is what makes the named one the latest: it is
+        // named again under the next ordinal, and the load then continues
+        // from it, by the key or by default. Perturbations: pass over to an
+        // older line again and the first two refusals answer; honour a
+        // `[restore]` that is not the latest and the third answers; append
+        // nothing for a listed name and the fourth refuses.
         let third = dir.join(&lines[2].name);
-        std::fs::remove_file(&third).unwrap();
-        assert_eq!(
-            select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine).err(),
-            Some(LifecycleRefusal::BoundaryUnverified),
-            "a latest gone refuses"
-        );
-        assert_eq!(
-            next_ordinal(&read_manifest(dir_fd.as_fd(), mine).unwrap()),
-            4
-        );
-        let named = select(
-            dir_fd.as_fd(),
-            (mine.uid, mine.gid),
-            Some(&lines[1].name),
-            mine,
-        )
-        .unwrap()
-        .expect("the named one");
-        assert_eq!(named.line.ordinal, 2);
         std::fs::write(
             &third,
             save_point("r-1", 3, 0, 3_000_000_000, b"other image"),
@@ -3430,6 +3452,45 @@ pub(crate) mod tests {
             Some(LifecycleRefusal::BoundaryUnverified),
             "a latest that differs refuses"
         );
+        std::fs::remove_file(&third).unwrap();
+        assert_eq!(
+            select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a latest gone refuses"
+        );
+        assert_eq!(
+            next_ordinal(&read_manifest(dir_fd.as_fd(), mine).unwrap()),
+            4
+        );
+        assert!(
+            matches!(
+                select(
+                    dir_fd.as_fd(),
+                    (mine.uid, mine.gid),
+                    Some(&lines[1].name),
+                    mine,
+                ),
+                Err(LifecycleRefusal::ConfigInvalid { .. })
+            ),
+            "a [restore] naming an older line than the latest refuses"
+        );
+        let again =
+            name_at_restore(dir_fd.as_fd(), (mine.uid, mine.gid), &lines[1].name, mine).unwrap();
+        assert_eq!(
+            (again.ordinal, again.arrived, again.digest.as_str()),
+            (4, Arrival::Restore, lines[1].digest.as_str()),
+            "the restore verb names the older one again as the latest"
+        );
+        for restore in [None, Some(lines[1].name.as_str())] {
+            let named = select(dir_fd.as_fd(), (mine.uid, mine.gid), restore, mine)
+                .unwrap()
+                .expect("the renamed one");
+            assert_eq!(named.line.ordinal, 4);
+            assert!(named.lineage.named_at_restore);
+        }
+        let first =
+            name_at_restore(dir_fd.as_fd(), (mine.uid, mine.gid), &lines[0].digest, mine).unwrap();
+        assert_eq!(first.ordinal, 5);
         let named = select(
             dir_fd.as_fd(),
             (mine.uid, mine.gid),
@@ -3438,7 +3499,7 @@ pub(crate) mod tests {
         )
         .unwrap()
         .expect("the named one");
-        assert_eq!(named.line.ordinal, 1);
+        assert_eq!(named.line.ordinal, 5);
         // A file no line names is not loadable by name.
         let stray = save_point("r-9", 9, 0, 9_000_000_000, b"stray");
         let stray_name = published_name(&judge(&stray).unwrap());
@@ -3472,7 +3533,7 @@ pub(crate) mod tests {
         let named =
             name_at_restore(dir_fd.as_fd(), (mine.uid, mine.gid), &stray_digest, mine).unwrap();
         assert_eq!(named.name, stray_name);
-        assert_eq!((named.ordinal, named.arrived), (4, Arrival::Restore));
+        assert_eq!((named.ordinal, named.arrived), (6, Arrival::Restore));
         let by_name = select(
             dir_fd.as_fd(),
             (mine.uid, mine.gid),
@@ -3481,7 +3542,7 @@ pub(crate) mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(by_name.line.ordinal, 4);
+        assert_eq!(by_name.line.ordinal, 6);
         let by_digest = select(
             dir_fd.as_fd(),
             (mine.uid, mine.gid),
@@ -3516,7 +3577,7 @@ pub(crate) mod tests {
             name_at_restore(dir_fd.as_fd(), (mine.uid, mine.gid), &stray_name, mine)
                 .unwrap()
                 .ordinal,
-            4
+            6
         );
         // A renamed file does not enter.
         std::fs::rename(
@@ -3593,7 +3654,7 @@ pub(crate) mod tests {
             file.write_all(b"{\"ordinal\":9,\"dig").unwrap();
         }
         let read = read_manifest(dir_fd.as_fd(), mine).unwrap();
-        assert_eq!(read.len(), 4, "the torn line is dropped: {read:?}");
+        assert_eq!(read.len(), 6, "the torn line is dropped: {read:?}");
         assert!(
             select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine)
                 .unwrap()
@@ -3606,7 +3667,7 @@ pub(crate) mod tests {
             "{text}"
         );
         assert!(text.ends_with('\n'));
-        assert_eq!(read_manifest(dir_fd.as_fd(), mine).unwrap().len(), 5);
+        assert_eq!(read_manifest(dir_fd.as_fd(), mine).unwrap().len(), 7);
         // A manifest that does not parse refuses, and so does one absent
         // beside published files; absent beside none is the first load.
         std::fs::write(dir.join(MANIFEST), "not json\n").unwrap();

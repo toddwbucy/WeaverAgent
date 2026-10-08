@@ -938,7 +938,14 @@ point named at a restore, on item 3. **The verb judges a listed name too**: the 
 opened and judged as the load judges it below before the verb answers, gone refusing
 `BoundaryUnverified` and not digesting to its line refusing `ConfigInvalid` naming
 `restore`, as the load would, so `RestoreNamed` means named and judged loadable now, never
-a line whose file has since gone or changed. A manifest that stands beside published
+a line whose file has since gone or changed. **The verb makes the named save point the
+latest** (the operator's ruling of 2026-10-08 on #99): a listed one that a newer line
+outranks is named again under the next ordinal, marked as named at a restore, so the load
+that follows continues from it. **A `[restore]` is honoured only while the save point it
+names is the manifest's latest**: where a newer save point has been published since, the
+load refuses `ConfigInvalid` naming `restore` and names both, the operator then removing
+`[restore]` to load the latest or running `restore` again to continue from the named one,
+so a key left behind never restores older state. A manifest that stands beside published
 files and does not read, or a named line whose file is absent, refuses `BoundaryUnverified` naming
 the manifest, and no manifest and no file is an agent's first load; a listing of
 `save-points/` that fails refuses the same way and is never read as an empty directory
