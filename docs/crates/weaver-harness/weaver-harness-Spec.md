@@ -2118,8 +2118,8 @@ dropped and said while the wait goes on inside the bound, so a
 member whose every snapshot outruns the bound never leaves the retry one answer behind,
 which a longer bound would not close, the race being one of order and not of time.
 **A snapshot-protocol frame is never another ask's answer**: one that lands past the
-drain while any other ask is awaited, `recall`, `grants`, `shape`, `identity`, `replay`,
-`restored` or `restore`, is dropped and said and the wait goes on inside that ask's own
+drain while any other ask is awaited, `recall`, `grants`, `shape`, `identity`, `replay`
+or `restored`, is dropped and said and the wait goes on inside that ask's own
 bound, so a late save-point frame never misses the next ask and never retires the seam;
 only a line that is neither the awaited answer nor such a frame misses it. A
 late finished answer's file stands in the room unrecorded and is published as recovered
@@ -2135,27 +2135,22 @@ the event, its own run and sequence, since after a restore the covered position 
 prior run's until a distillate lands and the event is this run's, which admin's
 manifest records; while a turn runs it refuses
 `ActivityNotAtRest`, as `Stop` would not, because a save point of a turn in flight would
-hold half of it. **A run that takes no save point refuses the demand `OutOfOrder`**: a
+hold half of it. **No save point is taken after the tee was lost** (the operator's
+ruling of 2026-10-08 on #99): the tee detaches silently on a stalled or broken seam, and
+the recorder marks it lost; the seam, a clone of the same socket, may still answer, but
+the holdings stopped growing at the detach, so the save point refuses
+`SavePointNotTaken` naming the member dead, the clean unload with it, and a force ends
+the run with the reset recorded. **A run that takes no save point refuses the demand `OutOfOrder`**: a
 diagnostic binding, or a serving run with no member seam, has no member to ask, and
 `SavePointNotTaken` naming the member dead would report a healthy member dead. The `Left` answer names the leave's save point the same way, so admin
-publishes it at once with its trace position. **A
-live restore is the loop's to trigger**: on the operator's demand this crate sends the
-`restore` ask naming a save point in the member's room, and on its answer flushes the
-decode session to `keep = 0` through the decode contract's existing cut before the next
-turn feeds the model, so no cached context outlives the state it was built from. **A
-save point whose identity differs from the one seated reopens the decode session**
-rather than reloading the model, per `weaver-spu-PRD`: the `restore` answer carries the
-save point's prefix, this crate compares it with the prefix seated, and where they
-differ it closes the session and opens it on the answered prefix, authoring nothing
-through the identity door, as an open authors nothing: the `restore` ask's `recall`
-names what was seated, and the prefix's text is on the trace at its seeding turn. **The
-rebuild at a restore is the prefix alone, as at a load**, on the operator's
-clarification of 2026-10-06 (#1): the reopened session holds the save point's prefix
-and nothing else is replayed into it, the rest being the operator's turn by turn. **The decode seam has no close or reopen today**, its directives
-being `Open`, `AppendAndGenerate`, `ReFeed`, `Cancel` and `Flush`, so this reopen is
-owed by the loop act that lands the live restore, as a `Reopen` of
-`weaver-harness-spu-decode-contract` and the SPU, and nothing here is implemented. The channel that carries the operator's demand to the loop is the
-loop act's to name.
+publishes it at once with its trace position. **The live
+`restore` ask is retired** (the operator's ruling of 2026-10-08 on #99): a restore is a
+reload of state, made only at a load through the save point admin hands the member at
+spawn, and this crate sends no `restore` ask. The live restore belongs to A5, with the
+decode seam's `Reopen`: the decode seam has no close or reopen today, its directives
+being `Open`, `AppendAndGenerate`, `ReFeed`, `Cancel` and `Flush`, and the flush, the
+reopen on a differing prefix and the rebuild of the prefix alone (the operator's
+clarification of 2026-10-06, #1) are that act's to charter.
 
 ### 6.1 The decode surface, chartered
 
@@ -2264,7 +2259,15 @@ enter's `Lineage`, or be absent where the enter names none, the other members,
 `named_at_restore` and `built_from`, being admin's resolution and never the member's to
 answer, and a refusal, a miss, or a disagreement refuses the enter before it authors
 `load`, through the fan-out's before-load refusal with the stream still clean, so no
-`load` event names state the member did not restore. **The reset rides the `load`
+`load` event names state the member did not restore. **An enter naming a lineage with
+no member's end refuses the same way** (#99): no member stands to have restored it and
+none can be asked, so the enter refuses before `load` rather than skip the comparison.
+**The `restored` answer is waited
+on for 120 seconds** (`RESTORED_ANSWER_BOUND_MS`, the operator's ruling of 2026-10-08 on
+#99): the member judges and seats the save point only after the opener reaches it, up to
+the save point's 1 GiB bound, and answers after that, so the two seconds of the small
+asks would refuse every load of a large save point. Admin's load bound
+(`load-bound-seconds`, 900 by default) spends this wait with the rest of the enter. **The reset rides the `load`
 event**: where the enter carries `reset`, beside its lineage and whether or not a save
 point stands, resolved by admin from its clean-unload marker per `weaver-admin-Spec`
 section 4, this crate copies it onto the `load` event beside the lineage, per

@@ -213,8 +213,12 @@ earlier session stay outside their view: that bound is each ask's own definition
 never the store's wall. An ask that reaches across sessions enters under section 7 like
 any further ask, with the loop act that writes the schema it reads.
 
-**The ask vocabulary is closed and enumerated here, and it holds eight names: `shape`,
-`recall`, `replay`, `grants`, `identity`, `snapshot`, `restore`, and `restored`.** The
+**The ask vocabulary is closed and enumerated here, and it holds seven names: `shape`,
+`recall`, `replay`, `grants`, `identity`, `snapshot`, and `restored`.** **The live
+`restore` ask is retired**, on the operator's ruling of 2026-10-08 on #99: a restore is a
+reload of state, made only at a load through the save point admin hands the member at
+spawn, and the live restore belongs to A5 with the decode seam's `Reopen`; a frame
+naming `restore` is an unknown ask and answers nothing. The
 shape ask carries no members, the session being the opener's, and asks for the session's
 shape - what happened, in what order, in which run, which is the phrase the charter uses
 for what the default election holds. Its answer carries the session's runs in the order
@@ -364,38 +368,6 @@ it; an acknowledgement the custodian cannot honour is answered by nothing and th
 is removed. The answer is a stamp and never the holdings: no byte of a save point
 crosses this seam.
 
-**The `restore` ask replaces the holdings from a save point in the member's room**,
-added 2026-10-02 on the operator's ruling on #58 that a live restore swaps state without
-unloading and that the harness triggers it. The ask carries one member, `save-point`, a
-name the member's room holds, and the custodian reads only its own room for it, never a
-path the name could lead out of. The custodian replaces its holdings whole with the save
-point's, or leaves them as they stood. The answer carries the five members the
-`snapshot` answer carries, read from the save point, so the harness records which save
-point and which position on the trace before it acts, and a sixth, `identity`, the
-prefix the save point holds: the turnless `message.system` events of its newest run that
-holds any, in landing order, served as the `identity` ask serves them, an empty list
-where it holds none. The live restore is the one serving path that reads a prefix from
-the store between loads, because the save point's state was built under its prefix and
-a live restore is not a load. Every
-distillate the stream carries after the ask lands on the restored holdings. The ask
-parks never, and a restore that fails is not answered, the asker's bound converting the
-silence into the missing answer of section 5: the harness then flushes nothing, records
-the miss, and serves on the holdings the member still holds. An answer lost after the
-member swapped its holdings is a reload that did not complete, on the operator's ruling
-of 2026-10-06 on #1 that a restore is a reload of the agent's state, never a patch into
-a running session: the harness stops the run, and the next load restores the latest
-published save point with the reset recorded; the custodian's holdings are either the
-prior ones or the restored ones, never a mixture, the swap being its commit step. The
-harness performs a restore only at a turn boundary, as a reload: flush the decode cache,
-ask, rebuild the prefix from the restored holdings, which needs the decode seam's
-`Reopen` and is the loop act's (A5). On its answer the harness
-flushes the decode session to `keep = 0` through `weaver-harness-spu-decode-contract`'s
-existing cut, or, where the answered `identity` differs from the seated prefix, closes
-and reopens the decode session with it, per `weaver-harness-Spec` section 6, and this
-seam carries nothing of the flush. A save point only in the territory's `save-points/`
-restores at a load, through the descriptor admin hands the member at spawn, and never
-through this ask.
-
 **The `restored` ask answers what the load restored**, added 2026-10-02 on the Planner's
 ruling on #58's fourth review round, because the opener is one-way and a schema the
 member refuses would otherwise have no path to the enter. The harness sends it at every
@@ -406,7 +378,10 @@ same four members of the enter's lineage and never with the members admin alone
 resolves, or nothing where it stood empty with
 no save point handed to it, or `refused` with a reason, `schema-mismatch` where the save
 point's schema is not the opener's. The member judges the save point at the opener,
-holds the outcome, and answers it immediately, parking never. **A refusal or a miss
+seats it, holds the outcome, and answers it once that is done, parking never; the
+harness waits 120 seconds for the answer (the operator's ruling of 2026-10-08 on #99), the
+judgment and the seating of an image up to the save point's 1 GiB bound coming first,
+and the member judges the image once, its commit running no second whole-image check. **A refusal or a miss
 refuses the enter**, on the identity ask's rule that the dead-peer clause of section 5
 does not convert it: an enter that cannot say what its state was restored from must not
 author a `load` event that says it. The opener stays one-way, and the save point's bytes
@@ -455,9 +430,8 @@ section 7 and does not exist until it merges there.
   count, the variable members exact and the envelope's fixed text and the frame's own
   allowed for above (#93 holds the exact measure as a cost with no correctness bearing);
   the other asks are bounded by their
-  own definitions, `recall` by `last-turns`, `shape`, `grants`, `snapshot`
-  and `restored` by their shapes, and `restore`'s answer carries the save
-  point's prefix, which the same seeding bound kept under it.
+  own definitions, `recall` by `last-turns`, and `shape`, `grants`, `snapshot`
+  and `restored` by their shapes.
 
 ## 4. What state owes
 
@@ -468,7 +442,7 @@ section 7 and does not exist until it merges there.
   distillate the schema refuses landing there alone.
 - **The save point and the restore faithful.** A save point holds exactly the
   holdings the stream carried before its ask, stamped with the position they cover, and
-  is never overwritten. A load or a live restore from it holds exactly what it holds,
+  is never overwritten. A load from it holds exactly what it holds,
   and a rebuild from the trace through that position, honouring every reset the record
   names, holds the same.
 - **Transformation without judgment.** Derived shapes, aggregates, and
@@ -496,7 +470,11 @@ the reset on the trace, the distillates landed since it kept by the record and r
 by no default, per `weaver-state-PRD` section 4. There is no buffering, no
 retry, and no backpressure onto the turn path: the derivative is rebuildable
 from the record, so the cheapest honest answer to a broken seam is to stop
-distilling until the next load.
+distilling until the next load. **A broken seam takes no save point** (the operator's
+ruling of 2026-10-08 on #99): where the tee has stopped distilling, the holdings miss
+what came after, so the harness asks no snapshot; the save point and the clean unload
+refuse, and the next load records the reset, never a stale save point published as
+whole.
 
 **A malformed distillate is the sender's defect.** State refuses it by
 closing nothing: the event is dropped, the defect is state's to surface when
@@ -575,10 +553,9 @@ after it. The serve half of the dead-peer clause is testable by asking with
 the member gone and watching the turn complete without the fact inside the
 bound. All three land with the loop act that shapes the surface.
 
-The snapshot and restore asks are testable against the living pair: a real load, real
-events landed, the snapshot ask answered with the position of the last distillate it
-carried before the ask and a name no earlier save point holds, a live restore of that
-save point after further landings answering the same position and holding what the
-first held at the ask, a second load restoring it through the spawn descriptor holding
-the same, and a rebuild from the record through the stamped position holding the same,
-ask for ask. They land with the code act that stands the store primitive.
+The snapshot ask and the load's restore are testable against the living pair: a real
+load, real events landed, the snapshot ask answered with the position of the last
+distillate it carried before the ask and a name no earlier save point holds, a second
+load restoring it through the spawn descriptor holding what the first held at the ask,
+and a rebuild from the record through the stamped position holding the same, ask for
+ask. They land with the code act that stands the store primitive.

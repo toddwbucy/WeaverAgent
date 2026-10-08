@@ -90,10 +90,12 @@ the first door's 3, a fixed convention between this crate and admin elected by t
 save-point act of 2026-10-05, and it is probed before it is adopted, by the rule below
 and before this process opens anything of its own, a regular file open for reading: a
 number holding nothing is the first load, and a number holding anything else is a fault
-the member refuses to start on. A live restore reads a save point from the member's own
-room by name, per section 4, and needs no descriptor. **The room is opened once by its
-path and held as a directory descriptor for the member's life**: every save point is
-written and read relative to it and never by a path, and the `grants` ask reads its
+the member refuses to start on. **The descriptor is the one way a save point reaches
+the holdings**: the live `restore` ask, which read the room by name, is retired on the
+operator's ruling of 2026-10-08 on #99, a restore being a reload of state made only at a
+load, and the live restore belongs to A5 with the decode seam's `Reopen`. **The room is
+opened once by its path and held as a directory descriptor for the member's life**: every
+save point is written relative to it and never by a path, and the `grants` ask reads its
 boundary through it. **The vector carries no flag**: it is the territory
 and, under a diagnostic binding, the preload name, per `weaver-admin-Spec` section 6.
 The engine flag and the service engine's three flags left it with that engine, and the
@@ -383,7 +385,18 @@ point is at most one gibibyte**, 1073741824 bytes of rendered file, on the opera
 ruling of 2026-10-08 that both readers enforce the bound admin's inventory holds: a
 `snapshot` whose save point would exceed it answers nothing, the reason said on the
 member's standard error, and leaves no part, so the harness's bound converts the silence
-as it does any failed write. **The
+as it does any failed write. **No save point is taken over a landing the store failed**
+(the operator's ruling of 2026-10-08 on #99): a distillate whose landing fails on a
+fault of the store itself, the engine full or past its size limit, an I/O fault or
+damage, rolls back whole, so the holdings lack what the trace holds; the failure is said
+on standard error as a `state_fault` line, never dropped, and every later `snapshot` of
+that member answers nothing, so the leave refuses `SavePointNotTaken` and the operator
+forces, the next load recording the reset. **A distillate the schema refuses is not
+one**: its landing rolls back by the schema's own constraint, the designed outcome of the
+schema slot above, and it notes nothing and poisons no later save point. **An adopted image grows as a first run's store does**: the engine's
+in-memory file for a deserialized database is capped at one gibibyte, which a store stood
+empty never meets, so after every deserialize at an adoption the member lifts that cap to
+the largest the engine admits, and the save point's bound stays the one ceiling. **The
 schema the stamp names is the store's own**: every object of the catalog with its
 statement, in a fixed order, exempting only an object of type index whose statement is
 exactly the election's generated form, `CREATE INDEX field_elected_<hex of the key path>
@@ -396,27 +409,24 @@ schema compared at a load is the one the store stands at open, the build's own. 
 one rule of adoption**, on that ruling and the operator's ruling of 2026-10-06 on #1
 that a restore is a reload of the agent's state and never a patch into a running
 session: everything the member proves about an image and everything it derives from
-it, the schema, the position, the prefix the `restore` answer carries and the index
-set, is computed on a scratch copy; the live connection is touched exactly once, last,
-after the answer frame is built and sized against the answer ceiling; and a failure
-anywhere leaves the live holdings as they stood and the ask unanswered. So the engine,
+it, the schema, the position and the index set, is computed on a scratch copy; the live
+connection is touched exactly once, last; and a failure anywhere leaves the holdings as
+they stood and the `restored` ask answering the refusal. So the engine,
 which adopts lazily and faults on first use, deserializes the image on a scratch
 connection, requires its own check to pass and the event table to stand, reads the
 image's own catalog, last landing and seated prefix and refuses a stamp that disagrees
 with either fact, drops every index in the election's generated form from the scratch
 copy and builds the active election's in their place, so the index set after adoption
-is exactly this load's at a load and at a live restore alike, and only then swaps the
-finished image in whole. A `restore` whose answer would exceed the ceiling refuses
-before anything moves. **A value the stamp cannot represent refuses the image and
+is exactly this load's, and only then swaps the finished image in whole. **A value the stamp cannot represent refuses the image and
 never defaults**: a sequence below zero, which the ingest refuses at the landing as the
 canonical form never spells one, or a turn key that is not `t-<n>`, is holdings this
 member never landed, and a stamp reading zero over them would pass with a false lineage.
-**One save point has one name**: the room reads a save point only under its own name,
-the digest with the suffix, and the same bytes under another name are an alias and
-refused, so the name an answer or the `save_point` event carries is the digest's by
-construction. What the harness owes a restore, the flush before and the
-rebuild after, and a restore whose answer is lost failing closed as a reload that did
-not complete, is the loop act's under the ruling of 2026-10-06. **An empty store has no position**,
+**One save point has one name**: the room writes a save point only under its own
+name, the digest with the suffix, so the name an answer or the `save_point` event
+carries is the digest's by construction. **A stamp the readers would refuse is never
+written** (#99): the run id and the schema digest are held to the parse's own bounds
+before any part is created, so every finished file is one this member's parse and
+admin's judgment admit. **An empty store has no position**,
 and what a save point taken of one is stamped with is the save-point act's provisional
 election, no run and sequence zero, pending the operator's ruling on the carried item
 r4170886146 in A3.0, the member learning no run until a distillate lands.
@@ -433,7 +443,7 @@ the restore's outcome from the opener on, and answers the enter's `restored` ask
 contract's section 2 with the restored lineage or with a refusal naming the schema
 mismatch, so the harness refuses the enter before it authors `load` and no `load` event
 claims a lineage the holdings did not come from. The operator names another save point
-through `restore` or rebuilds one. **Where the descriptor is absent the member
+through the declaration's `restore` or rebuilds one. **Where the descriptor is absent the member
 stands empty**, which is an agent's first load. **A rebuild from the trace is the
 offline save-point builder's**, per `weaver-state-PRD` section 3 and the operator's
 ruling of 2026-10-02 on #58: the builder lands the record through the preload door of
@@ -534,7 +544,7 @@ whose turn is absent and whose run is the run of the newest such row, ordered by
 list where the session holds none, per the contract's fifth ask of 2026-09-04. A
 malformed ask is dropped whole the way a malformed distillate is, and the resulting
 silence is the harness's bound to convert into a missing answer. **The `restored` ask
-answers the load's outcome**, per the contract's eighth ask of 2026-10-02: the member
+answers the load's outcome**, per the contract's `restored` ask of 2026-10-02: the member
 judges the descriptor's save point against the opener's schema when the opener lands,
 holds the outcome, and answers `{"answer":{"restored":{"lineage":{...}}}}` with the
 stamp it restored, its `lineage` carrying `digest`, `run`, `sequence` and `turn`,
@@ -564,17 +574,7 @@ lifecycle provenance the record keeps, and a rebuild through the preload door to
 save point's stamp stops before it too, which is what keeps the restore-equals-rebuild
 instrument, `a_reloaded_store_equals_a_full_replay`, equal by construction. It runs in stream order like every ask, so the save point
 covers exactly the distillates the stream carried before it, and a write that failed
-part way is what the load's check exists to catch. **The `restore` ask replaces the
-holdings from a save point in the room**, per the contract's seventh ask of 2026-10-02:
-the member opens the named file relative to its room's descriptor, refusing a name that
-is not a plain entry of the room, checks it and its schema as a load does, and only then
-swaps it in for the live database whole, answering `{"answer":{"restore":{...}}}`
-carrying the `snapshot` answer's five members and `identity`, the prefix read from the
-restored holdings as the `identity` ask reads it, or drops the ask unanswered with the
-holdings as they stood. A name that is not a plain entry of the room, empty, `.`, `..`,
-carrying `/` or NUL, or dotted, which is where the part files live, is refused before
-anything is opened. The distillates the stream carries after the ask land on the
-restored holdings.
+part way is what the load's check exists to catch.
 
 **Three protocol bounds are this crate's elections, each named with what its
 breach means, per the audit of 2026-08-26.** The answer ceiling is one
@@ -831,16 +831,15 @@ of the `preload_door` suite beside the room's own unit tests.
   the rest, then stands a second store from the save point and a third from the
   record rebuilt through the save point's stamp with no save point, and requires the
   second and third to answer every ask alike and to hold the same rows, table by
-  table, the loop's schema included, and a live restore of the same save point on the
-  first store must hold the same. The perturbations are the stamp written one
+  table, the loop's schema included. The perturbations are the stamp written one
   position late and one position early, each naming a position the holdings do not
   cover, and a rebuild that ignores a reset the record names: each must fail the
   equality.
-- A save point that fails its check is not loaded, watched at a live restore by one
-  truncated part way and by one with a byte flipped, each of which must leave the
-  holdings standing. At a load the same two are admin's to refuse, per
-  `weaver-admin-Spec` section 4. The perturbation drops the check, and a torn save
-  point is read as holdings.
+- A save point that fails its check is not loaded, watched at the load by one truncated
+  part way and by one with a byte flipped, each handed at the spawn, each of which must
+  refuse the member's start. They are admin's to refuse first, per `weaver-admin-Spec`
+  section 4. The perturbation drops the check, and the flipped save point starts the
+  member.
 - A save point under another schema is refused on the `restored` ask, watched by a
   load whose opener carries a schema the save point does not: the answer must name the
   mismatch. The perturbation answers the restored lineage regardless, and the enter

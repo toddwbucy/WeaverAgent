@@ -26,8 +26,7 @@ use weaver_state::save_point::{Room, SavePoint, schema_digest};
 use weaver_state::{
     Ask, Election, Restored, SavePointAnswer, Store, parse_ask, parse_distillate,
     render_finished_answer, render_grants_answer, render_identity_answer, render_recall_answer,
-    render_replay_answer, render_restore_answer, render_restored_answer, render_shape_answer,
-    render_snapshot_answer,
+    render_replay_answer, render_restored_answer, render_shape_answer, render_snapshot_answer,
 };
 
 /// The first door's end arrives at this descriptor number, the fixed
@@ -299,10 +298,10 @@ fn member_entry(
         store: store.as_mut(),
         room: &room,
         session: &session,
-        election: &election,
         restored,
         pending: None,
         save_point_bound: weaver_state::save_point::SAVE_POINT_BOUND,
+        unlanded: None,
     };
     let code = serve(lines, preload, preload_socket, &mut custody);
     // **An unacknowledged part does not outlive the member**, per
@@ -316,18 +315,18 @@ fn member_entry(
 /// **The one rule of a save point's adoption**, per `weaver-state-Spec`
 /// section 3 on the operator's rulings of 2026-10-05 and 2026-10-06 on #1:
 /// everything the member proves about an image and everything it derives
-/// from it, the schema, the position, the prefix the restore answer carries
-/// and the index set, is computed on a scratch copy; the live connection is
-/// touched exactly once, last, after the answer frame is built and sized;
-/// and a failure anywhere leaves the live holdings as they stood and the
-/// ask unanswered. `judge_save_point` is the proving half, shared by the
-/// load's restore and the live `restore` ask: the image is judged by what it
+/// from it, the schema, the position and the index set, is computed on a
+/// scratch copy; the live connection is touched exactly once, last; and a
+/// failure anywhere leaves the holdings as they stood and the load answers
+/// `restored` with the refusal. `judge_save_point` is the proving half of
+/// the load's restore, the one restore since the live `restore` ask was
+/// retired (the operator's ruling of 2026-10-08 on #99): the image is judged by what it
 /// says of itself and never by the stamp alone, its own catalog must be the
 /// standing schema and its own last landing the position the stamp claims,
 /// so a stamp written to agree cannot carry a foreign image past the schema
 /// rule, and a stamp that lies about its position is refused as one that
-/// disagrees. `commit_save_point` is the swap, called only once the caller
-/// has everything it will answer with.
+/// disagrees. `commit_save_point` is the swap, called only once the image
+/// is judged.
 fn judge_save_point(
     store: &dyn Store,
     session: &str,
@@ -372,9 +371,6 @@ struct Custody<'a> {
     store: &'a mut dyn Store,
     room: &'a Room,
     session: &'a str,
-    /// The opener's election, held so a live restore rebuilds this load's
-    /// indexes on the restored holdings.
-    election: &'a Election,
     restored: Restored,
     /// The part the last `snapshot` wrote and the harness has not yet
     /// acknowledged: its finished name and its digest. At most one stands,
@@ -384,6 +380,34 @@ struct Custody<'a> {
     /// `weaver-state-Spec` section 3: `SAVE_POINT_BOUND` at every standing,
     /// held here so a test can lower it.
     save_point_bound: u64,
+    /// **The first distillate that failed to land since this member stood**,
+    /// on the operator's ruling of 2026-10-08 on #99 (N2): a landing that
+    /// fails rolls back whole, so the holdings miss state the trace holds,
+    /// and a save point taken from them would be published as whole; every
+    /// later `snapshot` answers nothing, so no save point of this member's
+    /// is taken over a gap.
+    unlanded: Option<String>,
+}
+
+/// **Land one distillate, or say it did not land and remember it** (N2):
+/// never silent. A fault of the store goes to standard error as a
+/// `state_fault` line, and the first one is held on the custody, so the next
+/// `snapshot` refuses. **A distillate the schema refuses is not one**: that
+/// is the designed outcome of `weaver-state-Spec` section 3, what the schema
+/// does not admit landing nowhere, and it notes nothing and poisons nothing
+/// (the #99 area 1 grade).
+fn land_or_note(custody: &mut Custody<'_>, distillate: &weaver_state::Distillate) {
+    if let Err(fault @ weaver_state::CustodyFault::LandingFailed(_)) =
+        custody.store.land(distillate)
+    {
+        eprintln!(
+            "{}",
+            serde_json::json!({"state_fault": format!(
+                "a distillate failed to land ({fault:?}); no save point is taken from these holdings"
+            )})
+        );
+        custody.unlanded.get_or_insert_with(|| format!("{fault:?}"));
+    }
 }
 
 struct PendingSavePoint {
@@ -542,7 +566,7 @@ fn serve(
                         continue;
                     }
                     if let Some(distillate) = parse_distillate(&line) {
-                        let _ = custody.store.land(&distillate);
+                        land_or_note(custody, &distillate);
                     }
                 }
                 if !live {
@@ -606,7 +630,7 @@ fn drain_harness_lines(
 ) -> Option<std::process::ExitCode> {
     while let Some(line) = harness.take_line() {
         if let Some(distillate) = parse_distillate(&line) {
-            let _ = custody.store.land(&distillate);
+            land_or_note(custody, &distillate);
             continue;
         }
         let Some(ask) = parse_ask(&line) else {
@@ -687,6 +711,12 @@ fn answer_frame(
         // ruling of 2026-10-08 that both readers enforce it. An empty store has no
         // position and its stamp names no run and sequence zero.
         Ask::Snapshot { ordinal } => {
+            // **No save point over holdings that missed a landing** (N2).
+            if let Some(fault) = &custody.unlanded {
+                return Err(weaver_state::CustodyFault::SavePoint(format!(
+                    "a distillate failed to land since this member stood ({fault})"
+                )));
+            }
             let stamp = custody
                 .store
                 .position()?
@@ -748,41 +778,8 @@ fn answer_frame(
                 .map_err(|e| CustodyFault::SavePoint(e.to_string()))?;
             Ok(render_finished_answer(&pending.name, pending.ordinal))
         }
-        // **The restore reads its own room by name**, per the Spec: a name
-        // that is not a plain entry of the room, a file that fails its check
-        // or stands under another schema answers nothing and leaves the
-        // holdings as they stood; a sound one replaces them whole, and the
-        // answer carries its stamp and the prefix the restored holdings
-        // carry for the declared session. **The answer is built and sized
-        // on the scratch copy's facts before the swap**, per the one rule of
-        // `judge_save_point`: a frame past the answer ceiling refuses before
-        // anything moves, so an unanswered restore has moved nothing.
-        Ask::Restore { save_point } => {
-            let read = custody
-                .room
-                .read(save_point)
-                .map_err(|e| CustodyFault::SavePoint(e.to_string()))?;
-            let facts = judge_save_point(&*custody.store, session, &read)
-                .map_err(|reason| CustodyFault::SavePoint(reason.to_string()))?;
-            let frame = render_restore_answer(
-                &SavePointAnswer {
-                    name: save_point.clone(),
-                    stamp: read.stamp.clone(),
-                    digest: read.digest(),
-                },
-                &facts.identity,
-            );
-            if frame.len() > ANSWER_BOUND {
-                return Err(CustodyFault::SavePoint(
-                    "the restore answer exceeds the ceiling; nothing moved".into(),
-                ));
-            }
-            commit_save_point(custody.store, custody.election, &read)
-                .map_err(|reason| CustodyFault::SavePoint(reason.to_string()))?;
-            Ok(frame)
-        }
         // What the load restored, held since the opener, per the contract's
-        // eighth ask: answered immediately and parking never.
+        // `restored` ask: answered immediately and parking never.
         Ask::Restored => Ok(render_restored_answer(&custody.restored)),
     }
 }
@@ -1500,6 +1497,233 @@ mod tests {
         );
     }
 
+    /// **An acknowledgement finishes a part only on its ask and its digest
+    /// both** (the #99 area 1 review, T17): the right digest under another
+    /// ask's number is a late or misrouted frame, and the part is discarded,
+    /// no finished name given; the matching pair finishes it. Perturbation:
+    /// compare the digest alone and the misnumbered acknowledgement finishes
+    /// the part.
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn an_acknowledgement_finishes_only_on_its_number_and_digest() {
+        let scratch = Scratch(std::env::temp_dir().join(format!(
+            "weaver-state-ack-number-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        )));
+        std::fs::create_dir_all(&scratch.0).expect("room");
+        let room = Room::open(&scratch.0).expect("opens");
+        let mut store = weaver_state::engine::sqlite::Sqlite::stand().expect("stands");
+        let mut custody = Custody {
+            store: &mut store,
+            room: &room,
+            session: "s-1",
+            restored: weaver_state::Restored::Empty,
+            pending: None,
+            save_point_bound: weaver_state::save_point::SAVE_POINT_BOUND,
+            unlanded: None,
+        };
+        let finished = |dir: &std::path::Path| {
+            std::fs::read_dir(dir)
+                .expect("lists")
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+                .count()
+        };
+        answer_frame(&Ask::Snapshot { ordinal: 1 }, &mut custody).expect("answers");
+        let digest = custody.pending.as_ref().expect("pending").digest.clone();
+        let misnumbered = answer_frame(
+            &Ask::Acknowledge {
+                ordinal: 2,
+                digest: digest.clone(),
+            },
+            &mut custody,
+        );
+        assert!(
+            misnumbered.is_err(),
+            "another ask's number finishes nothing"
+        );
+        assert_eq!(finished(&scratch.0), 0, "no finished name was given");
+        answer_frame(&Ask::Snapshot { ordinal: 3 }, &mut custody).expect("answers");
+        let digest = custody.pending.as_ref().expect("pending").digest.clone();
+        answer_frame(&Ask::Acknowledge { ordinal: 3, digest }, &mut custody)
+            .expect("its own number and digest finish it");
+        assert_eq!(finished(&scratch.0), 1);
+    }
+
+    /// A store whose landings all fail, the rest delegated to the embedded
+    /// engine, for the watch on a landing that does not land.
+    #[cfg(feature = "sqlite")]
+    struct RefusingLand(
+        weaver_state::engine::sqlite::Sqlite,
+        fn() -> weaver_state::CustodyFault,
+    );
+
+    #[cfg(feature = "sqlite")]
+    impl weaver_state::Store for RefusingLand {
+        fn index_election(&mut self, e: &Election) -> Result<(), weaver_state::CustodyFault> {
+            self.0.index_election(e)
+        }
+        fn land(&mut self, _: &weaver_state::Distillate) -> Result<(), weaver_state::CustodyFault> {
+            Err((self.1)())
+        }
+        fn retire_and_index(
+            &mut self,
+            s: &str,
+            e: &Election,
+        ) -> Result<(), weaver_state::CustodyFault> {
+            self.0.retire_and_index(s, e)
+        }
+        fn replay(
+            &self,
+            s: &str,
+        ) -> Result<Vec<weaver_state::RecalledEvent>, weaver_state::CustodyFault> {
+            self.0.replay(s)
+        }
+        fn held(&self) -> Result<i64, weaver_state::CustodyFault> {
+            self.0.held()
+        }
+        fn shape(
+            &self,
+            s: &str,
+        ) -> Result<Vec<weaver_state::RunShape>, weaver_state::CustodyFault> {
+            self.0.shape(s)
+        }
+        fn recall(
+            &self,
+            s: &str,
+            last_turns: Option<u64>,
+        ) -> Result<Vec<weaver_state::RecalledEvent>, weaver_state::CustodyFault> {
+            self.0.recall(s, last_turns)
+        }
+        fn identity(
+            &self,
+            s: &str,
+        ) -> Result<Vec<weaver_state::RecalledEvent>, weaver_state::CustodyFault> {
+            self.0.identity(s)
+        }
+        fn image(&self) -> Result<Vec<u8>, weaver_state::CustodyFault> {
+            self.0.image()
+        }
+        fn judge_image(
+            &self,
+            image: &[u8],
+            s: &str,
+        ) -> Result<weaver_state::ImageFacts, weaver_state::CustodyFault> {
+            self.0.judge_image(image, s)
+        }
+        fn adopt(&mut self, image: &[u8], e: &Election) -> Result<(), weaver_state::CustodyFault> {
+            self.0.adopt(image, e)
+        }
+        fn schema(&self) -> Result<String, weaver_state::CustodyFault> {
+            self.0.schema()
+        }
+        fn position(
+            &self,
+        ) -> Result<Option<weaver_state::save_point::Stamp>, weaver_state::CustodyFault> {
+            self.0.position()
+        }
+    }
+
+    /// **A distillate the schema refuses poisons nothing** (the #99 area 1
+    /// grade of N2): the schema's refusal is `weaver-state-Spec` section 3's
+    /// designed outcome, so it notes nothing and the next `snapshot` still
+    /// answers; only a fault of the store does not. Perturbation: hold every
+    /// landing error as a store fault and the snapshot answers nothing.
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn a_landing_the_schema_refuses_poisons_nothing() {
+        let scratch = Scratch(std::env::temp_dir().join(format!(
+            "weaver-state-refused-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        )));
+        std::fs::create_dir_all(&scratch.0).expect("room");
+        let room = Room::open(&scratch.0).expect("opens");
+        let mut store = RefusingLand(
+            weaver_state::engine::sqlite::Sqlite::stand().expect("stands"),
+            || weaver_state::CustodyFault::LandingRefused("CHECK constraint failed".into()),
+        );
+        let mut custody = Custody {
+            store: &mut store,
+            room: &room,
+            session: "s-1",
+            restored: weaver_state::Restored::Empty,
+            pending: None,
+            save_point_bound: weaver_state::save_point::SAVE_POINT_BOUND,
+            unlanded: None,
+        };
+        let (mut ours, _theirs) = std::os::unix::net::UnixStream::pair().expect("pair");
+        let mut reader = LineReader::new(&mut ours);
+        reader.buffer = concat!(
+            r#"{"envelope":{"session":"s-1","run":"r-1","kind":"turn.started","sequence":"1"}}"#,
+            "\n"
+        )
+        .as_bytes()
+        .to_vec();
+        let mut parking = ReplayParking::new(false);
+        drain_harness_lines(&mut reader, &mut custody, &mut parking);
+        assert!(
+            custody.unlanded.is_none(),
+            "the schema's refusal is no fault"
+        );
+        answer_frame(&Ask::Snapshot { ordinal: 1 }, &mut custody)
+            .expect("the snapshot still answers");
+    }
+
+    /// **A landing that does not land is never silent, and no save point is
+    /// taken over it** (the operator's ruling of 2026-10-08 on #99, N2): the
+    /// fault is held on the custody, and the next `snapshot` answers
+    /// nothing, so the harness misses the leg and no save point publishes
+    /// holdings that lack what the trace holds. The landing arrives through
+    /// the drain the harness's lines take. Perturbations: discard the
+    /// landing's result in the drain again, drop the custody's note, or the
+    /// snapshot's look at it, and the snapshot answers.
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn a_landing_that_fails_refuses_every_later_snapshot() {
+        let scratch = Scratch(std::env::temp_dir().join(format!(
+            "weaver-state-unlanded-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        )));
+        std::fs::create_dir_all(&scratch.0).expect("room");
+        let room = Room::open(&scratch.0).expect("opens");
+        let mut store = RefusingLand(
+            weaver_state::engine::sqlite::Sqlite::stand().expect("stands"),
+            || weaver_state::CustodyFault::LandingFailed("database or disk is full".into()),
+        );
+        let mut custody = Custody {
+            store: &mut store,
+            room: &room,
+            session: "s-1",
+            restored: weaver_state::Restored::Empty,
+            pending: None,
+            save_point_bound: weaver_state::save_point::SAVE_POINT_BOUND,
+            unlanded: None,
+        };
+        answer_frame(&Ask::Snapshot { ordinal: 1 }, &mut custody)
+            .expect("before any failed landing the snapshot answers");
+        // The landing arrives as the harness sends it, through the drain.
+        let (mut ours, _theirs) = std::os::unix::net::UnixStream::pair().expect("pair");
+        let mut reader = LineReader::new(&mut ours);
+        reader.buffer = concat!(
+            r#"{"envelope":{"session":"s-1","run":"r-1","kind":"turn.started","sequence":"1"}}"#,
+            "\n"
+        )
+        .as_bytes()
+        .to_vec();
+        let mut parking = ReplayParking::new(false);
+        drain_harness_lines(&mut reader, &mut custody, &mut parking);
+        assert!(custody.unlanded.is_some(), "the failed landing is held");
+        let refused = answer_frame(&Ask::Snapshot { ordinal: 2 }, &mut custody)
+            .expect_err("no snapshot over a failed landing");
+        assert!(
+            format!("{refused:?}").contains("failed to land"),
+            "{refused:?}"
+        );
+    }
+
     /// **A snapshot past the save point's bound answers nothing and leaves
     /// no part**, per `weaver-state-Spec` section 3 on the operator's ruling
     /// of 2026-10-08: with the custody's bound lowered under the file, the
@@ -1519,15 +1743,14 @@ mod tests {
         std::fs::create_dir_all(&scratch.0).expect("room");
         let room = Room::open(&scratch.0).expect("opens");
         let mut store = weaver_state::engine::sqlite::Sqlite::stand().expect("stands");
-        let election = Election::default();
         let mut custody = Custody {
             store: &mut store,
             room: &room,
             session: "s-1",
-            election: &election,
             restored: weaver_state::Restored::Empty,
             pending: None,
             save_point_bound: weaver_state::save_point::SAVE_POINT_BOUND,
+            unlanded: None,
         };
         let answered = answer_frame(&Ask::Snapshot { ordinal: 1 }, &mut custody)
             .expect("at the standing bound the snapshot answers");
@@ -1538,6 +1761,56 @@ mod tests {
             .expect_err("past the bound the snapshot answers nothing");
         assert!(
             format!("{refused:?}").contains("past the bound of 16"),
+            "{refused:?}"
+        );
+        assert!(custody.pending.is_none(), "no part is pending");
+        let left: Vec<_> = std::fs::read_dir(&scratch.0)
+            .expect("lists")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        assert!(left.is_empty(), "the room holds no file: {left:?}");
+    }
+
+    /// **A snapshot over a stamp the readers would refuse answers nothing
+    /// and leaves no part** (#99, K7): holdings whose last landing names a
+    /// run of 129 bytes stamp a save point no reader admits, so the
+    /// `snapshot` ask is an `Err`, answered with silence, no part is pending
+    /// and the room holds no file. Perturbation: drop the `stamp_bounds`
+    /// call from `Room::write_part_within` and the snapshot answers.
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn a_snapshot_over_a_run_past_the_bound_answers_nothing() {
+        let scratch = Scratch(std::env::temp_dir().join(format!(
+            "weaver-state-snapshot-run-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        )));
+        std::fs::create_dir_all(&scratch.0).expect("room");
+        let room = Room::open(&scratch.0).expect("opens");
+        let mut store = weaver_state::engine::sqlite::Sqlite::stand().expect("stands");
+        store
+            .land(&weaver_state::Distillate {
+                session: "s-1".into(),
+                run: "r".repeat(129),
+                turn: None,
+                kind: "load".into(),
+                sequence: 0,
+                pairs: vec![],
+            })
+            .expect("lands");
+        let mut custody = Custody {
+            store: &mut store,
+            room: &room,
+            session: "s-1",
+            restored: weaver_state::Restored::Empty,
+            pending: None,
+            save_point_bound: weaver_state::save_point::SAVE_POINT_BOUND,
+            unlanded: None,
+        };
+        let refused = answer_frame(&Ask::Snapshot { ordinal: 1 }, &mut custody)
+            .expect_err("a run past 128 bytes answers nothing");
+        assert!(
+            format!("{refused:?}").contains("128 printable"),
             "{refused:?}"
         );
         assert!(custody.pending.is_none(), "no part is pending");

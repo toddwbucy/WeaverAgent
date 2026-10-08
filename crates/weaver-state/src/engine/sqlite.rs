@@ -75,10 +75,7 @@ impl Store for Sqlite {
     /// any failure, because a distillate held in part would be an
     /// attributable envelope over missing pairs.
     fn land(&mut self, distillate: &Distillate) -> Result<(), CustodyFault> {
-        let transaction = self
-            .connection
-            .transaction()
-            .map_err(|e| CustodyFault::LandingFailed(e.to_string()))?;
+        let transaction = self.connection.transaction().map_err(landing_fault)?;
         // The two inserts ride cached statements: one prepare per schema
         // for the store's life rather than one per event, with the
         // transaction boundary unchanged.
@@ -88,7 +85,7 @@ impl Store for Sqlite {
                     "INSERT INTO event (session, run, turn, kind, sequence)
                      VALUES (?1, ?2, ?3, ?4, ?5)",
                 )
-                .map_err(|e| CustodyFault::LandingFailed(e.to_string()))?;
+                .map_err(landing_fault)?;
             insert_event
                 .execute(rusqlite::params![
                     distillate.session,
@@ -97,7 +94,7 @@ impl Store for Sqlite {
                     distillate.kind,
                     distillate.sequence
                 ])
-                .map_err(|e| CustodyFault::LandingFailed(e.to_string()))?;
+                .map_err(landing_fault)?;
         }
         let event_id = transaction.last_insert_rowid();
         // The named members land typed and the rest verbatim, per
@@ -106,18 +103,15 @@ impl Store for Sqlite {
         {
             let mut insert_field = transaction
                 .prepare_cached("INSERT INTO field (event_id, key, value) VALUES (?1, ?2, ?3)")
-                .map_err(|e| CustodyFault::LandingFailed(e.to_string()))?;
+                .map_err(landing_fault)?;
             for (key, value) in &verbatim {
                 insert_field
                     .execute(rusqlite::params![event_id, key, value])
-                    .map_err(|e| CustodyFault::LandingFailed(e.to_string()))?;
+                    .map_err(landing_fault)?;
             }
         }
-        land_typed(&transaction, event_id, &typed)
-            .map_err(|e| CustodyFault::LandingFailed(e.to_string()))?;
-        transaction
-            .commit()
-            .map_err(|e| CustodyFault::LandingFailed(e.to_string()))
+        land_typed(&transaction, event_id, &typed).map_err(landing_fault)?;
+        transaction.commit().map_err(landing_fault)
     }
 
     /// **Retire the declared session's holdings and record the opener in one
@@ -370,6 +364,8 @@ impl Store for Sqlite {
     /// read exactly as the live store's are, so the facts a stamp claims
     /// can be held against the bytes before anything is adopted.
     fn judge_image(&self, image: &[u8], session: &str) -> Result<ImageFacts, CustodyFault> {
+        #[cfg(test)]
+        JUDGED.with(|count| count.set(count.get() + 1));
         let fault =
             |what: &str, e: rusqlite::Error| CustodyFault::SavePoint(format!("{what}: {e}"));
         let mut probe = Connection::open_in_memory().map_err(|e| fault("probe", e))?;
@@ -402,15 +398,19 @@ impl Store for Sqlite {
     /// live holdings standing and the swap itself takes an image already
     /// proven to deserialize. The statement cache is dropped after the swap
     /// because every cached statement was prepared against the holdings that
-    /// left.
+    /// left. **The image is the one `judge_image` passed**: the member judges
+    /// a save point before it commits one, so the commit does not run the
+    /// engine's whole-image check a second time over up to a gibibyte (the
+    /// operator's ruling of 2026-10-08 on #99, N1); an image that is no
+    /// database still refuses here, at the index rebuild.
     fn adopt(&mut self, image: &[u8], election: &Election) -> Result<(), CustodyFault> {
         let fault =
             |what: &str, e: rusqlite::Error| CustodyFault::SavePoint(format!("{what}: {e}"));
-        self.judge_image(image, "")?;
         let mut scratch = Connection::open_in_memory().map_err(|e| fault("scratch", e))?;
         scratch
             .deserialize_read_exact(rusqlite::MAIN_DB, image, image.len(), false)
             .map_err(|e| fault("deserialize", e))?;
+        lift_size_limit(&scratch)?;
         drop_elected_indexes(&scratch)?;
         build_indexes(&scratch, election)?;
         let finished = scratch
@@ -421,6 +421,7 @@ impl Store for Sqlite {
         self.connection
             .deserialize_read_exact(rusqlite::MAIN_DB, &finished[..], finished.len(), false)
             .map_err(|e| fault("swap", e))?;
+        lift_size_limit(&self.connection)?;
         self.connection.flush_prepared_statement_cache();
         Ok(())
     }
@@ -599,6 +600,67 @@ const TYPED_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS message (
      );
      CREATE INDEX IF NOT EXISTS part_event ON part (event_id, ordinal);
      CREATE INDEX IF NOT EXISTS series_event ON series (event_id, member, ordinal);";
+
+/// **An adopted image grows as a first run's store does** (the operator's
+/// ruling of 2026-10-08 on #99, N2): a deserialized database is SQLite's
+/// in-memory file, capped at `SQLITE_MEMDB_DEFAULT_MAXSIZE`, one gibibyte,
+/// which `open_in_memory`'s store never meets, so a restored run's landings
+/// past it failed `SQLITE_FULL` and an index build near it refused the
+/// restore. The cap is lifted to the largest the engine admits, so the save
+/// point's bound in the snapshot stays the one ceiling, as on a first run.
+fn lift_size_limit(connection: &Connection) -> Result<(), CustodyFault> {
+    let mut limit: i64 = i64::MAX;
+    // SAFETY: the handle is this live connection's, used on this thread for
+    // the one call; `main` names its attached database; `limit` is the
+    // `sqlite3_int64` the size-limit control reads and writes, alive across
+    // the call.
+    let code = unsafe {
+        rusqlite::ffi::sqlite3_file_control(
+            connection.handle(),
+            c"main".as_ptr(),
+            rusqlite::ffi::SQLITE_FCNTL_SIZE_LIMIT,
+            (&mut limit as *mut i64).cast(),
+        )
+    };
+    if code != rusqlite::ffi::SQLITE_OK || limit != i64::MAX {
+        return Err(CustodyFault::SavePoint(format!(
+            "the adopted image's size limit does not lift (code {code}, limit {limit})"
+        )));
+    }
+    Ok(())
+}
+
+/// The adopted database's size limit, read without changing it.
+#[cfg(test)]
+fn size_limit(connection: &Connection) -> i64 {
+    let mut limit: i64 = -1;
+    // SAFETY: as in `lift_size_limit`; a negative argument reads the limit.
+    unsafe {
+        rusqlite::ffi::sqlite3_file_control(
+            connection.handle(),
+            c"main".as_ptr(),
+            rusqlite::ffi::SQLITE_FCNTL_SIZE_LIMIT,
+            (&mut limit as *mut i64).cast(),
+        );
+    }
+    limit
+}
+
+/// **A refused landing is the schema's, a failed one the store's** (the #99
+/// area 1 grade of N2): a constraint the schema stands, `SQLITE_CONSTRAINT`
+/// (a `RAISE(ABORT)` trigger among them), refusing a distillate is the
+/// designed outcome of `weaver-state-Spec` section 3 and answers
+/// `LandingRefused`; anything else, the engine full or past its size limit,
+/// an I/O fault or a damaged image, is a fault of the store and answers
+/// `LandingFailed`.
+fn landing_fault(e: rusqlite::Error) -> CustodyFault {
+    match e.sqlite_error_code() {
+        Some(rusqlite::ErrorCode::ConstraintViolation) => {
+            CustodyFault::LandingRefused(e.to_string())
+        }
+        _ => CustodyFault::LandingFailed(e.to_string()),
+    }
+}
 
 /// Land one event's typed rows inside the caller's transaction.
 fn land_typed(
@@ -839,6 +901,13 @@ fn quoted(text: &str) -> String {
     format!("'{}'", text.replace('\'', "''"))
 }
 
+// Whole-image judgments on this thread, for the test that holds a restore
+// to one.
+#[cfg(test)]
+thread_local! {
+    static JUDGED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -886,7 +955,13 @@ mod tests {
             sequence: 1,
             pairs: vec![("fine".into(), "1".into()), ("poison".into(), "2".into())],
         });
-        assert!(refused.is_err(), "the forced failure refuses the landing");
+        // **A constraint's refusal is the schema's, never the store's** (the
+        // #99 area 1 grade of N2). Perturbation: answer every error
+        // `LandingFailed` and this reads the store's fault.
+        assert!(
+            matches!(refused, Err(CustodyFault::LandingRefused(_))),
+            "the schema's refusal: {refused:?}"
+        );
         assert_eq!(
             count(&store, "SELECT COUNT(*) FROM event"),
             1,
@@ -1167,7 +1242,22 @@ mod tests {
         drop(store);
         let mut restored = Sqlite::stand().expect("stands empty");
         assert_eq!(restored.held().expect("held"), 0);
+        // **A restore judges the image once** (the operator's ruling of
+        // 2026-10-08 on #99, N1): the member judges before it commits, so
+        // the commit runs no second whole-image check. Perturbation: judge
+        // again in `adopt` and the count reads two.
+        JUDGED.with(|count| count.set(0));
+        restored.judge_image(&image, "alpha-1").expect("judged");
         restored.adopt(&image, &election).expect("adopts");
+        assert_eq!(
+            JUDGED.with(std::cell::Cell::get),
+            1,
+            "one judgment per restore"
+        );
+        // **The adopted store has no one-gibibyte cap** (N2): its size limit
+        // is lifted past the save point's bound, as a first run's store has
+        // none. Perturbation: drop the lift and the limit reads 1073741824.
+        assert_eq!(size_limit(&restored.connection), i64::MAX);
         assert_eq!(
             restored.held().expect("held"),
             1,
@@ -1666,16 +1756,21 @@ mod tests {
             r#"{"ask":{"summarize":{}}}"#,
             // One ask per frame, its body exactly the contract's: a frame
             // naming two asks, a snapshot with a body, a snapshot that is
-            // null, a bodiless shape, a restore with a second member and a
-            // recall with a stranger each answer nothing, and the snapshot
-            // cases write nothing. Perturbation: parse by the presence of a
-            // name again and the compound frame takes a save point.
-            r#"{"ask":{"snapshot":null,"restore":{"save-point":"x"}}}"#,
+            // null, a bodiless shape and a recall with a stranger each answer
+            // nothing, and the snapshot cases write nothing. Perturbation:
+            // parse by the presence of a name again and the compound frame
+            // takes a save point.
+            r#"{"ask":{"snapshot":{"ask":1},"shape":{}}}"#,
             r#"{"ask":{"snapshot":{"now":true}}}"#,
             r#"{"ask":{"snapshot":null}}"#,
             r#"{"ask":{"shape":null}}"#,
             r#"{"ask":{"shape":{},"grants":{}}}"#,
-            r#"{"ask":{"restore":{"save-point":"x","other":1}}}"#,
+            // **The live `restore` ask is retired** (the operator's ruling of
+            // 2026-10-08 on #99): its frame, well formed as the contract once
+            // spelled it, is an unknown name and answers nothing.
+            // Perturbation: map `restore` to any ask in `parse_ask` and the
+            // first case parses.
+            r#"{"ask":{"restore":{"save-point":"x"}}}"#,
             r#"{"ask":{"restore":{}}}"#,
             r#"{"ask":{"recall":{"stranger":1}}}"#,
             r#"{"ask":{"recall":{"last-turns":1,"stranger":1}}}"#,

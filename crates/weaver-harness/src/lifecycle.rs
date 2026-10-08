@@ -1630,8 +1630,18 @@ impl Harness {
         // `load` event names state the member did not restore. The dead-peer
         // clause does not convert this ask, and a member whose end arrived
         // but whose seam did not stand cannot be asked, which is the miss.
+        //
+        // **An enter naming a lineage with no member to ask refuses too**
+        // (#99, K8; survey S19): no member stands to have restored it, so
+        // the `load` would name state nothing restored, and the arm that
+        // skips the ask is the one where nothing is named.
         if !diagnostic {
             let answered = match (state_member, state_seam.as_mut()) {
+                (false, None) if payload.restore.is_some() => {
+                    return Err(EnterFailure::BeforeLoad(
+                        LifecycleRefusal::DescriptorsUnusable,
+                    ));
+                }
                 (false, None) => None,
                 (true, None) => {
                     return Err(EnterFailure::BeforeLoad(
@@ -2192,11 +2202,14 @@ impl Harness {
         exchange: &ExchangeId,
         answer: LifecycleAnswer,
     ) -> Result<(), ChannelFault> {
-        connection.send(&OrganEnvelope {
-            exchange: exchange.clone(),
-            position: Position::Close,
-            payload: weaver_types::Payload::Answer(answer),
-        })
+        deliver(
+            connection,
+            &OrganEnvelope {
+                exchange: exchange.clone(),
+                position: Position::Close,
+                payload: weaver_types::Payload::Answer(answer),
+            },
+        )
     }
 
     fn refuse(
@@ -2205,12 +2218,33 @@ impl Harness {
         exchange: &ExchangeId,
         refusal: LifecycleRefusal,
     ) -> Result<(), ChannelFault> {
-        connection.send(&OrganEnvelope {
-            exchange: exchange.clone(),
-            position: Position::Close,
-            payload: weaver_types::Payload::Refusal(refusal),
-        })
+        deliver(
+            connection,
+            &OrganEnvelope {
+                exchange: exchange.clone(),
+                position: Position::Close,
+                payload: weaver_types::Payload::Refusal(refusal),
+            },
+        )
     }
+}
+
+/// **An answer the dialer is not there to take ends nothing** (the operator's
+/// ruling of 2026-10-08 on #99, N4): the verb's caller went away, an
+/// operator's interrupt, a connector's own timeout or a killed invocation,
+/// and the run it asked about stands as the directive left it. The send's
+/// failure is said on standard error and the serve loop returns to its wait,
+/// where the dead connection reads closed, as a verb answered and closed
+/// does; only the listener's loss ends service. A run's end is the directive
+/// that ended it, never a failed write to the party that asked.
+fn deliver(connection: &OrganChannel, envelope: &OrganEnvelope) -> Result<(), ChannelFault> {
+    if let Err(fault) = connection.send(envelope) {
+        eprintln!(
+            "weaver-harness: the answer to exchange {} was not delivered ({fault:?}); the dialer is gone and the run stands as the directive left it",
+            envelope.exchange.ordinal
+        );
+    }
+    Ok(())
 }
 
 /// Leave runs the reverse order and drains before it answers: lower the gate
@@ -2651,6 +2685,20 @@ fn take_save_point(
     let Some(seam) = run.state.as_mut() else {
         return Ok(None);
     };
+    // **No save point after the tee was lost** (the operator's ruling of
+    // 2026-10-08 on #99, R1): the tee detaches silently on a stalled or
+    // broken seam, and every distillate since is missing from the holdings,
+    // while the seam, a clone of the same socket, still answers. A snapshot
+    // now would be stale state published as whole, so the leg is the dead
+    // member's: the save point and the clean unload refuse, and a force
+    // ends the run with the reset recorded.
+    if run
+        .recorder
+        .serving()
+        .is_some_and(weaver_trace::Recorder::tee_lost)
+    {
+        return Err(weaver_types::SavePointLeg::MemberDead);
+    }
     let taken = seam.ask_snapshot()?;
     let position = run
         .author
@@ -3364,6 +3412,98 @@ mod tests {
         }
     }
 
+    /// **An enter naming a lineage with no state end refuses before the
+    /// load** (#99, K8; survey S19): with no member standing, nothing can
+    /// have restored the save point the enter names, so the enter refuses
+    /// `DescriptorsUnusable` with the stream still clean, where before it
+    /// skipped `restored_agrees` and authored a `load` naming the lineage.
+    ///
+    /// Perturbation: drop the `payload.restore.is_some()` arm and the enter
+    /// reaches the fan-out after the load.
+    #[test]
+    fn an_enter_naming_a_lineage_with_no_member_refuses_before_the_load() {
+        let dir = crate::scratch::dir(format!(
+            "weaver-harness-lineage-no-member-{}",
+            std::process::id()
+        ));
+        let socket = dir.join("c.sock");
+        std::fs::remove_file(&socket).ok();
+        let listener = crate::channel::bind_coordination(&socket).expect("bind");
+        let sink_path = dir.join("trace.ndjson");
+        let sink = OwnedFd::from(File::create(&sink_path).expect("sink"));
+        let mut harness = Harness {
+            coordination: listener,
+            organs: OrganBinaries {
+                classify: None,
+                spu: "/nonexistent/weaver-spu".into(),
+                gate: "/nonexistent/weaver-gate".into(),
+            },
+            parameters: OrganParameters::default(),
+            state: ChannelState::BeforeEnter,
+            composer: Some(weaver_trace::LoopIdentity::file(
+                "pyworker",
+                std::path::Path::new("/deployed/loop.py"),
+                Some("cd".repeat(32)),
+            )),
+        };
+        let payload = weaver_types::EnterPayload {
+            session: SessionId("s-lineage".into()),
+            run: weaver_types::RunId("r-1".into()),
+            spu_instruction: weaver_types::SpuInstruction {
+                classify: None,
+                decoder: weaver_types::DecoderInstruction {
+                    model_binding: weaver_types::ModelBinding {
+                        artifact: weaver_types::ArtifactRef("unreachable".into()),
+                        devices: vec![weaver_types::DeviceOrdinal(0)],
+                    },
+                    residual_readout_election: false,
+                    field_election: None,
+                    surprisal_election: false,
+                    refeed_permission: false,
+                    column_permission: false,
+                    tunable_values: Default::default(),
+                },
+            },
+            binding: weaver_types::EnterBinding::Serving {
+                gate_instruction: weaver_types::GateInstruction {
+                    access_rule: weaver_types::AccessRule {
+                        allowed_uids: Default::default(),
+                        allowed_gids: Default::default(),
+                        denied_uids: Default::default(),
+                    },
+                },
+            },
+            state_store: weaver_types::StateStore::default(),
+            declaration: String::new(),
+            restore: Some(lineage("ab", "r-0", 5, 1)),
+            reset: None,
+            stack: Default::default(),
+            boundary: String::new(),
+            cause: weaver_types::Cause { uid: 0 },
+            operator: 1000,
+            library_path: None,
+            state_election: weaver_types::StateElection {
+                all_kinds: false,
+                keys: Vec::new(),
+            },
+        };
+        let refusal = match harness.enter(payload, Some(sink), None) {
+            Err(EnterFailure::BeforeLoad(refusal)) => refusal,
+            Err(EnterFailure::AfterLoad(mut run, _)) => {
+                let _ = leave(&mut run, None, false);
+                panic!("a lineage with no member reached the load");
+            }
+            Ok(_) => panic!("the bogus fan-out cannot succeed"),
+        };
+        assert!(
+            matches!(refusal, LifecycleRefusal::DescriptorsUnusable),
+            "{refusal:?}"
+        );
+        let held = std::fs::read_to_string(&sink_path).expect("the sink reads back");
+        assert!(held.is_empty(), "the stream stays clean: {held}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A scripted member's far end that stood empty: every line the harness
     /// writes is yielded in order, the `restored` ask answered as empty and
     /// the `grants` ask with an empty surface, until the harness closes the
@@ -3444,6 +3584,9 @@ mod tests {
         /// The `SavePoint` directive against the entered run, then the
         /// fixture's own unwind: the answer captured is the save point's.
         SavePoint,
+        /// As `SavePoint`, with admin's end of the connection closed before
+        /// the directive is dispatched: the caller went away mid-verb.
+        SavePointAbandoned,
         /// An unforced `Leave` with a frame the gate stand-in queued before
         /// it, untaken by the loop (Codex on #94, round 13).
         QueuedFrame,
@@ -3621,6 +3764,7 @@ mod tests {
                     }
                     LeaveMode::Directive { .. }
                     | LeaveMode::SavePoint
+                    | LeaveMode::SavePointAbandoned
                     | LeaveMode::QueuedFrame
                     | LeaveMode::FrameDuringLower => {
                         // The fixture's SPU never admitted, its exec having
@@ -3753,10 +3897,17 @@ mod tests {
                                 cause: weaver_types::Cause { uid: 1000 },
                             },
                         };
-                        harness
-                            .dispatch_on(&connection, test_exchange(), directive, None, None)
-                            .expect("the directive dispatches");
-                        answer = Some(admin_peer.recv().expect("the leave answers").payload);
+                        if matches!(mode, LeaveMode::SavePointAbandoned) {
+                            drop(admin_peer);
+                            harness
+                                .dispatch_on(&connection, test_exchange(), directive, None, None)
+                                .expect("an undelivered answer is no fault of the run");
+                        } else {
+                            harness
+                                .dispatch_on(&connection, test_exchange(), directive, None, None)
+                                .expect("the directive dispatches");
+                            answer = Some(admin_peer.recv().expect("the leave answers").payload);
+                        }
                         still_entered = matches!(harness.state, ChannelState::Entered(_));
                         if let ChannelState::Entered(run) =
                             std::mem::replace(&mut harness.state, ChannelState::Left)
@@ -4050,6 +4201,88 @@ mod tests {
         assert!(
             !events.iter().any(|e| e["kind"] == "save_point"),
             "nothing is recorded"
+        );
+    }
+
+    /// **No save point is taken after the tee was lost** (the operator's
+    /// ruling of 2026-10-08 on #99, R1): the member stops reading, the
+    /// socket's buffer fills and the tee detaches, its distillates since
+    /// lost; the member then drains and the seam would answer, but the save
+    /// point refuses as the dead member's and no snapshot is asked, so stale
+    /// holdings are never published as whole. Perturbation: drop the look
+    /// at the lost tee and the snapshot is asked and misses its answer.
+    #[test]
+    fn a_save_point_after_the_tee_was_lost_is_refused() {
+        use std::io::Read;
+        let (mut run, _spare, _sink) = entered_run(None);
+        let (state_end, mut member_end) =
+            std::os::unix::net::UnixStream::pair().expect("the member's pair");
+        state_end.set_nonblocking(true).expect("nonblocking");
+        let mut seam = crate::state::StateSeam::new(state_end.try_clone().expect("clone"));
+        seam.snapshot_answer_bound_ms = 50;
+        run.state = Some(seam);
+        run.recorder.serving_mut().expect("serving").attach_tee(
+            weaver_trace::Tee::open(
+                state_end,
+                "s-1".into(),
+                weaver_trace::Election {
+                    all_kinds: true,
+                    keys: Vec::new(),
+                },
+            )
+            .expect("the tee opens"),
+        );
+        // The member reads nothing, so the buffer fills and the tee goes.
+        let mut authored = 0;
+        while !run.recorder.serving().expect("serving").tee_lost() {
+            authored += 1;
+            assert!(authored < 1_000_000, "the tee never detached");
+            let key = TurnKey(format!("t-{authored}"));
+            run.author
+                .author(
+                    &mut run.recorder,
+                    Kind::TurnStarted,
+                    Subsystem::Harness,
+                    Some(&key),
+                    None,
+                )
+                .expect("authored");
+        }
+        // The member catches up: the seam could carry an ask again.
+        member_end.set_nonblocking(true).expect("nonblocking");
+        let mut drained = vec![0u8; 1 << 16];
+        while matches!(member_end.read(&mut drained), Ok(n) if n > 0) {}
+        assert_eq!(
+            take_save_point(&mut run, None),
+            Err(weaver_types::SavePointLeg::MemberDead)
+        );
+        let mut after = Vec::new();
+        let _ = member_end.read_to_end(&mut after);
+        assert!(
+            !String::from_utf8_lossy(&after).contains(r#"{"ask":{"snapshot""#),
+            "no snapshot is asked over lost distillates"
+        );
+    }
+
+    /// **A save point whose caller went away leaves the run standing** (the
+    /// operator's ruling of 2026-10-08 on #99, N4): admin's end closes
+    /// before the answer, so the answer is not delivered, and the dispatch
+    /// returns as a delivered one does, the run still entered and the save
+    /// point recorded, never an unwind. Perturbation: answer a failed send
+    /// with its fault again and the dispatch errs.
+    #[test]
+    fn a_save_point_whose_caller_went_away_leaves_the_run_standing() {
+        let (events, _, _, answer, still_entered) = enter_against_a_member_leaving(
+            None,
+            false,
+            EMPTY_RESTORED,
+            LeaveMode::SavePointAbandoned,
+        );
+        assert_eq!(answer, None, "nobody was there to take the answer");
+        assert!(still_entered, "the run stands");
+        assert!(
+            events.iter().any(|e| e["kind"] == "save_point"),
+            "the save point is recorded"
         );
     }
 

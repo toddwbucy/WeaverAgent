@@ -281,7 +281,7 @@ pub fn judge(bytes: &[u8]) -> Result<Judged, String> {
         .ok_or("no check line")?;
     let check_line = &rest[..second];
     let image = &rest[second + 1..];
-    let (stamp, length) = judge_stamp(header)?;
+    let (stamp, length, _) = judge_stamp(header)?;
     if image.len() as u64 != length {
         return Err(format!(
             "the image is {} bytes and the stamp says {length}",
@@ -310,9 +310,10 @@ pub fn judge(bytes: &[u8]) -> Result<Judged, String> {
 
 /// **Judge a stamp line alone**, per `weaver-state-Spec` section 3: the
 /// seven members, the version, the run and schema bounds, the nonce, and the
-/// image length the stamp states. Answers the stamp and that length; the
-/// check and the digest are the whole file's and `judge`'s.
-fn judge_stamp(header: &[u8]) -> Result<(Stamp, u64), String> {
+/// image length the stamp states. Answers the stamp, that length and the
+/// nonce's process and count; the check and the digest are the whole file's
+/// and `judge`'s.
+fn judge_stamp(header: &[u8]) -> Result<(Stamp, u64, Taken), String> {
     let stamp: serde_json::Value = serde_json::from_slice(header)
         .map_err(|e| format!("the stamp line does not parse: {e}"))?;
     let object = stamp.as_object().ok_or("the stamp line is not an object")?;
@@ -369,12 +370,14 @@ fn judge_stamp(header: &[u8]) -> Result<(Stamp, u64), String> {
     if taken.len() != 3 {
         return Err("the stamp's taken does not carry exactly three members".into());
     }
-    if taken.get("pid").and_then(|v| v.as_u64()).is_none() {
-        return Err("the stamp's taken names no pid".into());
-    }
-    if taken.get("ordinal").and_then(|v| v.as_u64()).is_none() {
-        return Err("the stamp's taken names no ordinal".into());
-    }
+    let pid = taken
+        .get("pid")
+        .and_then(|v| v.as_u64())
+        .ok_or("the stamp's taken names no pid")?;
+    let ordinal = taken
+        .get("ordinal")
+        .and_then(|v| v.as_u64())
+        .ok_or("the stamp's taken names no ordinal")?;
     let wall_ns = taken
         .get("wall_ns")
         .and_then(|v| v.as_str())
@@ -393,7 +396,19 @@ fn judge_stamp(header: &[u8]) -> Result<(Stamp, u64), String> {
             wall_ns,
         },
         length,
+        Taken { pid, ordinal },
     ))
+}
+
+/// **The member process that took a save point, and its own count**, the
+/// stamp's `taken.pid` and `taken.ordinal`: the count strictly increases
+/// within one member process, so it orders that process's save points
+/// whatever the clock or the covered position did (the operator's ruling of
+/// 2026-10-08 on #99, N3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Taken {
+    pid: u64,
+    ordinal: u64,
 }
 
 /// The published name, computable from the bytes alone, per
@@ -425,10 +440,18 @@ fn utc_stamp(seconds: i64) -> String {
 }
 
 /// Whether a name is the room's finished form, `<digest>.save-point` with a
-/// 64-hex digest: a part is dotted and refused here, and so is anything else.
+/// 64-character lowercase hex digest, the one form the member writes and the
+/// copy's digest comparison admits: a part is dotted and refused here, and
+/// so is anything else. **Lowercase only** (the #99 area 1 review, K2): an
+/// uppercase name passed the scan and failed at every copy, a deferral no
+/// later load could drain.
 pub fn is_finished_name(name: &str) -> bool {
-    name.strip_suffix(SUFFIX)
-        .is_some_and(|digest| digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()))
+    name.strip_suffix(SUFFIX).is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    })
 }
 
 // ------------------------------------------------------------- the manifest
@@ -678,6 +701,7 @@ struct RoomEntry {
     /// judgment holds the bytes to.
     digest: String,
     stamp: Stamp,
+    taken: Taken,
 }
 
 /// **Read the member's room through its own descriptor**, per
@@ -709,12 +733,13 @@ fn read_room(room: BorrowedFd<'_>, member_uid: u32) -> Result<Vec<RoomEntry>, Li
         // by a later verb after newer files, outranking them. One that reads
         // and is no save point is left in place and named, as it can never
         // publish.
-        if let Some(stamp) = scan_room_file(room, &name, member_uid)? {
+        if let Some((stamp, taken)) = scan_room_file(room, &name, member_uid)? {
             let digest = name.trim_end_matches(SUFFIX).to_string();
             found.push(RoomEntry {
                 name,
                 digest,
                 stamp,
+                taken,
             });
         }
     }
@@ -781,7 +806,7 @@ fn scan_room_file(
     dir: BorrowedFd<'_>,
     name: &str,
     member_uid: u32,
-) -> Result<Option<Stamp>, LifecycleRefusal> {
+) -> Result<Option<(Stamp, Taken)>, LifecycleRefusal> {
     use std::os::unix::fs::MetadataExt;
     let refuse = |why: String| {
         diag!("weaver-admin: the room's {name} {why}; nothing is published until it is cleared");
@@ -808,11 +833,20 @@ fn scan_room_file(
     let metadata = file
         .metadata()
         .map_err(|e| refuse(format!("does not stat ({e})")))?;
-    if !metadata.is_file() || metadata.uid() != member_uid {
-        diag!(
-            "weaver-admin: the room's {name} is not the member's regular file and is left in place"
-        );
+    if !metadata.is_file() {
+        diag!("weaver-admin: the room's {name} is not a regular file and is left in place");
         return Ok(None);
+    }
+    // **A finished file the member does not own refuses** (the #99 area 1
+    // review, K2): the room is the member's own `0700`, so a regular file
+    // under a finished name and another uid is a re-made account's or a
+    // planted one, and may be newer state; passed over silently, an older
+    // save point would load in its place.
+    if metadata.uid() != member_uid {
+        return Err(refuse(format!(
+            "is owned by uid {}, not the member's {member_uid}",
+            metadata.uid()
+        )));
     }
     if metadata.len() > SAVE_POINT_BOUND {
         return Err(refuse(format!(
@@ -831,8 +865,21 @@ fn scan_room_file(
         );
         return Ok(None);
     };
+    // **A save-point format this crate does not read refuses** (K2): a
+    // stamp line naming another version is a member newer than this admin,
+    // after a rollback of the install, and its file may be the newest
+    // state; left in place silently, an older save point would load.
+    if let Some(version) = serde_json::from_slice::<serde_json::Value>(&head[..end])
+        .ok()
+        .and_then(|stamp| stamp.get("weaver-save-point").and_then(|v| v.as_u64()))
+        && version != 1
+    {
+        return Err(refuse(format!(
+            "is save-point format {version}, which this admin does not read"
+        )));
+    }
     match judge_stamp(&head[..end]) {
-        Ok((stamp, _)) => Ok(Some(stamp)),
+        Ok((stamp, _, taken)) => Ok(Some((stamp, taken))),
         Err(why) => {
             diag!("weaver-admin: the room's {name} is not a save point ({why})");
             Ok(None)
@@ -1005,40 +1052,34 @@ fn publish_with(
     let mut appended = Vec::new();
     let mut entries = read_room(room, member_uid)?;
     (hooks.after_scan)();
-    // **Several entries publish recovered first, then reported, the
-    // stamp's sequence ordering within a kind** (Codex on #94, rounds 5 and
-    // 6, and at 88c1aaf), per Spec section 6: a reported save point was
-    // taken last by construction, so it is minted last; within a kind the
-    // stamp's `sequence`, the trace position the save point covers, orders
-    // them, the digest as the tiebreak between two of one position. The
-    // sequence only grows within one run, so the order holds whatever the
-    // clock does. No clock orders anything: an adjustment moving it back
-    // between two stranded save points would have minted the older above
-    // the newer.
+    // **Several entries publish recovered first, then reported, the member
+    // process's own count ordering within a kind** (Codex on #94, rounds 5
+    // and 6, and the operator's ruling of 2026-10-08 on #99, N3), per Spec
+    // section 6: a reported save point was taken last by construction, so
+    // it is minted last; within a kind the stamp's `taken.ordinal`, which
+    // strictly increases within one member process, orders them. Neither
+    // the clock nor the covered position orders anything: the clock can
+    // step back, and the covered position's run is the last landed event's,
+    // which changes within one agent run after a restore.
     let reported = |entry: &RoomEntry| {
         reports
             .iter()
             .any(|(report, _)| report.save_point == entry.digest)
     };
-    // **Recovered save points of more than one run refuse** (Codex on #94
-    // at 88c1aaf): run references are minted and carry no order, and no
-    // count the member keeps survives its restarts, so nothing can say
-    // which run's holdings are the later. The operator clears the room or
-    // names one with `restore`; until then nothing is published and a load
+    // **Save points of more than one member process refuse** (N3): the
+    // room holds one member process's files, since a load publishes it
+    // whole or refuses before a member stands, so a second process, or a
+    // count repeated within one, is a room this crate cannot order. The
+    // operator clears the room; until then nothing is published and a load
     // refuses rather than guess.
-    let recovered_runs: std::collections::BTreeSet<&str> = entries
-        .iter()
-        .filter(|entry| !reported(entry))
-        .map(|entry| entry.stamp.run.as_str())
-        .collect();
-    if recovered_runs.len() > 1 {
-        let names: Vec<&str> = entries
-            .iter()
-            .filter(|entry| !reported(entry))
-            .map(|entry| entry.name.as_str())
-            .collect();
+    let processes: std::collections::BTreeSet<u64> =
+        entries.iter().map(|entry| entry.taken.pid).collect();
+    let counts: std::collections::BTreeSet<Taken> =
+        entries.iter().map(|entry| entry.taken).collect();
+    if processes.len() > 1 || counts.len() != entries.len() {
+        let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
         diag!(
-            "weaver-admin: the room holds recovered save points of more than one run ({}), and nothing orders runs; nothing is published until the room is cleared or one is named with restore",
+            "weaver-admin: the room holds save points of more than one member process, or two of one count ({}), which nothing orders; nothing is published until the room is cleared",
             names.join(", ")
         );
         return Err(LifecycleRefusal::BoundaryUnverified);
@@ -1046,8 +1087,7 @@ fn publish_with(
     entries.sort_by(|a, b| {
         reported(a)
             .cmp(&reported(b))
-            .then_with(|| a.stamp.sequence.cmp(&b.stamp.sequence))
-            .then_with(|| a.digest.cmp(&b.digest))
+            .then_with(|| a.taken.ordinal.cmp(&b.taken.ordinal))
     });
     let remove_from_room = |name: &str| {
         let _ = nix::unistd::unlinkat(room, name, nix::unistd::UnlinkatFlags::NoRemoveDir);
@@ -1838,9 +1878,17 @@ pub(crate) mod tests {
     }
 
     /// **A marker that stands and does not read fails closed** (the custody
-    /// audit's G8): a torn marker is an error, never no marker; absent is
-    /// none. Perturbation: map the error back to `None` and the torn one
-    /// reads as absent.
+    /// audit's G8): every arm of `load_marker` that finds a marker it cannot
+    /// read is an error, never no marker and never another marker; absent
+    /// alone is none. Each damaged marker but the torn one would read as a
+    /// marker were its arm gone: the unknown state, the missing run and the
+    /// non-UTF-8 run are whole JSON, the link points at a sound marker, and
+    /// the marker past the bound is a sound one padded with whitespace.
+    /// Perturbations, one per arm: read the torn one as absent; read an
+    /// unknown state as absent; read an open that fails, the link's `ELOOP`
+    /// among them, as absent; read a missing run as the empty run; read the
+    /// bytes lossily as text; read past the bound as a closed marker. Each
+    /// fails the case it names.
     #[test]
     fn a_marker_that_does_not_read_is_an_error() {
         let scratch = crate::scratch::Scratch(
@@ -1849,8 +1897,47 @@ pub(crate) mod tests {
         let root = scratch.0.clone();
         std::fs::create_dir_all(&root).unwrap();
         assert_eq!(load_marker(&root), Ok(None), "absent is none");
-        std::fs::write(root.join(MARKER), "{\"run\":").unwrap();
-        assert!(load_marker(&root).is_err(), "a torn marker is an error");
+        let sound = br#"{"run":"r-1","state":"closed"}"#;
+        let mut past_bound = sound.to_vec();
+        past_bound.resize(MARKER_BOUND as usize + 1, b' ');
+        let mut not_text = br#"{"run":"r-"#.to_vec();
+        not_text.extend_from_slice(&[0xff, 0xfe]);
+        not_text.extend_from_slice(br#"","state":"open"}"#);
+        let cases: [(&str, Vec<u8>); 5] = [
+            ("a torn marker", br#"{"run":"#.to_vec()),
+            (
+                "an unknown state",
+                br#"{"run":"r-1","state":"bogus"}"#.to_vec(),
+            ),
+            ("a missing run", br#"{"state":"open"}"#.to_vec()),
+            ("bytes that are not UTF-8", not_text),
+            ("a marker past its bound", past_bound),
+        ];
+        for (what, bytes) in cases {
+            std::fs::write(root.join(MARKER), &bytes).unwrap();
+            assert!(
+                load_marker(&root).is_err(),
+                "{what}: expected an error, read {:?}",
+                load_marker(&root)
+            );
+        }
+        // A link at the marker's name, to a sound marker, is never followed.
+        std::fs::remove_file(root.join(MARKER)).unwrap();
+        std::fs::write(root.join("elsewhere"), sound).unwrap();
+        std::os::unix::fs::symlink(root.join("elsewhere"), root.join(MARKER)).unwrap();
+        assert!(
+            load_marker(&root).is_err(),
+            "a link is an error, read {:?}",
+            load_marker(&root)
+        );
+        // The sound marker itself reads, so each case above failed on its
+        // own arm.
+        std::fs::remove_file(root.join(MARKER)).unwrap();
+        std::fs::write(root.join(MARKER), sound).unwrap();
+        assert_eq!(
+            load_marker(&root),
+            Ok(Some(Marker::Closed { run: "r-1".into() }))
+        );
     }
 
     /// **A new manifest takes its owner and group explicitly** (Codex on
@@ -1858,8 +1945,14 @@ pub(crate) mod tests {
     /// group to the expected owner's, whatever the creating process's
     /// effective gid, before its mode and the directory's sync; a later line,
     /// the manifest standing, sets nothing. The chown is counted through the
-    /// seam, so the case needs no second group and never skips.
-    /// Perturbation: drop the call and the count reads zero.
+    /// seam, so that case needs no second group and never skips; the
+    /// production closure in `append_line` is then pinned against a
+    /// supplementary group of this test's user, which an unprivileged
+    /// process may `fchown` its own file to, so the manifest's group can
+    /// only be that group if the closure ran. A box whose test user holds
+    /// no second group skips that half, saying so. Perturbations: drop the
+    /// call and the count reads zero; make `append_line`'s closure do
+    /// nothing and the new manifest keeps the effective gid.
     #[test]
     fn a_new_manifest_takes_its_owner_and_group_explicitly() {
         let scratch = crate::scratch::Scratch(std::env::temp_dir().join(format!(
@@ -1904,6 +1997,36 @@ pub(crate) mod tests {
             "set once, at the creation, to the expected owner"
         );
         assert_eq!(read_manifest(dir_fd.as_fd(), mine).unwrap().len(), 2);
+        // The production closure: a group this user holds that is not its
+        // effective gid, which a new file would take without the chown.
+        let egid = nix::unistd::getegid();
+        let Some(other) = nix::unistd::getgroups()
+            .unwrap()
+            .into_iter()
+            .find(|group| *group != egid)
+        else {
+            eprintln!(
+                "skipped: this test's user holds no group beside its effective gid, so the production chown cannot be told from none"
+            );
+            return;
+        };
+        let grouped = dir.join("grouped");
+        std::fs::create_dir_all(&grouped).unwrap();
+        let grouped_fd = open_directory(&grouped).unwrap();
+        let theirs = Owner {
+            uid: mine.uid,
+            gid: other.as_raw(),
+        };
+        append_line(grouped_fd.as_fd(), theirs, &line).unwrap();
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(
+                std::fs::metadata(grouped.join(MANIFEST)).unwrap().gid(),
+                other.as_raw(),
+                "the new manifest takes the owner's group, not the effective gid"
+            );
+        }
+        assert_eq!(read_manifest(grouped_fd.as_fd(), theirs).unwrap().len(), 1);
     }
 
     /// **An adopted entry is judged, then made durable** (Codex on #94): an
@@ -2056,6 +2179,22 @@ pub(crate) mod tests {
         wall_ns: u64,
         image: &[u8],
     ) -> Vec<u8> {
+        // One member process whose count follows the covered position, as
+        // a member that took them in order would have.
+        save_point_taken(run, sequence, turn, wall_ns, image, 1, sequence)
+    }
+
+    /// A save point as `save_point` builds it, taken by member process `pid`
+    /// as its `ordinal`th.
+    pub(crate) fn save_point_taken(
+        run: &str,
+        sequence: u64,
+        turn: u64,
+        wall_ns: u64,
+        image: &[u8],
+        pid: u64,
+        ordinal: u64,
+    ) -> Vec<u8> {
         let header = serde_json::json!({
             "weaver-save-point": 1,
             "run": run,
@@ -2063,7 +2202,7 @@ pub(crate) mod tests {
             "turn": turn,
             "schema": "0".repeat(64),
             "image": image.len(),
-            "taken": {"pid": 1, "ordinal": 0, "wall_ns": wall_ns.to_string()},
+            "taken": {"pid": pid, "ordinal": ordinal, "wall_ns": wall_ns.to_string()},
         })
         .to_string();
         let mut hasher = sha2::Sha256::new();
@@ -2140,11 +2279,11 @@ pub(crate) mod tests {
     /// **Several room entries publish in the stamp's order**, per Spec
     /// section 6 (Codex on #94, round 5): an older file left unreported and
     /// a newer one reported in the same verb take their ordinals by kind and
-    /// sequence, so the newer is the latest the manifest names whatever
-    /// order the room lists them in. The newer's digest is chosen
-    /// to sort first, which is the order the room reader yields.
-    /// Perturbation: drop the sort in `publish` and the older file is
-    /// minted last and selected as latest.
+    /// then the member process's count, so the newer is the latest the
+    /// manifest names whatever order the room lists them in. The newer's
+    /// digest is chosen to sort first, which is the order the room reader
+    /// yields. Perturbation: drop the sort in `publish` and the older file
+    /// is minted last and selected as latest.
     #[test]
     fn several_room_entries_publish_in_the_stamps_order() {
         let scratch = crate::scratch::Scratch(
@@ -2259,15 +2398,79 @@ pub(crate) mod tests {
             .unwrap()
             .expect("a latest");
         assert_eq!(latest.line.digest, behind_digest);
+        // **The reported key orders ahead of the count** (the #99 area 1
+        // review): the reported save point is minted last even where its
+        // `taken.ordinal` is below a recovered one's, so "reported last" is
+        // pinned on its own and not through the count agreeing with it.
+        // Perturbation: sort by the count alone and the recovered one is
+        // minted last and selected latest.
+        let room = base.join("room-3");
+        let dir = base.join("decl-3");
+        std::fs::create_dir_all(&room).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_fd = open_directory(&dir).unwrap();
+        let counted_high =
+            save_point_taken("r-1", 9, 2, 9_000_000_000, b"recovered, count 9", 1, 9);
+        let counted_high_digest = judge(&counted_high).unwrap().digest;
+        let counted_low = save_point_taken("r-1", 4, 1, 4_000_000_000, b"reported, count 4", 1, 4);
+        let counted_low_digest = judge(&counted_low).unwrap().digest;
+        std::fs::write(
+            room.join(format!("{counted_high_digest}{SUFFIX}")),
+            &counted_high,
+        )
+        .unwrap();
+        std::fs::write(
+            room.join(format!("{counted_low_digest}{SUFFIX}")),
+            &counted_low,
+        )
+        .unwrap();
+        let report = weaver_types::SavePointReport {
+            save_point: counted_low_digest.clone(),
+            name: format!("{counted_low_digest}{SUFFIX}"),
+            run: weaver_types::RunId("r-1".into()),
+            sequence: 4,
+            turn: 1,
+            event_run: weaver_types::RunId("r-1".into()),
+            position: 4,
+        };
+        let lines = publish(
+            open_directory(&room).unwrap().as_fd(),
+            me,
+            dir_fd.as_fd(),
+            owner,
+            mine,
+            &[(report, Arrival::Leave)],
+        )
+        .unwrap();
+        let minted: Vec<(u64, &str, Arrival)> = lines
+            .iter()
+            .map(|line| (line.ordinal, line.digest.as_str(), line.arrived))
+            .collect();
+        assert_eq!(
+            minted,
+            vec![
+                (1, counted_high_digest.as_str(), Arrival::Recovered),
+                (2, counted_low_digest.as_str(), Arrival::Leave),
+            ],
+            "the reported one is last though its count is lower"
+        );
+        let latest = select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine)
+            .unwrap()
+            .expect("a latest");
+        assert_eq!(latest.line.digest, counted_low_digest);
     }
 
     /// **A FIFO in the room does not wedge the publication** (the custody
     /// audit's G1): the member makes a FIFO under a finished name; the
     /// publication opens it without blocking, refuses it as no regular file,
-    /// appends nothing and leaves it in place, answering at once. Run on a
-    /// thread with a bound, so a perturbed open fails the test rather than
-    /// hanging it. Perturbation: open without `O_NONBLOCK` and the thread
-    /// never answers.
+    /// appends nothing and leaves it in place, answering at once. The scan
+    /// refuses a FIFO it finds, so a second case has the member make the
+    /// FIFO after the scan, at a name the scan judged a sound save point:
+    /// the copy's own open must not block either, and the verb defers. Each
+    /// runs on a thread with a bound, so a perturbed open fails the test
+    /// rather than hanging it. Perturbations: open without `O_NONBLOCK` at
+    /// the scan and the first thread never answers; at the copy, and the
+    /// second never answers.
     #[test]
     fn a_fifo_in_the_room_does_not_wedge_the_publication() {
         let scratch = crate::scratch::Scratch(
@@ -2306,6 +2509,47 @@ pub(crate) mod tests {
             .expect("the publication answers, never blocked on the FIFO");
         assert_eq!(answered, Ok(0), "nothing appended");
         assert!(fifo.exists(), "the FIFO is left in place");
+        // The FIFO made after the scan, under a name it judged sound.
+        let room = base.join("room-swapped");
+        let dir = base.join("published-swapped");
+        std::fs::create_dir_all(&room).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let bytes = save_point("r-1", 1, 0, 1_000_000_000, b"swapped for a FIFO");
+        let swapped = room.join(format!("{}{SUFFIX}", judge(&bytes).unwrap().digest));
+        std::fs::write(&swapped, &bytes).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (room_path, dir_path, fifo) = (room.clone(), dir.clone(), swapped.clone());
+        std::thread::spawn(move || {
+            let room_fd = open_directory(&room_path).unwrap();
+            let dir_fd = open_directory(&dir_path).unwrap();
+            let answered = publish_with(
+                room_fd.as_fd(),
+                me,
+                dir_fd.as_fd(),
+                (mine.uid, mine.gid),
+                mine,
+                &[],
+                &mut PublishHooks {
+                    after_scan: &mut || {
+                        std::fs::remove_file(&fifo).unwrap();
+                        nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::from_bits_truncate(0o600))
+                            .unwrap();
+                    },
+                    available: &mut available_bytes,
+                    cap: PUBLISH_CAP,
+                },
+            )
+            .map(|(lines, deferred)| (lines.len(), deferred));
+            let _ = tx.send(answered);
+        });
+        let answered = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("the copy answers, never blocked on the FIFO made after the scan");
+        assert_eq!(answered, Ok((0, true)), "nothing appended, and deferred");
+        assert!(
+            swapped.exists(),
+            "the FIFO made after the scan is left in place"
+        );
     }
 
     /// **A listing that fails refuses the selection** (the custody audit's
@@ -2467,15 +2711,30 @@ pub(crate) mod tests {
         );
     }
 
-    /// **A copy is made only where the space stands free** (the custody
-    /// audit's G23): with the filesystem reading less free than a file and
-    /// the reserve, nothing is copied and every room file stays for the next
-    /// verb. Perturbation: drop the free-space look and the files publish.
+    /// **A copy is made only where the space stands free, and the first
+    /// file that does not fit stops the verb** (the custody audit's G23):
+    /// the older of two room files is the larger, and the filesystem reads
+    /// exactly enough free for the newer and the reserve, so the older does
+    /// not fit and the newer would; nothing is copied, the verb says it
+    /// deferred, and both stay for the next verb, since the newer published
+    /// past the older would let the older be minted above it later.
+    /// Perturbations: drop the free-space look and both publish; skip the
+    /// file that does not fit instead of stopping and the newer publishes.
     #[test]
     fn a_copy_is_made_only_where_the_space_stands_free() {
-        let (_scratch, room, dir, mine, names) = room_of_save_points("room-space", 2);
+        let (_scratch, room, dir, mine, _) = room_of_save_points("room-space", 0);
+        let older = save_point("r-1", 1, 0, 1_000_000_000, &[b'o'; 4096]);
+        let newer = save_point("r-1", 2, 0, 2_000_000_000, b"newer, smaller");
+        assert!(older.len() > newer.len());
+        let mut names = Vec::new();
+        for bytes in [&older, &newer] {
+            let name = format!("{}{SUFFIX}", judge(bytes).unwrap().digest);
+            std::fs::write(room.join(&name), bytes).unwrap();
+            names.push(name);
+        }
         let dir_fd = open_directory(&dir).unwrap();
-        let lines = publish_with(
+        let free = newer.len() as u64 + PUBLISH_RESERVE;
+        let (lines, deferred) = publish_with(
             open_directory(&room).unwrap().as_fd(),
             mine.uid,
             dir_fd.as_fd(),
@@ -2484,23 +2743,28 @@ pub(crate) mod tests {
             &[],
             &mut PublishHooks {
                 after_scan: &mut || {},
-                available: &mut |_| Ok(PUBLISH_RESERVE),
+                available: &mut |_| Ok(free),
                 cap: PUBLISH_CAP,
             },
         )
         .unwrap();
-        let (lines, deferred) = lines;
-        assert!(lines.is_empty(), "nothing copied");
+        assert!(
+            lines.is_empty(),
+            "nothing copied, the newer not past the older"
+        );
         assert!(deferred, "and the verb says so");
-        assert!(names.iter().all(|(name, _)| room.join(name).exists()));
+        assert!(names.iter().all(|name| room.join(name).exists()));
     }
 
     /// **A standing line whose target differs stops the publication** (Codex
     /// on #94 at 7a25db2): a crash between the line's append and the room
     /// copy's removal leaves the copy, and the target is later damaged; the
     /// room's copy may be the newest sound state, so the verb defers and
-    /// the copy stays. Perturbation: skip the entry again and nothing is
-    /// deferred.
+    /// the copy stays, and every later save point is left with it: a newer
+    /// room file taken after it stays in the room and no line is appended.
+    /// Perturbations: skip the entry, the deferral dropped, and nothing is
+    /// deferred; skip it with the deferral kept and the newer file is
+    /// published past it.
     #[test]
     fn a_standing_line_whose_target_differs_defers() {
         let scratch = crate::scratch::Scratch(std::env::temp_dir().join(format!(
@@ -2535,31 +2799,48 @@ pub(crate) mod tests {
         };
         let (lines, _) = publish_now();
         assert_eq!(lines.len(), 1);
-        // The crash left the room's copy, and the target is damaged.
+        // The crash left the room's copy, and the target is damaged; a newer
+        // save point, taken after it, waits in the room beside it.
         std::fs::write(room.join(&room_name), &bytes).unwrap();
         std::fs::write(
             dir.join(&lines[0].name),
             save_point("r-1", 4, 1, 1_000_000_000, b"damaged"),
         )
         .unwrap();
+        let later = save_point("r-1", 5, 1, 2_000_000_000, b"taken after the standing one");
+        let later_name = format!("{}{SUFFIX}", judge(&later).unwrap().digest);
+        std::fs::write(room.join(&later_name), &later).unwrap();
         let (appended, deferred) = publish_now();
-        assert!(appended.is_empty());
+        assert!(appended.is_empty(), "nothing published past it");
         assert!(deferred, "the verb defers, so a load refuses");
         assert!(room.join(&room_name).exists(), "the room's copy stays");
+        assert!(room.join(&later_name).exists(), "the newer file is left");
+        assert_eq!(
+            read_manifest(dir_fd.as_fd(), mine).unwrap().len(),
+            1,
+            "no line appended"
+        );
     }
 
-    /// **Recovered save points order by sequence, never by the clock, and
-    /// those of two runs refuse** (Codex on #94 at 88c1aaf): two files of one
-    /// run, the clock stepped back between them, publish in sequence order
-    /// and the later is the latest; files of two runs, which nothing orders,
-    /// refuse the publication and stay in the room. Perturbation: order by
-    /// `taken.wall_ns` again and the earlier is minted last.
+    /// **Recovered save points order by the member process's own count, and
+    /// those of two processes refuse** (the operator's ruling of 2026-10-08
+    /// on #99, N3): one process's two files, the second taken after a
+    /// restore's first distillate landed so that its covered run changed
+    /// and its sequence fell, and the clock stepped back between them,
+    /// publish in count order, the later the latest; files of two member
+    /// processes, or two of one count, refuse and stay in the room. A
+    /// reported file counts as any other: a recovered file of one process
+    /// beside a reported one of another refuses too, the process set being
+    /// built from every entry. Perturbations: order by the covered sequence
+    /// and the earlier is minted last; key the refusal on the covered run
+    /// and the first room refuses; drop the process refusal and the second
+    /// room publishes; build the process set from the recovered files alone
+    /// and the reported room publishes.
     #[test]
-    fn recovered_save_points_order_by_sequence_and_two_runs_refuse() {
-        let scratch = crate::scratch::Scratch(std::env::temp_dir().join(format!(
-            "weaver-admin-sequence-order-{}",
-            std::process::id()
-        )));
+    fn recovered_save_points_order_by_the_members_count_and_two_processes_refuse() {
+        let scratch = crate::scratch::Scratch(
+            std::env::temp_dir().join(format!("weaver-admin-count-order-{}", std::process::id())),
+        );
         let base = scratch.0.clone();
         let me = nix::unistd::getuid().as_raw();
         let mine = Owner {
@@ -2579,20 +2860,23 @@ pub(crate) mod tests {
             }
             (room, dir, digests)
         };
-        // The earlier position carries the later clock.
-        let earlier = save_point("r-1", 3, 1, 9_000_000_000, b"earlier, clock ahead");
-        let later = save_point("r-1", 8, 2, 1_000_000_000, b"later, clock behind");
-        let (room, dir, digests) = room_of("one-run", &[earlier, later]);
+        let publish_room = |room: &std::path::Path, dir_fd: BorrowedFd<'_>| {
+            publish(
+                open_directory(room).unwrap().as_fd(),
+                me,
+                dir_fd,
+                (mine.uid, mine.gid),
+                mine,
+                &[],
+            )
+        };
+        // Taken first: the restored prior run's position, a late clock.
+        let earlier = save_point_taken("r-old", 900, 4, 9_000_000_000, b"earlier", 77, 0);
+        // Taken second: the new run's first position, an early clock.
+        let later = save_point_taken("r-new", 3, 1, 1_000_000_000, b"later", 77, 1);
+        let (room, dir, digests) = room_of("one-process", &[earlier, later]);
         let dir_fd = open_directory(&dir).unwrap();
-        let lines = publish(
-            open_directory(&room).unwrap().as_fd(),
-            me,
-            dir_fd.as_fd(),
-            (mine.uid, mine.gid),
-            mine,
-            &[],
-        )
-        .unwrap();
+        let lines = publish_room(&room, dir_fd.as_fd()).expect("one process publishes");
         let minted: Vec<&str> = lines.iter().map(|line| line.digest.as_str()).collect();
         assert_eq!(minted, [digests[0].as_str(), digests[1].as_str()]);
         let latest = select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine)
@@ -2600,13 +2884,35 @@ pub(crate) mod tests {
             .expect("a latest");
         assert_eq!(
             latest.line.digest, digests[1],
-            "the later position is the latest"
+            "the later taken is the latest"
         );
-        // Two runs' recovered files: nothing orders them.
-        let one = save_point("r-1", 5, 1, 1_000_000_000, b"run one");
-        let two = save_point("r-2", 2, 1, 2_000_000_000, b"run two");
-        let (room, dir, digests) = room_of("two-runs", &[one, two]);
+        // Two member processes: nothing orders them.
+        let one = save_point_taken("r-1", 5, 1, 1_000_000_000, b"process one", 77, 0);
+        let two = save_point_taken("r-1", 6, 1, 2_000_000_000, b"process two", 78, 0);
+        let (room, dir, digests) = room_of("two-processes", &[one, two]);
         let dir_fd = open_directory(&dir).unwrap();
+        assert_eq!(
+            publish_room(&room, dir_fd.as_fd()).err(),
+            Some(LifecycleRefusal::BoundaryUnverified)
+        );
+        for digest in &digests {
+            assert!(room.join(format!("{digest}{SUFFIX}")).exists());
+        }
+        // A recovered file of one process and a reported file of another:
+        // the report does not exempt its file from the process count.
+        let recovered = save_point_taken("r-1", 5, 1, 1_000_000_000, b"recovered, 77", 77, 0);
+        let reported = save_point_taken("r-1", 6, 1, 2_000_000_000, b"reported, 78", 78, 0);
+        let (room, dir, digests) = room_of("reported-other-process", &[recovered, reported]);
+        let dir_fd = open_directory(&dir).unwrap();
+        let report = weaver_types::SavePointReport {
+            save_point: digests[1].clone(),
+            name: format!("{}{SUFFIX}", digests[1]),
+            run: weaver_types::RunId("r-1".into()),
+            sequence: 6,
+            turn: 1,
+            event_run: weaver_types::RunId("r-1".into()),
+            position: 6,
+        };
         assert_eq!(
             publish(
                 open_directory(&room).unwrap().as_fd(),
@@ -2614,14 +2920,91 @@ pub(crate) mod tests {
                 dir_fd.as_fd(),
                 (mine.uid, mine.gid),
                 mine,
-                &[],
+                &[(report, Arrival::Leave)],
             )
             .err(),
-            Some(LifecycleRefusal::BoundaryUnverified)
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a reported file of another process refuses"
         );
         for digest in &digests {
             assert!(room.join(format!("{digest}{SUFFIX}")).exists());
         }
+        // One process, one count twice: a reused pid, unorderable.
+        let first = save_point_taken("r-1", 5, 1, 1_000_000_000, b"count once", 77, 4);
+        let again = save_point_taken("r-1", 6, 1, 2_000_000_000, b"count again", 77, 4);
+        let (room, dir, _) = room_of("one-count-twice", &[first, again]);
+        let dir_fd = open_directory(&dir).unwrap();
+        assert_eq!(
+            publish_room(&room, dir_fd.as_fd()).err(),
+            Some(LifecycleRefusal::BoundaryUnverified)
+        );
+    }
+
+    /// **The scan and the copy agree on what a room file is** (the #99 area
+    /// 1 review, K2): an uppercase-hex name is no finished name, ignored at
+    /// the scan and never a deferral; a sound file another uid owns, and a
+    /// save-point format this admin does not read, refuse rather than being
+    /// passed over while an older save point loads. Perturbations: admit
+    /// uppercase hex and the first room defers; leave another uid's file in
+    /// place and the second publishes nothing silently; drop the format look
+    /// and the third is passed over.
+    #[test]
+    fn the_scan_ignores_no_finished_name_and_refuses_what_may_be_newer() {
+        let scratch = crate::scratch::Scratch(
+            std::env::temp_dir().join(format!("weaver-admin-scan-verdicts-{}", std::process::id())),
+        );
+        let base = scratch.0.clone();
+        let me = nix::unistd::getuid().as_raw();
+        let mine = Owner {
+            uid: me,
+            gid: nix::unistd::getgid().as_raw(),
+        };
+        let room_with = |tag: &str, name: &str, bytes: &[u8]| {
+            let room = base.join(format!("room-{tag}"));
+            let dir = base.join(format!("published-{tag}"));
+            std::fs::create_dir_all(&room).unwrap();
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(room.join(name), bytes).unwrap();
+            (room, dir)
+        };
+        let publish_as = |room: &std::path::Path, dir: &std::path::Path, member: u32| {
+            let dir_fd = open_directory(dir).unwrap();
+            publish_noting_deferral(
+                open_directory(room).unwrap().as_fd(),
+                member,
+                dir_fd.as_fd(),
+                (mine.uid, mine.gid),
+                mine,
+                &[],
+            )
+        };
+        let bytes = save_point("r-1", 1, 0, 1_000_000_000, b"sound");
+        let digest = judge(&bytes).unwrap().digest;
+        // Uppercase: no finished name, so nothing is published or deferred.
+        let upper = format!("{}{SUFFIX}", digest.to_uppercase());
+        let (room, dir) = room_with("upper", &upper, &bytes);
+        let (lines, deferred) = publish_as(&room, &dir, me).unwrap();
+        assert!(lines.is_empty() && !deferred, "ignored, never deferred");
+        assert!(room.join(&upper).exists());
+        // Another uid's sound file: may be newer state, so it refuses.
+        let lower = format!("{digest}{SUFFIX}");
+        let (room, dir) = room_with("other-uid", &lower, &bytes);
+        assert_eq!(
+            publish_as(&room, &dir, me.wrapping_add(1)).err(),
+            Some(LifecycleRefusal::BoundaryUnverified)
+        );
+        // A format this admin does not read: refuses.
+        let newer = String::from_utf8(bytes.clone()).unwrap().replacen(
+            "\"weaver-save-point\":1",
+            "\"weaver-save-point\":2",
+            1,
+        );
+        assert!(newer.contains("\"weaver-save-point\":2"));
+        let (room, dir) = room_with("newer-format", &lower, newer.as_bytes());
+        assert_eq!(
+            publish_as(&room, &dir, me).err(),
+            Some(LifecycleRefusal::BoundaryUnverified)
+        );
     }
 
     /// **The save point's bound is one gibibyte in both readers** (the
@@ -2675,15 +3058,21 @@ pub(crate) mod tests {
     }
 
     /// **The room is copied one file at a time, from bytes judged in the same
-    /// read** (Codex on #94): three finished files in the room publish, each
-    /// read and judged again at its own copy, the scan having kept none of
-    /// their bytes (`RoomEntry` holds a name and a judgment, so it cannot);
-    /// and a file the member replaced between the scan and its copy, its
-    /// name kept and its bytes another save point's, is refused at the
-    /// re-judgment and left in place while the others publish.
-    /// Perturbation: copy without judging again, trusting the scan's
-    /// verdict, and the replaced bytes are published under the name the
-    /// scan judged.
+    /// read** (Codex on #94): each file is read and judged again at its own
+    /// copy, the scan having kept none of its bytes (`RoomEntry` holds a
+    /// name and a judgment, so it cannot). The oldest of three, replaced by
+    /// the member between the scan and its copy, its name kept and its
+    /// bytes another save point's, is refused at the re-judgment, and the
+    /// verb stops there: nothing is published, the verb defers, and all
+    /// three stay in the room. Two layers refuse it, deliberately: the
+    /// re-judgment's name check in `judge_room_file`, and `publish_with`'s
+    /// comparison of the judged digest with the scan's. The scan's digest is
+    /// the name's, so while the name check stands the comparison cannot fire
+    /// and no room reaches it alone; it is a defence kept beside the check.
+    /// The name check is pinned on its own by judging the replaced file
+    /// directly. Perturbations: drop the name check and the direct judgment
+    /// answers the replaced bytes; drop both and the replaced bytes publish
+    /// under the name the scan judged.
     #[test]
     fn the_room_is_copied_from_bytes_judged_in_the_same_read() {
         let scratch = crate::scratch::Scratch(std::env::temp_dir().join(format!(
@@ -2750,6 +3139,17 @@ pub(crate) mod tests {
         for (name, _) in &names {
             assert!(room.join(name).exists(), "{name} is left in the room");
         }
+        // The name check on its own: the replaced file, judged directly, is
+        // no save point under its name, and an untouched one judges sound.
+        let room_fd = open_directory(&room).unwrap();
+        assert!(
+            judge_room_file(room_fd.as_fd(), &names[0].0, me).is_none(),
+            "bytes that are not the name's are refused at the re-judgment"
+        );
+        assert_eq!(
+            judge_room_file(room_fd.as_fd(), &names[1].0, me).map(|(_, judged)| judged.digest),
+            Some(names[1].1.clone())
+        );
     }
 
     /// **A publication interrupted after the rename is adopted at the next
@@ -2916,9 +3316,13 @@ pub(crate) mod tests {
     /// an older one loads only by name, the ordinal is one past the highest line standing
     /// even when that line's file is gone, a file no line names is not
     /// loadable by name, and a manifest that does not parse refuses
-    /// `BoundaryUnverified`. Perturbations: drop the digest comparison in
-    /// `open_published` and the altered file is selected; mint the ordinal
-    /// from the files standing and it repeats.
+    /// `BoundaryUnverified`. The checks behind "differs" are pinned each on
+    /// its own at the end: a line naming a sound file by its published name
+    /// and carrying another's digest refuses, and a manifest of ordinals 1
+    /// and 5 mints 6. Perturbations: drop the digest comparison in
+    /// `open_published` and the line of another's digest selects its file;
+    /// mint the ordinal from the count of lines and the gapped manifest
+    /// mints 3.
     #[test]
     fn the_latest_is_read_from_the_manifest_and_a_file_it_does_not_name_is_not_loadable() {
         let scratch = crate::scratch::Scratch(
@@ -3245,6 +3649,83 @@ pub(crate) mod tests {
                 .unwrap()
                 .is_none(),
             "nothing at all is the first load"
+        );
+        // **A line whose digest is not its file's refuses** (the #99 area 1
+        // review), apart from the name check: the line names a sound file
+        // by the published name its bytes compute, so `open_judged` passes
+        // it, and carries another save point's digest.
+        let sound = save_point("r-1", 1, 0, 1_000_000_000, b"sound");
+        let sound_judged = judge(&sound).unwrap();
+        let sound_name = published_name(&sound_judged);
+        std::fs::write(dir.join(&sound_name), &sound).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                dir.join(&sound_name),
+                std::fs::Permissions::from_mode(0o640),
+            )
+            .unwrap();
+        }
+        let elsewhere = judge(&save_point("r-1", 2, 0, 2_000_000_000, b"elsewhere"))
+            .unwrap()
+            .digest;
+        append_line(
+            dir_fd.as_fd(),
+            mine,
+            &ManifestLine {
+                ordinal: 1,
+                digest: elsewhere,
+                name: sound_name.clone(),
+                stamp: sound_judged.stamp.clone(),
+                position: None,
+                arrived: Arrival::Leave,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a file of its name and not its line's digest refuses"
+        );
+        // **The ordinal is one past the highest line, not the count of
+        // lines**: lines 1 and 5 stand, and the next publication mints 6.
+        std::fs::remove_file(dir.join(MANIFEST)).unwrap();
+        for ordinal in [1, 5] {
+            append_line(
+                dir_fd.as_fd(),
+                mine,
+                &ManifestLine {
+                    ordinal,
+                    ..lines[0].clone()
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            next_ordinal(&read_manifest(dir_fd.as_fd(), mine).unwrap()),
+            6
+        );
+        let room = dir.join("room");
+        std::fs::create_dir(&room).unwrap();
+        let next = save_point("r-1", 6, 0, 6_000_000_000, b"next");
+        std::fs::write(
+            room.join(format!("{}{SUFFIX}", judge(&next).unwrap().digest)),
+            &next,
+        )
+        .unwrap();
+        let appended = publish(
+            open_directory(&room).unwrap().as_fd(),
+            me,
+            dir_fd.as_fd(),
+            (mine.uid, mine.gid),
+            mine,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            appended.iter().map(|line| line.ordinal).collect::<Vec<_>>(),
+            [6],
+            "minted one past the highest line"
         );
     }
 

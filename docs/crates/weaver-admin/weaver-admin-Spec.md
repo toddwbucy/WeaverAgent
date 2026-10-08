@@ -667,8 +667,12 @@ invocation lock is held: past the harness's 120 seconds for the save point's ans
 and its two-second legs (the operator's ruling of 2026-10-08 on #1, `weaver-harness-Spec`
 section 6), so admin never abandons a save point the harness still awaits. The
 observation and both dials spend it, so `unload` holds the invocation lock at most those
-150 seconds and the escalation's forty-five, 195 in all, the number a caller builds
-against beside `show`'s short wait for the lock. A worker
+150 seconds and the escalation's forty-five, 195 in all, **before the publication that
+follows `Left`** (the #99 area 1 review): copying the leave's save point and any recovered
+file the room holds, at most section 6's 32 of up to a gibibyte each, is bounded by that
+cap and the copy's own speed and not by time, so a caller builds against 195 seconds plus
+the copy of what the room holds, never against 195 seconds alone, beside `show`'s short
+wait for the lock. A worker
 that accepts leave and answers nothing inside it is a worker that would not exit: the
 verb goes to the escalation below without the aggregate, answers
 provisioned-and-unloaded once the lock is free, the run having ended with no leave
@@ -773,9 +777,10 @@ to: axiom-harness-integrates-by-the-loop
 **Rollback is the reap plus one directive, as data.** What a failed load can leave is a
 running worker, a connected sink, and a device the SPU took, per charter section 5, and
 the rollback walks what stands: direct a forced leave where a run was entered, a run
-being undone keeping no save point (the #94 survey's S10), and where that run does not
-answer `Left` leave the marker open on it rather than restore the one found, since the
-trace holds its `load` and no `unload` and the next load must record the reset; end every
+being undone keeping no save point (the #94 survey's S10), and, unless the leave answers
+`OutOfOrder` (no run entered), leave the marker open on that run rather than restore the
+one found, since the trace holds its `load` and the next load must record the reset
+(section 4); end every
 constituent the start step started by the escalation above, which never signals this
 invocation, then close the invocation's own copy of the run lock's description, which
 frees the lock, and close the sink where one opened.
@@ -975,9 +980,14 @@ reset the marker could not say. **The marker is this crate's, and it is written 
 once a run stands**,
 on the operator's rulings of 2026-10-06 on #1 (the A3.0 items) (item 5): at every load, after the enter answers `Ready`, this crate
 writes, in the agent's config root under its own custody, a marker naming the run it
-minted as open, and a clean unload marks that run closed; a load that fails at any later
-step restores the marker's prior state in its rollback, and a load that never authored
-`load` never opened a run and leaves the marker as it found it. A load that finds a
+minted as open, and a clean unload marks that run closed. **A load that rolls back after
+its `load` event is on the trace leaves the marker open on that run** (the operator's
+ruling of 2026-10-08 on #99), whether or not this crate read its `Ready`: an enter refused
+after `load`, or a `Ready` past the load bound, authored `load` all the same, so the next
+load records the reset. The rollback's forced leave says which it was: `OutOfOrder` is a
+harness never entered, so no `load` is on the trace and the marker stays as it was found;
+`Left`, or no answer, is a run that may have authored `load`, and the marker names it, a
+conservative reset rather than a false clean one. A load that finds a
 marker naming a run still open resolves the enter's `reset`, which rides apart from the
 lineage and whether or not a save point stands, to that run with `NoCleanUnload`, or
 with `ForcedUnload` where `force-unload` closed that run without its save point, per
@@ -1660,7 +1670,13 @@ S3), answering a deferral, so every file published is older than every file left
 the next verb and the highest ordinal stays the last taken. A room file that does not
 open, stat or read at the scan refuses the verb `BoundaryUnverified` naming it, left out
 of the order it would be published later above newer files; one that reads and is no
-save point is left in place and named, as it can never publish. **A `save-point` whose
+save point is left in place and named, as it can never publish. **What may be newer
+state refuses, never passed over** (the #99 area 1 review): a regular file under a
+finished name that another uid owns, the room being the member's own, and a stamp line
+naming a save-point format this crate does not read, each refuse the verb
+`BoundaryUnverified` naming the file. A finished name is 64 lowercase hex characters and
+the suffix, the one form the member writes, so an uppercase name is no finished name
+and is ignored, never deferred. **A `save-point` whose
 save point does not publish refuses `SavePointNotTaken` naming the publication** (the
 #94 survey's S12), as the unload names it, the run still open. **The publication reads
 no declaration** (the #94 survey's S8): the member's uid is the account database's by its
@@ -1693,19 +1709,24 @@ appended; a target of other bytes is left with the copy, then the last sound cop
 in the log, and stops the verb as a deferral (Codex on #94 at 7a25db2), there being no
 skip: the copy may be the newest sound state, so a load refuses until the target is
 repaired or cleared. **Several entries published by
-one verb are ordered recovered first, then reported, and by the stamp's `sequence`
-within a kind**, the trace position each covers, with the digest as the tiebreak
-between two of one position, before any ordinal is minted (Codex on #94 at 88c1aaf): a
-reported save point was taken last by construction and is minted last; within one run
-the sequence only grows, so the order holds whatever the clock does. No clock orders
-anything, `taken.wall_ns` naming a file and never ranking it: an adjustment moving the
-clock back between two stranded save points would otherwise mint the older above the
-newer. **Recovered save points of more than one run refuse** `BoundaryUnverified`,
-naming them, and nothing is published: run references carry no order and the member's
-own count, `taken.ordinal`, restarts with its process, so nothing says which run's
-holdings are the later. The operator clears the room or names one with `restore`, and
+one verb are ordered recovered first, then reported, and by the member process's own
+count within a kind**, the stamp's `taken.ordinal`, which strictly increases within one
+member process, before any ordinal is minted (the operator's ruling of 2026-10-08 on
+#99): a reported save point was taken last by construction and is minted last. Neither
+the clock nor the covered position orders anything, `taken.wall_ns` naming a file and
+never ranking it: the clock can step back between two stranded save points, and the
+covered position's run is the run of the last landed event, which changes within one
+agent run after a restore once its first distillate lands. **Save points of more than
+one member process refuse** `BoundaryUnverified`, naming them, and nothing is published,
+as do two of one process carrying one count (a reused process id): the room holds one
+member process's files, since a load publishes it whole or refuses before a member
+stands, so a second process is a room nothing orders. The operator clears the room, and
 until then a load refuses as on any deferral. So the latest the manifest names is the
-last taken and never a recovered older file the listing happened to yield later. **Each publication appends one
+last taken and never a recovered older file the listing happened to yield later. **A
+save point the `restore` verb names that no line names enters with the next, highest
+ordinal**, as section 4 says, so every later load continues from it until a newer save
+point is published: that is intended, a restore meaning "continue from here" (the
+operator's ruling of 2026-10-08 on #99). **Each publication appends one
 line to the manifest**, `save-points.manifest` in the territory's `save-points/`, a file
 this crate creates root-owned and mode `0644` and opens for reading and appending, never
 rewriting a line, a torn tail alone truncated as below: one JSON object per line carrying `ordinal`, a monotonic integer minted under the
@@ -1749,8 +1770,9 @@ an operator wrote is read whole into this crate's memory past that bound. **The
 manifest is the record of what is loadable, and the latest is read from it**: the
 highest ordinal, whose file must stand under its name and digest to the line's digest or
 the load refuses, per section 4, and a file no line names is not loadable. The directory is root's, read by the access group,
-so a save point on demand is readable by the operator at once, and a live restore of
-one the member still holds reads the member's own room with no part of this crate. **The verbs
+so a save point on demand is readable by the operator at once; a save point reaches the
+member's holdings only at a load, through the descriptor this crate hands it, the live
+`restore` ask being retired (the operator's ruling of 2026-10-08 on #99). **The verbs
 `save-point`, `restore` and `force-unload` are the operator contract's**, per section 2,
 and the publication itself carries nothing across it.
 

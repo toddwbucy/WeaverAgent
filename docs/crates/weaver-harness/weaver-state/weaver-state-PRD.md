@@ -374,10 +374,11 @@ save point and the live context share is the loop's choice through the same two 
 later. A save point that needs a different system prompt cannot be served by a flush:
 it needs the SPU session closed and reopened with the new prefix, one prefix recompute
 with the weights resident, never a model reload. The trace records the restore, by
-digest, and the flush. **The harness triggers a live restore**, on the operator's ruling
-of 2026-10-02 on #58, through the `restore` ask of `weaver-harness-state-contract`
-section 2, and flushes on its answer. The channel that carries the operator's demand to
-the loop is later work.
+digest, and the flush. **The live restore is A5's**, with the decode seam's `Reopen`,
+under the operator's ruling of 2026-10-06 on #1 that a restore is a reload of state: the
+`restore` ask that once carried it on `weaver-harness-state-contract` is retired on the
+operator's ruling of 2026-10-08 on #99, and until A5 lands a restore happens only at a
+load, through the descriptor below.
 
 **A save point named at a restore is an input, not derived state.** There is no
 operator-supplied save point, on the operator's ruling of 2026-10-06 on #1 (A3.0 item
@@ -432,9 +433,7 @@ one it restores reaches it as the descriptor below, never by a path. **A load
 restores through a descriptor**: admin, as root, opens the chosen save point in
 `save-points/`, the latest by admin's manifest or the one `restore` names, one
 named at a restore included, and hands the member the open descriptor at spawn, exactly as it opens the
-trace sink and hands it down, and for the same reasons. **A live restore reads the
-member's own room**, the save point the member itself wrote and still holds, with no
-admin. A save point that is only in `save-points/` restores at a load. The member sees
+trace sink and hands it down, and for the same reasons. The member sees
 its own room and a descriptor and never a path into `save-points/`, and the agent never
 reaches either.
 

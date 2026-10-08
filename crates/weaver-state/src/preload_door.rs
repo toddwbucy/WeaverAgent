@@ -787,15 +787,6 @@ impl Member {
         );
         answer
     }
-    /// The live `restore` ask, naming a save point in the member's room.
-    fn ask_restore(&mut self, name: &str) -> String {
-        self.send(&format!(
-            "{}\n",
-            json!({"ask":{"restore":{"save-point":name}}})
-        ));
-        self.receive(WAIT)
-            .unwrap_or_else(|| panic!("missing restore answer: {}", self.log()))
-    }
     /// The holdings as rows, table by table: a `snapshot` ask writes the
     /// member's save point into its room, and the image is read back here
     /// through the engine's own deserialize into a fresh connection. The
@@ -1374,8 +1365,7 @@ fn rebuild_plan(lines: &[String]) -> Vec<String> {
 /// 2026-10-02 on #1 and #58, and the contract's section 8. A live member
 /// lands a recorded run part way and takes a save point; a second member is
 /// handed that save point at its spawn and answers `restored` with its stamp;
-/// a live restore of the same save point on the first member holds what the
-/// second held at its restore; the second then lands the next run, whose
+/// the second then lands the next run, whose
 /// `load` names the lineage and a reset of the prior run; and a third member
 /// rebuilds the whole record through the preload door, honouring the reset,
 /// to the same holdings, ask for ask and table by table, the typed tables
@@ -1498,20 +1488,6 @@ fn a_reloaded_store_equals_a_full_replay() {
         json!({"digest": taken.digest, "run": taken.run, "sequence": taken.sequence, "turn": taken.turn}),
         "the restored ask answers the stamp the load restored"
     );
-    let at_restore = restored.tables();
-
-    // A live restore of the same save point on the first member holds the
-    // same, its tail gone.
-    let back = stamp_of(&live.ask_restore(&taken.name), "restore");
-    assert_eq!(
-        (&back.run, back.sequence, back.turn, &back.digest),
-        (&taken.run, taken.sequence, taken.turn, &taken.digest)
-    );
-    assert_eq!(
-        live.tables(),
-        at_restore,
-        "a live restore holds what the load restored"
-    );
 
     // The next run's load names the lineage and the reset of the prior run.
     let mut next: Vec<String> = lines[r_two..].to_vec();
@@ -1568,16 +1544,19 @@ fn a_reloaded_store_equals_a_full_replay() {
 /// under another schema is refused on `restored`**, per `weaver-state-Spec`
 /// sections 3 and 5: at a load, a save point taken under a schema the
 /// member does not stand answers `refused` naming the mismatch and the
-/// member stands empty; at a live restore, a save point truncated part way
-/// and one with a byte flipped each go unanswered and leave the holdings
-/// standing, and so does a name that is not a plain entry of the room. A
-/// torn save point handed at the spawn refuses the member's start, the
-/// bytes being admin's to judge at the inventory and a disagreement here a
-/// load that did not finish standing.
+/// member stands empty. A save point truncated part way and one with a byte
+/// flipped, each handed at the spawn, refuse the member's start, the bytes
+/// being admin's to judge at the inventory and a disagreement here a load
+/// that did not finish standing. A save point taken under another election
+/// restores at the load with this load's election standing on it. The live
+/// `restore` ask that once read the room by name is retired (the operator's
+/// ruling of 2026-10-08 on #99): a restore is a reload, made only here.
 ///
 /// Perturbations: skip the schema comparison in `adopt_judged` and the
 /// foreign save point restores, the first assertion failing; skip the check
-/// in `SavePoint::parse` and the flipped file restores, the holdings moving.
+/// in `SavePoint::parse` and the flipped file starts the member; drop the
+/// election from both `adopt_judged` and the opener's `index_election` and
+/// the elected index is gone from the restored holdings.
 #[test]
 #[ignore = "needs the preload credential; run inside a user namespace by the watch below"]
 fn a_damaged_or_foreign_save_point_never_reaches_the_holdings() {
@@ -1730,76 +1709,16 @@ fn a_damaged_or_foreign_save_point_never_reaches_the_holdings() {
         "a stamp that lies about its position is refused"
     );
 
-    // A live restore of a damaged save point leaves the holdings standing.
+    // A sound save point of this member's, and two damaged copies of it.
     member.feed(&lines[..record.cut]);
     let taken = stamp_of(&member.snapshot(), "snapshot");
-    let before = member.tables();
     let sound = std::fs::read(member.directory.0.join(&taken.name)).unwrap();
     let mut flipped = sound.clone();
     let last = flipped.len() - 1;
     flipped[last] ^= 0x01;
-    std::fs::write(member.directory.0.join("flipped"), &flipped).unwrap();
-    std::fs::write(member.directory.0.join("torn"), &sound[..sound.len() / 2]).unwrap();
-    for name in ["flipped", "torn", "../flipped", ".part-x", "absent"] {
-        member.send(&format!(
-            "{}\n",
-            json!({"ask":{"restore":{"save-point":name}}})
-        ));
-        assert!(
-            member.receive(Duration::from_millis(250)).is_none(),
-            "{name} restored: {}",
-            member.log()
-        );
-    }
-    // A save point whose prefix would put the restore answer past the
-    // ceiling answers nothing and moves nothing, per the one rule: the
-    // frame is built and sized on the scratch copy before the swap.
-    // Perturbation: build the frame after the swap and the holdings move.
-    let oversized = {
-        let mut store = Sqlite::stand().expect("stands");
-        let text = "x".repeat(1_100_000);
-        store
-            .land(&weaver_state::Distillate {
-                session: SESSION.into(),
-                run: "r-wide".into(),
-                turn: None,
-                kind: "message.system".into(),
-                sequence: 0,
-                pairs: vec![
-                    ("role".into(), "\"system\"".into()),
-                    (
-                        "content".into(),
-                        format!("[{{\"type\":\"text\",\"text\":\"{text}\"}}]"),
-                    ),
-                ],
-            })
-            .unwrap();
-        SavePoint::take(
-            store.position().unwrap().unwrap(),
-            &store.schema().unwrap(),
-            store.image().unwrap(),
-        )
-    };
-    std::fs::write(member.directory.0.join(oversized.name()), oversized.bytes()).unwrap();
-    member.send(&format!(
-        "{}\n",
-        json!({"ask":{"restore":{"save-point":oversized.name()}}})
-    ));
-    assert!(
-        member.receive(Duration::from_millis(500)).is_none(),
-        "a restore past the ceiling answers nothing: {}",
-        member.log()
-    );
-    assert_eq!(
-        member.tables(),
-        before,
-        "the holdings stand after every refusal"
-    );
-    let back = stamp_of(&member.ask_restore(&taken.name), "restore");
-    assert_eq!(back.digest, taken.digest, "the sound one still restores");
-    // A live restore of a save point taken under another election stands
-    // this load's election on the restored holdings. Perturbation: drop the
-    // `index_election` from `adopt_judged` and the elected index is gone.
+
+    // A save point taken under another election restores at the load with
+    // this load's election standing on the restored holdings.
     let unelected = {
         let mut store = Sqlite::stand().expect("stands");
         store
@@ -1812,46 +1731,47 @@ fn a_damaged_or_foreign_save_point_never_reaches_the_holdings() {
                 pairs: vec![],
             })
             .unwrap();
-        SavePoint::take(
+        let save_point = SavePoint::take(
             store.position().unwrap().unwrap(),
             &store.schema().unwrap(),
             store.image().unwrap(),
-        )
+        );
+        let path = foreign_dir.0.join("unelected.save-point");
+        std::fs::write(&path, save_point.bytes()).unwrap();
+        path
     };
-    std::fs::write(member.directory.0.join(unelected.name()), unelected.bytes()).unwrap();
-    stamp_of(&member.ask_restore(&unelected.name()), "restore");
-    // And the same bytes under another plain name are an alias, refused.
-    std::fs::write(member.directory.0.join("alias"), unelected.bytes()).unwrap();
-    member.send(&format!(
-        "{}\n",
-        json!({"ask":{"restore":{"save-point":"alias"}}})
-    ));
+    let mut adopted = Member::new_with(rule.clone(), false, SESSION, Some(&unelected));
+    let answered: Value = serde_json::from_str(&adopted.ask("restored", None)).unwrap();
     assert!(
-        member.receive(Duration::from_millis(250)).is_none(),
-        "an alias restores nothing: {}",
-        member.log()
+        answered["answer"]["restored"]["lineage"].is_object(),
+        "the unelected save point restores: {answered}"
     );
-    let after = member.tables();
+    let after = adopted.tables();
     assert!(
         after[2].iter().any(|sql| sql.contains("field_elected_")),
         "the active election's indexes stand on the restored holdings: {:?}",
         after[2]
     );
 
-    // A torn save point handed at the spawn refuses the start.
-    let torn = foreign_dir.0.join("torn.save-point");
-    std::fs::write(&torn, &sound[..sound.len() / 2]).unwrap();
-    let mut refused = Member::spawn_with(false, Some(&torn));
-    let status = refused.process.wait();
-    assert!(
-        !status.success(),
-        "a torn save point at the descriptor refuses the start"
-    );
-    assert!(
-        refused.log().contains("the save point descriptor refuses"),
-        "{}",
-        refused.log()
-    );
+    // A torn or flipped save point handed at the spawn refuses the start.
+    for (label, bytes) in [
+        ("torn", &sound[..sound.len() / 2]),
+        ("flipped", &flipped[..]),
+    ] {
+        let path = foreign_dir.0.join(format!("{label}.save-point"));
+        std::fs::write(&path, bytes).unwrap();
+        let mut refused = Member::spawn_with(false, Some(&path));
+        let status = refused.process.wait();
+        assert!(
+            !status.success(),
+            "a {label} save point at the descriptor refuses the start"
+        );
+        assert!(
+            refused.log().contains("the save point descriptor refuses"),
+            "{label}: {}",
+            refused.log()
+        );
+    }
 }
 
 /// **The watch for this module's instruments**: re-executes this test binary

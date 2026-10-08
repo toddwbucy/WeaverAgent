@@ -33,6 +33,14 @@ pub(crate) const ANSWER_BOUND_MS: u64 = 2_000;
 /// other ask, keep `ANSWER_BOUND_MS`.
 pub(crate) const SNAPSHOT_ANSWER_BOUND_MS: u64 = 120_000;
 
+/// **The bound on the `restored` answer**, per `weaver-harness-Spec` section
+/// 6.1 on the operator's ruling of 2026-10-08 on #99 (N1): the member
+/// restores the save point admin handed only after the opener reaches it,
+/// judging and seating an image of up to the save point's 1 GiB bound, and
+/// answers `restored` after that, so the ask is waited on as the snapshot's
+/// answer leg is, 120 seconds, and never on the small asks' two.
+pub(crate) const RESTORED_ANSWER_BOUND_MS: u64 = 120_000;
+
 /// The bound on an ask that parks at the member until the driver seals,
 /// per `weaver-harness-state-contract` section 2: the enter's identity and
 /// recall asks under a diagnostic binding or a restoring load wait on a
@@ -151,16 +159,7 @@ pub struct SavePointTaken {
     pub stamp: SavePointStamp,
 }
 
-/// The `restore` answer: what the member restored, named and stamped, and
-/// the prefix the restored holdings carry, served as the identity ask serves
-/// it.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SavePointRestored {
-    pub taken: SavePointTaken,
-    pub identity: Vec<Recalled>,
-}
-
-/// The `restored` answer, per the contract's eighth ask: the stamp of the
+/// The `restored` answer, per the contract's `restored` ask: the stamp of the
 /// save point the load restored, nothing where the member stood empty, or a
 /// refusal naming its reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,7 +203,10 @@ pub struct StateSeam {
     /// The snapshot answer leg's bound, `SNAPSHOT_ANSWER_BOUND_MS` on every
     /// seam the crate builds; a test that needs the leg to miss shortens it
     /// rather than waiting two minutes out.
-    snapshot_answer_bound_ms: u64,
+    pub(crate) snapshot_answer_bound_ms: u64,
+    /// The `restored` ask's bound, `RESTORED_ANSWER_BOUND_MS` on every seam
+    /// the crate builds; a test that needs it to miss shortens it.
+    restored_answer_bound_ms: u64,
 }
 
 impl StateSeam {
@@ -218,6 +220,7 @@ impl StateSeam {
             snapshot_ordinal: 1,
             residual: Vec::new(),
             snapshot_answer_bound_ms: SNAPSHOT_ANSWER_BOUND_MS,
+            restored_answer_bound_ms: RESTORED_ANSWER_BOUND_MS,
         }
     }
 
@@ -298,7 +301,7 @@ impl StateSeam {
         self.ask_recall_within(last_turns, ANSWER_BOUND_MS)
     }
 
-    /// The `restored` ask, per the contract's eighth ask of 2026-10-02: what
+    /// The `restored` ask, per the contract's `restored` ask of 2026-10-02: what
     /// the load restored, asked at every serving enter after the opener and
     /// before `load` is authored. A miss is `None`, the one ask beside the
     /// diagnostic identity's that the dead-peer clause does not convert: the
@@ -318,7 +321,7 @@ impl StateSeam {
         if !self.send(b"{\"ask\":{\"restored\":{}}}\n") {
             return None;
         }
-        self.await_answer(ANSWER_BOUND_MS, parse_restored_answer)
+        self.await_answer(self.restored_answer_bound_ms, parse_restored_answer)
     }
 
     /// **The `snapshot` ask's four legs**, per the contract's sixth ask of
@@ -386,34 +389,6 @@ impl StateSeam {
             return Err(SavePointLeg::Finished);
         }
         Ok(answered)
-    }
-
-    /// The `restore` ask, per the contract's seventh ask of 2026-10-02: the
-    /// member replaces its holdings from a save point in its own room, named
-    /// here, and answers the stamp and the restored prefix. **The flush and
-    /// the reopen that follow are the loop's**, per `weaver-harness-Spec`
-    /// section 6, and the channel that carries the operator's demand to the
-    /// loop is the loop act's to name, so nothing in this crate sends this
-    /// ask yet: the seam speaks the contract's vocabulary whole, and the
-    /// caller arrives with that act.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn ask_restore(&mut self, save_point: &str) -> Option<SavePointRestored> {
-        if self.dead {
-            return None;
-        }
-        let answered = self.restore_exchange(save_point);
-        if answered.is_none() {
-            self.dead = true;
-        }
-        answered
-    }
-
-    fn restore_exchange(&mut self, save_point: &str) -> Option<SavePointRestored> {
-        let ask = serde_json::json!({"ask": {"restore": {"save-point": save_point}}}).to_string();
-        if !self.send(format!("{ask}\n").as_bytes()) {
-            return None;
-        }
-        self.await_answer(ANSWER_BOUND_MS, parse_restore_answer)
     }
 
     /// The recall ask inside a caller's bound, the parked one at the enter
@@ -662,7 +637,7 @@ fn parse_identity_answer(line: &str) -> Option<Vec<Recalled>> {
     parse_recalled_events(events)
 }
 
-/// The five stamp members off a `snapshot` or `restore` answer, whole or
+/// The five stamp members off a `snapshot` answer, whole or
 /// nothing: `save-point`, `run`, `sequence`, `turn`, `digest`.
 fn parse_stamped(body: &serde_json::Value) -> Option<SavePointTaken> {
     Some(SavePointTaken {
@@ -704,15 +679,6 @@ fn parse_finished_answer(line: &str) -> Option<(u64, String)> {
         body.get("ask")?.as_u64()?,
         body.get("save-point")?.as_str()?.to_string(),
     ))
-}
-
-/// Parse the restore answer: the snapshot's members and `identity`.
-fn parse_restore_answer(line: &str) -> Option<SavePointRestored> {
-    let value: serde_json::Value = serde_json::from_str(line).ok()?;
-    let body = value.get("answer")?.get("restore")?;
-    let taken = parse_stamped(body)?;
-    let identity = parse_recalled_events(body.get("identity")?.as_array()?)?;
-    Some(SavePointRestored { taken, identity })
 }
 
 /// Parse the restored answer: `{"answer":{"restored":{"lineage":{...}}}}`
@@ -954,12 +920,12 @@ mod tests {
         );
     }
 
-    /// **The three save-point asks cross and their answers parse whole or
-    /// not at all**, per `weaver-harness-state-contract` section 2 as of
-    /// 2026-10-02: `restored` answers a stamp, nothing, or a refusal, and a
-    /// body that is none of the three is malformed; `snapshot` answers the
-    /// five stamp members; `restore` answers them and the restored prefix.
-    /// Each ask is spelled as the contract spells it.
+    /// **The two save-point asks cross and their answers parse whole or
+    /// not at all**, per `weaver-harness-state-contract` section 2:
+    /// `restored` answers a stamp, nothing, or a refusal, and a body that is
+    /// none of the three is malformed; `snapshot` answers the five stamp
+    /// members. Each ask is spelled as the contract spells it. The live
+    /// `restore` ask is retired (the operator's ruling of 2026-10-08 on #99).
     ///
     /// Perturbation: drop `turn` from `parse_stamped` and the snapshot
     /// assertion on the turn fails; accept a restored body with an unknown
@@ -1070,23 +1036,6 @@ mod tests {
             )
             .is_none(),
             "an answer without its ordinal is malformed (Codex on #94, round 10)"
-        );
-        let (parsed, asked) = exchange(
-            concat!(
-                r#"{"answer":{"restore":{"save-point":"ab.save-point","run":"r-1","sequence":41,"turn":2,"digest":"ab","#,
-                r#""identity":[{"envelope":{"session":"s","run":"r-1","kind":"message.system","sequence":"3"},"#,
-                r#""pairs":{"role":"system","content":[]}}]}}}"#
-            ),
-            &|seam| seam.ask_restore("ab.save-point").map(|a| format!("{a:?}")),
-        );
-        assert_eq!(
-            asked,
-            "{\"ask\":{\"restore\":{\"save-point\":\"ab.save-point\"}}}\n"
-        );
-        let parsed = parsed.expect("parses");
-        assert!(
-            parsed.contains("ab.save-point") && parsed.contains("message.system"),
-            "{parsed}"
         );
     }
 
@@ -1588,6 +1537,32 @@ mod tests {
         assert_eq!(taken.stamp.digest, "two");
         let asked = peer.join().unwrap();
         assert_eq!(asked[1], "{\"ask\":{\"recall\":{}}}\n");
+    }
+
+    /// **The `restored` ask has its own bound** (the operator's ruling of
+    /// 2026-10-08 on #99, N1): a member that answers `restored` two and a
+    /// half seconds after the ask, past the small asks' two, as a member
+    /// still seating a large image does, is read as answered. Perturbation:
+    /// wait it on `ANSWER_BOUND_MS` again and the ask answers nothing.
+    #[test]
+    fn a_restored_answer_past_the_small_bound_is_read() {
+        use std::io::BufRead;
+        assert_eq!(RESTORED_ANSWER_BOUND_MS, 120_000);
+        let (ours, theirs) = UnixStream::pair().expect("pair");
+        ours.set_nonblocking(true).expect("nonblocking");
+        let mut seam = StateSeam::new(ours);
+        let peer = std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(theirs.try_clone().expect("clone"));
+            let mut writer = theirs;
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("the restored ask");
+            std::thread::sleep(std::time::Duration::from_millis(ANSWER_BOUND_MS + 500));
+            writer
+                .write_all(b"{\"answer\":{\"restored\":{}}}\n")
+                .expect("answers past the small bound");
+        });
+        assert_eq!(seam.ask_restored(), Some(RestoredAnswer::Empty));
+        peer.join().unwrap();
     }
 
     /// **The snapshot's answer leg has its own bound**, per

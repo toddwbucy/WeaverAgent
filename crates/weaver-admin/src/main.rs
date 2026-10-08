@@ -1142,13 +1142,7 @@ fn run_load(
     // Refused here only where the manifest or the directory refuses, which
     // the selection below would refuse too; a room with nothing to publish
     // is no refusal.
-    let (_, deferred) = publish_from_room_noting(config, agent, &[])?;
-    load_may_select(config, deferred)?;
-    // **The selection**, per Spec section 4: the save point `restore` names
-    // or the latest the manifest names, judged through the descriptor the
-    // member will inherit; no member elected selects nothing, and a restore
-    // named beside the `none` engine refuses.
-    let selected = select_save_point(config, &inventory)?;
+    let selected = publish_then_select(config, agent, &inventory)?;
     if let Some(selected) = selected.as_ref() {
         record(
             config,
@@ -1255,6 +1249,9 @@ fn run_load(
     // reference that looks like the others and is not guaranteed.
     let run_reference =
         channel::mint_run_reference(&agent.0).ok_or(LifecycleRefusal::BoundaryUnverified)?;
+    // Held before the enter goes, so a rollback after it names the run
+    // whatever the answer was (K1).
+    standing.run_reference = Some(run_reference.0.clone());
     let envelope = weaver_types::OrganEnvelope {
         exchange: weaver_types::ExchangeId {
             opener: weaver_types::Opener::Admin,
@@ -1363,6 +1360,23 @@ fn open_marker(
     Ok(())
 }
 
+/// **The load's publication, its gate, then its selection, in that order**
+/// (the #99 area 1 review, T2): the room is published under the run lock,
+/// a publication that left any file refuses the load before anything is
+/// selected, and only then is the save point selected, per Spec section 4:
+/// the one `restore` names or the latest the manifest names, judged through
+/// the descriptor the member will inherit; no member elected selects nothing,
+/// and a restore named beside the `none` engine refuses.
+fn publish_then_select(
+    config: &ServiceConfig,
+    agent: &AgentName,
+    inventory: &inventory::Inventory,
+) -> Result<Option<save_points::Selected>, LifecycleRefusal> {
+    let (_, deferred) = publish_from_room_noting(config, agent, &[])?;
+    load_may_select(config, deferred)?;
+    select_save_point(config, inventory)
+}
+
 /// **A load selects only once the room is published whole** (Codex on #94,
 /// at ab8acef): where the publication left room files for a later verb, past
 /// the cap or the free space, a newer save point than the manifest's latest
@@ -1375,12 +1389,12 @@ fn load_may_select(config: &ServiceConfig, deferred: bool) -> Result<(), Lifecyc
         return Ok(());
     }
     diag!(
-        "weaver-admin: the room holds save points not yet published; this load published what it could and refuses, and the next load continues"
+        "weaver-admin: the room holds save points not yet published; this load published what it could and refuses. A later load continues where the cap or the free space stopped this one; a room file that fails its judgment at every copy stops every load until the operator clears it (the log above names it)"
     );
     record(
         config,
         "load",
-        "refused: the room holds save points not yet published; the next load continues",
+        "refused: the room holds save points not yet published; a later load continues, unless a room file the log names fails at every copy",
     );
     Err(LifecycleRefusal::BoundaryUnverified)
 }
@@ -1602,21 +1616,37 @@ fn roll_back(config: &ServiceConfig, standing: &mut Standing) -> String {
     // **The run being undone leaves forced** (the #94 survey's S10): it
     // takes no save point, a run rolled back having nothing to keep, and
     // its `unload` says forced.
-    let left = standing.entered
-        && direct_leave_within(config, std::time::Instant::now() + LEAVE_BOUND, true).is_ok();
-    if let Some(prior) = standing.marker_before.take() {
-        // **A run entered and not left keeps the marker open on it** (the
-        // #94 survey's S10): the trace holds its `load` and no `unload`, so
-        // the next load must record the reset; restoring the prior marker
-        // would have it record none.
-        let marker = match (&standing.run_reference, standing.entered && !left) {
-            (Some(run), true) => Some(save_points::Marker::Open { run: run.clone() }),
-            _ => prior,
-        };
-        let restored = save_points::write_marker(&config.root, marker.as_ref()).is_ok();
+    let leave = standing
+        .entered
+        .then(|| direct_leave_within(config, std::time::Instant::now() + LEAVE_BOUND, true));
+    let left = matches!(leave, Some(Ok(_)));
+    // **A run whose `load` is on the trace leaves the marker open on it**
+    // (the #94 survey's S10, and the operator's ruling of 2026-10-08 on #99,
+    // K1), whether or not this crate read its `Ready`: an enter refused
+    // after `load`, or a `Ready` past the load bound, authored `load` all
+    // the same, and the next load must record the reset. The rollback's
+    // forced leave says which: `OutOfOrder` is a harness never entered, so
+    // no `load`, and the marker stays as it was found; anything else, `Left`
+    // or no answer, is a run that may have authored `load`, so the marker
+    // names it, a conservative reset rather than a false clean one.
+    let load_on_trace = match &leave {
+        None => false,
+        Some(Err(LeaveFault::Refused(LifecycleRefusal::OutOfOrder))) => false,
+        Some(_) => true,
+    };
+    let marker = match (&standing.run_reference, load_on_trace) {
+        (Some(run), true) => Some(Some(save_points::Marker::Open { run: run.clone() })),
+        _ => standing.marker_before.take(),
+    };
+    if let Some(marker) = marker {
+        let written = save_points::write_marker(&config.root, marker.as_ref()).is_ok();
         account.push(format!(
             "marker {}",
-            if restored { "restored" } else { "not restored" }
+            match (load_on_trace, written) {
+                (true, true) => "left open on the run",
+                (false, true) => "restored",
+                (_, false) => "not restored",
+            }
         ));
     }
     if standing.entered {
@@ -1797,7 +1827,17 @@ fn unload_within(
                 // the run all the same, so where the lock frees inside the
                 // after-left wait the marker closes as forced before the
                 // refusal returns.
-                if forced && start::wait_free(&run_directory, bounds.after_left) {
+                // **Only a refusal that can follow `Left` is waited on** (the
+                // #99 area 1 review, K3): `ActivityNotAtRest` and
+                // `OutOfOrder` are answered with the run plainly standing or
+                // never entered, so waiting the after-left wait on them only
+                // holds the invocation lock and answers late.
+                let can_follow_left = !matches!(
+                    refusal,
+                    LifecycleRefusal::ActivityNotAtRest | LifecycleRefusal::OutOfOrder
+                );
+                if forced && can_follow_left && start::wait_free(&run_directory, bounds.after_left)
+                {
                     close_marker(config, true)?;
                 }
                 return Err(refusal);
@@ -3539,20 +3579,80 @@ mod tests {
         let _ = std::fs::remove_dir_all(root.with_extension("territory"));
     }
 
-    /// **A load with save points still waiting in the room refuses** (Codex
-    /// on #94, at ab8acef): the publication's deferral, past the cap or the
-    /// free space, stops the load before its selection; nothing deferred, it
-    /// goes on. The deferral itself is `publish_with`'s and is pinned there
-    /// with a cap of two over three files. Perturbation: ignore the flag and
-    /// the deferred load selects.
+    /// **A load with save points still waiting in the room refuses before it
+    /// selects** (Codex on #94, at ab8acef, and the #99 area 1 review, T2):
+    /// the load's publication, its gate and its selection run in that order
+    /// in `publish_then_select`, and a room file the copy cannot publish, its
+    /// stamp sound and its body not, defers, so the load refuses
+    /// `BoundaryUnverified` and never reaches the selection; the helper says
+    /// nothing deferred goes on. Perturbations: drop the gate from
+    /// `publish_then_select` and the deferred load selects nothing and goes
+    /// on; ignore the flag in `load_may_select` and the same.
     #[test]
     fn a_load_with_save_points_waiting_in_the_room_refuses() {
-        let (config, _scratch) = scratch_config("load-deferred");
+        let (config, report, base) = territory_with_one_room_file("load-deferred");
+        // The room's file keeps its sound stamp and its name, and its body
+        // no longer digests to the name: the scan admits it, every copy
+        // refuses it, and the publication defers.
+        let room = config.territory.join(save_points::ROOM).join(&report.name);
+        let mut bytes = std::fs::read(&room).unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xff;
+        std::fs::write(&room, &bytes).unwrap();
+        let declaration = weaver_types::parse(&format!(
+            concat!(
+                "session = \"s-1\"\n",
+                "tool-set = []\n",
+                "permission-mode = \"ask\"\n",
+                "\n",
+                "[spu-instruction.decoder]\n",
+                "residual-readout-election = false\n",
+                "tunable-values = {{}}\n",
+                "\n",
+                "[spu-instruction.decoder.model-binding]\n",
+                "artifact = \"qwen3-4b-instruct\"\n",
+                "devices = [0]\n",
+                "\n",
+                "[gate-instruction.access-rule]\n",
+                "allowed-uids = [0]\n",
+                "allowed-gids = []\n",
+                "denied-uids = [1701]\n",
+                "\n",
+                "[trace-sink]\n",
+                "kind = \"file\"\n",
+                "path = \"{}/trace.ndjson\"\n",
+                "create = true\n",
+                "\n",
+                "[state-store]\n",
+                "engine = \"sqlite\"\n",
+            ),
+            config.territory.display()
+        ))
+        .expect("the declaration parses");
+        let gate_instruction = declaration
+            .gate_instruction
+            .clone()
+            .expect("a serving declaration");
+        let me = nix::unistd::getuid().as_raw();
+        let inventory = inventory::Inventory {
+            config: declaration,
+            identity: "weaver-alpha".into(),
+            declaration: String::new(),
+            binding: weaver_types::EnterBinding::Serving { gate_instruction },
+            lineage: None,
+            member_account: Some(inventory::MemberAccount {
+                uid: me,
+                gid: nix::unistd::getgid().as_raw(),
+            }),
+        };
         assert_eq!(
-            load_may_select(&config, true),
-            Err(LifecycleRefusal::BoundaryUnverified)
+            publish_then_select(&config, &AgentName("alpha".into()), &inventory).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "the deferred load refuses before it selects"
         );
+        assert!(room.exists(), "the file stays for the operator");
         assert_eq!(load_may_select(&config, false), Ok(()));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// **The publication does not ask the boundary file** (Codex on #94, at
@@ -3603,8 +3703,11 @@ mod tests {
     /// **The publication never reads the declaration** (the #94 survey's
     /// S8): it runs after a run ended, so a declaration saved unparsable
     /// while the run stood must not strand the leave's save point. With
-    /// `agent.toml` holding no TOML, a sound room file publishes. Perturbation:
-    /// derive the room through `room_inventory` again and it refuses.
+    /// `agent.toml` holding no TOML, a sound room file publishes through
+    /// `publish_from_room`, the entry point the unload and the `save-point`
+    /// verb call, its test seam standing in only for the account lookup.
+    /// Perturbation: derive the room through `room_inventory` again and it
+    /// refuses.
     #[test]
     fn the_publication_does_not_read_the_declaration() {
         use std::os::unix::fs::PermissionsExt;
@@ -3627,11 +3730,12 @@ mod tests {
             uid: me,
             gid: nix::unistd::getgid().as_raw(),
         };
-        let (lines, deferred) =
-            publish_room_as(&config, me, mine, &[]).expect("the room publishes");
+        TEST_PUBLICATION.with(|cell| cell.set(Some((me, mine))));
+        let lines = publish_from_room(&config, &AgentName("alpha".into()), &[])
+            .expect("the room publishes");
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].digest, digest);
-        assert!(!deferred);
+        assert!(!room.join(format!("{digest}.save-point")).exists());
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -4311,11 +4415,15 @@ mod tests {
 
     /// **The `save-point` verb asks the running worker and answers the
     /// report only once it is published**, per Spec sections 2 and 6: one
-    /// directive, one answer, out of order where no run stands, and a refusal
-    /// where the publication cannot be made. Perturbations: drop the run-lock
-    /// check and the second case dials an absent worker and answers
-    /// `Unanswered` instead; answer the report whatever the publication did
-    /// and the third assertion sees `SavePointTaken`.
+    /// directive, one answer, out of order where no run stands, a refusal
+    /// where the publication cannot be made, and the report where it is: with
+    /// the reported file in a scratch territory's room, the verb answers
+    /// `SavePointTaken` and the manifest holds its line as arrived on demand
+    /// at the event's position. Perturbations: drop the run-lock check and
+    /// the second case dials an absent worker and answers `Unanswered`
+    /// instead; answer the report whatever the publication did and the third
+    /// assertion sees `SavePointTaken`; refuse whatever the publication did
+    /// and the last case refuses.
     #[test]
     fn the_save_point_verb_answers_the_report_and_is_out_of_order_without_a_run() {
         let (config, _scratch) = scratch_config("save-point-verb");
@@ -4332,10 +4440,10 @@ mod tests {
                 LifecycleAnswer::SavePointTaken { report: report() },
             )],
         );
-        // The fixture holds no declaration to publish from, so the verb
-        // refuses rather than answering a report of a save point that
-        // stands in the room alone (Codex on #94, round 1); the directive
-        // reached the worker all the same.
+        // This box holds no member account and the fixture no room, so
+        // nothing is published and the verb refuses rather than answering a
+        // report of a save point that stands in the room alone (Codex on
+        // #94, round 1); the directive reached the worker all the same.
         // A save point taken and not published is named so (the #94
         // survey's S12), as the unload names it.
         let answered = save_point(&config, &agent);
@@ -4353,6 +4461,80 @@ mod tests {
         ));
         let _ = holder.kill();
         let _ = holder.wait();
+        // The reported file stands in the territory's room: it publishes,
+        // and the verb answers the report.
+        let (config, report, base) = territory_with_one_room_file("save-point-verb-published");
+        let mut holder = stand_in_holder(&config);
+        let worker = recording_worker(
+            &config,
+            vec![weaver_types::Payload::Answer(
+                LifecycleAnswer::SavePointTaken {
+                    report: report.clone(),
+                },
+            )],
+        );
+        let answered = save_point(&config, &agent);
+        let _ = worker.join();
+        let _ = holder.kill();
+        let _ = holder.wait();
+        assert_eq!(
+            answered,
+            Ok(LifecycleAnswer::SavePointTaken {
+                report: report.clone()
+            })
+        );
+        let lines = manifest_lines(&config);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            (
+                lines[0].digest.as_str(),
+                lines[0].arrived,
+                lines[0].position.clone()
+            ),
+            (
+                report.save_point.as_str(),
+                save_points::Arrival::Demand,
+                Some((report.event_run.0.clone(), report.position))
+            )
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **A force refused before `Left` answers at once** (the #99 area 1
+    /// review, K3): a worker refusing the forced leave `ActivityNotAtRest`,
+    /// its run plainly standing, is answered without the after-left wait.
+    /// Perturbation: wait on every refusal again and the verb takes the
+    /// whole wait.
+    #[test]
+    fn a_force_refused_before_left_answers_without_the_wait() {
+        let (config, _scratch) = scratch_config("forced-not-at-rest");
+        let mut holder = stand_in_holder(&config);
+        let worker = recording_worker(
+            &config,
+            vec![
+                weaver_types::Payload::Answer(LifecycleAnswer::State {
+                    state: weaver_types::AgentState::Active,
+                    load: None,
+                    constituents: Vec::new(),
+                }),
+                weaver_types::Payload::Refusal(LifecycleRefusal::ActivityNotAtRest),
+            ],
+        );
+        let bounds = UnloadBounds {
+            after_left: std::time::Duration::from_secs(5),
+            ..TEST_UNLOAD_BOUNDS
+        };
+        let started = std::time::Instant::now();
+        let answered = unload_within(&config, bounds, true);
+        let took = started.elapsed();
+        let _ = worker.join();
+        let _ = holder.kill();
+        let _ = holder.wait();
+        assert_eq!(answered, Err(LifecycleRefusal::ActivityNotAtRest));
+        assert!(
+            took < std::time::Duration::from_secs(3),
+            "answered in {took:?}, inside the five-second wait"
+        );
     }
 
     /// **A forced verb closes the marker where the run already ended**, per
@@ -4395,7 +4577,9 @@ mod tests {
             "the forced verb records the operator's choice"
         );
         // The refusal arm: the holder keeps the lock while the worker
-        // refuses the leave, then goes down inside the after-left wait.
+        // refuses the leave past `Left`, a drain that failed being one such
+        // refusal, then goes down inside the after-left wait. A refusal
+        // answered before `Left` is never waited on (K3).
         save_points::write_marker(&config.root, Some(&open("r-2"))).unwrap();
         let _ = std::fs::remove_file(config.coordination_socket());
         let mut holder = stand_in_holder(&config);
@@ -4407,7 +4591,7 @@ mod tests {
                     load: None,
                     constituents: Vec::new(),
                 }),
-                weaver_types::Payload::Refusal(LifecycleRefusal::ActivityNotAtRest),
+                weaver_types::Payload::Refusal(LifecycleRefusal::DescriptorsUnusable),
             ],
         );
         let ender = std::thread::spawn(move || {
@@ -4418,7 +4602,10 @@ mod tests {
         let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
         ender.join().unwrap();
         let _ = worker.join();
-        assert!(matches!(answered, Err(LifecycleRefusal::ActivityNotAtRest)));
+        assert!(matches!(
+            answered,
+            Err(LifecycleRefusal::DescriptorsUnusable)
+        ));
         assert_eq!(
             save_points::read_marker(&config.root),
             Some(save_points::Marker::Forced { run: "r-2".into() }),
@@ -4566,8 +4753,8 @@ mod tests {
         (config, report, base)
     }
 
-    /// The digests the scratch territory's manifest names.
-    fn manifest_digests(config: &ServiceConfig) -> Vec<String> {
+    /// The lines the scratch territory's manifest holds.
+    fn manifest_lines(config: &ServiceConfig) -> Vec<save_points::ManifestLine> {
         let me = nix::unistd::getuid().as_raw();
         save_points::read_manifest(
             config.save_points_fd().unwrap(),
@@ -4577,49 +4764,92 @@ mod tests {
             },
         )
         .unwrap()
-        .into_iter()
-        .map(|line| line.digest)
-        .collect()
+    }
+
+    /// The digests the scratch territory's manifest names.
+    fn manifest_digests(config: &ServiceConfig) -> Vec<String> {
+        manifest_lines(config)
+            .into_iter()
+            .map(|line| line.digest)
+            .collect()
     }
 
     /// **A leave whose lock outlives the after-left wait keeps its save
     /// point** (the #94 survey's S7): the worker answers `Left` naming the
     /// room's file, a holder outlives the wait and is ended by the
-    /// escalation, and the report is published before `Unloaded`, the
-    /// marker closing clean. Perturbation: drop the report on the
-    /// escalation's path again and the manifest names nothing while the
-    /// marker stays open.
+    /// escalation, and the report is published before `Unloaded`, its line
+    /// arrived at the leave with the event's position, the marker closing
+    /// clean; and where the reported file is not in the room, the unload
+    /// refuses `SavePointNotTaken` naming `published` and the marker stays
+    /// open. Perturbation: drop the report on the escalation's path again
+    /// and the first file publishes as recovered with no position, and the
+    /// second unload answers unloaded over a marker closed clean.
     #[test]
     fn a_leave_ended_by_the_escalation_still_publishes_its_save_point() {
+        let escalated_leave = |config: &ServiceConfig, report: &weaver_types::SavePointReport| {
+            save_points::write_marker(
+                &config.root,
+                Some(&save_points::Marker::Open { run: "r-1".into() }),
+            )
+            .unwrap();
+            let mut holder = stand_in_holder(config);
+            let worker = recording_worker(
+                config,
+                vec![
+                    weaver_types::Payload::Answer(LifecycleAnswer::State {
+                        state: weaver_types::AgentState::Idle,
+                        load: None,
+                        constituents: Vec::new(),
+                    }),
+                    weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                        save_point: Some(report.clone()),
+                    }),
+                ],
+            );
+            let answered = unload_within(config, TEST_UNLOAD_BOUNDS, false);
+            let _ = holder.kill();
+            let _ = holder.wait();
+            let _ = worker.join();
+            answered
+        };
         let (config, report, base) = territory_with_one_room_file("left-escalated");
-        save_points::write_marker(
-            &config.root,
-            Some(&save_points::Marker::Open { run: "r-1".into() }),
-        )
-        .unwrap();
-        let mut holder = stand_in_holder(&config);
-        let worker = recording_worker(
-            &config,
-            vec![
-                weaver_types::Payload::Answer(LifecycleAnswer::State {
-                    state: weaver_types::AgentState::Idle,
-                    load: None,
-                    constituents: Vec::new(),
-                }),
-                weaver_types::Payload::Answer(LifecycleAnswer::Left {
-                    save_point: Some(report.clone()),
-                }),
-            ],
+        assert_eq!(escalated_leave(&config, &report), Ok(unloaded_answer()));
+        let lines = manifest_lines(&config);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            (
+                lines[0].digest.as_str(),
+                lines[0].arrived,
+                lines[0].position.clone()
+            ),
+            (
+                report.save_point.as_str(),
+                save_points::Arrival::Leave,
+                Some((report.event_run.0.clone(), report.position))
+            ),
+            "published as the leave's, at the event's position"
         );
-        let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, false);
-        let _ = holder.kill();
-        let _ = holder.wait();
-        let _ = worker.join();
-        assert_eq!(answered, Ok(unloaded_answer()));
-        assert_eq!(manifest_digests(&config), [report.save_point]);
         assert_eq!(
             save_points::read_marker(&config.root),
             Some(save_points::Marker::Closed { run: "r-1".into() })
+        );
+        let _ = std::fs::remove_dir_all(&base);
+        // The reported file absent from the room: the leave's save point
+        // did not publish, so the unload does not complete.
+        let (config, report, base) = territory_with_one_room_file("left-escalated-absent");
+        let room = config.territory.join(save_points::ROOM);
+        std::fs::remove_file(room.join(&report.name)).unwrap();
+        assert_eq!(
+            escalated_leave(&config, &report),
+            Err(LifecycleRefusal::SavePointNotTaken {
+                missed: weaver_types::SavePointLeg::Published,
+            })
+        );
+        assert!(manifest_lines(&config).is_empty());
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Open { run: "r-1".into() }),
+            "the marker stays open for the next load's reset"
         );
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -4706,43 +4936,68 @@ mod tests {
     /// review of 197e80b): the worker reports a save point whose event run
     /// is not the run the marker stands open on; it publishes, the verb
     /// answers unloaded, and the marker stays open for the next load's
-    /// reset. Perturbation: close the marker whatever the report's run and
-    /// it reads closed.
+    /// reset. The run compared is the event's, never the covered run: a run
+    /// restored and left with no turn covers the prior run's position, so a
+    /// report covering `r-0` whose event is `r-1`, with the marker open on
+    /// `r-1`, closes it clean. Perturbations: close the marker whatever the
+    /// report's run and the first reads closed; compare the covered run and
+    /// the second stays open.
     #[test]
     fn a_leave_reporting_another_runs_save_point_leaves_the_marker_open() {
+        let leave =
+            |config: &ServiceConfig, report: &weaver_types::SavePointReport, marker_run: &str| {
+                save_points::write_marker(
+                    &config.root,
+                    Some(&save_points::Marker::Open {
+                        run: marker_run.into(),
+                    }),
+                )
+                .unwrap();
+                let mut holder = stand_in_holder(config);
+                let worker = recording_worker(
+                    config,
+                    vec![
+                        weaver_types::Payload::Answer(LifecycleAnswer::State {
+                            state: weaver_types::AgentState::Idle,
+                            load: None,
+                            constituents: Vec::new(),
+                        }),
+                        weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                            save_point: Some(report.clone()),
+                        }),
+                    ],
+                );
+                let ender = std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    let _ = holder.kill();
+                    let _ = holder.wait();
+                });
+                let answered = unload_within(config, TEST_UNLOAD_BOUNDS, false);
+                ender.join().unwrap();
+                let _ = worker.join();
+                answered
+            };
         let (config, report, base) = territory_with_one_room_file("other-run-leave");
-        save_points::write_marker(
-            &config.root,
-            Some(&save_points::Marker::Open { run: "r-2".into() }),
-        )
-        .unwrap();
-        let mut holder = stand_in_holder(&config);
-        let worker = recording_worker(
-            &config,
-            vec![
-                weaver_types::Payload::Answer(LifecycleAnswer::State {
-                    state: weaver_types::AgentState::Idle,
-                    load: None,
-                    constituents: Vec::new(),
-                }),
-                weaver_types::Payload::Answer(LifecycleAnswer::Left {
-                    save_point: Some(report.clone()),
-                }),
-            ],
-        );
-        let ender = std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            let _ = holder.kill();
-            let _ = holder.wait();
-        });
-        let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, false);
-        ender.join().unwrap();
-        let _ = worker.join();
-        assert_eq!(answered, Ok(unloaded_answer()));
+        assert_eq!(leave(&config, &report, "r-2"), Ok(unloaded_answer()));
         assert_eq!(manifest_digests(&config), [report.save_point]);
         assert_eq!(
             save_points::read_marker(&config.root),
             Some(save_points::Marker::Open { run: "r-2".into() })
+        );
+        let _ = std::fs::remove_dir_all(&base);
+        // Covering the prior run, the event this run's: the marker closes.
+        let (config, report, base) = territory_with_one_room_file("restored-run-leave");
+        let report = weaver_types::SavePointReport {
+            run: weaver_types::RunId("r-0".into()),
+            event_run: weaver_types::RunId("r-1".into()),
+            ..report
+        };
+        assert_eq!(leave(&config, &report, "r-1"), Ok(unloaded_answer()));
+        assert_eq!(manifest_digests(&config), [report.save_point]);
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Closed { run: "r-1".into() }),
+            "the event's run is compared, not the covered run"
         );
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -4873,6 +5128,52 @@ mod tests {
             save_points::read_marker(&config.root),
             Some(save_points::Marker::Open { run: "r-1".into() })
         );
+        let _ = std::fs::remove_file(config.coordination_socket());
+        // **A run whose `load` is on the trace, its `Ready` never read,
+        // leaves the marker open on it** (the operator's ruling of 2026-10-08
+        // on #99, K1): an enter refused after `load`, or a `Ready` past the
+        // load bound, leaves `marker_before` unset; the rollback's forced
+        // leave answers `Left`, so the run was entered, and the marker names
+        // it, never the closed marker found. Perturbation: write the marker
+        // only where `marker_before` was set and it stays closed.
+        let closed = save_points::Marker::Closed { run: "r-0".into() };
+        save_points::write_marker(&config.root, Some(&closed)).unwrap();
+        let mut standing = Standing {
+            entered: true,
+            run_reference: Some("r-2".into()),
+            ..Standing::default()
+        };
+        let worker = recording_worker(
+            &config,
+            vec![weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                save_point: None,
+            })],
+        );
+        let account = roll_back(&config, &mut standing);
+        let _ = worker.join();
+        assert!(account.contains("left open on the run"), "{account}");
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Open { run: "r-2".into() })
+        );
+        // A harness that never entered answers the forced leave
+        // `OutOfOrder`: no `load` is on the trace, so the marker found is
+        // put back. Perturbation: name the run whatever the leave answered
+        // and this reads open.
+        let _ = std::fs::remove_file(config.coordination_socket());
+        let mut standing = Standing {
+            entered: true,
+            run_reference: Some("r-3".into()),
+            marker_before: Some(Some(closed.clone())),
+            ..Standing::default()
+        };
+        let worker = recording_worker(
+            &config,
+            vec![weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder)],
+        );
+        roll_back(&config, &mut standing);
+        let _ = worker.join();
+        assert_eq!(save_points::read_marker(&config.root), Some(closed));
     }
 
     const TEST_UNLOAD_BOUNDS: UnloadBounds = UnloadBounds {

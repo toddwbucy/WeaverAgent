@@ -161,7 +161,12 @@ as long as its verb.** The lifetime rule of `weaver-organ-channel` section 2 lan
 on the listener: bound once at the worker's start, closed by the worker's death,
 shared with no second worker. Each accepted connection is one invocation's, closed
 by admin when the verb answers, and the harness serves one connection at a time, a
-second dial waiting at the listener rather than being answered concurrently.
+second dial waiting at the listener rather than being answered concurrently. **An answer
+the harness cannot deliver ends nothing** (the operator's ruling of 2026-10-08 on #99):
+where the caller went away before its answer, an operator's interrupt, a connector's
+own timeout or a killed invocation, the harness says so on its standard error and
+returns to the listener, the run standing as the directive left it; only the listener's
+loss ends service, and a run ends only by the directive that ends it.
 
 ## 3. The exchanges
 

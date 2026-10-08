@@ -327,7 +327,8 @@ serving. No unit and no init system is involved. The worker, the state member an
 relay are processes admin started, detached from the invoking terminal, holding the run
 lock between them, and they live in the containment the load was invoked from: a load
 run from a login shell's scope lives in that scope. `unload` asks the agent to leave,
-then ends whatever still holds the run lock, within 195 seconds. Admin's own acts on
+then ends whatever still holds the run lock, within 195 seconds, then publishes the
+leave's save point, which takes as long as copying it does. Admin's own acts on
 this agent are in `<territory>/admin.log`, and the worker's output in `worker.log`
 beside it, both root's and yours to read through the access group.
 
