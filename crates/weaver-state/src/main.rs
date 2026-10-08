@@ -26,8 +26,7 @@ use weaver_state::save_point::{Room, SavePoint, schema_digest};
 use weaver_state::{
     Ask, Election, Restored, SavePointAnswer, Store, parse_ask, parse_distillate,
     render_finished_answer, render_grants_answer, render_identity_answer, render_recall_answer,
-    render_replay_answer, render_restore_answer, render_restored_answer, render_shape_answer,
-    render_snapshot_answer,
+    render_replay_answer, render_restored_answer, render_shape_answer, render_snapshot_answer,
 };
 
 /// The first door's end arrives at this descriptor number, the fixed
@@ -299,7 +298,6 @@ fn member_entry(
         store: store.as_mut(),
         room: &room,
         session: &session,
-        election: &election,
         restored,
         pending: None,
         save_point_bound: weaver_state::save_point::SAVE_POINT_BOUND,
@@ -317,18 +315,18 @@ fn member_entry(
 /// **The one rule of a save point's adoption**, per `weaver-state-Spec`
 /// section 3 on the operator's rulings of 2026-10-05 and 2026-10-06 on #1:
 /// everything the member proves about an image and everything it derives
-/// from it, the schema, the position, the prefix the restore answer carries
-/// and the index set, is computed on a scratch copy; the live connection is
-/// touched exactly once, last, after the answer frame is built and sized;
-/// and a failure anywhere leaves the live holdings as they stood and the
-/// ask unanswered. `judge_save_point` is the proving half, shared by the
-/// load's restore and the live `restore` ask: the image is judged by what it
+/// from it, the schema, the position and the index set, is computed on a
+/// scratch copy; the live connection is touched exactly once, last; and a
+/// failure anywhere leaves the holdings as they stood and the load answers
+/// `restored` with the refusal. `judge_save_point` is the proving half of
+/// the load's restore, the one restore since the live `restore` ask was
+/// retired (the operator's ruling of 2026-10-08 on #99): the image is judged by what it
 /// says of itself and never by the stamp alone, its own catalog must be the
 /// standing schema and its own last landing the position the stamp claims,
 /// so a stamp written to agree cannot carry a foreign image past the schema
 /// rule, and a stamp that lies about its position is refused as one that
-/// disagrees. `commit_save_point` is the swap, called only once the caller
-/// has everything it will answer with.
+/// disagrees. `commit_save_point` is the swap, called only once the image
+/// is judged.
 fn judge_save_point(
     store: &dyn Store,
     session: &str,
@@ -373,9 +371,6 @@ struct Custody<'a> {
     store: &'a mut dyn Store,
     room: &'a Room,
     session: &'a str,
-    /// The opener's election, held so a live restore rebuilds this load's
-    /// indexes on the restored holdings.
-    election: &'a Election,
     restored: Restored,
     /// The part the last `snapshot` wrote and the harness has not yet
     /// acknowledged: its finished name and its digest. At most one stands,
@@ -777,41 +772,8 @@ fn answer_frame(
                 .map_err(|e| CustodyFault::SavePoint(e.to_string()))?;
             Ok(render_finished_answer(&pending.name, pending.ordinal))
         }
-        // **The restore reads its own room by name**, per the Spec: a name
-        // that is not a plain entry of the room, a file that fails its check
-        // or stands under another schema answers nothing and leaves the
-        // holdings as they stood; a sound one replaces them whole, and the
-        // answer carries its stamp and the prefix the restored holdings
-        // carry for the declared session. **The answer is built and sized
-        // on the scratch copy's facts before the swap**, per the one rule of
-        // `judge_save_point`: a frame past the answer ceiling refuses before
-        // anything moves, so an unanswered restore has moved nothing.
-        Ask::Restore { save_point } => {
-            let read = custody
-                .room
-                .read(save_point)
-                .map_err(|e| CustodyFault::SavePoint(e.to_string()))?;
-            let facts = judge_save_point(&*custody.store, session, &read)
-                .map_err(|reason| CustodyFault::SavePoint(reason.to_string()))?;
-            let frame = render_restore_answer(
-                &SavePointAnswer {
-                    name: save_point.clone(),
-                    stamp: read.stamp.clone(),
-                    digest: read.digest(),
-                },
-                &facts.identity,
-            );
-            if frame.len() > ANSWER_BOUND {
-                return Err(CustodyFault::SavePoint(
-                    "the restore answer exceeds the ceiling; nothing moved".into(),
-                ));
-            }
-            commit_save_point(custody.store, custody.election, &read)
-                .map_err(|reason| CustodyFault::SavePoint(reason.to_string()))?;
-            Ok(frame)
-        }
         // What the load restored, held since the opener, per the contract's
-        // eighth ask: answered immediately and parking never.
+        // `restored` ask: answered immediately and parking never.
         Ask::Restored => Ok(render_restored_answer(&custody.restored)),
     }
 }
@@ -1529,6 +1491,60 @@ mod tests {
         );
     }
 
+    /// **An acknowledgement finishes a part only on its ask and its digest
+    /// both** (the #99 area 1 review, T17): the right digest under another
+    /// ask's number is a late or misrouted frame, and the part is discarded,
+    /// no finished name given; the matching pair finishes it. Perturbation:
+    /// compare the digest alone and the misnumbered acknowledgement finishes
+    /// the part.
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn an_acknowledgement_finishes_only_on_its_number_and_digest() {
+        let scratch = Scratch(std::env::temp_dir().join(format!(
+            "weaver-state-ack-number-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        )));
+        std::fs::create_dir_all(&scratch.0).expect("room");
+        let room = Room::open(&scratch.0).expect("opens");
+        let mut store = weaver_state::engine::sqlite::Sqlite::stand().expect("stands");
+        let mut custody = Custody {
+            store: &mut store,
+            room: &room,
+            session: "s-1",
+            restored: weaver_state::Restored::Empty,
+            pending: None,
+            save_point_bound: weaver_state::save_point::SAVE_POINT_BOUND,
+            unlanded: None,
+        };
+        let finished = |dir: &std::path::Path| {
+            std::fs::read_dir(dir)
+                .expect("lists")
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+                .count()
+        };
+        answer_frame(&Ask::Snapshot { ordinal: 1 }, &mut custody).expect("answers");
+        let digest = custody.pending.as_ref().expect("pending").digest.clone();
+        let misnumbered = answer_frame(
+            &Ask::Acknowledge {
+                ordinal: 2,
+                digest: digest.clone(),
+            },
+            &mut custody,
+        );
+        assert!(
+            misnumbered.is_err(),
+            "another ask's number finishes nothing"
+        );
+        assert_eq!(finished(&scratch.0), 0, "no finished name was given");
+        answer_frame(&Ask::Snapshot { ordinal: 3 }, &mut custody).expect("answers");
+        let digest = custody.pending.as_ref().expect("pending").digest.clone();
+        answer_frame(&Ask::Acknowledge { ordinal: 3, digest }, &mut custody)
+            .expect("its own number and digest finish it");
+        assert_eq!(finished(&scratch.0), 1);
+    }
+
     /// A store whose landings all fail, the rest delegated to the embedded
     /// engine, for the watch on a landing that does not land.
     #[cfg(feature = "sqlite")]
@@ -1622,12 +1638,10 @@ mod tests {
         let room = Room::open(&scratch.0).expect("opens");
         let mut store =
             RefusingLand(weaver_state::engine::sqlite::Sqlite::stand().expect("stands"));
-        let election = Election::default();
         let mut custody = Custody {
             store: &mut store,
             room: &room,
             session: "s-1",
-            election: &election,
             restored: weaver_state::Restored::Empty,
             pending: None,
             save_point_bound: weaver_state::save_point::SAVE_POINT_BOUND,
@@ -1674,12 +1688,10 @@ mod tests {
         std::fs::create_dir_all(&scratch.0).expect("room");
         let room = Room::open(&scratch.0).expect("opens");
         let mut store = weaver_state::engine::sqlite::Sqlite::stand().expect("stands");
-        let election = Election::default();
         let mut custody = Custody {
             store: &mut store,
             room: &room,
             session: "s-1",
-            election: &election,
             restored: weaver_state::Restored::Empty,
             pending: None,
             save_point_bound: weaver_state::save_point::SAVE_POINT_BOUND,
@@ -1694,6 +1706,56 @@ mod tests {
             .expect_err("past the bound the snapshot answers nothing");
         assert!(
             format!("{refused:?}").contains("past the bound of 16"),
+            "{refused:?}"
+        );
+        assert!(custody.pending.is_none(), "no part is pending");
+        let left: Vec<_> = std::fs::read_dir(&scratch.0)
+            .expect("lists")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        assert!(left.is_empty(), "the room holds no file: {left:?}");
+    }
+
+    /// **A snapshot over a stamp the readers would refuse answers nothing
+    /// and leaves no part** (#99, K7): holdings whose last landing names a
+    /// run of 129 bytes stamp a save point no reader admits, so the
+    /// `snapshot` ask is an `Err`, answered with silence, no part is pending
+    /// and the room holds no file. Perturbation: drop the `stamp_bounds`
+    /// call from `Room::write_part_within` and the snapshot answers.
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn a_snapshot_over_a_run_past_the_bound_answers_nothing() {
+        let scratch = Scratch(std::env::temp_dir().join(format!(
+            "weaver-state-snapshot-run-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        )));
+        std::fs::create_dir_all(&scratch.0).expect("room");
+        let room = Room::open(&scratch.0).expect("opens");
+        let mut store = weaver_state::engine::sqlite::Sqlite::stand().expect("stands");
+        store
+            .land(&weaver_state::Distillate {
+                session: "s-1".into(),
+                run: "r".repeat(129),
+                turn: None,
+                kind: "load".into(),
+                sequence: 0,
+                pairs: vec![],
+            })
+            .expect("lands");
+        let mut custody = Custody {
+            store: &mut store,
+            room: &room,
+            session: "s-1",
+            restored: weaver_state::Restored::Empty,
+            pending: None,
+            save_point_bound: weaver_state::save_point::SAVE_POINT_BOUND,
+            unlanded: None,
+        };
+        let refused = answer_frame(&Ask::Snapshot { ordinal: 1 }, &mut custody)
+            .expect_err("a run past 128 bytes answers nothing");
+        assert!(
+            format!("{refused:?}").contains("128 printable"),
             "{refused:?}"
         );
         assert!(custody.pending.is_none(), "no part is pending");

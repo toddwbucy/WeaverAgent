@@ -1740,16 +1740,21 @@ mod tests {
             r#"{"ask":{"summarize":{}}}"#,
             // One ask per frame, its body exactly the contract's: a frame
             // naming two asks, a snapshot with a body, a snapshot that is
-            // null, a bodiless shape, a restore with a second member and a
-            // recall with a stranger each answer nothing, and the snapshot
-            // cases write nothing. Perturbation: parse by the presence of a
-            // name again and the compound frame takes a save point.
-            r#"{"ask":{"snapshot":null,"restore":{"save-point":"x"}}}"#,
+            // null, a bodiless shape and a recall with a stranger each answer
+            // nothing, and the snapshot cases write nothing. Perturbation:
+            // parse by the presence of a name again and the compound frame
+            // takes a save point.
+            r#"{"ask":{"snapshot":{"ask":1},"shape":{}}}"#,
             r#"{"ask":{"snapshot":{"now":true}}}"#,
             r#"{"ask":{"snapshot":null}}"#,
             r#"{"ask":{"shape":null}}"#,
             r#"{"ask":{"shape":{},"grants":{}}}"#,
-            r#"{"ask":{"restore":{"save-point":"x","other":1}}}"#,
+            // **The live `restore` ask is retired** (the operator's ruling of
+            // 2026-10-08 on #99): its frame, well formed as the contract once
+            // spelled it, is an unknown name and answers nothing.
+            // Perturbation: map `restore` to any ask in `parse_ask` and the
+            // first case parses.
+            r#"{"ask":{"restore":{"save-point":"x"}}}"#,
             r#"{"ask":{"restore":{}}}"#,
             r#"{"ask":{"recall":{"stranger":1}}}"#,
             r#"{"ask":{"recall":{"last-turns":1,"stranger":1}}}"#,

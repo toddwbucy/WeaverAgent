@@ -286,8 +286,11 @@ pub enum LifecycleDirective {
 /// event's position without reading the record. **The two runs differ**
 /// after a restore under an election that keeps the load out of state: the
 /// covered position is the prior run's until a distillate lands, the event
-/// is the standing run's (Codex on #94, round 6).
+/// is the standing run's (Codex on #94, round 6). **No member but these**
+/// (#99, K9): admin writes the report into a root-owned manifest, so a
+/// report carrying any other field is refused rather than read past.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SavePointReport {
     pub save_point: String,
     pub name: String,
@@ -317,12 +320,16 @@ pub enum SavePointLeg {
 }
 
 /// Every directive receives exactly one answer: `Enter` answers `Ready`,
-/// `Leave` answers `Left`, `Stop` answers `TurnAborted` or `AtRest` by what it
-/// interrupted, `Admit` answers `Admitted`, `Release` answers `Released`,
-/// `Raise` answers `GateReady`, `Lower` answers `GateStopped`, `Validate`
-/// answers `Validated`, and `Load`, `Unload`, and `Show` answer `State`. Any
-/// directive may answer a [`LifecycleRefusal`] instead,
-/// which is the second half of what one answer per request means.
+/// `Leave` answers `Left`, `SavePoint` and the `save-point` verb
+/// (`SavePointVerb`) answer `SavePointTaken`, `Stop` answers `TurnAborted` or
+/// `AtRest` by what it interrupted, `Observe` answers `State`, `Admit`
+/// answers `Admitted`, `Release` answers `Released`, `Raise` answers
+/// `GateReady`, `Lower` answers `GateStopped`, `Validate` answers
+/// `Validated`, `Restore` answers `RestoreNamed`, `Load`, `Unload` and
+/// `ForceUnload` answer `State`, and `Show` answers `State` or, where another
+/// invocation holds the agent's lock, `InTransition`. Any directive may
+/// answer a [`LifecycleRefusal`] instead, which is the second half of what
+/// one answer per request means.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LifecycleAnswer {
@@ -1316,4 +1323,40 @@ pub enum FaultCase {
     /// reporting organ's own rendering by construction, and the load stands
     /// either way.
     IdentityPrefixUnrecorded,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **A save point report carries its seven members and no other** (#99,
+    /// K9): the report admin writes into a root-owned manifest round-trips,
+    /// and the same report with one field more fails to deserialize.
+    /// Perturbation: remove `deny_unknown_fields` from `SavePointReport` and
+    /// the extended report reads.
+    #[test]
+    fn a_save_point_report_with_an_extra_field_is_refused() {
+        let report = SavePointReport {
+            save_point: "ab".into(),
+            name: "ab.save-point".into(),
+            run: RunId("r-0".into()),
+            sequence: 5,
+            turn: 1,
+            event_run: RunId("r-1".into()),
+            position: 7,
+        };
+        let mut value = serde_json::to_value(&report).expect("serializes");
+        assert_eq!(
+            serde_json::from_value::<SavePointReport>(value.clone()).expect("round-trips"),
+            report
+        );
+        value
+            .as_object_mut()
+            .expect("an object")
+            .insert("extra".into(), serde_json::json!(1));
+        assert!(
+            serde_json::from_value::<SavePointReport>(value).is_err(),
+            "a report with an extra field is refused"
+        );
+    }
 }

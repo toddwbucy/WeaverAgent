@@ -102,8 +102,8 @@ pub trait Store {
     /// built before anything moves. An image that is no database, fails the
     /// engine's check or holds no event table is refused here.
     fn judge_image(&self, image: &[u8], session: &str) -> Result<ImageFacts, CustodyFault>;
-    /// Replace the holdings whole with an image's, the load's restore and the
-    /// live `restore` ask's one mechanism, **as a commit step**, per the
+    /// Replace the holdings whole with an image's, the load's restore,
+    /// **as a commit step**, per the
     /// operator's ruling of 2026-10-05 on #1: the election is built on a
     /// scratch copy of the image and the finished image is swapped in whole,
     /// so on any failure the live holdings never move. The image is one
@@ -140,9 +140,12 @@ pub struct RunShape {
     pub kinds: Vec<(String, i64)>,
 }
 
-/// An ask as the seam's closed vocabulary spells it: eight names, per the
-/// contract's section 2 as of 2026-10-02, and a frame carrying any other
-/// ask name is malformed and answers nothing.
+/// An ask as the seam's closed vocabulary spells it: seven names, per the
+/// contract's section 2, and a frame carrying any other ask name is
+/// malformed and answers nothing. **The live `restore` ask is retired** (the
+/// operator's ruling of 2026-10-08 on #99): a restore is a reload of state,
+/// made only at a load through the descriptor admin hands, so its frame is
+/// now one more unknown name.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Ask {
     /// The session's shape: runs in first-seen order, counts by kind.
@@ -166,10 +169,7 @@ pub enum Ask {
     /// answer and the `finished` answer echo, so a late answer is told from
     /// the retry's by its number.
     Snapshot { ordinal: u64 },
-    /// Replace the holdings from a save point in the member's room, per the
-    /// contract's seventh ask of 2026-10-02. Carries the name.
-    Restore { save_point: String },
-    /// What the load restored, per the contract's eighth ask of 2026-10-02.
+    /// What the load restored, per the contract's `restored` ask of 2026-10-02.
     /// Carries no members.
     Restored,
     /// **The harness's acknowledgement of a `snapshot` answer**, the one
@@ -183,9 +183,8 @@ pub enum Ask {
 /// Parse a seam frame as an ask, or nothing where it is not one. **An ask
 /// frame is one recognized name and no other, and its body is exactly what
 /// the contract gives that ask**: an empty object for the five asks that
-/// carry no members, exactly `ask` as a count for `snapshot`, exactly
-/// `save-point` as a string for `restore`, and at most `last-turns` as a
-/// count for `recall`. A frame naming two asks, or a
+/// carry no members, exactly `ask` as a count for `snapshot`, and at most
+/// `last-turns` as a count for `recall`. A frame naming two asks, or a
 /// body carrying anything else, is malformed and answers nothing, per the
 /// contract's silence rule, which matters most for `snapshot`, the one ask
 /// with a filesystem side effect: presence of its name is not an ask.
@@ -225,13 +224,6 @@ pub fn parse_ask(frame: &str) -> Option<Ask> {
             Some(Ask::Snapshot { ordinal })
         }
         "restored" => empty().map(|()| Ask::Restored),
-        "restore" => {
-            if body.len() != 1 {
-                return None;
-            }
-            let save_point = body.get("save-point")?.as_str()?.to_string();
-            Some(Ask::Restore { save_point })
-        }
         "recall" => {
             if body.len() > 1 {
                 return None;
@@ -327,7 +319,7 @@ pub fn render_replay_answer(events: &[RecalledEvent]) -> String {
     ) + "\n"
 }
 
-/// A save point's stamp as the `snapshot` and `restore` answers spell it,
+/// A save point's stamp as the `snapshot` answer spells it,
 /// per the contract: the name the room holds it under, the position it
 /// covers, and the digest of its bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -370,25 +362,8 @@ pub fn render_snapshot_answer(answer: &SavePointAnswer, ordinal: u64) -> String 
     frame
 }
 
-/// The restore answer: the snapshot's members read from the save point and
-/// `identity`, the prefix the restored holdings carry, served as the
-/// identity ask serves it.
-pub fn render_restore_answer(answer: &SavePointAnswer, identity: &[RecalledEvent]) -> String {
-    use serde_json::value::RawValue;
-    let mut members = stamp_members(answer);
-    let identity = RawValue::from_string(rendered_events(identity)).expect("events render");
-    members.insert(
-        "identity".into(),
-        serde_json::from_str(identity.get()).expect("rendered events parse"),
-    );
-    let mut frame =
-        serde_json::json!({"answer": {"restore": serde_json::Value::Object(members)}}).to_string();
-    frame.push('\n');
-    frame
-}
-
 /// What the load restored, held from the opener on and answered to the
-/// `restored` ask, per the contract's eighth ask of 2026-10-02.
+/// `restored` ask, per the contract's `restored` ask of 2026-10-02.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Restored {
     /// The stamp of the save point the member restored, its digest with it.
@@ -614,6 +589,20 @@ mod tests {
             parse_ask(r#"{"acknowledge":{"snapshot":{"digest":"ab"}}}"#),
             None
         );
+        // **An extra member refuses as a missing one does** (the #99 area 1
+        // review, T16): the acknowledgement's body, its outer object, the
+        // whole frame and the snapshot ask's body each carry exactly their
+        // members. Perturbations: drop any one member-count guard and its
+        // frame parses.
+        for frame in [
+            r#"{"acknowledge":{"snapshot":{"ask":2,"digest":"ab","extra":1}}}"#,
+            r#"{"acknowledge":{"snapshot":{"ask":2,"digest":"ab"},"other":{}}}"#,
+            r#"{"acknowledge":{"snapshot":{"ask":2,"digest":"ab"}},"ask":{"shape":{}}}"#,
+            r#"{"ask":{"snapshot":{"ask":2,"extra":1}}}"#,
+            r#"{"acknowledge":{"snapshot":{"ask":"2","digest":"ab"}}}"#,
+        ] {
+            assert_eq!(parse_ask(frame), None, "{frame}");
+        }
         assert!(
             render_finished_answer("x.save-point", 2)
                 .starts_with(r#"{"answer":{"finished":{"ask":2,"save-point":"x.save-point"}}}"#)

@@ -19,5 +19,5 @@ pub use store::{
     Ask, CustodyFault, Distillate, Election, ImageFacts, RecalledEvent, Restored, RunShape,
     SavePointAnswer, Store, is_shape_ask, parse_ask, parse_distillate, render_finished_answer,
     render_grants_answer, render_identity_answer, render_recall_answer, render_replay_answer,
-    render_restore_answer, render_restored_answer, render_shape_answer, render_snapshot_answer,
+    render_restored_answer, render_shape_answer, render_snapshot_answer,
 };

@@ -1630,8 +1630,18 @@ impl Harness {
         // `load` event names state the member did not restore. The dead-peer
         // clause does not convert this ask, and a member whose end arrived
         // but whose seam did not stand cannot be asked, which is the miss.
+        //
+        // **An enter naming a lineage with no member to ask refuses too**
+        // (#99, K8; survey S19): no member stands to have restored it, so
+        // the `load` would name state nothing restored, and the arm that
+        // skips the ask is the one where nothing is named.
         if !diagnostic {
             let answered = match (state_member, state_seam.as_mut()) {
+                (false, None) if payload.restore.is_some() => {
+                    return Err(EnterFailure::BeforeLoad(
+                        LifecycleRefusal::DescriptorsUnusable,
+                    ));
+                }
                 (false, None) => None,
                 (true, None) => {
                     return Err(EnterFailure::BeforeLoad(
@@ -3400,6 +3410,98 @@ mod tests {
             assert_eq!(load["payload"]["composer"]["sha256"], "cd".repeat(32));
             let _ = std::fs::remove_dir_all(&dir);
         }
+    }
+
+    /// **An enter naming a lineage with no state end refuses before the
+    /// load** (#99, K8; survey S19): with no member standing, nothing can
+    /// have restored the save point the enter names, so the enter refuses
+    /// `DescriptorsUnusable` with the stream still clean, where before it
+    /// skipped `restored_agrees` and authored a `load` naming the lineage.
+    ///
+    /// Perturbation: drop the `payload.restore.is_some()` arm and the enter
+    /// reaches the fan-out after the load.
+    #[test]
+    fn an_enter_naming_a_lineage_with_no_member_refuses_before_the_load() {
+        let dir = crate::scratch::dir(format!(
+            "weaver-harness-lineage-no-member-{}",
+            std::process::id()
+        ));
+        let socket = dir.join("c.sock");
+        std::fs::remove_file(&socket).ok();
+        let listener = crate::channel::bind_coordination(&socket).expect("bind");
+        let sink_path = dir.join("trace.ndjson");
+        let sink = OwnedFd::from(File::create(&sink_path).expect("sink"));
+        let mut harness = Harness {
+            coordination: listener,
+            organs: OrganBinaries {
+                classify: None,
+                spu: "/nonexistent/weaver-spu".into(),
+                gate: "/nonexistent/weaver-gate".into(),
+            },
+            parameters: OrganParameters::default(),
+            state: ChannelState::BeforeEnter,
+            composer: Some(weaver_trace::LoopIdentity::file(
+                "pyworker",
+                std::path::Path::new("/deployed/loop.py"),
+                Some("cd".repeat(32)),
+            )),
+        };
+        let payload = weaver_types::EnterPayload {
+            session: SessionId("s-lineage".into()),
+            run: weaver_types::RunId("r-1".into()),
+            spu_instruction: weaver_types::SpuInstruction {
+                classify: None,
+                decoder: weaver_types::DecoderInstruction {
+                    model_binding: weaver_types::ModelBinding {
+                        artifact: weaver_types::ArtifactRef("unreachable".into()),
+                        devices: vec![weaver_types::DeviceOrdinal(0)],
+                    },
+                    residual_readout_election: false,
+                    field_election: None,
+                    surprisal_election: false,
+                    refeed_permission: false,
+                    column_permission: false,
+                    tunable_values: Default::default(),
+                },
+            },
+            binding: weaver_types::EnterBinding::Serving {
+                gate_instruction: weaver_types::GateInstruction {
+                    access_rule: weaver_types::AccessRule {
+                        allowed_uids: Default::default(),
+                        allowed_gids: Default::default(),
+                        denied_uids: Default::default(),
+                    },
+                },
+            },
+            state_store: weaver_types::StateStore::default(),
+            declaration: String::new(),
+            restore: Some(lineage("ab", "r-0", 5, 1)),
+            reset: None,
+            stack: Default::default(),
+            boundary: String::new(),
+            cause: weaver_types::Cause { uid: 0 },
+            operator: 1000,
+            library_path: None,
+            state_election: weaver_types::StateElection {
+                all_kinds: false,
+                keys: Vec::new(),
+            },
+        };
+        let refusal = match harness.enter(payload, Some(sink), None) {
+            Err(EnterFailure::BeforeLoad(refusal)) => refusal,
+            Err(EnterFailure::AfterLoad(mut run, _)) => {
+                let _ = leave(&mut run, None, false);
+                panic!("a lineage with no member reached the load");
+            }
+            Ok(_) => panic!("the bogus fan-out cannot succeed"),
+        };
+        assert!(
+            matches!(refusal, LifecycleRefusal::DescriptorsUnusable),
+            "{refusal:?}"
+        );
+        let held = std::fs::read_to_string(&sink_path).expect("the sink reads back");
+        assert!(held.is_empty(), "the stream stays clean: {held}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A scripted member's far end that stood empty: every line the harness

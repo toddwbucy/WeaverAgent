@@ -19,5 +19,6 @@ rule alone. `run-at-bound` is the edge they meet at, a run of exactly 128 bytes;
 range, and `stamp-not-utf8` a stamp line holding a byte no UTF-8 reading admits.
 `stamp-eight-members`, `stamp-member-missing`, `sequence-wrong-type` and
 `turn-wrong-type` hold the stamp line to exactly the format's seven members, each of
-its type. Every case's check line is the check over its own bytes, so each refuses
+its type. `nonce-extra-member` holds the nonce to exactly its three members (#99,
+area 1 review): a fourth refuses in both readers. Every case's check line is the check over its own bytes, so each refuses
 for its named rule and never for its check.

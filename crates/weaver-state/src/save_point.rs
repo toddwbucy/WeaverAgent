@@ -78,11 +78,6 @@ pub enum SavePointFault {
     CheckFailed,
     /// The file could not be opened, read or written.
     Io(String),
-    /// A name that is not a plain entry of the room.
-    NotAPlainName,
-    /// The bytes under the name are a sound save point whose own name,
-    /// its digest, is another: an alias, which is not this save point.
-    NameDisagrees,
     /// The rendered save point is past [`SAVE_POINT_BOUND`], so it is never
     /// written: the file's size and the bound it exceeds.
     PastBound { size: u64, bound: u64 },
@@ -94,10 +89,6 @@ impl std::fmt::Display for SavePointFault {
             SavePointFault::Malformed(why) => write!(f, "malformed save point: {why}"),
             SavePointFault::CheckFailed => write!(f, "save point fails its check"),
             SavePointFault::Io(why) => write!(f, "save point io: {why}"),
-            SavePointFault::NotAPlainName => write!(f, "save point name is not a plain entry"),
-            SavePointFault::NameDisagrees => {
-                write!(f, "save point name is not the digest's, an alias")
-            }
             SavePointFault::PastBound { size, bound } => {
                 write!(f, "save point is {size} bytes, past the bound of {bound}")
             }
@@ -286,17 +277,8 @@ impl SavePoint {
         // judgment bounds them: a run id of at most 128 printable ASCII
         // bytes, a schema of exactly 64 lowercase hex.
         let run = text("run")?;
-        if run.len() > 128 || !run.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
-            return Err(malformed("run is not at most 128 printable ASCII bytes"));
-        }
         let schema = text("schema")?;
-        if schema.len() != 64
-            || !schema
-                .bytes()
-                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-        {
-            return Err(malformed("schema is not 64 lowercase hex"));
-        }
+        stamp_bounds(&run, &schema)?;
         let parsed = SavePoint {
             stamp: Stamp {
                 run,
@@ -316,6 +298,27 @@ impl SavePoint {
         }
         Ok(parsed)
     }
+}
+
+/// **The stamp's bounds, one rule for the writer and the reader** (the
+/// operator's ruling of 2026-10-08 on #1, the custody audit's G2, as admin's
+/// judgment bounds them): a run id of at most 128 printable ASCII bytes and a
+/// schema of exactly 64 lowercase hex. [`SavePoint::parse`] refuses a file
+/// that breaks either, and [`Room::write_part_within`] refuses to write one
+/// (#99, K7), so every finished file is one the readers admit.
+fn stamp_bounds(run: &str, schema: &str) -> Result<(), SavePointFault> {
+    let malformed = |why: &str| Err(SavePointFault::Malformed(why.to_string()));
+    if run.len() > 128 || !run.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
+        return malformed("run is not at most 128 printable ASCII bytes");
+    }
+    if schema.len() != 64
+        || !schema
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return malformed("schema is not 64 lowercase hex");
+    }
+    Ok(())
 }
 
 /// The digest of a schema's text, sha256 hex, as the stamp names it.
@@ -369,9 +372,12 @@ impl Room {
         ])
     }
 
-    /// Write a save point as a new file and answer its finished name: the
-    /// part written and finished in one call, for a writer that needs no
-    /// acknowledgement, the offline builder's case.
+    /// **A test helper that skips the acknowledgement**: the part written
+    /// and finished in one call, with no harness to acknowledge it. No
+    /// writer outside the tests finishes a save point without one; the
+    /// offline builder's Spec act decides how its writes are acknowledged
+    /// (#99, K6).
+    #[cfg(test)]
     pub fn write(&self, save_point: &SavePoint) -> Result<String, SavePointFault> {
         let name = self.write_part(save_point)?;
         self.finish(&name)?;
@@ -393,7 +399,10 @@ impl Room {
     /// created**, per `weaver-state-Spec` section 3: the standing part is
     /// cleared as for any write, the refusal leaves the room holding none,
     /// and the caller answers nothing. The bound is a parameter so a test
-    /// can lower it; every writer passes [`SAVE_POINT_BOUND`].
+    /// can lower it; every writer passes [`SAVE_POINT_BOUND`]. **So is a
+    /// stamp the readers would refuse** (#99, K7): a run or a schema past
+    /// [`stamp_bounds`] is `Malformed` here, by the parse's own rule, so no
+    /// finished file is one the member's parse or admin's judgment refuses.
     pub fn write_part_within(
         &self,
         save_point: &SavePoint,
@@ -401,6 +410,7 @@ impl Room {
     ) -> Result<String, SavePointFault> {
         use nix::fcntl::OFlag;
         self.clear_parts();
+        stamp_bounds(&save_point.stamp.run, &save_point.schema)?;
         let size = save_point.rendered_len();
         if size > bound {
             return Err(SavePointFault::PastBound { size, bound });
@@ -521,43 +531,6 @@ impl Room {
         nix::unistd::fsync(self.dir.as_fd())
             .map_err(|e| format!("sync room after unlink {name}: {e}"))
     }
-
-    /// Read a save point by name from the room and nowhere else: the name
-    /// must be a plain entry, the open follows no link, the bytes are judged
-    /// before anything is answered, **and the name must be the save point's
-    /// own**, the digest with the suffix, so one save point has one name and
-    /// a copy under another is refused as an alias; the name an answer or
-    /// the `save_point` event carries is thereby the digest's by
-    /// construction.
-    pub fn read(&self, name: &str) -> Result<SavePoint, SavePointFault> {
-        use nix::fcntl::OFlag;
-        if !is_plain_name(name) {
-            return Err(SavePointFault::NotAPlainName);
-        }
-        let fd = nix::fcntl::openat(
-            self.dir.as_fd(),
-            name,
-            OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
-            nix::sys::stat::Mode::empty(),
-        )
-        .map_err(|e| SavePointFault::Io(format!("open {name}: {e}")))?;
-        let save_point = read_regular(fd)?;
-        if save_point.name() != name {
-            return Err(SavePointFault::NameDisagrees);
-        }
-        Ok(save_point)
-    }
-}
-
-/// A plain entry of the room: not empty, not `.` or `..`, no `/`, no NUL, and
-/// not a dotted name, which is where the part files live.
-pub fn is_plain_name(name: &str) -> bool {
-    !name.is_empty()
-        && name != "."
-        && name != ".."
-        && !name.starts_with('.')
-        && !name.contains('/')
-        && !name.contains('\0')
 }
 
 /// Read a save point from a descriptor that must hold a regular file, the
@@ -786,9 +759,9 @@ mod tests {
         ));
     }
 
-    /// **The room writes a new file under the digest and never over one**,
-    /// reads it back by name, refuses a name that is not a plain entry, and
-    /// a second write of the same bytes is refused rather than overwriting.
+    /// **The room writes a new file under the digest and never over one**:
+    /// the file parses back to the save point, and a second write of the
+    /// same bytes is refused rather than overwriting.
     /// Perturbation: replace the link with a rename and the second write
     /// succeeds over the first.
     #[test]
@@ -809,29 +782,14 @@ mod tests {
             !dir.join(format!(".part-{name}")).exists(),
             "the part name is gone"
         );
-        assert_eq!(room.read(&name).expect("reads"), save_point);
+        assert_eq!(
+            SavePoint::parse(&std::fs::read(dir.join(&name)).expect("reads")).expect("parses"),
+            save_point
+        );
         assert!(
             matches!(room.write(&save_point), Err(SavePointFault::Io(_))),
             "the same bytes again are refused, never overwritten"
         );
-        for bad in ["", ".", "..", "../x", "a/b", ".part-x", "a\0b"] {
-            assert_eq!(
-                room.read(bad).err(),
-                Some(SavePointFault::NotAPlainName),
-                "{bad:?}"
-            );
-        }
-        assert!(matches!(
-            room.read("absent.save-point"),
-            Err(SavePointFault::Io(_))
-        ));
-        // **One save point has one name**: the same bytes under another
-        // plain name are an alias and refused, the digest's name still
-        // reading. Perturbation: drop the name check from `read` and the
-        // copy restores under its alias.
-        std::fs::copy(dir.join(&name), dir.join("copy")).expect("copies");
-        assert_eq!(room.read("copy").err(), Some(SavePointFault::NameDisagrees));
-        assert_eq!(room.read(&name).expect("reads"), save_point);
         // The failed-sync cleanup is checked and names the file: a removal
         // of a name the room does not hold reports which name. Perturbation:
         // ignore the unlink's result in `remove_finished` and the absent
@@ -900,6 +858,49 @@ mod tests {
             .write_part_within(&save_point, size)
             .expect("at the bound it writes");
         assert!(dir.join(format!(".part-{name}")).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A stamp the readers would refuse writes no part** (#99, K7): a run
+    /// of 129 bytes, or a schema that is not 64 lowercase hex, is refused
+    /// `Malformed` by the parse's own rule before any part is created, the
+    /// part a previous write left cleared too, so the room holds no file; a
+    /// run of 128 writes. Perturbation: drop the `stamp_bounds` call from
+    /// `write_part_within` and the long run stands a part.
+    #[test]
+    fn a_stamp_the_readers_refuse_writes_no_part() {
+        let dir = std::env::temp_dir().join(format!(
+            "weaver-state-stamp-bounds-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("room");
+        let room = Room::open(&dir).expect("opens");
+        room.write_part(&taken("r-1", 40, b"earlier"))
+            .expect("an earlier part");
+        let long = taken(&"r".repeat(129), 41, b"image");
+        assert!(
+            SavePoint::parse(&long.bytes()).is_err(),
+            "the reader refuses it"
+        );
+        assert!(matches!(
+            room.write_part(&long),
+            Err(SavePointFault::Malformed(why)) if why.contains("128 printable")
+        ));
+        let mut foreign = taken("r-1", 41, b"image");
+        foreign.schema = "NOT-HEX".into();
+        assert!(matches!(
+            room.write_part(&foreign),
+            Err(SavePointFault::Malformed(why)) if why.contains("64 lowercase hex")
+        ));
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .expect("lists")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        assert!(left.is_empty(), "the refusals leave no file: {left:?}");
+        room.write_part(&taken(&"r".repeat(128), 41, b"image"))
+            .expect("a run of 128 writes");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
