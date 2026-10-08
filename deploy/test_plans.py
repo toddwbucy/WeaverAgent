@@ -2435,6 +2435,8 @@ esac
         territory.chmod(0o2750)
         if territory.stat().st_mode & 0o7777 != 0o2750:
             self.skipTest("this filesystem keeps no setgid bit for this user")
+        (territory / "save-points").mkdir(exist_ok=True)
+        (territory / "save-points").chmod(0o755)
         (self.root / "installed").mkdir(exist_ok=True)
         self.env.update(ALLOW_APPLY_CHECKS="1", TERRITORY_GROUP_AS="weaver-existing-old")
         result = self.run_script("update-stack.sh", "--install")
@@ -2458,6 +2460,13 @@ esac
                        str(territory / "save-points")], calls[lay:])
         self.assertIn(["sudo", "chgrp", "weaver-existing-old", str(territory)], calls[lay:])
         self.assertIn(["sudo", "chmod", "02750", str(territory)], calls[lay:])
+        # **And the restore puts `save-points/` back before it reopens the
+        # territory** (the security review of 85054d5): once the territory
+        # stands as found, a member who could write it could swap a link in
+        # for root's re-lay of `save-points/` to follow. Perturbation: re-lay
+        # the territory first and this fails.
+        reopen = calls.index(["sudo", "chmod", "02750", str(territory)])
+        self.assertLess(calls.index(["sudo", "chmod", "00755", str(territory / "save-points")]), reopen)
 
     def test_the_verify_load_must_answer_the_idle_state(self):
         """**The verify step reads the load's answer** (#99 area 2 review,

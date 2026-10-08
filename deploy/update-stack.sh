@@ -958,11 +958,15 @@ restore() {
     for entry in "${LAID[@]}"; do
       IFS='|' read -r agent territory group mode sp <<< "$entry"
       printf '  re-laying %s as it stood\n' "$territory" >&2
-      restore_directory "$territory" "$group" "$mode" || failed=1
+      # `save-points/` first, while the territory is still closed: the
+      # territory's own re-lay may reopen it to a member who could then put
+      # a link at `save-points` for root's chgrp, chmod and setfacl to follow
+      # (the security review of 85054d5).
       case $sp in
         made|none) ;;
         *) restore_directory "$territory/save-points" "${sp%%:*}" "${sp##*:}" || failed=1 ;;
       esac
+      restore_directory "$territory" "$group" "$mode" || failed=1
     done
   fi
   if [ "$INSTALL_DONE" -eq 1 ] && [ -n "$BACKUP" ]; then
