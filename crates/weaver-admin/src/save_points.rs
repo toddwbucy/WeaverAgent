@@ -519,6 +519,23 @@ fn append_line(
     owner: Owner,
     line: &ManifestLine,
 ) -> Result<(), LifecycleRefusal> {
+    append_line_with(directory, owner, line, &mut |fd, uid, gid| {
+        nix::unistd::fchown(
+            fd,
+            Some(nix::unistd::Uid::from_raw(uid)),
+            Some(nix::unistd::Gid::from_raw(gid)),
+        )
+    })
+}
+
+/// `append_line` with the new manifest's chown a parameter, so a test can
+/// count it.
+fn append_line_with(
+    directory: BorrowedFd<'_>,
+    owner: Owner,
+    line: &ManifestLine,
+    chown: &mut dyn FnMut(BorrowedFd<'_>, u32, u32) -> nix::Result<()>,
+) -> Result<(), LifecycleRefusal> {
     let refuse = |what: String| {
         diag!("weaver-admin: the manifest {MANIFEST} {what}");
         LifecycleRefusal::BoundaryUnverified
@@ -540,6 +557,13 @@ fn append_line(
         )
         .map_err(|e| refuse(format!("does not create: {e}")))?;
         let file = std::fs::File::from(fd);
+        // **Its owner and group set, never the invoker's** (Codex on #94):
+        // `save-points/` is not setgid, so a new file takes the creating
+        // process's effective gid, and a root shell whose egid is not 0 would
+        // leave a manifest its own judgment refuses, stopping every later
+        // publication.
+        chown(file.as_fd(), owner.uid, owner.gid)
+            .map_err(|e| refuse(format!("does not take its owner and group: {e}")))?;
         nix::sys::stat::fchmod(
             file.as_fd(),
             nix::sys::stat::Mode::from_bits_truncate(0o644),
@@ -1259,6 +1283,19 @@ pub fn write_marker(root: &Path, marker: Option<&Marker>) -> std::io::Result<()>
     let temporary = root.join(".run.marker.new");
     {
         let mut file = std::fs::File::create(&temporary)?;
+        // **Root's group set, never the invoker's** (Codex on #94), as a
+        // defence: nothing judges the marker's group, but every file this
+        // crate creates takes its owner explicitly, so none depends on the
+        // invoking shell's effective gid. Root alone can set gid 0, and a
+        // test running as its user writes the marker under its own.
+        if nix::unistd::geteuid().is_root() {
+            nix::unistd::fchown(
+                file.as_fd(),
+                Some(nix::unistd::Uid::from_raw(0)),
+                Some(nix::unistd::Gid::from_raw(0)),
+            )
+            .map_err(std::io::Error::from)?;
+        }
         // **Root's, 0644, whatever the umask** (Codex on #94, round 10): the
         // create takes the invoking shell's umask, and a permissive one
         // would leave the marker writable in the 0755 root, so the mode is
@@ -1302,6 +1339,59 @@ pub fn room_of(territory_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    /// **A new manifest takes its owner and group explicitly** (Codex on
+    /// #94): the first line creates the manifest and sets its owner and
+    /// group to the expected owner's, whatever the creating process's
+    /// effective gid, before its mode and the directory's sync; a later line,
+    /// the manifest standing, sets nothing. The chown is counted through the
+    /// seam, so the case needs no second group and never skips.
+    /// Perturbation: drop the call and the count reads zero.
+    #[test]
+    fn a_new_manifest_takes_its_owner_and_group_explicitly() {
+        let scratch = crate::scratch::Scratch(std::env::temp_dir().join(format!(
+            "weaver-admin-manifest-owner-{}",
+            std::process::id()
+        )));
+        let dir = scratch.0.clone();
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_fd = open_directory(&dir).unwrap();
+        let mine = Owner {
+            uid: nix::unistd::getuid().as_raw(),
+            gid: nix::unistd::getgid().as_raw(),
+        };
+        let line = ManifestLine {
+            ordinal: 1,
+            digest: "ab".into(),
+            name: "ab.save-point".into(),
+            stamp: Stamp {
+                run: "r-1".into(),
+                sequence: 1,
+                turn: 0,
+                schema: String::new(),
+                wall_ns: 0,
+            },
+            position: None,
+            arrived: Arrival::Leave,
+        };
+        let mut chowned = Vec::new();
+        let mut counting = |_: BorrowedFd<'_>, uid: u32, gid: u32| -> nix::Result<()> {
+            chowned.push((uid, gid));
+            Ok(())
+        };
+        append_line_with(dir_fd.as_fd(), mine, &line, &mut counting).unwrap();
+        let second = ManifestLine {
+            ordinal: 2,
+            ..line.clone()
+        };
+        append_line_with(dir_fd.as_fd(), mine, &second, &mut counting).unwrap();
+        assert_eq!(
+            chowned,
+            [(mine.uid, mine.gid)],
+            "set once, at the creation, to the expected owner"
+        );
+        assert_eq!(read_manifest(dir_fd.as_fd(), mine).unwrap().len(), 2);
+    }
+
     /// **An adopted entry is judged, then made durable** (Codex on #94): an
     /// entry that stands is judged as a load judges it and the directory
     /// synced once before any manifest line can name it; a name with no
