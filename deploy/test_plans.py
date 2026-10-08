@@ -1715,6 +1715,16 @@ esac
         self.assertIn("already holds an agent.toml", result.stderr)
         self.assertIn("REDEPLOY.md section 8, step 7", result.stderr)
         (territory / "agent.toml").unlink()
+        # **Every occupied destination refuses, naming it, its bytes kept**
+        # (Codex on #94): a territory already holding a log would have it
+        # replaced by the move. Perturbation: judge agent.toml alone again and
+        # this run plans the migration over the standing log.
+        (territory / "admin.log").write_text("kept\n")
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("already holds an admin.log", result.stderr)
+        self.assertEqual((territory / "admin.log").read_text(), "kept\n")
+        (territory / "admin.log").unlink()
         # The move itself, as the install runs it: the stand-in sudo runs the
         # file verbs and records the account and ownership verbs.
         stand_in = self.root / "stand-in"
@@ -1723,7 +1733,8 @@ esac
         (stand_in / "sudo").write_text(STAND_IN_SUDO.replace("{recorded}", str(recorded)))
         (stand_in / "sudo").chmod(0o755)
         text = (self.repo / "deploy" / "update-stack.sh").read_text()
-        program = (shell_function(text, "chmod_nofollow") + shell_function(text, "migrate_layout")
+        program = (shell_function(text, "chmod_nofollow") + shell_function(text, "move_no_clobber")
+                   + shell_function(text, "migrate_layout")
                    + 'MOVED=(); declare -A MOVED_FILES=(); rollback() { echo "ROLLBACK: $1" >&2; exit 1; }\n'
                    + 'migrate_layout "$1"; printf \'%s\\n\' "${MOVED[@]}"')
         env = {**os.environ, "PATH": f"{stand_in}{os.pathsep}{os.environ['PATH']}",
@@ -1835,6 +1846,32 @@ esac
             self.assertTrue(any(c[:3] == ["sudo", "python3", "-c"] and c[-2:] == ["600", str(old_dir / name)]
                                 for c in calls[after:]), name)
             self.assertEqual((old_dir / name).stat().st_mode & 0o7777, 0o600, name)
+
+    def test_a_move_that_would_replace_fails_and_keeps_the_destination(self):
+        """**A move onto an occupied destination fails, loudly, and replaces
+        nothing** (Codex on #94): `move_no_clobber` declines with `mv -n` and
+        reads the source still standing as the failure, so a destination made
+        after the preflight keeps its bytes and the migration rolls back.
+        Perturbation: move with `mv -T` again and the destination's bytes are
+        replaced and the move answers success."""
+        text = (DEPLOY / "update-stack.sh").read_text()
+        source = self.root / "admin.log.source"
+        source.write_text("moved\n")
+        destination = self.root / "admin.log"
+        destination.write_text("kept\n")
+        program = 'sudo() { "$@"; }\n' + shell_function(text, "move_no_clobber") + 'move_no_clobber "$1" "$2"'
+        env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
+        ran = subprocess.run(["bash", "-c", program, "bash", str(source), str(destination)],
+                             env=env, text=True, capture_output=True, timeout=20)
+        self.assertNotEqual(ran.returncode, 0, "a declined move is a failure")
+        self.assertEqual(destination.read_text(), "kept\n")
+        self.assertTrue(source.exists())
+        destination.unlink()
+        ran = subprocess.run(["bash", "-c", program, "bash", str(source), str(destination)],
+                             env=env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertEqual(destination.read_text(), "moved\n")
+        self.assertFalse(source.exists())
 
     def test_the_no_follow_chmod_refuses_a_link_and_sets_a_regular_file(self):
         # Codex on #94, round 14: root sets a moved file's mode through a

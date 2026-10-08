@@ -900,7 +900,8 @@ files and does not read, or a named line whose file is absent, refuses `Boundary
 the manifest, and no manifest and no file is an agent's first load. **The selected save
 point's bytes are judged here**, before any process exists, under this crate's custody
 through the descriptor it opens and never by path: the entry judgment of section 9 (a
-regular file, not a link, owned by the operator, closed to group and other), a stamp line
+regular file, not a link, root's, mode 0640, grouped to the access group (judged by
+name, section 9)), a stamp line
 of the format's seven members, a check over the bytes that holds, a digest equal to the
 manifest's and a published name computable from the stamp per `weaver-state-Spec`
 section 3, and any of these failing refuses `ConfigInvalid` naming the save point, so a

@@ -623,10 +623,11 @@ fn append_line_with(
 
 // ------------------------------------------------------------ publication
 
-/// A finished save point found in the member's room, judged.
+/// A finished save point found in the member's room, judged: its name and
+/// its judgment, never its bytes (Codex on #94), so a room of many files
+/// never holds more than the one being copied in this root process's memory.
 struct RoomEntry {
     name: String,
-    bytes: Vec<u8>,
     judged: Judged,
 }
 
@@ -636,7 +637,6 @@ struct RoomEntry {
 /// uid under a finished name, its bytes judged; anything else is left in
 /// place and named.
 fn read_room(room: &Path, member_uid: u32) -> Option<(OwnedFd, Vec<RoomEntry>)> {
-    use std::os::unix::fs::MetadataExt;
     let dir = nix::fcntl::open(
         room,
         nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_DIRECTORY | nix::fcntl::OFlag::O_CLOEXEC,
@@ -653,63 +653,77 @@ fn read_room(room: &Path, member_uid: u32) -> Option<(OwnedFd, Vec<RoomEntry>)> 
         if !is_finished_name(&name) {
             continue;
         }
-        let Ok(fd) = nix::fcntl::openat(
-            dir.as_fd(),
-            name.as_str(),
-            nix::fcntl::OFlag::O_RDONLY
-                | nix::fcntl::OFlag::O_NOFOLLOW
-                | nix::fcntl::OFlag::O_CLOEXEC,
-            nix::sys::stat::Mode::empty(),
-        ) else {
-            diag!("weaver-admin: the room's {name} does not open and is left in place");
-            continue;
-        };
-        let mut file = std::fs::File::from(fd);
-        let Ok(metadata) = file.metadata() else {
-            continue;
-        };
-        if !metadata.is_file() || metadata.uid() != member_uid {
-            diag!(
-                "weaver-admin: the room's {name} is not the member's regular file and is left in place"
-            );
-            continue;
-        }
-        if metadata.len() > SAVE_POINT_BOUND {
-            diag!(
-                "weaver-admin: the room's {name} is {} bytes, past the bound of {SAVE_POINT_BOUND}, and is left in place",
-                metadata.len()
-            );
-            continue;
-        }
-        // **The bound holds through the read** (Codex on #94): the member
-        // owns this file and may still be running at a `save-point`, so it
-        // can grow the file after the length above was read; the read stops
-        // one byte past the bound and a file that reached it is refused as
-        // the length check refuses it.
-        let bytes = match read_within(&mut file, SAVE_POINT_BOUND) {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => {
-                diag!(
-                    "weaver-admin: the room's {name} grew past the bound of {SAVE_POINT_BOUND} as it was read, and is left in place"
-                );
-                continue;
-            }
-            Err(_) => continue,
-        };
-        match judge(&bytes) {
-            Ok(judged) if format!("{}{SUFFIX}", judged.digest) == name => found.push(RoomEntry {
-                name,
-                bytes,
-                judged,
-            }),
-            Ok(_) => diag!("weaver-admin: the room's {name} is not the file its name claims"),
-            Err(why) => diag!("weaver-admin: the room's {name} is not a save point ({why})"),
+        // Judged and dropped: the bytes are read again, and judged again,
+        // when this entry is copied.
+        if let Some((_, judged)) = judge_room_file(dir.as_fd(), &name, member_uid) {
+            found.push(RoomEntry { name, judged });
         }
     }
     // The listing's order is the filesystem's and means nothing; by name
     // it is the same on every box, and `publish` orders by the clock.
     found.sort_by(|a, b| a.name.cmp(&b.name));
     Some((dir, found))
+}
+
+/// **One room file, opened and judged through the room's descriptor**: a
+/// regular file owned by the member's uid, under the bound through the read,
+/// whose bytes judge sound and digest to its finished name. The bytes and the
+/// judgment are answered together, from one read, so what is copied is what
+/// was judged; anything else is left in place and named.
+fn judge_room_file(dir: BorrowedFd<'_>, name: &str, member_uid: u32) -> Option<(Vec<u8>, Judged)> {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(fd) = nix::fcntl::openat(
+        dir,
+        name,
+        nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_NOFOLLOW | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::empty(),
+    ) else {
+        diag!("weaver-admin: the room's {name} does not open and is left in place");
+        return None;
+    };
+    let mut file = std::fs::File::from(fd);
+    let Ok(metadata) = file.metadata() else {
+        return None;
+    };
+    if !metadata.is_file() || metadata.uid() != member_uid {
+        diag!(
+            "weaver-admin: the room's {name} is not the member's regular file and is left in place"
+        );
+        return None;
+    }
+    if metadata.len() > SAVE_POINT_BOUND {
+        diag!(
+            "weaver-admin: the room's {name} is {} bytes, past the bound of {SAVE_POINT_BOUND}, and is left in place",
+            metadata.len()
+        );
+        return None;
+    }
+    // **The bound holds through the read** (Codex on #94): the member
+    // owns this file and may still be running at a `save-point`, so it
+    // can grow the file after the length above was read; the read stops
+    // one byte past the bound and a file that reached it is refused as
+    // the length check refuses it.
+    let bytes = match read_within(&mut file, SAVE_POINT_BOUND) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => {
+            diag!(
+                "weaver-admin: the room's {name} grew past the bound of {SAVE_POINT_BOUND} as it was read, and is left in place"
+            );
+            return None;
+        }
+        Err(_) => return None,
+    };
+    match judge(&bytes) {
+        Ok(judged) if format!("{}{SUFFIX}", judged.digest) == name => Some((bytes, judged)),
+        Ok(_) => {
+            diag!("weaver-admin: the room's {name} is not the file its name claims");
+            None
+        }
+        Err(why) => {
+            diag!("weaver-admin: the room's {name} is not a save point ({why})");
+            None
+        }
+    }
 }
 
 /// **Publish the member's finished save points into the territory's
@@ -728,11 +742,34 @@ pub fn publish(
     owner: Owner,
     reports: &[(SavePointReport, Arrival)],
 ) -> Result<Vec<ManifestLine>, LifecycleRefusal> {
+    publish_with(
+        room,
+        member_uid,
+        directory,
+        file_owner,
+        owner,
+        reports,
+        &mut || {},
+    )
+}
+
+/// `publish` with a hook run between the room's scan and the first copy, so
+/// a test can change the room there as a running member could.
+fn publish_with(
+    room: &Path,
+    member_uid: u32,
+    directory: BorrowedFd<'_>,
+    file_owner: (u32, u32),
+    owner: Owner,
+    reports: &[(SavePointReport, Arrival)],
+    after_scan: &mut dyn FnMut(),
+) -> Result<Vec<ManifestLine>, LifecycleRefusal> {
     let mut lines = read_manifest(directory, owner)?;
     let mut appended = Vec::new();
     let Some((room_dir, mut entries)) = read_room(room, member_uid) else {
         return Ok(appended);
     };
+    after_scan();
     // **Several entries publish recovered first, then reported, the clock
     // ordering within a kind** (Codex on #94, rounds 5 and 6), per Spec
     // section 6: a reported save point was taken last by construction, so
@@ -811,6 +848,23 @@ pub fn publish(
         // judgment, so a directory swapped under the path between
         // steps is not followed and a link put at the path has this root
         // process create nothing where it points.
+        // **The copy is made from bytes judged in the same read** (Codex on
+        // #94): the scan kept no bytes, so the entry is opened again through
+        // the room's descriptor and judged again here, and those bytes, and
+        // no other read of them, are what is copied. The member can still
+        // write its room, so a verdict from the scan is never trusted for a
+        // later read; a file that changed since is refused and left in place.
+        let Some((bytes, judged)) = judge_room_file(room_dir.as_fd(), &entry.name, member_uid)
+        else {
+            continue;
+        };
+        if judged.digest != entry.judged.digest {
+            diag!(
+                "weaver-admin: the room's {} changed after it was judged and is left in place",
+                entry.name
+            );
+            continue;
+        }
         let temporary = format!(".publishing-{}", entry.judged.digest);
         let remove_temporary = || {
             let _ = nix::unistd::unlinkat(
@@ -840,7 +894,7 @@ pub fn publish(
                 nix::sys::stat::Mode::from_bits_truncate(0o640),
             )
             .map_err(std::io::Error::from)?;
-            file.write_all(&entry.bytes)?;
+            file.write_all(&bytes)?;
             nix::unistd::fchown(
                 file.as_fd(),
                 Some(nix::unistd::Uid::from_raw(file_owner.0)),
@@ -1745,6 +1799,65 @@ mod tests {
             .unwrap()
             .expect("a latest");
         assert_eq!(latest.line.digest, behind_digest);
+    }
+
+    /// **The room is copied one file at a time, from bytes judged in the same
+    /// read** (Codex on #94): three finished files in the room publish, each
+    /// read and judged again at its own copy, the scan having kept none of
+    /// their bytes (`RoomEntry` holds a name and a judgment, so it cannot);
+    /// and a file the member replaced between the scan and its copy, its
+    /// name kept and its bytes another save point's, is refused at the
+    /// re-judgment and left in place while the others publish.
+    /// Perturbation: copy without judging again, trusting the scan's
+    /// verdict, and the replaced bytes are published under the name the
+    /// scan judged.
+    #[test]
+    fn the_room_is_copied_from_bytes_judged_in_the_same_read() {
+        let scratch = crate::scratch::Scratch(std::env::temp_dir().join(format!(
+            "weaver-admin-room-one-at-a-time-{}",
+            std::process::id()
+        )));
+        let base = scratch.0.clone();
+        let room = base.join("room");
+        let dir = base.join("published");
+        std::fs::create_dir_all(&room).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_fd = open_directory(&dir).unwrap();
+        let me = nix::unistd::getuid().as_raw();
+        let mine = Owner {
+            uid: me,
+            gid: nix::unistd::getgid().as_raw(),
+        };
+        let mut names = Vec::new();
+        for (sequence, wall) in [
+            (1u64, 1_000_000_000u64),
+            (2, 2_000_000_000),
+            (3, 3_000_000_000),
+        ] {
+            let bytes = save_point("r-1", sequence, 0, wall, b"room");
+            let judged = judge(&bytes).unwrap();
+            let name = format!("{}{SUFFIX}", judged.digest);
+            std::fs::write(room.join(&name), &bytes).unwrap();
+            names.push((name, judged.digest));
+        }
+        // Between the scan and the copies the member replaces the first file
+        // with another save point's bytes under the same name.
+        let swapped = room.join(&names[0].0);
+        let other = save_point("r-1", 9, 0, 9_000_000_000, b"other");
+        let lines = publish_with(
+            &room,
+            me,
+            dir_fd.as_fd(),
+            (mine.uid, mine.gid),
+            mine,
+            &[],
+            &mut || std::fs::write(&swapped, &other).unwrap(),
+        )
+        .unwrap();
+        let published: Vec<&str> = lines.iter().map(|line| line.digest.as_str()).collect();
+        assert_eq!(published, [names[1].1.as_str(), names[2].1.as_str()]);
+        assert!(swapped.exists(), "the replaced file is left in place");
+        assert!(!room.join(&names[1].0).exists() && !room.join(&names[2].0).exists());
     }
 
     /// **A publication interrupted after the rename is adopted at the next

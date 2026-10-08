@@ -295,8 +295,9 @@ done
 # `save-points/` made beside them, the root's `territory` key written and the
 # old key removed, the member and the operator joined to the access group,
 # and the territory grouped to it. The plan names the move and does nothing. A
-# territory already holding an `agent.toml` refuses, since two declarations of
-# one agent is not a state this script can choose between.
+# territory already holding any of the four files refuses, naming it (Codex on
+# #94): two declarations of one agent is not a state this script can choose
+# between, and a move onto a prompt draft or a log would destroy its bytes.
 LAYOUT=()
 for agent in $AGENTS; do
   old=$(root_path "$agent" declaration-directory) || exit 1
@@ -304,7 +305,9 @@ for agent in $AGENTS; do
   [ -z "$(root_path "$agent" territory)" ] || die "$agent: its root names both a territory and a declaration-directory; remove the key that is wrong, then rerun"
   territory=$(territory_of "$agent") || exit 1
   [ -d "$territory" ] && [ ! -L "$territory" ] || die "$agent: its territory $territory does not stand, so its declaration cannot move there (deploy/REDEPLOY.md section 8, step 7)"
-  [ ! -e "$territory/agent.toml" ] || die "$agent: its territory $territory already holds an agent.toml while its root still names $old; remove the one that is wrong, then rerun (deploy/REDEPLOY.md section 8, step 7)"
+  for f in agent.toml system-prompt.md admin.log worker.log; do
+    [ ! -e "$territory/$f" ] && [ ! -L "$territory/$f" ] || die "$agent: its territory $territory already holds an $f while its root still names $old; remove the one that is wrong, then rerun (deploy/REDEPLOY.md section 8, step 7)"
+  done
   # **Every entry the move would take is a regular file and not a link**,
   # judged here before anything moves, in the plan as in the install (Codex
   # on #94, round 13): chmod has no no-dereference form, so a link must never
@@ -878,6 +881,14 @@ fi
 # Each entry is registered before its first step, so a death inside the loop
 # still puts the files back. A function, so the plan tests run it against a
 # stand-in sudo.
+# **A move that never replaces** (Codex on #94): `mv -n` declines an occupied
+# destination, and since it may decline in silence, the source still standing
+# after it is the move having failed. The preflight refused an occupied
+# destination already; this holds the line against one made since.
+move_no_clobber() {
+  sudo mv -n -T -- "$1" "$2" && ! sudo test -e "$1"
+}
+
 # migrate_layout "AGENT|OLD|TERRITORY"...
 migrate_layout() {
   local entry agent old territory f group mode owner fmode
@@ -906,13 +917,13 @@ migrate_layout() {
     # have root set its target's mode; the open refuses a link by name.
     for f in agent.toml system-prompt.md; do
       [ -e "$old/$f" ] || continue
-      sudo mv -T -- "$old/$f" "$territory/$f" && sudo chown -h root:root "$territory/$f" \
+      move_no_clobber "$old/$f" "$territory/$f" && sudo chown -h root:root "$territory/$f" \
         && chmod_nofollow 0644 "$territory/$f" \
         || rollback "$agent: $old/$f did not move into the territory as a regular file"
     done
     for f in admin.log worker.log; do
       [ -e "$old/$f" ] || continue
-      sudo mv -T -- "$old/$f" "$territory/$f" && sudo chown -h "root:weaver-$agent-admin" "$territory/$f" \
+      move_no_clobber "$old/$f" "$territory/$f" && sudo chown -h "root:weaver-$agent-admin" "$territory/$f" \
         && chmod_nofollow 0640 "$territory/$f" \
         || rollback "$agent: $old/$f did not move into the territory as a regular file"
     done
