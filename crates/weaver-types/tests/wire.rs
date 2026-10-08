@@ -144,7 +144,7 @@ fn the_boxed_payloads_cross_as_the_payloads_do() {
             "\"session\":\"s-1\",\"run\":\"r-1\",\"declaration\":\"d\",",
             "\"artifact\":\"/models/a.gguf\",\"residual_readout\":false,",
             "\"surprisal\":false,\"state_election\":{\"all-kinds\":false,\"keys\":[]},",
-            "\"state_store\":{\"engine\":\"sqlite\",\"database\":null,\"role\":null},",
+            "\"state_store\":{\"engine\":\"sqlite\"},",
             "\"state_member\":false,\"composer\":{\"binary\":\"weaver-harness\"}}}"
         ),
         "the load crosses unboxed and in the Spec's spelling"
@@ -560,19 +560,31 @@ fn the_cause_and_the_constituents_render_as_stated() {
         serde_json::to_string(&LifecycleRefusal::Unanswered).unwrap(),
         r#"{"kind":"unanswered"}"#
     );
-    // **The wire's defaults** (#99 area 3, T02 and T03): a leave written
-    // before `forced` existed reads unforced, and a `Left` that names no save
-    // point renders bare. Perturbation: drop `forced`'s `serde(default)` and
-    // the old leave does not read; drop `Left.save_point`'s
+    // **No default carries an older writer forward** (the operator's ruling
+    // of 2026-10-08 on #1, which re-pins #99 area 3's T02): a leave without
+    // `forced`, written by an admin of before A3.2, refuses, as does an open
+    // without `column_ask`; and a `Left` that names no save point renders bare
+    // (T03). Perturbation: give `forced` or `column_ask` a `serde(default)`
+    // again and its old form reads; drop `Left.save_point`'s
     // `skip_serializing_if` and it renders a null.
-    let old: LifecycleDirective = serde_json::from_str(r#"{"kind":"leave","cause":{"uid":1000}}"#)
-        .expect("an old leave reads");
-    assert_eq!(
-        old,
-        LifecycleDirective::Leave {
-            cause: weaver_types::Cause { uid: 1000 },
-            forced: false,
-        }
+    assert!(
+        serde_json::from_str::<LifecycleDirective>(r#"{"kind":"leave","cause":{"uid":1000}}"#)
+            .is_err(),
+        "a leave without forced refuses"
+    );
+    assert!(
+        serde_json::from_str::<weaver_types::TokenDirective>(
+            r#"{"kind":"open","session":"s","messages":[]}"#
+        )
+        .is_err(),
+        "an open without column_ask refuses"
+    );
+    assert!(
+        serde_json::from_str::<weaver_types::TokenDirective>(
+            r#"{"kind":"open","session":"s","messages":[],"column_ask":false}"#
+        )
+        .is_ok(),
+        "and one carrying it reads, so the refusal is the field's"
     );
     assert_eq!(
         serde_json::to_string(&LifecycleAnswer::Left { save_point: None }).unwrap(),

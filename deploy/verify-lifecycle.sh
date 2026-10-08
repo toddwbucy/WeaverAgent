@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Verify one agent's whole lifecycle on a live box, end to end: create it,
 # judge its layout, load it, seed it, take save points, reload, restore,
-# force it down, crash it, optionally migrate it, and take it down again.
+# force it down, crash it, stage a root of an older form, and take it down
+# again.
 #
 #   ./deploy/verify-lifecycle.sh --agent vtest1                          plan only
 #   ./deploy/verify-lifecycle.sh --agent vtest1 --artifact <gguf> \
@@ -24,25 +25,23 @@
 # every step. The first FAIL stops the run, naming the step, the check, what
 # was expected and what was found, and leaves the agent as it stands for the
 # operator to look at; `--cleanup` takes it down afterwards. The near misses
-# (steps 1b, 6b and 8b) put back exactly what they changed, the trap included,
-# whatever a check answers.
+# (steps 1b, 6b, 8 and 8b) put back exactly what they changed, the trap
+# included, whatever a check answers.
 #
 # **sudo runs only where admin and the deploy scripts run it**: admin's verbs,
 # the root reads of the territory, the trace, the manifest and the marker, the
-# near misses' changes and their restores, the worker's kill in step 7, the
-# layout staged by hand in step 8, and HowToDeployANewAgent.md section 7's
-# take-down in step 9. One more: the turns of steps 2 and 4 run turn.py as the
-# operator's own uid through `sudo -u <operator>`, which takes the groups
-# create-agent.sh just joined without a new login.
+# near misses' changes and their restores, the worker's kill in step 7, and
+# HowToDeployANewAgent.md section 7's take-down in step 9. One more: the turns
+# of steps 2 and 4 run turn.py as the operator's own uid through
+# `sudo -u <operator>`, which takes the groups create-agent.sh just joined
+# without a new login.
 #
 # **Step 9 never runs decommission.sh**, which takes every agent off the box:
 # it removes this one agent by HowToDeployANewAgent.md section 7's steps,
 # archiving its territory and its root first into `--archive <dir>`.
 #
-# **Steps 8 and 8b run only with `--with-migration`.** Step 8 runs
-# `update-stack.sh --install`, which touches every agent on the box: it
-# validates, loads and unloads each agent under the admin base. It is off by
-# default.
+# **No step runs `update-stack.sh --install`**, which touches every agent on
+# the box: steps 0 and 8 run its plan only, which acts on no agent.
 set -euo pipefail
 
 usage() {
@@ -67,12 +66,6 @@ creates (step 1, create-agent.sh) and takes down (step 9). Plan only unless
                           /etc/weaver/stack)
   --prefix <dir>          the install prefix (default: the stack record's
                           prefix, else /opt/weaver)
-  --with-migration        also run step 8, the layout migration, and step 8b.
-                          OFF BY DEFAULT: step 8 runs update-stack.sh --install,
-                          which touches every agent on the box (it validates,
-                          loads and unloads each one)
-  --allow-other-agents    with --apply, run on a box whose admin base holds
-                          other agents
   --cleanup               only take the agent down (step 9), for a run that
                           stopped part way; refused for an agent this script
                           did not create
@@ -85,8 +78,9 @@ creates (step 1, create-agent.sh) and takes down (step 9). Plan only unless
 
 Steps: 0 the box; 1 create; 1b near misses; 2 load, seed, one turn;
 3 save point; 4 unload and reload; 5 restore; 6 force-unload; 6b force-unload
-on a drifted territory; 7 crash recovery; 8 layout migration (--with-migration);
-8b an access entry on the trace (--with-migration); 9 take the agent down.
+on a drifted territory; 7 crash recovery; 8 a root naming a
+declaration-directory, refused by admin and by update-stack.sh's plan;
+8b an access entry on the trace; 9 take the agent down.
 Step 0 runs update-stack.sh in plan mode, which builds the tree: set
 CARGO_TARGET_DIR to a private directory first.
 USAGE
@@ -104,8 +98,6 @@ ADMIN_BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
 STACK=${WEAVER_STACK_RECORD:-/etc/weaver/stack}
 PREFIX_ARG=""
 APPLY=0
-WITH_MIGRATION=0
-ALLOW_OTHERS=0
 CLEANUP=0
 KEEP=0
 while [ $# -gt 0 ]; do
@@ -117,8 +109,6 @@ while [ $# -gt 0 ]; do
     --admin-base)   [ $# -ge 2 ] || die "--admin-base needs a directory"; ADMIN_BASE=$2; shift ;;
     --stack-record) [ $# -ge 2 ] || die "--stack-record needs a directory"; STACK=$2; shift ;;
     --prefix)       [ $# -ge 2 ] || die "--prefix needs a directory"; PREFIX_ARG=$2; shift ;;
-    --with-migration)     WITH_MIGRATION=1 ;;
-    --allow-other-agents) ALLOW_OTHERS=1 ;;
     --cleanup)      CLEANUP=1 ;;
     --keep)         KEEP=1 ;;
     --apply)        APPLY=1 ;;
@@ -237,7 +227,6 @@ OPERATOR=$(id -un)
 OPERATOR_UID=$(id -u)
 ACCOUNTS="$AU $AU-state $AU-relay $AU-admincon"
 GROUPS_MADE="$AU $AU-state $AU-trace $AU-admin $AU-admincon"
-OLD_DIR="${HOME:-/nonexistent}/.weaveragent/$A"   # step 8's layout from before 2026-10-07
 
 marker_names_agent() { [ -f "$MARKER" ] && grep -qxF "agent = \"$A\"" "$MARKER"; }
 
@@ -267,15 +256,6 @@ else
   done
 fi
 
-# The other agents on the box: the roots under the base, as update-stack.sh
-# counts them.
-OTHERS=""
-for root in "$ADMIN_BASE"/*/; do
-  [ -d "$root" ] || continue
-  name=$(basename -- "$root")
-  [ "$name" = "$A" ] || OTHERS="$OTHERS${OTHERS:+ }$name"
-done
-
 if [ "$APPLY" -eq 1 ]; then
   # **The default archive is the operator's own, closed** (the Planner's
   # grade of c1932b5): made 0700 under the operator's home where absent.
@@ -299,13 +279,7 @@ if [ "$APPLY" -eq 1 ]; then
   ARCHIVE=$(realpath -e -- "$ARCHIVE")
   if [ "$CLEANUP" -eq 0 ]; then
     [ -n "$ARTIFACT" ] || die "--apply needs --artifact <path>: step 1's create-agent.sh binds it"
-    if [ -n "$OTHERS" ] && [ "$ALLOW_OTHERS" -eq 0 ]; then
-      die "the admin base $ADMIN_BASE holds other agents ($OTHERS). Step 8's update-stack.sh --install touches every agent on the box: it validates, loads and unloads each one. Run this on a box holding no other agent, or pass --allow-other-agents to accept that"
-    fi
     [ -n "${CARGO_TARGET_DIR:-}" ] || die "set CARGO_TARGET_DIR to a private directory: step 0 runs update-stack.sh's plan, which builds the tree"
-    if [ "$WITH_MIGRATION" -eq 1 ] && { [ -e "$OLD_DIR" ] || [ -L "$OLD_DIR" ]; }; then
-      die "$OLD_DIR already stands, and step 8 stages the old layout there"
-    fi
   fi
 fi
 
@@ -322,7 +296,6 @@ begin_step() { # begin_step ID REFS TITLE
 end_step() { [ "$APPLY" -eq 0 ] || printf '   == PASS %s\n' "$STEP_LABEL"; }
 run_line() { printf '   $ %s\n' "$*"; }
 want()     { printf '     expect: %s\n' "$*"; }
-skip()     { say "step $1 SKIPPED: $2"; }
 
 fail() { # fail CHECK EXPECTED FOUND
   printf '   FAIL %s: %s\n' "$STEP_LABEL" "$1"
@@ -477,6 +450,7 @@ restore_mode()  { sudo -n chmod "$(printf '%05o' "$((8#$2))")" -- "$1"; }
 restore_group() { sudo -n chgrp -- "$2" "$1"; }
 restore_acl()   { sudo -n setfacl -b -- "$1"; }
 restore_key()   { printf '%s' "$1" | base64 -d | sudo -n tee -- "$R/territory" >/dev/null && sudo -n rm -f -- "$2"; }
+restore_absent() { sudo -n rm -f -- "$1"; }
 restore_now() {
   [ ${#RESTORE[@]} -gt 0 ] || return 0
   local -a pending=("${RESTORE[@]}")
@@ -522,7 +496,7 @@ script_env() { WEAVER_ADMIN_CONFIG="$ADMIN_BASE" WEAVER_STACK_RECORD="$STACK" "$
 
 # ------------------------------------------------------------ the steps
 step_0() {
-  begin_step 0 "deploy/REDEPLOY.md section 5" "the box, before anything"
+  begin_step 0 "deploy/REDEPLOY.md section 0" "the box, before anything"
   run_line "git -C $CHECKOUT log -1 --oneline"
   run_line "read every key of $STACK; realpath of its agent-directory"
   run_line "deploy/update-stack.sh   (plan mode, no sudo; it builds the tree)"
@@ -928,52 +902,39 @@ step_7() {
 }
 
 step_8() {
-  begin_step 8 "#99 N1, N5" "the layout migration, staged on $A"
+  begin_step 8 "#99 N1, N5" "a root naming a declaration-directory, staged on $A, refused by name"
   run_line "weaver-admin unload $A; weaver-admin show $A"
-  run_line "move agent.toml, system-prompt.md, admin.log and worker.log from $T into $OLD_DIR ($OPERATOR's, 0600)"
-  run_line "write $R/declaration-directory = $OLD_DIR; remove $R/territory; the territory setgid with an access entry u:nobody:x"
-  run_line "weaver-admin show $A"
-  run_line "deploy/update-stack.sh"
-  run_line "deploy/update-stack.sh --install   (touches every agent on the box)"
-  want "show refuses config_invalid with no territory key"
-  want "the plan names $A's layout move; the install exits 0 through == migrate layout, the move, == verify (the load's idle answer read, N5), == the box is at"
-  want "the territory root:$AU-state 710, not setgid, with no access entry; save-points/ 750; the four files root:$AU-admin 640 (N1)"
-  want "$R holds territory and no declaration-directory; $OLD_DIR stands empty"
+  run_line "write $R/declaration-directory = $T, root:root 0644 (removed by the step and by the exit trap)"
+  run_line "weaver-admin validate $A"
+  run_line "deploy/update-stack.sh   (plan mode, no sudo; it refuses before it builds)"
+  want "validate refuses config_invalid naming declaration-directory"
+  want "the plan exits 1 before any build, refusing $A by name for its declaration-directory"
+  want "the key removed: $R holds no declaration-directory; validate answers validated"
   [ "$APPLY" -eq 1 ] || return 0
   ask unload; expect_state unload unloaded
   expect_unloaded_alone
-  ( umask 077; mkdir -p -- "$OLD_DIR" )
-  local f
-  for f in agent.toml system-prompt.md admin.log worker.log; do
-    sudo -n mv -n -T -- "$T/$f" "$OLD_DIR/$f"
-    sudo -n chown "$OPERATOR:$(id -gn)" -- "$OLD_DIR/$f"
-    sudo -n chmod 0600 -- "$OLD_DIR/$f"
-  done
-  printf '%s\n' "$OLD_DIR" | sudo -n tee -- "$R/declaration-directory" >/dev/null
-  sudo -n chmod 0644 -- "$R/declaration-directory"
-  sudo -n rm -f -- "$R/territory"
-  sudo -n chmod g+s -- "$T"
-  sudo -n setfacl -m u:nobody:x -- "$T"
-  ask show; expect_kind "show with no territory key" config_invalid
-  local rc=0 out="$LOGDIR/step8-update-stack"
-  ( cd "$CHECKOUT" && script_env bash deploy/update-stack.sh ) >"$out.plan" 2>&1 || rc=$?
-  expect_eq "update-stack.sh's plan exits 0" 0 "$rc"
-  expect_eq "the plan names $A's layout move" yes "$(grep -qE "^  $A +layout: " "$out.plan" && echo yes || echo no)"
-  rc=0
-  ( cd "$CHECKOUT" && script_env bash deploy/update-stack.sh --install ) >"$out.install" 2>&1 || rc=$?
-  tail -n 40 "$out.install" | sed 's/^/     /'
-  expect_eq "update-stack.sh --install exits 0" 0 "$rc"
-  expect_in_order "the install migrates, verifies and finishes" "$out.install" \
-    "== migrate layout" "  $A: declaration, draft and logs moved from" "== verify" "== the box is at"
-  expect_eq "the reconcile validates $A" yes "$(grep -qE "^  $A +validated" "$out.install" && echo yes || echo no)"
-  expect_lay "$T" "root:$AU-state 710 directory"
-  expect_no_acl "$T" "$SAVE_POINTS"
-  for f in agent.toml system-prompt.md admin.log worker.log; do expect_lay "$T/$f" "root:$AU-admin 640 regular file"; done
-  expect_lay "$SAVE_POINTS" "root:$AU-admin 750 directory"
-  expect_eq "the root's territory key names the territory" "$T" "$(trim "$(cat -- "$R/territory" 2>/dev/null)")"
-  expect_eq "the root holds no declaration-directory" absent "$( [ -e "$R/declaration-directory" ] && echo present || echo absent)"
-  expect_eq "$OLD_DIR stands empty" "" "$(ls -A -- "$OLD_DIR")"
-  rmdir -- "$OLD_DIR"
+  { [ -e "$R/declaration-directory" ] || [ -L "$R/declaration-directory" ]; } \
+    && fail "the declaration-directory key's name is free" "nothing at $R/declaration-directory" "it stands"
+  RESTORE=(restore_absent "$R/declaration-directory")
+  { printf '%s\n' "$T" | sudo -n tee -- "$R/declaration-directory" >/dev/null \
+      && sudo -n chmod 0644 -- "$R/declaration-directory"; } \
+    || { restore_now || true; fail "the key is staged" "it is written" "it failed"; }
+  ask validate
+  local validated=$ANSWER
+  local rc=0 out="$LOGDIR/step8-update-stack.plan"
+  ( cd "$CHECKOUT" && script_env bash deploy/update-stack.sh ) >"$out" 2>&1 || rc=$?
+  restore_now || fail "the key is removed" "rm succeeds" "it failed"
+  tail -n 5 "$out" | sed 's/^/     /'
+  ANSWER=$validated
+  expect_kind validate config_invalid
+  expect_eq "validate names the field" declaration-directory "$(json_at "$ANSWER" field)"
+  expect_eq "update-stack.sh's plan exits 1" 1 "$rc"
+  expect_eq "the plan refuses $A by name for its declaration-directory" yes \
+    "$(grep -qF "REFUSED: $A: its root $R names a declaration-directory" "$out" && echo yes || echo no)"
+  expect_eq "the plan built nothing" no "$(grep -qE '^== (test|build)' "$out" && echo yes || echo no)"
+  expect_eq "the root holds no declaration-directory" absent "$(lay "$R/declaration-directory")"
+  ask validate; expect_kind validate validated
+  expect_unloaded_alone
   end_step
 }
 
@@ -1009,28 +970,8 @@ step_8b() {
 ARCHIVE_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 TERRITORY_TAR="${ARCHIVE%/}/$AU-territory-$ARCHIVE_STAMP.tar"
 ROOT_TAR="${ARCHIVE%/}/$AU-root-$ARCHIVE_STAMP.tar"
-# **staged_root_quiet**: whether the root stands as step 8 stages it (no
-# `territory` key, a `declaration-directory` key), which admin cannot read,
-# and no process of the agent's four accounts runs. Answers 0 where both
-# hold; 1, printing the accounts that still run a process, where it is
-# staged but not quiet; 2 where it is not the staged shape.
-staged_root_quiet() {
-  [ ! -e "$R/territory" ] && [ -e "$R/declaration-directory" ] || return 2
-  local u busy=""
-  for u in "$AU" "$AU-state" "$AU-relay" "$AU-admincon"; do
-    if pgrep -u "$u" >/dev/null 2>&1; then busy="$busy${busy:+ }$u"; fi
-  done
-  [ -z "$busy" ] && return 0
-  printf '%s' "$busy"
-  return 1
-}
-
 # **unload_for_teardown**: the run ended before the take-down, by `unload`,
-# else `force-unload`. A run stopped inside step 8 leaves the root staged
-# for the migration, which admin refuses `config_invalid` for every verb,
-# the force included (#101): there the take-down goes on only when no
-# process of the agent's accounts runs, and otherwise stops naming them
-# (Codex on #104, round 1).
+# else `force-unload`.
 unload_for_teardown() {
   ask unload
   if answered_state "$ANSWER" unloaded; then
@@ -1039,21 +980,8 @@ unload_for_teardown() {
     return 0
   fi
   ask force-unload
-  if answered_state "$ANSWER" unloaded; then
-    pass "force-unload answers the unloaded state"
-    expect_unloaded_alone
-    return 0
-  fi
-  if [ "$(json_at "$ANSWER" kind)" = config_invalid ]; then
-    local busy rc=0
-    busy=$(staged_root_quiet) || rc=$?
-    case $rc in
-      0) measured "admin cannot read the root step 8 staged (config_invalid), and no process of $AU's four accounts runs, so the take-down goes on"
-         return 0 ;;
-      1) fail "no process of $AU's accounts runs, which a take-down admin cannot verify requires" "none" "$busy" ;;
-    esac
-  fi
   expect_state force-unload unloaded
+  expect_unloaded_alone
 }
 
 step_9() {
@@ -1140,10 +1068,6 @@ plan "creation mark   $MARKER"
 plan "archive         ${ARCHIVE:-<--archive, default ~/.weaver-archive made 0700>}"
 if [ "$CLEANUP" -eq 0 ]; then
   plan "artifact        ${ARTIFACT:-<--artifact, required with --apply>}"
-  plan "migration       $( [ "$WITH_MIGRATION" -eq 1 ] && echo 'on: step 8 runs update-stack.sh --install, which touches every agent on the box' || echo 'off (steps 8 and 8b skipped)')"
-  if [ -n "$OTHERS" ]; then
-    plan "NOTE: the admin base holds other agents ($OTHERS); --apply refuses unless --allow-other-agents"
-  fi
 fi
 
 if [ "$APPLY" -eq 1 ]; then
@@ -1175,13 +1099,8 @@ step_5
 step_6
 step_6b
 step_7
-if [ "$WITH_MIGRATION" -eq 1 ]; then
-  step_8
-  step_8b
-else
-  skip 8 "the layout migration runs update-stack.sh --install, which touches every agent on the box; pass --with-migration to run it"
-  skip 8b "it measures the migrated agent with step 8; pass --with-migration to run it"
-fi
+step_8
+step_8b
 # **The checks with no command are made against a loaded agent** (Codex on
 # #104, round 1): with --keep the run stops before step 9 with the agent
 # loaded and prints how to take it down; without it the checks are printed

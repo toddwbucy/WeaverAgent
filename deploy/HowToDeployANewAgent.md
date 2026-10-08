@@ -143,8 +143,8 @@ a step that fails stops the rest; it refuses a territory, a stage or a root that
 stands, since `install -d` would merge with it. The territory is the stack record's
 `agent-directory` made canonical, as `create-agent.sh` makes it, and the 5-digit modes
 clear a setgid bit the base would otherwise pass down. The block stages the root; then
-install the sudo rule by `REDEPLOY.md` section 8, step 4's commands, with `A=$N`, and
-only then move the root into place, which is the admission: `sudo mv -T --
+install the sudo rule by the second block below, with `A=$N`, and only then move the
+root into place, which is the admission: `sudo mv -T --
 /etc/weaver/admin/.$N.partial /etc/weaver/admin/$N`.
 
 ```sh
@@ -176,6 +176,31 @@ T=$(realpath -e -- "$(cat /etc/weaver/stack/agent-directory)")/weaver-$N \
 && sudo chmod 0644 "$R"/* \
 && echo "$N: staged at $R; install the sudo rule, then: sudo mv -T -- $R /etc/weaver/admin/$N"
 ```
+
+**Install the connector's sudo rule**, staged and checked as `create-agent.sh` stages
+it: under a dot-name inside `/etc/sudoers.d`, which sudo never reads and no other
+principal can claim, checked by `visudo`, then moved into place. Never stage it under
+`/tmp`, where any local user can make the name first.
+
+```sh
+A=<a>; ADMIN=$(realpath -e -- <prefix>/bin/weaver-admin); lines=""
+for verb in show validate load unload stop save-point restore force-unload; do
+  lines="$lines${lines:+, }$ADMIN $verb $A"
+done
+sudo grep -qE '^[#@]includedir[[:space:]]+/etc/sudoers\.d([[:space:]]|$)' /etc/sudoers \
+&& rule=$(sudo mktemp "/etc/sudoers.d/.weaver-$A.XXXXXX") \
+&& printf 'Defaults:%s !pam_session\n%s ALL=(root) NOPASSWD: %s\n' "weaver-$A-admincon" "weaver-$A-admincon" "$lines" \
+   | sudo tee "$rule" >/dev/null \
+&& sudo chmod 0440 "$rule" \
+&& { sudo visudo -cqf "$rule" || { sudo rm -f -- "$rule"; false; }; } \
+&& sudo mv -T -- "$rule" "/etc/sudoers.d/weaver-$A" \
+&& sudo -l -U "weaver-$A-admincon"
+```
+
+These are the operator role's eight command lines, as `create-agent.sh` grants them.
+The observer role's rule grants the `show` line alone: run the loop over `show`
+only. A chain that stops after `mktemp` leaves the dot-named stage, which sudo
+ignores; remove it by hand.
 
 The declaration is written by hand. karl's, which loaded on 2026-09-30, is the shape,
 in the grammar of 2026-10-06, its prompt no longer in it:
@@ -211,10 +236,7 @@ engine = "none"
 Top-level keys first, then each table, since TOML reads a bare key after a table header
 as that table's. The inline `[[spu-instruction.decoder.identity]]` table of a
 declaration written before 2026-10-06, and the `identity-file` key of the days between,
-each refuse by name: take the text out into `system-prompt.md` beside the declaration and
-seed it through the gate (section 4). `update-stack.sh --install` makes that move for a
-declaration carrying one system text message (`deploy/migrate-identity.py` is what it
-runs, and says why when it cannot move a shape losslessly); the seeding stays yours.
+each refuse by name, and an agent carrying either is recreated (section 7).
 **The sink's `path` is `$T/trace.ndjson`, with `$T` the canonical territory the block
 derives**, karl's being the default's: admin compares the sink's directory with the
 canonical territory, so a path through a link, or under another base, refuses every
@@ -260,9 +282,11 @@ payload names the session, the run, the store, the declaration's hash, the compo
 and writes nothing is the failure this step exists to catch, and the worker's own words
 are in `<territory>/worker.log`, the state member's in `<territory>/state/state.log`.
 
-`deploy/verify-lifecycle.sh --agent <throwaway>` verifies a whole lifecycle end to end (create, load, seed, save
-points, restore, force-unload, crash recovery, take-down) on a throwaway agent it creates; it plans unless given `--apply`,
-and `--keep` stops it before the take-down so the checks it cannot make are made against the loaded agent.
+`deploy/verify-lifecycle.sh --agent <throwaway>` verifies a whole lifecycle end to end
+(create, load, seed, save points, restore, force-unload, crash recovery, the refusal by
+name of a root of an older layout, take-down) on a throwaway agent it creates; it plans
+unless given `--apply`, and `--keep` stops it before the take-down so the checks it
+cannot make are made against the loaded agent.
 
 `load` never ends a run that stands: it answers `agent_running` and leaves the decision
 to its caller, who reads `show` and issues `unload`.
@@ -434,3 +458,8 @@ for g in weaver-<name> weaver-<name>-state weaver-<name>-trace weaver-<name>-adm
   getent group "$g" >/dev/null && sudo groupdel "$g"
 done
 ```
+
+**An agent of an older layout or an older declaration form is not migrated.** Admin and
+`update-stack.sh` refuse it by name, and it is recreated with `create-agent.sh` after
+its take-down by this section; nothing migrates it (the operator's ruling of 2026-10-08
+on #1).

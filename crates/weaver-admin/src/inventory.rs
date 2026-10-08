@@ -165,8 +165,7 @@ fn take_inventory_against(
     // diagnostic declaration excludes it. The parse checks each field alone,
     // so the cross-field rule lands here, before any look at the filesystem
     // and before any unit starts. Absence of the kind means serving, per
-    // `weaver-types-PRD` section 2.1, so a declaration written before the
-    // member existed resolves as it always meant.
+    // `weaver-types-PRD` section 2.1, the ruled meaning of its absence.
     let binding = match (
         config.binding_kind.clone().unwrap_or(BindingKind::Serving),
         config.gate_instruction.clone(),
@@ -187,8 +186,8 @@ fn take_inventory_against(
     // the box. The parse checks each field alone, so the cross-field rules
     // land here: `none` declines the member and so refuses a state election
     // beside it, an election with no member to receive it being malformed
-    // rather than surplus, and `database` and `role` belong to the service
-    // engine exactly, absent under every other engine and present under it.
+    // rather than surplus. The service engine's `database` and `role` are no
+    // longer in the grammar and refuse at the parse as unknown fields.
     let store = config.state_store.clone().unwrap_or_default();
     let store_invalid = |field: &str| LifecycleRefusal::ConfigInvalid {
         field: Some(FieldName(field.into())),
@@ -197,14 +196,7 @@ fn take_inventory_against(
         StoreEngine::None if config.state_election.is_some() => {
             return Err(store_invalid("state-election"));
         }
-        StoreEngine::None | StoreEngine::Sqlite => {
-            if store.database.is_some() {
-                return Err(store_invalid("state-store.database"));
-            }
-            if store.role.is_some() {
-                return Err(store_invalid("state-store.role"));
-            }
-        }
+        StoreEngine::None | StoreEngine::Sqlite => {}
     }
 
     // A granted permission member is refused, per `weaver-admin-Spec`
@@ -1170,10 +1162,11 @@ mod tests {
 
     /// **The store election's declaration half**, per `weaver-admin-Spec`
     /// section 4 as of 2026-09-04: `none` beside a state election refuses
-    /// naming `state-election`, `database` and `role` belong to the service
-    /// engine exactly, and each refusal is `ConfigInvalid` naming the field.
-    /// Perturbation: remove any one arm of the match and its case below
-    /// passes the inventory, each case naming the arm that catches it.
+    /// naming `state-election`, the retired service engine's `database` and
+    /// `role` refuse at the parse as unknown fields, and each refusal is
+    /// `ConfigInvalid` naming the field. Perturbation: remove the match's
+    /// `state-election` arm and its case passes the inventory; give either
+    /// retired key back to the grammar and its case reads.
     #[test]
     fn the_store_election_is_judged_before_the_box() {
         let name = AgentName("alpha".into());
@@ -1189,11 +1182,11 @@ mod tests {
                 "engine = \"none\"\n\n[state-election]\nall-kinds = true\nkeys = []\n",
                 "state-election",
             ),
-            (
-                "engine = \"none\"\ndatabase = \"d\"\n",
-                "state-store.database",
-            ),
-            ("engine = \"sqlite\"\nrole = \"r\"\n", "state-store.role"),
+            // The service engine's keys left the grammar (the operator's
+            // ruling of 2026-10-08 on #1): each refuses at the parse as an
+            // unknown field, named by its key.
+            ("engine = \"none\"\ndatabase = \"d\"\n", "database"),
+            ("engine = \"sqlite\"\nrole = \"r\"\n", "role"),
             // An engine this build does not provide refuses at the parse.
             ("engine = \"postgres\"\n", "state-store.engine"),
         ];

@@ -221,7 +221,6 @@ pub enum LifecycleDirective {
     /// the leave does not complete without one.
     Leave {
         cause: crate::Cause,
-        #[serde(default)]
         forced: bool,
     },
     /// **A save point on demand**, admin's `save-point` verb, as of A3.2: the
@@ -528,7 +527,6 @@ pub struct EnterPayload {
     /// binary's name, so the load event names the stack that ran it, per the
     /// same section. Admin's fact, authored by the harness as it authors the
     /// store's.
-    #[serde(default)]
     pub stack: std::collections::BTreeMap<String, String>,
     /// The sha256 hex of the agent's `roles.toml` as admin read it at the
     /// inventory, per `weaver-types-Spec` section 4, which the harness copies
@@ -861,11 +859,11 @@ pub enum TokenDirective {
         messages: Vec<weaver_traits::Message>,
         /// The column ask, per `weaver-spu-PRD` section 13.7's cadence
         /// election: it crosses once, at session open, and the one answer
-        /// runs for the residency. A serving harness never writes it, the
+        /// runs for the residency. A serving harness never asks, the
         /// discipline watched on the harness, and an ask against any arm
-        /// of that clause's registry refuses typed at the open. Defaulted
-        /// so a directive written before the member existed asks nothing.
-        #[serde(default)]
+        /// of that clause's registry refuses typed at the open. The field
+        /// is always on the wire, false where nothing is asked, and a
+        /// directive without it refuses.
         column_ask: bool,
     },
     AppendAndGenerate {

@@ -225,8 +225,6 @@ The one member is the published name or the digest, per the paragraph above.
 
 pub struct StateStore {
     pub engine: StoreEngine,
-    pub database: Option<String>,
-    pub role: Option<String>,
 }
 
 pub enum StoreEngine {
@@ -553,26 +551,23 @@ filling that ruled default at inventory, so the worker never re-derives an absen
 the block is present, both its members are required, the required-field discipline
 resuming inside it. `loop_file` may be absent because `weaver-harness-PRD` section 2
 rules what absence means, the worker's own default loop, the compiled body or the
-installed file, so a declaration written before the member existed still parses and
-still means what it meant. Present, it names the loop file the agent's worker runs, the
+installed file, which is what omitting the field says. Present, it names the loop file the agent's worker runs, the
 loop being a member of that agent's harness and unique to it per the same section's
 ruling of 2026-08-20, and it reaches the worker in its argument vector per
 `weaver-admin-Spec` section 6 rather than in any exchange, because no exchange carries a
 path. `state_store` may be absent because `weaver-state-PRD` section 4 rules what
-absence means, the embedded engine, so a declaration written before the member existed
-still parses and still means what it meant, and the state member stands. Present, its
+absence means, the embedded engine with the state member standing. Present, its
 `engine` names which port the deployment elects, as of 2026-09-04: `none` declares that
 no member stands, which is a deployment's real posture and the one the
-instrument-validation matrices ran under, and `sqlite` the embedded engine, for which
-`database` and `role` are refused if present, the same cross-field rule admin holds for
-the gate instruction, judged at inventory before a process exists. **An engine this
+instrument-validation matrices ran under, and `sqlite` the embedded engine. **An engine this
 build does not provide refuses at the parse**, `BadValue` naming `state-store.engine`,
 which admin answers `ConfigInvalid`, so a declaration electing one fails naming the
 field rather than as an unnamed unknown value. No engine is refused by its own name: on
 the operator's ruling of 2026-10-05 (#86) another deployment may provide another engine
 behind the same contract, and the service engine, postgres, is simply not provided here
-since the ruling of 2026-10-02 on #1. `database` and `role` stay in the type, refused
-for both provided engines. **`none` beside a present `state_election`
+since the ruling of 2026-10-02 on #1. Its `database` and `role` left the grammar on the
+operator's ruling of 2026-10-08 on #1, so a declaration carrying either refuses at the
+parse as an unknown field, named by its key. **`none` beside a present `state_election`
 is refused by the same rule**: the election says what the tee sends to the member, and a
 declaration that elects what to send to a member it declined is malformed rather than
 surplus, refused `ConfigInvalid` naming the election, the way a granted permission
@@ -583,9 +578,8 @@ across the load boundary, they ride the enter directive resolved, and the load e
 records them, per `weaver-trace-PRD` section 3.1. The enum is closed at two because
 this build provides one engine, the embedded one, beside the absence of a member, and a
 further engine is a state act before it is a variant. `binding_kind` may be absent because
-`weaver-types-PRD` section 2.1 rules what absence means, a serving binding, so a
-declaration written before the member existed still parses and still means what it
-meant, on the same footing as `loop_file` above. The enum is closed at two cases because
+`weaver-types-PRD` section 2.1 rules what absence means, a serving binding, on the same
+footing as `loop_file` above. The enum is closed at two cases because
 `weaver-agent-PRD` section 6 names exactly two kinds, and a third kind is an apex act
 before it is a variant. `gate_instruction` is an `Option` for a reason the three above
 do not share: presence follows the resolved kind rather than standing alone, a serving
@@ -1454,10 +1448,8 @@ pub enum FaultCase {
 2026-09-04.** The config holds it as an option whose absence means the
 embedded engine, per section 2, and the payload holds it as admin resolved it
 at inventory, so the harness never re-derives an absence and the load event it
-authors names the engine, per `weaver-trace-PRD` section 3.1. `database` and
-`role` are absent from the resolved value, the cross-field rule having been
-judged before any process existed, and the member's own vector carries no
-engine word, per `weaver-admin-Spec` section 6, one engine standing.
+authors names the engine, per `weaver-trace-PRD` section 3.1, and the member's own
+vector carries no engine word, per `weaver-admin-Spec` section 6, one engine standing.
 
 **`restore` and `stack` ride the enter as of 2026-09-04.** `restore` rides as `Lineage`,
 resolved by admin from the save point the load restores, on the operator's ruling of
