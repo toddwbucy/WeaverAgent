@@ -252,7 +252,7 @@ STAND_IN_SUDO = (
     "printf '%s\\n' \"$*\" >> {recorded}\n"
     "case \"$1\" in\n"
     "  chown|chgrp|usermod) exit 0 ;;\n"
-    "  install) mkdir -p \"${@: -1}\"; exit 0 ;;\n"
+    "  install) for last; do :; done; mkdir -p \"$last\"; exit 0 ;;\n"
     "  *) exec \"$@\" ;;\n"
     "esac\n"
 )
@@ -2433,6 +2433,46 @@ class AdminAnswerTests(unittest.TestCase):
         admin_lines = [line for line in self.script.splitlines()
                        if "/weaver-admin\"" in line and not line.lstrip().startswith("#")]
         self.assertFalse([line for line in admin_lines if "tail -1" in line], admin_lines)
+
+
+class ShStandInTests(unittest.TestCase):
+    """**Every `#!/bin/sh` stand-in this file writes is POSIX sh** (Codex on
+    #94): a box whose `/bin/sh` is dash refuses a Bash-only form before the
+    test it serves runs. No dash stands on olympus, so the stand-ins are
+    judged here by their text: every string literal of this file that opens
+    with the sh shebang, an f-string's literal parts joined, carries none of
+    the Bash forms named. The count keeps the check from passing on nothing.
+    Perturbation: put `${@: -1}` back in the sudo stand-in and this fails."""
+
+    BASH_ONLY = ("${@:", "[[", "function ", "$(<")
+
+    def test_every_sh_stand_in_is_posix(self):
+        import ast
+        tree = ast.parse(Path(__file__).read_text())
+        inner = set()
+        scripts = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.JoinedStr):
+                parts = []
+                for value in node.values:
+                    if isinstance(value, ast.Constant):
+                        inner.add(id(value))
+                        parts.append(value.value)
+                    else:
+                        parts.append("{}")
+                scripts.append((node.lineno, "".join(parts)))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                    and id(node) not in inner):
+                scripts.append((node.lineno, node.value))
+        # The needle is built from two parts so this check's own source holds
+        # no literal it would count.
+        shebang = "#!/bin/" + "sh\n"
+        stand_ins = [(line, text) for line, text in scripts if text.startswith(shebang)]
+        self.assertGreaterEqual(len(stand_ins), 14, [line for line, _ in stand_ins])
+        for line, text in stand_ins:
+            for form in self.BASH_ONLY:
+                self.assertNotIn(form, text, f"the sh stand-in at line {line} carries {form!r}")
 
 
 if __name__ == "__main__":
