@@ -101,7 +101,7 @@ elif name == 'id':
     elif args[:1] == ['-Gn']:
         who = args[1]
         if who.endswith('-relay'): print(os.environ.get('RELAY_GROUPS', who.removesuffix('-relay') + '-trace'))
-        elif who.endswith('-admincon'): print(os.environ.get('CONNECTOR_GROUPS', who + ' ' + who.removesuffix('con')))
+        elif who.endswith('-admincon'): print(os.environ.get('CONNECTOR_GROUPS', who + ' ' + who.removesuffix('admincon') + 'state ' + who.removesuffix('con')))
         else: print(who)
     elif args[:1] == ['-u'] and len(args) > 1 and 'FIXTURE_ACCOUNT_UID' in os.environ:
         print(os.environ['FIXTURE_ACCOUNT_UID'])
@@ -193,7 +193,7 @@ elif name == 'sudo':
             assert not destination.exists(), destination
             source.rename(destination)
         privileged([source, destination], move)
-    elif op == 'chmod' and os.environ.get('LOCK_TERRITORY') and rest[:1] == ['0711'] \
+    elif op == 'chmod' and os.environ.get('LOCK_TERRITORY') and rest[:1] == ['0710'] \
             and pathlib.Path(mapped(rest[-1])) == pathlib.Path(os.environ['LOCK_TERRITORY']):
         # **The migration's regroup closes the territory to this process**, as
         # the real one does to a shell that has not taken the new login: the
@@ -528,6 +528,20 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(f"territory       {self.root / 'agents' / 'weaver-m1'} ", result.stdout)
 
+    def test_the_territory_is_named_by_its_canonical_path(self):
+        # The #94 survey's S23: admin compares the declaration's sink
+        # directory with the canonical territory, so a base named through a
+        # link is resolved before the territory, the sink and the root's
+        # `territory` key are written from it. Perturbation: drop the
+        # realpath and the linked path is planned.
+        linked = self.root / "linked-agents"
+        linked.symlink_to(self.root / "agents")
+        (self.stack / "agent-directory").write_text(f"{linked}\n")
+        result = self.create()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"territory       {self.root / 'agents' / 'weaver-m1'} ", result.stdout)
+        self.assertNotIn(str(linked), result.stdout)
+
     def test_a_territory_base_another_principal_could_write_refuses(self):
         # The operator's ruling of 2026-10-02 (#28): the territories stand under
         # a root-held base no other principal can make a name in. A base that
@@ -711,12 +725,13 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertFalse((self.config / "m1").exists())
 
     def test_the_relay_and_connector_groups_are_checked_before_admission(self):
-        # The relay holds the trace group alone, and the connector the access
-        # group and nothing of the agent's. Perturbations: drop either check,
-        # and a mis-grouped account is admitted.
+        # The relay holds the trace group alone, and the connector the state
+        # group, the access group and nothing of the agent's. Perturbations:
+        # drop any check, and a mis-grouped account is admitted.
         for env, said in ((dict(RELAY_GROUPS="weaver-m1-trace weaver-m1-state"), "not the trace group alone"),
-                          (dict(CONNECTOR_GROUPS="weaver-m1-admincon"), "does not hold weaver-m1-admin"),
-                          (dict(CONNECTOR_GROUPS="weaver-m1-admincon weaver-m1-admin weaver-m1-trace"),
+                          (dict(CONNECTOR_GROUPS="weaver-m1-admincon weaver-m1-state"), "does not hold weaver-m1-admin"),
+                          (dict(CONNECTOR_GROUPS="weaver-m1-admincon weaver-m1-admin"), "does not hold weaver-m1-state"),
+                          (dict(CONNECTOR_GROUPS="weaver-m1-admincon weaver-m1-state weaver-m1-admin weaver-m1-trace"),
                            "holds weaver-m1-trace")):
             with self.subTest(env=env):
                 shutil.rmtree(self.config / ".m1.partial", ignore_errors=True)
@@ -742,10 +757,10 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
 
     def test_the_territory_holds_the_declaration_the_draft_and_the_save_points(self):
         # The operator's rulings of 2026-10-07 and 2026-10-08 on #1: the
-        # territory is root:weaver-<name>-admin 0711, the declaration and the
+        # territory is root:weaver-<name>-state 0710, the declaration and the
         # draft root:weaver-<name>-admin 0640 in it, save-points/ root:weaver-<name>-admin 0750
-        # beside the state room, the operator in the access group and the
-        # member never (the custody audit's G11), and the root names the
+        # beside the state room, the operator in the state and access groups
+        # and the member in the access group never (the custody audit's G11), and the root names the
         # territory. Perturbations: write the draft into the operator's home
         # again, group the territory to the member, join the member to the
         # access group again, or drop the save-points directory, and this
@@ -756,13 +771,13 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assert_agent_root("sqlite")
         calls = self.calls()
         territory = str(self.decl)
-        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-admin", "-m", "0711", territory], calls)
+        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-state", "-m", "0710", territory], calls)
         self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-admin", "-m", "0750",
                        territory + "/save-points"], calls)
         self.assertIn(["sudo", "tee", territory + "/agent.toml"], calls)
         self.assertIn(["sudo", "tee", territory + "/system-prompt.md"], calls)
         self.assertNotIn(["sudo", "usermod", "-aG", "weaver-m1-admin", "weaver-m1-state"], calls)
-        self.assertIn(["sudo", "usermod", "-aG", "weaver-m1,weaver-m1-trace,weaver-m1-admin", "fixture-no-home"], calls)
+        self.assertIn(["sudo", "usermod", "-aG", "weaver-m1,weaver-m1-trace,weaver-m1-state,weaver-m1-admin", "fixture-no-home"], calls)
         self.assertFalse([c for c in calls if any(a.startswith(str(self.operator_home)) for a in c)],
                          "no call reaches the operator's home")
         self.assertNotIn("admin.log", "".join(a for c in calls for a in c), "admin makes the logs, not the script")
@@ -1022,11 +1037,11 @@ esac
     def test_the_territory_is_passage_for_the_member_and_the_trace_is_not_its_to_read(self):
         # The operator's ruling of 2026-10-02 (#28) as refined on #56 and by the
         # rulings of 2026-10-07 and 2026-10-08 on #1: the member passes through
-        # a root:weaver-<name>-admin 0711 territory (no setgid, no listing) to
-        # its 0700 room by the passage every uid has, and the trace is made before
+        # a root:weaver-<name>-state 0710 territory (no setgid, no listing) to
+        # its 0700 room by its own primary group, and the trace is made before
         # the first load as root:weaver-<name>-trace 0640, so the member, outside
         # that group, cannot read it. The operator joins the agent's group, the
-        # trace group and the access group, and no access entry is set or
+        # trace group, the state group and the access group, and no access entry is set or
         # probed. Perturbations: restore setgid (2710 or 2750), group the trace
         # to the member, or drop the trace group from the operator, and this
         # fails.
@@ -1035,7 +1050,7 @@ esac
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.calls()
         territory = str(self.root / "agents" / "weaver-m1")
-        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-admin", "-m", "0711", territory], calls)
+        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-state", "-m", "0710", territory], calls)
         self.assertIn(["sudo", "install", "-o", "root", "-g", "weaver-m1-trace", "-m", "0640", "/dev/null",
                        territory + "/trace.ndjson"], calls)
         self.assertIn(["sudo", "install", "-d", "-o", "weaver-m1-state", "-g", "weaver-m1-state", "-m", "0700",
@@ -1045,9 +1060,13 @@ esac
         self.assertIn(["sudo", "useradd", "--system", "--shell", "/usr/sbin/nologin", "--no-create-home",
                        "--no-user-group", "--gid", "weaver-m1-trace", "weaver-m1-relay"], calls)
         self.assertIn(["sudo", "useradd", "--system", "--shell", "/usr/sbin/nologin", "--no-create-home",
-                       "--user-group", "--groups", "weaver-m1-admin", "weaver-m1-admincon"], calls)
-        self.assertIn(["sudo", "usermod", "-aG", "weaver-m1,weaver-m1-trace,weaver-m1-admin", "fixture-no-home"], calls)
+                       "--user-group", "--groups", "weaver-m1-state,weaver-m1-admin", "weaver-m1-admincon"], calls)
+        self.assertIn(["sudo", "usermod", "-aG", "weaver-m1,weaver-m1-trace,weaver-m1-state,weaver-m1-admin", "fixture-no-home"], calls)
         self.assertIn(["sudo", "-u", "weaver-m1-state", "test", "-r", territory + "/trace.ndjson"], calls)
+        # The agent's own uid is asked to pass the territory and must not
+        # (the #94 survey's S1), and the member to read the declaration.
+        self.assertIn(["sudo", "-u", "weaver-m1", "test", "-x", territory], calls)
+        self.assertIn(["sudo", "-u", "weaver-m1-state", "test", "-r", territory + "/agent.toml"], calls)
         self.assertFalse([c for c in calls if "setfacl" in c or c[0] == "mktemp"], calls)
 
     def test_a_trace_the_member_can_read_refuses_before_admission(self):
@@ -1783,9 +1802,9 @@ esac
         self.assertEqual((territory / "admin.log").stat().st_mode & 0o7777, 0o640)
         # The member is not joined (the custody audit's G11); the operator is.
         self.assertNotIn("usermod -aG weaver-old-admin weaver-old-state", said)
-        self.assertIn("usermod -aG weaver-old-admin fixture-no-home", said)
-        self.assertIn(f"chgrp weaver-old-admin {territory}", said)
-        self.assertIn(f"chmod 0711 {territory}", said)
+        self.assertIn("usermod -aG weaver-old-state,weaver-old-admin fixture-no-home", said)
+        self.assertIn(f"chgrp weaver-old-state {territory}", said)
+        self.assertIn(f"chmod 0710 {territory}", said)
         # After the move the plan reads the declaration from the territory
         # and names no migration (the fixture's build directory cleared, as a
         # second build in one fixture needs).
@@ -1800,8 +1819,8 @@ esac
         # access group, a login fact this running shell does not acquire, and
         # regroups the territory, so every read of a declaration or a sink
         # after it goes through sudo and never through the operator's groups.
-        # The fake sudo locks the territory at the migration's chmod 0711,
-        # harder than the real 0711 does, which lists nothing to an operator
+        # The fake sudo locks the territory at the migration's chmod 0710,
+        # harder than the real 0710 does, which passes nothing to an operator
         # shell that has not taken the new login
         # (LOCK_TERRITORY) and reopens it for its own reads alone, so the
         # reconcile step reaches the declaration and refuses on the fixture's
@@ -1840,7 +1859,7 @@ esac
         self.assertNotIn("could be verified", result.stderr)
         self.assertIn("old refuses and this script will not guess the fix", result.stderr)
         calls = self.calls()
-        after = calls.index(["sudo", "chmod", "0711", str(territory)])
+        after = calls.index(["sudo", "chmod", "0710", str(territory)])
         self.assertIn(["sudo", "-n", "test", "-f", str(territory / "agent.toml")], calls[after:])
         self.assertIn(["sudo", "-n", "cat", "--", str(territory / "agent.toml")], calls[after:])
         # The rollback put the files back through the same privilege.
@@ -1855,8 +1874,9 @@ esac
         self.assertIn(["sudo", "stat", "-c", "%G %a", "--", str(territory)], calls[:after])
         self.assertIn(["sudo", "chgrp", "weaver-old-state", str(territory)], calls[after:])
         self.assertIn(["sudo", "chmod", "710", str(territory)], calls[after:])
-        self.assertLess(calls.index(["sudo", "chgrp", "weaver-old-admin", str(territory)]),
-                        calls.index(["sudo", "chgrp", "weaver-old-state", str(territory)]))
+        regroups = [i for i, c in enumerate(calls) if c == ["sudo", "chgrp", "weaver-old-state", str(territory)]]
+        self.assertEqual(len(regroups), 2, "the migration's regroup, then the restore's")
+        self.assertLess(regroups[0], after)
         # **And each moved file as the operator owned it** (Codex on #94,
         # round 12): its uid:gid and mode read before the move, put back
         # after the move back, so the operator reads and edits it as before
@@ -1929,6 +1949,31 @@ esac
         self.assertEqual(ran.returncode, 0, ran.stderr)
         self.assertEqual(destination.read_text(), "moved\n")
         self.assertFalse(source.exists())
+
+    def test_an_unload_is_read_from_admins_answer(self):
+        """**An unload is verified by its answer** (the #94 survey's S22):
+        `unload_verified` answers success only where admin's last line is the
+        unloaded state, so a refused unload, the run still standing, fails
+        the verify step and rolls the install back. Perturbation: answer
+        success whatever admin said and the refusal passes."""
+        text = (DEPLOY / "update-stack.sh").read_text()
+        admin = self.root / "bin" / "weaver-admin"
+        admin.parent.mkdir(parents=True, exist_ok=True)
+        program = ('sudo() { [ "$1" = -n ] && shift; shift; "$@"; }\n'
+                   + shell_function(text, "unload_verified") + 'unload_verified m1')
+        env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
+        env.update(BIN_DIR=str(admin.parent), ADMIN_BASE=str(self.config))
+        for answer, verified in (('{"kind":"state","state":"unloaded"}', True),
+                                 ('{"kind":"refused","refusal":"activity_not_at_rest"}', False),
+                                 ('', False)):
+            with self.subTest(answer=answer):
+                admin.write_text(f"#!/bin/sh\necho '{answer}'\nexit 0\n")
+                admin.chmod(0o755)
+                ran = subprocess.run(["bash", "-c", program], env=env, text=True,
+                                     capture_output=True, timeout=20)
+                self.assertEqual(ran.returncode == 0, verified, ran.stderr)
+                if not verified:
+                    self.assertIn("admin answered the unload of m1", ran.stderr)
 
     def test_the_no_follow_chmod_refuses_a_link_and_sets_a_regular_file(self):
         # Codex on #94, round 14: root sets a moved file's mode through a

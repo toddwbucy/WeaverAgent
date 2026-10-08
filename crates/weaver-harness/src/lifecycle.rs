@@ -1365,14 +1365,13 @@ impl Harness {
                             LifecycleAnswer::SavePointTaken { report },
                         )?;
                     }
+                    // **A run that takes no save point refuses the demand
+                    // as out of order**, per Spec section 6: a diagnostic
+                    // binding, or a serving run with no member seam, has no
+                    // member to ask, and calling a healthy member dead would
+                    // misreport it.
                     Ok(None) => {
-                        self.refuse(
-                            connection,
-                            &exchange,
-                            LifecycleRefusal::SavePointNotTaken {
-                                missed: weaver_types::SavePointLeg::MemberDead,
-                            },
-                        )?;
+                        self.refuse(connection, &exchange, LifecycleRefusal::OutOfOrder)?;
                     }
                     Err(missed) => {
                         self.refuse(
@@ -2587,7 +2586,7 @@ fn parked_ask_notice(bound_ms: u64) -> String {
 /// lineage**, per `weaver-harness-Spec` section 6.1: a miss or a refusal
 /// disagrees, an empty answer agrees with an enter naming no save point and
 /// with nothing else, and a stamp agrees where its digest, run, sequence and
-/// turn equal the lineage's four, `operator_supplied` and `built_from` being
+/// turn equal the lineage's four, `named_at_restore` and `built_from` being
 /// admin's resolution and never the member's to answer. The reason names
 /// what disagreed, for the diagnostic stream.
 fn restored_agrees(
@@ -2781,7 +2780,7 @@ mod tests {
     /// and in no other way**, per `weaver-harness-Spec` section 6.1: a miss
     /// and a refusal disagree, an empty answer agrees only with an enter
     /// naming no save point, and a stamp agrees only where its digest, run,
-    /// sequence and turn all equal the lineage's, `operator_supplied` being
+    /// sequence and turn all equal the lineage's, `named_at_restore` being
     /// admin's and never compared.
     ///
     /// Perturbation: drop the `turn` comparison from `restored_agrees` and
@@ -4022,6 +4021,35 @@ mod tests {
                 .iter()
                 .any(|line| line.contains(r#""kind":"save_point""#)),
             "the save point's event never crosses the tee: {read:?}"
+        );
+    }
+
+    /// **A save point demanded of a run that takes none is out of order**,
+    /// per `weaver-harness-Spec` section 6 and
+    /// `weaver-admin-harness-contract`: a diagnostic binding has no member
+    /// to ask, so the `SavePoint` directive refuses `OutOfOrder`, asks no
+    /// snapshot and records nothing, the run standing. Perturbation: refuse
+    /// `SavePointNotTaken { missed: MemberDead }` again and the answer
+    /// reports a healthy member dead.
+    #[test]
+    fn a_save_point_demanded_of_a_diagnostic_run_is_out_of_order() {
+        let (events, _, read, answer, still_entered) =
+            enter_against_a_member_leaving(None, true, EMPTY_RESTORED, LeaveMode::SavePoint);
+        assert_eq!(
+            answer,
+            Some(weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder)),
+            "a run that takes no save point is not a dead member"
+        );
+        assert!(still_entered, "the refusal leaves the run standing");
+        assert!(
+            !read
+                .iter()
+                .any(|line| line.starts_with(r#"{"ask":{"snapshot""#)),
+            "no snapshot is asked: {read:?}"
+        );
+        assert!(
+            !events.iter().any(|e| e["kind"] == "save_point"),
+            "nothing is recorded"
         );
     }
 

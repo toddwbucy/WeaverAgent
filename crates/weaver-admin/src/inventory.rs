@@ -266,7 +266,9 @@ fn take_inventory_against(
     // or remove the file admin opened - and custody of where the record leaves
     // the system is admin's by charter. Ownership does not by itself deny a
     // traversal that mode grants, and denial does not by itself establish
-    // custody, so both are checked.
+    // custody, so both are checked. The directory is the territory, root's at
+    // `0710` under the state group, which the agent's uid does not hold (the
+    // operator's ruling of 2026-10-08 on #1).
     let directory = sink_directory(&config.trace_sink);
     if agent_can_traverse(directory, boundary) {
         return Err(LifecycleRefusal::BoundaryUnverified);
@@ -380,7 +382,14 @@ fn take_inventory_against(
         declaration: declaration_digest(source),
         binding,
         lineage,
-        member_account: boundary.member_account,
+        // **The member is the election's, not the box's** (the #94 survey's
+        // S2): a box carries the member's account whatever the engine, and
+        // every consumer reads this as "a member stands", so a `none` agent
+        // answers none and never waits on, restores to or publishes for a
+        // member it does not stand.
+        member_account: (store.engine != StoreEngine::None)
+            .then_some(boundary.member_account)
+            .flatten(),
     })
 }
 
@@ -1265,6 +1274,16 @@ mod tests {
             take_inventory(&name, &embedded, &boundary(&sink_dir, 65533)).is_ok(),
             "and a box carrying the account passes, so the refusal is the account's"
         );
+        // **A `none` agent reports no member though the box carries the
+        // account** (the #94 survey's S2): every consumer reads the report's
+        // account as "a member stands". Perturbation: answer the box's
+        // account whatever the engine and this reads it.
+        let provisioned = boundary(&sink_dir, 65533);
+        assert!(provisioned.member_account.is_some());
+        let report = take_inventory(&name, &declined, &provisioned).expect("none reads");
+        assert_eq!(report.member_account, None, "none stands no member");
+        let report = take_inventory(&name, &embedded, &provisioned).expect("sqlite reads");
+        assert_eq!(report.member_account, provisioned.member_account);
         let _ = std::fs::remove_dir_all(&root);
     }
 

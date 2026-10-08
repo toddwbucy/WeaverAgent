@@ -66,7 +66,7 @@ fn adopt_durably(
     file_owner: (u32, u32),
     sync: &mut dyn FnMut(BorrowedFd<'_>) -> std::io::Result<()>,
 ) -> Result<Option<(std::fs::File, Judged)>, String> {
-    let judged = open_judged(directory, name, file_owner)?;
+    let judged = open_judged(directory, name, file_owner).map_err(|fault| fault.why)?;
     if judged.is_some() {
         sync(directory).map_err(|e| format!("the save-points directory does not sync: {e}"))?;
     }
@@ -704,7 +704,12 @@ fn read_room(room: BorrowedFd<'_>, member_uid: u32) -> Result<Vec<RoomEntry>, Li
         // name, a few KiB at the most, so a room of many files costs the
         // scan little and the per-verb cap bounds the whole reads, which
         // happen at the copy alone, each judging the bytes it copies.
-        if let Some(stamp) = scan_room_file(room, &name, member_uid) {
+        // **A room file that does not read refuses the verb** (the #94
+        // survey's S3 and S4): left out of the order, it would be published
+        // by a later verb after newer files, outranking them. One that reads
+        // and is no save point is left in place and named, as it can never
+        // publish.
+        if let Some(stamp) = scan_room_file(room, &name, member_uid)? {
             let digest = name.trim_end_matches(SUFFIX).to_string();
             found.push(RoomEntry {
                 name,
@@ -764,10 +769,24 @@ const STAMP_LINE_BOUND: u64 = 4096;
 /// without following a link and without blocking, a regular file of the
 /// member's under the size bound, its first line read within
 /// `STAMP_LINE_BOUND` and judged as a stamp. The image, the check and the
-/// digest are judged at the copy, from the bytes it copies.
-fn scan_room_file(dir: BorrowedFd<'_>, name: &str, member_uid: u32) -> Option<Stamp> {
+/// digest are judged at the copy, from the bytes it copies. A file that
+/// does not open, stat or read, or stands past the save point's bound, which
+/// the member never writes past (the operator's ruling of 2026-10-08 on #1),
+/// refuses the verb `BoundaryUnverified` naming it (the #94 survey's S3 and
+/// S4); a file gone since the listing, a link, a file not the member's or a
+/// line that is no stamp is no save point, `Ok(None)`, left in place and
+/// named.
+fn scan_room_file(
+    dir: BorrowedFd<'_>,
+    name: &str,
+    member_uid: u32,
+) -> Result<Option<Stamp>, LifecycleRefusal> {
     use std::os::unix::fs::MetadataExt;
-    let Ok(fd) = nix::fcntl::openat(
+    let refuse = |why: String| {
+        diag!("weaver-admin: the room's {name} {why}; nothing is published until it is cleared");
+        LifecycleRefusal::BoundaryUnverified
+    };
+    let fd = match nix::fcntl::openat(
         dir,
         name,
         nix::fcntl::OFlag::O_RDONLY
@@ -775,44 +794,47 @@ fn scan_room_file(dir: BorrowedFd<'_>, name: &str, member_uid: u32) -> Option<St
             | nix::fcntl::OFlag::O_NONBLOCK
             | nix::fcntl::OFlag::O_CLOEXEC,
         nix::sys::stat::Mode::empty(),
-    ) else {
-        diag!("weaver-admin: the room's {name} does not open and is left in place");
-        return None;
+    ) {
+        Ok(fd) => fd,
+        Err(nix::errno::Errno::ENOENT) => return Ok(None),
+        Err(nix::errno::Errno::ELOOP) => {
+            diag!("weaver-admin: the room's {name} is a link and is left in place");
+            return Ok(None);
+        }
+        Err(e) => return Err(refuse(format!("does not open ({e})"))),
     };
     let mut file = std::fs::File::from(fd);
-    let Ok(metadata) = file.metadata() else {
-        diag!("weaver-admin: the room's {name} does not stat and is left in place");
-        return None;
-    };
+    let metadata = file
+        .metadata()
+        .map_err(|e| refuse(format!("does not stat ({e})")))?;
     if !metadata.is_file() || metadata.uid() != member_uid {
         diag!(
             "weaver-admin: the room's {name} is not the member's regular file and is left in place"
         );
-        return None;
+        return Ok(None);
     }
     if metadata.len() > SAVE_POINT_BOUND {
-        diag!(
-            "weaver-admin: the room's {name} is {} bytes, past the bound of {SAVE_POINT_BOUND}, and is left in place",
+        return Err(refuse(format!(
+            "is {} bytes, past the bound of {SAVE_POINT_BOUND} the member never writes past",
             metadata.len()
-        );
-        return None;
+        )));
     }
     let mut head = Vec::new();
-    if let Err(e) = (&mut file).take(STAMP_LINE_BOUND).read_to_end(&mut head) {
-        diag!("weaver-admin: the room's {name} does not read ({e}) and is left in place");
-        return None;
-    }
+    (&mut file)
+        .take(STAMP_LINE_BOUND)
+        .read_to_end(&mut head)
+        .map_err(|e| refuse(format!("does not read ({e})")))?;
     let Some(end) = head.iter().position(|&b| b == b'\n') else {
         diag!(
             "weaver-admin: the room's {name} carries no stamp line within {STAMP_LINE_BOUND} bytes and is left in place"
         );
-        return None;
+        return Ok(None);
     };
     match judge_stamp(&head[..end]) {
-        Ok((stamp, _)) => Some(stamp),
+        Ok((stamp, _)) => Ok(Some(stamp)),
         Err(why) => {
             diag!("weaver-admin: the room's {name} is not a save point ({why})");
-            None
+            Ok(None)
         }
     }
 }
@@ -893,7 +915,8 @@ fn judge_room_file(dir: BorrowedFd<'_>, name: &str, member_uid: u32) -> Option<(
 /// **Publish the member's finished save points into the territory's
 /// save-points directory**, per `weaver-admin-Spec` section 6, under the lock
 /// the caller holds: each is copied under a temporary name owned by
-/// `file_owner`, root and the access group in production, and mode `0600`, renamed to its published name, named on one manifest line,
+/// `file_owner`, root and the access group in production, and mode `0640`,
+/// renamed to its published name, named on one manifest line,
 /// and only then removed from the room. `reports` are what the harness
 /// reported of the save points it recorded, so a file the report names
 /// carries the event's position and the report's arrival, and any other file
@@ -912,7 +935,8 @@ pub fn publish(
 }
 
 /// `publish`, answering besides the lines whether it left any room file for
-/// a later verb, past the cap or the free space (Codex on #94, at ab8acef):
+/// a later verb, past the cap or the free space (Codex on #94, at ab8acef),
+/// or at a judgment or copy that failed (the #94 survey's S3):
 /// a load must not select while a newer save point waits in the room.
 pub fn publish_noting_deferral(
     room: BorrowedFd<'_>,
@@ -1004,13 +1028,16 @@ fn publish_with(
     let remove_from_room = |name: &str| {
         let _ = nix::unistd::unlinkat(room, name, nix::unistd::UnlinkatFlags::NoRemoveDir);
     };
-    // **The cap and the free-space look stop the verb, never skip an entry**
-    // (the custody audit's G23): entries go oldest first and the reported
-    // one last, and the latest a load selects is the highest ordinal, so a
-    // file deferred past a newer one would outrank it when published later.
-    // Stopping at the first entry declined keeps every file published older
-    // than every file deferred; a leave's own save point deferred so leaves
-    // its unload refusing, as one that did not publish does.
+    // **Every entry declined stops the verb, never skips it** (the custody
+    // audit's G23 and the #94 survey's S3): entries go oldest first and the
+    // reported one last, and the latest a load selects is the highest
+    // ordinal, so a file left behind a newer one would outrank it when
+    // published later. The cap, the free-space look, a judgment at the copy
+    // that fails and a copy that fails each stop here and answer a deferral,
+    // so every file published is older than every file left; a leave's own
+    // save point so left leaves its unload refusing, and a load refuses too.
+    // The one skip is a standing line whose target is of other bytes: that
+    // entry never appends a line, so it outranks nothing.
     let total = entries.len();
     let mut deferred = false;
     for (at, entry) in entries.into_iter().enumerate() {
@@ -1082,14 +1109,20 @@ fn publish_with(
         // write its room, so a verdict from the scan is never trusted for a
         // later read; a file that changed since is refused and left in place.
         let Some((bytes, judged)) = judge_room_file(room, &entry.name, member_uid) else {
-            continue;
+            diag!(
+                "weaver-admin: the room's {} and every later save point are left for the next verb",
+                entry.name
+            );
+            deferred = true;
+            break;
         };
         if judged.digest != entry.digest {
             diag!(
-                "weaver-admin: the room's {} changed after it was judged and is left in place",
+                "weaver-admin: the room's {} changed after it was judged; it and every later save point are left for the next verb",
                 entry.name
             );
-            continue;
+            deferred = true;
+            break;
         }
         match (hooks.available)(directory) {
             Ok(free) if free >= bytes.len() as u64 + PUBLISH_RESERVE => {}
@@ -1199,11 +1232,12 @@ fn publish_with(
         })();
         if let Err(e) = written {
             diag!(
-                "weaver-admin: the room's {} did not publish ({e}) and is left in place",
+                "weaver-admin: the room's {} did not publish ({e}); it and every later save point are left for the next verb",
                 entry.name
             );
             remove_temporary();
-            continue;
+            deferred = true;
+            break;
         }
         if standing.is_some() {
             // The target stands again under its line; nothing to append.
@@ -1248,8 +1282,13 @@ fn open_judged(
     directory: BorrowedFd<'_>,
     name: &str,
     file_owner: (u32, u32),
-) -> Result<Option<(std::fs::File, Judged)>, String> {
+) -> Result<Option<(std::fs::File, Judged)>, NotPublished> {
     use std::os::unix::fs::MetadataExt;
+    let fault = |why: String| NotPublished {
+        why,
+        differs: false,
+    };
+    let differs = |why: String| NotPublished { why, differs: true };
     let fd = match nix::fcntl::openat(
         directory,
         name,
@@ -1261,52 +1300,72 @@ fn open_judged(
     ) {
         Ok(fd) => fd,
         Err(nix::errno::Errno::ENOENT) => return Ok(None),
-        Err(e) => return Err(format!("{name} does not open: {e}")),
+        Err(e) => return Err(fault(format!("{name} does not open: {e}"))),
     };
     let mut file = std::fs::File::from(fd);
     let metadata = file
         .metadata()
-        .map_err(|e| format!("{name} does not stat: {e}"))?;
+        .map_err(|e| fault(format!("{name} does not stat: {e}")))?;
     if !metadata.is_file() {
-        return Err(format!("{name} is not a regular file"));
+        return Err(fault(format!("{name} is not a regular file")));
     }
     if metadata.uid() != file_owner.0 {
-        return Err(format!("{name} is not root's"));
+        return Err(fault(format!("{name} is not root's")));
     }
     // **The group is judged as the owner is** (Codex on #94): a file the
     // access group cannot read is not a published save point, however it
     // came to stand here, so the operator and the connector read every one
     // a load can restore.
     if metadata.gid() != file_owner.1 {
-        return Err(format!("{name} is not grouped to the access group"));
+        return Err(fault(format!("{name} is not grouped to the access group")));
     }
     if metadata.mode() & 0o7777 != 0o640 {
-        return Err(format!(
+        return Err(fault(format!(
             "{name} is not mode 0640, root's and read by the access group"
-        ));
+        )));
     }
     if metadata.len() > SAVE_POINT_BOUND {
-        return Err(format!(
+        return Err(fault(format!(
             "{name} is {} bytes, past the bound of {SAVE_POINT_BOUND}",
             metadata.len()
-        ));
+        )));
     }
     // **Bounded through the read as well, as a defence** (Codex on #94): the
     // file is judged root's above and root alone writes it, so it cannot grow
     // under this read today; the bound holds through the read all the same,
     // so it stays true if the ownership ever changes.
     let bytes = read_within(&mut file, SAVE_POINT_BOUND)
-        .map_err(|e| format!("{name} does not read: {e}"))?
+        .map_err(|e| fault(format!("{name} does not read: {e}")))?
         .ok_or_else(|| {
-            format!("{name} grew past the bound of {SAVE_POINT_BOUND} as it was read")
+            fault(format!(
+                "{name} grew past the bound of {SAVE_POINT_BOUND} as it was read"
+            ))
         })?;
-    let judged = judge(&bytes).map_err(|why| format!("{name} is not a save point: {why}"))?;
+    let judged =
+        judge(&bytes).map_err(|why| differs(format!("{name} is not a save point: {why}")))?;
     if published_name(&judged) != name {
-        return Err(format!("{name} is not the name its bytes compute"));
+        return Err(differs(format!("{name} is not the name its bytes compute")));
     }
     nix::unistd::lseek(file.as_fd(), 0, nix::unistd::Whence::SeekSet)
-        .map_err(|e| format!("{name} does not seek: {e}"))?;
+        .map_err(|e| fault(format!("{name} does not seek: {e}")))?;
     Ok(Some((file, judged)))
+}
+
+/// **Why a published file is not the one its line names** (the #94 survey's
+/// S9): `differs` where its bytes were read and are not that save point, which
+/// the default selection passes over as Spec section 4 says; otherwise a
+/// fault reaching or judging the file, which refuses rather than restoring
+/// older state over a transient error or a hand-changed mode.
+#[derive(Debug)]
+pub(crate) struct NotPublished {
+    why: String,
+    differs: bool,
+}
+
+impl std::fmt::Display for NotPublished {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.why)
+    }
 }
 
 /// Open and judge the file a manifest line names, per `weaver-admin-Spec`
@@ -1315,12 +1374,15 @@ fn open_published(
     directory: BorrowedFd<'_>,
     line: &ManifestLine,
     file_owner: (u32, u32),
-) -> Result<Option<OwnedFd>, String> {
+) -> Result<Option<OwnedFd>, NotPublished> {
     let Some((file, judged)) = open_judged(directory, &line.name, file_owner)? else {
         return Ok(None);
     };
     if judged.digest != line.digest {
-        return Err(format!("{} does not digest to its line", line.name));
+        return Err(NotPublished {
+            why: format!("{} does not digest to its line", line.name),
+            differs: true,
+        });
     }
     Ok(Some(OwnedFd::from(file)))
 }
@@ -1428,11 +1490,22 @@ fn select_with(
                     line.name
                 );
             }
-            Err(why) => {
+            Err(why) if why.differs => {
                 diag!(
-                    "weaver-admin: the manifest's ordinal {} is not the latest: {why}",
+                    "weaver-admin: the manifest's ordinal {} is not the latest: {why}; passed over",
                     line.ordinal
                 );
+            }
+            // **Only a file gone or differing is passed over** (the #94
+            // survey's S9), per Spec section 4: a fault reaching or judging
+            // the latest refuses, so an EIO or a mode changed by hand never
+            // restores older state with only a log line.
+            Err(why) => {
+                diag!(
+                    "weaver-admin: the manifest's ordinal {} cannot be judged ({why}); the load refuses rather than restore an older save point",
+                    line.ordinal
+                );
+                return Err(LifecycleRefusal::BoundaryUnverified);
             }
         }
     }
@@ -1718,7 +1791,7 @@ pub fn reset_from(marker: Option<&Marker>) -> Option<weaver_types::Reset> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     /// **The marker's temporary is created narrow** (the custody audit's
     /// G14): read right after its creation, before its owner and mode are
     /// set, it carries no group or other bit, so a crash there leaves nothing
@@ -2404,6 +2477,56 @@ mod tests {
         assert!(names.iter().all(|(name, _)| room.join(name).exists()));
     }
 
+    /// **The save point's bound is one gibibyte in both readers** (the
+    /// operator's ruling of 2026-10-08 on #1): the member's own constant is
+    /// pinned to the same number in weaver-state, so the two are held equal
+    /// by naming it. Perturbation: change either constant.
+    #[test]
+    fn the_save_point_bound_is_one_gibibyte() {
+        assert_eq!(SAVE_POINT_BOUND, 1_073_741_824);
+    }
+
+    /// **A room file past the bound refuses the publication** (the #94
+    /// survey's S4): the member never writes one, so one standing is a fault
+    /// to clear, and left out of the order it would sit in the room while a
+    /// load restored older state. The file is sparse, so the test writes no
+    /// gibibyte. Perturbation: leave it in place and answer no entry again,
+    /// and the publication reads.
+    #[test]
+    fn a_room_file_past_the_bound_refuses_the_publication() {
+        let scratch = crate::scratch::Scratch(std::env::temp_dir().join(format!(
+            "weaver-admin-room-past-bound-{}",
+            std::process::id()
+        )));
+        let base = scratch.0.clone();
+        let room = base.join("room");
+        let dir = base.join("published");
+        std::fs::create_dir_all(&room).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let large =
+            std::fs::File::create(room.join(format!("{}{SUFFIX}", "a".repeat(64)))).unwrap();
+        large.set_len(SAVE_POINT_BOUND + 1).unwrap();
+        drop(large);
+        let me = nix::unistd::getuid().as_raw();
+        let mine = Owner {
+            uid: me,
+            gid: nix::unistd::getgid().as_raw(),
+        };
+        let dir_fd = open_directory(&dir).unwrap();
+        assert_eq!(
+            publish(
+                open_directory(&room).unwrap().as_fd(),
+                me,
+                dir_fd.as_fd(),
+                (mine.uid, mine.gid),
+                mine,
+                &[],
+            )
+            .err(),
+            Some(LifecycleRefusal::BoundaryUnverified)
+        );
+    }
+
     /// **The room is copied one file at a time, from bytes judged in the same
     /// read** (Codex on #94): three finished files in the room publish, each
     /// read and judged again at its own copy, the scan having kept none of
@@ -2445,27 +2568,41 @@ mod tests {
         }
         // Between the scan and the copies the member replaces the first file
         // with another save point's bytes under the same name.
+        // The newest is the one the harness reported.
         let swapped = room.join(&names[0].0);
         let other = save_point("r-1", 9, 0, 9_000_000_000, b"other");
-        let lines = publish_with(
+        let report = weaver_types::SavePointReport {
+            save_point: names[2].1.clone(),
+            name: names[2].0.clone(),
+            run: weaver_types::RunId("r-1".into()),
+            sequence: 3,
+            turn: 0,
+            event_run: weaver_types::RunId("r-1".into()),
+            position: 7,
+        };
+        let (lines, deferred) = publish_with(
             open_directory(&room).unwrap().as_fd(),
             me,
             dir_fd.as_fd(),
             (mine.uid, mine.gid),
             mine,
-            &[],
+            &[(report, Arrival::Demand)],
             &mut PublishHooks {
                 after_scan: &mut || std::fs::write(&swapped, &other).unwrap(),
                 available: &mut available_bytes,
                 cap: PUBLISH_CAP,
             },
         )
-        .unwrap()
-        .0;
-        let published: Vec<&str> = lines.iter().map(|line| line.digest.as_str()).collect();
-        assert_eq!(published, [names[1].1.as_str(), names[2].1.as_str()]);
-        assert!(swapped.exists(), "the replaced file is left in place");
-        assert!(!room.join(&names[1].0).exists() && !room.join(&names[2].0).exists());
+        .unwrap();
+        // **The oldest failing its judgment stops the verb** (the #94
+        // survey's S3): published past, it would leave the oldest to be
+        // minted later above the reported one. Perturbation: skip the
+        // failed entry again and the two newer publish.
+        assert!(lines.is_empty(), "nothing newer is published past it");
+        assert!(deferred, "and the verb answers the deferral");
+        for (name, _) in &names {
+            assert!(room.join(name).exists(), "{name} is left in the room");
+        }
     }
 
     /// **A publication interrupted after the rename is adopted at the next
@@ -2686,6 +2823,21 @@ mod tests {
             .expect("a latest");
         assert_eq!(latest.line.ordinal, 3);
         assert!(!latest.lineage.named_at_restore);
+        // **A latest that cannot be judged refuses, never passed over** (the
+        // #94 survey's S9): its mode changed by hand to 0644 is a fault, not
+        // a file gone or differing, so the selection refuses rather than
+        // restore the second. Perturbation: pass over every fault again and
+        // the second is selected.
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let third = dir.join(&lines[2].name);
+            std::fs::set_permissions(&third, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert_eq!(
+                select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine).err(),
+                Some(LifecycleRefusal::BoundaryUnverified)
+            );
+            std::fs::set_permissions(&third, std::fs::Permissions::from_mode(0o640)).unwrap();
+        }
         // The third's file goes: the second is latest, named at a restore,
         // and the next ordinal is still four.
         std::fs::remove_file(dir.join(&lines[2].name)).unwrap();

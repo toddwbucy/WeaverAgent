@@ -337,7 +337,12 @@ ordinal for the exchange**, counted per residency from 1 (Codex on #94, round 10
 late answer is told from the retry's by its number: the custodian echoes it on the
 answer and on the `finished` answer, matches the acknowledgement to the part by number
 and digest both, and the harness drops an answer carrying another number and keeps
-waiting inside its bound. The custodian writes the
+waiting inside its bound. **A frame of this protocol is never another ask's answer**:
+one that lands while the harness awaits any other ask is dropped and the wait goes on
+inside that ask's bound. **The answer leg's bound is 120 seconds**, on the operator's
+ruling of 2026-10-08, since the custodian writes the image before it answers and 120
+seconds covers a 1 GiB image; the `finished` answer and every other ask are awaited
+inside the harness's two seconds, per `weaver-harness-Spec` section 6. The custodian writes the
 whole of its holdings with the schema they stand under as a part in its own room, the
 territory's `state/`, never overwriting one that stands, per `weaver-state-PRD` section
 4. The answer carries six members: `ask`, the ordinal echoed, `save-point`, the finished

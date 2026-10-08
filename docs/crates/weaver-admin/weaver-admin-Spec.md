@@ -555,11 +555,11 @@ open the sink per section 5, run the start step per section 6, dial the worker's
 socket and direct enter per section 7, publish. Seven actions, the charter's
 own, the bind-and-listen act the earlier form interleaved here having moved to
 the worker with the inversion. **The run lock is taken before `validate`, and the save-point publication of section
-6 runs under it, opening the validate step** before the inventory selects the save point
-to restore, on the operator's rulings of 2026-10-06 on #1 (the A3.0 items) (item 7): a save point an unclean stop left in the member's
+6 runs under it, after the inventory and before the selection** of the save point to
+restore, on the operator's rulings of 2026-10-06 on #1 (the A3.0 items) (item 7): a save point an unclean stop left in the member's
 room is published and selectable by the load that follows it, and a concurrent `load`
-against an active or a stopped-unload agent refuses at the lock with
-`InvocationInFlight` and touches nothing. The publication adds no step to the seven,
+against an active or a stopped-unload agent refuses at the run lock with `AgentRunning`,
+or `Unanswered` where the worker is silent, and touches nothing. The publication adds no step to the seven,
 being the inventory's first read of what the load restores. Each step's failure returns a typed
 `lifecycle-refusal` and enters the rollback below carrying the step's name.
 
@@ -634,18 +634,30 @@ publication that does not land, this verb refuses `SavePointNotTaken` naming the
 publication, the fifth leg and this crate's own, and leaves the marker open, so the next
 load records `NoCleanUnload` and recovers the room's file or names it as unpublishable,
 never restoring an older save point in silence behind an `Unloaded`. A forced unload
-reports no save point and is unchanged. A forced verb that finds the run
-already ended, the lock free, closes the marker as forced where it stands open, and a
+reports no save point and is unchanged. **A leave whose lock outlives the after-left
+wait keeps its report** (the #94 survey's S7): the escalation ends the holders and the
+reported save point is published as on a lock that freed, the same refusal following
+where it does not land, so `Unloaded` is never answered over a leave save point left in
+the room. **A verb that finds the run already ended, the lock free, publishes the room
+first** (the #94 survey's S11): a publication that refuses or leaves a file refuses
+`SavePointNotTaken` naming the publication again; one that published a room file closes
+the marker clean for either verb, the leave's save point having been taken, so a force
+records no `ForcedUnload` over the save point it published; where the room held none, a
+forced verb closes the marker as forced where it stands open, and an unforced one closes
+nothing, a run that ended on its own being the unclean stop the next load records. A
 forced leave the harness refuses past its `Left`, its organs going down behind the
 refusal, closes it the same inside the after-left wait before the refusal returns, so
 the next load records `ForcedUnload` and never `NoCleanUnload` for a run the operator
 forced. `force-unload` is `unload` in every
 other respect, the same waits and the same escalation.
 
-**The leave has a bound of its own, sixty seconds from the verb's start**, once the
-invocation lock is held: the observation and both dials spend it, so `unload` holds the
-invocation lock at most those sixty seconds and the escalation's forty-five, 105 in all,
-the number a caller builds against beside `show`'s short wait for the lock. A worker
+**The leave has a bound of its own, 150 seconds from the verb's start**, once the
+invocation lock is held: past the harness's 120 seconds for the save point's answer leg
+and its two-second legs (the operator's ruling of 2026-10-08 on #1, `weaver-harness-Spec`
+section 6), so admin never abandons a save point the harness still awaits. The
+observation and both dials spend it, so `unload` holds the invocation lock at most those
+150 seconds and the escalation's forty-five, 195 in all, the number a caller builds
+against beside `show`'s short wait for the lock. A worker
 that accepts leave and answers nothing inside it is a worker that would not exit: the
 verb goes to the escalation below without the aggregate, answers
 provisioned-and-unloaded once the lock is free, the run having ended with no leave
@@ -659,7 +671,7 @@ A run whose lock is still held thirty seconds after left, or past the leave's ow
 is ended by the escalation: every holder is sent `SIGTERM`, then every holder still
 standing ten seconds later `SIGKILL`, and the lock is read a last time five seconds
 after that. **The three waits are fixed**, as the leave's and the stop's are, so
-`unload` holds the invocation lock at most the leave's sixty seconds and these
+`unload` holds the invocation lock at most the leave's 150 seconds and these
 forty-five past it. **The holders are found from the kernel's descriptor tables, because
 a description lock names no pid**: `F_OFD_GETLK` reports a held lock with an `l_pid` of
 `-1`, so this crate stats `run.lock` for its device and inode and scans `/proc/<pid>/fd`
@@ -710,7 +722,7 @@ not conduct.
 
 **Every answer a verb waits for under its invocation lock has a bound, and the stop's is
 sixty seconds from the directive.** The enter's is section 2's 900 seconds, the leave's
-sixty above, and the observation's five seconds from the `Observe`, after the dial's
+150 above, and the observation's five seconds from the `Observe`, after the dial's
 bound, which covers only the connect. A worker that accepts stop and answers nothing
 inside its bound is not ended, a stop being no unload: the verb refuses `Unanswered`,
 exits, and releases the invocation lock with the run as it stands, so `show` and
@@ -749,7 +761,10 @@ to: axiom-harness-integrates-by-the-loop
 
 **Rollback is the reap plus one directive, as data.** What a failed load can leave is a
 running worker, a connected sink, and a device the SPU took, per charter section 5, and
-the rollback walks what stands: direct leave where a run was entered, end every
+the rollback walks what stands: direct a forced leave where a run was entered, a run
+being undone keeping no save point (the #94 survey's S10), and where that run does not
+answer `Left` leave the marker open on it rather than restore the one found, since the
+trace holds its `load` and no `unload` and the next load must record the reset; end every
 constituent the start step started by the escalation above, which never signals this
 invocation, then close the invocation's own copy of the run lock's description, which
 frees the lock, and close the sink where one opened.
@@ -885,7 +900,14 @@ section 6 is the record of what is loadable**: the inventory reads it, root-owne
 the territory's `save-points/` of section 9, one line per published or named save point, and
 selects either the save point the declaration's `[restore]` names, by its published name
 or its digest, or the latest, the line of highest ordinal whose file still stands under
-its name and whose bytes digest to the line's digest. **A file no line names is not
+its name and whose bytes digest to the line's digest. **Only a file gone or differing is
+passed over** (the #94 survey's S9): one that cannot be reached or judged, an open or a
+read that fails, or an owner, group, mode or size not as published, refuses
+`BoundaryUnverified` naming its line, so a transient fault or a mode changed by hand
+never restores an older save point with only a log line. **A member stands by the
+declaration's election, never by the box's account** (the #94 survey's S2): an agent
+electing `none` restores, publishes and waits on no member, though the box carries the
+member's account. **A file no line names is not
 loadable**, whatever stands in the directory: a declaration naming one refuses
 `ConfigInvalid` naming `restore`, and the way such a file becomes loadable is the
 `restore` verb, which judges it as below and appends the line that names it, marked as
@@ -945,7 +967,7 @@ lineage and whether or not a save point stands, to that run with `NoCleanUnload`
 with `ForcedUnload` where `force-unload` closed that run without its save point, per
 `weaver-types-Spec` section 4. An agent's first load finds no marker and resolves no
 reset. **A marker that stands and does not read refuses** (the custody audit's G8): one
-that is a link, torn, foreign or past a few hundred bytes refuses the load before any
+that is a link, torn, foreign or past 4096 bytes refuses the load before any
 process stands and the unload before it writes, `BoundaryUnverified` naming the marker,
 never read as no marker, since an absent marker resolves no reset and a run left open
 would load without its `NoCleanUnload`. The marker's temporary is created `0600`
@@ -1108,7 +1130,7 @@ than narrowed: a diagnostic sink is a sink.
 member could replace, or a link root would follow, would hand the worker a file other
 than the record, and since #80 the relay would read that file back out to the trace
 reader. **The trace's directory is judged first**: resolved once, owned by root or the
-admin principal and writable by no group or other, the territory's 0711 pass-through
+admin principal and writable by no group or other, the territory's 0710 passage
 being no write, and every directory above it held by section 9's
 rule. **The open goes through that directory** write-only with `O_APPEND`, `O_CLOEXEC`,
 `O_NOFOLLOW` and `O_NONBLOCK`, so a link at the trace's name refuses and a FIFO there
@@ -1475,9 +1497,10 @@ to: admin-member-spawn-drops-to-its-account
 is that the spawned process runs as the member and holds no group root left it - the
 supplementary set narrowed to the member's own group alone, then the gids, then the
 uids, in that order, because the two narrowings need the privilege the last one gives
-away. **The member holds no group of the territory**, on the operator's ruling of
-2026-10-08 on #1 (the custody audit's G11): the territory is `0711`, so the member
-passes to its own room by the bit every uid has, and the drop sets the supplementary set
+away. **The member holds its own group alone**, on the operator's ruling of
+2026-10-08 on #1 (the custody audit's G11): the territory is `0710` under the state
+group, the member's own primary group, so the member passes to its own room by that
+group, and the drop sets the supplementary set
 from this crate's slice and never from the account database, so no membership the
 account carries reaches the member. Neither the access group, which reads `admin.log`,
 `worker.log` and the published save points, nor the trace's group is among them, so the
@@ -1615,9 +1638,19 @@ cap admits, at most one image stands in this root process's memory, and a file t
 member changes after the scan is refused. **One verb publishes at most 32 room files, and copies one
 only where its size and 64 MiB more stand free** on the save-points filesystem, this
 act's elections (the custody audit's G23); entries go oldest first and the reported one
-last, and the cap or the space stops the verb at the first entry it declines rather than
-skipping it, so every file published is older than every file left for the next verb and
-the highest ordinal stays the last taken. A leave's own save point so deferred leaves
+last, and the cap, the space, a judgment at the copy that fails and a copy that fails
+each stop the verb at the first entry declined rather than skipping it (the #94 survey's
+S3), answering a deferral, so every file published is older than every file left for
+the next verb and the highest ordinal stays the last taken. A room file that does not
+open, stat or read at the scan refuses the verb `BoundaryUnverified` naming it, left out
+of the order it would be published later above newer files; one that reads and is no
+save point is left in place and named, as it can never publish. **A `save-point` whose
+save point does not publish refuses `SavePointNotTaken` naming the publication** (the
+#94 survey's S12), as the unload names it, the run still open. **The publication reads
+no declaration** (the #94 survey's S8): the member's uid is the account database's by its
+derived name and the room is the territory's, so an unload or a `save-point` publishes
+whatever the declaration says after the run began, and an agent electing no member has
+no room. A leave's own save point so deferred leaves
 its unload refusing `SavePointNotTaken` naming the publication, as one that did not
 publish does, until later verbs drain the room. **A load whose publication deferred
 any entry refuses `BoundaryUnverified`** (Codex on #94, round 30) after publishing what
@@ -1651,8 +1684,8 @@ with it, and the clock is monotonic enough across processes for one agent's file
 the latest the manifest names is the last taken and never a recovered older file the
 listing happened to yield later. **Each publication appends one
 line to the manifest**, `save-points.manifest` in the territory's `save-points/`, a file
-this crate creates root-owned and mode `0644` and opens for appending alone, never rewriting
-it: one JSON object per line carrying `ordinal`, a monotonic integer minted under the
+this crate creates root-owned and mode `0644` and opens for reading and appending, never
+rewriting a line, a torn tail alone truncated as below: one JSON object per line carrying `ordinal`, a monotonic integer minted under the
 lock as one past the highest line standing; `digest`; `name`, the published name;
 `stamp`, the run, sequence, turn and schema digest the stamp line carries; `taken`, its
 wall clock; `position`, the trace position of the `save_point` event that named it, the
@@ -1671,7 +1704,7 @@ link never opens. It is created only where no entry stands, exclusively as root 
 directory is root's, read by the access group and written by no one else: the operator
 removes a manifest only as root, which fails closed per section 9, and cannot replace
 or write one, which refuses. **What is written is durable before what depends on it is written**: the
-operator's copy is synced after its ownership is set and the directory after the
+published copy, root's, is synced after its ownership is set and the directory after the
 rename, before the manifest line names the entry; the line is synced before the room's
 copy goes; a line a failed write left torn is rolled back to the length the file had,
 and a torn last line a power loss left is dropped at the read, named, and truncated by
@@ -1679,14 +1712,16 @@ the next append, so the publication it was for is retried through the adoption o
 target rather than blocking every load; and the marker is synced as a temporary, root's
 and mode `0644` set through the descriptor whatever the umask, renamed, and its root
 synced, so it survives the loss of power it exists to record.
-**Every other file this crate touches at a publication goes the same way**: the room is listed by path for names
-alone and every entry opened and removed through the room's descriptor; the operator's
+**Every other file this crate touches at a publication goes the same way**: the room is listed through its own
+descriptor for names alone and every entry opened and removed through it; the published
 copy is created exclusively under a temporary name, its owner and mode verified on the
-open file, and renamed with `RENAME_NOREPLACE`, so an entry the operator put under the
+open file, and renamed with `RENAME_NOREPLACE`, so an entry anyone put under the
 published name refuses the rename rather than being replaced or followed; the marker
 stands in the root this crate owns. **A save point past one gibibyte
-is not read**, this act's election: in the room it is left in place and named, in the
-directory it is not the latest and a restore naming it refuses, so no file a member or
+is not read**, a bound both readers enforce on the operator's ruling of 2026-10-08 on #1,
+the member never writing one: in the room one refuses the publication
+`BoundaryUnverified` naming it until it is cleared, in the directory it refuses the
+selection as a fault and a restore naming it refuses, so no file a member or
 an operator wrote is read whole into this crate's memory past that bound. **The
 manifest is the record of what is loadable, and the latest is read from it**: the highest ordinal whose file still
 stands under its name and whose bytes digest to the line's digest, per section 4, and a
@@ -2132,9 +2167,10 @@ is one per agent, at `admin.log` in the agent's territory**, beside `agent.toml`
 prompt draft and `save-points/`, on the operator's ruling of 2026-10-03 on #63's sixth
 question, carried forward on #50, which moves it from the root's `log-path` of #45, and
 on the operator's ruling of 2026-10-07 on #1, which moves it with the declaration from
-the operator's home into the territory. The agent's uids never reach it, the territory
-being closed to them by section 9's judgment, and the operator and the connector read
-it through the access group: it is root's, grouped to the access group, mode `0640`,
+the operator's home into the territory. The agent's uids never reach it: the agent's own uid
+cannot pass the territory, and the member, which passes it by the state group, does not
+hold the access group (section 9). The operator and the connector read it through the
+access group: it is root's, grouped to the access group, mode `0640`,
 set through the open descriptor. This crate appends to it as root, opening
 it with `O_NOFOLLOW` so a link planted at the name is refused rather than followed, and
 non-blocking and judged a regular file before a line is written, so a FIFO planted at
@@ -2345,16 +2381,21 @@ file another principal could write among what a root step reads. The value of
 `territory` is resolved once to its canonical path, the look not following a link at
 the directory itself. **The territory is held as a descriptor for the verb's life**:
 opened once at the judgment with no link followed, judged on that descriptor a
-directory owned by uid 0, mode `0711` exactly on the operator's ruling of 2026-10-08 on
-#1, passage by name for every uid and listing for none, grouped to the access group as
-judged by name, and carrying no access-control entry beyond its mode. **The wall is
+directory owned by uid 0, mode `0710` exactly and grouped to the state group
+`weaver-<agent>-state`, judged by name, on the operator's ruling of 2026-10-08 on #1,
+which supersedes that day's earlier `0711`: passage by name and no listing for the state
+group alone, which the member holds as its primary group and the operator and the
+connector join, and nothing for the agent's own uid, which holds neither the state
+group nor the access group, so section 4's denial of the sink's directory to the agent's
+uid holds of the territory that holds the trace; and carrying no access-control entry
+beyond its mode. **The wall is
 each file's own mode**: the member's room is the member's `0700`, the trace is
 `root:weaver-<agent>-trace 0640`, the logs and `save-points/` are the access group's
 and closed to other, and `agent.toml` and `system-prompt.md` are
 `root:weaver-<agent>-admin 0640`, read through the access group alone, which the member
 does not hold (the custody audit's G11); `save-points/` beneath it is opened
-through that descriptor and judged the same way at mode `0750` and the territory's
-group; and every read and every write after goes through those descriptors and never
+through that descriptor and judged the same way at mode `0750` and the access group;
+and every read and every write after goes through those descriptors and never
 through the path again: `agent.toml` opened beneath the territory's, and section 6's
 published copy made, renamed and synced, the manifest opened and appended, and a file
 judged for a load or at a restore, each against `save-points/`. **The declaration's sink
@@ -2363,8 +2404,10 @@ derived from the sink's directory, and the territory is the agent whole, so a
 declaration whose sink's directory is not the judged territory refuses `ConfigInvalid`
 naming `trace-sink`, never standing the trace or the room outside what the territory's
 custody, group and archive cover. **The one entry this
-crate reads is held closed**: `agent.toml` is opened with no link followed and without
-blocking, and judged on its descriptor a regular file, owned by uid 0, grouped to the
+crate reads is held closed**, and is read only by the verbs that need it, `validate`,
+`load` and `restore` (the #94 survey's S8), never by the verbs that end or read a run, so
+a declaration saved invalid while a run stands never strands it: `agent.toml` is opened
+with no link followed and without blocking, and judged on its descriptor a regular file, owned by uid 0, grouped to the
 access group and mode `0640` exactly, so the access group reads it and never rewrites it
 and no other uid reads it; a declaration at any other owner, group or mode refuses
 `ConfigInvalid` naming it.
@@ -2822,10 +2865,12 @@ directive is asserted where the run happens.
 - The root check: the binary run as a non-root uid refuses before touching any
   agent, confirmed by watching a verb proceed when the check is removed.
 - The territory is root's and closed, per section 9 as of 2026-10-08: a directory of
-  any mode but `0711`, the earlier `0710` among them, one carrying an access-control entry, one
+  any mode but `0710`, the earlier `0711` among them, one under any group but the state
+  group, one carrying an access-control entry, one
   whose `save-points/` carries one, one not root's, one holding
   no `save-points/` or one of any mode but `0750`, an `operator` key absent or naming no
-  uid, a declaration that is a link or writable by group or other, and an ancestor
+  uid, a declaration that is a link or of any owner, group or mode but root, the access
+group and `0640`, and an ancestor
   another principal can write each refuse `BoundaryUnverified` before a value is read,
   confirmed by watching each pass and its declaration parse when its arm of the
   judgment is removed. The enter's `operator` is

@@ -302,6 +302,7 @@ fn member_entry(
         election: &election,
         restored,
         pending: None,
+        save_point_bound: weaver_state::save_point::SAVE_POINT_BOUND,
     };
     let code = serve(lines, preload, preload_socket, &mut custody);
     // **An unacknowledged part does not outlive the member**, per
@@ -379,6 +380,10 @@ struct Custody<'a> {
     /// acknowledged: its finished name and its digest. At most one stands,
     /// per `weaver-state-Spec` section 3.
     pending: Option<PendingSavePoint>,
+    /// The size past which a `snapshot` writes nothing, per
+    /// `weaver-state-Spec` section 3: `SAVE_POINT_BOUND` at every standing,
+    /// held here so a test can lower it.
+    save_point_bound: u64,
 }
 
 struct PendingSavePoint {
@@ -677,7 +682,9 @@ fn answer_frame(
         // stamped with the position of the last distillate landed before this
         // ask and the schema it stands under, written under a finished name
         // only once the write is whole. A write that fails answers nothing
-        // and leaves no file under a finished name. An empty store has no
+        // and leaves no file under a finished name, and **a save point past
+        // the bound answers nothing and leaves no part**, on the operator's
+        // ruling of 2026-10-08 that both readers enforce it. An empty store has no
         // position and its stamp names no run and sequence zero.
         Ask::Snapshot { ordinal } => {
             let stamp = custody
@@ -699,7 +706,7 @@ fn answer_frame(
             custody.pending = None;
             let name = custody
                 .room
-                .write_part(&save_point)
+                .write_part_within(&save_point, custody.save_point_bound)
                 .map_err(|e| CustodyFault::SavePoint(e.to_string()))?;
             let digest = save_point.digest();
             custody.pending = Some(PendingSavePoint {
@@ -1491,6 +1498,54 @@ mod tests {
             stand_preload_name(&path).is_some(),
             "and a named one stands"
         );
+    }
+
+    /// **A snapshot past the save point's bound answers nothing and leaves
+    /// no part**, per `weaver-state-Spec` section 3 on the operator's ruling
+    /// of 2026-10-08: with the custody's bound lowered under the file, the
+    /// `snapshot` ask is an `Err`, which the drain says on standard error and
+    /// answers with silence, no part is pending and the room holds no file,
+    /// the part the snapshot before it left cleared too; at the standing
+    /// bound the same holdings answer. Perturbation: drop the bound check
+    /// from `Room::write_part_within` and the lowered snapshot answers.
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn a_snapshot_past_the_bound_answers_nothing_and_leaves_no_part() {
+        let scratch = Scratch(std::env::temp_dir().join(format!(
+            "weaver-state-snapshot-bound-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        )));
+        std::fs::create_dir_all(&scratch.0).expect("room");
+        let room = Room::open(&scratch.0).expect("opens");
+        let mut store = weaver_state::engine::sqlite::Sqlite::stand().expect("stands");
+        let election = Election::default();
+        let mut custody = Custody {
+            store: &mut store,
+            room: &room,
+            session: "s-1",
+            election: &election,
+            restored: weaver_state::Restored::Empty,
+            pending: None,
+            save_point_bound: weaver_state::save_point::SAVE_POINT_BOUND,
+        };
+        let answered = answer_frame(&Ask::Snapshot { ordinal: 1 }, &mut custody)
+            .expect("at the standing bound the snapshot answers");
+        assert!(answered.contains("\"ask\":1"), "{answered}");
+        assert!(custody.pending.is_some(), "a part is pending");
+        custody.save_point_bound = 16;
+        let refused = answer_frame(&Ask::Snapshot { ordinal: 2 }, &mut custody)
+            .expect_err("past the bound the snapshot answers nothing");
+        assert!(
+            format!("{refused:?}").contains("past the bound of 16"),
+            "{refused:?}"
+        );
+        assert!(custody.pending.is_none(), "no part is pending");
+        let left: Vec<_> = std::fs::read_dir(&scratch.0)
+            .expect("lists")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        assert!(left.is_empty(), "the room holds no file: {left:?}");
     }
 
     /// The operator's 2026-09-22 ruling admits trace only as test scaffolding.

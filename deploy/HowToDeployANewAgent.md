@@ -33,7 +33,7 @@ load where any piece is missing, so the pieces are made first and admin is asked
 | Relay account, the trace relay's uid | `weaver-<name>-relay`, no home | system user, nologin, its one group the trace group |
 | Access group, the territory's and the trace door's | `weaver-<name>-admin` | system group, held by the connector and the operator, never the member; it reads and never writes |
 | Connector account, admin-con's service user | `weaver-<name>-admincon`, no home | system user, nologin, holds the access group and nothing of the agent's |
-| Territory | `<agent-directory>/weaver-<name>/`, the stack record's `agent-directory` (default `/var/lib/weaver-agent`, root 0755) | root:weaver-<name>-admin 0711, not setgid: every uid passes to what stands in it by name, none lists, the files' own modes are the wall, and no access entry is set |
+| Territory | `<agent-directory>/weaver-<name>/`, the stack record's `agent-directory` (default `/var/lib/weaver-agent`, root 0755) | root:weaver-<name>-state 0710, not setgid: the state group passes to what stands in it by name, which the member holds as its own and the operator and the connector join; the agent's own uid passes not; none lists; the files' own modes are the wall beneath, and no access entry is set |
 | State room (agents with a store) | `<territory>/state/`, where the member writes its save points | member 0700, unreachable by the agent's uid |
 | Trace sink | `<territory>/trace.ndjson` | made by create-agent before the first load, root:weaver-<name>-trace 0640, so the member cannot read it, and admin opens it append-only at load and leaves its owner and mode alone |
 | Declaration | `<territory>/agent.toml` | root:weaver-<name>-admin 0640, written by create-agent as root; you edit it with `sudoedit`, and admin refuses any other owner, group or mode |
@@ -134,12 +134,12 @@ sudo useradd --system --shell /usr/sbin/nologin --create-home --user-group weave
 sudo groupadd --system weaver-$N-trace
 sudo groupadd --system weaver-$N-admin
 sudo useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group --gid weaver-$N-trace weaver-$N-relay
-sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group --groups weaver-$N-admin weaver-$N-admincon
-sudo usermod -aG weaver-$N,weaver-$N-trace,weaver-$N-admin "$USER"
+sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group --groups weaver-$N-state,weaver-$N-admin weaver-$N-admincon
+sudo usermod -aG weaver-$N,weaver-$N-trace,weaver-$N-state,weaver-$N-admin "$USER"
 sudo chmod 2750 /home/weaver-$N
 T=/var/lib/weaver-agent/weaver-$N      # the stack record's agent-directory, then the account
 [ ! -e "$T" ] || { echo "REFUSED: $T already exists"; exit 1; }   # install -d would merge
-sudo install -d -o root -g weaver-$N-admin -m 0711 "$T"
+sudo install -d -o root -g weaver-$N-state -m 0710 "$T"
 sudo install -o root -g weaver-$N-trace -m 0640 /dev/null "$T/trace.ndjson"
 sudo install -d -o root -g weaver-$N-admin -m 0750 "$T/save-points"
 sudo install -o root -g weaver-$N-admin -m 0640 $N.toml "$T/agent.toml"
@@ -327,7 +327,7 @@ serving. No unit and no init system is involved. The worker, the state member an
 relay are processes admin started, detached from the invoking terminal, holding the run
 lock between them, and they live in the containment the load was invoked from: a load
 run from a login shell's scope lives in that scope. `unload` asks the agent to leave,
-then ends whatever still holds the run lock, within 105 seconds. Admin's own acts on
+then ends whatever still holds the run lock, within 195 seconds. Admin's own acts on
 this agent are in `<territory>/admin.log`, and the worker's output in `worker.log`
 beside it, both root's and yours to read through the access group.
 

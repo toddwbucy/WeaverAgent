@@ -49,7 +49,7 @@ something this runbook does not mention, the runbook is what gets amended.
 | Model artifacts, hash-pinned | `<prefix>/models/` | operator, by hand |
 | The python SPU prefix and zipapp | `<prefix>/python-spu/` | `python-spu/README.md` |
 | Accounts: the agent's `weaver-<name>` (home `/home/weaver-<name>`, 2750), the member's `weaver-<name>-state`, the relay's `weaver-<name>-relay`, the connector's `weaver-<name>-admincon`, and the groups `weaver-<name>-trace` and `weaver-<name>-admin` | passwd | create-agent |
-| Territory `weaver-<name>/` (root:weaver-<name>-admin 0711, passage only) with `agent.toml` and `system-prompt.md` (root:weaver-<name>-admin 0640), `admin.log` and `worker.log` once admin has run a verb (root:weaver-<name>-admin 0640), `save-points/` (root:weaver-<name>-admin 0750, the published save points 0640 and the manifest root 0644), `state/` (member 0700) and `trace.ndjson` (root:weaver-<name>-trace 0640); the whole agent, on the operator's ruling of 2026-10-07 on #1 | the stack record's `agent-directory`,  default `/var/lib/weaver-agent` | create-agent, admin for the logs and the save points |
+| Territory `weaver-<name>/` (root:weaver-<name>-state 0710, passage for the state group alone) with `agent.toml` and `system-prompt.md` (root:weaver-<name>-admin 0640), `admin.log` and `worker.log` once admin has run a verb (root:weaver-<name>-admin 0640), `save-points/` (root:weaver-<name>-admin 0750, the published save points 0640 and the manifest root 0644), `state/` (member 0700) and `trace.ndjson` (root:weaver-<name>-trace 0640); the whole agent, on the operator's ruling of 2026-10-07 on #1 | the stack record's `agent-directory`,  default `/var/lib/weaver-agent` | create-agent, admin for the logs and the save points |
 | Run directory: `run.lock`, `admin.lock` and the trace door `trace.sock` | `<coordination-root>/weaver.run/<name>/` (root 0755, on tmpfs under `/run`) | admin, at its first verb |
 
 No unit and no init system is part of a stack. Admin's start step stands the worker, its
@@ -170,7 +170,7 @@ What it does, so the log can say which step a failure was at:
    `headroom-bytes` or `load-bound-seconds` on every agent writes
    it into the record before making agents. Creates the admin base `/etc/weaver/admin`
    empty (root 0755) and the agent directory `/var/lib/weaver-agent` (root 0755), under
-   which each territory is root:weaver-<name>-admin 0711, not setgid.
+   which each territory is root:weaver-<name>-state 0710, not setgid.
 
 The python SPU is a separate install and not part of this step. Its procedure is
 `python-spu/README.md`, "Installing it on a box", and an agent that serves from it is
@@ -192,8 +192,9 @@ deploy/create-agent.sh m1 --artifact /opt/weaver/models/qwen2.5-0.5b-instruct-q6
 
 The store is the embedded sqlite engine, the default (the service engine retired on the
 operator's ruling of 2026-10-02 on #1). The script makes the four accounts and the two
-groups, the territory (root:weaver-<name>-admin 0711 under the stack record's
-`agent-directory`, passage for every uid and listing for none, with no access entries), its trace
+groups, the territory (root:weaver-<name>-state 0710 under the stack record's
+`agent-directory`, passage for the state group, which the member holds as its own and the
+operator and the connector join, and nothing for the agent's own uid, with no access entries), its trace
 (root:weaver-<name>-trace 0640, which the member cannot read), the declaration and the
 prompt draft in the territory (root:weaver-<name>-admin 0640; `sudoedit` edits the declaration) and
 `save-points/` beside them, and the agent root staged under a dot-name: every key
@@ -341,7 +342,7 @@ install prefix, `/opt/weaver` by default.
    getent group "weaver-$A-trace" >/dev/null || sudo groupadd --system "weaver-$A-trace"
    sudo groupadd --system "weaver-$A-admin"
    sudo useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group --gid "weaver-$A-trace" "weaver-$A-relay"
-   sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group --groups "weaver-$A-admin" "weaver-$A-admincon"
+   sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group --groups "weaver-$A-state,weaver-$A-admin" "weaver-$A-admincon"
    ```
 
    A territory from before 2026-10-02 that is still grouped to its member and setgid is
@@ -393,9 +394,10 @@ install prefix, `/opt/weaver` by default.
    a `declaration-directory`, before the binaries and registered for rollback: it
    moves `agent.toml`, `system-prompt.md`, `admin.log` and `worker.log` into the
    territory as root:weaver-<a>-admin 0640; makes `save-points/`
-   (root:weaver-<a>-admin 0750); joins the operator to the access group
-   `weaver-<a>-admin`, the member never; regroups the territory to the access group
-   at 0711; writes the root's `territory` key and removes `declaration-directory`. The
+   (root:weaver-<a>-admin 0750); joins the operator to the state group
+   `weaver-<a>-state` and the access group `weaver-<a>-admin` and the connector to the
+   state group, the member to the access group never; regroups the territory to the
+   state group at 0710; writes the root's `territory` key and removes `declaration-directory`. The
    plan names the move and does nothing. It refuses an agent whose territory already
    holds an `agent.toml`, since two declarations of one agent is not a state it can
    choose between: remove the one that is wrong first. After the install the

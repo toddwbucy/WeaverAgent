@@ -37,6 +37,28 @@ die() { printf '\nREFUSED: %s\n' "$*" >&2; exit 1; }
 
 read_key() { cat "$STACK/$1" 2>/dev/null || true; }
 
+# **An unload is read from admin's answer, never assumed** (the #94 survey's
+# S22): since A3.2 an unload can refuse with the run still standing
+# (`activity_not_at_rest`, `save_point_not_taken`), or after it ended with
+# the marker open, so an exit taken as done would leave a verified agent
+# serving or a false reset for the next load. Answers 0 where admin's last
+# line is the unloaded state, and names the answer otherwise.
+# unload_verified AGENT
+unload_verified() {
+  local said
+  said=$(sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" unload "$1" 2>/dev/null | sed -n '$p') || true
+  if python3 -c 'import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except ValueError:
+    sys.exit(1)
+sys.exit(0 if isinstance(d, dict) and d.get("kind") == "state" and d.get("state") == "unloaded" else 1)' "$said"; then
+    return 0
+  fi
+  printf '  admin answered the unload of %s: %s\n' "$1" "${said:-nothing}" >&2
+  return 1
+}
+
 # **chmod_nofollow MODE PATH: root sets a moved file's mode through a
 # descriptor opened O_NOFOLLOW** (Codex on #94, round 14). chmod has no
 # no-dereference form, and a check that the name is no link followed by a
@@ -265,6 +287,9 @@ root_path() { # root_path AGENT KEY
 # **The territory is the stack's layout fact**: `<agent-directory>/weaver-<a>`,
 # as create-agent.sh lays it out, which is where a migrated agent's files go.
 AGENT_DIR=$(read_key agent-directory)
+# **Canonical** (the #94 survey's S23), as create-agent.sh writes it: admin
+# compares the declaration's sink directory with the canonical territory.
+[ -z "$AGENT_DIR" ] || AGENT_DIR=$(realpath -m -- "$AGENT_DIR")
 territory_of() { # territory_of AGENT: prints its territory
   local t
   t=$(root_path "$1" territory) || exit 1
@@ -286,18 +311,20 @@ declaration_of() { # declaration_of AGENT: prints the path of its agent.toml
 }
 for agent in $AGENTS; do
   decl=$(declaration_of "$agent") || exit 1
-  [ -r "$decl" ] || die "$agent: its declaration $decl cannot be read by $OPERATOR_NAME. It stands in the territory, which the access group weaver-$agent-admin passes: join that group (create-agent.sh adds the operator to it), and take a new login before it applies."
+  [ -r "$decl" ] || die "$agent: its declaration $decl cannot be read by $OPERATOR_NAME. It stands in the territory, which the state group weaver-$agent-state passes and the access group weaver-$agent-admin reads: join both (create-agent.sh adds the operator to them), and take a new login before they apply."
 done
 # **A root of the layout before 2026-10-07 is migrated by the install**, on the
 # operator's ruling of that date on #1: its `declaration-directory` names the
 # operator's own directory holding `agent.toml`, `system-prompt.md`,
 # `admin.log` and `worker.log`, which move into the territory, root's, with
 # `save-points/` made beside them, the root's `territory` key written and the
-# old key removed, the operator joined to the access group, and the territory
-# grouped to it at 0711 (the operator's ruling of 2026-10-08 on #1). The
-# member is not joined: the territory's passage is every uid's, and a member
-# an earlier install joined keeps a membership the admin no longer hands it
-# at its spawn. The plan names the move and does nothing. A
+# old key removed, the operator joined to the state group for passage and the
+# access group for reading, the connector to the state group, and the
+# territory grouped to the state group at 0710 (the operator's ruling of
+# 2026-10-08 on #1). The member is not joined to the access group: it passes
+# by its own primary group, the state group, and a member an earlier install
+# joined keeps a membership the admin no longer hands it at its spawn. The
+# plan names the move and does nothing. A
 # territory already holding any of the four files refuses, naming it (Codex on
 # #94): two declarations of one agent is not a state this script can choose
 # between, and a move onto a prompt draft or a log would destroy its bytes.
@@ -756,8 +783,7 @@ restore() {
   # to perform.
   if [ -n "$LOADED_AGENT" ]; then
     printf '  unloading %s before the restore\n' "$LOADED_AGENT" >&2
-    sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" \
-      unload "$LOADED_AGENT" >/dev/null 2>&1 \
+    unload_verified "$LOADED_AGENT" \
       || { printf '  %s WOULD NOT UNLOAD. It is still serving, and the files below go back under it. Unload it by hand before loading anything.\n' "$LOADED_AGENT" >&2; failed=1; }
     LOADED_AGENT=""
   fi
@@ -948,16 +974,22 @@ migrate_layout() {
         && chmod_nofollow 0640 "$territory/$f" \
         || rollback "$agent: $old/$f did not move into the territory as a regular file"
     done
-    sudo usermod -aG "weaver-$agent-admin" "$OPERATOR_NAME" \
-      || rollback "$agent: the operator could not join weaver-$agent-admin"
-    sudo chgrp "weaver-$agent-admin" "$territory" && sudo chmod 0711 "$territory" \
-      || rollback "$agent: the territory could not take the access group"
+    sudo usermod -aG "weaver-$agent-state,weaver-$agent-admin" "$OPERATOR_NAME" \
+      || rollback "$agent: the operator could not join weaver-$agent-state and weaver-$agent-admin"
+    # The connector passes the territory by the state group; one this box
+    # never made is create-agent's to make.
+    if id -u "weaver-$agent-admincon" >/dev/null 2>&1; then
+      sudo usermod -aG "weaver-$agent-state" "weaver-$agent-admincon" \
+        || rollback "$agent: the connector could not join weaver-$agent-state"
+    fi
+    sudo chgrp "weaver-$agent-state" "$territory" && sudo chmod 0710 "$territory" \
+      || rollback "$agent: the territory could not take the state group"
     printf '%s\n' "$territory" | sudo tee "$ADMIN_BASE/$agent/territory" >/dev/null \
       && sudo chmod 0644 "$ADMIN_BASE/$agent/territory" \
       && sudo rm -f "$ADMIN_BASE/$agent/declaration-directory" \
       || rollback "$agent: the root's keys did not change over"
-    printf '  %s: declaration, draft and logs moved from %s into %s; %s joined %s, take a new login before it applies\n' \
-      "$agent" "$old" "$territory" "$OPERATOR_NAME" "weaver-$agent-admin"
+    printf '  %s: declaration, draft and logs moved from %s into %s; %s joined %s and %s, take a new login before they apply\n' \
+      "$agent" "$old" "$territory" "$OPERATOR_NAME" "weaver-$agent-state" "weaver-$agent-admin"
   done
 }
 if [ ${#LAYOUT[@]} -gt 0 ]; then
@@ -1100,7 +1132,7 @@ for AGENT in $AGENTS; do
   [ "$rc" -eq 0 ] && [ -n "$SINK" ] || rollback "cannot find the trace sink for $AGENT"
   printf '  %s\n' "$AGENT"
   LINES=$(sink_lines "$SINK") || rollback "$AGENT: $SINK is not a regular file, and this step reads the load event back out of one"
-  sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" unload "$AGENT" >/dev/null 2>&1 || true
+  unload_verified "$AGENT" || rollback "$AGENT: the unload before the verify load did not answer unloaded, so its load would not be this install's"
   # Claimed before the load rather than after it, so a load that comes up and
   # then dies on its read-back is still a load the restore knows to undo.
   LOADED_AGENT="$AGENT"
@@ -1125,7 +1157,7 @@ for AGENT in $AGENTS; do
   if ! as_root tail -n "$NEW" -- "$SINK" | weaver_read_load; then
     rollback "$AGENT: the load event does not name its composer; the install did not take"
   fi
-  sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" unload "$AGENT" >/dev/null 2>&1 || true
+  unload_verified "$AGENT" || rollback "$AGENT: the verify load's unload did not answer unloaded"
   LOADED_AGENT=""
   VERIFIED=$((VERIFIED + 1))
 done

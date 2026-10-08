@@ -2099,10 +2099,13 @@ echoing the ordinal, on which this crate authors the
 `save_point` event, per `weaver-trace-Spec` section 3, the save point by digest and the
 position it covers, an event the tee never sends to state under any election, so the
 save point and a rebuild to its position hold the same; a save point is never
-overwritten, so each answer names a new one. **Where any leg misses, the leave does not
+overwritten, so each answer names a new one. **The answer leg has its own bound**, on
+the operator's ruling of 2026-10-08: 120 seconds (`SNAPSHOT_ANSWER_BOUND_MS`), enough for
+the member to write a 1 GiB image before it answers, while the ask, the `finished` leg
+and every other ask keep the two seconds of `ANSWER_BOUND_MS`. **Where any leg misses, the leave does not
 complete**: this crate authors no `unload`, answers admin `SavePointNotTaken` naming
-which leg, the write, the answer, the acknowledgement's answer, or the member being
-dead, and stays entered at rest with the run open, so the operator retries with
+which leg, the answer (a member's failed write among its causes), the
+acknowledgement's answer, or the member being dead, and stays entered at rest with the run open, so the operator retries with
 `save-point` and `unload` or, where the member is dead, forces the unload; nothing is
 silent and the dead-peer conversion does not apply to this ask at the leave. **The seam
 stays alive across the miss**: a missed answer or finished leg retires nothing, and before
@@ -2113,7 +2116,12 @@ carries the next ordinal, and an answer of either kind, the `snapshot` answer or
 `finished` answer, that arrives past the drain carrying the ordinal of an ask before is
 dropped and said while the wait goes on inside the bound, so a
 member whose every snapshot outruns the bound never leaves the retry one answer behind,
-which a longer bound would not close, the race being one of order and not of time; a
+which a longer bound would not close, the race being one of order and not of time.
+**A snapshot-protocol frame is never another ask's answer**: one that lands past the
+drain while any other ask is awaited, `recall`, `grants`, `shape`, `identity`, `replay`,
+`restored` or `restore`, is dropped and said and the wait goes on inside that ask's own
+bound, so a late save-point frame never misses the next ask and never retires the seam;
+only a line that is neither the awaited answer nor such a frame misses it. A
 late finished answer's file stands in the room unrecorded and is published as recovered
 at the next publication, the leave's at the latest. A missed write, the ask itself unsent, is the dead peer as every send failure is.
 **A forced leave takes no save point**: the `Leave` directive's `forced` member, set by admin's
@@ -2127,7 +2135,9 @@ the event, its own run and sequence, since after a restore the covered position 
 prior run's until a distillate lands and the event is this run's, which admin's
 manifest records; while a turn runs it refuses
 `ActivityNotAtRest`, as `Stop` would not, because a save point of a turn in flight would
-hold half of it. The `Left` answer names the leave's save point the same way, so admin
+hold half of it. **A run that takes no save point refuses the demand `OutOfOrder`**: a
+diagnostic binding, or a serving run with no member seam, has no member to ask, and
+`SavePointNotTaken` naming the member dead would report a healthy member dead. The `Left` answer names the leave's save point the same way, so admin
 publishes it at once with its trace position. **A
 live restore is the loop's to trigger**: on the operator's demand this crate sends the
 `restore` ask naming a save point in the member's room, and on its answer flushes the

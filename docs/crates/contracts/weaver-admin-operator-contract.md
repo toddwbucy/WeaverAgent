@@ -223,8 +223,11 @@ cannot pin the run lock's holder refuses `LockHolderUnknown`, and one whose work
 holds the run lock after the escalation refuses `WorkerWouldNotExit` and answers no
 state. An `unload` whose leave save point was reported and did not publish refuses
 `SavePointNotTaken` naming `published`, admin's own leg, and leaves the marker open for
-the next load's reset, per `weaver-admin-Spec` section 3; `force-unload` reports no save
-point and is unchanged. A `stop` or a `show` whose answer does not arrive within its bound refuses
+the next load's reset, per `weaver-admin-Spec` section 3: unlike every other leg, the
+run has ended and the save point stands unpublished in the member's room. A
+`save-point` whose publication does not land refuses `SavePointNotTaken` naming
+`published` too, the run still open. `force-unload` reports no save point and is
+unchanged. A `stop` or a `show` whose answer does not arrive within its bound refuses
 `Unanswered`, and so does a `load` meeting a run whose worker is silent, each leaving
 the run as it stands for `unload`. **Recovery from a killed invocation is the
 caller's**: admin-con reads `show`'s facts and issues `unload`, which ends whatever

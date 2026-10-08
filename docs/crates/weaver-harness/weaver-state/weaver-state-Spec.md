@@ -378,7 +378,12 @@ writes over a file, is made only on the harness's `acknowledge` of that answer, 
 `weaver-harness-state-contract` section 2, and answered `finished`; a failed write, or
 an acknowledgement that never arrives, leaves no file under a finished name, the part
 removed on the failure, at the member's exit, or by the next `snapshot`, so the room
-holds at most one part and an unacknowledged save point is never published. **The
+holds at most one part and an unacknowledged save point is never published. **A save
+point is at most one gibibyte**, 1073741824 bytes of rendered file, on the operator's
+ruling of 2026-10-08 that both readers enforce the bound admin's inventory holds: a
+`snapshot` whose save point would exceed it answers nothing, the reason said on the
+member's standard error, and leaves no part, so the harness's bound converts the silence
+as it does any failed write. **The
 schema the stamp names is the store's own**: every object of the catalog with its
 statement, in a fixed order, exempting only an object of type index whose statement is
 exactly the election's generated form, `CREATE INDEX field_elected_<hex of the key path>

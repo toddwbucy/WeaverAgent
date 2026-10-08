@@ -185,7 +185,8 @@ per the identity ruling of 2026-08-14.
 the agent's root names as its `territory`, `/var/lib/weaver-agent/weaver-<agent>/` as the
 deploy scripts lay it out, per `weaver-admin-Spec` section 9. It is root's, which the
 operator edits with `sudoedit` and the access group reads, and never readable by the
-agent, the territory being closed to the agent's uids. **The declaration says how the agent is built; state says who it is**:
+agent: it is `root:weaver-<agent>-admin 0640`, and no uid of the agent holds the access
+group, the state member passing the territory by its state group alone. **The declaration says how the agent is built; state says who it is**:
 the system prompt is an entry in state management, entered through the gate as the
 agent's first turn and carried by its save points, per `weaver-harness-Spec` section
 6.1 and `weaver-gate-world-contract` section 2, and `system-prompt.md` beside the
@@ -613,7 +614,7 @@ offline. **Restoring needs a member to restore into**: where the
 declaration's store engine is `none`, no save point is selected, by name or by default,
 and a `restore` member present beside that engine refuses `ConfigInvalid` naming
 `restore`, so no load names holdings that no member restored. Present, `save-point` is the
-published name of a save point in the declaration's own directory,
+published name of a save point in the territory's `save-points/`,
 `<YYYYMMDDTHHMMSSZ>-<digest>.save-point`, or its digest alone, a bare name carrying no
 `/`, not `.` or `..`, not empty and with no control character, refusing `BadValue`
 naming `restore.save-point` otherwise. Admin resolves it through its manifest and opens
@@ -1305,16 +1306,19 @@ pub struct SavePointReport {
     pub run: RunId,
     pub sequence: u64,
     pub turn: u64,
-    pub position: Sequence,
+    pub event_run: RunId,
+    pub position: u64,
 }
 ```
 
 **`Leave` carries `forced`, `SavePoint` is the on-demand save point, and `Left` names
 the leave's save point**, as of A3.2 on the operator's rulings of 2026-10-06 on #1:
 `SavePointReport` is what the harness reports of a finished save point, its digest, the
-finished name the member gave it, the position it covers and the trace position of the
-`save_point` event, so admin's manifest records the event's position without reading
-the record; `Left` carries none where the leave was forced or the binding diagnostic.
+finished name the member gave it, the position it covers (`run`, `sequence`, `turn`) and
+the trace position of the `save_point` event, its own run and sequence (`event_run`,
+`position`), so admin's manifest records the event's position without reading the
+record; `Left` carries none where the leave was forced, the binding diagnostic, or the
+serving run has no member seam, its declaration electing no store.
 `RestoreNamed` is the `restore` verb's answer, the save point it judged and entered in
 the manifest. The three verbs mirror the command line as `SavePointVerb`, `Restore` and
 `ForceUnload`, the first named apart from the directive the worker receives.
@@ -1373,7 +1377,6 @@ pub enum LifecycleRefusal {
 }
 
 pub enum SavePointLeg {
-    Write,
     Answer,
     Finished,
     MemberDead,

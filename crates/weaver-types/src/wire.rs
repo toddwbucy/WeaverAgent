@@ -299,13 +299,13 @@ pub struct SavePointReport {
 }
 
 /// Which leg of the state seam's four-leg save point missed, per
-/// `weaver-harness-state-contract` section 2: the write, the answer, the
-/// `finished` answer to the harness's acknowledgement, or the member being
-/// dead before the ask.
+/// `weaver-harness-state-contract` section 2: the answer, the `finished`
+/// answer to the harness's acknowledgement, or the member being dead before
+/// the ask. **A member that fails its write answers nothing**, so that miss
+/// arrives as `Answer`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SavePointLeg {
-    Write,
     Answer,
     Finished,
     MemberDead,
@@ -328,8 +328,8 @@ pub enum SavePointLeg {
 pub enum LifecycleAnswer {
     Ready,
     /// **`Left` names the leave's save point**, as of A3.2, so admin publishes
-    /// it with its trace position; none where the leave was forced or the
-    /// binding diagnostic.
+    /// it with its trace position; none where the leave was forced, the
+    /// binding diagnostic, or the serving run has no member seam.
     Left {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         save_point: Option<SavePointReport>,
@@ -468,7 +468,11 @@ pub enum LifecycleRefusal {
     ActivityNotAtRest,
     /// **The leave or the save point on demand did not finish its save
     /// point**, as of A3.2 on the operator's ruling of 2026-10-06 on #1 (A3.0
-    /// item 6): the run stays open and the leg that missed is named.
+    /// item 6): the leg that missed is named, and the run stays open for
+    /// every leg but `published` at an unload, where the run has ended and
+    /// the save point stands in the member's room unpublished. The
+    /// `save-point` verb answers it with `published` too, when its
+    /// publication does not land, the run still open.
     SavePointNotTaken {
         missed: SavePointLeg,
     },

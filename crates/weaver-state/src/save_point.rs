@@ -49,6 +49,13 @@ use std::os::fd::{AsFd, OwnedFd};
 
 use sha2::Digest;
 
+/// **The save point's bound, one gibibyte of rendered file**, per
+/// `weaver-state-Spec` section 3 on the operator's ruling of 2026-10-08 that
+/// both readers enforce it: admin's `SAVE_POINT_BOUND` holds the same number
+/// under its own watch, the two crates seeing neither's constant, and the
+/// member writes no save point past it.
+pub const SAVE_POINT_BOUND: u64 = 1024 * 1024 * 1024;
+
 /// The trace position a save point covers, per `weaver-state-Spec` section
 /// 3: the run and sequence of the last distillate landed in it, and the last
 /// turn that run's holdings carry, zero where the run holds no turn.
@@ -76,6 +83,9 @@ pub enum SavePointFault {
     /// The bytes under the name are a sound save point whose own name,
     /// its digest, is another: an alias, which is not this save point.
     NameDisagrees,
+    /// The rendered save point is past [`SAVE_POINT_BOUND`], so it is never
+    /// written: the file's size and the bound it exceeds.
+    PastBound { size: u64, bound: u64 },
 }
 
 impl std::fmt::Display for SavePointFault {
@@ -87,6 +97,9 @@ impl std::fmt::Display for SavePointFault {
             SavePointFault::NotAPlainName => write!(f, "save point name is not a plain entry"),
             SavePointFault::NameDisagrees => {
                 write!(f, "save point name is not the digest's, an alias")
+            }
+            SavePointFault::PastBound { size, bound } => {
+                write!(f, "save point is {size} bytes, past the bound of {bound}")
             }
         }
     }
@@ -161,6 +174,11 @@ impl SavePoint {
         out.push(b'\n');
         out.extend_from_slice(&self.image);
         out
+    }
+
+    /// The length of the file's bytes, counted without rendering them.
+    pub fn rendered_len(&self) -> u64 {
+        (self.header.len() + self.check_line().len() + self.image.len() + 2) as u64
     }
 
     /// The save point's digest, sha256 hex over the whole file, which is its
@@ -368,8 +386,25 @@ impl Room {
     /// acknowledgement alone. Any part standing before this write is
     /// removed first, so the room holds at most one.
     pub fn write_part(&self, save_point: &SavePoint) -> Result<String, SavePointFault> {
+        self.write_part_within(save_point, SAVE_POINT_BOUND)
+    }
+
+    /// **A save point past the bound is refused before any part is
+    /// created**, per `weaver-state-Spec` section 3: the standing part is
+    /// cleared as for any write, the refusal leaves the room holding none,
+    /// and the caller answers nothing. The bound is a parameter so a test
+    /// can lower it; every writer passes [`SAVE_POINT_BOUND`].
+    pub fn write_part_within(
+        &self,
+        save_point: &SavePoint,
+        bound: u64,
+    ) -> Result<String, SavePointFault> {
         use nix::fcntl::OFlag;
         self.clear_parts();
+        let size = save_point.rendered_len();
+        if size > bound {
+            return Err(SavePointFault::PastBound { size, bound });
+        }
         let name = save_point.name();
         let part = format!(".part-{name}");
         let io = |what: &str, e: nix::errno::Errno| SavePointFault::Io(format!("{what}: {e}"));
@@ -812,6 +847,59 @@ mod tests {
         assert_eq!(surface.len(), 2);
         assert!(surface[0].starts_with("owner "));
         assert!(surface[1].starts_with("mode 0"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **The save point's bound is the ruling's number, named**, per
+    /// `weaver-state-Spec` section 3 on the operator's ruling of 2026-10-08:
+    /// admin's `SAVE_POINT_BOUND` is pinned to the same literal under its own
+    /// watch, so the two readers are held equal by the number and neither
+    /// links the other. Perturbation: change the constant and this fails.
+    #[test]
+    fn the_save_point_bound_is_one_gibibyte() {
+        assert_eq!(SAVE_POINT_BOUND, 1_073_741_824);
+    }
+
+    /// **A save point past the bound writes no part**: with the bound
+    /// lowered under the file's size the write is refused naming the size,
+    /// the part a previous write left is cleared, and the room holds no
+    /// file; at its own size the same save point writes. The size is the
+    /// rendered file's, counted without rendering it. Perturbation: drop the
+    /// bound check from `write_part_within` and the lowered write stands a
+    /// part.
+    #[test]
+    fn a_save_point_past_the_bound_writes_no_part() {
+        let dir = std::env::temp_dir().join(format!(
+            "weaver-state-bound-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("room");
+        let room = Room::open(&dir).expect("opens");
+        let save_point = taken("r-1", 41, b"an image of some bytes");
+        let size = save_point.bytes().len() as u64;
+        assert_eq!(save_point.rendered_len(), size, "the count is the file's");
+        let earlier = room
+            .write_part(&taken("r-1", 40, b"earlier"))
+            .expect("an earlier part");
+        assert!(dir.join(format!(".part-{earlier}")).exists());
+        assert_eq!(
+            room.write_part_within(&save_point, size - 1),
+            Err(SavePointFault::PastBound {
+                size,
+                bound: size - 1
+            })
+        );
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .expect("lists")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        assert!(left.is_empty(), "the refusal leaves no file: {left:?}");
+        let name = room
+            .write_part_within(&save_point, size)
+            .expect("at the bound it writes");
+        assert!(dir.join(format!(".part-{name}")).exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

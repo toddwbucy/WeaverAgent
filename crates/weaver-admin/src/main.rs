@@ -213,8 +213,6 @@ impl ServiceConfig {
         self.territory.join("worker.log")
     }
 
-    /// Who owns the operator's logs: the `operator` uid and the declaration
-    /// directory's group, set through the open descriptor, per section 8.
     /// **The owner of what this crate writes in the territory**: this
     /// process's uid, root in production and the suite's own under test, and
     /// the access group, so the logs and the published save points are root's
@@ -428,10 +426,10 @@ fn well_formed(agent: &str) -> bool {
 /// too. This crate makes the socketpair, arms the member's end onto the fixed
 /// number in the spawn path itself, and returns the harness's end for the
 /// enter directive to courier, speaking on neither, per `weaver-admin-PRD`
-/// section 2. The binary is discovered beside the worker's own, so a
-/// deployment without it simply has no leg. Every failure here is absorbed:
-/// the leg is optional by presence, a load is never refused over its
-/// derivative, and a `None` return is the leg not standing.
+/// section 2. The binary is discovered beside the worker's own. A `None`
+/// return is the leg not standing, which the load refuses where the
+/// declaration elects a member (Codex on #94), never running without a leg
+/// the declaration asked for.
 /// The save point's descriptor in the member, per `weaver-state-Spec`
 /// section 2: a fixed convention between this crate and the member.
 const SAVE_POINT_FD: std::os::fd::RawFd = 4;
@@ -555,7 +553,7 @@ fn stand_state_member(
 }
 
 /// **The member's territory, which the member owns.** One subdirectory of
-/// the operator-side directory the sink already stands in, made if absent and
+/// the agent's territory, which the sink stands in, made if absent and
 /// repaired if present, `0700` and owned by the member's own account, per
 /// `weaver-state-PRD` section 4 and `weaver-admin-Spec` section 6.
 ///
@@ -569,14 +567,13 @@ fn stand_state_member(
 /// being one, and this crate is the party that owns saying so.
 ///
 /// The agent's uid is walled out twice over and neither wall rests on the
-/// other: the containing directory denies it the search bit, which section 4
-/// verified before this ran, and this directory grants it nothing through
-/// owner, group, or other.
+/// other: the territory, `0710` under the state group, denies it the search
+/// bit, which section 4 verified before this ran, and this directory grants
+/// it nothing through owner, group, or other.
 ///
-/// **Absorbed rather than refused**, like every other failure on this path:
-/// a territory this crate could not make or could not hand to the member is
-/// the leg not standing, and a member spawned into a room it cannot write is
-/// worse than an absent one.
+/// **A failure here is the leg not standing**, which the load then refuses
+/// where a member is elected: a member spawned into a room it cannot write
+/// is worse than none.
 ///
 /// conforms: admin-member-territory-is-the-members-own
 fn prepare_territory(
@@ -646,8 +643,8 @@ fn become_member(member: inventory::MemberAccount) -> std::io::Result<()> {
 
 /// **The member's group set is its own group alone**, per Spec section 6 on
 /// the operator's ruling of 2026-10-08 on #1 (the custody audit's G11): the
-/// territory is `0711`, so the member passes to its own room by the bit
-/// every uid has and needs no group for it, and the access group, which
+/// territory is `0710` under the state group, the member's own primary group,
+/// so the member passes to its room by that group alone, and the access group, which
 /// reads `admin.log`, `worker.log` and the published save points, is not
 /// the member's. `drop_to` sets the supplementary set from this slice alone,
 /// never from the account database, so no membership the account carries
@@ -766,9 +763,9 @@ fn read_declaration(config: &ServiceConfig) -> Result<String, LifecycleRefusal> 
 /// Open `agent.toml` beneath the territory's descriptor and judge it, as
 /// `read_declaration` says; `directory` names the territory in the refusal.
 /// **Root's, grouped to the access group, mode `0640` exactly**, on the
-/// operator's ruling of 2026-10-08 on #1: the territory's `0711` passage is
-/// every uid's, so the declaration's own mode is its wall, read by the access
-/// group alone and written by no one but root.
+/// operator's ruling of 2026-10-08 on #1: the state group passes the
+/// territory and the member holds it, so the declaration's own mode is its
+/// wall, read by the access group alone and written by no one but root.
 fn open_declaration(
     territory: std::os::fd::BorrowedFd<'_>,
     directory: &std::path::Path,
@@ -1024,9 +1021,11 @@ mod gid_tests {
 /// `Observe`, after the dial's bound, which covers only the connect.
 const OBSERVE_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// The leave's own bound, per Spec section 3: sixty seconds from the
-/// directive.
-const LEAVE_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
+/// The leave's own bound, per Spec section 3: 150 seconds from the
+/// directive, past the harness's 120 for the save point's answer leg (the
+/// operator's ruling of 2026-10-08 on #1) and its two-second legs, so admin
+/// never gives up on a save point the harness is still waiting for.
+const LEAVE_BOUND: std::time::Duration = std::time::Duration::from_secs(150);
 
 /// The stop's bound, per Spec section 3: sixty seconds from the directive.
 const STOP_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
@@ -1085,6 +1084,9 @@ struct Standing {
     /// The marker as it stood before this load wrote it open, once it did:
     /// restored by the rollback, per Spec section 4.
     marker_before: Option<Option<save_points::Marker>>,
+    /// The run this load opened the marker for, which the rollback leaves
+    /// the marker open on where the entered run did not leave.
+    run_reference: Option<String>,
 }
 
 /// **`load` keeps one promise**, per Spec section 3 and the operator's ruling
@@ -1347,6 +1349,7 @@ fn open_marker(
         );
         LifecycleRefusal::BoundaryUnverified
     })?);
+    standing.run_reference = Some(run.to_string());
     let marker = save_points::Marker::Open {
         run: run.to_string(),
     };
@@ -1450,19 +1453,23 @@ fn save_point(
     // **The verb answers only a published save point**: the harness's
     // report is answered once its file stands in the territory's save-points
     // under a manifest line, and a publication that refuses, or does not
-    // reach this save point, refuses the verb, the file standing in the
-    // room for the next verb and said so in the log.
-    let lines = publish_from_room(
+    // reach this save point, refuses the verb `SavePointNotTaken` naming
+    // `published`, as the unload names it (the #94 survey's S12), the file
+    // standing in the room for the next verb and said so in the log.
+    let published = publish_from_room(
         config,
         agent,
         &[(report.clone(), save_points::Arrival::Demand)],
-    )?;
-    if !lines.iter().any(|line| line.digest == report.save_point) {
+    );
+    if !matches!(&published, Ok(lines) if lines.iter().any(|line| line.digest == report.save_point))
+    {
         diag!(
             "weaver-admin: the save point {} was taken and not published; it stands in the member's room for the next verb",
             report.save_point
         );
-        return Err(LifecycleRefusal::BoundaryUnverified);
+        return Err(LifecycleRefusal::SavePointNotTaken {
+            missed: weaver_types::SavePointLeg::Published,
+        });
     }
     Ok(LifecycleAnswer::SavePointTaken { report })
 }
@@ -1592,15 +1599,27 @@ fn refusal_from_worker(worker: &mut std::process::Child) -> LifecycleRefusal {
 /// Answers the account, empty where nothing stood.
 fn roll_back(config: &ServiceConfig, standing: &mut Standing) -> String {
     let mut account = Vec::new();
+    // **The run being undone leaves forced** (the #94 survey's S10): it
+    // takes no save point, a run rolled back having nothing to keep, and
+    // its `unload` says forced.
+    let left = standing.entered
+        && direct_leave_within(config, std::time::Instant::now() + LEAVE_BOUND, true).is_ok();
     if let Some(prior) = standing.marker_before.take() {
-        let restored = save_points::write_marker(&config.root, prior.as_ref()).is_ok();
+        // **A run entered and not left keeps the marker open on it** (the
+        // #94 survey's S10): the trace holds its `load` and no `unload`, so
+        // the next load must record the reset; restoring the prior marker
+        // would have it record none.
+        let marker = match (&standing.run_reference, standing.entered && !left) {
+            (Some(run), true) => Some(save_points::Marker::Open { run: run.clone() }),
+            _ => prior,
+        };
+        let restored = save_points::write_marker(&config.root, marker.as_ref()).is_ok();
         account.push(format!(
             "marker {}",
             if restored { "restored" } else { "not restored" }
         ));
     }
     if standing.entered {
-        let left = direct_leave(config).is_ok();
         account.push(format!("leave {}", if left { "undone" } else { "held" }));
     }
     standing.run_lock = None;
@@ -1721,8 +1740,8 @@ struct UnloadBounds {
     kill: std::time::Duration,
 }
 
-/// Spec section 3's values: the leave's sixty seconds, thirty after `left`,
-/// ten from `SIGTERM` to `SIGKILL` and five for the last read, at most 105
+/// Spec section 3's values: the leave's 150 seconds, thirty after `left`,
+/// ten from `SIGTERM` to `SIGKILL` and five for the last read, at most 195
 /// seconds in all, a number WeaverWeb builds against.
 const UNLOAD_BOUNDS: UnloadBounds = UnloadBounds {
     leave: LEAVE_BOUND,
@@ -1740,24 +1759,10 @@ fn unload_within(
     let _invocation = start::take_invocation_lock(&run_directory)?;
     // **The leave's budget runs from here**, per Spec section 3: the
     // observation and both dials spend it, so the verb holds the invocation
-    // lock at most the leave's sixty seconds and the escalation's forty-five.
+    // lock at most the leave's 150 seconds and the escalation's forty-five.
     let leave_deadline = std::time::Instant::now() + bounds.leave;
-    let unloaded = Ok(LifecycleAnswer::State {
-        state: weaver_types::AgentState::Unloaded,
-        load: None,
-        constituents: Vec::new(),
-    });
     if !start::run_lock_held(&run_directory)? {
-        // **A forced verb that finds the run already ended closes the
-        // marker as forced where it stands open** (Codex on #94, round 6),
-        // per Spec section 3: a forced unload refused after the harness had
-        // left, retried, still records the operator's choice rather than
-        // `NoCleanUnload`. An unforced verb closes nothing here: a run that
-        // ended on its own is the unclean stop the next load records.
-        if forced {
-            close_marker(config, true)?;
-        }
-        return unloaded;
+        return conclude_ended(config, forced);
     }
     // **A refused observation is silence**, `unload`'s promise being to end
     // whatever holds the lock: it directs leave as for any silent run.
@@ -1770,44 +1775,15 @@ fn unload_within(
     if entered {
         match direct_leave_within(config, leave_deadline, forced) {
             Ok(report) => {
-                if start::wait_free(&run_directory, bounds.after_left) {
-                    // **The member has stopped: publish, then close the
-                    // marker**, per Spec sections 3 and 6: the leave's save
-                    // point carries its event's position, anything else the
-                    // room still held is recovered, and the marker closes
-                    // on a clean unload or stays open under `ForcedUnload`.
-                    let reports: Vec<_> = report
-                        .into_iter()
-                        .map(|report| (report, save_points::Arrival::Leave))
-                        .collect();
-                    // **The unload does not complete without its save point
-                    // published** (Codex on #94, round 9), per Spec section
-                    // 3 on A3.0 item 6: the leave's reported digest must be
-                    // among the lines this publication appended, or the
-                    // marker stays open, so the next load records
-                    // `NoCleanUnload` and recovers the room's file or names
-                    // it as unpublishable, and the verb refuses naming the
-                    // publication rather than answering Unloaded over a
-                    // stale restore. A forced unload reports no save point
-                    // and is unchanged.
-                    let published =
-                        publish_from_room(config, &AgentName(config.agent.clone()), &reports);
-                    if let Some(digest) = unpublished_leave(&reports, &published) {
-                        diag!(
-                            "weaver-admin: the leave's save point {digest} did not publish; the marker stays open and the unload does not complete"
-                        );
-                        record(
-                            config,
-                            "unload",
-                            "refused: the leave's save point did not publish",
-                        );
-                        return Err(LifecycleRefusal::SavePointNotTaken {
-                            missed: weaver_types::SavePointLeg::Published,
-                        });
-                    }
-                    close_marker(config, forced)?;
-                    return unloaded;
+                // **A leave whose lock outlives the after-left wait keeps its
+                // save point** (the #94 survey's S7): the escalation ends the
+                // holders, and the report is published as on a lock that
+                // freed, so `Unloaded` is never answered over a leave save
+                // point left unpublished in the room.
+                if !start::wait_free(&run_directory, bounds.after_left) {
+                    start::escalate_within(&run_directory, bounds.term, bounds.kill)?;
                 }
+                return conclude_left(config, report, forced);
             }
             // A refusal on leave returns to the operator unchanged and
             // answers nothing further: `ActivityNotAtRest` above all, and
@@ -1840,7 +1816,92 @@ fn unload_within(
     if forced {
         close_marker(config, true)?;
     }
-    unloaded
+    Ok(unloaded_answer())
+}
+
+/// The answer an unload gives where the run has ended.
+fn unloaded_answer() -> LifecycleAnswer {
+    LifecycleAnswer::State {
+        state: weaver_types::AgentState::Unloaded,
+        load: None,
+        constituents: Vec::new(),
+    }
+}
+
+/// **The member has stopped: publish, then close the marker**, per Spec
+/// sections 3 and 6: the leave's save point carries its event's position,
+/// anything else the room still held is recovered, and the marker closes on a
+/// clean unload or stays open under `ForcedUnload`. **The unload does not
+/// complete without its save point published** (Codex on #94, round 9), per
+/// Spec section 3 on A3.0 item 6: the leave's reported digest must be among
+/// the lines this publication appended, or the marker stays open, so the next
+/// load records `NoCleanUnload` and recovers the room's file or names it as
+/// unpublishable, and the verb refuses naming the publication rather than
+/// answering Unloaded over a stale restore. A forced unload reports no save
+/// point and is unchanged.
+fn conclude_left(
+    config: &ServiceConfig,
+    report: Option<weaver_types::SavePointReport>,
+    forced: bool,
+) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    let reports: Vec<_> = report
+        .into_iter()
+        .map(|report| (report, save_points::Arrival::Leave))
+        .collect();
+    let published = publish_from_room(config, &AgentName(config.agent.clone()), &reports);
+    if let Some(digest) = unpublished_leave(&reports, &published) {
+        diag!(
+            "weaver-admin: the leave's save point {digest} did not publish; the marker stays open and the unload does not complete"
+        );
+        record(
+            config,
+            "unload",
+            "refused: the leave's save point did not publish",
+        );
+        return Err(LifecycleRefusal::SavePointNotTaken {
+            missed: weaver_types::SavePointLeg::Published,
+        });
+    }
+    close_marker(config, forced)?;
+    Ok(unloaded_answer())
+}
+
+/// **An unload that finds the run already ended publishes the room first**
+/// (the #94 survey's S11), per Spec section 3: after an unload refused
+/// `SavePointNotTaken` naming `published`, the leave's save point stands in
+/// the room and the operator retries, plainly or forced. A publication that
+/// refuses or leaves a file refuses `published` again. Where it published a
+/// room file the leave's save point existed, so the marker closes clean for
+/// either verb and a force records no `ForcedUnload` over a save point it
+/// published; where the room held none, a forced verb closes the marker as
+/// forced, the operator's choice (Codex on #94, round 6), and an unforced one
+/// closes nothing, a run that ended on its own being the unclean stop the
+/// next load records.
+fn conclude_ended(
+    config: &ServiceConfig,
+    forced: bool,
+) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    let not_published = || {
+        record(
+            config,
+            "unload",
+            "refused: the room's save points did not publish",
+        );
+        LifecycleRefusal::SavePointNotTaken {
+            missed: weaver_types::SavePointLeg::Published,
+        }
+    };
+    let (lines, deferred) = publish_from_room_noting(config, &AgentName(config.agent.clone()), &[])
+        .map_err(|_| not_published())?;
+    if deferred {
+        return Err(not_published());
+    }
+    if !lines.is_empty() {
+        close_marker(config, false)?;
+    } else if forced {
+        close_marker(config, true)?;
+    }
+    Ok(unloaded_answer())
 }
 
 /// **The leave's save point that did not publish**, per Spec section 3: the
@@ -1861,10 +1922,10 @@ fn unpublished_leave(
 }
 
 /// **Publish the member's finished save points into the territory's
-/// save-points directory**, per Spec section 6, from the room the declaration's
-/// territory holds: the member's uid and the room are the inventory's, and
-/// an inventory that does not read leaves the files for the next load,
-/// said in the log. The lines appended are logged.
+/// save-points directory**, per Spec section 6, from the room the territory
+/// holds: the member's uid from the account database by its derived name and
+/// the room through the territory's descriptor, the declaration never read.
+/// The lines appended are logged.
 fn publish_from_room(
     config: &ServiceConfig,
     agent: &AgentName,
@@ -1881,25 +1942,53 @@ fn publish_from_room_noting(
     agent: &AgentName,
     reports: &[(weaver_types::SavePointReport, save_points::Arrival)],
 ) -> Result<(Vec<save_points::ManifestLine>, bool), LifecycleRefusal> {
-    let inventory = match room_inventory(config, agent) {
-        Ok(inventory) => inventory,
-        Err(refusal) => {
+    // **The publication needs the member's uid and the room, and never the
+    // declaration** (the #94 survey's S8): it runs after a run has ended,
+    // at an unload and a `save-point`, where a declaration saved invalid
+    // while the run stood, or a box step swapping a binary, would otherwise
+    // strand the leave's save point. The member's uid is the account
+    // database's, by the derived name; a member stands where its room does,
+    // a `none` agent having none.
+    admissible(config, agent)?;
+    #[cfg(test)]
+    if let Some((member, owner)) = TEST_PUBLICATION.with(std::cell::Cell::get) {
+        return publish_room_as(config, member, owner, reports);
+    }
+    let member = match nix::unistd::User::from_name(&inventory::member_identity_for(agent)) {
+        Ok(Some(user)) => user.uid.as_raw(),
+        Ok(None) => return Ok((Vec::new(), false)),
+        Err(e) => {
+            diag!("weaver-admin: the member's account does not read ({e}); nothing is published");
             record(
                 config,
                 "publish",
-                &format!(
-                    "skipped: the inventory refuses {}; the room's save points are published at the next load",
-                    surface::render_refusal(&refusal)
-                ),
+                "refused: the member's account does not read",
             );
-            return Err(refusal);
+            return Err(LifecycleRefusal::BoundaryUnverified);
         }
     };
-    let Some(member) = inventory.member_account else {
-        return Ok((Vec::new(), false));
-    };
-    // The room is the territory's own entry, the sink held to the territory
-    // by `room_inventory`, opened through the territory's descriptor.
+    publish_room_as(config, member, save_points::ROOT, reports)
+}
+
+// The member and manifest owner a test's publication runs as, this box
+// holding no agent accounts; production reads the account database.
+#[cfg(test)]
+thread_local! {
+    static TEST_PUBLICATION: std::cell::Cell<Option<(u32, save_points::Owner)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The publication from the territory's room as the member `member`, the
+/// uid production reads from the account database, with the manifest
+/// `owner`'s, root's in production; a test sets both to its own.
+fn publish_room_as(
+    config: &ServiceConfig,
+    member: u32,
+    owner: save_points::Owner,
+    reports: &[(weaver_types::SavePointReport, save_points::Arrival)],
+) -> Result<(Vec<save_points::ManifestLine>, bool), LifecycleRefusal> {
+    // The room is the territory's own entry, opened through the territory's
+    // descriptor.
     let room = match config.territory_fd().and_then(save_points::open_room) {
         Ok(Some(room)) => room,
         Ok(None) => return Ok((Vec::new(), false)),
@@ -1925,10 +2014,10 @@ fn publish_from_room_noting(
     };
     match save_points::publish_noting_deferral(
         std::os::fd::AsFd::as_fd(&room),
-        member.uid,
+        member,
         directory,
         config.file_owner(),
-        save_points::ROOT,
+        owner,
         reports,
     ) {
         Ok((lines, deferred)) => {
@@ -2012,13 +2101,6 @@ fn close_marker(config: &ServiceConfig, forced: bool) -> Result<(), LifecycleRef
 enum LeaveFault {
     Refused(LifecycleRefusal),
     Unanswered,
-}
-
-/// **Directs leave under the leave's own bound**, per Spec section 3.
-fn direct_leave(
-    config: &ServiceConfig,
-) -> Result<Option<weaver_types::SavePointReport>, LeaveFault> {
-    direct_leave_within(config, std::time::Instant::now() + LEAVE_BOUND, false)
 }
 
 /// Directs leave, forced or not, and waits for its answer until `deadline`,
@@ -2120,29 +2202,75 @@ fn load_service_config(agent: &AgentName) -> Result<ServiceConfig, LifecycleRefu
     let base = std::env::var_os("WEAVER_ADMIN_CONFIG")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_BASE));
-    // **The access group is resolved by name** (Codex on #94), as the trace
-    // door and the reader's judgment resolve it: the territory's own group is
-    // judged against it and never taken as it stands, since that gid becomes
-    // the state member's supplementary group.
+    // **The access group and the state group are resolved by name** (Codex
+    // on #94, and the operator's ruling of 2026-10-08 on #1), as the trace
+    // door and the reader's judgment resolve them: the territory's group is
+    // judged against the state group and `save-points/`'s against the access
+    // group, never taken as they stand.
     let group_name = format!("{}-admin", inventory::identity_for(agent));
     let Some(access) = nix::unistd::Group::from_name(&group_name).ok().flatten() else {
         diag!("weaver-admin: the access group {group_name} is not provisioned");
         return Err(LifecycleRefusal::BoundaryUnverified);
     };
-    load_service_config_at(&base, &agent.0, 0, access.gid.as_raw())
+    let state_name = inventory::member_identity_for(agent);
+    let Some(state) = nix::unistd::Group::from_name(&state_name).ok().flatten() else {
+        diag!("weaver-admin: the state group {state_name} is not provisioned");
+        return Err(LifecycleRefusal::BoundaryUnverified);
+    };
+    load_service_config_with(
+        &base,
+        &agent.0,
+        0,
+        TerritoryGroups {
+            access: access.gid.as_raw(),
+            state: state.gid.as_raw(),
+        },
+    )
 }
 
-/// The judgments in Spec section 9's order, against `owner` for the root's
-/// files, which production fixes at uid 0 and a test sets to its own uid: the
-/// root admitted and closed, its ancestors closed, its entries closed, its
-/// values read, then the agent's territory judged against `access_gid`, the
-/// access group production resolves by name and a test sets to its own, and
-/// `library-path` judged as the root is.
+/// **The territory's two groups**, on the operator's ruling of 2026-10-08 on
+/// #1: the state group `weaver-<agent>-state`, the member's primary group,
+/// which the territory is grouped to for passage, and the access group
+/// `weaver-<agent>-admin`, which the files beneath it are grouped to for
+/// reading. The agent's own uid holds neither.
+#[derive(Debug, Clone, Copy)]
+struct TerritoryGroups {
+    access: u32,
+    state: u32,
+}
+
+/// The judgments under one group for both, as the suite's own uid holds no
+/// second group it can rely on; a test of the two apart calls
+/// `load_service_config_with`.
+#[cfg(test)]
 fn load_service_config_at(
     base: &std::path::Path,
     agent: &str,
     owner: u32,
     access_gid: u32,
+) -> Result<ServiceConfig, LifecycleRefusal> {
+    load_service_config_with(
+        base,
+        agent,
+        owner,
+        TerritoryGroups {
+            access: access_gid,
+            state: access_gid,
+        },
+    )
+}
+
+/// The judgments in Spec section 9's order, against `owner` for the root's
+/// files, which production fixes at uid 0 and a test sets to its own uid: the
+/// root admitted and closed, its ancestors closed, its entries closed, its
+/// values read, then the agent's territory judged against `groups`, which
+/// production resolves by name and a test sets to its own, and
+/// `library-path` judged as the root is.
+fn load_service_config_with(
+    base: &std::path::Path,
+    agent: &str,
+    owner: u32,
+    groups: TerritoryGroups,
 ) -> Result<ServiceConfig, LifecycleRefusal> {
     let root = base.join(agent);
     judge_root(&root, owner)?;
@@ -2154,7 +2282,7 @@ fn load_service_config_at(
         // named where it is required, at `validate` and `load`.
         LifecycleRefusal::ConfigInvalid { field: None }
     })?;
-    let judged = judge_territory(&config.territory, access_gid)?;
+    let judged = judge_territory(&config.territory, groups)?;
     config.territory = judged.canonical;
     config.access_gid = judged.access_gid;
     config.territory_fd = Some(judged.territory);
@@ -2298,6 +2426,11 @@ fn judge_root(root: &std::path::Path, owner: u32) -> Result<(), LifecycleRefusal
     Ok(())
 }
 
+/// **The territory's mode**, `0710`, on the operator's ruling of 2026-10-08
+/// on #1, and the one `deploy/create-agent.sh` lays it out at, which
+/// `the_territory_create_agent_lays_out_passes_both_judgments` holds equal.
+const TERRITORY_MODE: u32 = 0o710;
+
 /// What the territory's judgment answers: the canonical path, the two
 /// descriptors held for the verb's life and the access group's gid.
 struct JudgedTerritory {
@@ -2310,21 +2443,23 @@ struct JudgedTerritory {
 /// **The territory is judged before any value in it is read, on its
 /// descriptor**, per Spec section 9 on the operator's ruling of 2026-10-07 on
 /// #1: opened once with no link followed, a directory owned by this process's
-/// uid, root in production and the suite's own under test, mode `0711`
-/// exactly on the operator's ruling of 2026-10-08 on #1, passage and no
-/// listing for every other principal, the member reaching its room by it and
-/// the files beneath keeping their own modes as the wall; grouped to the
-/// access group, which is judged by name; carrying
+/// uid, root in production and the suite's own under test, mode `0710`
+/// exactly and grouped to the state group, judged by name, on the operator's
+/// ruling of 2026-10-08 on #1: passage for the state group alone, which the
+/// member holds as its primary group and the operator and the connector join,
+/// and nothing for the agent's own uid, which holds neither group, so section
+/// 4's denial of the sink's directory holds; carrying
 /// no access-control entry beyond its mode; every directory above it held
 /// closed by root as the root's ancestors are. `save-points/` beneath it is
 /// opened through that descriptor and judged the same way at mode `0750` and
-/// the territory's group. The ancestors' walk and the access-control look
+/// the access group. The ancestors' walk and the access-control look
 /// stay by path, being about the path; everything read after is through the
 /// descriptors.
 fn judge_territory(
     directory: &std::path::Path,
-    access_gid: u32,
+    groups: TerritoryGroups,
 ) -> Result<JudgedTerritory, LifecycleRefusal> {
+    let access_gid = groups.access;
     use std::os::fd::AsFd;
     use std::os::unix::fs::MetadataExt;
     let refuse = |what: &str| {
@@ -2352,20 +2487,20 @@ fn judge_territory(
     if metadata.uid() != own {
         return Err(refuse("is not root's"));
     }
-    if metadata.mode() & 0o7777 != 0o711 {
+    if metadata.mode() & 0o7777 != TERRITORY_MODE {
         return Err(refuse(
-            "is not mode 0711, root's with passage and no listing for every other principal",
+            "is not mode 0710, root's with passage for the state group alone",
         ));
     }
     if carries_access_entries(directory) {
         return Err(refuse("carries an access-control entry beyond its mode"));
     }
-    // **Grouped to the access group by name, never taken as it stands**
-    // (Codex on #94): the territory's gid becomes the state member's
-    // supplementary group, so a territory misprovisioned as `root:root`
-    // would hand the unprivileged member gid 0.
-    if metadata.gid() != access_gid {
-        return Err(refuse("is not grouped to the access group"));
+    // **Grouped to the state group by name, never taken as it stands**
+    // (Codex on #94, and the operator's ruling of 2026-10-08 on #1): its
+    // group is who passes, so a territory under any other group would pass
+    // a principal the ruling did not name.
+    if metadata.gid() != groups.state {
+        return Err(refuse("is not grouped to the state group"));
     }
     let canonical = judge_ancestors(directory, &[own, 0])?;
     let save_points = nix::fcntl::openat(
@@ -2416,11 +2551,13 @@ fn judge_territory(
             )));
         }
     }
-    // **A territory holding no `agent.toml` is no agent**, `NoSuchAgent` as a
-    // root holding none was, and one holding a declaration that is not a
-    // closed regular file of root's is the provisioning, refused: judged here
-    // through the descriptor, as the inventory reads it.
-    drop(open_declaration(opened.as_fd(), directory, access_gid)?);
+    // **The declaration is judged where it is read, not here** (the #94
+    // survey's S8): `validate`, `load` and `restore` read it through
+    // `read_declaration`, which refuses an absent one `NoSuchAgent` and one
+    // that is not root's at the access group's `0640` the provisioning's;
+    // `unload`, `force-unload`, `stop`, `show` and `save-point` end or read a
+    // run and never parse the declaration, so one saved invalid while the
+    // run stood does not strand the run.
     Ok(JudgedTerritory {
         canonical,
         territory: opened,
@@ -2910,9 +3047,23 @@ mod tests {
         }
     }
 
+    /// The configuration as `validate`, `load` and `restore` read it: the
+    /// territory judged, then the declaration read through it and judged
+    /// where it is read (the #94 survey's S8).
+    fn load_and_read(
+        base: &std::path::Path,
+        agent: &str,
+        owner: u32,
+        access_gid: u32,
+    ) -> Result<ServiceConfig, LifecycleRefusal> {
+        let config = load_service_config_at(base, agent, owner, access_gid)?;
+        read_declaration(&config)?;
+        Ok(config)
+    }
+
     /// The values every root carries, written into a scratch root, with the
     /// agent's territory beside it, `<root>.territory`, laid out as the
-    /// judgment asks with this test's uid in root's place: mode 0711, its
+    /// judgment asks with this test's uid in root's place: mode 0710, its
     /// `save-points/` 0750, and an empty `agent.toml` 0640. Answers the
     /// territory.
     fn write_root(root: &std::path::Path) -> std::path::PathBuf {
@@ -2932,7 +3083,7 @@ mod tests {
             std::fs::Permissions::from_mode(0o640),
         )
         .unwrap();
-        std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(0o711)).unwrap();
+        std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(0o710)).unwrap();
         let operator = nix::unistd::getuid().as_raw().to_string();
         let territory_path = territory.display().to_string();
         for (name, text) in [
@@ -3078,11 +3229,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// **The territory is grouped to the access group by name** (Codex on
-    /// #94), per Spec section 9: its gid is judged against the access group
-    /// production resolves by name and is never taken as it stands, since it
-    /// becomes the state member's supplementary group; a territory that
-    /// stood as `root:root` would have handed the unprivileged member gid 0.
+    /// **The territory and `save-points/` are grouped by name** (Codex on
+    /// #94), per Spec section 9: the territory's gid is judged against the
+    /// state group and `save-points/`'s against the access group, each
+    /// resolved by name in production and never taken as it stands.
     /// The territory stands under this test's own gid and the judgment is
     /// given a gid one off, so the case needs no supplementary group and
     /// never skips: one off refuses, its own reads. Perturbation: take the
@@ -3105,8 +3255,82 @@ mod tests {
         );
         let config = load_service_config_at(&base, "alpha", me, mine).expect("its own group reads");
         assert_eq!(config.access_gid, mine);
+        // **The territory is the state group's, `save-points/` and the
+        // declaration the access group's** (the operator's ruling of
+        // 2026-10-08 on #1): judged against two groups apart, the territory
+        // under the access group alone refuses. Perturbation: judge the
+        // territory against the access group and it reads.
+        let apart = TerritoryGroups {
+            access: mine,
+            state: mine.wrapping_add(1),
+        };
+        assert_eq!(
+            load_service_config_with(&base, "alpha", me, apart).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a territory under the access group rather than the state group refuses"
+        );
         let _ = std::fs::remove_dir_all(&base);
         let _ = std::fs::remove_dir_all(base.join("alpha").with_extension("territory"));
+    }
+
+    /// **The territory `deploy/create-agent.sh` lays out passes both of
+    /// admin's judgments of it** (the #94 survey's S1): `judge_territory`,
+    /// which asks the ruled mode and group, and section 4's denial walk,
+    /// `agent_can_traverse` on the sink's directory, which asks that the
+    /// agent's uid cannot pass. At `0711` the two could never both hold, and
+    /// every load refused. The mode and the group are read from the script's
+    /// own line, so the script, the judgment and the walk cannot drift apart
+    /// again. Perturbation: lay the territory out, or judge it, at `0711`.
+    #[test]
+    fn the_territory_create_agent_lays_out_passes_both_judgments() {
+        use std::os::unix::fs::PermissionsExt;
+        let script = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/create-agent.sh"),
+        )
+        .unwrap();
+        let line = script
+            .lines()
+            .find(|line| line.starts_with("sudo install -d") && line.ends_with("\"$HOME_DIR\""))
+            .expect("create-agent.sh lays the territory out with one install line");
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let after = |flag: &str| words[words.iter().position(|w| *w == flag).unwrap() + 1];
+        assert_eq!(after("-o"), "root", "{line}");
+        assert_eq!(after("-g"), "\"$STATE_GROUP\"", "{line}");
+        let mode = u32::from_str_radix(after("-m"), 8).unwrap();
+        assert!(
+            script.contains("STATE_GROUP=\"$MEMBER_USER\""),
+            "the state group is the member's own primary group"
+        );
+        let me = nix::unistd::getuid().as_raw();
+        let mine = nix::unistd::getegid().as_raw();
+        let base = std::env::temp_dir().join(format!("weaver-admin-laid-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let territory = write_root(&base.join("alpha"));
+        std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(mode)).unwrap();
+        let groups = TerritoryGroups {
+            access: mine,
+            state: mine,
+        };
+        assert!(
+            judge_territory(&territory, groups).is_ok(),
+            "create-agent's mode {mode:o} passes the territory's judgment"
+        );
+        // The agent's uid is not the territory's owner and holds neither
+        // the state group nor the access group.
+        let boundary = inventory::Boundary {
+            agent_uid: me.wrapping_add(1),
+            admin_uid: me,
+            agent_gids: vec![mine.wrapping_add(1)],
+            home: territory.clone(),
+            member_binary: None,
+            member_account: None,
+        };
+        assert!(
+            !inventory::agent_can_traverse(&territory, &boundary),
+            "create-agent's mode {mode:o} lets the agent's uid pass to the trace"
+        );
+        assert!(inventory::admin_holds_custody(&territory, &boundary));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// **A territory with no `agent.toml` is no agent, and one
@@ -3123,7 +3347,7 @@ mod tests {
         let root = base.join("alpha");
         let declarations = write_root(&root);
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let config = load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw())
+        let config = load_and_read(&base, "alpha", me, nix::unistd::getegid().as_raw())
             .expect("a declared agent reads");
         assert_eq!(config.agent, "alpha");
         assert_eq!(
@@ -3132,13 +3356,13 @@ mod tests {
         );
         std::fs::remove_file(declarations.join("agent.toml")).unwrap();
         assert_eq!(
-            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
+            load_and_read(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::NoSuchAgent),
             "no agent.toml is no agent"
         );
         std::fs::create_dir(declarations.join("agent.toml")).unwrap();
         assert_eq!(
-            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
+            load_and_read(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
             "a directory named agent.toml"
         );
@@ -3146,26 +3370,25 @@ mod tests {
         std::os::unix::fs::symlink(declarations.join("gone"), declarations.join("agent.toml"))
             .unwrap();
         assert_eq!(
-            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
+            load_and_read(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
             "a link named agent.toml"
         );
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// **The territory is root's at mode 0711, its `save-points/` 0750 and
+    /// **The territory is root's at mode 0710, its `save-points/` 0750 and
     /// its declaration the access group's at 0640, and never a link at its
-    /// own name**,
-    /// per Spec section 9 on the operator's rulings of 2026-10-07 and
-    /// 2026-10-08 on #1, with this test's uid in root's place: the mode
-    /// before the second ruling, 0710, refuses now, as does every other.
+    /// own name**, per Spec section 9 on the operator's rulings of 2026-10-07
+    /// and 2026-10-08 on #1, with this test's uid in root's place: the `0711`
+    /// of the first 2026-10-08 ruling refuses now, as does every other mode.
     /// Perturbations: test only the write bits and the 0750 territory reads;
-    /// judge 0710 again and the 0711 territory refuses; drop the save-points
+    /// judge 0711 again and the 0710 territory refuses; drop the save-points
     /// judgment and the 0770 one reads; judge the declaration's write bits
     /// alone and the 0644 one reads; drop its group comparison and one under
     /// another group reads.
     #[test]
-    fn the_territory_is_roots_at_0711_and_never_a_link() {
+    fn the_territory_is_roots_at_0710_and_never_a_link() {
         use std::os::unix::fs::PermissionsExt;
         let me = nix::unistd::getuid().as_raw();
         let base = std::env::temp_dir().join(format!("weaver-admin-decl-{}", std::process::id()));
@@ -3173,23 +3396,21 @@ mod tests {
         let root = base.join("alpha");
         let territory = write_root(&root);
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(
-            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).is_ok()
-        );
-        for open in [0o750, 0o710, 0o700, 0o770, 0o1711] {
+        assert!(load_and_read(&base, "alpha", me, nix::unistd::getegid().as_raw()).is_ok());
+        for open in [0o750, 0o711, 0o700, 0o770, 0o1710] {
             std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(open)).unwrap();
             assert_eq!(
-                load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
+                load_and_read(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
                 Some(LifecycleRefusal::BoundaryUnverified),
-                "{open:o} is not the territory's 0711"
+                "{open:o} is not the territory's 0710"
             );
         }
-        std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(0o711)).unwrap();
+        std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(0o710)).unwrap();
         let save_points = territory.join("save-points");
         for open in [0o770, 0o755, 0o700] {
             std::fs::set_permissions(&save_points, std::fs::Permissions::from_mode(open)).unwrap();
             assert_eq!(
-                load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
+                load_and_read(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
                 Some(LifecycleRefusal::BoundaryUnverified),
                 "{open:o} is not save-points' 0750"
             );
@@ -3197,7 +3418,7 @@ mod tests {
         std::fs::set_permissions(&save_points, std::fs::Permissions::from_mode(0o750)).unwrap();
         std::fs::rename(&save_points, territory.join("aside")).unwrap();
         assert_eq!(
-            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
+            load_and_read(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
             "no save-points directory is the provisioning incomplete"
         );
@@ -3205,7 +3426,7 @@ mod tests {
         let declaration = territory.join("agent.toml");
         std::fs::set_permissions(&declaration, std::fs::Permissions::from_mode(0o664)).unwrap();
         assert_eq!(
-            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
+            load_and_read(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
             "a declaration the group could write"
         );
@@ -3216,14 +3437,12 @@ mod tests {
         // bits alone again and the 0644 declaration reads.
         std::fs::set_permissions(&declaration, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert_eq!(
-            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
+            load_and_read(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
             "a declaration every uid could read"
         );
         std::fs::set_permissions(&declaration, std::fs::Permissions::from_mode(0o640)).unwrap();
-        assert!(
-            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).is_ok()
-        );
+        assert!(load_and_read(&base, "alpha", me, nix::unistd::getegid().as_raw()).is_ok());
         // **Grouped to the access group**: a declaration at 0640 under any
         // other group is read by that group, so it refuses. Set to another
         // of this uid's own groups, and skipped, naming why, where it holds
@@ -3237,7 +3456,7 @@ mod tests {
             Some(other) => {
                 nix::unistd::chown(&declaration, None, Some(other)).unwrap();
                 assert_eq!(
-                    load_service_config_at(&base, "alpha", me, mine.as_raw()).err(),
+                    load_and_read(&base, "alpha", me, mine.as_raw()).err(),
                     Some(LifecycleRefusal::BoundaryUnverified),
                     "a declaration grouped to another group than the access group"
                 );
@@ -3249,7 +3468,7 @@ mod tests {
         std::os::unix::fs::symlink(&territory, &link).unwrap();
         std::fs::write(root.join("territory"), link.display().to_string()).unwrap();
         assert_eq!(
-            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
+            load_and_read(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
             "a link at the territory's own name"
         );
@@ -3348,6 +3567,41 @@ mod tests {
         assert_ne!(restore(&config, &agent).err(), Some(boundary));
         let _ = std::fs::remove_dir_all(&base);
         let _ = std::fs::remove_dir_all(root.with_extension("territory"));
+    }
+
+    /// **The publication never reads the declaration** (the #94 survey's
+    /// S8): it runs after a run ended, so a declaration saved unparsable
+    /// while the run stood must not strand the leave's save point. With
+    /// `agent.toml` holding no TOML, a sound room file publishes. Perturbation:
+    /// derive the room through `room_inventory` again and it refuses.
+    #[test]
+    fn the_publication_does_not_read_the_declaration() {
+        use std::os::unix::fs::PermissionsExt;
+        let me = nix::unistd::getuid().as_raw();
+        let base =
+            std::env::temp_dir().join(format!("weaver-admin-no-decl-read-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("alpha");
+        let territory = write_root(&root);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(territory.join("agent.toml"), "this is [ not toml").unwrap();
+        let room = territory.join(save_points::ROOM);
+        std::fs::create_dir(&room).unwrap();
+        let bytes = save_points::tests::save_point("r-1", 1, 0, 1_000_000_000, b"room");
+        let digest = save_points::judge(&bytes).unwrap().digest;
+        std::fs::write(room.join(format!("{digest}.save-point")), &bytes).unwrap();
+        let config = load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw())
+            .expect("the root reads");
+        let mine = save_points::Owner {
+            uid: me,
+            gid: nix::unistd::getgid().as_raw(),
+        };
+        let (lines, deferred) =
+            publish_room_as(&config, me, mine, &[]).expect("the room publishes");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].digest, digest);
+        assert!(!deferred);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// **A missing or malformed boundary file refuses naming it, at the verbs
@@ -4051,15 +4305,15 @@ mod tests {
         // refuses rather than answering a report of a save point that
         // stands in the room alone (Codex on #94, round 1); the directive
         // reached the worker all the same.
+        // A save point taken and not published is named so (the #94
+        // survey's S12), as the unload names it.
         let answered = save_point(&config, &agent);
-        assert!(
-            matches!(
-                answered,
-                Err(LifecycleRefusal::NoSuchAgent)
-                    | Err(LifecycleRefusal::BoundaryUnverified)
-                    | Err(LifecycleRefusal::ConfigInvalid { .. })
-            ),
-            "answers only a published save point: {answered:?}"
+        assert_eq!(
+            answered,
+            Err(LifecycleRefusal::SavePointNotTaken {
+                missed: weaver_types::SavePointLeg::Published,
+            }),
+            "answers only a published save point"
         );
         let directed = worker.join().unwrap();
         assert!(matches!(
@@ -4143,8 +4397,9 @@ mod tests {
 
     /// **The member's group set is its own group alone**, per Spec section 6
     /// on the operator's ruling of 2026-10-08 on #1 (the custody audit's
-    /// G11): the territory is `0711`, so the member needs no group to reach
-    /// its room, and the access group, which reads the logs and the
+    /// G11): the territory is `0710` under the state group, the member's own
+    /// primary group, so the member needs no other group to reach its room,
+    /// and the access group, which reads the logs and the
     /// published save points, is not the member's. Perturbation: put the
     /// access group back beside the member's own and the assertion fails.
     #[test]
@@ -4234,6 +4489,135 @@ mod tests {
             unpublished_leave(&[], &Err(LifecycleRefusal::BoundaryUnverified)),
             None
         );
+    }
+
+    /// A configuration over a judged scratch territory whose room holds one
+    /// sound finished save point, with a run directory beside it and the
+    /// publication run as this test's uid; answers the config, the room
+    /// file's report and the base to remove.
+    fn territory_with_one_room_file(
+        tag: &str,
+    ) -> (
+        ServiceConfig,
+        weaver_types::SavePointReport,
+        std::path::PathBuf,
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+        let me = nix::unistd::getuid().as_raw();
+        let base = std::env::temp_dir().join(format!("weaver-admin-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("alpha");
+        let territory = write_root(&root);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let room = territory.join(save_points::ROOM);
+        std::fs::create_dir(&room).unwrap();
+        let bytes = save_points::tests::save_point("r-1", 5, 1, 1_000_000_000, b"room");
+        let digest = save_points::judge(&bytes).unwrap().digest;
+        std::fs::write(room.join(format!("{digest}.save-point")), &bytes).unwrap();
+        let mut config =
+            load_service_config_at(&base, "alpha", me, nix::unistd::getegid().as_raw()).unwrap();
+        config.coordination_root = base.join("coordination");
+        std::fs::create_dir_all(config.run_directory()).unwrap();
+        TEST_PUBLICATION.with(|cell| {
+            cell.set(Some((
+                me,
+                save_points::Owner {
+                    uid: me,
+                    gid: nix::unistd::getgid().as_raw(),
+                },
+            )))
+        });
+        let report = weaver_types::SavePointReport {
+            save_point: digest.clone(),
+            name: format!("{digest}.save-point"),
+            ..report()
+        };
+        (config, report, base)
+    }
+
+    /// The digests the scratch territory's manifest names.
+    fn manifest_digests(config: &ServiceConfig) -> Vec<String> {
+        let me = nix::unistd::getuid().as_raw();
+        save_points::read_manifest(
+            config.save_points_fd().unwrap(),
+            save_points::Owner {
+                uid: me,
+                gid: nix::unistd::getgid().as_raw(),
+            },
+        )
+        .unwrap()
+        .into_iter()
+        .map(|line| line.digest)
+        .collect()
+    }
+
+    /// **A leave whose lock outlives the after-left wait keeps its save
+    /// point** (the #94 survey's S7): the worker answers `Left` naming the
+    /// room's file, a holder outlives the wait and is ended by the
+    /// escalation, and the report is published before `Unloaded`, the
+    /// marker closing clean. Perturbation: drop the report on the
+    /// escalation's path again and the manifest names nothing while the
+    /// marker stays open.
+    #[test]
+    fn a_leave_ended_by_the_escalation_still_publishes_its_save_point() {
+        let (config, report, base) = territory_with_one_room_file("left-escalated");
+        save_points::write_marker(
+            &config.root,
+            Some(&save_points::Marker::Open { run: "r-1".into() }),
+        )
+        .unwrap();
+        let mut holder = stand_in_holder(&config);
+        let worker = recording_worker(
+            &config,
+            vec![
+                weaver_types::Payload::Answer(LifecycleAnswer::State {
+                    state: weaver_types::AgentState::Idle,
+                    load: None,
+                    constituents: Vec::new(),
+                }),
+                weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                    save_point: Some(report.clone()),
+                }),
+            ],
+        );
+        let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, false);
+        let _ = holder.kill();
+        let _ = holder.wait();
+        let _ = worker.join();
+        assert_eq!(answered, Ok(unloaded_answer()));
+        assert_eq!(manifest_digests(&config), [report.save_point]);
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Closed { run: "r-1".into() })
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **A retry on a run already ended publishes the room first** (the #94
+    /// survey's S11): after an unload refused `published`, the leave's save
+    /// point stands in the room; a `force-unload` with the run lock free
+    /// publishes it and closes the marker clean, recording no
+    /// `ForcedUnload` over the save point it published. Perturbation: drop
+    /// the publication from the lock-free branch and the marker closes as
+    /// forced with the file still in the room.
+    #[test]
+    fn a_retry_on_an_ended_run_publishes_the_room_first() {
+        let (config, report, base) = territory_with_one_room_file("ended-retry");
+        save_points::write_marker(
+            &config.root,
+            Some(&save_points::Marker::Open { run: "r-1".into() }),
+        )
+        .unwrap();
+        assert_eq!(
+            unload_within(&config, TEST_UNLOAD_BOUNDS, true),
+            Ok(unloaded_answer())
+        );
+        assert_eq!(manifest_digests(&config), [report.save_point]);
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Closed { run: "r-1".into() })
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// **A sink outside the territory refuses naming `trace-sink`**, per Spec
@@ -4327,7 +4711,41 @@ mod tests {
         )
         .unwrap();
         roll_back(&config, &mut standing);
-        assert_eq!(save_points::read_marker(&config.root), Some(closed));
+        assert_eq!(save_points::read_marker(&config.root), Some(closed.clone()));
+        // **The run being undone leaves forced, and one that does not leave
+        // keeps the marker open on it** (the #94 survey's S10): the worker
+        // refuses the leave, so the trace holds this run's `load` and no
+        // `unload`, and the marker names the run for the next load's reset.
+        // Perturbations: direct an unforced leave and the directive says so;
+        // restore the prior marker whatever the leave did and it reads
+        // closed.
+        let mut standing = Standing {
+            entered: true,
+            marker_before: Some(Some(closed)),
+            run_reference: Some("r-1".into()),
+            ..Standing::default()
+        };
+        save_points::write_marker(
+            &config.root,
+            Some(&save_points::Marker::Open { run: "r-1".into() }),
+        )
+        .unwrap();
+        let worker = recording_worker(
+            &config,
+            vec![weaver_types::Payload::Refusal(
+                LifecycleRefusal::ActivityNotAtRest,
+            )],
+        );
+        roll_back(&config, &mut standing);
+        let directed = worker.join().unwrap();
+        assert!(matches!(
+            directed[0],
+            weaver_types::Payload::Directive(LifecycleDirective::Leave { forced: true, .. })
+        ));
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Open { run: "r-1".into() })
+        );
     }
 
     const TEST_UNLOAD_BOUNDS: UnloadBounds = UnloadBounds {

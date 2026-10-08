@@ -173,16 +173,20 @@ rest, asks the member for a save point through `weaver-harness-state-contract` s
 2's four legs, authors the `save_point` event, and answers `SavePointTaken` naming the
 digest, the finished name, the position the save point covers and the trace position of
 the event, its own run and sequence, or refuses `ActivityNotAtRest` where a turn runs, or `SavePointNotTaken`
-naming which leg missed. `Leave` carries `forced` beside its cause: the harness takes the
+naming which leg missed, or `OutOfOrder` where the run takes no save point, a diagnostic
+binding or a serving run with no member seam, which has no member to ask and is never
+reported as the member dead. `Leave` carries `forced` beside its cause: the harness takes the
 leave's save point before it authors `unload`, and answers `Left` naming it as
 `SavePointTaken` does so admin publishes it under the same ordinal rule; where the save
 point is not finished and `forced` is false it answers `SavePointNotTaken` and stays
 entered, the run open, and where `forced` is true it leaves without one and the `unload`
-event says so. The legs the harness names are the write, the answer, the finished answer
-and the member dead; admin names a fifth of its own, `published`, at the unload, where
-the leave's save point was reported and its publication did not land, per
-`weaver-admin-operator-contract` section 3. A `Left` with no save point is a forced leave, or a leave under a
-diagnostic binding, which takes none.
+event says so. The legs the harness names are the answer, the finished answer and the
+member dead, a member's failed write arriving as the answer missed; admin names a fourth
+of its own, `published`, at the unload and the `save-point` verb, where the save point
+was reported and its publication did not land, per
+`weaver-admin-operator-contract` section 3. A `Left` with no save point is a forced leave, a leave under a
+diagnostic binding, or a leave of a serving run with no member seam, the last two taking
+none.
 
 **Enter the run.** Opened by admin. Admin directs the harness to enter, supplying the
 session identity, the run reference, the kind of the binding, the trace sink handle, the

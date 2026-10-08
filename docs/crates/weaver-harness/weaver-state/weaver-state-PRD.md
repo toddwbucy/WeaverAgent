@@ -427,8 +427,8 @@ declaration and the prompt draft, on the operator's ruling of 2026-10-07 on #1, 
 next load or unload or at once on the operator's `save-point`, per `weaver-admin-Spec`
 section 6, so a save point taken on demand is readable by the operator at the next
 verb, and one that survived an unclean stop is published at the next load. The member
-reads its own published copies through the access group and writes none, and does not
-try to open one by path. **A load
+does not hold the access group, so it can read no published copy and writes none; the
+one it restores reaches it as the descriptor below, never by a path. **A load
 restores through a descriptor**: admin, as root, opens the chosen save point in
 `save-points/`, the latest by admin's manifest or the one `restore` names, one
 named at a restore included, and hands the member the open descriptor at spawn, exactly as it opens the

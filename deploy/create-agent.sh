@@ -117,7 +117,7 @@ while [ $# -gt 0 ]; do
     --member-identity) die "--member-identity is retired as of 2026-09-15, issue #545. The
    member's account is weaver-<name>-state, derived by weaver-admin from the
    agent's name. Lay an agent made before this date out as create-agent.sh now
-   makes one: root:weaver-<name>-admin 0711, its trace root:weaver-<name>-trace
+   makes one: root:weaver-<name>-state 0710, its trace root:weaver-<name>-trace
    0640 (deploy/REDEPLOY.md, existing territories)." ;;
     --engine)   [ $# -ge 2 ] || die "--engine needs a name"; ENGINE=$2; shift ;;
     --spu)      [ $# -ge 2 ] || die "--spu needs a path"; SPU_OVERRIDE=$2; shift ;;
@@ -187,9 +187,10 @@ OPERATOR=$(id -un)
 OPERATOR_UID=$(id -u)
 AGENT_USER="weaver-$NAME"          # the agent's own uid: the worker's identity
 MEMBER_USER="weaver-$NAME-state"   # the member's uid: owns the state room
+STATE_GROUP="$MEMBER_USER"         # the member's primary group: the territory's, passage alone
 TRACE_GROUP="weaver-$NAME-trace"   # the trace's readers: the operator and the relay, never the member
 RELAY_USER="weaver-$NAME-relay"    # the trace relay's uid, its one group the trace group
-ACCESS_GROUP="weaver-$NAME-admin"  # the territory's group and the trace door's: reads, never writes
+ACCESS_GROUP="weaver-$NAME-admin"  # the territory's files' group and the trace door's: reads, never writes
 CONNECTOR_USER="weaver-$NAME-admincon"  # the connector's service user: the reader, and the sudo rule's one user
 SUDO_RULE="/etc/sudoers.d/weaver-$NAME"
 ADMIN_BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
@@ -307,12 +308,17 @@ judge_names || exit 1
 # record's `agent-directory`, which bootstrap-stack.sh makes root 0755: it must
 # stand, be held closed by admin's rule, and let no other principal make a name
 # in it, since the territory is a new name there. Each territory is root-owned,
-# grouped to the access group, 0711: every uid passes and none lists, and the
-# files' own modes are the wall (the operator's ruling of 2026-10-08 on #1);
-# the trace has a group of its own (below). No ACL is asked of the
+# grouped to the state group, 0710: the state group passes and none lists, the
+# agent's own uid passes not, and the files' own modes are the wall beneath
+# (the operator's ruling of 2026-10-08 on #1); the trace has a group of its
+# own (below). No ACL is asked of the
 # filesystem, so a box whose datasets carry none deploys as any other.
 [ -d "$AGENT_DIR" ] || die "the stack record's agent-directory $AGENT_DIR does not stand: bootstrap-stack.sh makes it, root 0755"
 bad=$(creatable_in "$AGENT_DIR") || die "the stack record's agent-directory $AGENT_DIR is not a root-held base no other principal can make a name in ($bad)"
+# **The territory's path is canonical** (the #94 survey's S23): admin
+# compares the declaration's sink directory with the canonical territory, so
+# a link in the base's path written here would refuse every verb.
+AGENT_DIR=$(realpath -e -- "$AGENT_DIR") || die "the stack record's agent-directory $AGENT_DIR does not resolve"
 HOME_DIR="$AGENT_DIR/$AGENT_USER"
 STATE_DIR="$HOME_DIR/state"
 # **The declaration, the draft and the save points stand in the territory**
@@ -440,14 +446,14 @@ bad=$(creatable_in "$ADMIN_BASE") || die "the admin base $ADMIN_BASE lets anothe
 
 say "plan for agent '$NAME'"
 plan "agent account   $AGENT_USER      (system, nologin, the worker's uid)"
-plan "member account  $MEMBER_USER     (system, nologin, owns the state room, holds $ACCESS_GROUP for passage)"
+plan "member account  $MEMBER_USER     (system, nologin, owns the state room, passes the territory by its own group $STATE_GROUP)"
 plan "trace group     $TRACE_GROUP     (system group: the trace's readers, never the member)"
 plan "relay account   $RELAY_USER      (system, nologin, no home, its one group $TRACE_GROUP)"
-plan "access group    $ACCESS_GROUP    (system group: the territory's and the trace door's, reads and never writes)"
-plan "connector       $CONNECTOR_USER  (system, nologin, no home, holds $ACCESS_GROUP, the trace reader)"
-plan "operator        $OPERATOR joins groups $AGENT_USER, $TRACE_GROUP and $ACCESS_GROUP"
+plan "access group    $ACCESS_GROUP    (system group: the territory's files' and the trace door's, reads and never writes)"
+plan "connector       $CONNECTOR_USER  (system, nologin, no home, holds $STATE_GROUP and $ACCESS_GROUP, the trace reader)"
+plan "operator        $OPERATOR joins groups $AGENT_USER, $TRACE_GROUP, $STATE_GROUP and $ACCESS_GROUP"
 plan "home            /home/$AGENT_USER        the agent's own, where its tools run"
-plan "territory       $HOME_DIR        root:$ACCESS_GROUP 0711, passage only, no listing"
+plan "territory       $HOME_DIR        root:$STATE_GROUP 0710, passage for the state group alone"
 plan "trace           $HOME_DIR/trace.ndjson  root:$TRACE_GROUP 0640, made before the first load"
 plan "state room      $STATE_DIR       $MEMBER_USER 0700, which the agent's uid cannot enter"
 plan "store           sqlite in memory, its save points in the state room"
@@ -514,17 +520,18 @@ sudo groupadd --system "$ACCESS_GROUP"
 sudo useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group --gid "$TRACE_GROUP" "$RELAY_USER"
 # **The connector holds the access group and nothing of the agent's**: it
 # reaches the trace through the door alone, never by the trace group.
-sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group --groups "$ACCESS_GROUP" "$CONNECTOR_USER"
-# **The member holds no group of the territory** (the operator's ruling of
-# 2026-10-08 on #1): the territory is 0711, so the member passes to its own
-# room by the bit every uid has, and the access group, which reads admin.log,
-# worker.log and the published save points, is not the member's.
+sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group --groups "$STATE_GROUP,$ACCESS_GROUP" "$CONNECTOR_USER"
+# **The member holds its own group alone** (the operator's ruling of
+# 2026-10-08 on #1): the territory is 0710 under that group, so the member
+# passes to its own room by it, and the access group, which reads admin.log,
+# worker.log, the declaration, the draft and the published save points, is
+# not the member's.
 # **The operator reads without sudo through the access group**: the gate's
 # socket by the agent's group, the trace by its group, and the territory with
 # the declaration, the draft, the logs and the save points by the access
-# group. The member's own group buys the operator nothing, the state room
-# being the member's alone.
-sudo usermod -aG "$AGENT_USER,$TRACE_GROUP,$ACCESS_GROUP" "$OPERATOR"
+# group. The member's own group, the state group, buys the operator passage
+# of the territory and nothing more, the state room being the member's alone.
+sudo usermod -aG "$AGENT_USER,$TRACE_GROUP,$STATE_GROUP,$ACCESS_GROUP" "$OPERATOR"
 sudo chmod 2750 "/home/$AGENT_USER"
 printf '   %s uid %s, %s uid %s, %s uid %s, %s uid %s\n' \
   "$AGENT_USER" "$(id -u "$AGENT_USER")" "$MEMBER_USER" "$(id -u "$MEMBER_USER")" \
@@ -533,12 +540,15 @@ printf '   %s uid %s, %s uid %s, %s uid %s, %s uid %s\n' \
 say "territory"
 # **The whole agent lives here, and the group passes and never writes** (the
 # operator's ruling of 2026-10-07 on #1, refining 2026-10-02's #28 and #56).
-# The territory is root's, grouped to the access group, 0711 and not setgid:
-# every uid may pass to what stands in it by name but none may list, and
-# nothing written here takes its group (the operator's ruling of 2026-10-08
-# on #1). Admin makes the member's room at `<sink directory>/state`, so the
-# member traverses the directory holding the trace by that passage, and the
-# protection sits on each file's own mode, the trace's first:
+# The territory is root's, grouped to the state group, 0710 and not setgid
+# (the operator's ruling of 2026-10-08 on #1): the state group passes to what
+# stands in it by name and lists nothing. The member holds that group as its
+# primary group, and the operator and the connector join it for passage. The
+# agent's own uid holds it not, so it cannot pass to the trace, which is the
+# denial admin's load asks of the sink's directory. Nothing written here
+# takes the territory's group. Admin makes the member's room at
+# `<sink directory>/state`, and the protection beneath sits on each file's
+# own mode, the trace's first:
 # made here, before the first load, root:$TRACE_GROUP 0640, the layout admin
 # checks at every load (#62): admin opens it append-only, never through a
 # link, and refuses a trace that stands otherwise, so the member, outside that
@@ -549,7 +559,7 @@ say "territory"
 # `save-points/`, root:$ACCESS_GROUP 0750, where admin writes each copy 0640
 # to the group and the manifest root 0644, so the group reads a save point and
 # rewrites none.
-sudo install -d -o root -g "$ACCESS_GROUP" -m 0711 "$HOME_DIR"
+sudo install -d -o root -g "$STATE_GROUP" -m 0710 "$HOME_DIR"
 sudo install -o root -g "$TRACE_GROUP" -m 0640 /dev/null "$HOME_DIR/trace.ndjson"
 sudo install -d -o "$MEMBER_USER" -g "$MEMBER_USER" -m 0700 "$STATE_DIR"
 sudo install -d -o root -g "$ACCESS_GROUP" -m 0750 "$SAVE_POINTS"
@@ -614,6 +624,19 @@ if sudo -u "$MEMBER_USER" test -r "$HOME_DIR/trace.ndjson"; then
 else
   printf "   the member cannot read the trace, which is the boundary the state charter asks for\n"
 fi
+# **The member reads none of the access group's files**: it passes the
+# territory by its own group and holds not the access group.
+if sudo -u "$MEMBER_USER" test -r "$DECLARATION"; then
+  die "THE MEMBER $MEMBER_USER CAN READ THE DECLARATION $DECLARATION: it holds the access group, or the file's mode is open"
+fi
+# **The agent's own uid cannot pass the territory** (the #94 survey's S1):
+# admin's load refuses a sink whose directory the agent's uid can traverse,
+# so a territory it could pass would refuse every load.
+if sudo -u "$AGENT_USER" test -x "$HOME_DIR"; then
+  die "THE AGENT'S UID CAN PASS THE TERRITORY $HOME_DIR: its group or mode is open, and admin would refuse every load"
+else
+  printf "   the agent's own uid cannot pass the territory, which is the trace's denial admin checks\n"
+fi
 
 # **The access group reads and never writes** (the operator's ruling of
 # 2026-10-07 on #1): the connector, which holds it, reads the declaration and
@@ -629,13 +652,14 @@ done
 printf '   %s reads the declaration and writes nothing of the territory\n' "$CONNECTOR_USER"
 
 # **The relay and the connector hold exactly their groups**: the relay the
-# trace group alone, the connector its own and the access group, and neither
-# any group of the agent's or the member's.
+# trace group alone, the connector its own, the state group for passage and
+# the access group for reading, and neither any group of the agent's.
 relay_groups=$(id -Gn "$RELAY_USER")
 [ "$relay_groups" = "$TRACE_GROUP" ] || die "the relay account $RELAY_USER holds '$relay_groups', not the trace group alone"
 connector_groups=" $(id -Gn "$CONNECTOR_USER") "
 [[ "$connector_groups" == *" $ACCESS_GROUP "* ]] || die "the connector $CONNECTOR_USER does not hold $ACCESS_GROUP, so the trace door would turn it away"
-for g in "$AGENT_USER" "$MEMBER_USER" "$TRACE_GROUP"; do
+[[ "$connector_groups" == *" $STATE_GROUP "* ]] || die "the connector $CONNECTOR_USER does not hold $STATE_GROUP, so it cannot pass the territory"
+for g in "$AGENT_USER" "$TRACE_GROUP"; do
   [[ "$connector_groups" != *" $g "* ]] || die "the connector $CONNECTOR_USER holds $g, which reaches the agent's territory or trace by group"
 done
 printf '   %s holds %s alone, %s holds%s\n' "$RELAY_USER" "$TRACE_GROUP" "$CONNECTOR_USER" "${connector_groups% }"
@@ -680,7 +704,7 @@ say "made"
 # the account and not a session already running, so a shell that predates this
 # run cannot reach the gate's socket until it takes the group (#673, measured
 # on the W4a run of 2026-09-25).
-printf '   %s joined groups %s, %s and %s: a session that predates this run needs a new\n' "$OPERATOR" "$AGENT_USER" "$TRACE_GROUP" "$ACCESS_GROUP"
+printf '   %s joined groups %s, %s, %s and %s: a session that predates this run needs a new\n' "$OPERATOR" "$AGENT_USER" "$TRACE_GROUP" "$STATE_GROUP" "$ACCESS_GROUP"
 printf '   login before the groups apply (`newgrp` selects one group in one shell)\n'
 printf '   the declaration %s is root'"'"'s: edit it with sudoedit, and read it, the draft, the logs and\n' "$DECLARATION"
 printf '   the save points under %s through %s\n' "$HOME_DIR" "$ACCESS_GROUP"
