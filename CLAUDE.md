@@ -127,7 +127,8 @@ line is a Unix domain socket, and there is no listening network socket anywhere.
 
 Cargo edges run downward only: every crate links at most the floor, the harness links
 its two members, `weaver-state` links `weaver-trace`, and no organ links another organ.
-Each crate's `tests/manifest.rs` reads its own manifest to pin its part of that shape.
+Every crate but `weaver-state` has a `tests/manifest.rs` that reads its own manifest to
+pin its part of that shape; `weaver-state`'s edges are pinned by no test.
 
 ### Where the documents are
 
@@ -181,7 +182,17 @@ cargo test -p weaver-harness --locked <name_fragment>    # one test by substring
 cargo clippy -p <crate> --all-targets --locked -- -D warnings
 cargo clippy -p weaver-spu --all-targets --features cuda,gguf --locked -- -D warnings
 cargo fmt --all -- --check
+python3 deploy/test_plans.py                             # the deploy scripts' gate, no sudo
 ```
+
+**Gates run with a private target directory.** On olympus `CARGO_TARGET_DIR` points every
+checkout at one shared directory, and cargo leaves a crate's path out of its artifact
+hash, so two checkouts of the same source share one test binary with the first
+checkout's compile-time paths baked in: a worktree's tests can run another checkout's
+binary and fail on fixtures that are not there. Set `CARGO_TARGET_DIR` per checkout for
+any gate or grade, outside the home directory (a test that runs inside a user namespace
+maps to an unprivileged uid that cannot traverse `/home/<operator>`), and say which
+target a gate line used.
 
 `lock.sh` compiles nothing and runs in under a second. Its 0 and 1 are definitive; 2
 means the gate could not run (cold cache, network needed, unreadable manifest), so the
@@ -247,13 +258,18 @@ whole agent lives in its territory** (the operator's ruling of 2026-10-07, #1),
 `/var/lib/weaver-agent/weaver-<agent>/`, root-owned, which the root's `territory` key names:
 the declaration `agent.toml` (edited with `sudoedit`), the prompt draft
 `system-prompt.md`, `admin.log`, `worker.log`, `save-points/` with the published save
-points and their manifest, the trace and the member's room. The access group
-`weaver-<agent>-admin` reads it and never writes; the operator joins that group to read
-without sudo. Each agent runs under its own OS user, started by admin's
+points and their manifest, the trace and the member's room. The territory is
+`root:weaver-<agent>-state 0710`: the member passes to its own room by that group, and
+the operator and the connector join it for passage; the files in it are grouped to the
+access group `weaver-<agent>-admin`, which reads them and never writes, and which the
+member is not in. Each agent runs under its own OS user, started by admin's
 start step, with no systemd unit. `create-agent.sh` writes the connector's strict sudo
-rule. Taking down a single agent is still by hand (#35). A box installed before #50
-migrates by `REDEPLOY.md` section 8, which is the thinkpad's case, since it runs a stack
-built at the split. Run logs of redeploys are kept under `docs/project/redeploy-*.md`.
+rule. Taking down a single agent is by hand, `HowToDeployANewAgent.md` section 7 (#35).
+**No old layout is carried forward** (the operator's ruling of 2026-10-08, #1): an agent
+made under an earlier layout or declaration is taken down and recreated with
+`create-agent.sh`, and admin and the scripts refuse it by name. `deploy/verify-lifecycle.sh`
+drives a throwaway agent through the lifecycle (plan by default, `--apply` to act,
+`--keep` to stop with it loaded for the checks it cannot make). Run logs of redeploys are kept under `docs/project/redeploy-*.md`.
 
 ### Reading command output
 
@@ -289,16 +305,27 @@ this file and `AGENTS.md`, which are the Planner's, also go through a pull reque
    ruling).
 3. The Planner undrafts. That fires Codex's review; a draft gets no pass. A clean pass
    edits the summary comment in place and posts no thread; findings arrive as review
-   threads, sometimes a minute after the summary row flips, so read the body, not the
-   thread count.
+   threads, sometimes a minute after the summary row flips: wait past the flip, then
+   list the threads created since the push from the GraphQL thread graph (the REST
+   comment listing paginates at thirty). `main` requires every conversation resolved, so
+   an answered thread is resolved by id; a BLOCKED merge state is an unresolved thread.
 4. Every finding is graded and answered on the pull request, fixed or declined with the
    reason. A finding names one site of its class: grep every consumer of the same
    shape in every file of the act and table each site in the body before the next
    pass. Each push to an undrafted pull request fires another pass.
-5. Past four rounds the Planner checks convergence: new classes keep the loop going;
-   the same class again, or findings sharing one design question, return the pull
-   request to design.
-6. Only the operator merges. The body names every issue it closes (`Closes #N`) and
+5. **A severity line is agreed before review starts** and held: a finding that would
+   bite in normal use, lose state or restore stale state silently, or cross a privilege
+   boundary is fixed; documentation and consistency findings are batched; crash windows
+   and exotic races are filed. Each finding is sorted into one of those five buckets as
+   it lands. Codex runs at most two rounds before the pull request goes to the operator
+   with the merge decision. Before each push, name the new surface the fix creates (a
+   limit, a refusal, a state) and trace every caller of it.
+6. **A design change during review is its own pull request.** A ruling that adds a
+   layout, a protocol or a limit mid-review is parked on a branch and landed separately;
+   #94 carried three such changes and ran thirty rounds. A cross-process protocol gets
+   a state table (states, the events each actor may cause, the invariants) in its Spec
+   before any code.
+7. Only the operator merges, unless the operator asks the Planner to merge one. The body names every issue it closes (`Closes #N`) and
    every epic item it closes or moves, or says in one line that it answers nothing.
    After the merge the Executor ticks each named item on its epic with the merge
    commit; an epic closes only when its checklist is empty or annotated.
