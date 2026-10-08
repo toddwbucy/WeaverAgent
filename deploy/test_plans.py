@@ -228,6 +228,29 @@ elif name == 'sudo':
         else: made.touch()
         print(template.replace('XXXXXX', 'fixture'))
     elif op == 'visudo': sys.exit(1 if os.environ.get('VISUDO_FAIL') else 0)
+    elif op == 'rmdir':
+        # The restore's removal of a save-points/ the run made (#99 area 2
+        # review, K7): only an empty directory goes, as rmdir does.
+        target = pathlib.Path(mapped(rest[-1]))
+        assert target.is_relative_to(root), target
+        def remove():
+            try: target.rmdir()
+            except OSError: return 1
+            return 0
+        sys.exit(privileged([target], remove))
+    elif op == 'python3' and rest[:1] != ['-c']:
+        # A script run as root (the identity move of a declaration in its
+        # territory): its file arguments are opened to it for the call, as
+        # root's privilege passes a file's mode.
+        files = [pathlib.Path(a) for a in rest[1:] if a.startswith('/') and pathlib.Path(a).is_file()]
+        assert all(f.is_relative_to(root) for f in files), files
+        modes = [(f, f.stat().st_mode) for f in files]
+        for f, m in modes: f.chmod(m | 0o600)
+        try: code = privileged(files, lambda: subprocess.run([sys.executable, *rest]).returncode)
+        finally:
+            for f, m in modes:
+                if f.exists(): f.chmod(m & 0o7777)
+        sys.exit(code)
     elif op.startswith('WEAVER_ADMIN_CONFIG=') and os.environ.get('FIXTURE_ADMIN'):
         # **Admin as a test stands it in** (#99 area 2 review, N5): the
         # verb and the agent handed to the script FIXTURE_ADMIN names.
@@ -252,7 +275,14 @@ elif name == 'sudo':
         # fixture opens the group.
         if identity == 'weaver-m1-admincon' and '-w' in rest: sys.exit(0 if os.environ.get('GROUP_WRITES') else 1)
         sys.exit(0)
-    elif op in ('useradd', 'usermod', 'groupadd', 'chmod', 'chown', 'chgrp', 'setfacl'): pass
+    elif op in ('chown', 'chgrp'):
+        # **An owner is set only on what stands** (#99 area 2 review, K11):
+        # a path under the fixture that does not exist fails, as chown does.
+        for a in rest:
+            p = pathlib.Path(mapped(a))
+            if a.startswith('/') and p.is_relative_to(root) and not privileged([p], lambda: os.path.lexists(p)):
+                sys.exit(1)
+    elif op in ('useradd', 'usermod', 'groupadd', 'chmod', 'setfacl'): pass
     else: sys.exit(99)
 elif name == 'mktemp':
     if not os.environ.get('ALLOW_APPLY_CHECKS'): sys.exit(99)
@@ -798,8 +828,8 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assert_agent_root("sqlite")
         calls = self.calls()
         territory = str(self.decl)
-        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-state", "-m", "0710", territory], calls)
-        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-admin", "-m", "0750",
+        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-state", "-m", "00710", territory], calls)
+        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-admin", "-m", "00750",
                        territory + "/save-points"], calls)
         self.assertIn(["sudo", "tee", territory + "/agent.toml"], calls)
         self.assertIn(["sudo", "tee", territory + "/system-prompt.md"], calls)
@@ -931,6 +961,39 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         self.assertEqual(made, [], self.calls())
         self.assertFalse((self.config / ".m1.partial").exists())
 
+    def test_create_agent_refuses_a_base_whose_inheritance_admin_would_refuse(self):
+        """**A setgid base, or one carrying a default access entry, refuses
+        before anything is made** (#99 area 2 review, K4): a territory made in
+        it would inherit the bit or the entry, which admin refuses at every
+        verb. Perturbations: drop the setgid judgment, or the default-entry
+        look, and the agent is provisioned."""
+        base = self.root / "agents"
+        setfacl = shutil.which("setfacl", path="/usr/bin:/bin")
+        cases = [("setgid", lambda: base.chmod(0o2755), lambda: base.chmod(0o755), "is setgid (mode 2755)")]
+        if setfacl:
+            cases.append(("default entry",
+                          lambda: subprocess.run([setfacl, "-d", "-m", f"u:{os.getuid()}:rx", str(base)], check=True),
+                          lambda: subprocess.run([setfacl, "-b", str(base)], check=True),
+                          "carries a default access entry"))
+        for label, make, undo, said in cases:
+            with self.subTest(label):
+                make()
+                if label == "setgid" and base.stat().st_mode & 0o7777 != 0o2755:
+                    undo()
+                    continue
+                self.log.unlink(missing_ok=True)
+                self.env["ALLOW_APPLY_CHECKS"] = "1"
+                try:
+                    result = self.create("--apply")
+                finally:
+                    undo()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(said, result.stderr)
+                made = [c for c in self.calls()
+                        if c[0] in ("psql", "systemctl", "mktemp", "setfacl")
+                        or (c[0] == "sudo" and c[1:2] != ["-v"] and c[1:3] != ["-n", "sh"])]
+                self.assertEqual(made, [], self.calls())
+
     def test_verify_load_runs_only_the_records_admin_held_closed(self):
         # Codex on #45, round 10: verify-load ran `$(dirname worker-binary)/
         # weaver-admin`, a key of a root admin had not judged, as root. It
@@ -1023,6 +1086,73 @@ esac
         self.assertIn("in the invoker's cgroup", result.stdout)
         self.assertIn("every constituent gone, show unloaded", result.stdout)
 
+    def test_verify_load_reads_its_unload_and_takes_only_a_load_event(self):
+        """**verify-load reads its first unload's answer, and only `load` is a
+        load event** (#99 area 2 review, K8): a refused unload, the run still
+        standing, refuses before the load, naming the answer; a load that
+        writes only an `unload` event refuses as one that wrote no load
+        event; a refused load refuses naming its answer and shows the state
+        member's log, read as the member (N5's class, K12). Perturbations:
+        ignore the unload's answer again and the run is verified; match
+        "load" as a substring again and the `unload` event passes; drop the
+        load's answer check and the refused load is verified."""
+        stub = self.root / "installed" / "bin" / "weaver-admin"
+        for case in ("refused unload", "unload event", "refused load"):
+            with self.subTest(case):
+                shutil.rmtree(self.config / "m1", ignore_errors=True)
+                shutil.rmtree(self.decl, ignore_errors=True)
+                shutil.rmtree(self.root / "stub-state", ignore_errors=True)
+                shutil.rmtree(self.root / "installed", ignore_errors=True)
+                state = self.verify_fixture()
+                text = stub.read_text()
+                if case == "refused unload":
+                    text = text.replace(
+                        """          echo '{"kind":"state","state":"unloaded"}' ;;""",
+                        """          echo '{"kind":"refused","reason":"activity_not_at_rest"}' ;;""")
+                elif case == "unload event":
+                    text = text.replace("""echo '{"kind":"load"}' >>""", """echo '{"kind":"unload"}' >>""")
+                else:
+                    text = text.replace("""        echo '{"kind":"state","state":"idle"}' ;;""",
+                                        """        echo '{"kind":"refused","reason":"descriptors_unusable"}' ;;""")
+                    # The member's log, which admin makes root:<member's group>
+                    # 0640 for the member to read (K12), read as the member.
+                    room = self.root / "agents" / "state"
+                    room.mkdir(exist_ok=True)
+                    self.env["ALLOW_APPLY_CHECKS"] = "1"
+                    (room / "state.log").write_text("no engine named \"x\" in this binary\n")
+                stub.write_text(text)
+                try:
+                    result = self.run_script("verify-load.sh", "m1")
+                finally:
+                    self.end_stand_in(state)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                if case == "refused unload":
+                    self.assertIn('the unload before the load answered {"kind":"refused"', result.stderr)
+                    self.assertNotIn("load        ", result.stdout)
+                elif case == "unload event":
+                    self.assertIn("the new events carry no load event", result.stderr)
+                else:
+                    self.assertIn("the load answered {\"kind\":\"refused\"", result.stderr)
+                    self.assertIn("the state member last said:", result.stdout)
+                    self.assertIn('no engine named "x" in this binary', result.stdout)
+
+    def test_verify_load_counts_no_sink_that_is_not_a_file(self):
+        """**A pipe sink is never opened for a count** (#99 area 2 review,
+        K6): root opening a FIFO with no writer blocks for ever, so a non-file
+        sink skips the line checks, says so, and is verified by the load's
+        answer and its constituents. Perturbation: count whatever stands at
+        the path again and the run hangs past the harness's timeout."""
+        state = self.verify_fixture()
+        fifo = self.root / "agents" / "trace.pipe"
+        os.mkfifo(fifo)
+        (self.decl / "agent.toml").write_text(f'[trace-sink]\nkind = "pipe"\npath = "{fifo}"\n')
+        try:
+            result = self.run_script("verify-load.sh", "m1")
+        finally:
+            self.end_stand_in(state)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("not counted: a pipe is not a file a line count reads", result.stdout)
+
     def test_verify_load_refuses_a_constituent_of_another_account(self):
         # Perturbation: drop the account check, and a stranger's process passes.
         state = self.verify_fixture()
@@ -1077,7 +1207,7 @@ esac
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.calls()
         territory = str(self.root / "agents" / "weaver-m1")
-        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-state", "-m", "0710", territory], calls)
+        self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-state", "-m", "00710", territory], calls)
         self.assertIn(["sudo", "install", "-o", "root", "-g", "weaver-m1-trace", "-m", "0640", "/dev/null",
                        territory + "/trace.ndjson"], calls)
         self.assertIn(["sudo", "install", "-d", "-o", "weaver-m1-state", "-g", "weaver-m1-state", "-m", "0700",
@@ -1164,14 +1294,16 @@ esac
     def test_update_stack_patches_a_declaration_as_root(self):
         # The declaration is root's in root's territory (the operator's ruling
         # of 2026-10-07 on #1), so the patch, its backup and its restore are
-        # root's writes of root's own file, and the text is read whole before
-        # the write replaces it. Perturbation: append as the operator again,
-        # or pipe cat into tee, and this fails.
+        # root's writes of root's own file. The reconcile patch that declared
+        # `engine = "none"` could never run, `weaver-state` being in every
+        # install, and is gone (#99 area 2 review, K11): no step writes a
+        # declaration but the identity move. Perturbation: append as the
+        # operator again, or put the patch back, and this fails.
         text = (self.repo / "deploy" / "update-stack.sh").read_text()
         self.assertIn('sudo cp -a "$decl" "$decl.pre-$AFTER-bak"', text)
         self.assertIn('sudo cp -a "${entry##*|}" "${entry%%|*}"', text)
-        self.assertIn('patched=$(read_declaration "$decl"; printf', text)
-        self.assertIn('printf \'%s\\n\' "$patched" | sudo tee "$decl"', text)
+        self.assertNotIn('sudo tee "$decl"', text)
+        self.assertNotIn("STATE_BINARY", text)
         self.assertNotIn('>> "$decl"', text)
         self.assertNotIn('cat "$decl" |', text)
 
@@ -1850,13 +1982,12 @@ esac
         # access group, a login fact this running shell does not acquire, and
         # regroups the territory, so every read of a declaration or a sink
         # after it goes through sudo and never through the operator's groups.
-        # The fake sudo locks the territory at the migration's chmod 0710,
+        # The fake sudo locks the territory at the migration's chmod 00710,
         # harder than the real 0710 does, which passes nothing to an operator
         # shell that has not taken the new login
         # (LOCK_TERRITORY) and reopens it for its own reads alone, so the
-        # reconcile step reaches the declaration and refuses on the fixture's
-        # unanswering admin, which is as far as this fixture can take an
-        # install; made as the operator, the same reads find no declaration
+        # reconcile and verify steps reach the declaration and the stand-in
+        # admin's refused load rolls the install back; made as the operator, the same reads find no declaration
         # and the run ends at "no agent root ... could be verified".
         # Perturbation: make any read in the install path unprivileged again
         # (`[ -f "$decl" ]`, `cat "$decl"`, `declared` opening the path) and
@@ -1880,7 +2011,18 @@ esac
         territory.chmod(0o750)
         shutil.rmtree(self.config / "existing")
         (self.root / "installed").mkdir(exist_ok=True)
-        self.env.update(ALLOW_APPLY_CHECKS="1", LOCK_TERRITORY=str(territory), TERRITORY_GROUP_AS="weaver-old-state")
+        # An admin that validates and refuses the load, so the run reaches
+        # the verify step's reads of the declaration and then rolls back.
+        admin = self.root / "fixture-admin"
+        admin.write_text("#!/bin/sh\n"
+                         "case \"$1\" in\n"
+                         "  validate) echo '{\"kind\":\"validated\"}' ;;\n"
+                         "  unload) echo '{\"kind\":\"state\",\"state\":\"unloaded\"}' ;;\n"
+                         "  *) echo '{\"kind\":\"refused\",\"reason\":\"no_residency\"}' ;;\n"
+                         "esac\n")
+        admin.chmod(0o755)
+        self.env.update(ALLOW_APPLY_CHECKS="1", LOCK_TERRITORY=str(territory), TERRITORY_GROUP_AS="weaver-old-state",
+                        FIXTURE_ADMIN=str(admin))
         try:
             result = self.run_script("update-stack.sh", "--install")
         finally:
@@ -1889,7 +2031,7 @@ esac
         self.assertIn("declaration, draft and logs moved from", result.stdout)
         self.assertNotIn("no declaration at", result.stdout, result.stdout + result.stderr)
         self.assertNotIn("could be verified", result.stderr)
-        self.assertIn("old refuses and this script will not guess the fix", result.stderr)
+        self.assertIn("old: the verify load answered", result.stderr)
         calls = self.calls()
         after = calls.index(["sudo", "chmod", "00710", str(territory)])
         self.assertIn(["sudo", "-n", "test", "-f", str(territory / "agent.toml")], calls[after:])
@@ -1906,6 +2048,10 @@ esac
         self.assertIn(["sudo", "stat", "-c", "%G %a", "--", str(territory)], calls[:after])
         self.assertIn(["sudo", "chgrp", "weaver-old-state", str(territory)], calls[after:])
         self.assertIn(["sudo", "chmod", "00750", str(territory)], calls[after:])
+        # The migration lays the territory before it moves a file into it
+        # (the security review of ec08f69). Perturbation: lay after the moves.
+        first_move = next(i for i, c in enumerate(calls) if c[:2] == ["sudo", "mv"])
+        self.assertLess(after, first_move)
         regroups = [i for i, c in enumerate(calls) if c == ["sudo", "chgrp", "weaver-old-state", str(territory)]]
         self.assertEqual(len(regroups), 2, "the migration's regroup, then the restore's")
         self.assertLess(regroups[0], after)
@@ -1986,8 +2132,10 @@ esac
         """**An unload is verified by its answer** (the #94 survey's S22):
         `unload_verified` answers success only where admin's last line is the
         unloaded state, so a refused unload, the run still standing, fails
-        the verify step and rolls the install back. Perturbation: answer
-        success whatever admin said and the refusal passes."""
+        the verify step and rolls the install back; and admin's cause on
+        stderr is relayed beside it (#99 area 2 review, K9). Perturbations:
+        answer success whatever admin said and the refusal passes; send
+        admin's stderr to /dev/null again and the cause is lost."""
         text = (DEPLOY / "update-stack.sh").read_text()
         admin = self.root / "bin" / "weaver-admin"
         admin.parent.mkdir(parents=True, exist_ok=True)
@@ -2000,13 +2148,15 @@ esac
                                  ('{"kind":"refused","refusal":"activity_not_at_rest"}', False),
                                  ('', False)):
             with self.subTest(answer=answer):
-                admin.write_text(f"#!/bin/sh\necho '{answer}'\nexit 0\n")
+                admin.write_text(f"#!/bin/sh\necho 'weaver-admin: the cause' >&2\necho '{answer}'\nexit 0\n")
                 admin.chmod(0o755)
                 ran = subprocess.run(["bash", "-c", program], env=env, text=True,
                                      capture_output=True, timeout=20)
                 self.assertEqual(ran.returncode == 0, verified, ran.stderr)
                 if not verified:
                     self.assertIn("admin answered the unload of m1", ran.stderr)
+                if answer:
+                    self.assertIn("  admin: weaver-admin: the cause", ran.stderr)
 
     def test_the_no_follow_chmod_refuses_a_link_and_sets_a_regular_file(self):
         # Codex on #94, round 14: root sets a moved file's mode through a
@@ -2294,6 +2444,14 @@ esac
         calls = self.calls()
         lay = calls.index(["sudo", "chmod", "00710", str(territory)])
         self.assertIn(["sudo", "stat", "-c", "%G %a", "--", str(territory)], calls[:lay])
+        # **Closed before anything in it is looked at** (the security review
+        # of ec08f69): the territory takes 00710 and drops its entries before
+        # root looks at `save-points` or acts on it, so a member who could
+        # write the old territory cannot swap a link in between.
+        # Perturbation: look at save-points before the chmod and this fails.
+        look = calls.index(["sudo", "test", "-L", str(territory / "save-points")])
+        self.assertLess(calls.index(["sudo", "setfacl", "-b", "--", str(territory)]), look)
+        self.assertLess(lay, look)
         self.assertIn(["sudo", "chgrp", "weaver-existing-state", str(territory)], calls[:lay])
         self.assertIn(["sudo", "setfacl", "-b", "--", str(territory)], calls[lay:])
         self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-existing-admin", "-m", "00750",
@@ -2339,6 +2497,112 @@ esac
                     self.assertNotEqual(result.returncode, 0, result.stdout)
                     self.assertIn(f"the verify load answered {answer}, not the idle state", result.stderr)
                     self.assertNotIn("the box is at", result.stdout)
+
+    def test_the_verify_step_reads_no_line_of_a_pipe_sink(self):
+        """**A pipe sink is verified by the load's answer and named as such**
+        (#99 area 2 review, K6): neither a line count nor the load event is
+        read from it, so a box holding one is not rolled back at every
+        install. Perturbation: verify every sink as a file again and the
+        install rolls back on "is not a regular file"."""
+        territory = self.existing_territory.resolve()
+        fifo = territory / "trace.pipe"
+        os.mkfifo(fifo)
+        (territory / "agent.toml").write_text(
+            f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "pipe"\npath = "{fifo}"\n')
+        (self.root / "installed").mkdir(exist_ok=True)
+        admin = self.root / "fixture-admin"
+        admin.write_text("#!/bin/sh\n"
+                         "case \"$1\" in\n"
+                         "  validate) echo '{\"kind\":\"validated\"}' ;;\n"
+                         "  unload) echo '{\"kind\":\"state\",\"state\":\"unloaded\"}' ;;\n"
+                         "  load) echo '{\"kind\":\"state\",\"state\":\"idle\"}' ;;\n"
+                         "  *) exit 2 ;;\n"
+                         "esac\n")
+        admin.chmod(0o755)
+        self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_ADMIN=str(admin))
+        result = self.run_script("update-stack.sh", "--install")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("its pipe sink is not a file a line count reads", result.stdout)
+        self.assertIn("the box is at", result.stdout)
+
+    def test_the_migration_rollback_gives_back_only_what_it_moved(self):
+        """**The rollback undoes the run and nothing more** (#99 area 2
+        review, K7): the migrated files go back to the operator's directory,
+        a log admin made in the territory during the run stays where admin
+        made it, the `save-points/` the run made is removed, and no failure
+        is reported where the restore is whole. Perturbations: move back the
+        fixed four names again and the run's log lands in the operator's
+        directory with RESTORE INCOMPLETE; drop the removal and save-points/
+        stands."""
+        old_root = self.config / "old"
+        old_root.mkdir()
+        (old_root / "worker-binary").write_text(str(self.root / "installed" / "pyworker"))
+        old_dir = self.operator_home / ".weaveragent" / "old"
+        old_dir.mkdir(parents=True)
+        territory = (self.root / "agents" / "weaver-old").resolve()
+        territory.mkdir()
+        (old_dir / "agent.toml").write_text('[state-store]\nengine = "none"\n')
+        (old_dir / "system-prompt.md").write_text("You are old.\n")
+        (old_root / "declaration-directory").write_text(str(old_dir) + "\n")
+        shutil.rmtree(self.config / "existing")
+        (self.root / "installed").mkdir(exist_ok=True)
+        admin = self.root / "fixture-admin"
+        admin.write_text("#!/bin/sh\n"
+                         f"echo 'made by this run' >> '{territory}/admin.log'\n"
+                         "echo 'weaver-admin: boundary unverified: a fixture refusal' >&2\n"
+                         "echo '{\"kind\":\"boundary_unverified\"}'\n")
+        admin.chmod(0o755)
+        self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_ADMIN=str(admin), TERRITORY_GROUP_AS="weaver-old-state")
+        result = self.run_script("update-stack.sh", "--install")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("old refuses and this script will not guess the fix", result.stderr)
+        self.assertNotIn("RESTORE INCOMPLETE", result.stderr)
+        self.assertNotIn("FAILED", result.stderr)
+        self.assertEqual((old_dir / "agent.toml").read_text(), '[state-store]\nengine = "none"\n')
+        self.assertEqual((old_dir / "system-prompt.md").read_text(), "You are old.\n")
+        self.assertFalse((old_dir / "admin.log").exists(), "the run's own log is not the operator's")
+        self.assertEqual((territory / "admin.log").read_text(), "made by this run\n")
+        self.assertFalse((territory / "save-points").exists(), "the save-points/ the run made is removed")
+
+    def test_the_identity_move_in_a_territory_sets_only_what_stands_and_its_draft_goes_back(self):
+        """**The identity move as root sets the owner of what stands, and the
+        rollback removes the draft it made** (#99 area 2 review, K11 and K7):
+        an empty `identity = []` writes no draft and is moved without
+        aborting the install; a moved text's draft is removed by the
+        restore, the declaration put back from its backup; and the
+        territory is laid before the move reaches it (the security review
+        of ec08f69). Perturbations: chown the draft unconditionally again and
+        the empty identity aborts before the reconcile; drop the draft
+        removal and the draft outlives the rollback."""
+        territory = self.existing_territory
+        decl = territory / "agent.toml"
+        empty = ('session = "s"\n\n[spu-instruction.decoder]\nidentity = []\nsurprisal-election = true\n\n'
+                 '[state-store]\nengine = "none"\n')
+        (self.root / "installed").mkdir(exist_ok=True)
+        for label, text in (("empty identity", empty), ("one system text", self.KARL)):
+            with self.subTest(label):
+                decl.chmod(0o644)
+                decl.write_text(text)
+                decl.chmod(0o444)
+                (territory / "system-prompt.md").unlink(missing_ok=True)
+                self.log.unlink(missing_ok=True)
+                shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+                self.env.update(ALLOW_APPLY_CHECKS="1")
+                try:
+                    result = self.run_script("update-stack.sh", "--install")
+                finally:
+                    decl.chmod(0o644)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("existing refuses and this script will not guess the fix", result.stderr)
+                self.assertNotIn("RESTORE INCOMPLETE", result.stderr)
+                calls = self.calls()
+                self.assertIn(["sudo", "chown", "-h", "root:weaver-existing-admin", "--", str(decl)], calls)
+                self.assertLess(calls.index(["sudo", "chmod", "00710", str(territory)]),
+                                calls.index(["sudo", "cp", "-a", str(decl), f"{decl}.pre-abcdef0-bak"]))
+                self.assertEqual(decl.read_text(), text, "the declaration is put back")
+                self.assertFalse((territory / "system-prompt.md").exists(), "no draft outlives the rollback")
+                if label == "one system text":
+                    self.assertIn(["sudo", "rm", "-f", "--", str(territory / "system-prompt.md")], calls)
 
     def test_stack_build_failure_cannot_claim_a_plan(self):
         self.env["BUILD_FAIL"] = "1"
@@ -2846,10 +3110,42 @@ class AdminAnswerTests(unittest.TestCase):
 
     def test_both_call_sites_reach_the_helper(self):
         self.assertIn('validate() {\n  admin_answer validate "$1"\n}', self.script)
-        self.assertIn('  verdict=$(admin_answer load "$AGENT")\n  answered_state "$verdict" idle \\\n', self.script)
+        self.assertIn('  verdict=$(admin_answer load "$AGENT")\n  if ! answered_state "$verdict" idle; then\n', self.script)
         admin_lines = [line for line in self.script.splitlines()
                        if "/weaver-admin\"" in line and not line.lstrip().startswith("#")]
         self.assertFalse([line for line in admin_lines if "tail -1" in line], admin_lines)
+
+
+class AccessNoteTests(unittest.TestCase):
+    """**turn.py names both groups reading the draft takes** (#99 area 2
+    review, K10): the state group passes the territory and the access group
+    reads the draft, so a session lacking either is told which. Perturbation:
+    judge the access group alone again and a session holding it but not the
+    state group is told its file's mode is wrong."""
+
+    def note(self, held):
+        import grp
+        import importlib.util
+        from unittest import mock
+        spec = importlib.util.spec_from_file_location("turn_under_test", DEPLOY / "turn.py")
+        turn = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(turn)
+        gids = {"weaver-m1-state": 9001, "weaver-m1-admin": 9002}
+        with mock.patch.object(grp, "getgrnam", lambda n: mock.Mock(gr_gid=gids[n])), \
+                mock.patch.object(os, "getgroups", lambda: [gids[g] for g in held]), \
+                mock.patch.object(os, "getegid", lambda: 1):
+            return turn.access_note("m1")
+
+    def test_each_missing_group_is_named(self):
+        said = self.note(["weaver-m1-admin"])
+        self.assertIn("does not hold weaver-m1-state, which passes the territory", said)
+        self.assertNotIn("weaver-m1-admin, through", said)
+        said = self.note(["weaver-m1-state"])
+        self.assertIn("does not hold weaver-m1-admin, through which the draft is read", said)
+        said = self.note([])
+        self.assertIn("weaver-m1-state, which passes the territory or weaver-m1-admin", said)
+        said = self.note(["weaver-m1-state", "weaver-m1-admin"])
+        self.assertIn("holds weaver-m1-state and weaver-m1-admin", said)
 
 
 class ShStandInTests(unittest.TestCase):

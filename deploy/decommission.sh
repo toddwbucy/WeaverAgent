@@ -52,8 +52,9 @@
 # bulk store. The archive records each model's sha256 and copies none.
 #
 # **Root, because most of what stands is root's or the agents'.** Territories
-# are 0700 under the agent's uid, the record's directory is root's and not
-# searchable, and the log is root's. Run it under sudo; it refuses otherwise.
+# are root's, 0710 to the state group, with files beneath grouped to the access
+# and trace groups and the member's own room, the record's directory is root's
+# and not searchable, and the log is root's. Run it under sudo; it refuses otherwise.
 #
 # **No store is discovered or purged.** The service engine retired on the
 # operator's ruling of 2026-10-02 on #1, and its discovery here matched every
