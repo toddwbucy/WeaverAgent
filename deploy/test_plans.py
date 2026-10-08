@@ -2697,7 +2697,8 @@ esac
         # Each refusal fires with its message before sudo is asked for: a name
         # create-agent would refuse, an agent that stands, a run as root or
         # under sudo, no stack record, other agents on the box under --apply,
-        # --apply without --archive, and an earlier run's marker.
+        # an archive directory another user writes, and an earlier run's
+        # marker.
         # Perturbation: drop any one refusal, and its case fails.
         archive = self.root / "archive"
         archive.mkdir()
@@ -2709,6 +2710,14 @@ esac
         open_archive.mkdir()
         open_archive.chmod(0o777)
         open_apply = ["--apply", "--archive", str(open_archive), "--artifact", str(self.artifact)]
+        # **A sticky one refuses too**, /tmp's shape: sticky stops another
+        # user removing a name, never creating one. A sticky directory above
+        # a closed one is allowed (the suite's own scratch sits under /tmp).
+        # Perturbation: allow a sticky archive directory again.
+        sticky_archive = self.root / "sticky-archive"
+        sticky_archive.mkdir()
+        sticky_archive.chmod(0o1777)
+        sticky_apply = ["--apply", "--archive", str(sticky_archive), "--artifact", str(self.artifact)]
         marker = self.stack / "verify-lifecycle-m1"
         cases = (
             ("bad name", {}, None, ["--agent", "M1"], "lowercase letters and digits"),
@@ -2720,8 +2729,8 @@ esac
             ("sudo", {"SUDO_USER": "someone"}, None, [], "not under sudo"),
             ("no stack record", {}, "stack", [], "no stack record"),
             ("other agents", {}, None, apply, "Step 8's update-stack.sh --install touches every agent on the box"),
-            ("no archive", {}, None, ["--apply", "--artifact", str(self.artifact)], "--apply needs --archive"),
             ("open archive", {}, None, open_apply, "is writable by another principal"),
+            ("sticky archive", {}, None, sticky_apply, "is writable by another principal"),
             ("earlier marker", {}, "marker", [], "take that agent down first with --cleanup"),
         )
         self.install_stack()

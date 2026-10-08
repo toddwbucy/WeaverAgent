@@ -56,7 +56,9 @@ creates (step 1, create-agent.sh) and takes down (step 9). Plan only unless
   --agent <name>          the throwaway agent; refused if it already exists
   --artifact <path>       the model the agent's decoder binds (required with --apply)
   --archive <dir>         where step 9 archives the territory and the root
-                          before removing them (required with --apply)
+                          before removing them (default: ~/.weaver-archive,
+                          made 0700 if absent); it must be writable by you
+                          and root alone, never a shared directory like /tmp
   --checkout <dir>        the repository whose deploy/ scripts run
                           (default: the repository this script is in)
   --admin-base <dir>      the admin base (default: WEAVER_ADMIN_CONFIG, else
@@ -161,19 +163,21 @@ held_closed() {
   done
 }
 
-# **closed_to_others PATH**: every component of PATH's canonical path owned
-# by root or the operator and writable by neither group nor other, a sticky
-# directory excepted; answers non-zero and prints the first that is not.
+# **closed_to_others PATH**: PATH's canonical path owned by root or the
+# operator and writable by neither group nor other, sticky or not, and every
+# component above it held the same way except that a sticky directory is
+# allowed there; answers non-zero and prints the first that is not.
 closed_to_others() {
-  local at owner mode me
+  local at owner mode me leaf=1
   me=$(id -u)
   at=$(realpath -e -- "$1" 2>/dev/null) || { printf '%s' "$1"; return 1; }
   while :; do
     read -r owner mode < <(stat -c '%u %a' -- "$at" 2>/dev/null) || { printf '%s' "$at"; return 1; }
     if { [ "$owner" != 0 ] && [ "$owner" != "$me" ]; } \
-      || { (( 8#$mode & 8#022 )) && ! { [ -d "$at" ] && (( 8#$mode & 8#1000 )); }; }; then
+      || { (( 8#$mode & 8#022 )) && { [ "$leaf" = 1 ] || ! { [ -d "$at" ] && (( 8#$mode & 8#1000 )); }; }; }; then
       printf '%s' "$at"; return 1
     fi
+    leaf=0
     [ "$at" = / ] && return 0
     at=$(dirname -- "$at")
   done
@@ -266,14 +270,23 @@ for root in "$ADMIN_BASE"/*/; do
 done
 
 if [ "$APPLY" -eq 1 ]; then
-  [ -n "$ARCHIVE" ] || die "--apply needs --archive <dir>: step 9 archives the territory and the root there before it removes them"
+  # **The default archive is the operator's own, closed** (the Planner's
+  # grade of c1932b5): made 0700 under the operator's home where absent.
+  if [ -z "$ARCHIVE" ]; then
+    ARCHIVE="$HOME/.weaver-archive"
+    [ -d "$ARCHIVE" ] || ( umask 077 && mkdir -p -- "$ARCHIVE" ) \
+      || die "the default archive directory $ARCHIVE could not be made"
+  fi
   [ -d "$ARCHIVE" ] || die "the archive directory $ARCHIVE does not stand"
   # **The archive is written as root into a directory no other principal
   # writes** (the commit security review of 36f1374): a directory another
   # user could write would let them plant a link at the archive's name for
   # root's tar to follow, and the archive holds the territory's custodied
-  # files. Every component of its path is root's or the operator's and
-  # writable by neither group nor other, a sticky directory excepted.
+  # files. The directory itself is root's or the operator's and writable by
+  # neither group nor other, sticky or not: a sticky directory such as /tmp
+  # stops another user removing a name, never creating one. Every component
+  # above it is held the same way, where a sticky one is safe, since no other
+  # user can rename or replace an entry it does not own there.
   bad=$(closed_to_others "$ARCHIVE") \
     || die "the archive directory $ARCHIVE is writable by another principal at $bad: name one only root and you can write"
   ARCHIVE=$(realpath -e -- "$ARCHIVE")
@@ -1075,7 +1088,7 @@ plan "prefix          $PREFIX  (weaver-admin $ADMIN)"
 plan "territory       $T"
 plan "agent root      $R"
 plan "creation mark   $MARKER"
-plan "archive         ${ARCHIVE:-<--archive, required with --apply>}"
+plan "archive         ${ARCHIVE:-<--archive, default ~/.weaver-archive made 0700>}"
 if [ "$CLEANUP" -eq 0 ]; then
   plan "artifact        ${ARTIFACT:-<--artifact, required with --apply>}"
   plan "migration       $( [ "$WITH_MIGRATION" -eq 1 ] && echo 'on: step 8 runs update-stack.sh --install, which touches every agent on the box' || echo 'off (steps 8 and 8b skipped)')"
