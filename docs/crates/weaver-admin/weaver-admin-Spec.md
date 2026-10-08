@@ -1686,14 +1686,19 @@ removed only where the line's target stands and digests to the line; a target go
 recreated beneath the standing line, the line being the record and no second one
 appended; a target of other bytes is left with the copy, then the last sound copy, and
 named in the log. **Several entries published by
-one verb are ordered recovered first, then reported, and by the stamp's clock within a
-kind**, `taken.wall_ns` ascending with the digest as the tiebreak, before any ordinal is
-minted: a reported save point was taken last by construction and is minted last
-whatever the clock did between, a clock stepped back included; within a kind the clock
-orders because the member's own count, `taken.ordinal`, is per process and restarts
-with it, and the clock is monotonic enough across processes for one agent's files. So
-the latest the manifest names is the last taken and never a recovered older file the
-listing happened to yield later. **Each publication appends one
+one verb are ordered recovered first, then reported, and by the stamp's `sequence`
+within a kind**, the trace position each covers, with the digest as the tiebreak
+between two of one position, before any ordinal is minted (Codex on #94 at 88c1aaf): a
+reported save point was taken last by construction and is minted last; within one run
+the sequence only grows, so the order holds whatever the clock does. No clock orders
+anything, `taken.wall_ns` naming a file and never ranking it: an adjustment moving the
+clock back between two stranded save points would otherwise mint the older above the
+newer. **Recovered save points of more than one run refuse** `BoundaryUnverified`,
+naming them, and nothing is published: run references carry no order and the member's
+own count, `taken.ordinal`, restarts with its process, so nothing says which run's
+holdings are the later. The operator clears the room or names one with `restore`, and
+until then a load refuses as on any deferral. So the latest the manifest names is the
+last taken and never a recovered older file the listing happened to yield later. **Each publication appends one
 line to the manifest**, `save-points.manifest` in the territory's `save-points/`, a file
 this crate creates root-owned and mode `0644` and opens for reading and appending, never
 rewriting a line, a torn tail alone truncated as below: one JSON object per line carrying `ordinal`, a monotonic integer minted under the

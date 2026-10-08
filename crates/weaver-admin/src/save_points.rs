@@ -719,7 +719,8 @@ fn read_room(room: BorrowedFd<'_>, member_uid: u32) -> Result<Vec<RoomEntry>, Li
         }
     }
     // The listing's order is the filesystem's and means nothing; by name
-    // it is the same on every box, and `publish` orders by the clock.
+    // it is the same on every box, and `publish` orders by the stamp's
+    // sequence.
     found.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(found)
 }
@@ -1004,25 +1005,48 @@ fn publish_with(
     let mut appended = Vec::new();
     let mut entries = read_room(room, member_uid)?;
     (hooks.after_scan)();
-    // **Several entries publish recovered first, then reported, the clock
-    // ordering within a kind** (Codex on #94, rounds 5 and 6), per Spec
-    // section 6: a reported save point was taken last by construction, so
-    // it is minted last whatever the clock did between, a clock stepped
-    // back included; within a kind `taken.wall_ns` ascending orders them,
-    // the digest as the tiebreak, because the member's own count,
-    // `taken.ordinal`, is per process and restarts with it, and the clock
-    // is monotonic enough across processes for one agent's files. So the
-    // latest the manifest names is the last taken, never a recovered older
-    // file the listing happened to yield later.
+    // **Several entries publish recovered first, then reported, the
+    // stamp's sequence ordering within a kind** (Codex on #94, rounds 5 and
+    // 6, and at 88c1aaf), per Spec section 6: a reported save point was
+    // taken last by construction, so it is minted last; within a kind the
+    // stamp's `sequence`, the trace position the save point covers, orders
+    // them, the digest as the tiebreak between two of one position. The
+    // sequence only grows within one run, so the order holds whatever the
+    // clock does. No clock orders anything: an adjustment moving it back
+    // between two stranded save points would have minted the older above
+    // the newer.
     let reported = |entry: &RoomEntry| {
         reports
             .iter()
             .any(|(report, _)| report.save_point == entry.digest)
     };
+    // **Recovered save points of more than one run refuse** (Codex on #94
+    // at 88c1aaf): run references are minted and carry no order, and no
+    // count the member keeps survives its restarts, so nothing can say
+    // which run's holdings are the later. The operator clears the room or
+    // names one with `restore`; until then nothing is published and a load
+    // refuses rather than guess.
+    let recovered_runs: std::collections::BTreeSet<&str> = entries
+        .iter()
+        .filter(|entry| !reported(entry))
+        .map(|entry| entry.stamp.run.as_str())
+        .collect();
+    if recovered_runs.len() > 1 {
+        let names: Vec<&str> = entries
+            .iter()
+            .filter(|entry| !reported(entry))
+            .map(|entry| entry.name.as_str())
+            .collect();
+        diag!(
+            "weaver-admin: the room holds recovered save points of more than one run ({}), and nothing orders runs; nothing is published until the room is cleared or one is named with restore",
+            names.join(", ")
+        );
+        return Err(LifecycleRefusal::BoundaryUnverified);
+    }
     entries.sort_by(|a, b| {
         reported(a)
             .cmp(&reported(b))
-            .then_with(|| a.stamp.wall_ns.cmp(&b.stamp.wall_ns))
+            .then_with(|| a.stamp.sequence.cmp(&b.stamp.sequence))
             .then_with(|| a.digest.cmp(&b.digest))
     });
     let remove_from_room = |name: &str| {
@@ -2119,16 +2143,16 @@ pub(crate) mod tests {
         }
     }
 
-    /// **Several room entries publish in the clock's order**, per Spec
+    /// **Several room entries publish in the stamp's order**, per Spec
     /// section 6 (Codex on #94, round 5): an older file left unreported and
-    /// a newer one reported in the same verb take their ordinals by
-    /// `taken.wall_ns`, so the newer is the latest the manifest names
-    /// whatever order the room lists them in. The newer's digest is chosen
+    /// a newer one reported in the same verb take their ordinals by kind and
+    /// sequence, so the newer is the latest the manifest names whatever
+    /// order the room lists them in. The newer's digest is chosen
     /// to sort first, which is the order the room reader yields.
     /// Perturbation: drop the sort in `publish` and the older file is
     /// minted last and selected as latest.
     #[test]
-    fn several_room_entries_publish_in_the_clocks_order() {
+    fn several_room_entries_publish_in_the_stamps_order() {
         let scratch = crate::scratch::Scratch(
             std::env::temp_dir().join(format!("weaver-admin-order-{}", std::process::id())),
         );
@@ -2184,7 +2208,7 @@ pub(crate) mod tests {
                 (1, older_digest.as_str(), Arrival::Recovered),
                 (2, newer_digest.as_str(), Arrival::Demand),
             ],
-            "ordinals follow the clock, the reported one last"
+            "ordinals follow the sequence, the reported one last"
         );
         let latest = select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine)
             .unwrap()
@@ -2475,6 +2499,82 @@ pub(crate) mod tests {
         assert!(lines.is_empty(), "nothing copied");
         assert!(deferred, "and the verb says so");
         assert!(names.iter().all(|(name, _)| room.join(name).exists()));
+    }
+
+    /// **Recovered save points order by sequence, never by the clock, and
+    /// those of two runs refuse** (Codex on #94 at 88c1aaf): two files of one
+    /// run, the clock stepped back between them, publish in sequence order
+    /// and the later is the latest; files of two runs, which nothing orders,
+    /// refuse the publication and stay in the room. Perturbation: order by
+    /// `taken.wall_ns` again and the earlier is minted last.
+    #[test]
+    fn recovered_save_points_order_by_sequence_and_two_runs_refuse() {
+        let scratch = crate::scratch::Scratch(std::env::temp_dir().join(format!(
+            "weaver-admin-sequence-order-{}",
+            std::process::id()
+        )));
+        let base = scratch.0.clone();
+        let me = nix::unistd::getuid().as_raw();
+        let mine = Owner {
+            uid: me,
+            gid: nix::unistd::getgid().as_raw(),
+        };
+        let room_of = |tag: &str, files: &[Vec<u8>]| {
+            let room = base.join(format!("room-{tag}"));
+            let dir = base.join(format!("published-{tag}"));
+            std::fs::create_dir_all(&room).unwrap();
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut digests = Vec::new();
+            for bytes in files {
+                let digest = judge(bytes).unwrap().digest;
+                std::fs::write(room.join(format!("{digest}{SUFFIX}")), bytes).unwrap();
+                digests.push(digest);
+            }
+            (room, dir, digests)
+        };
+        // The earlier position carries the later clock.
+        let earlier = save_point("r-1", 3, 1, 9_000_000_000, b"earlier, clock ahead");
+        let later = save_point("r-1", 8, 2, 1_000_000_000, b"later, clock behind");
+        let (room, dir, digests) = room_of("one-run", &[earlier, later]);
+        let dir_fd = open_directory(&dir).unwrap();
+        let lines = publish(
+            open_directory(&room).unwrap().as_fd(),
+            me,
+            dir_fd.as_fd(),
+            (mine.uid, mine.gid),
+            mine,
+            &[],
+        )
+        .unwrap();
+        let minted: Vec<&str> = lines.iter().map(|line| line.digest.as_str()).collect();
+        assert_eq!(minted, [digests[0].as_str(), digests[1].as_str()]);
+        let latest = select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine)
+            .unwrap()
+            .expect("a latest");
+        assert_eq!(
+            latest.line.digest, digests[1],
+            "the later position is the latest"
+        );
+        // Two runs' recovered files: nothing orders them.
+        let one = save_point("r-1", 5, 1, 1_000_000_000, b"run one");
+        let two = save_point("r-2", 2, 1, 2_000_000_000, b"run two");
+        let (room, dir, digests) = room_of("two-runs", &[one, two]);
+        let dir_fd = open_directory(&dir).unwrap();
+        assert_eq!(
+            publish(
+                open_directory(&room).unwrap().as_fd(),
+                me,
+                dir_fd.as_fd(),
+                (mine.uid, mine.gid),
+                mine,
+                &[],
+            )
+            .err(),
+            Some(LifecycleRefusal::BoundaryUnverified)
+        );
+        for digest in &digests {
+            assert!(room.join(format!("{digest}{SUFFIX}")).exists());
+        }
     }
 
     /// **The save point's bound is one gibibyte in both readers** (the
