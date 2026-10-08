@@ -907,7 +907,8 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         """Each deploy script's `held_closed`, run on `path` under the fixture's
         `stat`. Answers each script's exit status and what it printed."""
         answers = {}
-        for script in ("verify-load.sh", "create-agent.sh", "bootstrap-stack.sh", "update-stack.sh"):
+        for script in ("verify-load.sh", "create-agent.sh", "bootstrap-stack.sh", "update-stack.sh",
+                       "verify-lifecycle.sh"):
             text = (self.repo / "deploy" / script).read_text()
             start = text.index("held_closed() {")
             body = text[start:text.index("\n}\n", start) + 3]
@@ -923,7 +924,7 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
         # Perturbation: drop the mode test from one copy, and its answer differs.
         texts = set()
         for script in ("verify-load.sh", "create-agent.sh", "bootstrap-stack.sh", "update-stack.sh",
-                       "decommission.sh"):
+                       "decommission.sh", "verify-lifecycle.sh"):
             text = (self.repo / "deploy" / script).read_text()
             start = text.index("held_closed() {")
             texts.add(text[start:text.index("\n}\n", start)])
@@ -2621,6 +2622,361 @@ esac
         self.assertNotIn("== plan", result.stdout)
         self.assertNotIn("box is current", result.stdout)
         self.assert_unprivileged()
+
+    # ---- verify-lifecycle.sh: the live end-to-end check of one agent's
+    # lifecycle. Its --apply needs a real box (owners and groups by name,
+    # admin's answers in sequence, the gate's socket, kill, userdel), which
+    # the fixture's doubles do not carry, so its plan, its refusals and its
+    # near misses' restore are what run here.
+
+    LIFECYCLE_STEPS = ("0", "1", "1b", "2", "3", "4", "5", "6", "6b", "7", "9")
+
+    def lifecycle(self, *args, agent="m1"):
+        self.install_stack()
+        return self.run_script("verify-lifecycle.sh", "--agent", agent, *args)
+
+    def test_lifecycle_plan_prints_every_step_in_order_and_acts_on_nothing(self):
+        # Plan by default: every step with its commands and its expected
+        # answers, in the run's order, the three checks with no command, no
+        # sudo and no file changed. Perturbation: drop step 6b from the run
+        # list, or let the plan print a PASS, and this fails.
+        self.install_stack()
+        before = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        result = self.lifecycle()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        at = [result.stdout.find(f"== step {s} (") for s in self.LIFECYCLE_STEPS]
+        self.assertNotIn(-1, at, dict(zip(self.LIFECYCLE_STEPS, at)))
+        self.assertEqual(at, sorted(at), "the steps print in the run's order")
+        self.assertGreaterEqual(result.stdout.count("     expect: "), len(self.LIFECYCLE_STEPS))
+        self.assertIn("   $ deploy/create-agent.sh m1 --artifact", result.stdout)
+        for manual in ("against the KV cache", "stamp position", "descriptor audit"):
+            self.assertIn(manual, result.stdout)
+        self.assertIn("== plan only", result.stdout)
+        self.assertNotIn("PASS", result.stdout)
+        self.assert_unprivileged()
+        after = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file() and p != self.log}
+        self.assertEqual(before, after)
+
+    def test_lifecycle_steps_name_what_they_check(self):
+        # Each step names its Spec section or its #99 finding, in the plan and
+        # so in every PASS and FAIL line. Perturbation: drop a finding id from
+        # a step's label, and this fails.
+        result = self.lifecycle("--with-migration")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for label in ("step 1b (weaver-admin-Spec section 9; #99 H3)",
+                      "step 2 (weaver-admin-Spec section 6; #99 K12)",
+                      "step 5 (weaver-admin-Spec section 4; #99 N6)",
+                      "step 6b (weaver-admin-Spec section 9; #99 K5)",
+                      "step 8 (#99 N1, N5)", "step 8b (#99 H5, measured)",
+                      "step 9 (HowToDeployANewAgent.md section 7)"):
+            self.assertIn(f"== {label}:", result.stdout)
+
+    def test_lifecycle_migration_is_off_by_default_and_runs_no_install(self):
+        # Step 8 runs update-stack.sh --install, which touches every agent on
+        # the box, so without --with-migration the plan skips 8 and 8b, says
+        # why, and runs no install; the usage says so plainly. Perturbation:
+        # run steps 8 and 8b whatever the flag, and this fails.
+        result = self.lifecycle()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("== step 8 SKIPPED: the layout migration runs update-stack.sh --install, "
+                      "which touches every agent on the box", result.stdout)
+        self.assertIn("== step 8b SKIPPED", result.stdout)
+        self.assertNotIn("== step 8 (", result.stdout)
+        self.assertNotIn("$ deploy/update-stack.sh --install", result.stdout)
+        self.assert_unprivileged()
+        with_migration = self.lifecycle("--with-migration")
+        self.assertEqual(with_migration.returncode, 0, with_migration.stderr)
+        self.assertIn("$ deploy/update-stack.sh --install", with_migration.stdout)
+        self.assertNotIn("SKIPPED", with_migration.stdout)
+        usage = self.run_script("verify-lifecycle.sh", "--help")
+        self.assertEqual(usage.returncode, 0, usage.stderr)
+        self.assertIn("OFF BY DEFAULT: step 8 runs update-stack.sh --install", usage.stdout)
+        self.assertIn("which touches every agent on the box", usage.stdout)
+
+    def test_lifecycle_keep_stops_before_the_take_down_with_the_checks(self):
+        # **The checks with no command are made against a loaded agent**
+        # (Codex on #104, round 1): with --keep the plan stops before step 9,
+        # prints the checks and the exact --cleanup line; without it the
+        # checks come before step 9 and the run says they were not made. The
+        # usage recommends --keep for a first live run, and --keep with
+        # --cleanup refuses. Perturbations: print the checks after step 9
+        # again; run step 9 under --keep.
+        kept = self.lifecycle("--keep")
+        self.assertEqual(kept.returncode, 0, kept.stderr)
+        self.assertNotIn("== step 9 (", kept.stdout)
+        checks = kept.stdout.index("checks with no command today")
+        self.assertLess(kept.stdout.index("== step 7 ("), checks)
+        self.assertIn("kept: m1 stands loaded for the checks above", kept.stdout)
+        self.assertIn("deploy/verify-lifecycle.sh --agent m1 --cleanup --apply", kept.stdout)
+        self.assert_unprivileged()
+        plain = self.lifecycle()
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertLess(plain.stdout.index("checks with no command today"),
+                        plain.stdout.index("== step 9 ("))
+        self.assertIn("the checks above were not made", plain.stdout)
+        usage = self.run_script("verify-lifecycle.sh", "--help")
+        self.assertIn("RECOMMENDED for a first live run", usage.stdout)
+        both = self.lifecycle("--keep", "--cleanup")
+        self.assertNotEqual(both.returncode, 0)
+        self.assertIn("pass one", both.stderr)
+
+    def test_lifecycle_refuses_before_acting(self):
+        # Each refusal fires with its message before sudo is asked for: a name
+        # create-agent would refuse, an agent that stands, a run as root or
+        # under sudo, no stack record, other agents on the box under --apply,
+        # an archive directory another user writes, and an earlier run's
+        # marker.
+        # Perturbation: drop any one refusal, and its case fails.
+        archive = self.root / "archive"
+        archive.mkdir()
+        apply = ["--apply", "--archive", str(archive), "--artifact", str(self.artifact)]
+        # **An archive directory another principal writes refuses** (the
+        # commit security review of 36f1374): root's tar would follow a link
+        # planted at the archive's name. Perturbation: drop the closed walk.
+        open_archive = self.root / "open-archive"
+        open_archive.mkdir()
+        open_archive.chmod(0o777)
+        open_apply = ["--apply", "--archive", str(open_archive), "--artifact", str(self.artifact)]
+        # **A sticky one refuses too**, /tmp's shape: sticky stops another
+        # user removing a name, never creating one. A sticky directory above
+        # a closed one is allowed (the suite's own scratch sits under /tmp).
+        # Perturbation: allow a sticky archive directory again.
+        sticky_archive = self.root / "sticky-archive"
+        sticky_archive.mkdir()
+        sticky_archive.chmod(0o1777)
+        sticky_apply = ["--apply", "--archive", str(sticky_archive), "--artifact", str(self.artifact)]
+        marker = self.stack / "verify-lifecycle-m1"
+        cases = (
+            ("bad name", {}, None, ["--agent", "M1"], "lowercase letters and digits"),
+            ("existing root", {}, "root", [], "already exists"),
+            ("existing account", {"COLLISION": "weaver-m1-relay"}, None, [], "the account weaver-m1-relay already exists"),
+            ("existing group", {"COLLISION_GROUP": "weaver-m1-admin"}, None, [], "the group weaver-m1-admin already exists"),
+            ("existing territory", {}, "territory", [], "already exists"),
+            ("root", {"FIXTURE_UID": "0"}, None, [], "not as root"),
+            ("sudo", {"SUDO_USER": "someone"}, None, [], "not under sudo"),
+            ("no stack record", {}, "stack", [], "no stack record"),
+            ("other agents", {}, None, apply, "Step 8's update-stack.sh --install touches every agent on the box"),
+            ("open archive", {}, None, open_apply, "is writable by another principal"),
+            ("sticky archive", {}, None, sticky_apply, "is writable by another principal"),
+            ("earlier marker", {}, "marker", [], "take that agent down first with --cleanup"),
+        )
+        self.install_stack()
+        for name, env, make, args, said in cases:
+            with self.subTest(case=name):
+                self.log.unlink(missing_ok=True)
+                saved = dict(self.env)
+                self.env.update(ALLOW_APPLY_CHECKS="1", **env)
+                if make == "root": (self.config / "m1").mkdir()
+                elif make == "territory": self.decl.mkdir()
+                elif make == "stack": shutil.move(self.stack, self.root / "stack.aside")
+                elif make == "marker": marker.write_text('agent = "m1"\n')
+                try:
+                    if args[:1] == ["--agent"]:
+                        result = self.run_script("verify-lifecycle.sh", *args)
+                    else:
+                        result = self.lifecycle(*args)
+                finally:
+                    self.env = saved
+                    if make == "root": (self.config / "m1").rmdir()
+                    elif make == "territory": self.decl.rmdir()
+                    elif make == "stack": shutil.move(self.root / "stack.aside", self.stack)
+                    elif make == "marker": marker.unlink()
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn("REFUSED: ", result.stderr)
+                self.assertIn(said, result.stderr)
+                self.assertFalse([c for c in self.calls() if c[0] == "sudo"], self.calls())
+        # **Every archive root writes is written under umask 077**, so the
+        # territory's custodied files are not exposed by their archive (the
+        # commit security review of 36f1374). Perturbation: drop the umask
+        # from either tar.
+        script = (self.repo / "deploy" / "verify-lifecycle.sh").read_text()
+        writes = [l for l in script.splitlines() if "sudo -n" in l and " -cpf " in l]
+        self.assertEqual(len(writes), 2, writes)
+        for line in writes:
+            self.assertIn("umask 077 && exec tar", line)
+        # With --allow-other-agents the run passes every refusal and asks for
+        # sudo first, and nothing else privileged.
+        self.env.update(ALLOW_APPLY_CHECKS="1", SUDO_FAIL="1")
+        self.log.unlink(missing_ok=True)
+        result = self.lifecycle(*apply, "--allow-other-agents")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--apply needs sudo", result.stderr)
+        self.assertEqual([c for c in self.calls() if c[0] == "sudo"], [["sudo", "-v"]])
+
+    def test_lifecycle_cleanup_takes_down_only_an_agent_it_made(self):
+        # --cleanup is step 9 alone, plan by default, and refuses an agent
+        # without the marker step 1 writes, or whose root names a territory
+        # not its own; it never runs decommission.sh and names no other
+        # agent. Perturbation: drop the marker check, and the first case
+        # fails.
+        result = self.lifecycle("--cleanup")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("verify-lifecycle.sh did not create m1", result.stderr)
+        marker = self.stack / "verify-lifecycle-m1"
+        marker.write_text('agent = "other"\n')
+        self.assertIn("did not create m1", self.lifecycle("--cleanup").stderr)
+        marker.write_text('agent = "m1"\nmade-by = "deploy/verify-lifecycle.sh"\n')
+        result = self.lifecycle("--cleanup")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("== step 9 (HowToDeployANewAgent.md section 7):", result.stdout)
+        self.assertNotIn("== step 1 (", result.stdout)
+        commands = [l for l in result.stdout.splitlines() if l.startswith("   $ ")]
+        self.assertTrue(commands)
+        self.assertFalse([l for l in commands if "decommission" in l or "existing" in l], commands)
+        self.assertIn("userdel -r weaver-m1;", result.stdout)
+        self.assert_unprivileged()
+        (self.config / "m1").mkdir()
+        (self.config / "m1" / "territory").write_text(str(self.existing_territory) + "\n")
+        result = self.lifecycle("--cleanup")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("removes only the territory named for its agent", result.stderr)
+
+
+def lifecycle_functions(script, *names):
+    """verify-lifecycle.sh's functions as the script defines them, a
+    one-line definition as its line and any other to its closing brace."""
+    lines = script.splitlines()
+    out = []
+    for name in names:
+        start = next(i for i, l in enumerate(lines) if l.startswith(f"{name}()"))
+        if lines[start].rstrip().endswith("}"):
+            out.append(lines[start])
+        else:
+            end = next(i for i in range(start, len(lines)) if lines[i] == "}")
+            out.extend(lines[start:end + 1])
+    return "\n".join(out) + "\n"
+
+
+class LifecycleTeardownTests(unittest.TestCase):
+    """**A take-down of a run stopped inside step 8** (Codex on #104, round
+    1): the root step 8 staged makes admin refuse `config_invalid` for every
+    verb, the force included, so the take-down goes on only where no process
+    of the agent's four accounts runs, and otherwise stops naming them.
+    `unload_for_teardown` is run alone with admin and pgrep as stand-ins.
+    Perturbation: proceed with a process standing, and the busy case
+    passes."""
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix="weaver-teardown-")
+        self.addCleanup(self.scratch.cleanup)
+        root = Path(self.scratch.name)
+        self.bin_dir = root / "bin"
+        self.bin_dir.mkdir()
+        sudo = self.bin_dir / "sudo"
+        sudo.write_text('#!/bin/sh\n[ "$1" = "-n" ] && shift\nexec env "$@"\n')
+        sudo.chmod(0o755)
+        admin = self.bin_dir / "weaver-admin"
+        admin.write_text("#!/bin/sh\nprintf '%s\\n' '{\"kind\":\"config_invalid\"}'\n")
+        admin.chmod(0o755)
+        pgrep = self.bin_dir / "pgrep"
+        pgrep.write_text('#!/bin/sh\n[ "$2" = "${BUSY_USER:-}" ]\n')
+        pgrep.chmod(0o755)
+        self.root_dir = root / "m1"
+        self.root_dir.mkdir()
+        (self.root_dir / "declaration-directory").write_text("/old\n")
+        script = (DEPLOY / "verify-lifecycle.sh").read_text()
+        self.program = ("set -euo pipefail\n"
+                        + 'STEP_LABEL="step 9 (test)"; A=m1; AU=weaver-m1\n'
+                        + f'R={shlex.quote(str(self.root_dir))}; ADMIN_BASE=/nonexistent; ADMIN={shlex.quote(str(admin))}\n'
+                        + lifecycle_functions(script, "fail", "pass", "measured", "expect_eq", "json_at",
+                                              "answered_state", "ask", "expect_state", "expect_kind",
+                                              "expect_unloaded_alone", "staged_root_quiet",
+                                              "unload_for_teardown")
+                        + "unload_for_teardown\necho GOES-ON\n")
+
+    def run_teardown(self, busy=""):
+        env = {**os.environ, "PATH": str(self.bin_dir) + os.pathsep + os.environ["PATH"],
+               "BUSY_USER": busy}
+        env.pop("BASH_ENV", None)
+        return subprocess.run(["bash", "-c", self.program], env=env, text=True,
+                              capture_output=True, timeout=20)
+
+    def test_a_staged_root_with_no_process_goes_on(self):
+        result = self.run_teardown()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("MEASURED step 9 (test): admin cannot read the root step 8 staged", result.stdout)
+        self.assertIn("GOES-ON", result.stdout)
+
+    def test_a_staged_root_with_a_process_stops_naming_it(self):
+        result = self.run_teardown(busy="weaver-m1-relay")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("found:    weaver-m1-relay", result.stderr)
+        self.assertNotIn("GOES-ON", result.stdout)
+
+    def test_a_root_not_staged_still_needs_the_force(self):
+        (self.root_dir / "territory").write_text("/somewhere\n")
+        result = self.run_teardown()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("force-unload answers the unloaded state", result.stderr)
+        self.assertNotIn("GOES-ON", result.stdout)
+
+
+class LifecycleNearMissTests(unittest.TestCase):
+    """**verify-lifecycle.sh's near misses put back what they changed**, the
+    exit trap included, whatever admin answers: a near miss is run alone on a
+    scratch file, with sudo and admin as stand-ins. Perturbations: drop the
+    restore from `on_exit` and the interrupted case leaves 0711; drop it from
+    both `near_miss` and `on_exit` and the failed case does too."""
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix="weaver-lifecycle-")
+        self.addCleanup(self.scratch.cleanup)
+        root = Path(self.scratch.name)
+        self.bin_dir = root / "bin"
+        self.bin_dir.mkdir()
+        sudo = self.bin_dir / "sudo"
+        sudo.write_text('#!/bin/sh\n[ "$1" = "-n" ] && shift\nexec env "$@"\n')
+        sudo.chmod(0o755)
+        self.admin = self.bin_dir / "weaver-admin"
+        self.target = root / "territory"
+        self.target.mkdir()
+        self.target.chmod(0o710)
+        script = (DEPLOY / "verify-lifecycle.sh").read_text()
+        traps = [l for l in script.splitlines() if l.startswith("trap ")]
+        self.program = ("set -euo pipefail\n"
+                        + 'STEP_LABEL="step 1b (test)"; RESTORE=(); CREATED=0; LOGDIR=""; A=m1\n'
+                        + f'ADMIN_BASE=/nonexistent; ADMIN={shlex.quote(str(self.admin))}\n'
+                        + "export MAIN_PID=$$\n"
+                        + lifecycle_functions(script, "fail", "pass", "expect_eq", "json_at", "ask",
+                                              "expect_kind", "restore_mode", "restore_now",
+                                              "near_miss", "on_exit")
+                        + "\n".join(traps) + "\n"
+                        + 'near_miss "the territory at 0711" restore_mode "$1" 710 -- sudo -n chmod 0711 -- "$1"\n'
+                        + 'echo FINISHED\n')
+
+    def run_near_miss(self, admin_body):
+        self.admin.write_text("#!/bin/sh\n" + admin_body)
+        self.admin.chmod(0o755)
+        env = {**os.environ, "PATH": str(self.bin_dir) + os.pathsep + os.environ["PATH"]}
+        env.pop("BASH_ENV", None)
+        return subprocess.run(["bash", "-c", self.program, "x", str(self.target)], env=env,
+                              text=True, capture_output=True, timeout=20)
+
+    def mode(self):
+        return self.target.stat().st_mode & 0o7777
+
+    def test_the_answer_owed_passes_and_the_mode_is_back(self):
+        result = self.run_near_miss("""printf '%s\\n' '{"kind":"boundary_unverified"}'\n""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("PASS step 1b (test): the territory at 0711: validate answers boundary_unverified", result.stdout)
+        self.assertIn("FINISHED", result.stdout)
+        self.assertEqual(self.mode(), 0o710)
+
+    def test_a_failed_check_still_puts_the_change_back(self):
+        result = self.run_near_miss("""printf '%s\\n' '{"kind":"validated"}'\n""")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("FAIL step 1b (test)", result.stderr)
+        self.assertIn("expected: boundary_unverified", result.stderr)
+        self.assertIn("found:    validated", result.stderr)
+        self.assertEqual(self.mode(), 0o710)
+
+    def test_a_run_stopped_before_the_answer_is_put_back_by_the_trap(self):
+        # The run is interrupted while admin holds the verb: the change was
+        # made and the step's own restore never reached.
+        result = self.run_near_miss('kill -TERM "$MAIN_PID"\nsleep 1\n')
+        self.assertEqual(result.returncode, 130, result.stdout + result.stderr)
+        self.assertNotIn("FINISHED", result.stdout)
+        self.assertEqual(self.mode(), 0o710)
 
 
 def shell_function(script, name):

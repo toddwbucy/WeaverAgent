@@ -3,7 +3,7 @@
 One agent, on a box that already runs the stack. First written 2026-09-30 from the
 thinkpad redeploy, and rewritten for the start step of #50, which took the agent out of
 systemd on the operator's ruling of 2026-10-03: admin stands the agent itself, holds its
-run by a run lock, and starts a trace relay beside it. The olympus run that proved this
+run by a run lock, and starts a trace relay beside it. The run that proved this
 layout is logged under `docs/project/`. Standing the stack itself up is `REDEPLOY.md`,
 and this document starts where that one ends.
 
@@ -255,6 +255,10 @@ payload names the session, the run, the store, the declaration's hash, the compo
 and writes nothing is the failure this step exists to catch, and the worker's own words
 are in `<territory>/worker.log`, the state member's in `<territory>/state/state.log`.
 
+`deploy/verify-lifecycle.sh --agent <throwaway>` verifies a whole lifecycle end to end (create, load, seed, save
+points, restore, force-unload, crash recovery, take-down) on a throwaway agent it creates; it plans unless given `--apply`,
+and `--keep` stops it before the take-down so the checks it cannot make are made against the loaded agent.
+
 `load` never ends a run that stands: it answers `agent_running` and leaves the decision
 to its caller, who reads `show` and issues `unload`.
 
@@ -347,8 +351,8 @@ restore names one again.
 **`[restore]` is honoured only while the save point it names is the manifest's latest**
 (the operator's ruling of 2026-10-08 on #99), which the `restore` verb makes it. Once a
 later unload or `save-point` publishes a newer one, a load with `[restore]` still in the
-declaration refuses `config_invalid` naming `restore`, and `admin.log` names both save
-points, rather than restore the older state over the newer. Remove `[restore]` with
+declaration refuses `config_invalid` naming `restore`, and admin's standard error names
+both save points, rather than restore the older state over the newer. Remove `[restore]` with
 `sudoedit` to continue from the latest, or run `restore <name>` again to continue from
 the named one.
 
