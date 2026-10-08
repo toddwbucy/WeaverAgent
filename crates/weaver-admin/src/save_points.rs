@@ -743,7 +743,7 @@ pub fn publish(
             .find(|line| line.digest == entry.judged.digest)
             .cloned();
         if let Some(line) = &standing {
-            match open_published(directory, line, file_owner.0) {
+            match open_published(directory, line, file_owner) {
                 Ok(Some(_)) => {
                     remove_from_room(&entry.name);
                     continue;
@@ -808,7 +808,10 @@ pub fn publish(
             file.sync_all()?;
             let metadata = file.metadata()?;
             use std::os::unix::fs::MetadataExt;
-            if metadata.uid() != file_owner.0 || metadata.mode() & 0o777 != 0o640 {
+            if metadata.uid() != file_owner.0
+                || metadata.gid() != file_owner.1
+                || metadata.mode() & 0o777 != 0o640
+            {
                 return Err(std::io::Error::other(
                     "the copy is not root's 0640, read by the access group",
                 ));
@@ -836,7 +839,7 @@ pub fn publish(
                 // bytes refuses the rename and is left in place, named.
                 Err(nix::errno::Errno::EEXIST) => {
                     remove_temporary();
-                    match open_judged(directory, &name, file_owner.0) {
+                    match open_judged(directory, &name, file_owner) {
                         Ok(Some((_, standing))) if standing.digest == entry.judged.digest => Ok(()),
                         Ok(Some(_)) => Err(std::io::Error::other(
                             "an entry of other bytes stands under the published name",
@@ -902,7 +905,7 @@ pub struct Selected {
 fn open_judged(
     directory: BorrowedFd<'_>,
     name: &str,
-    file_owner: u32,
+    file_owner: (u32, u32),
 ) -> Result<Option<(std::fs::File, Judged)>, String> {
     use std::os::unix::fs::MetadataExt;
     let fd = match nix::fcntl::openat(
@@ -922,8 +925,15 @@ fn open_judged(
     if !metadata.is_file() {
         return Err(format!("{name} is not a regular file"));
     }
-    if metadata.uid() != file_owner {
+    if metadata.uid() != file_owner.0 {
         return Err(format!("{name} is not root's"));
+    }
+    // **The group is judged as the owner is** (Codex on #94): a file the
+    // access group cannot read is not a published save point, however it
+    // came to stand here, so the operator and the connector read every one
+    // a load can restore.
+    if metadata.gid() != file_owner.1 {
+        return Err(format!("{name} is not grouped to the access group"));
     }
     if metadata.mode() & 0o7777 != 0o640 {
         return Err(format!(
@@ -959,7 +969,7 @@ fn open_judged(
 fn open_published(
     directory: BorrowedFd<'_>,
     line: &ManifestLine,
-    file_owner: u32,
+    file_owner: (u32, u32),
 ) -> Result<Option<OwnedFd>, String> {
     let Some((file, judged)) = open_judged(directory, &line.name, file_owner)? else {
         return Ok(None);
@@ -978,7 +988,7 @@ fn open_published(
 /// manifest with nothing named.
 pub fn select(
     directory: BorrowedFd<'_>,
-    file_owner: u32,
+    file_owner: (u32, u32),
     restore: Option<&str>,
     owner: Owner,
 ) -> Result<Option<Selected>, LifecycleRefusal> {
@@ -1072,7 +1082,7 @@ pub fn select(
 /// naming it is appended, marked as arrived by restore, with no position.
 pub fn name_at_restore(
     directory: BorrowedFd<'_>,
-    file_owner: u32,
+    file_owner: (u32, u32),
     named: &str,
     owner: Owner,
 ) -> Result<ManifestLine, LifecycleRefusal> {
@@ -1272,6 +1282,58 @@ pub fn room_of(territory_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    /// **A published file is judged by its group as by its owner** (Codex on
+    /// #94): a save point that stands under another group than the access
+    /// group, which the operator and the connector could not read, is refused
+    /// by `restore` naming it and by a load selecting it; the same file
+    /// judged against its own group reads. The file is written under this
+    /// test's own uid and gid and the judgment given a gid one off, so no
+    /// supplementary group is needed and the case never skips. Perturbation:
+    /// drop the gid comparison and the wrong group reads.
+    #[test]
+    fn a_published_file_under_another_group_is_refused() {
+        let scratch = crate::scratch::Scratch(
+            std::env::temp_dir().join(format!("weaver-admin-group-{}", std::process::id())),
+        );
+        let dir = scratch.0.clone();
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_fd = open_directory(&dir).unwrap();
+        let mine = Owner {
+            uid: nix::unistd::getuid().as_raw(),
+            gid: nix::unistd::getgid().as_raw(),
+        };
+        let wrong = (mine.uid, mine.gid.wrapping_add(1));
+        let bytes = save_point("r-7", 7, 0, 7_000_000_000, b"grouped");
+        let name = published_name(&judge(&bytes).unwrap());
+        std::fs::write(dir.join(&name), &bytes).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir.join(&name), std::fs::Permissions::from_mode(0o640))
+                .unwrap();
+        }
+        assert!(
+            name_at_restore(dir_fd.as_fd(), wrong, &name, mine).is_err(),
+            "restore refuses a file under another group"
+        );
+        let named = name_at_restore(dir_fd.as_fd(), (mine.uid, mine.gid), &name, mine)
+            .expect("its own group reads");
+        assert!(
+            select(dir_fd.as_fd(), wrong, Some(&named.name), mine).is_err(),
+            "a load refuses it under another group"
+        );
+        assert!(
+            select(
+                dir_fd.as_fd(),
+                (mine.uid, mine.gid),
+                Some(&named.name),
+                mine
+            )
+            .unwrap()
+            .is_some(),
+            "and selects it under its own"
+        );
+    }
+
     /// **The size bound holds through the read** (Codex on #94): a source
     /// that ends within the bound reads whole, one that reaches past it is
     /// refused, however long it runs, as a room file its member grows after
@@ -1475,7 +1537,7 @@ mod tests {
             ],
             "ordinals follow the clock, the reported one last"
         );
-        let latest = select(dir_fd.as_fd(), me, None, mine)
+        let latest = select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine)
             .unwrap()
             .expect("a latest");
         assert_eq!(latest.line.digest, newer_digest);
@@ -1526,7 +1588,7 @@ mod tests {
             vec![(1, ahead_digest.as_str()), (2, behind_digest.as_str())],
             "the reported one is last though its clock is behind"
         );
-        let latest = select(dir_fd.as_fd(), me, None, mine)
+        let latest = select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine)
             .unwrap()
             .expect("a latest");
         assert_eq!(latest.line.digest, behind_digest);
@@ -1713,7 +1775,7 @@ mod tests {
             lines,
             "the lines round-trip"
         );
-        let latest = select(dir_fd.as_fd(), me, None, mine)
+        let latest = select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine)
             .unwrap()
             .expect("a latest");
         assert_eq!(latest.line.ordinal, 3);
@@ -1721,7 +1783,7 @@ mod tests {
         // The third's file goes: the second is latest, named at a restore,
         // and the next ordinal is still four.
         std::fs::remove_file(dir.join(&lines[2].name)).unwrap();
-        let latest = select(dir_fd.as_fd(), me, None, mine)
+        let latest = select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine)
             .unwrap()
             .expect("a latest");
         assert_eq!(latest.line.ordinal, 2);
@@ -1737,7 +1799,7 @@ mod tests {
             save_point("r-1", 2, 0, 2_000_000_000, b"other image"),
         )
         .unwrap();
-        let latest = select(dir_fd.as_fd(), me, None, mine)
+        let latest = select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine)
             .unwrap()
             .expect("a latest");
         assert_eq!(latest.line.ordinal, 1);
@@ -1754,7 +1816,12 @@ mod tests {
             .unwrap();
         }
         assert!(matches!(
-            select(dir_fd.as_fd(), me, Some(&stray_name), mine),
+            select(
+                dir_fd.as_fd(),
+                (mine.uid, mine.gid),
+                Some(&stray_name),
+                mine
+            ),
             Err(LifecycleRefusal::ConfigInvalid { .. })
         ));
         // Named at a restore by its bare digest, the unlisted file is found
@@ -1763,17 +1830,30 @@ mod tests {
         // no file carries refuses. Perturbation: open the digest as a name
         // and the first call refuses.
         let stray_digest = judge(&stray).unwrap().digest;
-        assert!(name_at_restore(dir_fd.as_fd(), me, &"0".repeat(64), mine).is_err());
-        let named = name_at_restore(dir_fd.as_fd(), me, &stray_digest, mine).unwrap();
+        assert!(
+            name_at_restore(dir_fd.as_fd(), (mine.uid, mine.gid), &"0".repeat(64), mine).is_err()
+        );
+        let named =
+            name_at_restore(dir_fd.as_fd(), (mine.uid, mine.gid), &stray_digest, mine).unwrap();
         assert_eq!(named.name, stray_name);
         assert_eq!((named.ordinal, named.arrived), (4, Arrival::Restore));
-        let by_name = select(dir_fd.as_fd(), me, Some(&stray_name), mine)
-            .unwrap()
-            .unwrap();
+        let by_name = select(
+            dir_fd.as_fd(),
+            (mine.uid, mine.gid),
+            Some(&stray_name),
+            mine,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(by_name.line.ordinal, 4);
-        let by_digest = select(dir_fd.as_fd(), me, Some(&named.digest), mine)
-            .unwrap()
-            .unwrap();
+        let by_digest = select(
+            dir_fd.as_fd(),
+            (mine.uid, mine.gid),
+            Some(&named.digest),
+            mine,
+        )
+        .unwrap()
+        .unwrap();
         assert!(by_digest.lineage.named_at_restore);
         // **A listed name is judged at the verb** (Codex on #94, round 4):
         // the file holding other sound bytes refuses as the load would, gone
@@ -1786,18 +1866,18 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            name_at_restore(dir_fd.as_fd(), me, &stray_name, mine),
+            name_at_restore(dir_fd.as_fd(), (mine.uid, mine.gid), &stray_name, mine),
             Err(LifecycleRefusal::ConfigInvalid { .. })
         ));
         std::fs::rename(dir.join(&stray_name), dir.join("aside")).unwrap();
         assert!(matches!(
-            name_at_restore(dir_fd.as_fd(), me, &stray_digest, mine),
+            name_at_restore(dir_fd.as_fd(), (mine.uid, mine.gid), &stray_digest, mine),
             Err(LifecycleRefusal::BoundaryUnverified)
         ));
         std::fs::rename(dir.join("aside"), dir.join(&stray_name)).unwrap();
         std::fs::write(dir.join(&stray_name), &stray).unwrap();
         assert_eq!(
-            name_at_restore(dir_fd.as_fd(), me, &stray_name, mine)
+            name_at_restore(dir_fd.as_fd(), (mine.uid, mine.gid), &stray_name, mine)
                 .unwrap()
                 .ordinal,
             4
@@ -1809,7 +1889,13 @@ mod tests {
         )
         .unwrap();
         assert!(
-            name_at_restore(dir_fd.as_fd(), me, "20200101T000000Z-aa.save-point", mine).is_err()
+            name_at_restore(
+                dir_fd.as_fd(),
+                (mine.uid, mine.gid),
+                "20200101T000000Z-aa.save-point",
+                mine
+            )
+            .is_err()
         );
         // **The manifest is judged as the owner's**: against another expected
         // owner the one that stands reads as the operator's and refuses, read
@@ -1826,7 +1912,7 @@ mod tests {
             Err(LifecycleRefusal::BoundaryUnverified)
         ));
         assert!(matches!(
-            select(dir_fd.as_fd(), me, None, other),
+            select(dir_fd.as_fd(), (mine.uid, mine.gid), None, other),
             Err(LifecycleRefusal::BoundaryUnverified)
         ));
         assert!(matches!(
@@ -1866,7 +1952,11 @@ mod tests {
         }
         let read = read_manifest(dir_fd.as_fd(), mine).unwrap();
         assert_eq!(read.len(), 4, "the torn line is dropped: {read:?}");
-        assert!(select(dir_fd.as_fd(), me, None, mine).unwrap().is_some());
+        assert!(
+            select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine)
+                .unwrap()
+                .is_some()
+        );
         append_line(dir_fd.as_fd(), mine, &lines[0]).unwrap();
         let text = std::fs::read_to_string(dir.join(MANIFEST)).unwrap();
         assert!(
@@ -1884,12 +1974,12 @@ mod tests {
                 .unwrap();
         }
         assert!(matches!(
-            select(dir_fd.as_fd(), me, None, mine),
+            select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine),
             Err(LifecycleRefusal::BoundaryUnverified)
         ));
         std::fs::remove_file(dir.join(MANIFEST)).unwrap();
         assert!(matches!(
-            select(dir_fd.as_fd(), me, None, mine),
+            select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine),
             Err(LifecycleRefusal::BoundaryUnverified)
         ));
         // A manifest of another mode is not this crate's and refuses, read
@@ -1913,7 +2003,9 @@ mod tests {
             std::fs::remove_file(entry.path()).unwrap();
         }
         assert!(
-            select(dir_fd.as_fd(), me, None, mine).unwrap().is_none(),
+            select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine)
+                .unwrap()
+                .is_none(),
             "nothing at all is the first load"
         );
     }
@@ -2062,7 +2154,7 @@ mod tests {
             std::fs::read_dir(&dir).unwrap().next().is_none(),
             "the directory at the path gets nothing"
         );
-        let latest = select(dir_fd.as_fd(), me, None, mine)
+        let latest = select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine)
             .unwrap()
             .expect("a latest");
         assert_eq!(latest.line.digest, judged.digest);
@@ -2070,7 +2162,7 @@ mod tests {
         // holds no manifest and no file: the first load's answer.
         let replacement = open_directory(&dir).unwrap();
         assert!(
-            select(replacement.as_fd(), me, None, mine)
+            select(replacement.as_fd(), (mine.uid, mine.gid), None, mine)
                 .unwrap()
                 .is_none()
         );

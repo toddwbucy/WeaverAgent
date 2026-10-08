@@ -1328,7 +1328,7 @@ fn select_save_point(
     }
     save_points::select(
         config.save_points_fd()?,
-        config.file_owner().0,
+        config.file_owner(),
         restore,
         save_points::ROOT,
     )
@@ -1415,7 +1415,7 @@ fn restore(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer,
     }
     let line = save_points::name_at_restore(
         config.save_points_fd()?,
-        config.file_owner().0,
+        config.file_owner(),
         &named.save_point,
         save_points::ROOT,
     )?;
