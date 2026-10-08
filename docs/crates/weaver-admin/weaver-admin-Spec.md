@@ -1693,19 +1693,24 @@ appended; a target of other bytes is left with the copy, then the last sound cop
 in the log, and stops the verb as a deferral (Codex on #94 at 7a25db2), there being no
 skip: the copy may be the newest sound state, so a load refuses until the target is
 repaired or cleared. **Several entries published by
-one verb are ordered recovered first, then reported, and by the stamp's `sequence`
-within a kind**, the trace position each covers, with the digest as the tiebreak
-between two of one position, before any ordinal is minted (Codex on #94 at 88c1aaf): a
-reported save point was taken last by construction and is minted last; within one run
-the sequence only grows, so the order holds whatever the clock does. No clock orders
-anything, `taken.wall_ns` naming a file and never ranking it: an adjustment moving the
-clock back between two stranded save points would otherwise mint the older above the
-newer. **Recovered save points of more than one run refuse** `BoundaryUnverified`,
-naming them, and nothing is published: run references carry no order and the member's
-own count, `taken.ordinal`, restarts with its process, so nothing says which run's
-holdings are the later. The operator clears the room or names one with `restore`, and
+one verb are ordered recovered first, then reported, and by the member process's own
+count within a kind**, the stamp's `taken.ordinal`, which strictly increases within one
+member process, before any ordinal is minted (the operator's ruling of 2026-10-08 on
+#99): a reported save point was taken last by construction and is minted last. Neither
+the clock nor the covered position orders anything, `taken.wall_ns` naming a file and
+never ranking it: the clock can step back between two stranded save points, and the
+covered position's run is the run of the last landed event, which changes within one
+agent run after a restore once its first distillate lands. **Save points of more than
+one member process refuse** `BoundaryUnverified`, naming them, and nothing is published,
+as do two of one process carrying one count (a reused process id): the room holds one
+member process's files, since a load publishes it whole or refuses before a member
+stands, so a second process is a room nothing orders. The operator clears the room, and
 until then a load refuses as on any deferral. So the latest the manifest names is the
-last taken and never a recovered older file the listing happened to yield later. **Each publication appends one
+last taken and never a recovered older file the listing happened to yield later. **A
+save point the `restore` verb names that no line names enters with the next, highest
+ordinal**, as section 4 says, so every later load continues from it until a newer save
+point is published: that is intended, a restore meaning "continue from here" (the
+operator's ruling of 2026-10-08 on #99). **Each publication appends one
 line to the manifest**, `save-points.manifest` in the territory's `save-points/`, a file
 this crate creates root-owned and mode `0644` and opens for reading and appending, never
 rewriting a line, a torn tail alone truncated as below: one JSON object per line carrying `ordinal`, a monotonic integer minted under the

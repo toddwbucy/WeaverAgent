@@ -281,7 +281,7 @@ pub fn judge(bytes: &[u8]) -> Result<Judged, String> {
         .ok_or("no check line")?;
     let check_line = &rest[..second];
     let image = &rest[second + 1..];
-    let (stamp, length) = judge_stamp(header)?;
+    let (stamp, length, _) = judge_stamp(header)?;
     if image.len() as u64 != length {
         return Err(format!(
             "the image is {} bytes and the stamp says {length}",
@@ -310,9 +310,10 @@ pub fn judge(bytes: &[u8]) -> Result<Judged, String> {
 
 /// **Judge a stamp line alone**, per `weaver-state-Spec` section 3: the
 /// seven members, the version, the run and schema bounds, the nonce, and the
-/// image length the stamp states. Answers the stamp and that length; the
-/// check and the digest are the whole file's and `judge`'s.
-fn judge_stamp(header: &[u8]) -> Result<(Stamp, u64), String> {
+/// image length the stamp states. Answers the stamp, that length and the
+/// nonce's process and count; the check and the digest are the whole file's
+/// and `judge`'s.
+fn judge_stamp(header: &[u8]) -> Result<(Stamp, u64, Taken), String> {
     let stamp: serde_json::Value = serde_json::from_slice(header)
         .map_err(|e| format!("the stamp line does not parse: {e}"))?;
     let object = stamp.as_object().ok_or("the stamp line is not an object")?;
@@ -369,12 +370,14 @@ fn judge_stamp(header: &[u8]) -> Result<(Stamp, u64), String> {
     if taken.len() != 3 {
         return Err("the stamp's taken does not carry exactly three members".into());
     }
-    if taken.get("pid").and_then(|v| v.as_u64()).is_none() {
-        return Err("the stamp's taken names no pid".into());
-    }
-    if taken.get("ordinal").and_then(|v| v.as_u64()).is_none() {
-        return Err("the stamp's taken names no ordinal".into());
-    }
+    let pid = taken
+        .get("pid")
+        .and_then(|v| v.as_u64())
+        .ok_or("the stamp's taken names no pid")?;
+    let ordinal = taken
+        .get("ordinal")
+        .and_then(|v| v.as_u64())
+        .ok_or("the stamp's taken names no ordinal")?;
     let wall_ns = taken
         .get("wall_ns")
         .and_then(|v| v.as_str())
@@ -393,7 +396,19 @@ fn judge_stamp(header: &[u8]) -> Result<(Stamp, u64), String> {
             wall_ns,
         },
         length,
+        Taken { pid, ordinal },
     ))
+}
+
+/// **The member process that took a save point, and its own count**, the
+/// stamp's `taken.pid` and `taken.ordinal`: the count strictly increases
+/// within one member process, so it orders that process's save points
+/// whatever the clock or the covered position did (the operator's ruling of
+/// 2026-10-08 on #99, N3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Taken {
+    pid: u64,
+    ordinal: u64,
 }
 
 /// The published name, computable from the bytes alone, per
@@ -678,6 +693,7 @@ struct RoomEntry {
     /// judgment holds the bytes to.
     digest: String,
     stamp: Stamp,
+    taken: Taken,
 }
 
 /// **Read the member's room through its own descriptor**, per
@@ -709,12 +725,13 @@ fn read_room(room: BorrowedFd<'_>, member_uid: u32) -> Result<Vec<RoomEntry>, Li
         // by a later verb after newer files, outranking them. One that reads
         // and is no save point is left in place and named, as it can never
         // publish.
-        if let Some(stamp) = scan_room_file(room, &name, member_uid)? {
+        if let Some((stamp, taken)) = scan_room_file(room, &name, member_uid)? {
             let digest = name.trim_end_matches(SUFFIX).to_string();
             found.push(RoomEntry {
                 name,
                 digest,
                 stamp,
+                taken,
             });
         }
     }
@@ -781,7 +798,7 @@ fn scan_room_file(
     dir: BorrowedFd<'_>,
     name: &str,
     member_uid: u32,
-) -> Result<Option<Stamp>, LifecycleRefusal> {
+) -> Result<Option<(Stamp, Taken)>, LifecycleRefusal> {
     use std::os::unix::fs::MetadataExt;
     let refuse = |why: String| {
         diag!("weaver-admin: the room's {name} {why}; nothing is published until it is cleared");
@@ -832,7 +849,7 @@ fn scan_room_file(
         return Ok(None);
     };
     match judge_stamp(&head[..end]) {
-        Ok((stamp, _)) => Ok(Some(stamp)),
+        Ok((stamp, _, taken)) => Ok(Some((stamp, taken))),
         Err(why) => {
             diag!("weaver-admin: the room's {name} is not a save point ({why})");
             Ok(None)
@@ -1005,40 +1022,34 @@ fn publish_with(
     let mut appended = Vec::new();
     let mut entries = read_room(room, member_uid)?;
     (hooks.after_scan)();
-    // **Several entries publish recovered first, then reported, the
-    // stamp's sequence ordering within a kind** (Codex on #94, rounds 5 and
-    // 6, and at 88c1aaf), per Spec section 6: a reported save point was
-    // taken last by construction, so it is minted last; within a kind the
-    // stamp's `sequence`, the trace position the save point covers, orders
-    // them, the digest as the tiebreak between two of one position. The
-    // sequence only grows within one run, so the order holds whatever the
-    // clock does. No clock orders anything: an adjustment moving it back
-    // between two stranded save points would have minted the older above
-    // the newer.
+    // **Several entries publish recovered first, then reported, the member
+    // process's own count ordering within a kind** (Codex on #94, rounds 5
+    // and 6, and the operator's ruling of 2026-10-08 on #99, N3), per Spec
+    // section 6: a reported save point was taken last by construction, so
+    // it is minted last; within a kind the stamp's `taken.ordinal`, which
+    // strictly increases within one member process, orders them. Neither
+    // the clock nor the covered position orders anything: the clock can
+    // step back, and the covered position's run is the last landed event's,
+    // which changes within one agent run after a restore.
     let reported = |entry: &RoomEntry| {
         reports
             .iter()
             .any(|(report, _)| report.save_point == entry.digest)
     };
-    // **Recovered save points of more than one run refuse** (Codex on #94
-    // at 88c1aaf): run references are minted and carry no order, and no
-    // count the member keeps survives its restarts, so nothing can say
-    // which run's holdings are the later. The operator clears the room or
-    // names one with `restore`; until then nothing is published and a load
+    // **Save points of more than one member process refuse** (N3): the
+    // room holds one member process's files, since a load publishes it
+    // whole or refuses before a member stands, so a second process, or a
+    // count repeated within one, is a room this crate cannot order. The
+    // operator clears the room; until then nothing is published and a load
     // refuses rather than guess.
-    let recovered_runs: std::collections::BTreeSet<&str> = entries
-        .iter()
-        .filter(|entry| !reported(entry))
-        .map(|entry| entry.stamp.run.as_str())
-        .collect();
-    if recovered_runs.len() > 1 {
-        let names: Vec<&str> = entries
-            .iter()
-            .filter(|entry| !reported(entry))
-            .map(|entry| entry.name.as_str())
-            .collect();
+    let processes: std::collections::BTreeSet<u64> =
+        entries.iter().map(|entry| entry.taken.pid).collect();
+    let counts: std::collections::BTreeSet<Taken> =
+        entries.iter().map(|entry| entry.taken).collect();
+    if processes.len() > 1 || counts.len() != entries.len() {
+        let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
         diag!(
-            "weaver-admin: the room holds recovered save points of more than one run ({}), and nothing orders runs; nothing is published until the room is cleared or one is named with restore",
+            "weaver-admin: the room holds save points of more than one member process, or two of one count ({}), which nothing orders; nothing is published until the room is cleared",
             names.join(", ")
         );
         return Err(LifecycleRefusal::BoundaryUnverified);
@@ -1046,8 +1057,7 @@ fn publish_with(
     entries.sort_by(|a, b| {
         reported(a)
             .cmp(&reported(b))
-            .then_with(|| a.stamp.sequence.cmp(&b.stamp.sequence))
-            .then_with(|| a.digest.cmp(&b.digest))
+            .then_with(|| a.taken.ordinal.cmp(&b.taken.ordinal))
     });
     let remove_from_room = |name: &str| {
         let _ = nix::unistd::unlinkat(room, name, nix::unistd::UnlinkatFlags::NoRemoveDir);
@@ -2056,6 +2066,22 @@ pub(crate) mod tests {
         wall_ns: u64,
         image: &[u8],
     ) -> Vec<u8> {
+        // One member process whose count follows the covered position, as
+        // a member that took them in order would have.
+        save_point_taken(run, sequence, turn, wall_ns, image, 1, sequence)
+    }
+
+    /// A save point as `save_point` builds it, taken by member process `pid`
+    /// as its `ordinal`th.
+    pub(crate) fn save_point_taken(
+        run: &str,
+        sequence: u64,
+        turn: u64,
+        wall_ns: u64,
+        image: &[u8],
+        pid: u64,
+        ordinal: u64,
+    ) -> Vec<u8> {
         let header = serde_json::json!({
             "weaver-save-point": 1,
             "run": run,
@@ -2063,7 +2089,7 @@ pub(crate) mod tests {
             "turn": turn,
             "schema": "0".repeat(64),
             "image": image.len(),
-            "taken": {"pid": 1, "ordinal": 0, "wall_ns": wall_ns.to_string()},
+            "taken": {"pid": pid, "ordinal": ordinal, "wall_ns": wall_ns.to_string()},
         })
         .to_string();
         let mut hasher = sha2::Sha256::new();
@@ -2548,18 +2574,21 @@ pub(crate) mod tests {
         assert!(room.join(&room_name).exists(), "the room's copy stays");
     }
 
-    /// **Recovered save points order by sequence, never by the clock, and
-    /// those of two runs refuse** (Codex on #94 at 88c1aaf): two files of one
-    /// run, the clock stepped back between them, publish in sequence order
-    /// and the later is the latest; files of two runs, which nothing orders,
-    /// refuse the publication and stay in the room. Perturbation: order by
-    /// `taken.wall_ns` again and the earlier is minted last.
+    /// **Recovered save points order by the member process's own count, and
+    /// those of two processes refuse** (the operator's ruling of 2026-10-08
+    /// on #99, N3): one process's two files, the second taken after a
+    /// restore's first distillate landed so that its covered run changed
+    /// and its sequence fell, and the clock stepped back between them,
+    /// publish in count order, the later the latest; files of two member
+    /// processes, or two of one count, refuse and stay in the room.
+    /// Perturbations: order by the covered sequence and the earlier is
+    /// minted last; key the refusal on the covered run and the first room
+    /// refuses; drop the process refusal and the second room publishes.
     #[test]
-    fn recovered_save_points_order_by_sequence_and_two_runs_refuse() {
-        let scratch = crate::scratch::Scratch(std::env::temp_dir().join(format!(
-            "weaver-admin-sequence-order-{}",
-            std::process::id()
-        )));
+    fn recovered_save_points_order_by_the_members_count_and_two_processes_refuse() {
+        let scratch = crate::scratch::Scratch(
+            std::env::temp_dir().join(format!("weaver-admin-count-order-{}", std::process::id())),
+        );
         let base = scratch.0.clone();
         let me = nix::unistd::getuid().as_raw();
         let mine = Owner {
@@ -2579,20 +2608,23 @@ pub(crate) mod tests {
             }
             (room, dir, digests)
         };
-        // The earlier position carries the later clock.
-        let earlier = save_point("r-1", 3, 1, 9_000_000_000, b"earlier, clock ahead");
-        let later = save_point("r-1", 8, 2, 1_000_000_000, b"later, clock behind");
-        let (room, dir, digests) = room_of("one-run", &[earlier, later]);
+        let publish_room = |room: &std::path::Path, dir_fd: BorrowedFd<'_>| {
+            publish(
+                open_directory(room).unwrap().as_fd(),
+                me,
+                dir_fd,
+                (mine.uid, mine.gid),
+                mine,
+                &[],
+            )
+        };
+        // Taken first: the restored prior run's position, a late clock.
+        let earlier = save_point_taken("r-old", 900, 4, 9_000_000_000, b"earlier", 77, 0);
+        // Taken second: the new run's first position, an early clock.
+        let later = save_point_taken("r-new", 3, 1, 1_000_000_000, b"later", 77, 1);
+        let (room, dir, digests) = room_of("one-process", &[earlier, later]);
         let dir_fd = open_directory(&dir).unwrap();
-        let lines = publish(
-            open_directory(&room).unwrap().as_fd(),
-            me,
-            dir_fd.as_fd(),
-            (mine.uid, mine.gid),
-            mine,
-            &[],
-        )
-        .unwrap();
+        let lines = publish_room(&room, dir_fd.as_fd()).expect("one process publishes");
         let minted: Vec<&str> = lines.iter().map(|line| line.digest.as_str()).collect();
         assert_eq!(minted, [digests[0].as_str(), digests[1].as_str()]);
         let latest = select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine)
@@ -2600,28 +2632,29 @@ pub(crate) mod tests {
             .expect("a latest");
         assert_eq!(
             latest.line.digest, digests[1],
-            "the later position is the latest"
+            "the later taken is the latest"
         );
-        // Two runs' recovered files: nothing orders them.
-        let one = save_point("r-1", 5, 1, 1_000_000_000, b"run one");
-        let two = save_point("r-2", 2, 1, 2_000_000_000, b"run two");
-        let (room, dir, digests) = room_of("two-runs", &[one, two]);
+        // Two member processes: nothing orders them.
+        let one = save_point_taken("r-1", 5, 1, 1_000_000_000, b"process one", 77, 0);
+        let two = save_point_taken("r-1", 6, 1, 2_000_000_000, b"process two", 78, 0);
+        let (room, dir, digests) = room_of("two-processes", &[one, two]);
         let dir_fd = open_directory(&dir).unwrap();
         assert_eq!(
-            publish(
-                open_directory(&room).unwrap().as_fd(),
-                me,
-                dir_fd.as_fd(),
-                (mine.uid, mine.gid),
-                mine,
-                &[],
-            )
-            .err(),
+            publish_room(&room, dir_fd.as_fd()).err(),
             Some(LifecycleRefusal::BoundaryUnverified)
         );
         for digest in &digests {
             assert!(room.join(format!("{digest}{SUFFIX}")).exists());
         }
+        // One process, one count twice: a reused pid, unorderable.
+        let first = save_point_taken("r-1", 5, 1, 1_000_000_000, b"count once", 77, 4);
+        let again = save_point_taken("r-1", 6, 1, 2_000_000_000, b"count again", 77, 4);
+        let (room, dir, _) = room_of("one-count-twice", &[first, again]);
+        let dir_fd = open_directory(&dir).unwrap();
+        assert_eq!(
+            publish_room(&room, dir_fd.as_fd()).err(),
+            Some(LifecycleRefusal::BoundaryUnverified)
+        );
     }
 
     /// **The save point's bound is one gibibyte in both readers** (the
