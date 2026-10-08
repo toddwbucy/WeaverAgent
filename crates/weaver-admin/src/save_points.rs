@@ -1060,8 +1060,8 @@ fn publish_with(
     // that fails and a copy that fails each stop here and answer a deferral,
     // so every file published is older than every file left; a leave's own
     // save point so left leaves its unload refusing, and a load refuses too.
-    // The one skip is a standing line whose target is of other bytes: that
-    // entry never appends a line, so it outranks nothing.
+    // There is no skip: a standing line whose target is of other bytes stops
+    // the verb too (Codex on #94 at 7a25db2).
     let total = entries.len();
     let mut deferred = false;
     for (at, entry) in entries.into_iter().enumerate() {
@@ -1111,12 +1111,19 @@ fn publish_with(
                     "weaver-admin: the manifest names {}, which is gone; the room's copy recreates it under the standing line",
                     line.name
                 ),
+                // **A standing line whose target differs stops the verb**
+                // (Codex on #94 at 7a25db2): the room's copy may be the
+                // newest sound state, so publishing past it, or a load
+                // selecting past it, would restore older state. It is a
+                // deferral, so a load refuses until the target is repaired
+                // or cleared.
                 Err(why) => {
                     diag!(
-                        "weaver-admin: the manifest names {}, which is not the file its line says ({why}); the room's copy stays",
+                        "weaver-admin: the manifest names {}, which is not the file its line says ({why}); the room's copy stays and every later save point is left for the next verb",
                         line.name
                     );
-                    continue;
+                    deferred = true;
+                    break;
                 }
             }
         }
@@ -1308,11 +1315,7 @@ fn open_judged(
     file_owner: (u32, u32),
 ) -> Result<Option<(std::fs::File, Judged)>, NotPublished> {
     use std::os::unix::fs::MetadataExt;
-    let fault = |why: String| NotPublished {
-        why,
-        differs: false,
-    };
-    let differs = |why: String| NotPublished { why, differs: true };
+    let fault = |why: String| NotPublished { why };
     let fd = match nix::fcntl::openat(
         directory,
         name,
@@ -1366,24 +1369,22 @@ fn open_judged(
             ))
         })?;
     let judged =
-        judge(&bytes).map_err(|why| differs(format!("{name} is not a save point: {why}")))?;
+        judge(&bytes).map_err(|why| fault(format!("{name} is not a save point: {why}")))?;
     if published_name(&judged) != name {
-        return Err(differs(format!("{name} is not the name its bytes compute")));
+        return Err(fault(format!("{name} is not the name its bytes compute")));
     }
     nix::unistd::lseek(file.as_fd(), 0, nix::unistd::Whence::SeekSet)
         .map_err(|e| fault(format!("{name} does not seek: {e}")))?;
     Ok(Some((file, judged)))
 }
 
-/// **Why a published file is not the one its line names** (the #94 survey's
-/// S9): `differs` where its bytes were read and are not that save point, which
-/// the default selection passes over as Spec section 4 says; otherwise a
-/// fault reaching or judging the file, which refuses rather than restoring
-/// older state over a transient error or a hand-changed mode.
+/// **Why a published file is not the one its line names**: a fault
+/// reaching or judging it, or bytes that are not the save point its line
+/// names. Every one refuses the selection (the Planner's ruling of
+/// 2026-10-08 on #94), so the cause is carried for the log alone.
 #[derive(Debug)]
 pub(crate) struct NotPublished {
     why: String,
-    differs: bool,
 }
 
 impl std::fmt::Display for NotPublished {
@@ -1405,7 +1406,6 @@ fn open_published(
     if judged.digest != line.digest {
         return Err(NotPublished {
             why: format!("{} does not digest to its line", line.name),
-            differs: true,
         });
     }
     Ok(Some(OwnedFd::from(file)))
@@ -1414,8 +1414,9 @@ fn open_published(
 /// **Select the save point a load restores**, per `weaver-admin-Spec`
 /// section 4: the one `restore` names by its published name or its digest,
 /// which must have a manifest line, or the latest, the line of highest
-/// ordinal whose file stands and judges to its digest, a line whose file is
-/// gone or differs being passed over. `Ok(None)` is no save point: an empty
+/// ordinal, whose file must stand and judge to its digest or the load
+/// refuses, never passing over to an older line. `Ok(None)` is no save
+/// point: an empty
 /// manifest with nothing named.
 pub fn select(
     directory: BorrowedFd<'_>,
@@ -1496,44 +1497,37 @@ fn select_with(
             }
         };
     }
-    let mut ordered: Vec<&ManifestLine> = lines.iter().collect();
-    ordered.sort_by_key(|line| std::cmp::Reverse(line.ordinal));
-    for line in ordered {
-        match open_published(directory, line, file_owner) {
-            Ok(Some(descriptor)) => {
-                return Ok(Some(Selected {
-                    descriptor,
-                    lineage: lineage_of(line),
-                    line: line.clone(),
-                }));
-            }
-            Ok(None) => {
-                diag!(
-                    "weaver-admin: the manifest's ordinal {} names {}, which is gone; passed over",
-                    line.ordinal,
-                    line.name
-                );
-            }
-            Err(why) if why.differs => {
-                diag!(
-                    "weaver-admin: the manifest's ordinal {} is not the latest: {why}; passed over",
-                    line.ordinal
-                );
-            }
-            // **Only a file gone or differing is passed over** (the #94
-            // survey's S9), per Spec section 4: a fault reaching or judging
-            // the latest refuses, so an EIO or a mode changed by hand never
-            // restores older state with only a log line.
-            Err(why) => {
-                diag!(
-                    "weaver-admin: the manifest's ordinal {} cannot be judged ({why}); the load refuses rather than restore an older save point",
-                    line.ordinal
-                );
-                return Err(LifecycleRefusal::BoundaryUnverified);
-            }
+    // **The latest is the highest ordinal, never passed over** (the
+    // Planner's ruling of 2026-10-08 on #94, beyond the survey's S9): a
+    // latest gone, differing or not judged refuses `BoundaryUnverified`,
+    // naming the line and what was found, so no load restores older state
+    // unasked. The operator names an older save point with `restore`, a
+    // deliberate act the manifest records.
+    let Some(line) = lines.iter().max_by_key(|line| line.ordinal) else {
+        return Ok(None);
+    };
+    match open_published(directory, line, file_owner) {
+        Ok(Some(descriptor)) => Ok(Some(Selected {
+            descriptor,
+            lineage: lineage_of(line),
+            line: line.clone(),
+        })),
+        Ok(None) => {
+            diag!(
+                "weaver-admin: the manifest's latest, ordinal {}, names {}, which is gone; the load refuses rather than restore an older save point, and restore names one",
+                line.ordinal,
+                line.name
+            );
+            Err(LifecycleRefusal::BoundaryUnverified)
+        }
+        Err(why) => {
+            diag!(
+                "weaver-admin: the manifest's latest, ordinal {}, is not the file its line says ({why}); the load refuses rather than restore an older save point, and restore names one",
+                line.ordinal
+            );
+            Err(LifecycleRefusal::BoundaryUnverified)
         }
     }
-    Ok(None)
 }
 
 /// **Name a save point at a restore**, the `restore` verb's judgment, per
@@ -2501,6 +2495,59 @@ pub(crate) mod tests {
         assert!(names.iter().all(|(name, _)| room.join(name).exists()));
     }
 
+    /// **A standing line whose target differs stops the publication** (Codex
+    /// on #94 at 7a25db2): a crash between the line's append and the room
+    /// copy's removal leaves the copy, and the target is later damaged; the
+    /// room's copy may be the newest sound state, so the verb defers and
+    /// the copy stays. Perturbation: skip the entry again and nothing is
+    /// deferred.
+    #[test]
+    fn a_standing_line_whose_target_differs_defers() {
+        let scratch = crate::scratch::Scratch(std::env::temp_dir().join(format!(
+            "weaver-admin-standing-differs-{}",
+            std::process::id()
+        )));
+        let base = scratch.0.clone();
+        let room = base.join("room");
+        let dir = base.join("published");
+        std::fs::create_dir_all(&room).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_fd = open_directory(&dir).unwrap();
+        let me = nix::unistd::getuid().as_raw();
+        let mine = Owner {
+            uid: me,
+            gid: nix::unistd::getgid().as_raw(),
+        };
+        let bytes = save_point("r-1", 4, 1, 1_000_000_000, b"newest");
+        let judged = judge(&bytes).unwrap();
+        let room_name = format!("{}{SUFFIX}", judged.digest);
+        std::fs::write(room.join(&room_name), &bytes).unwrap();
+        let publish_now = || {
+            publish_noting_deferral(
+                open_directory(&room).unwrap().as_fd(),
+                me,
+                dir_fd.as_fd(),
+                (mine.uid, mine.gid),
+                mine,
+                &[],
+            )
+            .unwrap()
+        };
+        let (lines, _) = publish_now();
+        assert_eq!(lines.len(), 1);
+        // The crash left the room's copy, and the target is damaged.
+        std::fs::write(room.join(&room_name), &bytes).unwrap();
+        std::fs::write(
+            dir.join(&lines[0].name),
+            save_point("r-1", 4, 1, 1_000_000_000, b"damaged"),
+        )
+        .unwrap();
+        let (appended, deferred) = publish_now();
+        assert!(appended.is_empty());
+        assert!(deferred, "the verb defers, so a load refuses");
+        assert!(room.join(&room_name).exists(), "the room's copy stays");
+    }
+
     /// **Recovered save points order by sequence, never by the clock, and
     /// those of two runs refuse** (Codex on #94 at 88c1aaf): two files of one
     /// run, the clock stepped back between them, publish in sequence order
@@ -2864,9 +2911,9 @@ pub(crate) mod tests {
     }
 
     /// **The manifest's lines round-trip and the latest is read from it**,
-    /// per `weaver-admin-Spec` sections 4 and 6: a line whose file is gone
-    /// is passed over, one whose file's bytes do not digest to its line is
-    /// not the latest, the ordinal is one past the highest line standing
+    /// per `weaver-admin-Spec` sections 4 and 6: a latest whose file is
+    /// gone, or whose bytes do not digest to its line, refuses the load and
+    /// an older one loads only by name, the ordinal is one past the highest line standing
     /// even when that line's file is gone, a file no line names is not
     /// loadable by name, and a manifest that does not parse refuses
     /// `BoundaryUnverified`. Perturbations: drop the digest comparison in
@@ -2938,29 +2985,56 @@ pub(crate) mod tests {
             );
             std::fs::set_permissions(&third, std::fs::Permissions::from_mode(0o640)).unwrap();
         }
-        // The third's file goes: the second is latest, named at a restore,
-        // and the next ordinal is still four.
-        std::fs::remove_file(dir.join(&lines[2].name)).unwrap();
-        let latest = select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine)
-            .unwrap()
-            .expect("a latest");
-        assert_eq!(latest.line.ordinal, 2);
-        assert!(latest.lineage.named_at_restore);
+        // **The latest gone or differing refuses, never passed over** (the
+        // Planner's ruling of 2026-10-08 on #94): the third's file goes and
+        // the load refuses, the next ordinal still four; `restore` naming
+        // the second loads it; the third standing again with other sound
+        // bytes refuses too, and `restore` naming the first by its digest
+        // loads it. Perturbation: pass over to an older line again and the
+        // two refusals answer the second and the first.
+        let third = dir.join(&lines[2].name);
+        std::fs::remove_file(&third).unwrap();
+        assert_eq!(
+            select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a latest gone refuses"
+        );
         assert_eq!(
             next_ordinal(&read_manifest(dir_fd.as_fd(), mine).unwrap()),
             4
         );
-        // The second's file holds other sound bytes, a save point whose digest
-        // is not its line's: not the latest, the first is.
+        let named = select(
+            dir_fd.as_fd(),
+            (mine.uid, mine.gid),
+            Some(&lines[1].name),
+            mine,
+        )
+        .unwrap()
+        .expect("the named one");
+        assert_eq!(named.line.ordinal, 2);
         std::fs::write(
-            dir.join(&lines[1].name),
-            save_point("r-1", 2, 0, 2_000_000_000, b"other image"),
+            &third,
+            save_point("r-1", 3, 0, 3_000_000_000, b"other image"),
         )
         .unwrap();
-        let latest = select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine)
-            .unwrap()
-            .expect("a latest");
-        assert_eq!(latest.line.ordinal, 1);
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&third, std::fs::Permissions::from_mode(0o640)).unwrap();
+        }
+        assert_eq!(
+            select(dir_fd.as_fd(), (mine.uid, mine.gid), None, mine).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a latest that differs refuses"
+        );
+        let named = select(
+            dir_fd.as_fd(),
+            (mine.uid, mine.gid),
+            Some(&lines[0].digest),
+            mine,
+        )
+        .unwrap()
+        .expect("the named one");
+        assert_eq!(named.line.ordinal, 1);
         // A file no line names is not loadable by name.
         let stray = save_point("r-9", 9, 0, 9_000_000_000, b"stray");
         let stray_name = published_name(&judge(&stray).unwrap());
@@ -3055,6 +3129,12 @@ pub(crate) mod tests {
             )
             .is_err()
         );
+        // Back under its name, the latest stands again for what follows.
+        std::fs::rename(
+            dir.join("20200101T000000Z-aa.save-point"),
+            dir.join(&stray_name),
+        )
+        .unwrap();
         // **The manifest is judged as the owner's**: against another expected
         // owner the one that stands reads as the operator's and refuses, read
         // and appended, its planted lines selecting nothing; a second link

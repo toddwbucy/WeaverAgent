@@ -910,12 +910,17 @@ and resolves no lineage, and a declaration naming `restore` beside that engine r
 section 6 is the record of what is loadable**: the inventory reads it, root-owned in
 the territory's `save-points/` of section 9, one line per published or named save point, and
 selects either the save point the declaration's `[restore]` names, by its published name
-or its digest, or the latest, the line of highest ordinal whose file still stands under
-its name and whose bytes digest to the line's digest. **Only a file gone or differing is
-passed over** (the #94 survey's S9): one that cannot be reached or judged, an open or a
-read that fails, or an owner, group, mode or size not as published, refuses
-`BoundaryUnverified` naming its line, so a transient fault or a mode changed by hand
-never restores an older save point with only a log line. **A member stands by the
+or its digest, or the latest, the line of highest ordinal, whose file must stand under
+its name and digest to the line's digest. **The latest is never passed over** (the
+Planner's ruling of 2026-10-08 on #94, beyond the survey's S9): its file gone, of other
+bytes, or not reached or judged (an open or a read that fails, an owner, group, mode or
+size not as published) refuses the load `BoundaryUnverified`, naming the line and what
+was found, and no older save point is restored in its place. The operator names an older
+one with `restore`, a deliberate act the manifest records; a save point so named, or
+named by `[restore]`, is judged as before. **No state is restored older than the latest
+unasked**: the publication defers on any entry it declines and a load refuses on any
+deferral (section 6), and the selection refuses where the latest does not stand, so
+older holdings return only by the operator's name. **A member stands by the
 declaration's election, never by the box's account** (the #94 survey's S2): an agent
 electing `none` restores, publishes and waits on no member, though the box carries the
 member's account. **A file no line names is not
@@ -1649,8 +1654,8 @@ cap admits, at most one image stands in this root process's memory, and a file t
 member changes after the scan is refused. **One verb publishes at most 32 room files, and copies one
 only where its size and 64 MiB more stand free** on the save-points filesystem, this
 act's elections (the custody audit's G23); entries go oldest first and the reported one
-last, and the cap, the space, a judgment at the copy that fails and a copy that fails
-each stop the verb at the first entry declined rather than skipping it (the #94 survey's
+last, and the cap, the space, a judgment at the copy that fails, a copy that fails and a
+standing line whose target differs each stop the verb at the first entry declined rather than skipping it (the #94 survey's
 S3), answering a deferral, so every file published is older than every file left for
 the next verb and the highest ordinal stays the last taken. A room file that does not
 open, stat or read at the scan refuses the verb `BoundaryUnverified` naming it, left out
@@ -1684,8 +1689,10 @@ unclean stop left behind is published at the next load. **A line already standin
 the room's copy is judged before the copy goes** (Codex on #94, round 9): the copy is
 removed only where the line's target stands and digests to the line; a target gone is
 recreated beneath the standing line, the line being the record and no second one
-appended; a target of other bytes is left with the copy, then the last sound copy, and
-named in the log. **Several entries published by
+appended; a target of other bytes is left with the copy, then the last sound copy, named
+in the log, and stops the verb as a deferral (Codex on #94 at 7a25db2), there being no
+skip: the copy may be the newest sound state, so a load refuses until the target is
+repaired or cleared. **Several entries published by
 one verb are ordered recovered first, then reported, and by the stamp's `sequence`
 within a kind**, the trace position each covers, with the digest as the tiebreak
 between two of one position, before any ordinal is minted (Codex on #94 at 88c1aaf): a
@@ -1739,9 +1746,9 @@ the member never writing one: in the room one refuses the publication
 `BoundaryUnverified` naming it until it is cleared, in the directory it refuses the
 selection as a fault and a restore naming it refuses, so no file a member or
 an operator wrote is read whole into this crate's memory past that bound. **The
-manifest is the record of what is loadable, and the latest is read from it**: the highest ordinal whose file still
-stands under its name and whose bytes digest to the line's digest, per section 4, and a
-file no line names is not loadable. The directory is root's, read by the access group,
+manifest is the record of what is loadable, and the latest is read from it**: the
+highest ordinal, whose file must stand under its name and digest to the line's digest or
+the load refuses, per section 4, and a file no line names is not loadable. The directory is root's, read by the access group,
 so a save point on demand is readable by the operator at once, and a live restore of
 one the member still holds reads the member's own room with no part of this crate. **The verbs
 `save-point`, `restore` and `force-unload` are the operator contract's**, per section 2,
