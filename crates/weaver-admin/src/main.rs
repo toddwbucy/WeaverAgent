@@ -119,11 +119,17 @@ struct ServiceConfig {
     /// the `restore` verb's judgment go through it, so nothing this root
     /// process writes is reached through a path after the judgment.
     save_points: Option<std::os::fd::OwnedFd>,
+    /// **Set only for `force-unload` whose territory did not judge** (the
+    /// operator's ruling of 2026-10-08 on #99, K5): the force still ends the
+    /// run, but nothing is written into or read from the unjudged territory,
+    /// no `admin.log` line and no publication, and the marker closes forced.
+    territory_unjudged: bool,
     /// The operator's uid, the box's own fact about whose data defines the
     /// agent, per section 9: the harness admits the seeding line from it.
     operator: u32,
-    /// The access group's gid, the territory's group, which the logs and the
-    /// published save points take so the operator and the connector read
+    /// The access group's gid, the group of the files beneath the territory
+    /// (the territory's own is the state group), which the declaration, the
+    /// logs and the published save points take so the operator and the connector read
     /// them and nothing else does, per sections 6 and 8.
     access_gid: u32,
     /// The boundary file, `roles.toml`, as read: its sha256 hex and its one
@@ -303,7 +309,8 @@ fn run() -> Result<LifecycleAnswer, LifecycleRefusal> {
     let request = surface::parse_arguments(std::env::args().skip(1))?;
     // **A refusal before the agent's root is admitted has no admin.log to
     // reach**, per Spec section 8: it goes to standard error alone.
-    let config = load_service_config(request.agent()).inspect_err(|refusal| {
+    let forced = matches!(request, surface::Request::ForceUnload(_));
+    let config = load_service_config(request.agent(), forced).inspect_err(|refusal| {
         diag!(
             "weaver-admin: refused before admission: {}",
             surface::render_refusal(refusal)
@@ -434,6 +441,12 @@ fn well_formed(agent: &str) -> bool {
 /// section 2: a fixed convention between this crate and the member.
 const SAVE_POINT_FD: std::os::fd::RawFd = 4;
 
+/// `state.log`'s owner: root's, and the member's group, `0640`, so the
+/// member reads its own stderr and never writes past root's append.
+fn state_log_owner(member: inventory::MemberAccount) -> (u32, u32) {
+    (0, member.gid)
+}
+
 fn stand_state_member(
     config: &ServiceConfig,
     inventory: &inventory::Inventory,
@@ -472,8 +485,12 @@ fn stand_state_member(
     .ok()?;
     // **Opened as root in the member's own room, so never through a link**:
     // the member could otherwise aim root's append at any file, and a FIFO
-    // could hold the load.
-    let log = log::open_append(&territory.join("state.log"), None);
+    // could hold the load. Grouped to the member, so the scripts that read
+    // it as the member find what it wrote (#99 area 2, K12).
+    let log = log::open_append(
+        &territory.join("state.log"),
+        Some(state_log_owner(member_account)),
+    );
     let mut member = std::process::Command::new(&binary);
     member
         .args(member_vector(&territory, &inventory.binding))
@@ -928,6 +945,10 @@ fn take_inventory_from(
                 uid: user.uid.as_raw(),
                 gid: user.gid.as_raw(),
             }),
+        member_group: nix::unistd::Group::from_name(&inventory::member_identity_for(agent))
+            .ok()
+            .flatten()
+            .map(|group| group.gid.as_raw()),
     };
     inventory::take_inventory(agent, source, &boundary)
 }
@@ -2021,6 +2042,11 @@ fn publish_from_room_noting(
     // database's, by the derived name; a member stands where its room does,
     // a `none` agent having none.
     admissible(config, agent)?;
+    // **A force over an unjudged territory publishes nothing** (K5): the
+    // room's files wait for a load, which judges the territory first.
+    if config.territory_unjudged {
+        return Ok((Vec::new(), false));
+    }
     #[cfg(test)]
     if let Some((member, owner)) = TEST_PUBLICATION.with(std::cell::Cell::get) {
         return publish_room_as(config, member, owner, reports);
@@ -2239,6 +2265,14 @@ fn stop(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
 /// digest in force, and the outcome. A log that cannot open costs the line,
 /// never the verb.
 fn record(config: &ServiceConfig, verb: &'static str, outcome: &str) {
+    // An unjudged territory is written nothing (K5): the line goes to
+    // standard error alone.
+    if config.territory_unjudged {
+        diag!(
+            "weaver-admin: {verb}: {outcome} (the territory did not judge; admin.log not written)"
+        );
+        return;
+    }
     let Ok(mut operations) =
         log::OperationsLog::open(&config.admin_log(), Some(config.file_owner()))
     else {
@@ -2266,7 +2300,7 @@ const DEFAULT_BASE: &str = "/etc/weaver/admin";
 /// judged before the path is built, the root existing is the admission, and
 /// the root must be root's and closed to every other writer before a value is
 /// read from it, since what it names runs under the agent's identity.
-fn load_service_config(agent: &AgentName) -> Result<ServiceConfig, LifecycleRefusal> {
+fn load_service_config(agent: &AgentName, forced: bool) -> Result<ServiceConfig, LifecycleRefusal> {
     if !well_formed(&agent.0) {
         return Err(LifecycleRefusal::NoSuchAgent);
     }
@@ -2279,24 +2313,32 @@ fn load_service_config(agent: &AgentName) -> Result<ServiceConfig, LifecycleRefu
     // judged against the state group and `save-points/`'s against the access
     // group, never taken as they stand.
     let group_name = format!("{}-admin", inventory::identity_for(agent));
-    let Some(access) = nix::unistd::Group::from_name(&group_name).ok().flatten() else {
-        diag!("weaver-admin: the access group {group_name} is not provisioned");
-        return Err(LifecycleRefusal::BoundaryUnverified);
-    };
     let state_name = inventory::member_identity_for(agent);
-    let Some(state) = nix::unistd::Group::from_name(&state_name).ok().flatten() else {
-        diag!("weaver-admin: the state group {state_name} is not provisioned");
-        return Err(LifecycleRefusal::BoundaryUnverified);
-    };
-    load_service_config_with(
-        &base,
-        &agent.0,
-        0,
-        TerritoryGroups {
+    let access = nix::unistd::Group::from_name(&group_name).ok().flatten();
+    let state = nix::unistd::Group::from_name(&state_name).ok().flatten();
+    let resolved = match (access, state) {
+        (Some(access), Some(state)) => TerritoryGroups {
             access: access.gid.as_raw(),
             state: state.gid.as_raw(),
-        },
-    )
+        }
+        .distinct(),
+        (None, _) => Err(format!("the access group {group_name} is not provisioned")),
+        (_, None) => Err(format!("the state group {state_name} is not provisioned")),
+    };
+    let groups = match resolved {
+        Ok(groups) => Some(groups),
+        Err(cause) => {
+            diag!("weaver-admin: {cause}");
+            // **A force does not wait on the territory** (K5): without its
+            // groups the territory cannot be judged, and the force goes on
+            // without it.
+            if !forced {
+                return Err(LifecycleRefusal::BoundaryUnverified);
+            }
+            None
+        }
+    };
+    load_service_config_judged(&base, &agent.0, 0, groups, forced)
 }
 
 /// **The territory's two groups**, on the operator's ruling of 2026-10-08 on
@@ -2308,6 +2350,22 @@ fn load_service_config(agent: &AgentName) -> Result<ServiceConfig, LifecycleRefu
 struct TerritoryGroups {
     access: u32,
     state: u32,
+}
+
+impl TerritoryGroups {
+    /// **The two groups are two, and neither is root's** (#99 area 2, H2):
+    /// one gid for both would let the member read the declaration, the logs
+    /// and every published save point, every judgment still passing.
+    fn distinct(self) -> Result<Self, String> {
+        if self.access == self.state || self.access == 0 || self.state == 0 {
+            return Err(format!(
+                "the access group (gid {}) and the state group (gid {}) are not two \
+                 groups apart from root's",
+                self.access, self.state
+            ));
+        }
+        Ok(self)
+    }
 }
 
 /// The judgments under one group for both, as the suite's own uid holds no
@@ -2337,11 +2395,28 @@ fn load_service_config_at(
 /// values read, then the agent's territory judged against `groups`, which
 /// production resolves by name and a test sets to its own, and
 /// `library-path` judged as the root is.
+#[cfg(test)]
 fn load_service_config_with(
     base: &std::path::Path,
     agent: &str,
     owner: u32,
     groups: TerritoryGroups,
+) -> Result<ServiceConfig, LifecycleRefusal> {
+    load_service_config_judged(base, agent, owner, Some(groups), false)
+}
+
+/// The judgments, with the territory's judgment required except for a
+/// `force-unload` (the operator's ruling of 2026-10-08 on #99, K5): there a
+/// territory that does not judge, or whose groups did not resolve, leaves
+/// the configuration marked `territory_unjudged` rather than refusing, so
+/// the force always ends the run. The root and its ancestors are judged for
+/// every verb, the force's included: they name what this crate runs.
+fn load_service_config_judged(
+    base: &std::path::Path,
+    agent: &str,
+    owner: u32,
+    groups: Option<TerritoryGroups>,
+    forced: bool,
 ) -> Result<ServiceConfig, LifecycleRefusal> {
     let root = base.join(agent);
     judge_root(&root, owner)?;
@@ -2353,11 +2428,25 @@ fn load_service_config_with(
         // named where it is required, at `validate` and `load`.
         LifecycleRefusal::ConfigInvalid { field: None }
     })?;
-    let judged = judge_territory(&config.territory, groups)?;
-    config.territory = judged.canonical;
-    config.access_gid = judged.access_gid;
-    config.territory_fd = Some(judged.territory);
-    config.save_points = Some(judged.save_points);
+    match groups
+        .ok_or(LifecycleRefusal::BoundaryUnverified)
+        .and_then(|groups| judge_territory(&config.territory, groups))
+    {
+        Ok(judged) => {
+            config.territory = judged.canonical;
+            config.access_gid = judged.access_gid;
+            config.territory_fd = Some(judged.territory);
+            config.save_points = Some(judged.save_points);
+        }
+        Err(_) if forced => {
+            diag!(
+                "weaver-admin: the territory {} does not judge; the force ends the run without it, publishing nothing, and the marker closes forced",
+                config.territory.display()
+            );
+            config.territory_unjudged = true;
+        }
+        Err(refusal) => return Err(refusal),
+    }
     if let Some(libraries) = &config.library_path {
         config.library_path = Some(judge_library_path(libraries, owner)?);
     }
@@ -2574,6 +2663,12 @@ fn judge_territory(
         return Err(refuse("is not grouped to the state group"));
     }
     let canonical = judge_ancestors(directory, &[own, 0])?;
+    // **Named by its canonical path** (#99 area 2, H3): the territory is
+    // opened by the key and the logs are made at the canonical path, so the
+    // two must be one name.
+    if canonical != directory {
+        return Err(refuse("is not named by its canonical path"));
+    }
     let save_points = nix::fcntl::openat(
         opened.as_fd(),
         "save-points",
@@ -2822,6 +2917,7 @@ fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<Servi
         territory: path("territory")?,
         territory_fd: None,
         save_points: None,
+        territory_unjudged: false,
         operator,
         access_gid: 0,
         boundary,
@@ -2832,6 +2928,31 @@ fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<Servi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **`state.log` is root's and the member's group** (#99 area 2, K12):
+    /// verify-load and update-stack read it as the member, and a log
+    /// `root:root` reads empty to them. Perturbation: answer root's group
+    /// and this fails.
+    /// **The territory's two groups are two, and neither is gid 0** (#99
+    /// area 2, H2). Perturbation: drop either half of the comparison and
+    /// this fails.
+    #[test]
+    fn the_territory_groups_are_two_and_not_roots() {
+        let groups = |access, state| TerritoryGroups { access, state }.distinct();
+        assert!(groups(1001, 1002).is_ok());
+        assert!(groups(1001, 1001).is_err(), "one gid for both refuses");
+        assert!(groups(0, 1002).is_err(), "an access group of gid 0 refuses");
+        assert!(groups(1001, 0).is_err(), "a state group of gid 0 refuses");
+    }
+
+    #[test]
+    fn the_state_log_is_grouped_to_the_member() {
+        let member = inventory::MemberAccount {
+            uid: 4242,
+            gid: 4343,
+        };
+        assert_eq!(state_log_owner(member), (0, 4343));
+    }
 
     /// **The cause is the uid sudo reports, parsed strictly**, per
     /// `weaver-admin-Spec` section 2: absent is a root shell and uid 0, a
@@ -3395,6 +3516,7 @@ mod tests {
             home: territory.clone(),
             member_binary: None,
             member_account: None,
+            member_group: None,
         };
         assert!(
             !inventory::agent_can_traverse(&territory, &boundary),
@@ -3542,6 +3664,19 @@ mod tests {
             load_and_read(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
             Some(LifecycleRefusal::BoundaryUnverified),
             "a link at the territory's own name"
+        );
+        // **A link above the territory's name** (#99 area 2, H3): the open
+        // follows it and the logs would be made at the canonical path, so
+        // a key that is not canonical refuses. Perturbation: drop the
+        // canonical comparison and this loads.
+        let via = base.join("via");
+        std::os::unix::fs::symlink(territory.parent().unwrap(), &via).unwrap();
+        let through = via.join(territory.file_name().unwrap());
+        std::fs::write(root.join("territory"), through.display().to_string()).unwrap();
+        assert_eq!(
+            load_and_read(&base, "alpha", me, nix::unistd::getegid().as_raw()).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a territory named through a link above it"
         );
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -3843,7 +3978,7 @@ mod tests {
     fn a_malformed_name_refuses_before_the_base_is_read() {
         for bad in [".", "..", "a/b", "../alpha", "", "al pha"] {
             assert_eq!(
-                load_service_config(&AgentName(bad.into())).err(),
+                load_service_config(&AgentName(bad.into()), false).err(),
                 Some(LifecycleRefusal::NoSuchAgent),
                 "{bad:?}"
             );
@@ -3960,6 +4095,7 @@ mod tests {
             territory: PathBuf::from("/nonexistent/territory"),
             territory_fd: None,
             save_points: None,
+            territory_unjudged: false,
             operator: 1000,
             access_gid: 1000,
             boundary: Ok(BoundaryRead {
@@ -4535,6 +4671,88 @@ mod tests {
             took < std::time::Duration::from_secs(3),
             "answered in {took:?}, inside the five-second wait"
         );
+    }
+
+    /// **A force does not depend on the territory** (the operator's ruling of
+    /// 2026-10-08 on #99, K5): with the territory at a mode the judgment
+    /// refuses, every other verb refuses at the configuration, while the
+    /// force's configuration stands marked unjudged; the force over a run
+    /// already ended publishes nothing from the room, writes no `admin.log`
+    /// line, and closes the marker forced. Perturbation: judge the territory
+    /// for the force too and its configuration refuses.
+    #[test]
+    fn a_force_ends_the_run_where_the_territory_does_not_judge() {
+        use std::os::unix::fs::PermissionsExt;
+        let me = nix::unistd::getuid().as_raw();
+        let mine = nix::unistd::getegid().as_raw();
+        let base = std::env::temp_dir().join(format!(
+            "weaver-admin-force-unjudged-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("alpha");
+        let territory = write_root(&root);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let room = territory.join(save_points::ROOM);
+        std::fs::create_dir(&room).unwrap();
+        let bytes = save_points::tests::save_point("r-1", 1, 0, 1_000_000_000, b"room");
+        let digest = save_points::judge(&bytes).unwrap().digest;
+        std::fs::write(room.join(format!("{digest}.save-point")), &bytes).unwrap();
+        std::fs::set_permissions(&territory, std::fs::Permissions::from_mode(0o711)).unwrap();
+        let groups = TerritoryGroups {
+            access: mine,
+            state: mine,
+        };
+        assert_eq!(
+            load_service_config_judged(&base, "alpha", me, Some(groups), false).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "every other verb refuses the drifted territory"
+        );
+        let mut config = load_service_config_judged(&base, "alpha", me, Some(groups), true)
+            .expect("the force's configuration stands");
+        assert!(config.territory_unjudged);
+        config.coordination_root = base.join("coordination");
+        std::fs::create_dir_all(config.run_directory()).unwrap();
+        save_points::write_marker(
+            &config.root,
+            Some(&save_points::Marker::Open { run: "r-1".into() }),
+        )
+        .unwrap();
+        // The publication runs as this uid, so only the unjudged mark keeps
+        // it from the room.
+        TEST_PUBLICATION.with(|cell| {
+            cell.set(Some((
+                me,
+                save_points::Owner {
+                    uid: me,
+                    gid: nix::unistd::getgid().as_raw(),
+                },
+            )))
+        });
+        assert_eq!(
+            unload_within(&config, TEST_UNLOAD_BOUNDS, true),
+            Ok(unloaded_answer())
+        );
+        record(&config, "force-unload", "unloaded");
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Forced { run: "r-1".into() })
+        );
+        assert!(
+            room.join(format!("{digest}.save-point")).exists(),
+            "nothing is published from the unjudged territory"
+        );
+        assert!(
+            !territory.join("admin.log").exists(),
+            "nothing is written there"
+        );
+        // Without its groups the force still stands.
+        assert!(
+            load_service_config_judged(&base, "alpha", me, None, true)
+                .expect("stands")
+                .territory_unjudged
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// **A forced verb closes the marker where the run already ended**, per
@@ -5335,7 +5553,7 @@ mod tests {
         for reserved in ["x-state", "x-trace", "x-relay", "x-admin", "x-admincon"] {
             assert!(!well_formed(reserved), "{reserved}");
             assert_eq!(
-                load_service_config(&AgentName(reserved.into())).err(),
+                load_service_config(&AgentName(reserved.into()), false).err(),
                 Some(LifecycleRefusal::NoSuchAgent),
                 "{reserved}"
             );

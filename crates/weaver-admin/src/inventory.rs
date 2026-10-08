@@ -43,6 +43,11 @@ pub struct Boundary {
     /// spawn drops to and the store admits. `None` is an unprovisioned box
     /// and never an absent member, the same reading `member_binary` takes.
     pub member_account: Option<MemberAccount>,
+    /// The state group `weaver-<agent>-state` resolved by name, which the
+    /// territory is judged against (`weaver-admin-Spec` section 9). The
+    /// member passes the territory by its primary group, so the account's
+    /// gid must be this one.
+    pub member_group: Option<u32>,
 }
 
 /// The state member's own kernel identity: the uid the spawn drops to and
@@ -302,6 +307,23 @@ fn take_inventory_against(
              Run deploy/create-agent.sh, or useradd --system --no-create-home \
              --user-group it.",
             member_identity_for(name)
+        );
+        return Err(LifecycleRefusal::BoundaryUnverified);
+    }
+    // **And its primary group is the state group, and not root's** (#99
+    // area 2, K1): the territory is judged against the state group by name
+    // and the member passes it by its primary group, so a box where the two
+    // differ would validate and fail every load with nothing naming why.
+    if store.engine != StoreEngine::None
+        && let Some(account) = boundary.member_account
+        && (boundary.member_group != Some(account.gid) || account.gid == 0)
+    {
+        diag!(
+            "boundary unverified: the state member's primary group (gid {}) is not the \
+             group {} resolves to ({:?}), or is gid 0",
+            account.gid,
+            member_identity_for(name),
+            boundary.member_group
         );
         return Err(LifecycleRefusal::BoundaryUnverified);
     }
@@ -1100,6 +1122,7 @@ mod tests {
                 uid: nix::unistd::getuid().as_raw(),
                 gid: nix::unistd::getgid().as_raw(),
             }),
+            member_group: Some(nix::unistd::getgid().as_raw()),
         }
     }
 
@@ -1284,6 +1307,35 @@ mod tests {
         assert_eq!(report.member_account, None, "none stands no member");
         let report = take_inventory(&name, &embedded, &provisioned).expect("sqlite reads");
         assert_eq!(report.member_account, provisioned.member_account);
+        // **The account's primary group must be the state group, and not
+        // gid 0** (#99 area 2, K1). Perturbation: drop the comparison and
+        // both pass the inventory.
+        let mut apart = boundary(&sink_dir, 65533);
+        apart.member_group = apart.member_group.map(|gid| gid.wrapping_add(1));
+        assert!(
+            matches!(
+                take_inventory(&name, &embedded, &apart),
+                Err(LifecycleRefusal::BoundaryUnverified)
+            ),
+            "a primary group other than the state group refuses"
+        );
+        let mut unresolved = boundary(&sink_dir, 65533);
+        unresolved.member_group = None;
+        assert!(
+            take_inventory(&name, &embedded, &unresolved).is_err(),
+            "a state group that does not resolve refuses"
+        );
+        let mut rooted = boundary(&sink_dir, 65533);
+        rooted.member_account = Some(MemberAccount { uid: 65533, gid: 0 });
+        rooted.member_group = Some(0);
+        assert!(
+            take_inventory(&name, &embedded, &rooted).is_err(),
+            "a member grouped to gid 0 refuses even where the names agree"
+        );
+        assert!(
+            take_inventory(&name, &declined, &apart).is_ok(),
+            "none stands no member, so its group is not asked"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1657,6 +1709,7 @@ mod tests {
                 uid: nix::unistd::getuid().as_raw(),
                 gid: nix::unistd::getgid().as_raw(),
             }),
+            member_group: Some(nix::unistd::getgid().as_raw()),
         };
         assert!(
             !agent_can_traverse(&sink_dir, &third_party),

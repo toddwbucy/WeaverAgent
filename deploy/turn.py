@@ -60,17 +60,27 @@ def read_key(base: str, agent: str, key: str) -> str | None:
 
 
 def access_note(agent: str) -> str:
-    """Whether this session holds the agent's access group, through which the
-    territory's declaration and draft are read."""
-    access = f"weaver-{agent}-admin"
-    try:
-        gid = grp.getgrnam(access).gr_gid
-    except KeyError:
-        return f"no group {access} stands on this box, so the agent was not created here"
-    if gid in os.getgroups() or os.getegid() == gid:
-        return f"this session holds {access}, so the file's group or mode is wrong"
-    return (f"this session does not hold {access}, through which the draft is read; create-agent.sh adds "
-            f"the operator to it, and a session that predates that needs a new login")
+    """Whether this session holds the two groups reading the draft takes
+    (#99 area 2 review, K10): the state group, the territory's own, for
+    passage to it, and the access group, the draft's, for reading it."""
+    held = set(os.getgroups()) | {os.getegid()}
+    notes, absent = [], []
+    for group, why in ((f"weaver-{agent}-state", "which passes the territory"),
+                       (f"weaver-{agent}-admin", "through which the draft is read")):
+        try:
+            gid = grp.getgrnam(group).gr_gid
+        except KeyError:
+            absent.append(group)
+            continue
+        if gid not in held:
+            notes.append(f"{group}, {why}")
+    if absent:
+        return f"no group {' or '.join(absent)} stands on this box, so the agent was not created here"
+    if not notes:
+        return (f"this session holds weaver-{agent}-state and weaver-{agent}-admin, so the territory's or "
+                f"the file's group or mode is wrong")
+    return (f"this session does not hold {' or '.join(notes)}; create-agent.sh adds the operator to both, "
+            f"and a session that predates that needs a new login")
 
 
 def main() -> int:
@@ -109,8 +119,9 @@ def main() -> int:
                 text = f.read().decode("utf-8")
         except PermissionError as e:
             # **The draft is read through the access group**, the file being
-            # root:weaver-<agent>-admin 0640, so a refusal names whether this
-            # session holds the group rather than leaving a bare EACCES.
+            # root:weaver-<agent>-admin 0640, past the territory the state
+            # group passes, so a refusal names which of the two this session
+            # lacks rather than leaving a bare EACCES.
             print(f"cannot read the prompt draft {draft}: {e.strerror or e}; {access_note(agent)}", file=sys.stderr)
             return 1
         except OSError as e:

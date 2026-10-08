@@ -34,11 +34,14 @@
 # `admin.log` and `worker.log` once a verb has run, `save-points/` for the
 # published save points and their manifest, beside the state room and the
 # trace. Root reads and writes root's files in root's directory, so no file
-# admin writes stands where another principal could choose it. The access
-# group `weaver-<name>-admin` reads all of it and never writes: it is the
-# territory's group, for passage, and the published save points' group, so
-# the connector reads the declaration and a save point and can rewrite
-# neither. The operator joins that group to read without sudo.
+# admin writes stands where another principal could choose it. The territory
+# itself is the state group's, `weaver-<name>-state` at 0710, which gives
+# passage and lists nothing (the operator's ruling of 2026-10-08 on #1). The
+# access group `weaver-<name>-admin` groups the files beneath it, the
+# declaration, the draft, the logs and `save-points/` with the published save
+# points, and reads them and never writes, so the connector reads the
+# declaration and a save point and can rewrite neither. The operator joins
+# both groups to read without sudo.
 #
 # **The system prompt is state and not a field** (operator's ruling of
 # 2026-10-06): the declaration carries no identity, admin reads no prompt, and
@@ -64,7 +67,8 @@
 # no env_keep, and turns sudo's `pam_session` off for that user so a session
 # never moves the invocation, and the agent it starts, out of the invoker's
 # containment. The observer role grants `show`, and the operator role adds
-# `validate`, `load`, `unload` and `stop`. The rule is checked with `visudo
+# `validate`, `load`, `unload`, `stop`, `save-point`, `restore` and
+# `force-unload`, the eight lines `VERBS` below names. The rule is checked with `visudo
 # -cf` before it is installed. A delegated invocation reads admin's default
 # base, sudo stripping WEAVER_ADMIN_CONFIG, so the rule drives an agent only
 # under `/etc/weaver/admin`.
@@ -319,6 +323,28 @@ bad=$(creatable_in "$AGENT_DIR") || die "the stack record's agent-directory $AGE
 # compares the declaration's sink directory with the canonical territory, so
 # a link in the base's path written here would refuse every verb.
 AGENT_DIR=$(realpath -e -- "$AGENT_DIR") || die "the stack record's agent-directory $AGENT_DIR does not resolve"
+# **A base whose inheritance would make a territory admin refuses is refused
+# here, before anything is made** (#99 area 2 review, K4): a territory made in
+# a setgid base comes out setgid, and one made in a base carrying a default
+# access entry carries it, and admin refuses either at every verb (exact
+# mode 0710, no access entry), which the wall step below does not see. The
+# look is admin's own: either POSIX ACL attribute present, read without
+# following a link; a look that cannot answer refuses.
+read -r base_mode < <(stat -c '%a' -- "$AGENT_DIR" 2>/dev/null) || die "cannot read the mode of the agent-directory $AGENT_DIR"
+(( 8#$base_mode & 8#2000 )) && die "the stack record's agent-directory $AGENT_DIR is setgid (mode $base_mode), so a territory made in it would be setgid, which admin refuses; clear the bit (deploy/REDEPLOY.md), then rerun"
+rc=0
+python3 -c '
+import errno, os, sys
+try:
+    os.getxattr(sys.argv[1], "system.posix_acl_default", follow_symlinks=False)
+except OSError as e:
+    sys.exit(1 if e.errno in (errno.ENODATA, errno.EOPNOTSUPP) else 2)
+' "$AGENT_DIR" || rc=$?
+case $rc in
+  0) die "the stack record's agent-directory $AGENT_DIR carries a default access entry, which a territory made in it would inherit and admin refuses; remove it (deploy/REDEPLOY.md), then rerun" ;;
+  1) ;;
+  *) die "whether the agent-directory $AGENT_DIR carries a default access entry cannot be read" ;;
+esac
 HOME_DIR="$AGENT_DIR/$AGENT_USER"
 STATE_DIR="$HOME_DIR/state"
 # **The declaration, the draft and the save points stand in the territory**
@@ -526,11 +552,12 @@ sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group --
 # passes to its own room by it, and the access group, which reads admin.log,
 # worker.log, the declaration, the draft and the published save points, is
 # not the member's.
-# **The operator reads without sudo through the access group**: the gate's
-# socket by the agent's group, the trace by its group, and the territory with
-# the declaration, the draft, the logs and the save points by the access
-# group. The member's own group, the state group, buys the operator passage
-# of the territory and nothing more, the state room being the member's alone.
+# **The operator reads without sudo through its groups**: the gate's socket
+# by the agent's group, the trace by its group, and the declaration, the
+# draft, the logs and the save points by the access group, past the
+# territory, which the state group passes. The state group buys the operator
+# passage of the territory and nothing more, the state room being the
+# member's alone.
 sudo usermod -aG "$AGENT_USER,$TRACE_GROUP,$STATE_GROUP,$ACCESS_GROUP" "$OPERATOR"
 sudo chmod 2750 "/home/$AGENT_USER"
 printf '   %s uid %s, %s uid %s, %s uid %s, %s uid %s\n' \
@@ -559,10 +586,12 @@ say "territory"
 # `save-points/`, root:$ACCESS_GROUP 0750, where admin writes each copy 0640
 # to the group and the manifest root 0644, so the group reads a save point and
 # rewrites none.
-sudo install -d -o root -g "$STATE_GROUP" -m 0710 "$HOME_DIR"
+# Five-digit modes, so no setgid bit survives however the base stands (#99
+# area 2 review, K4): GNU install keeps one under a four-digit mode.
+sudo install -d -o root -g "$STATE_GROUP" -m 00710 "$HOME_DIR"
 sudo install -o root -g "$TRACE_GROUP" -m 0640 /dev/null "$HOME_DIR/trace.ndjson"
 sudo install -d -o "$MEMBER_USER" -g "$MEMBER_USER" -m 0700 "$STATE_DIR"
-sudo install -d -o root -g "$ACCESS_GROUP" -m 0750 "$SAVE_POINTS"
+sudo install -d -o root -g "$ACCESS_GROUP" -m 00750 "$SAVE_POINTS"
 
 
 say "declaration"
@@ -643,7 +672,7 @@ fi
 # cannot rewrite it, the draft or the save points directory, since a connector
 # that could rewrite the declaration would choose what admin loads.
 sudo -u "$CONNECTOR_USER" test -r "$DECLARATION" \
-  || die "the connector $CONNECTOR_USER cannot read the declaration $DECLARATION through $ACCESS_GROUP: the territory's group or mode is wrong"
+  || die "the connector $CONNECTOR_USER cannot read the declaration $DECLARATION through $STATE_GROUP and $ACCESS_GROUP: the territory's or the file's group or mode is wrong"
 for f in "$DECLARATION" "$PROMPT" "$SAVE_POINTS"; do
   if sudo -u "$CONNECTOR_USER" test -w "$f"; then
     die "THE ACCESS GROUP CAN WRITE $f: the connector could rewrite what admin loads"

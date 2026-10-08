@@ -79,6 +79,17 @@ ADMIN=$(realpath -e -- "$PREFIX/bin/weaver-admin" 2>/dev/null) || die "no weaver
 [ -f "$ADMIN" ] && [ -x "$ADMIN" ] || die "no weaver-admin at $ADMIN"
 bad=$(held_closed "$ADMIN") || die "weaver-admin at $ADMIN is not held closed by root: $bad"
 admin() { WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$ADMIN" "$@" 2>&1 || true; }
+# **answered_state ANSWER STATE: admin's answer is the state named**, read as
+# JSON and never matched as text, as update-stack.sh's reader of the same
+# name (the #94 survey's S22, #99 area 2 review K8).
+answered_state() {
+  python3 -c 'import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except ValueError:
+    sys.exit(1)
+sys.exit(0 if isinstance(d, dict) and d.get("kind") == "state" and d.get("state") == sys.argv[2] else 1)' "$1" "$2"
+}
 
 # **Admin judges the root before this script reads anything in it.** It read
 # `agent.toml` and then counted the sink it names, as root, before admin had
@@ -96,27 +107,59 @@ DECL="$TERRITORY/agent.toml"; [ -f "$DECL" ] || die "no declaration at $DECL"
 
 SINK=$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["trace-sink"]["path"])' "$DECL") \
   || die "the declaration names no trace-sink.path"
-lines() { [ -e "$1" ] && wc -l < "$1" || echo 0; }
+SINK_KIND=$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["trace-sink"].get("kind",""))' "$DECL" 2>/dev/null || true)
+# **Only a regular file is counted** (#99 area 2 review, K6): a pipe or a
+# socket sink is not a file a line count reads, and root opening a FIFO with
+# no writer blocks for ever, so a non-file sink is never opened here and its
+# load is judged by admin's answer and the constituents alone. A link or a
+# FIFO standing where a file sink is declared counts as nothing.
+lines() { if [ -f "$1" ] && [ ! -L "$1" ]; then wc -l < "$1"; else echo 0; fi; }
 
 say "$AGENT"
 plan "declaration $DECL"
-plan "sink        $SINK"
+plan "sink        $SINK ($SINK_KIND)"
 plan "validate    $VERDICT"
-BEFORE=$(lines "$SINK")
-admin unload "$AGENT" >/dev/null
-plan "load        $(admin load "$AGENT" | tail -1)"
+# **The state member's last words**, beside a load that did not stand. Read as
+# the member, whose room it is, never as root: the member can put a link at
+# that name, and root's read would follow it anywhere. Admin creates the log
+# root:<the member's group> 0640 so the member reads it (#99 area 2 review,
+# K12); a read the member is refused prints nothing.
+member_said() {
+  local st said
+  st="$(dirname "$SINK")/state/state.log"
+  said=$(sudo -n -u "weaver-$AGENT-state" tail -n 3 "$st" 2>/dev/null || true)
+  [ -n "$said" ] && { plan "the state member last said:"; printf '%s\n' "$said" | sed 's/^/     /'; }
+  return 0
+}
+# **The first unload is read from its answer** (#99 area 2 review, K8, the
+# sibling of S22): a refused unload leaves a run standing, whose state and
+# constituents the checks below would then read as this load's. The count is
+# taken after it, so the unload's own events are never this load's.
+SAID=$(admin unload "$AGENT" | tail -1)
+answered_state "$SAID" unloaded || die "$AGENT: the unload before the load answered ${SAID:-nothing}, so a load now would not be this script's"
+BEFORE=0
+[ "$SINK_KIND" != file ] || BEFORE=$(lines "$SINK")
+LOADED=$(admin load "$AGENT" | tail -1)
+plan "load        $LOADED"
+# **And the load's** (N5's class): only the idle state is a load that stands.
+if ! answered_state "$LOADED" idle; then
+  member_said
+  admin unload "$AGENT" >/dev/null
+  die "$AGENT: the load answered ${LOADED:-nothing}, not the idle state"
+fi
+if [ "$SINK_KIND" != file ]; then
+  plan "events      not counted: a ${SINK_KIND:-sink of no kind} is not a file a line count reads, so the load is judged by its answer and its constituents"
+else
 AFTER=$(lines "$SINK")
 NEW=$((AFTER - BEFORE))
 if [ "$NEW" -le 0 ]; then
-  st="$(dirname "$SINK")/state/state.log"
-  # Read as the member, whose territory it is, never as root: the member can put
-  # a link at that name, and root's read would follow it anywhere.
-  said=$(sudo -n -u "weaver-$AGENT-state" tail -n 3 "$st" 2>/dev/null || true)
-  [ -n "$said" ] && { plan "the state member last said:"; printf '%s\n' "$said" | sed 's/^/     /'; }
+  member_said
   admin unload "$AGENT" >/dev/null
   die "the load wrote no events to $SINK"
 fi
 plan "events      $NEW new lines"
+# **The load event is `load` exactly** (K8): a match on the word let the
+# unload's own `unload` stand for a load.
 tail -n "$NEW" "$SINK" | python3 -c '
 import sys, json, collections
 kinds = collections.Counter()
@@ -126,12 +169,13 @@ for line in sys.stdin:
     except ValueError: kinds["<unparsed>"] += 1; continue
     k = ev.get("kind") or ev.get("event") or ev.get("type") or "?"
     kinds[k] += 1
-    if load is None and "load" in json.dumps(k).lower(): load = ev
+    if load is None and k == "load": load = ev
 for k, n in kinds.most_common(): print(f"   {n:4d}  {k}")
 if load is None: sys.exit("   no load event among them")
 keep = {k: v for k, v in load.items() if k not in ("content",)}
 print("   load event:", json.dumps(keep)[:600])
 ' || { admin unload "$AGENT" >/dev/null; die "$AGENT: the new events carry no load event, so the run is unloaded"; }
+fi
 # **The constituents, from `show`, judged where they run.** Each is recorded
 # by pid and start time, so a pid the kernel reuses after the unload is never
 # taken for a constituent that survived it.
@@ -151,7 +195,6 @@ start_time() {
   printf '%s' "${20}"
 }
 OWN_CGROUP=$(cat /proc/self/cgroup)
-SINK_KIND=$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["trace-sink"].get("kind",""))' "$DECL" 2>/dev/null || true)
 declare -A ACCOUNT=()
 for who in "weaver-$AGENT" "weaver-$AGENT-state" "weaver-$AGENT-relay"; do
   uid=$(id -u "$who" 2>/dev/null) && ACCOUNT["$uid"]=$who
