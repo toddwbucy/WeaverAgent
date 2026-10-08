@@ -303,6 +303,7 @@ fn member_entry(
         restored,
         pending: None,
         save_point_bound: weaver_state::save_point::SAVE_POINT_BOUND,
+        unlanded: None,
     };
     let code = serve(lines, preload, preload_socket, &mut custody);
     // **An unacknowledged part does not outlive the member**, per
@@ -384,6 +385,28 @@ struct Custody<'a> {
     /// `weaver-state-Spec` section 3: `SAVE_POINT_BOUND` at every standing,
     /// held here so a test can lower it.
     save_point_bound: u64,
+    /// **The first distillate that failed to land since this member stood**,
+    /// on the operator's ruling of 2026-10-08 on #99 (N2): a landing that
+    /// fails rolls back whole, so the holdings miss state the trace holds,
+    /// and a save point taken from them would be published as whole; every
+    /// later `snapshot` answers nothing, so no save point of this member's
+    /// is taken over a gap.
+    unlanded: Option<String>,
+}
+
+/// **Land one distillate, or say it did not land and remember it** (N2):
+/// never silent. The fault goes to standard error as a `state_fault` line,
+/// and the first one is held on the custody, so the next `snapshot` refuses.
+fn land_or_note(custody: &mut Custody<'_>, distillate: &weaver_state::Distillate) {
+    if let Err(fault) = custody.store.land(distillate) {
+        eprintln!(
+            "{}",
+            serde_json::json!({"state_fault": format!(
+                "a distillate failed to land ({fault:?}); no save point is taken from these holdings"
+            )})
+        );
+        custody.unlanded.get_or_insert_with(|| format!("{fault:?}"));
+    }
 }
 
 struct PendingSavePoint {
@@ -542,7 +565,7 @@ fn serve(
                         continue;
                     }
                     if let Some(distillate) = parse_distillate(&line) {
-                        let _ = custody.store.land(&distillate);
+                        land_or_note(custody, &distillate);
                     }
                 }
                 if !live {
@@ -606,7 +629,7 @@ fn drain_harness_lines(
 ) -> Option<std::process::ExitCode> {
     while let Some(line) = harness.take_line() {
         if let Some(distillate) = parse_distillate(&line) {
-            let _ = custody.store.land(&distillate);
+            land_or_note(custody, &distillate);
             continue;
         }
         let Some(ask) = parse_ask(&line) else {
@@ -687,6 +710,12 @@ fn answer_frame(
         // ruling of 2026-10-08 that both readers enforce it. An empty store has no
         // position and its stamp names no run and sequence zero.
         Ask::Snapshot { ordinal } => {
+            // **No save point over holdings that missed a landing** (N2).
+            if let Some(fault) = &custody.unlanded {
+                return Err(weaver_state::CustodyFault::SavePoint(format!(
+                    "a distillate failed to land since this member stood ({fault})"
+                )));
+            }
             let stamp = custody
                 .store
                 .position()?
@@ -1500,6 +1529,132 @@ mod tests {
         );
     }
 
+    /// A store whose landings all fail, the rest delegated to the embedded
+    /// engine, for the watch on a landing that does not land.
+    #[cfg(feature = "sqlite")]
+    struct RefusingLand(weaver_state::engine::sqlite::Sqlite);
+
+    #[cfg(feature = "sqlite")]
+    impl weaver_state::Store for RefusingLand {
+        fn index_election(&mut self, e: &Election) -> Result<(), weaver_state::CustodyFault> {
+            self.0.index_election(e)
+        }
+        fn land(&mut self, _: &weaver_state::Distillate) -> Result<(), weaver_state::CustodyFault> {
+            Err(weaver_state::CustodyFault::LandingFailed(
+                "database or disk is full".into(),
+            ))
+        }
+        fn retire_and_index(
+            &mut self,
+            s: &str,
+            e: &Election,
+        ) -> Result<(), weaver_state::CustodyFault> {
+            self.0.retire_and_index(s, e)
+        }
+        fn replay(
+            &self,
+            s: &str,
+        ) -> Result<Vec<weaver_state::RecalledEvent>, weaver_state::CustodyFault> {
+            self.0.replay(s)
+        }
+        fn held(&self) -> Result<i64, weaver_state::CustodyFault> {
+            self.0.held()
+        }
+        fn shape(
+            &self,
+            s: &str,
+        ) -> Result<Vec<weaver_state::RunShape>, weaver_state::CustodyFault> {
+            self.0.shape(s)
+        }
+        fn recall(
+            &self,
+            s: &str,
+            last_turns: Option<u64>,
+        ) -> Result<Vec<weaver_state::RecalledEvent>, weaver_state::CustodyFault> {
+            self.0.recall(s, last_turns)
+        }
+        fn identity(
+            &self,
+            s: &str,
+        ) -> Result<Vec<weaver_state::RecalledEvent>, weaver_state::CustodyFault> {
+            self.0.identity(s)
+        }
+        fn image(&self) -> Result<Vec<u8>, weaver_state::CustodyFault> {
+            self.0.image()
+        }
+        fn judge_image(
+            &self,
+            image: &[u8],
+            s: &str,
+        ) -> Result<weaver_state::ImageFacts, weaver_state::CustodyFault> {
+            self.0.judge_image(image, s)
+        }
+        fn adopt(&mut self, image: &[u8], e: &Election) -> Result<(), weaver_state::CustodyFault> {
+            self.0.adopt(image, e)
+        }
+        fn schema(&self) -> Result<String, weaver_state::CustodyFault> {
+            self.0.schema()
+        }
+        fn position(
+            &self,
+        ) -> Result<Option<weaver_state::save_point::Stamp>, weaver_state::CustodyFault> {
+            self.0.position()
+        }
+    }
+
+    /// **A landing that does not land is never silent, and no save point is
+    /// taken over it** (the operator's ruling of 2026-10-08 on #99, N2): the
+    /// fault is held on the custody, and the next `snapshot` answers
+    /// nothing, so the harness misses the leg and no save point publishes
+    /// holdings that lack what the trace holds. The landing arrives through
+    /// the drain the harness's lines take. Perturbations: discard the
+    /// landing's result in the drain again, drop the custody's note, or the
+    /// snapshot's look at it, and the snapshot answers.
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn a_landing_that_fails_refuses_every_later_snapshot() {
+        let scratch = Scratch(std::env::temp_dir().join(format!(
+            "weaver-state-unlanded-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        )));
+        std::fs::create_dir_all(&scratch.0).expect("room");
+        let room = Room::open(&scratch.0).expect("opens");
+        let mut store =
+            RefusingLand(weaver_state::engine::sqlite::Sqlite::stand().expect("stands"));
+        let election = Election::default();
+        let mut custody = Custody {
+            store: &mut store,
+            room: &room,
+            session: "s-1",
+            election: &election,
+            restored: weaver_state::Restored::Empty,
+            pending: None,
+            save_point_bound: weaver_state::save_point::SAVE_POINT_BOUND,
+            unlanded: None,
+        };
+        answer_frame(&Ask::Snapshot { ordinal: 1 }, &mut custody)
+            .expect("before any failed landing the snapshot answers");
+        // The landing arrives as the harness sends it, through the drain.
+        let (mut ours, _theirs) = std::os::unix::net::UnixStream::pair().expect("pair");
+        let mut reader = LineReader::new(&mut ours);
+        reader.buffer = concat!(
+            r#"{"envelope":{"session":"s-1","run":"r-1","kind":"turn.started","sequence":"1"}}"#,
+            "\n"
+        )
+        .as_bytes()
+        .to_vec();
+        let mut parking = ReplayParking::new(false);
+        drain_harness_lines(&mut reader, &mut custody, &mut parking);
+        assert!(custody.unlanded.is_some(), "the failed landing is held");
+        let refused = answer_frame(&Ask::Snapshot { ordinal: 2 }, &mut custody)
+            .expect_err("no snapshot over a failed landing");
+        assert!(
+            format!("{refused:?}").contains("failed to land"),
+            "{refused:?}"
+        );
+    }
+
     /// **A snapshot past the save point's bound answers nothing and leaves
     /// no part**, per `weaver-state-Spec` section 3 on the operator's ruling
     /// of 2026-10-08: with the custody's bound lowered under the file, the
@@ -1528,6 +1683,7 @@ mod tests {
             restored: weaver_state::Restored::Empty,
             pending: None,
             save_point_bound: weaver_state::save_point::SAVE_POINT_BOUND,
+            unlanded: None,
         };
         let answered = answer_frame(&Ask::Snapshot { ordinal: 1 }, &mut custody)
             .expect("at the standing bound the snapshot answers");

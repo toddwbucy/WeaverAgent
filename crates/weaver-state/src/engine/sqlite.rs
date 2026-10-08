@@ -416,6 +416,7 @@ impl Store for Sqlite {
         scratch
             .deserialize_read_exact(rusqlite::MAIN_DB, image, image.len(), false)
             .map_err(|e| fault("deserialize", e))?;
+        lift_size_limit(&scratch)?;
         drop_elected_indexes(&scratch)?;
         build_indexes(&scratch, election)?;
         let finished = scratch
@@ -426,6 +427,7 @@ impl Store for Sqlite {
         self.connection
             .deserialize_read_exact(rusqlite::MAIN_DB, &finished[..], finished.len(), false)
             .map_err(|e| fault("swap", e))?;
+        lift_size_limit(&self.connection)?;
         self.connection.flush_prepared_statement_cache();
         Ok(())
     }
@@ -604,6 +606,51 @@ const TYPED_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS message (
      );
      CREATE INDEX IF NOT EXISTS part_event ON part (event_id, ordinal);
      CREATE INDEX IF NOT EXISTS series_event ON series (event_id, member, ordinal);";
+
+/// **An adopted image grows as a first run's store does** (the operator's
+/// ruling of 2026-10-08 on #99, N2): a deserialized database is SQLite's
+/// in-memory file, capped at `SQLITE_MEMDB_DEFAULT_MAXSIZE`, one gibibyte,
+/// which `open_in_memory`'s store never meets, so a restored run's landings
+/// past it failed `SQLITE_FULL` and an index build near it refused the
+/// restore. The cap is lifted to the largest the engine admits, so the save
+/// point's bound in the snapshot stays the one ceiling, as on a first run.
+fn lift_size_limit(connection: &Connection) -> Result<(), CustodyFault> {
+    let mut limit: i64 = i64::MAX;
+    // SAFETY: the handle is this live connection's, used on this thread for
+    // the one call; `main` names its attached database; `limit` is the
+    // `sqlite3_int64` the size-limit control reads and writes, alive across
+    // the call.
+    let code = unsafe {
+        rusqlite::ffi::sqlite3_file_control(
+            connection.handle(),
+            c"main".as_ptr(),
+            rusqlite::ffi::SQLITE_FCNTL_SIZE_LIMIT,
+            (&mut limit as *mut i64).cast(),
+        )
+    };
+    if code != rusqlite::ffi::SQLITE_OK || limit != i64::MAX {
+        return Err(CustodyFault::SavePoint(format!(
+            "the adopted image's size limit does not lift (code {code}, limit {limit})"
+        )));
+    }
+    Ok(())
+}
+
+/// The adopted database's size limit, read without changing it.
+#[cfg(test)]
+fn size_limit(connection: &Connection) -> i64 {
+    let mut limit: i64 = -1;
+    // SAFETY: as in `lift_size_limit`; a negative argument reads the limit.
+    unsafe {
+        rusqlite::ffi::sqlite3_file_control(
+            connection.handle(),
+            c"main".as_ptr(),
+            rusqlite::ffi::SQLITE_FCNTL_SIZE_LIMIT,
+            (&mut limit as *mut i64).cast(),
+        );
+    }
+    limit
+}
 
 /// Land one event's typed rows inside the caller's transaction.
 fn land_typed(
@@ -1191,6 +1238,10 @@ mod tests {
             1,
             "one judgment per restore"
         );
+        // **The adopted store has no one-gibibyte cap** (N2): its size limit
+        // is lifted past the save point's bound, as a first run's store has
+        // none. Perturbation: drop the lift and the limit reads 1073741824.
+        assert_eq!(size_limit(&restored.connection), i64::MAX);
         assert_eq!(
             restored.held().expect("held"),
             1,

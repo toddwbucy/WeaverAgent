@@ -383,7 +383,15 @@ point is at most one gibibyte**, 1073741824 bytes of rendered file, on the opera
 ruling of 2026-10-08 that both readers enforce the bound admin's inventory holds: a
 `snapshot` whose save point would exceed it answers nothing, the reason said on the
 member's standard error, and leaves no part, so the harness's bound converts the silence
-as it does any failed write. **The
+as it does any failed write. **No save point is taken over a landing that did not land**
+(the operator's ruling of 2026-10-08 on #99): a distillate whose landing fails rolls back
+whole, so the holdings lack what the trace holds; the failure is said on standard error
+as a `state_fault` line, never dropped, and every later `snapshot` of that member answers
+nothing, so the leave refuses `SavePointNotTaken` and the operator forces, the next load
+recording the reset. **An adopted image grows as a first run's store does**: the engine's
+in-memory file for a deserialized database is capped at one gibibyte, which a store stood
+empty never meets, so after every deserialize at an adoption the member lifts that cap to
+the largest the engine admits, and the save point's bound stays the one ceiling. **The
 schema the stamp names is the store's own**: every object of the catalog with its
 statement, in a fixed order, exempting only an object of type index whose statement is
 exactly the election's generated form, `CREATE INDEX field_elected_<hex of the key path>
