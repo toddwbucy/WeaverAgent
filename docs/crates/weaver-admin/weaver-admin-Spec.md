@@ -425,7 +425,7 @@ section 3 states where that obligation lands now.
 | State | `load` | `unload` (graceful) | `force-unload` | `save-point` | `restore` | `show` |
 |---|---|---|---|---|---|---|
 | S0 | S1 | nothing to do: `Unloaded` | nothing to do: `Unloaded` | refuse `OutOfOrder` | names the save point for the next load | `Unloaded` |
-| S0d | S1: the load publishes the room's finished save points as recovered, and records the reset from the marker | publishes the room's finished save points as recovered first (section 6), refusing `SavePointNotTaken` naming `published` where a publication refuses or leaves a file; then `Unloaded`, the marker left as it stands, so the next load records `NoCleanUnload` | publishes the room first as `unload` does, refusing the same way; then closes the marker `Forced` where it stands `Open`, the operator's choice, and prints `Unloaded`, so the next load records `ForcedUnload` | refuse `OutOfOrder` | as S0 | `Unloaded` |
+| S0d | S1: the load publishes the room's finished save points as recovered, and records the reset from the marker | publishes the room's finished save points as recovered first (section 6), refusing `SavePointNotTaken` naming `published` where a publication refuses or leaves a file; then `Unloaded`, the marker left as it stands, so the next load records `NoCleanUnload` | publishes the room first as `unload` does, refusing the same way; then `Unloaded`, the marker left as it stands: a force on an agent already down ended nothing, so the next load records the cause the marker holds | refuse `OutOfOrder` | as S0 | `Unloaded` |
 | S1 | refuse `InvocationInFlight` | refuse `InvocationInFlight` | joins nothing, no run being entered: waits for the invocation lock, through the load's publication of recovered files before the enter, bounded by size per section 6, then at most the load's own bound (section 2), then acts on what it finds | refuse `InvocationInFlight` | refuse `InvocationInFlight` | `InTransition` |
 | S2 | refuse `AgentRunning` | S4, and with no turn, straight to S5 | S10, sole | a save point at rest, published at once; the `save_point` event | names the save point for the next load | `Idle` |
 | S3 | refuse `AgentRunning` | S4; the turn continues | S10, sole | refuse `ActivityNotAtRest` | as S2 | `Active` |
@@ -503,7 +503,7 @@ A leave that stayed graceful whose save point is not taken answers no `Left` (a 
 
 | # | Invariant | Held by |
 |---|---|---|
-| I1 | **One owner.** One admin invocation mutates the agent at a time, by the invocation lock: a graceful unload holds it from its first step to its conclusion, and a force beside a holder acts lock-free only through the harness (`JoinLeave`) or through process ends. **The conclusion is serialized by the lock and idempotent per run**: every caller answered `Left` concludes under the lock, and a marker closed for a run is never rewritten. **Every marker write is under the invocation lock**: the load's `Open`, the conclusion, the escalation's `Forced` after the kill, and the recovery of a run found ended (S0d). | the lock; the conclusion |
+| I1 | **One owner.** One admin invocation mutates the agent at a time, by the invocation lock: a graceful unload holds it from its first step to its conclusion, and a force beside a holder acts lock-free only through the harness (`JoinLeave`) or through process ends. **The conclusion is serialized by the lock and idempotent per run**: every caller answered `Left` concludes under the lock, and a marker closed for a run is never rewritten. **Every marker write is under the invocation lock**: the load's `Open`, the conclusion, and the escalation's `Forced` after the kill; a verb that finds the run ended (S0d) writes no marker. | the lock; the conclusion |
 | I2 | **Agreement.** For any run that ends with `Left`, the `unload` event's `forced` and the `Left` answer's `forced` agree, each the leave's state at its end and not the directive it began as, the marker is the conclusion's outcome row for that `Left`, `forced_by` names any joining force, and `adopted_by` names any adopting graceful caller. A run with no `unload` event never answered `Left`, and its marker is `Open` or `Forced`; a worker that dies in S7, before `Left`, `unload` authored or not, is S8 as far as this crate can tell, and its marker stays `Open`. A load's rollback (S1 x `Leave`, below) is exempt by name. | both unloads; `Left.forced`; `forced_by` |
 | I3 | **Force always ends the run within a bound, measured from the moment the force can act**: the leave bound for a harness that answers, plus the escalation for one that does not, a join, or a forced `Leave` into an orphaned leave, turning the leave forced at once. A force behind a holder first waits that holder's own bound, and takes over none: a load's pre-enter publication, bounded by size per section 6, then its time bound (section 2), or, for a holder that is publishing (a `save-point`'s publication, or another caller's conclusion), the publication's copy, bounded by size per section 6 and not by time. The escalation applies to an unanswered join, never to the wait behind a holder. Every leg from the lower on is bounded, and those bounds sum inside this crate's 150 seconds; the drain and the wind-down are bounded only where the declaration sets them (the bounds, below). | the forced unload; the bounds below |
 | I4 | **Nothing lost silently.** Any run whose state since its last published save point is not kept leaves its marker `Open` or `Forced`, and the next load records the reset with its reason (`NoCleanUnload` or `ForcedUnload`) on the trace. A `Closed` marker means a save point of this run's state published, or the run elected no state member and had nothing to keep (the conclusion's outcomes). | the graceful unload, step 8; the forced unload |
@@ -805,15 +805,17 @@ is lost silently, a `Closed` marker meaning a save point of this run's state pub
 (or, for a run electing no state member, nothing to keep; 3.0, the conclusion's outcomes):
 with the
 run gone, nothing tells a leave whose publication failed from a run that crashed with
-an on-demand save point in its room, and a published file proves no leave. So a forced
-verb closes the marker as forced where it stands open, the operator's choice, and an
-unforced one closes nothing, the next load recording `NoCleanUnload`. A conservative
+an on-demand save point in its room, and a published file proves no leave. So a verb that
+finds the run ended, forced or not, closes nothing and leaves the marker as it stands: a
+force on an agent already down ended nothing, and relabelling a crash as the operator's
+force would have the next load record `ForcedUnload` where the cause was
+`NoCleanUnload`. A conservative
 label is never a false one. The survey's aim that a force record no `ForcedUnload` over
 a leave's save point it published yields to that rule: a retry after `published` records a
 reset, forced or not, over a leave that did take its save point, until the leave's
 provenance in the marker, the lifecycle act's, can tell the two apart. A
 forced leave the harness refuses past its `Left`, its organs going down behind the
-refusal, closes it the same inside the after-left wait before the refusal returns, so
+refusal, is no run found ended: it closes the marker `Forced` under its lock inside the after-left wait before the refusal returns, so
 the next load records `ForcedUnload` and never `NoCleanUnload` for a run the operator
 forced. **A force does not depend on the territory** (the operator's ruling of
 2026-10-08 on #99): where the territory does not judge, or its groups do not resolve,
@@ -1174,8 +1176,8 @@ and change nothing (3.0, the conclusion; I1); a force that escalates a silent ha
 writes `Forced` after the kill and never before it, once it holds the invocation lock,
 leaving a marker already closed for the run as it stands (3.0, the forced unload; I3).
 **Every marker write is under the invocation lock** (I1): the load's `Open` after the
-enter answers, the conclusion, the escalation's `Forced`, and a verb's recovery of a run
-it finds ended, so no two writes race and a marker closed for a run is never rewritten. **A load that rolls back after
+enter answers, the conclusion and the escalation's `Forced`, a verb that finds the run
+ended writing none, so no two writes race and a marker closed for a run is never rewritten. **A load that rolls back after
 its `load` event is on the trace leaves the marker open on that run** (the operator's
 ruling of 2026-10-08 on #99), whether or not this crate read its `Ready`: an enter refused
 after `load`, or a `Ready` past the load bound, authored `load` all the same, so the next
