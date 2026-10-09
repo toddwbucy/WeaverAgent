@@ -1377,8 +1377,8 @@ S6 and S10 `show` answers the same whether the unload's invocation still holds t
 or has died (`weaver-admin-Spec` section 3, S4 to S7 and S10 x `show`; the operator's
 ruling of 2026-10-09). In S7 and S8 the leave's last waits, the SPU's release, the trace's drain and the reaps, do not poll the listener, so with the holder dead an observation is answered `InTransition` where the harness answers inside the observation's bound and otherwise goes `Unanswered`, which there means a run ending and not a wedged one: the caller asks again, and the run lock freeing turns the answer into `Unloaded`. After a
 leave the answer is `Unloaded` with no load, the position being terminal and the
-observation not an act, so it is the one directive the left position answers rather than
-refuses. No event is authored and no bracket touched: an observation mid-turn reads the
+observation not an act, so it is, beside a late caller's `Leave` answered the `Left` as it
+stands, a directive the left position answers rather than refuses. No event is authored and no bracket touched: an observation mid-turn reads the
 turn key and the held facts and disturbs nothing. **The state the observation answers is
 true of the run.** Since 2026-09-05 the turn key stands on the run from the bracket's
 open until its close lands, set by the seat where the key is minted and cleared where
@@ -3233,9 +3233,10 @@ for the organs whose side is unwritten.
 - A directive out of order is refused and not queued: a leave arriving before
   any enter answers `OutOfOrder` and reaches no unwind, and a directive
   arriving after a leave answers the same, the left position being terminal,
-  but for `JoinLeave` and the `Leave`s section 6 admits while a leave is
-  pending or once it is answered (a join, an adoption, a late caller answered
-  the `Left` as it stands). The compile pin of section 3 holds that the refusal reaches a match
+  but for `Observe`, answered `InTransition` while a leave is pending and
+  `Unloaded` once it is left, and `JoinLeave` and the `Leave`s section 6 admits
+  while a leave is pending or once it is answered (a join, an adoption, a late
+  caller answered the `Left` as it stands). The compile pin of section 3 holds that the refusal reaches a match
   arm rather than a flag check, and this holds what the arm then does, an arm
   being free to queue or to answer the wrong refusal while compiling exactly as
   well. Confirmed twice, by watching the early leave reach the unwind path when

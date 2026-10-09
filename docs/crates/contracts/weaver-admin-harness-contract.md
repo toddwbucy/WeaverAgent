@@ -441,8 +441,8 @@ an obligation on the party that could break it.
   exchange naming the arm, rather than a `fault` event, the report to admin and
   the account on the stream being two different things.
 - Leave is terminal for the worker and is pending at most once. While one is pending
-  (`weaver-admin-Spec` section 3, S4 to S7 and S10), every directive but `JoinLeave`
-  and a `Leave` is refused `OutOfOrder`. While the holder lives, admin's invocation lock
+  (`weaver-admin-Spec` section 3, S4 to S7 and S10), every directive but `Observe`,
+  answered `InTransition`, `JoinLeave` and a `Leave` is refused `OutOfOrder`. While the holder lives, admin's invocation lock
   refuses those verbs before it dials (I1). Where it has died while the leave can still
   change (S4 to S6, or S10), any forced `Leave` joins the
   orphaned leave as `JoinLeave` does, and an unforced `Leave` adopts a
@@ -574,8 +574,8 @@ ask, because admin answers nothing. The cases:
   parse
 - the directive is out of order for the channel's state: a `JoinLeave` with no leave
   pending; an unforced `Leave` meeting a pending forced leave; and, while a leave is
-  pending, any directive but `JoinLeave` and the `Leave`s the ordering rule above
-  admits (a forced `Leave` joining in S4 to S6 or in S10,
+  pending, any directive but `Observe` (answered `InTransition`), `JoinLeave` and the
+  `Leave`s the ordering rule above admits (a forced `Leave` joining in S4 to S6 or in S10,
   an unforced one adopting a graceful leave in S4 to S6, and either from S7 on, answered
   the `Left` as it stands)
 - activity is not at rest, so no save point is taken on demand (`weaver-admin-Spec`
