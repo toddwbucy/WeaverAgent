@@ -1186,7 +1186,11 @@ records the miss as a `refusal` of the leave carrying `save_point_not_taken` and
 before `unload`. **A run with no `unload` event never answered `Left`** (I2), the
 harness answering `Left` only after the writer's queue has drained `unload` to the
 sink, per `weaver-admin-harness-contract` section 4, so a reader keys a run's close on
-`unload` and its `forced` and never infers one from the record's end. The converse does
+`unload` and its `forced` and never infers one from the record's end. **A record that
+ends with a turn started and never closed, and no `unload`, is a worker's death**: the
+worker is the trace's author and cannot record its own death, so the unclosed final
+turn is the account that its request was not completed, and the next load records the
+reset (`weaver-admin-Spec` section 3, S8b and I5). The converse does
 not hold: a worker that dies in S7 after `unload` and before `Left` leaves an
 `unload` with no answer, which admin meets as S8b with the marker `Open` (S7 x the worker
 dies). A member that dies while the worker lives ends nothing on the record: in S4 to S6

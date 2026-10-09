@@ -183,7 +183,12 @@ response path, as extensions to this page rather than replacements of it.
 - **What a dialer sees, state by state**, per the lifecycle state table approved by
   the operator on 2026-10-09, recorded on #1, whose text is `weaver-admin-Spec`
   section 3, and `weaver-harness-Spec` section 6. No request the gate admitted is
-  dropped unanswered and unrecorded (I5).
+  dropped unanswered and unrecorded while the agent's worker lives (I5).
+  - **The worker dying** (any state): every connection, the one whose turn is running
+    and any waiting behind it, closes unanswered. The record ends there unclosed, a
+    turn started and never closed being the trace's account that its request was not
+    completed, and the agent's next load records the reset (`weaver-admin-Spec`
+    section 3, S8b and I5).
   - **Serving, at rest**: the request is admitted and its turn runs (S2 x dialer
     request).
   - **Serving, a turn in flight**: the request is admitted and queued behind the
