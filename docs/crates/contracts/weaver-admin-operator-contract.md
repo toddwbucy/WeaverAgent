@@ -256,7 +256,10 @@ was not kept.
 `restore` names the save point the next load restores in every state that answers it,
 the live restore being A5's. `stop` and `validate` take the invocation lock as every
 line but `show` does, so each refuses `InvocationInFlight` wherever the table shows an
-invocation holding it (S1, S4 to S8, S10, S11); a `stop` in S9 answers `AtRest`. The
+invocation holding it (S1, S4 to S7, S8a, S10, S11); a `stop` in S9 answers `AtRest`,
+and in S8b, where no invocation holds it, both take the free lock: `stop`, no worker
+listening, refuses `Unanswered` once the dial's bound passes, and `validate` answers as
+it does in any state, starting nothing. The
 lock is taken before the state is read, so a line that meets a held lock refuses
 `InvocationInFlight` whatever the state behind it. `show` alone reads beside a holder, and
 what it prints is one ladder (`weaver-admin-Spec` section 3): `InTransition` at once

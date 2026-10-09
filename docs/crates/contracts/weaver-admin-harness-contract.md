@@ -332,9 +332,10 @@ same `Left`, `forced` true (S4, S5, S6 x force-unload). A later join receives th
 `Left` and is named nowhere. **From S7 on**, the save point taken or missed and
 the leave's outcome fixed, a join the harness holds at the seal adds nothing to the
 record and is answered with the `Left` as it stands, its caller concluding (S7 x
-force-unload; the conclusion), and a join after the unlink finds no socket. **Where a
-forced leave is pending** (S10) the join is answered with that leave's `Left` (S10 x
-force-unload). **A `Leave` meeting a pending leave is refused `OutOfOrder`**, forced or
+force-unload; the conclusion), and a join after the unlink finds no socket. **Where the
+pending leave is a force's or a rollback's** (S10, S1) the `JoinLeave` is refused
+`OutOfOrder`, a second force having refused `InvocationInFlight` at admin before it
+dials (`weaver-admin-Spec` section 3, S10 x force-unload). **A `Leave` meeting a pending leave is refused `OutOfOrder`**, forced or
 not: the join is the one overlap the operating envelope admits (`weaver-agent-PRD`
 section 6.1), and an invocation killed mid-command gets admin's conservative answer,
 never a takeover (`weaver-admin-Spec` section 3, outside the envelope). **The harness hears a join in every wait of
@@ -448,8 +449,9 @@ an obligation on the party that could break it.
   forced leave is refused `OutOfOrder`. A leave refused `SavePointNotTaken`, one that stayed graceful to its
   miss (a forced one answering `Left` instead), is no longer pending, and the run stands entered at rest for a retried or a forced `Leave`
   (S9).
-- `JoinLeave` is valid only while a leave is pending, and is refused `OutOfOrder`
-  otherwise, before the enter included. Admin sends one only where the lock's recorded
+- `JoinLeave` is valid only while a leave an `unload` directed is pending (S4 to S7),
+  turned forced since or not, and is refused `OutOfOrder` otherwise: with no leave
+  pending, before the enter included, and against a force's leave (S10) or a rollback's. Admin sends one only where the lock's recorded
   verb is `unload` (`weaver-admin-Spec` section 3, the forced unload, joining), so the
   harness never tells a force a holder's kind.
 - Within the run, the record's order is `weaver-admin-Spec` section 3, I9: the
@@ -572,7 +574,7 @@ ask, because admin answers nothing. The cases:
   carries its reason, so the aggregate answer is one refusal rather than a report to
   parse
 - the directive is out of order for the channel's state: a `JoinLeave` with no leave
-  pending; and, while a leave is pending, any directive but `Observe` (answered
+  pending, or against a force's or a rollback's leave; and, while a leave is pending, any directive but `Observe` (answered
   `InTransition`) and `JoinLeave`, a `Leave` of either kind included
 - activity is not at rest, so no save point is taken on demand (`weaver-admin-Spec`
   section 3, S3 x save-point); a leave is never refused for activity
