@@ -238,7 +238,7 @@ state; it reads `show` and acts on what it prints.
 | S8b, the worker gone with no answer (it died), a process still holding the run | `AgentRunning` until the run ends, then as S0d | ends what still holds the run, then publishes what the run left as recovered; the next load records `NoCleanUnload` | the same as `unload`, the marker left as it stands | `OutOfOrder` | `RestoreNamed` | `InTransition` with the run's processes named, then `Unloaded` |
 | S9, an unload stopped at its save point | `AgentRunning` | retried: the save point, then down | the forced unload | `SavePointTaken` | `RestoreNamed` | `Idle`, the gate lowered |
 | S10, a force in progress | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
-| S11, a silent worker being ended | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+| S11, a silent worker being ended | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` where a force is ending it; beside an `unload` ending it, joins, below, and ends it beside the unload, the second ending changing nothing | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 
 **The table is for one command at a time** (`weaver-agent-PRD` section 6.1, the
 operating envelope): a caller issues one command and waits for its answer, the one
