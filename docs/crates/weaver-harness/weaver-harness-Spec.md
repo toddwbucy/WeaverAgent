@@ -2147,7 +2147,8 @@ served.
    queue depth and authors any pressure `fault` the crossing calls for, as the pressure
    rule of section 4 states; then `unload` is authored with `forced`, the leave's cause
    and the release outcome, the run's terminal event, nothing authored after it (I9); the
-   writer is drained, and `Left { save_point, forced }` answered, `forced` on both being
+   writer is drained, and `Left { save_point, forced, no_state }` answered, `no_state` true
+   where the run elects no state member, `forced` on both being
    the leave's state at its end, never the directive it began as: false where it stayed
    graceful, true where a join or a declared bound turned it forced (I2). The member,
    released before `unload`, needs nothing after it: its save point is taken and its
@@ -2171,7 +2172,7 @@ closed by the gate unanswered (I5); cancel the turn in flight as a stop does, re
 a stop naming the unload, state holding what landed up to the cancel; run no wind-down;
 take the leave's save point and report it as any leave does; release the SPU and the
 member as item 6 does; and author `unload` last with `forced` true and the release
-outcome, answering `Left { save_point, forced: true }`. Where the save point cannot
+outcome, answering `Left { save_point, forced: true, no_state }`. Where the save point cannot
 be taken, the member dead or a leg unanswered, the forced leave comes down without one,
 `Left` naming none and the miss recorded as a lifecycle refusal of the leave naming the
 leg, so the next load carries the reset admin resolves from its marker (I4).

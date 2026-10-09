@@ -302,7 +302,7 @@ with none. Admin leaves the marker as section 4's marker-write rule gives (K1), 
 rollback is the exemption I2 names. The directive marks it, never the harness's
 position.
 
-**`Left` carries `forced`**, required on the wire with no default, true where the leave
+**`Left` carries `forced` and `no_state`**, each required on the wire with no default, `no_state` true where the run elects no state member (a diagnostic binding, or a serving run with no member seam), so a `Left` with no save point says on the wire whether there was nothing to keep or the save point was not taken; `forced` true where the leave
 came down forced, directed so, joined, or turned so past a declared bound, so every
 invocation answered `Left` concludes by it, the first closing the marker as the leave
 ended and the rest finding it closed (`weaver-admin-Spec` section 3, the conclusion), and the
