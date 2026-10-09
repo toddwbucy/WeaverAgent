@@ -3,8 +3,8 @@
 //!
 //! The table is keyed by the agent's state, which admin never sees whole: it
 //! sees the invocation lock (and, held, the holder's recorded verb), the run
-//! lock, the marker, and the worker's word to `Observe`. So the decision is two
-//! functions, each with its own table test. `class_of` folds what admin saw
+//! lock and the worker's word to `Observe`, never the marker. So the decision
+//! is two functions, each with its own table test. `class_of` folds what admin saw
 //! into the classes it can tell apart, which is where two states that look
 //! alike to admin (S2, S3 and S9 all answering) meet. `act` gives each verb's
 //! action in each class, one case per cell or cells of 3.0 the class covers.
@@ -25,15 +25,14 @@
 )]
 
 /// What admin saw, in the order it looks: the invocation lock first, then the
-/// run lock, then the marker where the run lock is free or the worker's word
-/// where it is held.
+/// run lock, then the worker's word where the run lock is held.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Seen {
     /// Another invocation holds the invocation lock exclusively, its recorded
     /// verb read.
     Holder(HolderVerb),
     /// The invocation lock is this verb's and the run lock is free.
-    RunLockFree(MarkerSeen),
+    RunLockFree,
     /// The invocation lock is this verb's and the run lock is held.
     RunLockHeld(WorkerSeen),
 }
@@ -49,15 +48,6 @@ pub enum HolderVerb {
     Restore,
     Stop,
     Validate,
-}
-
-/// The marker as read, section 4.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MarkerSeen {
-    None,
-    Open,
-    Closed,
-    Forced,
 }
 
 /// The worker's word to `Observe`, or what stood in for it.
@@ -76,11 +66,10 @@ pub enum WorkerSeen {
 /// The classes of state admin can tell apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdminView {
-    /// S0: nothing stands, the marker `Closed` or absent.
+    /// S0, S0d, and S8b once the run lock frees: nothing stands. The marker
+    /// tells them apart and is the next load's to read; what S0d asks of an
+    /// unload, publishing the room, finds nothing to do in S0.
     Down,
-    /// S0d, and S8b once the run lock frees: nothing stands, the marker
-    /// `Open` or `Forced`.
-    DownDirty,
     /// A living `unload` holds the invocation lock: S4 to S7, S8a concluding
     /// it, and S11 where the holder is that `unload`.
     HeldByUnload,
@@ -123,9 +112,8 @@ pub enum VerbAction {
     /// A held run lock whose worker is silent: no load ends a run.
     RefuseUnanswered,
     RefuseOutOfOrder,
-    /// Nothing to do: `Unloaded`.
-    AnswerUnloaded,
-    /// Publish the room's finished save points as recovered, then `Unloaded`,
+    /// Publish the room's finished save points as recovered, nothing in S0's
+    /// empty room, then `Unloaded`,
     /// the marker left as it stands for the next load's reset.
     PublishRoomThenUnloaded,
     /// The graceful leave, the harness choosing S4, S5 or S9's retry.
@@ -159,7 +147,7 @@ pub enum VerbAction {
 
 /// **Folds what admin saw into the class it can tell apart**: the holder's verb
 /// decides alone where one holds, since only `force-unload` acts beside a
-/// holder and only an `unload`'s; the marker decides where nothing stands; the
+/// holder and only an `unload`'s; the run lock says whether anything stands; the
 /// worker's word where something does.
 pub fn class_of(seen: Seen) -> AdminView {
     match seen {
@@ -172,8 +160,7 @@ pub fn class_of(seen: Seen) -> AdminView {
             | HolderVerb::Stop
             | HolderVerb::Validate,
         ) => AdminView::HeldByOther,
-        Seen::RunLockFree(MarkerSeen::None | MarkerSeen::Closed) => AdminView::Down,
-        Seen::RunLockFree(MarkerSeen::Open | MarkerSeen::Forced) => AdminView::DownDirty,
+        Seen::RunLockFree => AdminView::Down,
         Seen::RunLockHeld(WorkerSeen::Idle | WorkerSeen::Active) => AdminView::Serving,
         Seen::RunLockHeld(WorkerSeen::Silent) => AdminView::Wedged,
         Seen::RunLockHeld(WorkerSeen::InTransition) => AdminView::LeavePendingUnheld,
@@ -199,17 +186,16 @@ pub fn act(verb: Verb, view: AdminView) -> VerbAction {
         // Wherever the lock is this verb's: the live restore is A5's.
         (
             Verb::Restore,
-            Down | DownDirty | Serving | Wedged | LeavePendingUnheld | NeverEntered | WorkerGone,
+            Down | Serving | Wedged | LeavePendingUnheld | NeverEntered | WorkerGone,
         ) => NameForNextLoad,
 
-        (Verb::Load, Down | DownDirty) => Start,
+        (Verb::Load, Down) => Start,
         (Verb::Load, Serving | LeavePendingUnheld | NeverEntered | WorkerGone) => {
             RefuseAgentRunning
         }
         (Verb::Load, Wedged) => RefuseUnanswered,
 
-        (Verb::Unload | Verb::ForceUnload, Down) => AnswerUnloaded,
-        (Verb::Unload | Verb::ForceUnload, DownDirty) => PublishRoomThenUnloaded,
+        (Verb::Unload | Verb::ForceUnload, Down) => PublishRoomThenUnloaded,
         (Verb::Unload, Serving | Wedged) => DirectLeave,
         (Verb::ForceUnload, Serving | Wedged) => DirectForcedLeave,
         (Verb::Unload, LeavePendingUnheld) => RefuseOutOfOrder,
@@ -219,11 +205,11 @@ pub fn act(verb: Verb, view: AdminView) -> VerbAction {
         }
 
         (Verb::SavePoint, Serving | Wedged) => DirectSavePoint,
-        (Verb::SavePoint, Down | DownDirty | LeavePendingUnheld | NeverEntered | WorkerGone) => {
+        (Verb::SavePoint, Down | LeavePendingUnheld | NeverEntered | WorkerGone) => {
             RefuseOutOfOrder
         }
 
-        (Verb::Show, Down | DownDirty) => ShowUnloaded,
+        (Verb::Show, Down) => ShowUnloaded,
         (Verb::Show, Serving | LeavePendingUnheld) => ShowWorkersWord,
         (Verb::Show, Wedged) => ShowUnanswered,
         (Verb::Show, NeverEntered | WorkerGone) => ShowInTransitionConstituents,
@@ -258,24 +244,9 @@ mod tests {
 
     // **The state-to-class mapping**: each state's presentation to admin.
     class!(
-        s0_presents_down_with_no_marker,
-        Seen::RunLockFree(MarkerSeen::None),
+        s0_s0d_and_s8b_freed_present_down,
+        Seen::RunLockFree,
         V::Down
-    );
-    class!(
-        s0_presents_down_with_a_closed_marker,
-        Seen::RunLockFree(MarkerSeen::Closed),
-        V::Down
-    );
-    class!(
-        s0d_presents_down_dirty_with_an_open_marker,
-        Seen::RunLockFree(MarkerSeen::Open),
-        V::DownDirty
-    );
-    class!(
-        s0d_presents_down_dirty_with_a_forced_marker,
-        Seen::RunLockFree(MarkerSeen::Forced),
-        V::DownDirty
     );
     class!(
         s1_presents_held_by_other,
@@ -348,69 +319,36 @@ mod tests {
         V::NeverEntered
     );
 
-    // S0.
-    cell!(s0_x_load_starts, Verb::Load, V::Down, A::Start);
+    // S0 and S0d, the room published where it holds anything.
+    cell!(s0_s0d_x_load_starts, Verb::Load, V::Down, A::Start);
     cell!(
-        s0_x_unload_answers_unloaded,
+        s0_s0d_x_unload_publishes_the_room_then_unloaded,
         Verb::Unload,
         V::Down,
-        A::AnswerUnloaded
+        A::PublishRoomThenUnloaded
     );
     cell!(
-        s0_x_force_unload_answers_unloaded,
+        s0_s0d_x_force_unload_publishes_the_room_then_unloaded,
         Verb::ForceUnload,
         V::Down,
-        A::AnswerUnloaded
+        A::PublishRoomThenUnloaded
     );
     cell!(
-        s0_x_save_point_refuses_out_of_order,
+        s0_s0d_x_save_point_refuses_out_of_order,
         Verb::SavePoint,
         V::Down,
         A::RefuseOutOfOrder
     );
     cell!(
-        s0_x_restore_names_for_the_next_load,
+        s0_s0d_x_restore_names_for_the_next_load,
         Verb::Restore,
         V::Down,
         A::NameForNextLoad
     );
     cell!(
-        s0_x_show_answers_unloaded,
+        s0_s0d_x_show_answers_unloaded,
         Verb::Show,
         V::Down,
-        A::ShowUnloaded
-    );
-
-    // S0d.
-    cell!(s0d_x_load_starts, Verb::Load, V::DownDirty, A::Start);
-    cell!(
-        s0d_x_unload_publishes_the_room,
-        Verb::Unload,
-        V::DownDirty,
-        A::PublishRoomThenUnloaded
-    );
-    cell!(
-        s0d_x_force_unload_publishes_the_room,
-        Verb::ForceUnload,
-        V::DownDirty,
-        A::PublishRoomThenUnloaded
-    );
-    cell!(
-        s0d_x_save_point_refuses_out_of_order,
-        Verb::SavePoint,
-        V::DownDirty,
-        A::RefuseOutOfOrder
-    );
-    cell!(
-        s0d_x_restore_names_for_the_next_load,
-        Verb::Restore,
-        V::DownDirty,
-        A::NameForNextLoad
-    );
-    cell!(
-        s0d_x_show_answers_unloaded,
-        Verb::Show,
-        V::DownDirty,
         A::ShowUnloaded
     );
 
