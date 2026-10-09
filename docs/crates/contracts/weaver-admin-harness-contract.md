@@ -494,8 +494,9 @@ record can both name what they were built from, the operator's uid as the root's
 `weaver-gate-world-contract` section 2 from the operator alone, the boundary file's
 digest, so the record declares who could read the run without that file
 joining the tuple, the cause of every load, unload, save point and stop, the uid sudo reports, whether
-a leave is forced (by `force-unload` or by a load's rollback, the latter told by the
-harness from its own state, per section 3), the forcing caller's cause on a join, the engine libraries'
+a leave is forced (by `force-unload` or by a load's rollback), whether it is a load's
+rollback (`Leave.rollback`, which admin sets and the harness never infers from its own
+position, per section 3), the forcing caller's cause on a join, the engine libraries'
 directory where the agent's root names one, and the intent to stop. Admin never writes the trace: it hands these facts to the harness,
 the single writer, as it hands the declaration's digest.
 
