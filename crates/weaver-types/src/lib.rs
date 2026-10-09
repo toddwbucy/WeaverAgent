@@ -103,8 +103,8 @@ mod wire;
 pub use config::{
     AgentConfig, ArtifactRef, BindingKind, ClassifyInstruction, ConfigError, ConfigErrorKind,
     DecoderInstruction, DeviceOrdinal, ElectedKindConfig, FieldElection, FieldName,
-    GateInstruction, ModelBinding, Restore, SpuInstruction, StateElection, StateStore, StoreEngine,
-    ToolName, TraceSink,
+    GateInstruction, Lifecycle, ModelBinding, Restore, SpuInstruction, StateElection, StateStore,
+    StoreEngine, ToolName, TraceSink,
 };
 #[cfg(feature = "config")]
 pub use config::{check_identity_roles, parse, parse_boundary};

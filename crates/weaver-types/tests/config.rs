@@ -639,7 +639,9 @@ fn a_path_carrying_a_control_character_refuses_by_name() {
 fn both_lifecycle_bounds_parse() {
     let source = full_config() + "\n[lifecycle]\ndrain-bound = 30\nwind-down-bound = 60\n";
     let config = parse(&source).expect("parses");
-    let lifecycle = config.lifecycle.expect("the table is present");
+    // Named by its public path: the field's type is re-exported with the
+    // rest of the declaration's (Codex on #112), a compile pin.
+    let lifecycle: weaver_types::Lifecycle = config.lifecycle.expect("the table is present");
     assert_eq!(lifecycle.drain_bound, Some(30));
     assert_eq!(lifecycle.wind_down_bound, Some(60));
 }
