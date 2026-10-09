@@ -1382,7 +1382,7 @@ facts the load event was authored from and held on the run for this exchange. **
 leave is pending the answer is `InTransition`**, whether a turn runs or not, so in S4 to
 S6 and S10 `show` answers the same whether the unload's invocation still holds the lock
 or has died (`weaver-admin-Spec` section 3, S4 to S7 and S10 x `show`; the operator's
-ruling of 2026-10-09). In S7 and S8 the leave's last waits, the SPU's release, the trace's drain and the reaps, do not poll the listener, so with the holder dead an observation is answered `InTransition` where the harness answers inside the observation's bound and otherwise goes `Unanswered`, which there means a run ending and not a wedged one: the caller asks again, and the run lock freeing turns the answer into `Unloaded`. After a
+ruling of 2026-10-09). In S7 an observation the harness holds before the unlink is answered `InTransition` when it is accepted, and one after the unlink finds no socket, which admin answers by its general rule, `Unloaded` with the run's constituents named while the run lock is held (`weaver-admin-Spec` section 3, the seal's table). After a
 leave the answer is `Unloaded` with no load, the position being terminal and the
 observation not an act, so it is, beside a late caller's `Leave` answered the `Left` as it
 stands, a directive the left position answers rather than refuses. No event is authored and no bracket touched: an observation mid-turn reads the
@@ -2195,7 +2195,7 @@ and a force took the freed lock as sole; a pending forced leave answers it with 
 `Left` (the orphaned leave of `weaver-admin-Spec` section 3; I1, I3), and its caller,
 answered `Left`, concludes as every answered caller does (`weaver-admin-Spec` section 3,
 the conclusion). From S7 on, a graceful or a forced
-leave's save point taken or missed and its outcome fixed, a forced or an unforced `Leave` from a late caller, its dial held at the seal, is answered the `Left`
+leave's save point taken or missed and its outcome fixed, a forced or an unforced `Leave` from a late caller, its dial held at the seal's step 3, is answered the `Left`
 as it stands and adds nothing to the record, neither `forced_by` nor `adopted_by` (the
 late caller of `weaver-admin-Spec` section 3, who concludes as every caller this crate
 answers with `Left` does; I2). What remains of the quiesce's wait, the drain and the wind-down is
@@ -2235,16 +2235,12 @@ I3), through one helper: the wait for `GateQuiesced`, the drain, the wind-down, 
 lower, the save point's four legs and the grants read-back poll the listener beside what
 they wait on, and the dials that land while this crate waits on what cannot be polled
 beside it, the SPU's release, the trace's drain and the reaps, are swept from the
-listener's backlog before the leave's dialers are answered, by the from-S7 rule. **The
-listener is sealed first** (`weaver-admin-Spec` section 3, the seal; Codex on #109, round
-18 and 19): once the leave's outcome is fixed this crate (a) unlinks the coordination
-socket's pathname, so no new connect can reach it; (b) drains the accept backlog with
-non-blocking accepts, answering each dial it holds as the leave stands, a `Leave` or a
-`JoinLeave` with the `Left` and an `Observe` with `InTransition`; and (c) only then
-closes the listening descriptor, whose close would discard a backlog not yet accepted.
-No dial lands behind a listener left open until the worker exits, none already
-connected goes unanswered, and a dial after the seal finds no socket at connect, which
-admin reads as a run past its outcome.
+listener's backlog before the leave's dialers are answered, by the from-S7 rule. **S7
+runs the seal's steps** (`weaver-admin-Spec` section 3, the seal: S7's own steps, whose
+table is the authority and is not restated here): the pathname unlinked, the backlog
+accepted into held connections, the release, `unload`, the writer's drain, and only
+then the `Left` to the leave's dialer and every held `Leave` and `JoinLeave`, before the
+listening descriptor closes and the worker exits.
 
 **The drain and the wind-down are unbounded by default, and every other leg is bounded**
 (I3; the operator's ruling of 2026-10-09 on #1; #107, area 1, R2). The turn in flight

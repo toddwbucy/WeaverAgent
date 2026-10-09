@@ -159,13 +159,11 @@ flagged at its connect and dies with the verb.
 **The listener lives from the worker's start until the seal (S7), and a connection
 lives exactly as long as its verb.** The lifetime rule of `weaver-organ-channel` section 2 lands
 on the listener: bound once at the worker's start, closed by the seal or, short of it,
-by the worker's death, shared with no second worker, **and sealed once the leave's outcome is fixed** (S7):
-the harness unlinks the socket's pathname, so no new connect reaches it; drains the
-accept backlog with non-blocking accepts, answering each dial it holds as the leave
-stands; and only then closes the listening descriptor, whose close would discard a
-backlog not yet accepted. A dial after the seal finds no socket at connect rather than
-waiting unanswered behind a listener open until the worker's exit, and admin reads that
-as a run past its outcome (`weaver-admin-Spec` section 3, the seal). Each
+by the worker's death, shared with no second worker, **and sealed once the leave's outcome is fixed** (S7),
+in the steps and with the answers `weaver-admin-Spec` section 3's table for the seal
+gives: a dial already held is answered at the normal answer point, after the writer's
+drain, and a dial after the unlink finds no socket, which admin reads as a run past its
+outcome. Each
 accepted connection is one invocation's, closed
 by admin when the verb answers, and the harness serves one connection at a time, a
 second dial waiting at the listener rather than being answered concurrently, **except
@@ -331,9 +329,9 @@ still-graceful leave forced is recorded as `forced_by` on `unload`, a join into 
 declared bound already turned forced naming none; and the join and the leave's own dialer are answered with the
 same `Left`, `forced` true (S4, S5, S6 x force-unload). A later join receives the same
 `Left` and is named nowhere. **From S7 on**, the save point taken or missed and
-the leave's outcome fixed, a join the harness held at the seal adds nothing to the record and is answered with the `Left`
-as it stands, its caller concluding (S7 x force-unload; the conclusion); a join after
-the seal finds no socket at connect (`weaver-admin-Spec` section 3, the seal). **Where a forced leave is pending** (S10) the join is answered with
+the leave's outcome fixed, a join is as `weaver-admin-Spec` section 3's table for the seal gives: held, it adds
+nothing to the record and is answered with the `Left` as it stands, its caller
+concluding (S7 x force-unload; the conclusion), and after the unlink it finds no socket. **Where a forced leave is pending** (S10) the join is answered with
 that leave's `Left` (S10 x force-unload). **An orphaned leave is joined by any forced
 `Leave`**: where the invocation holding a pending leave died while it could still change,
 a graceful unload's in S4 to S6 or a force's in S10, a force
@@ -347,9 +345,10 @@ harness keeps the leave graceful with its own cause, records the adopter as `ado
 on `unload`, and answers it with the leave's `Left` when it completes; the adopter
 concludes as every answered caller does (`weaver-admin-Spec` section 3, the adopted leave;
 the operator's ruling of 2026-10-09). Both the orphan join and the adoption hold only
-while the leave can still change, S4 to S6; from S7 on a late caller's `Leave` held at the
-seal is answered the `Left` as it stands, one after the seal finding no socket at connect, adds nothing to the record, and its caller concludes as
-every answered caller does (`weaver-admin-Spec` section 3, the conclusion; I2). **The harness hears a join in every wait of
+while the leave can still change, S4 to S6; from S7 on a late caller's `Leave` is as the
+seal's table gives: held, it is answered the `Left` as it stands, adds nothing to the
+record, and its caller concludes as every answered caller does, and after the unlink it
+finds no socket (`weaver-admin-Spec` section 3, the conclusion; I2). **The harness hears a join in every wait of
 the leave**: the wait for `GateQuiesced`, the turn's finish, the wind-down, the lower,
 the save point's legs and the unwind after them, so a forced leave never waits on what
 remains (I3). **With no leave pending** (S2, S3, S9, or before the enter) the harness
@@ -386,7 +385,7 @@ composing loop by binary and, where it is a file, path and digest, the same fact
 `load` event carries and read from the run rather than the record. While a leave is
 pending, `InTransition`, so in S4 to S6 and S10 `show` answers the same whether the
 lock's holder lives or has died (`weaver-admin-Spec` section 3, S4 to S7 and S10 x
-`show`). In S7 and S8 the leave's last waits, the SPU's release, the trace's drain and the reaps, do not poll the listener, so with the holder dead an observation is answered `InTransition` where the harness answers inside the observation's bound and otherwise goes `Unanswered`, which there means a run ending and not a wedged one: the caller asks again, and the run lock freeing turns the answer into `Unloaded`. After a leave,
+`show`). In S7 an observation the harness holds before the unlink is answered `InTransition` when it is accepted, and one after the unlink finds no socket, which admin answers by its general rule, `Unloaded` with the run's constituents named while the run lock is held (`weaver-admin-Spec` section 3, the seal's table). After a leave,
 `Unloaded` and no load, the position being terminal. The answer is the harness's own
 word and never a read of the deployment, it touches no bracket and authors no event, and
 an observation arriving during a turn is answered from inside it, between tokens, as
@@ -457,9 +456,9 @@ an obligation on the party that could break it.
   orphaned leave as `JoinLeave` does, and an unforced `Leave` adopts a
   pending graceful one (the operator's ruling of 2026-10-09), `adopted_by` naming it;
   either caller, answered `Left`, concludes (I3, I4). From S7 on, the leave's outcome fixed,
-  either `Leave` held at the seal is answered the `Left` as it stands, one after the
-  seal finding no socket at connect, adds nothing to the record, and
-  its caller concludes all the same (`weaver-admin-Spec` section 3, the conclusion). An unforced `Leave` meeting a pending
+  either `Leave` is as the seal's table gives: held, it is answered the `Left` as it
+  stands, adds nothing to the record, and its caller concludes all the same, and after
+  the unlink it finds no socket (`weaver-admin-Spec` section 3, the conclusion). An unforced `Leave` meeting a pending
   forced leave is refused `OutOfOrder`. A leave refused `SavePointNotTaken`, one that stayed graceful to its
   miss (a forced one answering `Left` instead), is no longer pending, and the run stands entered at rest for a retried or a forced `Leave`
   (S9).

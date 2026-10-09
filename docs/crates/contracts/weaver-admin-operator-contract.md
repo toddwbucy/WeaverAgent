@@ -242,9 +242,10 @@ invocation holding it (S1, S4 to S8, S10, S11); a `stop` in S9 answers `AtRest`.
 lock is taken before the state is read, so a line that meets a held lock refuses
 `InvocationInFlight` whatever the state behind it. `show` alone reads beside a holder: in
 S4 to S6 and S10 it prints `InTransition` whether the unload's caller lives or was killed;
-in S7 and S8 with the caller killed it prints `InTransition` where the agent answers in
-time and otherwise `Unanswered`, which there means a run that is ending: ask again, and
-once the run lock frees it prints `Unloaded`.
+in S7 and S8 with the caller killed it prints `InTransition` where it reached the agent
+before the agent stopped listening, and after that `Unloaded` with the run's processes
+named while they are still exiting, the outcome being fixed (`weaver-admin-Spec` section
+3, the seal's table).
 
 **`unload` drains, winds down, saves, then goes down** (`weaver-admin-Spec` section 3,
 the graceful unload). It may take the length of the turn in flight and one generation
@@ -337,9 +338,11 @@ waits and the publication after the answer come on top, as before.
 caller the agent answers to conclude: a force or a second `unload` as above while the
 leave can still change, S4 to S6, or from S7 on a later `force-unload` or `unload`, which
 the agent answers with the leave as it stood, adding nothing to the record, where it
-reached the agent before the agent stopped listening; one after that waits for the run
-to end and finds it ended, publishing what the run left as recovered (`weaver-admin-Spec`
-section 3, the seal). With no
+reached the agent before the agent stopped listening, the answer coming once the agent
+has written its record; one after that waits for the run to end and finds it ended,
+publishing what the run left as recovered, as `weaver-admin-Spec` section 3's table for
+the seal gives, a `force-unload` waiting at most 150 seconds and then the escalation's
+45. With no
 answered caller the agent finishes the leave unanswered: the save point stays in the member's room for the next verb
 to publish, and the marker stays open, so the next load records `NoCleanUnload` although
 the state was kept, a conservative label with nothing lost (`weaver-admin-Spec` section
@@ -356,7 +359,7 @@ reader.
 arriving while another invocation holds this agent's invocation lock refuses
 `InvocationInFlight` before touching anything, `force-unload` alone excepted, which
 joins, waits or escalates per section 4, and `show` then answers `InTransition`, or
-`Unanswered` in S7 and S8 with the caller killed, per the table above. A
+in S7 and S8 with the caller killed as the paragraph above says. A
 second `load` of a running agent answers `AgentRunning` and touches nothing, a load
 never ending an existing run, whether or not that run ever entered. A missing or
 malformed boundary file refuses `ConfigInvalid` naming `roles.toml`. An `unload` that
