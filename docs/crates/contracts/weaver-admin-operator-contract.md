@@ -226,10 +226,10 @@ state; it reads `show` and acts on what it prints.
 | S1, loading | `InvocationInFlight` | `InvocationInFlight` | waits for the load, at most its bound, then answers as the state it finds | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S2, serving at rest | `AgentRunning` | the graceful unload, below | the forced unload, below | `SavePointTaken` | `RestoreNamed` | `Idle` |
 | S3, serving, a turn in flight | `AgentRunning` | the graceful unload, after the turn | the forced unload, the turn cancelled | `ActivityNotAtRest` | `RestoreNamed` | `Active` |
-| S4 to S7, a graceful unload in progress | `InvocationInFlight` | `InvocationInFlight`, or, the holder having died, adopts the leave in S4 to S6, and in S7 is answered as the leave stands | joins, below | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+| S4 to S7, a graceful unload in progress | `InvocationInFlight` | `InvocationInFlight`, or, the holder having died, adopts the leave in S4 to S6, and in S7 is answered as the leave stands, concluding either way | joins, below | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S8, an unload concluding | `InvocationInFlight` | `InvocationInFlight` | waits, then as S0 or S0d | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S9, an unload stopped at its save point | `AgentRunning` | retried: the save point, then down | the forced unload | `SavePointTaken` | `RestoreNamed` | `Idle`, the gate lowered |
-| S10, a force in progress | `InvocationInFlight` | `InvocationInFlight` | joins | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+| S10, a force in progress | `InvocationInFlight` | `InvocationInFlight`, or, the holder having died, `OutOfOrder` before `unload` is authored and answered as the leave stands after | joins | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S11, a silent worker being ended | `InvocationInFlight` | `InvocationInFlight` | waits, then as S0 or S0d | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 
 `restore` names the save point the next load restores in every state that answers it,
@@ -339,7 +339,9 @@ reader.
 
 **At a command line, the floor's refusals**, per `weaver-admin-Spec` section 3: a verb
 arriving while another invocation holds this agent's invocation lock refuses
-`InvocationInFlight` before touching anything, and `show` then answers `InTransition`. A
+`InvocationInFlight` before touching anything, `force-unload` alone excepted, which
+joins, waits or escalates per section 4, and `show` then answers `InTransition`, or
+`Unanswered` in S7 and S8 with the caller killed, per the table above. A
 second `load` of a running agent answers `AgentRunning` and touches nothing, a load
 never ending an existing run, whether or not that run ever entered. A missing or
 malformed boundary file refuses `ConfigInvalid` naming `roles.toml`. An `unload` that

@@ -585,7 +585,8 @@ clients, and none is needed, since a client sees only its own connection.
 ### 13.3 Lowering with traffic present
 
 **The drain is the graceful unload's, and this section states its shape.** A
-graceful unload quiesces this crate first: the listener closes, connections owed
+graceful unload quiesces this crate first, once any tool call out is interrupted: the
+listener closes, connections owed
 nothing close, every admitted frame is flushed to the harness, which answers it
 through this crate as refused, and only then does the lower come, after every owed
 response is written. A forced unload lowers at once, every admitted frame recorded

@@ -2201,9 +2201,10 @@ not: only `Leave` adopts. An unforced `Leave` meeting a pending forced leave (S1
 
 **From S7 on, a join gets the `Left` as it stands** (`weaver-admin-Spec` section 3, the
 forced unload (joining), and the ordering of #94's round 21; I2). Once `unload` is
-authored the record is final, so a force heard after it changes nothing, records no
-`forced_by`, and is answered with the same `Left` the leave's own dialer gets, its
-`forced` as the leave came down.
+authored the record is final, so a force heard after it adds nothing to the record,
+records no `forced_by`, and is answered with the same `Left` the leave's own dialer
+gets, its `forced` as the leave came down; its caller concludes all the same
+(`weaver-admin-Spec` section 3, the conclusion).
 
 **Every wait of the leave hears the coordination listener** (Codex on #94, round 17; I1,
 I3), through one helper: the wait for `GateQuiesced`, the drain, the wind-down, the
@@ -3199,9 +3200,11 @@ for the organs whose side is unwritten.
   see the substitution at all, which is why the boundary the type was elected
   to buy needs a watch of its own, per section 2.1.
 - A directive out of order is refused and not queued: a leave arriving before
-  any enter answers `OutOfOrder` and reaches no unwind, and a directive of any
-  kind arriving after a leave answers the same, the left position being
-  terminal. The compile pin of section 3 holds that the refusal reaches a match
+  any enter answers `OutOfOrder` and reaches no unwind, and a directive
+  arriving after a leave answers the same, the left position being terminal,
+  but for `JoinLeave` and the `Leave`s section 6 admits while a leave is
+  pending or once it is answered (a join, an adoption, a late caller answered
+  the `Left` as it stands). The compile pin of section 3 holds that the refusal reaches a match
   arm rather than a flag check, and this holds what the arm then does, an arm
   being free to queue or to answer the wrong refusal while compiling exactly as
   well. Confirmed twice, by watching the early leave reach the unwind path when

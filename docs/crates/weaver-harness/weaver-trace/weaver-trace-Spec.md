@@ -1967,6 +1967,11 @@ the fact exists.
   its `skip_serializing_if` is removed, and a joined leave's `unload` carries the
   leave's own `cause` and the force's `forced_by`, watched to fail when the harness
   writes the joining cause into `cause`.
+- The `unload` event names an adopting caller apart, per section 3, owed by the
+  lifecycle act's code: `adopted_by` is absent from a payload no caller adopted, watched
+  to fail when its `skip_serializing_if` is removed, and an adopted leave's `unload`
+  carries the leave's own `cause` and the adopter's `adopted_by`, watched to fail when
+  `adopted_by` is absent, written null, or carries the original cause.
 - A score is recorded turnless with the verdict and the ratio's two terms, per section
   3: the recorder refuses one carrying a turn or another kind's payload, watched to fail
   when the kind leaves `turn_forbidden` or its pairing row, and the port records one per

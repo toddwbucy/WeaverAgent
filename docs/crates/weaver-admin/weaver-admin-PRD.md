@@ -529,9 +529,11 @@ absent, has no counterpart on the way up.
    admin's part in their unwinding.
 2. **Await the run's exit.** The worker exits after it answers left, the member and
    the relay with it, and the kernel releases the run lock when the last of them is
-   gone, which is what this step waits on. The leave has a bound of its own, and where
-   it expires or the run does not exit a bounded escalation ends every holder of the
-   lock, per the Spec's section 3.
+   gone, which is what this step waits on. A forced leave has a bound of its own, and a
+   graceful one where the declaration bounds both its drain and its wind-down; where
+   that bound expires or the run does not exit, a bounded escalation ends every holder
+   of the lock, per the Spec's section 3. A graceful leave with either bound undeclared
+   waits on the agent, and `force-unload` is the recourse.
 3. **Publish provisioned and unloaded.** Which is a different state from absent, and
    absent is reached by an operator act rather than by a verb.
 

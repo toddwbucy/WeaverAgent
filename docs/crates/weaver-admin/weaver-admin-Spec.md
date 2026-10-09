@@ -429,7 +429,7 @@ section 3 states where that obligation lands now.
 | S1 | refuse `InvocationInFlight` | refuse `InvocationInFlight` | joins nothing, no run being entered: waits for the invocation lock, at most the load's own bound (section 2), then acts on what it finds | refuse `InvocationInFlight` | refuse `InvocationInFlight` | `InTransition` |
 | S2 | refuse `AgentRunning` | S4, and with no turn, straight to S5 | S10, sole | a save point at rest, published at once; the `save_point` event | names the save point for the next load | `Idle` |
 | S3 | refuse `AgentRunning` | S4; the turn continues | S10, sole | refuse `ActivityNotAtRest` | as S2 | `Active` |
-| S4, S5, S6, S7 | refuse `InvocationInFlight` | refuse `InvocationInFlight`; where the holder has died and the lock is free, in S4 to S6 adopts the pending graceful leave (the adopted leave, below), and in S7 is answered the `Left` as it stands (the late caller, below) | joins lock-free (`JoinLeave`): the leave turns forced from where it stands; from S7 on, the join gets the `Left` as it stands and changes nothing. Where the holder has died and the lock is free, in S4 to S6 the force takes it as sole and its forced `Leave` joins the pending leave the same way, the force then concluding; in S7 it is answered the `Left` as it stands (the late caller, below) | refuse `InvocationInFlight` | refuse `InvocationInFlight` | `InTransition`; in S7 with the holder dead, `InTransition` where the harness answers inside the observation's bound, otherwise `Unanswered`, a run ending: asked again, it reads `Unloaded` once the run lock frees |
+| S4, S5, S6, S7 | refuse `InvocationInFlight` | refuse `InvocationInFlight`; where the holder has died and the lock is free, in S4 to S6 adopts the pending graceful leave (the adopted leave, below), and in S7 is answered the `Left` as it stands (the late caller, below) | joins lock-free (`JoinLeave`): the leave turns forced from where it stands; from S7 on, the join gets the `Left` as it stands, adds nothing to the record, and concludes (the conclusion). Where the holder has died and the lock is free, in S4 to S6 the force takes it as sole and its forced `Leave` joins the pending leave the same way, the force then concluding; in S7 it is answered the `Left` as it stands (the late caller, below) | refuse `InvocationInFlight` | refuse `InvocationInFlight` | `InTransition`; in S7 with the holder dead, `InTransition` where the harness answers inside the observation's bound, otherwise `Unanswered`, a run ending: asked again, it reads `Unloaded` once the run lock frees |
 | S8 | refuse `InvocationInFlight` | refuse `InvocationInFlight` | waits for the invocation lock; finds S0 or S0d | refuse | refuse | `InTransition`; with the holder dead, as in S7, then `Unloaded` once the run lock frees |
 | S9 | refuse `AgentRunning` | retry: S6, the lower being done, straight to the save point | S10, sole | a save point at rest (stays S9); an `unload` may follow | as S2 | `Idle`, the gate lowered |
 | S10, S11 | refuse `InvocationInFlight` | refuse `InvocationInFlight` (the holder dead in S10, an unforced `Leave` meeting the forced leave is refused) | joins (S10); waits (S11). Where the S10 holder has died and the lock is free, the force takes it as sole and its forced `Leave` joins the pending forced leave while it can change, answered with that leave's `Left`, and concludes; once `unload` is authored, the late caller (below) | refuse | refuse | `InTransition` |
@@ -532,7 +532,8 @@ worker of one agent.
   `weaver.run/` away and leave the next `load` a fresh `run.lock` while a run still
   holds the old one. Every verb but `show` then takes the invocation lock exclusively
   and holds it until it exits, and an invocation that finds it held exclusively refuses
-  `InvocationInFlight` before touching anything. **`show` holds it shared for the length
+  `InvocationInFlight` before touching anything, but for `force-unload`, which joins,
+  waits or escalates as 3.0's forced unload states. **`show` holds it shared for the length
   of its observation**, taking a shared lock without waiting: where an exclusive holder
   stands, the shared lock is refused and `show` answers `InTransition` at once, without
   dialing, because before the worker exists there is no socket and once it exists the
@@ -541,7 +542,8 @@ worker of one agent.
   and observed the worker, so its answer cannot straddle a transition. **A verb that
   wants the lock exclusively tries it without waiting and, refused, reads the holder's
   kind from `F_GETLK`'s `l_type`**: an exclusive holder is another transition and the
-  verb refuses `InvocationInFlight` at once, and a shared holder is a `show` and the
+  verb refuses `InvocationInFlight` at once (a `force-unload` instead joining or waiting,
+  per 3.0), and a shared holder is a `show` and the
   verb retries, re-reading `l_type` before every attempt, for at most `show`'s own
   bound, the dial's, a read being no transition. A holder that changes between the read
   and the next attempt is judged afresh on that attempt, so a shared hold that gives way
@@ -600,7 +602,7 @@ read only where no worker answers.** `show` dials the agent's coordination socke
 opens `Observe`, per `weaver-admin-harness-contract` section 3, and what returns is the
 harness's own word: `Unloaded` before any enter or after a leave, `Idle` or `Active`
 with the load's facts beside it where a run stands, read from the run and never from the
-record. **Those facts are `LoadFacts`, which overlaps the `load` event and is not its
+record, and `InTransition` while a leave is pending (3.0, `show` in S4 to S7 and S10). **Those facts are `LoadFacts`, which overlaps the `load` event and is not its
 shape**, per `weaver-types-Spec` section 4.2: it carries the session, run and artifact
 the event carries in its envelope or not at all, and lacks the event's stack, lineage,
 reset and prompt digest, so a consumer that stores both stores two shapes. Where the run
@@ -634,8 +636,10 @@ Where the observation answers `Idle` it directs leave per below. Where it answer
 `Unloaded`, or no worker listens at all, the dial finding no name bound or its
 connection refused through the dial's whole bound, no run was entered and there is
 nothing to leave, so it goes straight to the escalation below. Where the worker is
-silent it directs leave all the same, the leave's own bound and the escalation ending a
-worker that is truly wedged and a healthy one answering `ActivityNotAtRest`. **The
+silent it directs leave all the same: a worker that is truly wedged is ended by the
+escalation where the leave has a bound (3.0, the bounds), and otherwise a `force-unload`
+joining the leave is the recourse (I3); a leave is never refused for activity, the
+harness draining instead (I5). **The
 recovery path is admin-con's**: it reads `show`'s facts and issues `unload`, then
 `load`, the choice between leaving a run standing and ending it being the caller's and
 never a load's.
@@ -802,34 +806,40 @@ so the next load records the loss. Force always works (I3). Its sole, joining an
 waiting forms, and its escalation of a silent harness, are the forced unload of 3.0.
 
 **The leave has a bound of its own, 150 seconds**, as 3.0's bounds state it: from the
-verb's start for a forced leave; for a graceful one, after a declared drain and wind-down
-bound, and with none declared no deadline at all, a force joining being the recourse
+verb's start for a forced leave; for a graceful one, after its declared drain and
+wind-down bounds where both are declared, and with either undeclared no deadline at all, a force joining being the recourse
 (I3). The 150 seconds run past the harness's 120 seconds for the save point's answer leg
 and its two-second legs (the operator's ruling of 2026-10-08 on #1, `weaver-harness-Spec`
 section 6), so admin never abandons a save point the harness still awaits. The
 observation and both dials spend it, so a forced `unload` holds the invocation lock at
 most those 150 seconds and the escalation's forty-five, 195 in all, and a graceful one
 those 195 past its declared drain and wind-down bounds, or as long as the drain and the
-wind-down take where none is declared, **before the publication that follows `Left`** (the #99 area 1 review): copying the leave's save point and any recovered
+wind-down take where either is undeclared, **before the publication that follows `Left`** (the #99 area 1 review): copying the leave's save point and any recovered
 file the room holds, at most section 6's 32 of up to a gibibyte each, is bounded by that
 cap and the copy's own speed and not by time, so a caller builds against 195 seconds plus
 the copy of what the room holds, never against 195 seconds alone, beside `show`'s short
 wait for the lock. A worker
-that accepts leave and answers nothing inside it is a worker that would not exit: the
+that accepts leave and answers nothing inside a leave that has a bound (a forced one, or
+a graceful one with both bounds declared) is a worker that would not exit: the
 verb goes to the escalation below without the aggregate, answers
 provisioned-and-unloaded once the lock is free, the run having ended with no leave
 answered, which `admin.log` records and the next load's reset reads, and refuses
 `WorkerWouldNotExit` where the lock still stands after it. Without the bound a wedged
-worker would hold the verb, and with it the invocation lock, for ever, and since the
-invocation ignores the catchable signals no later verb could recover the agent.
+worker would hold a forced verb, and with it the invocation lock, for ever, and since the
+invocation ignores the catchable signals no later verb could recover the agent. A
+graceful leave with either bound undeclared has no deadline and is never escalated: it
+waits as long as the drain and the wind-down take, and a `force-unload` joining it
+lock-free is the recourse (3.0, the bounds; I3).
 
 **The wait has a bound and an escalation, and the report never runs ahead of the lock.**
-A run whose lock is still held thirty seconds after left, or past the leave's own bound,
-is ended by the escalation: every holder is sent `SIGTERM`, then every holder still
+A run whose lock is still held thirty seconds after left, or past the leave's own bound
+where the leave has one, is ended by the escalation: every holder is sent `SIGTERM`, then every holder still
 standing ten seconds later `SIGKILL`, and the lock is read a last time five seconds
 after that. **The three waits are fixed**, as the leave's and the stop's are, so
-`unload` holds the invocation lock at most the leave's 150 seconds and these
-forty-five past it. **The holders are found from the kernel's descriptor tables, because
+a `force-unload` holds the invocation lock at most the leave's 150 seconds and these
+forty-five past it, and a graceful `unload` with both bounds declared at most their sum,
+the 150 and the forty-five; a graceful `unload` with either bound undeclared has no
+deadline and never escalates (3.0, the bounds). **The holders are found from the kernel's descriptor tables, because
 a description lock names no pid**: `F_OFD_GETLK` reports a held lock with an `l_pid` of
 `-1`, so this crate stats `run.lock` for its device and inode and scans `/proc/<pid>/fd`
 of every process for a descriptor referring to that file, root reading every table, its
@@ -886,10 +896,13 @@ exits, and releases the invocation lock with the run as it stands, so `show` and
 `unload` reach the agent next, and `unload`'s own bounds and escalation are the
 recovery. **An observation unanswered inside its bound** refuses `show` with
 `Unanswered` too, releasing the shared hold, and claims no state, and inside `load` it
-refuses `Unanswered` and inside `unload` it is the silence section 3 meets with a
-bounded leave. **No verb holds the invocation lock past a bound it states**, since the
-invocation ignores the catchable signals and a wait without end would leave every later
-verb refusing `InvocationInFlight` and `show` answering `InTransition`. The interior
+refuses `Unanswered` and inside `unload` it is the silence section 3 meets by directing
+leave all the same. **No verb holds the invocation lock past a bound it states**, since
+the invocation ignores the catchable signals and a wait without end would leave every
+later verb refusing `InvocationInFlight` and `show` answering `InTransition`. The one
+exception is the graceful `unload` with either drain or wind-down bound undeclared,
+which waits on the agent by the operator's ruling of 2026-10-09, a `force-unload`
+joining it without the lock being the recourse (3.0, the bounds; I3). The interior
 verbs of section 2 take the same rule by the recipe.
 
 **This record's edge moves to the integration invariant.** The labelling pass
@@ -3200,10 +3213,16 @@ perturbation-verified:
   expires and a following `unload` takes the invocation lock. No test pins it yet; the
   instrument owed is a stand-in worker that accepts stop and never answers, its
   perturbation dropping the stop's bound so the verb never returns.
-- **A wedged leave is bounded**, watched by a stand-in worker that accepts leave and
-  never answers: the `unload` escalates once the leave's bound expires and answers when
-  the lock is free. The perturbation drops the leave's bound, the verb never returns,
-  and every later verb refuses `InvocationInFlight`.
+- **A wedged leave is bounded where the leave has a bound**, watched by a stand-in
+  worker that accepts leave and never answers: a `force-unload`, and a graceful `unload`
+  under a declaration with both bounds, escalates once its leave bound expires and
+  answers when the lock is free. The perturbation drops the leave's bound, the verb
+  never returns, and every later verb refuses `InvocationInFlight`.
+- **An undeclared graceful leave is never escalated**, watched by the same stand-in
+  worker under a declaration with no `[lifecycle]` bounds: the graceful `unload` is still
+  waiting past 195 seconds, and a joining `force-unload` ends the run. The perturbation
+  imposes the 195 seconds on the graceful leave, and the test fails when the verb
+  escalates.
 - **The escalation ends every holder**, watched by a run left by a killed load whose
   stand-in member
   does not retire on the first door's end: the `unload` signals the worker and the

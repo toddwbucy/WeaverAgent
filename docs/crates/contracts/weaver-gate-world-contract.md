@@ -193,7 +193,8 @@ response path, as extensions to this page rather than replacements of it.
     that has sent no request is closed. A request whose turn is running gets that
     turn's answer on its connection, the turn finishing what it can without further
     input; a tool call it had out is interrupted and the turn closes there, its
-    answer given. A request the gate received and the agent had not started is
+    answer given, unless the call's result had already come back, which stands
+    and is delivered to the turn (the first outcome wins). A request the gate received and the agent had not started is
     answered on its still-standing connection with the refused close naming the
     unload, `{"kind":"refused","reason":"the agent is unloading"}`, which names no
     turn, and the refusal is recorded as `Unloading` (S4 x dialer request). A seeding line is

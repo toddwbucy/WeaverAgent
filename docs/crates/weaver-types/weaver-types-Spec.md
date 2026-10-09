@@ -1382,7 +1382,8 @@ agent is unloading": the harness answers each frame the gate flushes to it with 
 through the gate, the connection standing, and records it as a refusal of the leave
 (`weaver-admin-Spec` section 3, S4 and S5 x dialer request, and I5). One fact, the
 agent leaving, and no claim about the request.
-**`Quiesce`** is the harness's to the gate, the graceful unload's first act at the gate,
+**`Quiesce`** is the harness's to the gate, the graceful unload's first act at the gate
+but for a `ToolInterrupt` that precedes it where a tool call is out,
 and **`GateQuiesced`** the gate's answer once it has closed its listener, stopped
 reading and flushed every frame it admitted to the harness (the graceful unload, step 2;
 I5). The verbs need no new case: `unload` and `force-unload` mirror the command line as
@@ -1620,7 +1621,8 @@ wherever no run holds the lock, and empty is absent on the wire.
 
 **`InTransition` is an answer, not a state**, on the same ruling: `show` answers it
 where another invocation holds the agent's invocation lock, a load or an unload in
-flight, per `weaver-admin-Spec` section 3. It claims no `AgentState`, apex section 6's
+flight, and the harness answers it to `Observe` while a leave is pending, so `show`
+prints it too where the leave's caller was killed, per `weaver-admin-Spec` section 3. It claims no `AgentState`, apex section 6's
 four states being the harness's to know and the harness being busy with that very
 invocation, so the caller polls again.
 

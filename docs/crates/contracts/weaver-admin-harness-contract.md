@@ -312,8 +312,8 @@ stays the caller who asked for it and the first joining cause is recorded as
 `forced_by` on `unload`; and the join and the leave's own dialer are answered with the
 same `Left`, `forced` true (S4, S5, S6 x force-unload). A later join receives the same
 `Left` and is named nowhere. **From S7 on**, `unload` being authored and
-the record final, the join changes nothing and is answered with the `Left` as it stands
-(S7 x force-unload). **Where a forced leave is pending** (S10) the join is answered with
+the record final, the join adds nothing to the record and is answered with the `Left`
+as it stands, its caller concluding (S7 x force-unload; the conclusion). **Where a forced leave is pending** (S10) the join is answered with
 that leave's `Left` (S10 x force-unload). **An orphaned leave is joined by any forced
 `Leave`**: where the invocation holding a pending leave died while it could still change,
 a graceful unload's in S4 to S6 or a force's in S10 before `unload` is authored, a force
@@ -501,8 +501,11 @@ guarantee is of verification rather than of authorship, since the boundary is th
 operator's artifact. It guarantees that no directive carries work of any kind. It
 guarantees that a `force-unload` acting beside a holder of the invocation lock acts
 only through `JoinLeave` or by ending the run's processes, never through publication or
-the marker, and that where it ends them it writes the marker `Forced` only after they
-are gone (`weaver-admin-Spec` section 3, I1 and I3).
+the marker while the holder holds the lock; that any caller answered `Left` publishes
+and writes the marker only once it holds the invocation lock itself, and changes
+nothing where the marker is already closed for the run (the conclusion); and that where
+it ends the run's processes it writes the marker `Forced` only after they are gone
+(`weaver-admin-Spec` section 3, I1 and I3).
 
 **The harness supplies** its readiness as the aggregate of the enter fan-out, its
 confirmation of departure naming the leave's save point where it took one and whether
@@ -555,8 +558,12 @@ ask, because admin answers nothing. The cases:
 - an organ the enter fans out to refused, and the refusal names which organ and
   carries its reason, so the aggregate answer is one refusal rather than a report to
   parse
-- the directive is out of order for the channel's state, a `JoinLeave` with no leave
-  pending and any directive but `JoinLeave` while one is pending among them
+- the directive is out of order for the channel's state: a `JoinLeave` with no leave
+  pending; an unforced `Leave` meeting a pending forced leave; and, while a leave is
+  pending, any directive but `JoinLeave` and the `Leave`s the ordering rule above
+  admits (a forced `Leave` joining in S4 to S6 or in S10 before `unload` is authored,
+  an unforced one adopting a graceful leave in S4 to S6, and either from S7 on, answered
+  the `Left` as it stands)
 - activity is not at rest, so no save point is taken on demand (`weaver-admin-Spec`
   section 3, S3 x save-point); a leave is never refused for activity
 - the leave's save point is not finished on an unforced leave, which names the leg and

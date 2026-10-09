@@ -743,8 +743,11 @@ from: weaver-gate
 to: gate-one-exchange-open-per-connection
 ```
 
-**A graceful unload quiesces first, and from it the gate accepts no further input**
-(`weaver-admin-Spec` section 3, the graceful unload, step 2; I5). `Quiesce` from the
+**A graceful unload quiesces, after interrupting any tool call out, and from the quiesce
+the gate accepts no further input** (`weaver-admin-Spec` section 3, the graceful unload,
+step 2; I5): where an execution is open the harness sends `ToolInterrupt` first, an open
+execution reading only its own continuation, and `Quiesce` once the execution has
+ended. `Quiesce` from the
 raised position closes the listener, so no new connection is accepted; closes every
 connection owed nothing, whose input was never received as a request; stops reading
 every connection that stands; sends every frame still waiting on the channel's
