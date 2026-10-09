@@ -237,7 +237,11 @@ the live restore being A5's. `stop` and `validate` take the invocation lock as e
 line but `show` does, so each refuses `InvocationInFlight` wherever the table shows an
 invocation holding it (S1, S4 to S8, S10, S11); a `stop` in S9 answers `AtRest`. The
 lock is taken before the state is read, so a line that meets a held lock refuses
-`InvocationInFlight` whatever the state behind it.
+`InvocationInFlight` whatever the state behind it. `show` alone reads beside a holder: in
+S4 to S6 and S10 it prints `InTransition` whether the unload's caller lives or was killed;
+in S7 and S8 with the caller killed it prints `InTransition` where the agent answers in
+time and otherwise `Unanswered`, which there means a run that is ending: ask again, and
+once the run lock frees it prints `Unloaded`.
 
 **`unload` drains, winds down, saves, then goes down** (`weaver-admin-Spec` section 3,
 the graceful unload). It may take the length of the turn in flight and one generation

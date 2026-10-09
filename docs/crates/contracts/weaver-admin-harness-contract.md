@@ -362,8 +362,9 @@ declaration's digest as admin read it at the enter, the artifact, the elections 
 stands under, the store the member stands on and whether its end arrived, and the
 composing loop by binary and, where it is a file, path and digest, the same facts the
 `load` event carries and read from the run rather than the record. While a leave is
-pending, `InTransition`, so `show` answers the same whether the lock's holder lives or
-has died (`weaver-admin-Spec` section 3, S4 to S7 and S10 x `show`). After a leave,
+pending, `InTransition`, so in S4 to S6 and S10 `show` answers the same whether the
+lock's holder lives or has died (`weaver-admin-Spec` section 3, S4 to S7 and S10 x
+`show`). In S7 and S8 the leave's last waits, the trace's drain, the SPU's release and the reaps, do not poll the listener, so with the holder dead an observation is answered `InTransition` where the harness answers inside the observation's bound and otherwise goes `Unanswered`, which there means a run ending and not a wedged one: the caller asks again, and the run lock freeing turns the answer into `Unloaded`. After a leave,
 `Unloaded` and no load, the position being terminal. The answer is the harness's own
 word and never a read of the deployment, it touches no bracket and authors no event, and
 an observation arriving during a turn is answered from inside it, between tokens, as

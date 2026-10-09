@@ -1372,10 +1372,10 @@ is `Unloaded` with no load. Entered, it is `Idle` where no turn key stands in fl
 run, the declaration's digest the enter carried, the artifact, the elections, the store
 and whether the member's end arrived, and the composer `serve` was handed, the same
 facts the load event was authored from and held on the run for this exchange. **While a
-leave is pending the answer is `InTransition`**, whether a turn runs or not, so `show`
-answers the same whether the unload's invocation still holds the lock or has died
-(`weaver-admin-Spec` section 3, S4 to S7 and S10 x `show`; the operator's ruling of
-2026-10-09). After a
+leave is pending the answer is `InTransition`**, whether a turn runs or not, so in S4 to
+S6 and S10 `show` answers the same whether the unload's invocation still holds the lock
+or has died (`weaver-admin-Spec` section 3, S4 to S7 and S10 x `show`; the operator's
+ruling of 2026-10-09). In S7 and S8 the leave's last waits, the trace's drain, the SPU's release and the reaps, do not poll the listener, so with the holder dead an observation is answered `InTransition` where the harness answers inside the observation's bound and otherwise goes `Unanswered`, which there means a run ending and not a wedged one: the caller asks again, and the run lock freeing turns the answer into `Unloaded`. After a
 leave the answer is `Unloaded` with no load, the position being terminal and the
 observation not an act, so it is the one directive the left position answers rather than
 refuses. No event is authored and no bracket touched: an observation mid-turn reads the
