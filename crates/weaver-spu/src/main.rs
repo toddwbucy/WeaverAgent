@@ -1879,6 +1879,8 @@ mod tests {
                     forced: true,
                     rollback: false,
                 },
+                LifecycleDirective::JoinLeave { cause },
+                LifecycleDirective::Quiesce,
                 LifecycleDirective::SavePoint { cause },
                 LifecycleDirective::Stop { cause },
                 LifecycleDirective::Observe,

@@ -4229,6 +4229,37 @@ mod tests {
         );
     }
 
+    /// **A run with no state to keep says so on `Left`**, per
+    /// `weaver-types-Spec` section 4.2 (`Left.no_state`): a diagnostic
+    /// binding has no member, so its leave answers `no_state` true with no save
+    /// point, where the serving cases above answer it false. Perturbations:
+    /// answer `no_state` false always and this case fails; true always and
+    /// the serving cases fail.
+    #[test]
+    fn a_diagnostic_runs_leave_answers_no_state() {
+        for forced in [false, true] {
+            let (_, _, _, answer, still_entered) = enter_against_a_member_leaving(
+                None,
+                true,
+                EMPTY_RESTORED,
+                LeaveMode::Directive {
+                    forced,
+                    finished: true,
+                },
+            );
+            assert!(!still_entered, "forced = {forced}: the leave completes");
+            assert_eq!(
+                answer,
+                Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                    save_point: None,
+                    forced,
+                    no_state: true,
+                })),
+                "forced = {forced}"
+            );
+        }
+    }
+
     /// **A save point demanded of a run that takes none is out of order**,
     /// per `weaver-harness-Spec` section 6 and
     /// `weaver-admin-harness-contract`: a diagnostic binding has no member

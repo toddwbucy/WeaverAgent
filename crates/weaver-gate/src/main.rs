@@ -905,6 +905,9 @@ mod tests {
                 rollback: true,
             },
             LifecycleDirective::JoinLeave { cause },
+            // Refused until the drain's quiesce lands (PR B, Task 6), which
+            // moves it into the drawn vocabulary.
+            LifecycleDirective::Quiesce,
             LifecycleDirective::SavePoint { cause },
             LifecycleDirective::Stop { cause },
             LifecycleDirective::Observe,
