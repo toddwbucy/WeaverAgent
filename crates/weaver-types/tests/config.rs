@@ -631,3 +631,72 @@ fn a_path_carrying_a_control_character_refuses_by_name() {
     );
     parse(&plain).expect("a path without a control character parses");
 }
+
+/// **The `[lifecycle]` table bounds the graceful unload, and its absence leaves
+/// it unbounded**, per `weaver-types-Spec` section 2 (the lifecycle act,
+/// 2026-10-09): both bounds parse, each a whole number of seconds above zero.
+#[test]
+fn both_lifecycle_bounds_parse() {
+    let source = full_config() + "\n[lifecycle]\ndrain-bound = 30\nwind-down-bound = 60\n";
+    let config = parse(&source).expect("parses");
+    let lifecycle = config.lifecycle.expect("the table is present");
+    assert_eq!(lifecycle.drain_bound, Some(30));
+    assert_eq!(lifecycle.wind_down_bound, Some(60));
+}
+
+/// A declaration with no `[lifecycle]` table carries no bound at all.
+#[test]
+fn an_absent_lifecycle_table_is_none() {
+    assert_eq!(parse(&full_config()).expect("parses").lifecycle, None);
+}
+
+/// **Each lone bound is held independently**: a drain bound alone leaves the
+/// wind-down absent. Perturbation: copy the drain bound into the wind-down
+/// field and this fails.
+#[test]
+fn a_lone_drain_bound_parses_with_the_other_absent() {
+    let source = full_config() + "\n[lifecycle]\ndrain-bound = 30\n";
+    let lifecycle = parse(&source).expect("parses").lifecycle.expect("present");
+    assert_eq!(lifecycle.drain_bound, Some(30));
+    assert_eq!(lifecycle.wind_down_bound, None);
+}
+
+/// A wind-down bound alone leaves the drain absent.
+#[test]
+fn a_lone_wind_down_bound_parses_with_the_other_absent() {
+    let source = full_config() + "\n[lifecycle]\nwind-down-bound = 60\n";
+    let lifecycle = parse(&source).expect("parses").lifecycle.expect("present");
+    assert_eq!(lifecycle.drain_bound, None);
+    assert_eq!(lifecycle.wind_down_bound, Some(60));
+}
+
+/// **A zero, a negative or a non-integer bound refuses `BadValue` naming the
+/// key**, per `weaver-types-Spec` section 2. Perturbation: admit zero and the
+/// first case parses.
+#[test]
+fn a_bound_that_is_not_whole_seconds_above_zero_refuses_naming_the_key() {
+    for (key, value) in [
+        ("drain-bound", "0"),
+        ("wind-down-bound", "0"),
+        ("drain-bound", "-5"),
+        ("wind-down-bound", "1.5"),
+        ("drain-bound", "\"30\""),
+    ] {
+        let source = full_config() + &format!("\n[lifecycle]\n{key} = {value}\n");
+        let err = parse(&source).expect_err("refuses");
+        assert_eq!(err.kind, ConfigErrorKind::BadValue, "{key} = {value}");
+        assert_eq!(
+            err.field,
+            Some(FieldName(format!("lifecycle.{key}"))),
+            "{key} = {value} is refused by its own name"
+        );
+    }
+}
+
+/// An unknown key in the table refuses as every table's does.
+#[test]
+fn an_unknown_lifecycle_key_refuses() {
+    let source = full_config() + "\n[lifecycle]\ndrain-bounds = 30\n";
+    let err = parse(&source).expect_err("refuses");
+    assert_eq!(err.kind, ConfigErrorKind::UnknownField);
+}

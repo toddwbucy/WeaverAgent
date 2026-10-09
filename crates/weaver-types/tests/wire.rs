@@ -65,47 +65,7 @@ fn organ_refused_carries_the_inner_reason_unchanged() {
 #[test]
 fn the_boxed_payloads_cross_as_the_payloads_do() {
     let enter = LifecycleDirective::Enter {
-        payload: Box::new(weaver_types::EnterPayload {
-            session: weaver_types::SessionId("s-1".into()),
-            run: weaver_types::RunId("r-1".into()),
-            spu_instruction: weaver_types::SpuInstruction {
-                classify: None,
-                decoder: weaver_types::DecoderInstruction {
-                    model_binding: weaver_types::ModelBinding {
-                        artifact: weaver_types::ArtifactRef("/models/a.gguf".into()),
-                        devices: vec![weaver_types::DeviceOrdinal(0)],
-                    },
-                    residual_readout_election: false,
-                    field_election: None,
-                    surprisal_election: false,
-                    refeed_permission: false,
-                    column_permission: false,
-                    tunable_values: Default::default(),
-                },
-            },
-            binding: weaver_types::EnterBinding::Serving {
-                gate_instruction: weaver_types::GateInstruction {
-                    access_rule: weaver_types::AccessRule {
-                        allowed_uids: Default::default(),
-                        allowed_gids: Default::default(),
-                        denied_uids: Default::default(),
-                    },
-                },
-            },
-            state_store: weaver_types::StateStore::default(),
-            declaration: String::new(),
-            restore: None,
-            reset: None,
-            stack: Default::default(),
-            boundary: String::new(),
-            cause: weaver_types::Cause { uid: 0 },
-            operator: 1000,
-            library_path: None,
-            state_election: weaver_types::StateElection {
-                all_kinds: false,
-                keys: Vec::new(),
-            },
-        }),
+        payload: Box::new(sample_enter_payload()),
     };
     let json = serde_json::to_string(&enter).expect("serializes");
     assert!(json.starts_with("{\"kind\":\"enter\",\"payload\":{\"session\":\"s-1\""));
@@ -690,4 +650,86 @@ fn the_lifecycle_vocabulary_round_trips() {
         serde_json::from_str::<Payload>(&interrupt).unwrap(),
         Payload::ToolInterrupt
     );
+}
+
+/// One enter payload, the shape every enter test starts from.
+fn sample_enter_payload() -> weaver_types::EnterPayload {
+    weaver_types::EnterPayload {
+        session: weaver_types::SessionId("s-1".into()),
+        run: weaver_types::RunId("r-1".into()),
+        spu_instruction: weaver_types::SpuInstruction {
+            classify: None,
+            decoder: weaver_types::DecoderInstruction {
+                model_binding: weaver_types::ModelBinding {
+                    artifact: weaver_types::ArtifactRef("/models/a.gguf".into()),
+                    devices: vec![weaver_types::DeviceOrdinal(0)],
+                },
+                residual_readout_election: false,
+                field_election: None,
+                surprisal_election: false,
+                refeed_permission: false,
+                column_permission: false,
+                tunable_values: Default::default(),
+            },
+        },
+        binding: weaver_types::EnterBinding::Serving {
+            gate_instruction: weaver_types::GateInstruction {
+                access_rule: weaver_types::AccessRule {
+                    allowed_uids: Default::default(),
+                    allowed_gids: Default::default(),
+                    denied_uids: Default::default(),
+                },
+            },
+        },
+        state_store: weaver_types::StateStore::default(),
+        declaration: String::new(),
+        restore: None,
+        reset: None,
+        stack: Default::default(),
+        boundary: String::new(),
+        cause: weaver_types::Cause { uid: 0 },
+        operator: 1000,
+        library_path: None,
+        drain_bound: None,
+        wind_down_bound: None,
+        state_election: weaver_types::StateElection {
+            all_kinds: false,
+            keys: Vec::new(),
+        },
+    }
+}
+
+/// **The bounds cross to the harness on the enter**, per `weaver-types-Spec`
+/// section 2: an enter from a silent declaration carries neither, absent
+/// rather than null.
+#[test]
+fn an_enter_from_a_silent_declaration_carries_no_bound() {
+    let json = serde_json::to_string(&sample_enter_payload()).expect("serializes");
+    assert!(!json.contains("drain-bound"), "{json}");
+    assert!(!json.contains("wind-down-bound"), "{json}");
+}
+
+/// **Each lone bound crosses with the other absent, and round-trips**.
+/// Perturbation: carry the drain bound into the wind-down field and the
+/// first case fails.
+#[test]
+fn an_enter_with_one_bound_round_trips_with_the_other_absent() {
+    for (drain, wind_down) in [(Some(30), None), (None, Some(60)), (Some(30), Some(60))] {
+        let mut payload = sample_enter_payload();
+        payload.drain_bound = drain;
+        payload.wind_down_bound = wind_down;
+        let json = serde_json::to_string(&payload).expect("serializes");
+        assert_eq!(
+            json.contains("\"drain-bound\":30"),
+            drain.is_some(),
+            "{json}"
+        );
+        assert_eq!(
+            json.contains("\"wind-down-bound\":60"),
+            wind_down.is_some(),
+            "{json}"
+        );
+        let back: weaver_types::EnterPayload = serde_json::from_str(&json).expect("reads");
+        assert_eq!(back, payload);
+    }
 }

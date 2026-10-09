@@ -3130,6 +3130,8 @@ mod tests {
             cause: weaver_types::Cause { uid: 0 },
             operator: 1000,
             library_path: None,
+            drain_bound: None,
+            wind_down_bound: None,
             state_election: weaver_types::StateElection {
                 all_kinds: false,
                 keys: vec![weaver_types::ElectedKindConfig {
@@ -3252,6 +3254,8 @@ mod tests {
             cause: weaver_types::Cause { uid: 0 },
             operator: 1000,
             library_path: None,
+            drain_bound: None,
+            wind_down_bound: None,
             state_election: weaver_types::StateElection {
                 all_kinds: false,
                 keys: Vec::new(),
@@ -3410,6 +3414,8 @@ mod tests {
                 cause: weaver_types::Cause { uid: 0 },
                 operator: 1000,
                 library_path: None,
+                drain_bound: None,
+                wind_down_bound: None,
                 state_election: weaver_types::StateElection {
                     all_kinds: false,
                     keys: Vec::new(),
@@ -3522,6 +3528,8 @@ mod tests {
             cause: weaver_types::Cause { uid: 0 },
             operator: 1000,
             library_path: None,
+            drain_bound: None,
+            wind_down_bound: None,
             state_election: weaver_types::StateElection {
                 all_kinds: false,
                 keys: Vec::new(),
@@ -3722,6 +3730,8 @@ mod tests {
             cause: weaver_types::Cause { uid: 0 },
             operator: 1000,
             library_path: None,
+            drain_bound: None,
+            wind_down_bound: None,
             // Every kind crosses, so the member's log shows the unload's
             // distillate beside the asks.
             state_election: weaver_types::StateElection {
@@ -4651,6 +4661,8 @@ mod tests {
             cause: weaver_types::Cause { uid: 0 },
             operator: 1000,
             library_path: None,
+            drain_bound: None,
+            wind_down_bound: None,
             state_election: weaver_types::StateElection {
                 all_kinds: false,
                 keys: Vec::new(),
@@ -4752,6 +4764,8 @@ mod tests {
                 cause: weaver_types::Cause { uid: 1000 },
                 operator: 1000,
                 library_path: Some("/opt/weaver/lib".to_string()),
+                drain_bound: None,
+                wind_down_bound: None,
                 state_election: weaver_types::StateElection {
                     all_kinds: false,
                     keys: vec![weaver_types::ElectedKindConfig {
@@ -4908,6 +4922,8 @@ mod tests {
             cause: weaver_types::Cause { uid: 0 },
             operator: 1000,
             library_path: None,
+            drain_bound: None,
+            wind_down_bound: None,
             state_election: weaver_types::StateElection::default(),
         };
 
@@ -5034,6 +5050,8 @@ mod tests {
             cause: weaver_types::Cause { uid: 0 },
             operator: 1000,
             library_path: None,
+            drain_bound: None,
+            wind_down_bound: None,
             state_election: weaver_types::StateElection::default(),
         };
 

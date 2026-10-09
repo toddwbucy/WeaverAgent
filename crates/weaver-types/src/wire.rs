@@ -581,6 +581,14 @@ pub struct EnterPayload {
     /// judged by admin and recorded on the load event beside the stack.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub library_path: Option<String>,
+    /// **The graceful unload's drain bound, in seconds**, as admin parsed the
+    /// declaration's `[lifecycle]` table, the harness's only source for timing
+    /// S4; absent where the declaration is silent, meaning unbounded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain_bound: Option<u64>,
+    /// The wind-down's bound, in seconds, the same way, for S5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wind_down_bound: Option<u64>,
 }
 
 /// A save point's lineage as admin resolved it from the stamp, per

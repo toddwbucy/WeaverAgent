@@ -1326,6 +1326,19 @@ fn run_load(
                     .library_path
                     .as_ref()
                     .map(|path| path.display().to_string()),
+                // **The bounds cross on the enter**, per `weaver-types-Spec`
+                // section 2: the harness's only source for timing the drain
+                // and the wind-down, read from the one parse admin made.
+                drain_bound: inventory
+                    .config
+                    .lifecycle
+                    .as_ref()
+                    .and_then(|bounds| bounds.drain_bound),
+                wind_down_bound: inventory
+                    .config
+                    .lifecycle
+                    .as_ref()
+                    .and_then(|bounds| bounds.wind_down_bound),
             }),
         }),
     };
