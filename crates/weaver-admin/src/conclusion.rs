@@ -1,11 +1,15 @@
 //! **The conclusion's outcome table**, `weaver-admin-Spec` section 3.0, "the
-//! conclusion's outcomes", as one pure decision: what a caller answered `Left`
+//! conclusion's outcomes", as pure decisions: what a caller answered `Left`
 //! publishes, writes to the marker, leaves the next load to record, and prints.
 //!
 //! The table's keys are tested in the Spec's order, and the kinds are encoded so
 //! that a combination the Spec lists as unreachable cannot be built: `classify`
-//! refuses it instead. The I/O, publication and the marker's write, takes the
-//! decision's result and decides nothing (section 10, the decision instruments).
+//! refuses it instead. **Publication splits the table in two**: `conclude`
+//! decides from the `Left` alone whether a publication is attempted, and where
+//! one is, `after_publication` gives the outcome from whether it landed, so the
+//! decision never needs the result of the act it orders. The I/O, publication
+//! and the marker's write, takes each result and decides nothing (section 10,
+//! the decision instruments).
 
 /// What the conclusion knows of the `Left` it was answered, before the table:
 /// the caller's own kind (a load's rollback, with whether `load` is on the
@@ -23,11 +27,10 @@ pub struct Seen {
 }
 
 /// A save point the `Left` reported: whether its `event_run` is the run the
-/// marker stands open on, and whether its publication landed.
+/// marker stands open on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Reported {
     pub this_run: bool,
-    pub published: bool,
 }
 
 /// **One variant per row of the outcome table**, in the Spec's key order.
@@ -43,7 +46,7 @@ pub enum LeftKind {
     /// Row 4: forced, its save point not taken.
     ForcedNotTaken,
     /// Rows 5 to 7: a save point reported.
-    Reported { this_run: bool, published: bool },
+    Reported { this_run: bool },
 }
 
 /// A combination the Spec lists as never answered.
@@ -83,14 +86,23 @@ pub enum Printed {
     LoadsOwnRefusal,
 }
 
-/// The table's output columns.
+/// The table's output columns but the reset, which the marker decides
+/// (`reset_of`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Outcome {
-    /// Whether the reported save point is published.
-    pub publish: bool,
     pub marker: MarkerWrite,
-    pub reset: NextReset,
     pub printed: Printed,
+}
+
+/// The first half of the table: settled from the `Left` alone, or a
+/// publication of the reported save point to attempt first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Conclusion {
+    /// Nothing is published.
+    Settled(Outcome),
+    /// Attempt the publication, then `after_publication` with whether it
+    /// landed.
+    Publish { this_run: bool },
 }
 
 /// **The keys, tested in the Spec's order**, so every reachable `Left` matches
@@ -129,18 +141,12 @@ pub fn classify(seen: Seen) -> Result<LeftKind, Unreachable> {
     match seen.reported {
         None if seen.forced => Ok(LeftKind::ForcedNotTaken),
         None => Err(Unreachable),
-        Some(Reported {
-            this_run,
-            published,
-        }) => Ok(LeftKind::Reported {
-            this_run,
-            published,
-        }),
+        Some(Reported { this_run }) => Ok(LeftKind::Reported { this_run }),
     }
 }
 
-/// **The outcome table, one exhaustive match and no wildcard arm**: a new kind
-/// of `Left` does not compile until it has a row.
+/// **The outcome table before publication, one exhaustive match and no
+/// wildcard arm**: a new kind of `Left` does not compile until it has a row.
 #[cfg_attr(
     not(test),
     expect(
@@ -148,69 +154,56 @@ pub fn classify(seen: Seen) -> Result<LeftKind, Unreachable> {
         reason = "wired into the conclusion by the lifecycle plumbing, PR B"
     )
 )]
-pub fn conclude(kind: LeftKind) -> Outcome {
+pub fn conclude(kind: LeftKind) -> Conclusion {
+    let settled = |marker, printed| Conclusion::Settled(Outcome { marker, printed });
     match kind {
         LeftKind::Rollback {
             load_on_trace: false,
-        } => Outcome {
-            publish: false,
-            marker: MarkerWrite::AsFound,
-            reset: NextReset::AsMarkerCarries,
-            printed: Printed::LoadsOwnRefusal,
-        },
+        } => settled(MarkerWrite::AsFound, Printed::LoadsOwnRefusal),
         LeftKind::Rollback {
             load_on_trace: true,
-        } => Outcome {
-            publish: false,
-            marker: MarkerWrite::Open,
-            reset: NextReset::NoCleanUnload,
-            printed: Printed::LoadsOwnRefusal,
-        },
-        LeftKind::TerritoryUnjudged => Outcome {
-            publish: false,
-            marker: MarkerWrite::Forced,
-            reset: NextReset::ForcedUnload,
-            printed: Printed::Unloaded,
-        },
-        LeftKind::NoState => Outcome {
-            publish: false,
-            marker: MarkerWrite::Closed,
-            reset: NextReset::None,
-            printed: Printed::Unloaded,
-        },
-        LeftKind::ForcedNotTaken => Outcome {
-            publish: false,
-            marker: MarkerWrite::Forced,
-            reset: NextReset::ForcedUnload,
-            printed: Printed::Unloaded,
-        },
-        LeftKind::Reported {
-            this_run: false,
-            published: _,
-        } => Outcome {
-            publish: true,
-            marker: MarkerWrite::LeaveOpen,
-            reset: NextReset::NoCleanUnload,
-            printed: Printed::Unloaded,
-        },
-        LeftKind::Reported {
-            this_run: true,
-            published: true,
-        } => Outcome {
-            publish: true,
-            marker: MarkerWrite::Closed,
-            reset: NextReset::None,
-            printed: Printed::Unloaded,
-        },
-        LeftKind::Reported {
-            this_run: true,
-            published: false,
-        } => Outcome {
-            publish: true,
-            marker: MarkerWrite::LeaveOpen,
-            reset: NextReset::NoCleanUnload,
-            printed: Printed::SavePointNotTakenPublished,
-        },
+        } => settled(MarkerWrite::Open, Printed::LoadsOwnRefusal),
+        LeftKind::TerritoryUnjudged => settled(MarkerWrite::Forced, Printed::Unloaded),
+        LeftKind::NoState => settled(MarkerWrite::Closed, Printed::Unloaded),
+        LeftKind::ForcedNotTaken => settled(MarkerWrite::Forced, Printed::Unloaded),
+        LeftKind::Reported { this_run } => Conclusion::Publish { this_run },
+    }
+}
+
+/// **Rows 5 to 7 after the publication**: the marker closes clean only for
+/// this run's own save point, landed (section 6).
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired into the conclusion by the lifecycle plumbing, PR B"
+    )
+)]
+pub fn after_publication(this_run: bool, landed: bool) -> Outcome {
+    let outcome = |marker, printed| Outcome { marker, printed };
+    match (this_run, landed) {
+        (false, true | false) => outcome(MarkerWrite::LeaveOpen, Printed::Unloaded),
+        (true, true) => outcome(MarkerWrite::Closed, Printed::Unloaded),
+        (true, false) => outcome(MarkerWrite::LeaveOpen, Printed::SavePointNotTakenPublished),
+    }
+}
+
+/// **The reset column, derived from the marker**: the next load records the
+/// cause the marker carries, so a row cannot state a reset its marker cannot
+/// produce.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired into the conclusion by the lifecycle plumbing, PR B"
+    )
+)]
+pub fn reset_of(marker: MarkerWrite) -> NextReset {
+    match marker {
+        MarkerWrite::AsFound => NextReset::AsMarkerCarries,
+        MarkerWrite::Open | MarkerWrite::LeaveOpen => NextReset::NoCleanUnload,
+        MarkerWrite::Closed => NextReset::None,
+        MarkerWrite::Forced => NextReset::ForcedUnload,
     }
 }
 
@@ -218,20 +211,39 @@ pub fn conclude(kind: LeftKind) -> Outcome {
 mod tests {
     use super::*;
 
+    /// A row settled without publication, with its reset through `reset_of`.
+    fn settled(kind: LeftKind) -> (MarkerWrite, NextReset, Printed) {
+        match conclude(kind) {
+            Conclusion::Settled(outcome) => {
+                (outcome.marker, reset_of(outcome.marker), outcome.printed)
+            }
+            Conclusion::Publish { .. } => panic!("{kind:?} publishes"),
+        }
+    }
+
+    /// A row after its publication, with its reset through `reset_of`.
+    fn published(this_run: bool, landed: bool) -> (MarkerWrite, NextReset, Printed) {
+        assert_eq!(
+            conclude(LeftKind::Reported { this_run }),
+            Conclusion::Publish { this_run }
+        );
+        let outcome = after_publication(this_run, landed);
+        (outcome.marker, reset_of(outcome.marker), outcome.printed)
+    }
+
     /// Row 1, a load's rollback before its `load` event is on the trace: the
     /// marker stays as the load found it (K1).
     #[test]
     fn row1_rollback_before_load_leaves_the_marker_as_found() {
         assert_eq!(
-            conclude(LeftKind::Rollback {
+            settled(LeftKind::Rollback {
                 load_on_trace: false
             }),
-            Outcome {
-                publish: false,
-                marker: MarkerWrite::AsFound,
-                reset: NextReset::AsMarkerCarries,
-                printed: Printed::LoadsOwnRefusal,
-            }
+            (
+                MarkerWrite::AsFound,
+                NextReset::AsMarkerCarries,
+                Printed::LoadsOwnRefusal
+            )
         );
     }
 
@@ -240,15 +252,14 @@ mod tests {
     #[test]
     fn row1_rollback_after_load_writes_the_marker_open() {
         assert_eq!(
-            conclude(LeftKind::Rollback {
+            settled(LeftKind::Rollback {
                 load_on_trace: true
             }),
-            Outcome {
-                publish: false,
-                marker: MarkerWrite::Open,
-                reset: NextReset::NoCleanUnload,
-                printed: Printed::LoadsOwnRefusal,
-            }
+            (
+                MarkerWrite::Open,
+                NextReset::NoCleanUnload,
+                Printed::LoadsOwnRefusal
+            )
         );
     }
 
@@ -257,13 +268,12 @@ mod tests {
     #[test]
     fn row2_unjudged_territory_closes_forced() {
         assert_eq!(
-            conclude(LeftKind::TerritoryUnjudged),
-            Outcome {
-                publish: false,
-                marker: MarkerWrite::Forced,
-                reset: NextReset::ForcedUnload,
-                printed: Printed::Unloaded,
-            }
+            settled(LeftKind::TerritoryUnjudged),
+            (
+                MarkerWrite::Forced,
+                NextReset::ForcedUnload,
+                Printed::Unloaded
+            )
         );
     }
 
@@ -271,13 +281,8 @@ mod tests {
     #[test]
     fn row3_no_state_closes_clean() {
         assert_eq!(
-            conclude(LeftKind::NoState),
-            Outcome {
-                publish: false,
-                marker: MarkerWrite::Closed,
-                reset: NextReset::None,
-                printed: Printed::Unloaded,
-            }
+            settled(LeftKind::NoState),
+            (MarkerWrite::Closed, NextReset::None, Printed::Unloaded)
         );
     }
 
@@ -285,13 +290,12 @@ mod tests {
     #[test]
     fn row4_forced_not_taken_closes_forced() {
         assert_eq!(
-            conclude(LeftKind::ForcedNotTaken),
-            Outcome {
-                publish: false,
-                marker: MarkerWrite::Forced,
-                reset: NextReset::ForcedUnload,
-                printed: Printed::Unloaded,
-            }
+            settled(LeftKind::ForcedNotTaken),
+            (
+                MarkerWrite::Forced,
+                NextReset::ForcedUnload,
+                Printed::Unloaded
+            )
         );
     }
 
@@ -300,19 +304,15 @@ mod tests {
     /// publication's outcome (the key is blank in the Spec).
     #[test]
     fn row5_another_runs_save_point_publishes_and_leaves_open() {
-        for published in [true, false] {
+        for landed in [true, false] {
             assert_eq!(
-                conclude(LeftKind::Reported {
-                    this_run: false,
-                    published
-                }),
-                Outcome {
-                    publish: true,
-                    marker: MarkerWrite::LeaveOpen,
-                    reset: NextReset::NoCleanUnload,
-                    printed: Printed::Unloaded,
-                },
-                "published = {published}"
+                published(false, landed),
+                (
+                    MarkerWrite::LeaveOpen,
+                    NextReset::NoCleanUnload,
+                    Printed::Unloaded
+                ),
+                "landed = {landed}"
             );
         }
     }
@@ -321,103 +321,102 @@ mod tests {
     #[test]
     fn row6_published_closes_clean() {
         assert_eq!(
-            conclude(LeftKind::Reported {
-                this_run: true,
-                published: true
-            }),
-            Outcome {
-                publish: true,
-                marker: MarkerWrite::Closed,
-                reset: NextReset::None,
-                printed: Printed::Unloaded,
-            }
+            published(true, true),
+            (MarkerWrite::Closed, NextReset::None, Printed::Unloaded)
         );
     }
 
-    /// Row 7, this run's save point not published: the marker left open, the
-    /// caller refused `SavePointNotTaken` naming the publication.
+    /// Row 7, this run's save point attempted and not landed: the marker left
+    /// open, the caller refused `SavePointNotTaken` naming the publication.
     #[test]
     fn row7_unpublished_leaves_open_and_refuses() {
         assert_eq!(
-            conclude(LeftKind::Reported {
-                this_run: true,
-                published: false
-            }),
-            Outcome {
-                publish: true,
-                marker: MarkerWrite::LeaveOpen,
-                reset: NextReset::NoCleanUnload,
-                printed: Printed::SavePointNotTakenPublished,
-            }
+            published(true, false),
+            (
+                MarkerWrite::LeaveOpen,
+                NextReset::NoCleanUnload,
+                Printed::SavePointNotTakenPublished
+            )
         );
+    }
+
+    /// **No row before the reported ones publishes**: rows 1 to 4 settle from
+    /// the `Left` alone, so nothing is written into an unjudged territory (K5).
+    #[test]
+    fn only_a_reported_save_point_is_published() {
+        for kind in [
+            LeftKind::Rollback {
+                load_on_trace: false,
+            },
+            LeftKind::Rollback {
+                load_on_trace: true,
+            },
+            LeftKind::TerritoryUnjudged,
+            LeftKind::NoState,
+            LeftKind::ForcedNotTaken,
+        ] {
+            assert!(matches!(conclude(kind), Conclusion::Settled(_)), "{kind:?}");
+        }
     }
 
     /// **The keys are tested in the Spec's order**: a rollback is row 1 even
     /// with `no_state` true, and an unjudged territory is row 2 whatever else
-    /// holds.
+    /// holds, a save point reported among it.
     #[test]
     fn the_keys_are_tested_in_order() {
-        assert_eq!(
-            classify(Seen {
-                rollback: Some(true),
-                territory_judged: true,
-                forced: true,
-                no_state: true,
-                reported: None,
-            }),
-            Ok(LeftKind::Rollback {
-                load_on_trace: true
-            })
-        );
-        assert_eq!(
-            classify(Seen {
-                rollback: None,
-                territory_judged: false,
-                forced: true,
-                no_state: false,
-                reported: Some(Reported {
-                    this_run: true,
-                    published: true
-                }),
-            }),
-            Ok(LeftKind::TerritoryUnjudged)
-        );
-        assert_eq!(
-            classify(Seen {
-                rollback: None,
-                territory_judged: true,
-                forced: false,
-                no_state: true,
-                reported: None,
-            }),
-            Ok(LeftKind::NoState)
-        );
-        assert_eq!(
-            classify(Seen {
-                rollback: None,
-                territory_judged: true,
-                forced: true,
-                no_state: false,
-                reported: None,
-            }),
-            Ok(LeftKind::ForcedNotTaken)
-        );
-        assert_eq!(
-            classify(Seen {
-                rollback: None,
-                territory_judged: true,
-                forced: false,
-                no_state: false,
-                reported: Some(Reported {
-                    this_run: false,
-                    published: false
-                }),
-            }),
-            Ok(LeftKind::Reported {
-                this_run: false,
-                published: false
-            })
-        );
+        let base = Seen {
+            rollback: None,
+            territory_judged: true,
+            forced: false,
+            no_state: false,
+            reported: None,
+        };
+        let reported = Some(Reported { this_run: true });
+        for (seen, kind) in [
+            (
+                Seen {
+                    rollback: Some(true),
+                    forced: true,
+                    no_state: true,
+                    ..base
+                },
+                LeftKind::Rollback {
+                    load_on_trace: true,
+                },
+            ),
+            (
+                Seen {
+                    territory_judged: false,
+                    forced: true,
+                    reported,
+                    ..base
+                },
+                LeftKind::TerritoryUnjudged,
+            ),
+            (
+                Seen {
+                    no_state: true,
+                    ..base
+                },
+                LeftKind::NoState,
+            ),
+            (
+                Seen {
+                    forced: true,
+                    ..base
+                },
+                LeftKind::ForcedNotTaken,
+            ),
+            (
+                Seen {
+                    reported: Some(Reported { this_run: false }),
+                    ..base
+                },
+                LeftKind::Reported { this_run: false },
+            ),
+        ] {
+            assert_eq!(classify(seen), Ok(kind), "{seen:?}");
+        }
     }
 
     /// **The combinations the Spec lists as never answered** classify as
@@ -433,10 +432,7 @@ mod tests {
             no_state: false,
             reported: None,
         };
-        let reported = Some(Reported {
-            this_run: true,
-            published: true,
-        });
+        let reported = Some(Reported { this_run: true });
         for (case, seen) in [
             (
                 "a rollback not forced",
