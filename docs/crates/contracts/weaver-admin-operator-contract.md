@@ -234,7 +234,7 @@ state; it reads `show` and acts on what it prints.
 | S2, serving at rest | `AgentRunning` | the graceful unload, below | the forced unload, below | `SavePointTaken` | `RestoreNamed` | `Idle` |
 | S3, serving, a turn in flight | `AgentRunning` | the graceful unload, after the turn | the forced unload, the turn cancelled | `ActivityNotAtRest` | `RestoreNamed` | `Active` |
 | S4 to S7, a graceful unload in progress | `InvocationInFlight` | `InvocationInFlight` | joins, below | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
-| S8a, an unload concluding | `InvocationInFlight` | `InvocationInFlight` | waits for the unload to finish, then prints its outcome as the marker records it | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+| S8a, an unload concluding | `InvocationInFlight` | `InvocationInFlight` | waits for the unload to finish, then prints `Unloaded` | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S8b, the worker gone with no answer (it died), a process still holding the run | `AgentRunning` until the run ends, then as S0d | ends what still holds the run, then publishes what the run left as recovered; the next load records `NoCleanUnload` | the same as `unload`, the marker left as it stands | `OutOfOrder` | `RestoreNamed` | `InTransition` with the run's processes named, then `Unloaded` |
 | S9, an unload stopped at its save point | `AgentRunning` | retried: the save point, then down | the forced unload | `SavePointTaken` | `RestoreNamed` | `Idle`, the gate lowered |
 | S10, a force in progress | `InvocationInFlight` | `InvocationInFlight` | joins the forced leave | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
@@ -319,9 +319,9 @@ waits and the publication after the answer come on top, as before.
   and once the agent no longer listens it waits for the unload to finish: at most 150
   seconds and then the escalation while the agent's processes still hold the run, and
   with no deadline once they are gone and the unload is publishing, a publication taking
-  as long as its copy does; it then prints the unload's outcome as the marker
-  records it: `Unloaded` where it closed, `Unloaded` and forced where it was forced, and
-  `SavePointNotTaken` naming the publication where it stayed open.
+  as long as its copy does; it then prints `Unloaded`, nothing
+  being resident: ending the run was its job, and whether the unload's save point
+  published is the unload's own answer and the marker's, for the next load.
 - **Beside any other command** (a load in S1, a `save-point`, another force): it refuses `InvocationInFlight` and takes over nothing, one command
   at a time being the caller's to keep (`weaver-agent-PRD` section 6.1). A `show`'s
   brief shared hold is waited out, as by every command.
