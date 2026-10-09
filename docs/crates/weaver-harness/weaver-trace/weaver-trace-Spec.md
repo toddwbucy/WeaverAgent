@@ -319,6 +319,17 @@ pub struct UnloadClose {
     pub forced: bool,
     pub forced_by: Option<Cause>,
     pub adopted_by: Option<Cause>,
+    pub release: Release,
+}
+
+pub struct Release {
+    pub spu: ReleaseOutcome,
+    pub member: Option<ReleaseOutcome>,
+}
+
+pub enum ReleaseOutcome {
+    Confirmed,
+    Unconfirmed,
 }
 
 pub enum GrantSurface {
@@ -693,7 +704,12 @@ account whose `unload` adopted an orphaned graceful leave**, in S4 to S6
 (`weaver-admin-Spec` section 3, the adopted leave; the operator's ruling of 2026-10-09);
 from S7 on the record is final and a late caller is named nowhere: `cause` stays the leave's own,
 and `adopted_by` carries the first adopting caller's cause, one name; absent where no
-caller adopted the leave, and never written null. The
+caller adopted the leave, and never written null. **`release` says how the run's organs let go**, on the lifecycle act's I9 (`weaver-admin-Spec`
+section 3): the SPU and the member are released before `unload` is authored, so
+`unload` is the run's terminal event and carries the outcome, `Confirmed` or
+`Unconfirmed` per organ, `member` absent where the run stands no member, per
+`weaver-harness-spu-contract` section 5; an organ that dies in its release is a `fault`
+authored before `unload`, and its outcome reads `Unconfirmed`. The
 `unload` event's `forced`, `forced_by` and `adopted_by` agree with the `Left` answer's
 `forced` and the marker admin writes, per I2, the rollback excepted by name. `load` carries `Elections`. The five
 message kinds carry `Message`. `turn.closed` carries `TurnClosed`. `fault` carries
@@ -1140,7 +1156,9 @@ the loop act's (A5), and the reset rides the `load` event's `reset` member above
 **The run's record order is `weaver-admin-Spec` section 3, I9**, the lifecycle state
 table's, and this crate's kinds carry it without a kind of their own: within a run,
 `load` first; the seeding turn's `message.system`, where the agent is seeded in this
-run, before any user turn; `save_point` before `unload`; and `unload` last. **An unload's
+run, before any user turn; `save_point` before `unload`; a `fault` met in the release
+of the SPU or the member before `unload`, the release coming first; and `unload` last,
+the terminal event, carrying the release outcome, nothing authored after it. **An unload's
 own account rides standing kinds** (`weaver-admin-Spec` section 3, the graceful unload
 and the forced unload): a request the drain refuses through the gate is a `refusal` of
 the leave, one per request, carrying the lifecycle refusal `unloading` that answered it,
@@ -1155,7 +1173,7 @@ before `unload`. **A run with no `unload` event never answered `Left`** (I2), th
 harness answering `Left` only after the writer's queue has drained `unload` to the
 sink, per `weaver-admin-harness-contract` section 4, so a reader keys a run's close on
 `unload` and its `forced` and never infers one from the record's end. The converse does
-not hold: a worker that dies in S7, after `unload` and before `Left`, leaves an
+not hold: a worker that dies in S7 after `unload` and before `Left` leaves an
 `unload` with no answer, which admin meets as S8 with the marker `Open` (S7 x worker or
 member dies).
 

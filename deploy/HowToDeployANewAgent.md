@@ -351,7 +351,7 @@ sudo /opt/weaver/bin/weaver-admin show <name>         # the state and the run's 
 sudo /opt/weaver/bin/weaver-admin save-point <name>   # a save point now, published at once
 sudo /opt/weaver/bin/weaver-admin unload <name>       # answers {"kind":"state","state":"unloaded"}
 sudo /opt/weaver/bin/weaver-admin restore <name>      # make [restore]'s save point the latest, which the next load restores
-sudo /opt/weaver/bin/weaver-admin force-unload <name> # unload without the leave's save point
+sudo /opt/weaver/bin/weaver-admin force-unload <name> # stop the work at once, still taking the leave's save point
 ```
 
 **The save points and the manifest.** Every unload takes a save point at the leave and

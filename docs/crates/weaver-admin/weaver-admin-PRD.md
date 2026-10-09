@@ -521,9 +521,9 @@ absent, has no counterpart on the way up.
    process never outlives the interior it protects and nothing new arrives. A
    graceful leave lets a turn in flight finish and winds down before it lowers the
    gate; a forced one cancels the turn (`weaver-admin-Spec` section 3, the two
-   unloads). After the save point it authors its
-   `unload` event, closing the bracket, drains the writer's queue to the stream,
-   then releases the SPU, so residency ends and the device is freed. The answer
+   unloads). After the save point it releases the SPU and the member, so residency
+   ends and the device is freed, then authors its `unload` event, closing the bracket
+   with the release outcome, and drains the writer's queue to the stream. The answer
    carries left, or a refusal naming where the sequence stopped. Admin holds no
    channel to Gate or the SPU, per section 6, so this directive is the whole of
    admin's part in their unwinding.

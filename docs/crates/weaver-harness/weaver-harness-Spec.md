@@ -1339,9 +1339,9 @@ state table approved by the operator on 2026-10-09, recorded on #1, whose text i
 heard at rest or mid-turn and is never refused for a turn in flight: it becomes the
 pending leave, and from there it quiesces the gate where one stands, the run state's
 arm answering whether it does, lets the turn finish or cancels it, runs the wind-down,
-lowers the gate, takes the leave's save point, authors the `unload` event with the
-leave directive's cause, drains the writer's queue, and releases the SPU, each step as
-section 6 states it. Left is answered only after the drain returns, which is what makes
+lowers the gate, takes the leave's save point, releases the SPU and the member,
+authors the `unload` event with the leave directive's cause and the release outcome,
+the terminal event, and drains the writer's queue, each step as section 6 states it. Left is answered only after the drain returns, which is what makes
 the answer mean what `weaver-admin-harness-contract` section 4 says it means, that
 everything admitted reached the stream. **The ordering is review's by election,** a
 double sink that drains slowly reaching it, which is the shape the gate's
@@ -1375,7 +1375,7 @@ facts the load event was authored from and held on the run for this exchange. **
 leave is pending the answer is `InTransition`**, whether a turn runs or not, so in S4 to
 S6 and S10 `show` answers the same whether the unload's invocation still holds the lock
 or has died (`weaver-admin-Spec` section 3, S4 to S7 and S10 x `show`; the operator's
-ruling of 2026-10-09). In S7 and S8 the leave's last waits, the trace's drain, the SPU's release and the reaps, do not poll the listener, so with the holder dead an observation is answered `InTransition` where the harness answers inside the observation's bound and otherwise goes `Unanswered`, which there means a run ending and not a wedged one: the caller asks again, and the run lock freeing turns the answer into `Unloaded`. After a
+ruling of 2026-10-09). In S7 and S8 the leave's last waits, the SPU's release, the trace's drain and the reaps, do not poll the listener, so with the holder dead an observation is answered `InTransition` where the harness answers inside the observation's bound and otherwise goes `Unanswered`, which there means a run ending and not a wedged one: the caller asks again, and the run lock freeing turns the answer into `Unloaded`. After a
 leave the answer is `Unloaded` with no load, the position being terminal and the
 observation not an act, so it is the one directive the left position answers rather than
 refuses. No event is authored and no bracket touched: an observation mid-turn reads the
@@ -2128,9 +2128,14 @@ served.
    nothing unanswered for the lower to meet.
 5. **The leave's save point** (step 6): the four legs below, the `save_point` event
    authored on the finished answer.
-6. **`unload`** (step 7; S7): authored with `forced` false and the leave's cause, the SPU
-   and the member released, the writer drained, and `Left { save_point, forced: false }`
-   answered. A run with no `unload` event never answered `Left`: a death in S7 is S8 as
+6. **The release, then `unload`** (step 7; S7): the SPU and the member are released
+   first, an organ that dies in its release authored as a `fault` per
+   `weaver-harness-spu-contract` section 5, and a release this crate cannot confirm
+   reported unconfirmed; then `unload` is authored with `forced` false, the leave's cause
+   and the release outcome, the run's terminal event, nothing authored after it (I9); the
+   writer is drained, and `Left { save_point, forced: false }` answered. The member,
+   released before `unload`, needs nothing after it: its save point is taken and its
+   grant surface read before the release, and no save point ever carries `unload`. A run with no `unload` event never answered `Left`: a death in S7 is S8 as
    far as admin can tell, the marker left `Open` (S7 x worker or member dies).
 
 **A missed leg stops the graceful leave in S9** (S6 x member misses a save-point leg):
@@ -2148,8 +2153,9 @@ the channel to `GateStopped` and recording every frame met there refused, carryi
 `Unloading`, its connection
 closed by the gate unanswered (I5); cancel the turn in flight as a stop does, recorded as
 a stop naming the unload, state holding what landed up to the cancel; run no wind-down;
-take the leave's save point and report it as any leave does; and author `unload` with
-`forced` true, answering `Left { save_point, forced: true }`. Where the save point cannot
+take the leave's save point and report it as any leave does; release the SPU and the
+member as item 6 does; and author `unload` last with `forced` true and the release
+outcome, answering `Left { save_point, forced: true }`. Where the save point cannot
 be taken, the member dead or a leg unanswered, the forced leave comes down without one,
 `Left` naming none and the miss recorded as a lifecycle refusal of the leave naming the
 leg, so the next load carries the reset admin resolves from its marker (I4).
@@ -2157,8 +2163,9 @@ leg, so the next load carries the reset admin resolves from its marker (I4).
 **The rollback's leave is its own row** (`weaver-admin-Spec` section 3, S1 x Leave; K1).
 A load's rollback directs a forced leave of a run that never served, which this crate
 tells apart by its own state, a run never entered past `Ready`, with no directive of its
-own: it takes no save point and runs no wind-down, and where the bracket stands it
-authors `unload` with `forced` true. It is exempt from I2 by name, admin leaving the
+own: it takes no save point and runs no wind-down, releases what it admitted, and
+where the bracket stands it authors `unload` last with `forced` true and the release
+outcome. It is exempt from I2 by name, admin leaving the
 marker `Open`.
 
 **A force that joins a pending leave turns it forced from where it stands**
@@ -2167,12 +2174,12 @@ force-unload). `JoinLeave { cause }`, the force admin sends without the invocati
 beside the graceful unload that holds it, joins it. **Any forced `Leave` that arrives
 while any leave is pending joins it the same way**, by this crate's own state: that
 happens only where the invocation holding the pending leave died while it could still
-change, a graceful unload's in S4 to S6 or a force's in S10 before `unload` is authored,
+change, a graceful unload's in S4 to S6 or a force's in S10,
 and a force took the freed lock as sole; a pending forced leave answers it with its own
 `Left` (the orphaned leave of `weaver-admin-Spec` section 3; I1, I3), and its caller,
 answered `Left`, concludes as every answered caller does (`weaver-admin-Spec` section 3,
-the conclusion). From S7 on, or once a forced leave has
-authored `unload`, the record final, a forced or an unforced `Leave` from a late caller is answered the `Left`
+the conclusion). From S7 on, a graceful or a forced
+leave's save point taken or missed and its outcome fixed, a forced or an unforced `Leave` from a late caller is answered the `Left`
 as it stands and adds nothing to the record, neither `forced_by` nor `adopted_by` (the
 late caller of `weaver-admin-Spec` section 3, who concludes as every caller this crate
 answers with `Left` does; I2). What remains of the quiesce's wait, the drain and the wind-down is
@@ -2200,8 +2207,8 @@ not: only `Leave` adopts. An unforced `Leave` meeting a pending forced leave (S1
 `OutOfOrder` too, the forced leave's own `Left` being what a force's join receives.
 
 **From S7 on, a join gets the `Left` as it stands** (`weaver-admin-Spec` section 3, the
-forced unload (joining), and the ordering of #94's round 21; I2). Once `unload` is
-authored the record is final, so a force heard after it adds nothing to the record,
+forced unload (joining), and the ordering of #94's round 21; I2). From S7 on the
+leave's outcome is fixed, its save point taken or missed, so a force heard then adds nothing to the record,
 records no `forced_by`, and is answered with the same `Left` the leave's own dialer
 gets, its `forced` as the leave came down; its caller concludes all the same
 (`weaver-admin-Spec` section 3, the conclusion).
@@ -2210,7 +2217,7 @@ gets, its `forced` as the leave came down; its caller concludes all the same
 I3), through one helper: the wait for `GateQuiesced`, the drain, the wind-down, the
 lower, the save point's four legs and the grants read-back poll the listener beside what
 they wait on, and the dials that land while this crate waits on what cannot be polled
-beside it, the trace's drain, the SPU's release and the reaps, are swept from the
+beside it, the SPU's release, the trace's drain and the reaps, are swept from the
 listener's backlog before the leave's dialers are answered, by the from-S7 rule.
 
 **The drain and the wind-down are unbounded by default, and every other leg is bounded**
@@ -3234,6 +3241,12 @@ for the organs whose side is unwritten.
   one heard in the wind-down's save point legs with none, each answers `InTransition`
   and authors nothing. Confirmed by watching the test fail when the drain's answer is
   `Active`.
+- `unload` is the run's terminal event (`weaver-admin-Spec` section 3, I9; section 6
+  item 6), owed by the lifecycle act's code: with a stand-in SPU that dies in its
+  release, the record carries the `fault` and then `unload`, whose `release.spu` reads
+  `Unconfirmed`, and no line follows `unload`; with both organs releasing cleanly, each
+  reads `Confirmed`. Confirmed by watching the test fail when the release is moved after
+  `unload`, the fault then landing past the terminal event.
 - Announce-after-record: a stop's answer follows the close event's placement,
   confirmed by watching the answer precede the record when the two are
   reordered.

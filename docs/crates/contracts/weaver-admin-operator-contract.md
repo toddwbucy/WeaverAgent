@@ -225,13 +225,13 @@ state; it reads `show` and acts on what it prints.
 |---|---|---|---|---|---|---|
 | S0, down, clean | the load's answer, or its refusal | `Unloaded`, nothing to do | `Unloaded`, nothing to do | `OutOfOrder` | `RestoreNamed` | `Unloaded` |
 | S0d, down, a run ended without closing | as S0, the load recording the reset | `Unloaded`, nothing to do | `Unloaded`, nothing to do | `OutOfOrder` | `RestoreNamed` | `Unloaded` |
-| S1, loading | `InvocationInFlight` | `InvocationInFlight` | waits for the load, at most its bound, then answers as the state it finds | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+| S1, loading | `InvocationInFlight` | `InvocationInFlight` | waits for the load's publication of recovered files, bounded by their size, then at most the load's bound, then answers as the state it finds | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S2, serving at rest | `AgentRunning` | the graceful unload, below | the forced unload, below | `SavePointTaken` | `RestoreNamed` | `Idle` |
 | S3, serving, a turn in flight | `AgentRunning` | the graceful unload, after the turn | the forced unload, the turn cancelled | `ActivityNotAtRest` | `RestoreNamed` | `Active` |
 | S4 to S7, a graceful unload in progress | `InvocationInFlight` | `InvocationInFlight`, or, the holder having died, adopts the leave in S4 to S6, and in S7 is answered as the leave stands, concluding either way | joins, below | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S8, an unload concluding | `InvocationInFlight` | `InvocationInFlight` | waits, then as S0 or S0d | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S9, an unload stopped at its save point | `AgentRunning` | retried: the save point, then down | the forced unload | `SavePointTaken` | `RestoreNamed` | `Idle`, the gate lowered |
-| S10, a force in progress | `InvocationInFlight` | `InvocationInFlight`, or, the holder having died, `OutOfOrder` before `unload` is authored and answered as the leave stands after | joins | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+| S10, a force in progress | `InvocationInFlight` | `InvocationInFlight`, or, the holder having died, `OutOfOrder` | joins | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S11, a silent worker being ended | `InvocationInFlight` | `InvocationInFlight` | waits, then as S0 or S0d | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 
 `restore` names the save point the next load restores in every state that answers it,
@@ -292,7 +292,7 @@ waits and the publication after the answer come on top, as before.
   lock first, publishing and closing the marker, and the force after it, finding the run
   concluded and changing nothing (I1); each prints only once the run lock has freed,
   never on the agent's answer alone, so `Unloaded` means no constituent still runs. From
-  S7 on, the record being final, the join adds nothing to it and concludes the same way.
+  S7 on, the leave's outcome being fixed, the join adds nothing to it and concludes the same way.
 - **Behind any other holder of the lock** (a load in S1, a `show`, a `save-point`, an
   unload concluding in S8): it retries the join and the lock in turn, and acts alone
   once it holds the lock. It first waits the holder's own bound and takes over none.
