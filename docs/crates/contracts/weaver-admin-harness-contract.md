@@ -265,7 +265,8 @@ from where it stands, with no `forced_by`, the leave's `cause` staying the grace
 caller's, and comes down as a forced leave does. It lowers the gate (`Lower`,
 answered `GateStopped`), takes the leave's save point through the four legs of
 `weaver-harness-state-contract` section 2 and authors `save_point` (S6), then releases
-the SPU and the member, authoring a `fault` for an organ that dies in its release,
+the SPU and the member, authoring a `fault` for an SPU that dies in its release and
+any recorder pressure,
 authors `unload` with `forced` and the release outcome, the terminal event, drains
 the writer's queue to the stream, and answers `Left` naming the save point as `SavePointTaken` does, so
 admin publishes it under the same ordinal rule, with the same `forced` (S7). **`forced`
@@ -456,7 +457,8 @@ an obligation on the party that could break it.
   otherwise, before the enter included.
 - Within the run, the record's order is `weaver-admin-Spec` section 3, I9: the
   harness authors `save_point` before `unload`, releases the SPU and the member before
-  `unload`, any fault of that release authored before it, and authors `unload` last,
+  `unload`, any fault of that release and any recorder pressure authored before it, and
+  authors `unload` last,
   nothing after it, per `weaver-trace-Spec` section 3.
 - Messages within one exchange are ordered.
 - An answer to enter arrives only after the working structure is standing, the
@@ -610,8 +612,9 @@ S10 x the worker dies, I2 and I4): a run whose record holds no `unload` never an
 `weaver-harness-state-contract` section 5, so in S4 to S6 the leave goes on and its save
 point misses `MemberDead` at S6, a leave that stayed graceful answering
 `SavePointNotTaken` and standing in S9, a forced one answering `Left` with `forced` true
-and no save point; and in S7 a member dying in its release is a `fault` before `unload`,
-its release outcome `Unconfirmed` (`weaver-admin-Spec` section 3, S4 to S10 x the member
+and no save point; and in S7 a member whose seam is found dead at the release reads
+`Unconfirmed` in the `unload` event's release, no `fault` authored, a dead peer being
+no fault (`weaver-admin-Spec` section 3, S4 to S10 x the member
 dies, the worker alive).
 
 **Nothing on this seam retries, but the join.** A refused directive returns to admin,

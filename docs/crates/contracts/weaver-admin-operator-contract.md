@@ -168,7 +168,8 @@ human-readable diagnostics no caller parses. A
 `load` answers once the agent is up or refused, within admin's own bound of 900 seconds
 by default on the agent's start, which a caller's bound must exceed, after any
 publication of recovered files from an unclosed run, which is bounded by their size and
-not by time. **An invocation finishes even when its
+not by time; a load whose agent does not start inside that bound rolls back before it
+answers, which takes at most 195 seconds more. **An invocation finishes even when its
 caller disappears**, its outcome recorded in the agent's `admin.log`, so a caller that
 gives up reads the outcome from the next `show`.
 
@@ -225,7 +226,7 @@ state; it reads `show` and acts on what it prints.
 |---|---|---|---|---|---|---|
 | S0, down, clean | the load's answer, or its refusal | `Unloaded`, nothing to do | `Unloaded`, nothing to do | `OutOfOrder` | `RestoreNamed` | `Unloaded` |
 | S0d, down, a run ended without closing | as S0, the load recording the reset | publishes the save points the run left as recovered, then `Unloaded`, or `SavePointNotTaken` naming `published` where that fails; the next load records `NoCleanUnload` | publishes them the same way, then `Unloaded`, or refuses as `unload` does; the marker is left as it stands, a force on an agent already down having ended nothing | `OutOfOrder` | `RestoreNamed` | `Unloaded` |
-| S1, loading | `InvocationInFlight` | `InvocationInFlight` | waits for the load's publication of recovered files, bounded by their size, then at most the load's bound, then answers as the state it finds | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+| S1, loading | `InvocationInFlight` | `InvocationInFlight` | waits for the load's publication of recovered files, bounded by their size, then at most the load's bound, then, where the agent did not start inside it, the load's rollback (at most 195 seconds), then answers as the state it finds | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S2, serving at rest | `AgentRunning` | the graceful unload, below | the forced unload, below | `SavePointTaken` | `RestoreNamed` | `Idle` |
 | S3, serving, a turn in flight | `AgentRunning` | the graceful unload, after the turn | the forced unload, the turn cancelled | `ActivityNotAtRest` | `RestoreNamed` | `Active` |
 | S4 to S7, a graceful unload in progress | `InvocationInFlight` | `InvocationInFlight`, or, the holder having died, adopts the leave in S4 to S6, and in S7 is answered as the leave stands, concluding either way | joins, below | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
@@ -301,13 +302,15 @@ waits and the publication after the answer come on top, as before.
   Behind a load it waits for the load to publish the recovered files it found from an
   unclosed run, which is bounded by their size and not by time, then at most that
   load's bound (900 seconds unless the agent's root names another), which bounds the
-  enter alone, the load concluding or rolling back inside it. Behind a holder that is
+  enter alone, the load concluding inside it; where the agent does not start inside it,
+  the force also waits the load's rollback, a forced leave of at most 150 seconds and
+  the escalation's 45. Behind a holder that is
   publishing (a `save-point`'s publication, or another caller's conclusion) it waits for
   that publication's copy, which is bounded by size and not by time, since a publication
   interrupted midway is worse than one waited for. The escalation applies to an
   unanswered join, never to these waits. So, from the moment it can act, a force ends
-  the run within 150 seconds plus the escalation's 45, after the load's publication and
-  its bound where a load is in flight (I3). That bound ends before the publication: copying the leave's
+  the run within 150 seconds plus the escalation's 45, after the load's publication, its
+  bound and, where the agent did not start, its rollback, where a load is in flight (I3). That bound ends before the publication: copying the leave's
   save point, and any recovered file the room holds, is bounded by their size and the
   copy's speed and not by time (`weaver-admin-Spec` section 3), so the command prints
   once that copy is done.

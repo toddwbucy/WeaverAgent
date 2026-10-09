@@ -1572,7 +1572,10 @@ to: harness-refused-submission-not-retried
 recorder's queue depth after authoring and, on the crossing of the high-water
 mark, authors the `fault` event naming `FaultCase::RecorderCommitPressure`,
 per `weaver-trace-Spec` section 6, carrying the floor's `fault-report` as
-section 3 states. **The depth is read rather than returned** as of
+section 3 states. **The terminal `unload` is the one exception**: the leave reads the
+depth before it authors `unload` and reports any pressure then, and once `unload` is
+authored no event follows, the check after it skipped (`weaver-admin-Spec` section 3,
+I9; section 6 item 6). **The depth is read rather than returned** as of
 2026-08-22: it arrived as a `Failure` the recorder handed back after the
 event had already landed, so acting on it meant treating a recorded event as
 a lost one.
@@ -2129,9 +2132,13 @@ served.
 5. **The leave's save point** (step 6): the four legs below, the `save_point` event
    authored on the finished answer.
 6. **The release, then `unload`** (step 7; S7): the SPU and the member are released
-   first, an organ that dies in its release authored as a `fault` per
-   `weaver-harness-spu-contract` section 5, and a release this crate cannot confirm
-   reported unconfirmed; then `unload` is authored with `forced`, the leave's cause
+   first: the SPU by its `Release`, answered `Released` (`Confirmed`) or not
+   (`Unconfirmed`), an SPU that dies in it authored as a `fault` per
+   `weaver-harness-spu-contract` section 5; the member by closing the state seam, it
+   having no release exchange and retiring on its own (`Closed`, or `Unconfirmed` where
+   the seam was already dead or the close failed). The leave then reads the recorder's
+   queue depth and authors any pressure `fault` the crossing calls for, as the pressure
+   rule of section 4 states; then `unload` is authored with `forced`, the leave's cause
    and the release outcome, the run's terminal event, nothing authored after it (I9); the
    writer is drained, and `Left { save_point, forced }` answered, `forced` on both being
    the leave's state at its end, never the directive it began as: false where it stayed
@@ -3264,9 +3271,12 @@ for the organs whose side is unwritten.
 - `unload` is the run's terminal event (`weaver-admin-Spec` section 3, I9; section 6
   item 6), owed by the lifecycle act's code: with a stand-in SPU that dies in its
   release, the record carries the `fault` and then `unload`, whose `release.spu` reads
-  `Unconfirmed`, and no line follows `unload`; with both organs releasing cleanly, each
-  reads `Confirmed`. Confirmed by watching the test fail when the release is moved after
-  `unload`, the fault then landing past the terminal event.
+  `Unconfirmed`, and no line follows `unload`; with both organs releasing cleanly,
+  `release.spu` reads `Confirmed` and `release.member` reads `Closed`; and with a
+  recorder whose queue crosses its high-water mark at the `unload` submit, no pressure
+  `fault` follows `unload`. Confirmed by watching the test fail when the release is
+  moved after `unload`, the fault then landing past the terminal event, and when the
+  depth check runs after `unload`, a pressure report landing past it.
 - Announce-after-record: a stop's answer follows the close event's placement,
   confirmed by watching the answer precede the record when the two are
   reordered.

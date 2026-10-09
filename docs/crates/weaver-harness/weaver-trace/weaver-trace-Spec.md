@@ -324,11 +324,16 @@ pub struct UnloadClose {
 
 pub struct Release {
     pub spu: ReleaseOutcome,
-    pub member: Option<ReleaseOutcome>,
+    pub member: Option<MemberRelease>,
 }
 
 pub enum ReleaseOutcome {
     Confirmed,
+    Unconfirmed,
+}
+
+pub enum MemberRelease {
+    Closed,
     Unconfirmed,
 }
 
@@ -709,10 +714,15 @@ and `adopted_by` carries the first adopting caller's cause, one name; absent whe
 caller adopted the leave, a record written before the lifecycle act, which no caller
 could adopt, included, and never written null. **`release` says how the run's organs let go**, on the lifecycle act's I9 (`weaver-admin-Spec`
 section 3): the SPU and the member are released before `unload` is authored, so
-`unload` is the run's terminal event and carries the outcome, `Confirmed` or
-`Unconfirmed` per organ, `member` absent where the run stands no member, per
-`weaver-harness-spu-contract` section 5; an organ that dies in its release is a `fault`
-authored before `unload`, and its outcome reads `Unconfirmed`. **`release` is optional
+`unload` is the run's terminal event and carries the outcome. The SPU's is `Confirmed`
+or `Unconfirmed`, its `Release` answered `Released` or not, per
+`weaver-harness-spu-contract` section 5, and an SPU that dies in its release is a
+`fault` authored before `unload`, its outcome `Unconfirmed`. The member's is
+`Closed` or `Unconfirmed`, absent where the run stands no member: the member has no
+release exchange, so this crate closes the state seam and the member retires on its own
+(`weaver-admin-Spec` section 6), and `Closed` says only that the close was made, never
+that the member was seen to exit; `Unconfirmed` says the seam was already dead or the
+close failed. **`release` is optional
 at the read**, per section 3's rule for an added member: this crate always writes it,
 so a current record always carries it, and its absence means only that the record was
 written before the member existed and the release was not recorded, never that it was
@@ -1164,9 +1174,10 @@ the loop act's (A5), and the reset rides the `load` event's `reset` member above
 **The run's record order is `weaver-admin-Spec` section 3, I9**, the lifecycle state
 table's, and this crate's kinds carry it without a kind of their own: within a run,
 `load` first; the seeding turn's `message.system`, where the agent is seeded in this
-run, before any user turn; `save_point` before `unload`; a `fault` met in the release
-of the SPU or the member before `unload`, the release coming first; and `unload` last,
-the terminal event, carrying the release outcome, nothing authored after it. **An unload's
+run, before any user turn; `save_point` before `unload`; a `fault` met in the SPU's
+release, and a recorder-pressure `fault`, before `unload`, the release coming first; and
+`unload` last, the terminal event, carrying the release outcome, nothing authored after
+it, the harness reading the queue depth before `unload` and not after. **An unload's
 own account rides standing kinds** (`weaver-admin-Spec` section 3, the graceful unload
 and the forced unload): a request the drain refuses through the gate is a `refusal` of
 the leave, one per request, carrying the lifecycle refusal `unloading` that answered it,
@@ -1185,8 +1196,8 @@ not hold: a worker that dies in S7 after `unload` and before `Left` leaves an
 `unload` with no answer, which admin meets as S8 with the marker `Open` (S7 x the worker
 dies). A member that dies while the worker lives ends nothing on the record: in S4 to S6
 the leave's save point misses `MemberDead`, recorded as a `refusal` of the leave where
-the leave is forced, and in S7 the death in the release is a `fault` before `unload`,
-whose release reads `Unconfirmed` (S4 to S10 x the member dies, the worker alive).
+the leave is forced, and in S7 a seam found dead at the release reads `Unconfirmed` in
+`release.member`, no `fault` authored (S4 to S10 x the member dies, the worker alive).
 
 **`score` and the classify pair are the precedents for every loop judgment**, per the
 charter's section 3.1 on the operator's ruling of 2026-10-02: a judgment the loop makes,
