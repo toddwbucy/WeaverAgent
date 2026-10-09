@@ -553,8 +553,8 @@ emission. It guarantees that a stop answer follows the close event it reports, s
 the record holds the abort before the channel does. It guarantees that `Left`'s
 `forced`, the `unload` event's `forced` and its `forced_by` agree (`weaver-admin-Spec`
 section 3, I2, the rollback's leave excepted by name), that every wait of a pending leave hears a join (I3), and that every
-frame the gate admitted is answered or recorded refused before the leave's save point
-is taken (I5).
+frame the gate admitted is answered, recorded refused, or recorded as a turn the unload
+stopped, before the leave's save point is taken (I5).
 
 **Non-inheritance is the receiver's, and only the receiver can supply it.** The flag
 rides the handle rather than the open file description, so it does not cross with
