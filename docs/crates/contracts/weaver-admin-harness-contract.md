@@ -515,8 +515,9 @@ only through `JoinLeave` or by ending the run's processes, never through publica
 the marker while the holder holds the lock; that any caller answered `Left` publishes
 and writes the marker only once it holds the invocation lock itself, and changes
 nothing where the marker is already closed for the run (the conclusion); and that where
-it ends the run's processes it writes the marker `Forced` only after they are gone
-(`weaver-admin-Spec` section 3, I1 and I3).
+it ends the run's processes it writes the marker `Forced` only after they are gone and
+only holding the invocation lock, every marker write being under it (`weaver-admin-Spec`
+section 3, I1 and I3).
 
 **The harness supplies** its readiness as the aggregate of the enter fan-out, its
 confirmation of departure naming the leave's save point where it took one and whether

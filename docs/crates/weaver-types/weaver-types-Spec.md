@@ -2453,8 +2453,12 @@ bounds of `weaver-admin-Spec` section 3): a declaration with both bounds parses 
 `Lifecycle` with each, one with a zero or a non-integer bound refuses `BadValue` naming
 the key, and an `EnterPayload` built from a silent declaration serializes neither
 `drain_bound` nor `wind_down_bound` while one built from a bounded declaration carries
-both and round-trips. Watched to fail when the parse drops the table, so the enter
-carries no bound where one is declared, and when a zero bound is admitted.
+both and round-trips. A declaration with `drain-bound` alone parses to `Lifecycle` with
+`drain_bound` set and `wind_down_bound` absent, and its `EnterPayload` round-trips with
+the one and without the other; `wind-down-bound` alone, the same the other way. Watched
+to fail when the parse drops the table, so the enter carries no bound where one is
+declared; when a zero bound is admitted; and, for each lone bound, when the parse or the
+payload copies it into the other field or drops it, each field held independently.
 
 **Enforced by a perturbation-verified test at the parse.** Section 2's rule
 that every identity message carries `role: system` is a `BadValue` naming
