@@ -1382,7 +1382,7 @@ facts the load event was authored from and held on the run for this exchange. **
 leave is pending the answer is `InTransition`**, whether a turn runs or not, so in S4 to
 S6 and S10 `show` answers the same whether the unload's invocation still holds the lock
 or has died (`weaver-admin-Spec` section 3, S4 to S7 and S10 x `show`; the operator's
-ruling of 2026-10-09). In S7 an observation the harness holds before the unlink is answered `InTransition` when it is accepted, and one after the unlink finds no socket, which admin answers by its general rule, `Unloaded` with the run's constituents named while the run lock is held (`weaver-admin-Spec` section 3, the seal's table). After a
+ruling of 2026-10-09). In S7 an observation the harness holds before the unlink is answered `InTransition` when it is accepted, and one after the unlink finds no socket, which admin answers by its general rule, `InTransition` with the run's constituents named while the run lock is held and `Unloaded` once it frees (`weaver-admin-Spec` section 3, the seal's table). After a
 leave the answer is `Unloaded` with no load, the position being terminal and the
 observation not an act, so it is, beside a late caller's `Leave` answered the `Left` as it
 stands, a directive the left position answers rather than refuses. No event is authored and no bracket touched: an observation mid-turn reads the

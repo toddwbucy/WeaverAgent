@@ -385,7 +385,7 @@ composing loop by binary and, where it is a file, path and digest, the same fact
 `load` event carries and read from the run rather than the record. While a leave is
 pending, `InTransition`, so in S4 to S6 and S10 `show` answers the same whether the
 lock's holder lives or has died (`weaver-admin-Spec` section 3, S4 to S7 and S10 x
-`show`). In S7 an observation the harness holds before the unlink is answered `InTransition` when it is accepted, and one after the unlink finds no socket, which admin answers by its general rule, `Unloaded` with the run's constituents named while the run lock is held (`weaver-admin-Spec` section 3, the seal's table). After a leave,
+`show`). In S7 an observation the harness holds before the unlink is answered `InTransition` when it is accepted, and one after the unlink finds no socket, which admin answers by its general rule, `InTransition` with the run's constituents named while the run lock is held and `Unloaded` once it frees (`weaver-admin-Spec` section 3, the seal's table). After a leave,
 `Unloaded` and no load, the position being terminal. The answer is the harness's own
 word and never a read of the deployment, it touches no bracket and authors no event, and
 an observation arriving during a turn is answered from inside it, between tokens, as

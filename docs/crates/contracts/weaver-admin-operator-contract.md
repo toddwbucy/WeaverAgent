@@ -163,7 +163,11 @@ other status, or a status with no object, is a fault the caller answers by readi
 next `show`. **`show` names the run's constituents** where a run holds the agent's run
 lock, on toddwbucy/WeaverWeb#15: the process id of every one of them, the worker, the
 state member and the trace relay, so a caller can check that each sits in its own
-containment at every load. They are absent where no run stands. Standard error carries
+containment at every load. They are absent where no run stands. **`Unloaded` means
+nothing resident**, and `show` prints it only once the run lock is free: while any
+constituent still holds it and no worker answers, a run that never entered or one
+ending, `show` prints `InTransition` with the constituents named (`weaver-admin-Spec`
+section 5). Standard error carries
 human-readable diagnostics no caller parses. A
 `load` answers once the agent is up or refused, within admin's own bound of 900 seconds
 by default on the agent's start, which a caller's bound must exceed, after any
@@ -243,8 +247,9 @@ lock is taken before the state is read, so a line that meets a held lock refuses
 `InvocationInFlight` whatever the state behind it. `show` alone reads beside a holder: in
 S4 to S6 and S10 it prints `InTransition` whether the unload's caller lives or was killed;
 in S7 and S8 with the caller killed it prints `InTransition` where it reached the agent
-before the agent stopped listening, and after that `Unloaded` with the run's processes
-named while they are still exiting, the outcome being fixed (`weaver-admin-Spec` section
+before the agent stopped listening, and after that `InTransition` with the run's
+processes named while they are still exiting, the outcome being fixed, and `Unloaded`
+only once they are gone (`weaver-admin-Spec` section
 3, the seal's table).
 
 **`unload` drains, winds down, saves, then goes down** (`weaver-admin-Spec` section 3,

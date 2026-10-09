@@ -1625,8 +1625,10 @@ wherever no run holds the lock, and empty is absent on the wire.
 
 **`InTransition` is an answer, not a state**, on the same ruling: `show` answers it
 where another invocation holds the agent's invocation lock, a load or an unload in
-flight, and the harness answers it to `Observe` while a leave is pending, so `show`
-prints it too where the leave's caller was killed, per `weaver-admin-Spec` section 3. It claims no `AgentState`, apex section 6's
+flight, the harness answers it to `Observe` while a leave is pending, so `show`
+prints it too where the leave's caller was killed, and `show` prints it where the run
+lock is held and no worker answers, `Unloaded` meaning nothing resident and printed only
+once the run lock is free, per `weaver-admin-Spec` section 3. It claims no `AgentState`, apex section 6's
 four states being the harness's to know and the harness being busy with that very
 invocation, so the caller polls again.
 
