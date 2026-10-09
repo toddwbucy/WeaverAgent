@@ -583,8 +583,11 @@ worker of one agent.
   verb. **A reader retries a record that does not name the holder** (Codex on #109,
   round 45): while `F_GETLK` reports the same holder pid and the record is empty,
   partial or still the last holder's, the window between the holder's lock and its
-  write, it reads again every 100 ms for at most 1 second, the write being one truncate
-  and one short write under the lock; past that it reads as no verb. **The run directory is made before either lock is taken**: every verb's
+  write, it reads again every 100 ms, with no ceiling (round 46). The wait ends when the
+  record names that holder, and the reader acts on its verb, or when the holder changes
+  or releases, and the reader starts again. A holder stuck before its write is an admin
+  invocation stalled, outside the envelope (`weaver-agent-PRD` section 6.1), and the
+  force's wait then ends with that holder. **The run directory is made before either lock is taken**: every verb's
   first act after the name check and the root's admission, `show` and `validate`
   included, makes `<coordination-root>/weaver.run/` and `weaver.run/<agent>/` beneath it
   where they are absent, which they are at an agent's first invocation and after every
@@ -3376,8 +3379,10 @@ perturbation-verified:
   the lifecycle act's code: `take_invocation_lock` writes `<verb> <pid>` into
   `admin.lock` under the lock, and a force meeting a held lock reads it holding nothing.
   A force beside a load (the verb `load`, its rollback in flight) refuses
-  `InvocationInFlight` and sends no `JoinLeave`; beside an `unload` it joins; beside a
-  record that still does not name the holder after the 1-second retry it refuses. The perturbation lets the force
+  `InvocationInFlight` and sends no `JoinLeave`; beside an `unload` it joins; while the
+  record does not yet name the holder it re-reads every 100 ms, acting on the verb once
+  it does, and is watched to fail when it refuses on a record the holder has not yet
+  written. The perturbation lets the force
   ignore the verb beside a rollback, and the test fails when it joins and concludes over
   K1's marker.
 - **(A) A graceful unload with a dead gate or SPU turns forced**, owed by the lifecycle

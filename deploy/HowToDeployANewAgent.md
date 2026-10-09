@@ -395,8 +395,9 @@ any unload does and, where it cannot be taken, records that on the trace; the ne
 then restores the latest published save point with the reset recorded. The loss is your recorded choice. Where
 `missed` is `published`, the run has already ended and the save point waits in the
 member's room: retry `unload`, which publishes it first, and read `admin.log` if it
-refuses again. An unload that turned forced, joined by a `force-unload`, past a
-declared `[lifecycle]` bound, or with the gate or SPU dead, does not stop there: it comes down without the save point,
+refuses again. An unload that turned forced, by the one definition of `forced` in `weaver-admin-Spec`
+section 3 (joined by a `force-unload`, past a declared `[lifecycle]` bound, or with the
+gate or SPU dead), does not stop there: it comes down without the save point,
 the marker stands `Forced`, and the next load restores the latest published save point
 and records `ForcedUnload`.
 

@@ -279,8 +279,9 @@ then the gate closes and the leave's save point is taken. The `unload` holds the
 invocation lock throughout (I1). It prints `Unloaded` with the marker closed, so the
 next load records no reset; or, where the unload stayed graceful to the miss,
 `SavePointNotTaken` naming the leg the save point missed, the run left standing at rest with its gate closed, for a retried `unload`, a
-`save-point` and then an `unload`, or a `force-unload` (S9), while one a declared bound
-or a joining force turned forced comes down without it, prints `Unloaded` with the
+`save-point` and then an `unload`, or a `force-unload` (S9), while one that turned forced, by
+`weaver-admin-Spec` section 3's definition of `forced` (directed forced, joined, a
+declared bound passing, or a dead gate or SPU), comes down without it, prints `Unloaded` with the
 marker `Forced`, and the next load records `ForcedUnload`; or `SavePointNotTaken`
 naming `published`, the run ended and its save point standing unpublished, so the next
 load records `NoCleanUnload` and recovers the file (S0d).
