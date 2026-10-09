@@ -291,8 +291,14 @@ waits and the publication after the answer come on top, as before.
   once it holds the lock. Behind a load it waits at most that load's bound (900 seconds
   unless the agent's root names another), the load concluding or rolling back inside
   it; the escalation applies to an unanswered join, never to that wait. So a force
-  prints within the load's bound, where a load is in flight, plus 150 seconds plus the
-  escalation's 45 (I3).
+  ends the run within the load's bound, where a load is in flight, plus 150 seconds plus
+  the escalation's 45 (I3). That bound ends before the publication: copying the leave's
+  save point, and any recovered file the room holds, is bounded by their size and the
+  copy's speed and not by time (`weaver-admin-Spec` section 3), so the command prints
+  once that copy is done.
+- **On an orphaned force** (a `force-unload` whose invocation was killed in S10 before
+  the agent wrote its `unload`): a later force takes the lock alone and joins the forced
+  leave, receives its outcome, and concludes it, publishing and closing the marker.
 - **On an orphaned unload** (an `unload` whose invocation was killed in S4 to S6): the
   lock is free and the leave still pending, so the force takes the lock alone and its
   leave joins the pending one, turning it forced; the force concludes as a force alone

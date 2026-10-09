@@ -401,8 +401,13 @@ serving. No unit and no init system is involved. The worker, the state member an
 relay are processes admin started, detached from the invoking terminal, holding the run
 lock between them, and they live in the containment the load was invoked from: a load
 run from a login shell's scope lives in that scope. `unload` asks the agent to leave,
-then ends whatever still holds the run lock, within 195 seconds, then publishes the
-leave's save point, which takes as long as copying it does. Admin's own acts on
+letting it finish the turn in flight and write a wind-down summary before its save
+point, which has no time limit unless the declaration's `[lifecycle]` table sets a
+`drain-bound` and a `wind-down-bound`; with both set it ends whatever still holds the
+run lock within their sum plus 195 seconds. `force-unload` stops the work at once and
+still saves the state, ending the run within 195 seconds (behind a load in progress,
+that load's bound first). Either then publishes the leave's save point, which takes as
+long as copying it does. Admin's own acts on
 this agent are in `<territory>/admin.log`, and the worker's output in `worker.log`
 beside it, both root's and yours to read through the access group.
 

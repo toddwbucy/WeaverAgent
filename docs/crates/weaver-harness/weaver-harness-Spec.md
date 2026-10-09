@@ -2160,19 +2160,23 @@ marker `Open`.
 **A force that joins a pending leave turns it forced from where it stands**
 (`weaver-admin-Spec` section 3, the forced unload (joining); S4, S5 and S6 x
 force-unload). `JoinLeave { cause }`, the force admin sends without the invocation lock
-beside the graceful unload that holds it, joins it. **A forced `Leave` that arrives while
-a leave is pending joins it the same way**, by this crate's own state: that happens only
-where the graceful unload's invocation died in S4 to S6 and a force took the freed lock
-as sole (the orphaned leave of `weaver-admin-Spec` section 3; I1, I3), and its caller,
-holding the lock, is the one that concludes. From S7 on, `unload` authored and the
-record final, a forced or an unforced `Leave` from a late caller is answered the `Left`
+beside the graceful unload that holds it, joins it. **Any forced `Leave` that arrives
+while any leave is pending joins it the same way**, by this crate's own state: that
+happens only where the invocation holding the pending leave died while it could still
+change, a graceful unload's in S4 to S6 or a force's in S10 before `unload` is authored,
+and a force took the freed lock as sole; a pending forced leave answers it with its own
+`Left` (the orphaned leave of `weaver-admin-Spec` section 3; I1, I3), and its caller,
+holding the lock, is the one that concludes. From S7 on, or once a forced leave has
+authored `unload`, the record final, a forced or an unforced `Leave` from a late caller is answered the `Left`
 as it stands and adds nothing to the record, neither `forced_by` nor `adopted_by` (the
 late caller of `weaver-admin-Spec` section 3; I2). What remains of the quiesce's wait, the drain and the wind-down is
 skipped: a tool call out is interrupted, the turn or the wind-down's generation is
-cancelled as a stop, and a gate already quiescing or draining is brought down at once by
-this crate closing its end of the gate channel and reaping the gate, closure being death
-to the gate per `weaver-harness-gate-contract` section 1, its connections closing
-undelivered. The save point is still taken, and a leg it misses comes down as the forced
+cancelled as a stop, and a gate already quiescing or draining is brought down with
+`Lower`, as the sole force's is: the gate sends every frame it admitted and had not yet
+sent, this crate records each refused with `Unloading` and its connection closes (I5),
+inside the lower bound. Only where the gate does not answer `Lower` inside that bound
+does this crate close its end of the gate channel and reap the gate, closure being death
+to the gate per `weaver-harness-gate-contract` section 1. The save point is still taken, and a leg it misses comes down as the forced
 leave's does rather than stopping in S9; a force heard while the legs run does not
 abandon them. The pending leave keeps its own cause, the graceful caller's, and records
 the first joining cause as `forced_by` on `unload`, and every dialer is answered with the

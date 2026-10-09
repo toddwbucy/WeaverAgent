@@ -767,9 +767,12 @@ unload's close** (`weaver-admin-Spec` section 3, the forced unload (sole); I5): 
 listener and every accepted connection close at once, whatever they awaited, every
 frame still waiting on the channel's writability sent first so the harness records each
 refused with `Unloading`, and stopped is answered after the closes return, the operator having chosen no
-time to finish. **A force that joins a drain closes the channel** rather than sending
-`Lower` (the forced unload (joining)): this crate meets closure, closes its listener and
-every connection undelivered, and exits, per section 2's closure rule.
+time to finish. **A force that joins a quiesce or a drain sends `Lower` too** (the forced
+unload (joining); I5): this crate sends every frame it admitted and has not yet sent to
+the channel, so the harness records each refused with `Unloading`, writes what it owes
+inside the lower bound, closes the listener and every connection, and answers stopped.
+Closure of the channel stays only the escalation, where this crate does not answer
+`Lower` inside its bound: it then meets closure and exits per section 2's closure rule.
 
 **A frame carries the dialer beside its octets**, as of the operator's ruling of
 2026-10-06 (#1): the `turn-frame` this crate opens inward names the connection's

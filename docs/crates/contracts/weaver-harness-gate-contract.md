@@ -168,10 +168,14 @@ listener and every connection close at once, every frame the gate admitted reach
 the channel ahead of the answer so the harness records each refused with `Unloading`,
 its connection
 closing unanswered (I5). **Stopped is sent only after the closes have returned,** so
-nothing new can arrive anywhere in the interior once the harness proceeds. A force that
-joins a leave whose gate is already quiescing closes the harness's end of this channel
-instead of sending `Lower`, and the gate meets closure, per section 1 (the forced unload
-(joining)).
+nothing new can arrive anywhere in the interior once the harness proceeds. **A force
+that joins a leave whose gate is quiescing or draining sends `Lower` as well** (the
+forced unload (joining), and the orphaned leave): the gate sends every frame it admitted
+and had not yet sent ahead of its answer, the harness recording each refused with
+`Unloading`, writes what it owes inside the lower bound, closes, and answers stopped
+(I5). Closing the harness's end of this channel is only the escalation, where the gate
+does not answer `Lower` inside the lower bound, the gate then meeting closure per
+section 1.
 
 **Carry a turn.** Opened by the gate, one exchange per client request, from
 the token workflow's act of 2026-08-02. The gate relays the client's line

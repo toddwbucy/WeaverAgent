@@ -312,11 +312,13 @@ same `Left`, `forced` true (S4, S5, S6 x force-unload). A later join receives th
 `Left` and is named nowhere. **From S7 on**, `unload` being authored and
 the record final, the join changes nothing and is answered with the `Left` as it stands
 (S7 x force-unload). **Where a forced leave is pending** (S10) the join is answered with
-that leave's `Left` (S10 x force-unload). **An orphaned leave is joined by a forced
-`Leave`**: where the graceful unload's invocation died in S4 to S6, a force takes the
-freed lock as sole and directs `Leave{forced}`, which the harness joins to the pending
-leave by its own state, exactly as it joins `JoinLeave`, `forced_by` naming the force's
-cause; the force, holding the lock, receives `Left{forced: true}` and concludes
+that leave's `Left` (S10 x force-unload). **An orphaned leave is joined by any forced
+`Leave`**: where the invocation holding a pending leave died while it could still change,
+a graceful unload's in S4 to S6 or a force's in S10 before `unload` is authored, a force
+takes the freed lock as sole and directs `Leave{forced}`, which the harness joins to the
+pending leave by its own state, exactly as it joins `JoinLeave`, `forced_by` naming the
+force's cause where the leave was graceful, and a pending forced leave answering with its
+own `Left`; the force, holding the lock, receives `Left{forced: true}` and concludes
 (`weaver-admin-Spec` section 3, the orphaned leave; I1, I3). **An orphaned graceful leave
 is adopted by an unforced `Leave`**, in S4 to S6: a second `unload` takes the freed lock, and the
 harness keeps the leave graceful with its own cause, records the adopter as `adopted_by`
@@ -425,8 +427,9 @@ an obligation on the party that could break it.
 - Leave is terminal for the worker and is pending at most once. While one is pending
   (`weaver-admin-Spec` section 3, S4 to S7 and S10), every directive but `JoinLeave`
   and a `Leave` is refused `OutOfOrder`. While the holder lives, admin's invocation lock
-  refuses those verbs before it dials (I1). Where it has died in S4 to S6, a forced
-  `Leave` joins the orphaned leave as `JoinLeave` does, and an unforced `Leave` adopts a
+  refuses those verbs before it dials (I1). Where it has died while the leave can still
+  change (S4 to S6, or S10 before `unload` is authored), any forced `Leave` joins the
+  orphaned leave as `JoinLeave` does, and an unforced `Leave` adopts a
   pending graceful one (the operator's ruling of 2026-10-09), `adopted_by` naming it;
   either caller, holding the lock, concludes (I3, I4). From S7 on, the record final,
   either `Leave` is answered the `Left` as it stands and adds nothing to the record, the
