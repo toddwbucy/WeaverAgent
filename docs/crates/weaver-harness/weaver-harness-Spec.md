@@ -3025,6 +3025,19 @@ none of their content appears, watched to fail when the filter widens.
 - Descriptors are owned types end to end, so a handle that escapes its owner
   is a move the borrow checker sees, not an integer copied silently.
 
+**The in-run event table is enforced by a decision function and its table**, on the
+operator's agreement of 2026-10-09 recorded on #1, owed by the lifecycle act's code.
+`weaver-admin-Spec` section 3's transitions for events inside a run (state x dialer
+request, tool return, turn close, a missed save point leg, a death) are this crate's
+decision: one pure function from the run's position and the event to what this crate
+does and records, an exhaustive `match` with no wildcard arm, so a new position or
+event does not compile until it has a row: a compile-time pin. It is paired with a
+table-driven test transcribed row for row from that table, which fails when any row's
+expected act or record changes. **The I/O paths take the decision's result and do not
+decide**: the gate's refusals, the record's authoring and the save point's legs are
+given what the function returned, and are tested by integration cases over those
+paths, not one per row.
+
 **Enforced by compile-fail tests, because the property is an absence.**
 
 - One constructor: code constructing a `Harness` other than through `adopt`

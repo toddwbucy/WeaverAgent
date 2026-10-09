@@ -2895,6 +2895,27 @@ to a running agent's supervisor exists only for the life of one invocation.
   cannot drift, the one-code-path rule as a call graph. Where the verb stops
   is not a call-graph property, so section 3 leaves that half to review.
 
+**The lifecycle's table-shaped decisions are enforced by a decision function and its
+table**, on the operator's agreement of 2026-10-09 recorded on #1, owed by the
+lifecycle act's code. Two of 3.0's tables are this crate's decisions:
+- **The conclusion** (3.0, the conclusion's outcomes) is one pure function from what the
+  conclusion knows (the `Left` answered: forced or not, a save point reported or none
+  and why none, the reported `event_run` against the marker's run, the publication's
+  outcome, and the marker as read) to what it does: the marker to write or leave, the
+  reset the next load will record, and the answer to print. It is an exhaustive `match`
+  with no wildcard arm, so a new `Left` kind does not compile until it has a row: a
+  compile-time pin.
+- **The operator's verbs** (3.0, the transitions: the operator's verbs) are one pure
+  function from the state as observed and the verb to the act and the answer, under
+  the same pin.
+
+Each is paired with a table-driven test transcribed row for row from its table in 3.0,
+which fails when any row's expected marker, reset, act or printed answer changes, so a
+row edited in the code and not in this Spec, or the reverse, is caught at the next run.
+**The I/O paths take the decision's result and do not decide**: the publication, the
+marker's write, the dial and the escalation are given what the function returned, and
+are tested by integration cases over those paths, not one per row.
+
 **Enforced by compile-fail tests, because the property is an absence.** The
 floor already pins the load-bearing absence this crate depends on,
 `PeerIdentity` deriving no `Deserialize`, so a credential cannot be
@@ -3240,14 +3261,6 @@ perturbation-verified:
   waiting past 195 seconds, and a joining `force-unload` ends the run. The perturbation
   imposes the 195 seconds on the graceful leave, and the test fails when the verb
   escalates.
-- **Every `Left` has one outcome row** (3.0, the conclusion's outcomes), owed by the
-  lifecycle act's code: the conclusion matches on the `Left` it was answered (forced or
-  not, a save point reported or none, and why none) with no wildcard arm, so a
-  combination with no row does not compile, and a test walks every row against a
-  stand-in harness answering that `Left`, reading the publication, the marker and the
-  printed answer. The perturbation closes the memberless row `Forced`, and the next
-  load records a reset over a run that lost nothing; a second closes the rollback's
-  marker, and the test fails on each.
 - **The escalation ends every holder**, watched by a run left by a killed load whose
   stand-in member
   does not retire on the first door's end: the `unload` signals the worker and the
