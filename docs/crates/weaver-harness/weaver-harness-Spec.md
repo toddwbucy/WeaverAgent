@@ -2188,7 +2188,7 @@ and a force took the freed lock as sole; a pending forced leave answers it with 
 `Left` (the orphaned leave of `weaver-admin-Spec` section 3; I1, I3), and its caller,
 answered `Left`, concludes as every answered caller does (`weaver-admin-Spec` section 3,
 the conclusion). From S7 on, a graceful or a forced
-leave's save point taken or missed and its outcome fixed, a forced or an unforced `Leave` from a late caller is answered the `Left`
+leave's save point taken or missed and its outcome fixed, a forced or an unforced `Leave` from a late caller, its dial held at the seal, is answered the `Left`
 as it stands and adds nothing to the record, neither `forced_by` nor `adopted_by` (the
 late caller of `weaver-admin-Spec` section 3, who concludes as every caller this crate
 answers with `Left` does; I2). What remains of the quiesce's wait, the drain and the wind-down is
@@ -2227,7 +2227,13 @@ I3), through one helper: the wait for `GateQuiesced`, the drain, the wind-down, 
 lower, the save point's four legs and the grants read-back poll the listener beside what
 they wait on, and the dials that land while this crate waits on what cannot be polled
 beside it, the SPU's release, the trace's drain and the reaps, are swept from the
-listener's backlog before the leave's dialers are answered, by the from-S7 rule.
+listener's backlog before the leave's dialers are answered, by the from-S7 rule. **The
+listener is sealed first** (`weaver-admin-Spec` section 3, the seal; Codex on #109, round
+18): once the leave's outcome is fixed this crate closes the coordination listener, and
+only then sweeps the backlog, answering each dial it holds as the leave stands, a
+`Leave` or a `JoinLeave` with the `Left` and an `Observe` with `InTransition`, so no
+dial lands behind a listener left open until the worker exits; a dial after the seal is
+refused at connect, which admin reads as a run past its outcome.
 
 **The drain and the wind-down are unbounded by default, and every other leg is bounded**
 (I3; the operator's ruling of 2026-10-09 on #1; #107, area 1, R2). The turn in flight

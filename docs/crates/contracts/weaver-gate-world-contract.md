@@ -213,7 +213,9 @@ response path, as extensions to this page rather than replacements of it.
     lowered until the operator retries the unload or forces it, so a dial finds no
     listener (S9 x dialer request).
   - **Forced unload**: the listener and every connection close at once with no
-    answer, the turn in flight cancelled and recorded as a stop naming the unload,
+    answer, once any tool call of the turn in flight has been interrupted (until then
+    the agent still listens: a dial connects, and its request is recorded refused as
+    `Unloading` when the gate closes), the turn in flight cancelled and recorded as a stop naming the unload,
     and every request the gate admitted and the agent had not started is recorded
     refused as `Unloading` (`weaver-admin-Spec` section 3, the forced unload; I5). A force that
     joins a graceful unload closes every connection still standing the same way.

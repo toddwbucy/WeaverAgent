@@ -229,7 +229,7 @@ state; it reads `show` and acts on what it prints.
 | S1, loading | `InvocationInFlight` | `InvocationInFlight` | waits for the load's publication of recovered files, bounded by their size, then at most the load's bound, then, where the agent did not start inside it, the load's rollback (at most 195 seconds), then answers as the state it finds | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S2, serving at rest | `AgentRunning` | the graceful unload, below | the forced unload, below | `SavePointTaken` | `RestoreNamed` | `Idle` |
 | S3, serving, a turn in flight | `AgentRunning` | the graceful unload, after the turn | the forced unload, the turn cancelled | `ActivityNotAtRest` | `RestoreNamed` | `Active` |
-| S4 to S7, a graceful unload in progress | `InvocationInFlight` | `InvocationInFlight`, or, the holder having died, adopts the leave in S4 to S6, and in S7 is answered as the leave stands, concluding either way | joins, below | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+| S4 to S7, a graceful unload in progress | `InvocationInFlight` | `InvocationInFlight`, or, the holder having died, adopts the leave in S4 to S6, and in S7 is answered as the leave stands, concluding either way, or, once the agent has stopped listening, waits for the run to end and finds it ended | joins, below | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S8, an unload concluding | `InvocationInFlight` | `InvocationInFlight` | waits, then as S0 or S0d | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S9, an unload stopped at its save point | `AgentRunning` | retried: the save point, then down | the forced unload | `SavePointTaken` | `RestoreNamed` | `Idle`, the gate lowered |
 | S10, a force in progress | `InvocationInFlight` | `InvocationInFlight`, or, the holder having died, `OutOfOrder` | joins | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
@@ -335,7 +335,10 @@ waits and the publication after the answer come on top, as before.
 **A caller whose invocation is killed during an unload** (S4 to S8) leaves the next
 caller the agent answers to conclude: a force or a second `unload` as above while the
 leave can still change, S4 to S6, or from S7 on a later `force-unload` or `unload`, which
-the agent answers with the leave as it stood, adding nothing to the record. With no
+the agent answers with the leave as it stood, adding nothing to the record, where it
+reached the agent before the agent stopped listening; one after that waits for the run
+to end and finds it ended, publishing what the run left as recovered (`weaver-admin-Spec`
+section 3, the seal). With no
 answered caller the agent finishes the leave unanswered: the save point stays in the member's room for the next verb
 to publish, and the marker stays open, so the next load records `NoCleanUnload` although
 the state was kept, a conservative label with nothing lost (`weaver-admin-Spec` section
