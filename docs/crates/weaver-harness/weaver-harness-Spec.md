@@ -2131,14 +2131,16 @@ served.
 6. **The release, then `unload`** (step 7; S7): the SPU and the member are released
    first, an organ that dies in its release authored as a `fault` per
    `weaver-harness-spu-contract` section 5, and a release this crate cannot confirm
-   reported unconfirmed; then `unload` is authored with `forced` false, the leave's cause
+   reported unconfirmed; then `unload` is authored with `forced`, the leave's cause
    and the release outcome, the run's terminal event, nothing authored after it (I9); the
-   writer is drained, and `Left { save_point, forced: false }` answered. The member,
+   writer is drained, and `Left { save_point, forced }` answered, `forced` on both being
+   the leave's state at its end, never the directive it began as: false where it stayed
+   graceful, true where a join or a declared bound turned it forced (I2). The member,
    released before `unload`, needs nothing after it: its save point is taken and its
    grant surface read before the release, and no save point ever carries `unload`. A run with no `unload` event never answered `Left`: a death in S7 is S8 as
    far as admin can tell, the marker left `Open` (S7 x worker or member dies).
 
-**A missed leg stops the graceful leave in S9** (S6 x member misses a save-point leg):
+**A missed leg stops a leave that stayed graceful in S9** (S6 x member misses a save-point leg):
 the run stays entered at rest with the gate lowered, as the leg rule below states. The
 retry goes straight to the save point, the lower being done (S9 x unload); a
 `save-point` at rest is taken as from S2 (S9 x save-point); a force acts as the sole
@@ -2230,8 +2232,9 @@ This crate reads the two from the enter, `EnterPayload.drain_bound` and
 phase is unbounded, and admin's own wait comes from the same parse it put on the enter,
 so the two agree by construction.
 Where the declaration sets one, a leg past its bound turns the leave forced from where it
-stands, as a join does, with no `forced_by` and the cause staying the graceful caller's;
-with both set, admin's bound is their sum and 150 seconds, per `weaver-admin-Spec`
+stands, as a join does, with no `forced_by` and the cause staying the graceful caller's,
+`unload` and `Left` then carrying `forced` true and a missed leg coming down as a forced
+leave's does; with both set, admin's bound is their sum and 150 seconds, per `weaver-admin-Spec`
 section 3. Every other leg is bounded in this crate: the save point's ask and `finished`
 legs and the grants read-back under `ANSWER_BOUND_MS`, its answer leg under
 `SNAPSHOT_ANSWER_BOUND_MS`, and `GateStopped` from a draining gate under the lower bound,

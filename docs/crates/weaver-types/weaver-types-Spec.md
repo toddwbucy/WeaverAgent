@@ -1368,8 +1368,9 @@ section 3, S1 x Leave), a forced leave otherwise taking its save point as any le
 state table approved by the operator on 2026-10-09, recorded on #1, which
 `weaver-admin-Spec` section 3 holds; each cites the row it carries and none restates
 it. **`Left`'s `forced`** is true where the leave came down forced, directed so by a
-`force-unload` holding the invocation lock or turned so by one joining, and false
-otherwise, so every invocation answered `Left` concludes by it, the first closing the
+`force-unload` holding the invocation lock, turned so by one joining, or turned so past
+a declared drain or wind-down bound, and false where the leave stayed graceful: the
+leave's state at its end, never the directive it began as, so every invocation answered `Left` concludes by it, the first closing the
 marker as the leave ended (`weaver-admin-Spec` section 3, the conclusion), and it agrees with the `unload` event's `forced` (I2). It is always on the wire,
 and a `Left` without it refuses at the parse, as `Leave.forced` does: no default carries
 an older writer forward (the operator's ruling of 2026-10-08 on #1). **`JoinLeave`** is a `force-unload` that does not hold the invocation lock,

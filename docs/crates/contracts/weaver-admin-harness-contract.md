@@ -266,10 +266,14 @@ caller's, and comes down as a forced leave does. It lowers the gate (`Lower`,
 answered `GateStopped`), takes the leave's save point through the four legs of
 `weaver-harness-state-contract` section 2 and authors `save_point` (S6), then releases
 the SPU and the member, authoring a `fault` for an organ that dies in its release,
-authors `unload` with `forced` false and the release outcome, the terminal event, drains
+authors `unload` with `forced` and the release outcome, the terminal event, drains
 the writer's queue to the stream, and answers `Left` naming the save point as `SavePointTaken` does, so
-admin publishes it under the same ordinal rule, with `forced` false (S7). **Where the
-save point is not finished it answers `SavePointNotTaken`** naming the leg, authors
+admin publishes it under the same ordinal rule, with the same `forced` (S7). **`forced`
+is the leave's state at its end, not the directive it began as**: false where the leave
+stayed graceful, true where a join or a declared bound turned it forced, the cause
+staying the graceful caller's and a bound naming no `forced_by` (`weaver-admin-Spec`
+section 3, I2). **Where the save point of a leave that stayed graceful is not finished
+it answers `SavePointNotTaken`** naming the leg, authors
 nothing more, and stays entered at rest with the gate lowered, the leave no longer
 pending (S6 x member misses a save-point leg, and S9). A later unforced `Leave` from
 there goes straight to the save point, the lower being done (S9 x unload).

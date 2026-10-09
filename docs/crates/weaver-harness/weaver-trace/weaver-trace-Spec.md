@@ -711,7 +711,8 @@ section 3): the SPU and the member are released before `unload` is authored, so
 `weaver-harness-spu-contract` section 5; an organ that dies in its release is a `fault`
 authored before `unload`, and its outcome reads `Unconfirmed`. The
 `unload` event's `forced`, `forced_by` and `adopted_by` agree with the `Left` answer's
-`forced` and the marker admin writes, per I2, the rollback excepted by name. `load` carries `Elections`. The five
+`forced`, each the leave's state at its end, and the marker is the conclusion's outcome
+row for that `Left` (`weaver-admin-Spec` section 3), per I2, the rollback excepted by name. `load` carries `Elections`. The five
 message kinds carry `Message`. `turn.closed` carries `TurnClosed`. `fault` carries
 `Fault`. `flush` carries `FlushCounts`, the resident token counts before and after, both
 plain integers. **`elision` carries `ElisionSpan` and not those counts**: an elision
