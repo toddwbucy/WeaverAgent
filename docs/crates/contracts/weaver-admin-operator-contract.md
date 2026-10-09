@@ -229,7 +229,7 @@ state; it reads `show` and acts on what it prints.
 | State | `load` | `unload` | `force-unload` | `save-point` | `restore` | `show` |
 |---|---|---|---|---|---|---|
 | S0, down, clean | the load's answer, or its refusal | `Unloaded`, nothing to do | `Unloaded`, nothing to do | `OutOfOrder` | `RestoreNamed` | `Unloaded` |
-| S0d, down, a run ended without closing | as S0, the load recording the reset | publishes the save points the run left as recovered, then `Unloaded`, or `SavePointNotTaken` naming `published` where that fails; the next load records `NoCleanUnload` | publishes them the same way, then `Unloaded`, or refuses as `unload` does; the marker is left as it stands, a force on an agent already down having ended nothing | `OutOfOrder` | `RestoreNamed` | `Unloaded` |
+| S0d, down, a run ended without closing | as S0, the load recording the reset | publishes the save points the run left as recovered, then `Unloaded`, or `SavePointNotTaken` naming `published` where that fails; the marker left as it stands, the next load records the cause it carries (`NoCleanUnload` where the run was left open, `ForcedUnload` where a force closed it) | publishes them the same way, then `Unloaded`, or refuses as `unload` does; the marker is left as it stands, a force on an agent already down having ended nothing, and the next load records the cause it carries | `OutOfOrder` | `RestoreNamed` | `Unloaded` |
 | S1, loading | `InvocationInFlight`; the lock free, `AgentRunning` while a process holds the run, else as S0d | `InvocationInFlight`; the lock free, ends whatever holds the run, else as S0d | waits for the load's publication of recovered files, bounded by their size, then at most the load's bound, then, where the agent did not start inside it, the load's rollback (at most 195 seconds), then answers as the state it finds; the lock free, ends whatever holds the run as `unload` does | `InvocationInFlight`; the lock free, `OutOfOrder` unless the agent had started serving | `InvocationInFlight`; the lock free, `RestoreNamed` | `InTransition`; the lock free, `InTransition` with the run's processes named while they stand, then `Unloaded` |
 | S2, serving at rest | `AgentRunning` | the graceful unload, below | the forced unload, below | `SavePointTaken` | `RestoreNamed` | `Idle` |
 | S3, serving, a turn in flight | `AgentRunning` | the graceful unload, after the turn | the forced unload, the turn cancelled | `ActivityNotAtRest` | `RestoreNamed` | `Active` |
@@ -338,9 +338,10 @@ waits and the publication after the answer come on top, as before.
   answered caller does, and the record names it as `adopted_by` (the operator's
   ruling of 2026-10-09).
 - **On a worker that answers nothing** (S11): a join unanswered within 150 seconds ends
-  the run's processes without the lock (I3), and only then, holding the invocation lock
-  as every marker write does, writes the marker `Forced`, leaving it as it stands where
-  it is already closed for the run. The `unload` holding the lock is answered no `Left`,
+  the run's processes without the lock (I3), and only then writes the marker `Forced`,
+  by `weaver-admin-Spec` section 6's marker-write rule: holding the invocation lock, and
+  leaving a marker that names another run or is already closed for this one as it
+  stands. The `unload` holding the lock is answered no `Left`,
   so it concludes nothing and releases the lock, and the marker stands `Forced`, the
   escalator's. The force prints `Unloaded`, or `LockHolderUnknown` or `WorkerWouldNotExit`
   where the escalation cannot end the run, per section 5.

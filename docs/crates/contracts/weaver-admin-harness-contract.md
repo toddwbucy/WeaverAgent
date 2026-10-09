@@ -524,10 +524,11 @@ operator's artifact. It guarantees that no directive carries work of any kind. I
 guarantees that a `force-unload` acting beside a holder of the invocation lock acts
 only through `JoinLeave` or by ending the run's processes, never through publication or
 the marker while the holder holds the lock; that any caller answered `Left` publishes
-and writes the marker only once it holds the invocation lock itself, and changes
-nothing where the marker is already closed for the run (the conclusion); and that where
-it ends the run's processes it writes the marker `Forced` only after they are gone and
-only holding the invocation lock, every marker write being under it (`weaver-admin-Spec`
+and writes the marker only once it holds the invocation lock itself (the conclusion);
+that where it ends the run's processes it writes the marker `Forced` only after they
+are gone; and that every marker write follows `weaver-admin-Spec` section 6's
+marker-write rule, under the invocation lock, the marker read first, one another run's
+or already closed for this run left alone (`weaver-admin-Spec`
 section 3, I1 and I3).
 
 **The harness supplies** its readiness as the aggregate of the enter fan-out, its
