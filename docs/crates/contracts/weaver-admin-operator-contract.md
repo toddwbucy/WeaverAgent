@@ -289,8 +289,9 @@ waits and the publication after the answer come on top, as before.
   records `NoCleanUnload` and recovers the file (I4).
 - **Beside a graceful `unload`** (S4 to S7): it joins without the lock, turning the
   pending leave forced from where it stands, and the record names both callers, the
-  `unload`'s as the leave's cause and the first force's as `forced_by` (I2), a later
-  force joining the same leave named nowhere. Every caller the agent answers concludes
+  `unload`'s as the leave's cause and, as `forced_by`, the first force's that turned it
+  forced while it was still graceful (I2), a later force, or one joining a leave a
+  declared bound already turned forced, named nowhere. Every caller the agent answers concludes
   the same way (`weaver-admin-Spec` section 3, the conclusion): the `unload` holding the
   lock first, publishing and closing the marker, and the force after it, finding the run
   concluded and changing nothing (I1); each prints only once the run lock has freed,

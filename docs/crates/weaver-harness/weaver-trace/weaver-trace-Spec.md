@@ -699,10 +699,11 @@ by a `refusal` of the leave naming `save_point_not_taken` and its leg, so the re
 says what state the operator's choice kept. **`forced_by` names the account that forced
 a leave another account asked for** (`weaver-admin-Spec` section 3, the forced unload,
 joining, and I2): where a `force-unload` joined a graceful unload's pending leave,
-`cause` stays the leave's own, the graceful caller's, and `forced_by` carries the first
-joining caller's cause, so the record keeps both accounts rather than attributing the
+`cause` stays the leave's own, the graceful caller's, and `forced_by` carries the cause
+of the first force that turned the still-graceful leave forced, so the record keeps both accounts rather than attributing the
 force to the caller who asked for a graceful unload; a later join receives the same
-answer and is named nowhere. It is absent where no force joined, a sole forced unload
+answer and is named nowhere, as is a join into a leave a declared bound already turned
+forced, the bound having been first. It is absent where no force joined, a sole forced unload
 included, whose `cause` already names it, and a leave turned forced by a declared
 bound, whose `cause` stays the graceful caller's, and is never written null; absent at the
 read in a record written before the lifecycle act, which no force could join, so the
@@ -2006,7 +2007,9 @@ the fact exists.
   act's code: `forced_by` is absent from a payload no force joined, watched to fail when
   its `skip_serializing_if` is removed, and a joined leave's `unload` carries the
   leave's own `cause` and the force's `forced_by`, watched to fail when the harness
-  writes the joining cause into `cause`.
+  writes the joining cause into `cause`; and where a declared bound turns the leave
+  forced and a force joins after it, `forced_by` is absent, the bound having been first,
+  watched to fail when the harness records the join.
 - The `unload` event names an adopting caller apart, per section 3, owed by the
   lifecycle act's code: `adopted_by` is absent from a payload no caller adopted, watched
   to fail when its `skip_serializing_if` is removed, and an adopted leave's `unload`

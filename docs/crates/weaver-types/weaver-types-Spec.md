@@ -1377,7 +1377,8 @@ an older writer forward (the operator's ruling of 2026-10-08 on #1). The wire is
 durable, a frame being read by the process it was sent to and never stored, so the record's rule that an added payload member
 is optional at the read (`weaver-trace-Spec` section 3) does not apply to it. **`JoinLeave`** is a `force-unload` that does not hold the invocation lock,
 carrying the forcing caller's cause, which the harness records as the `unload` event's
-`forced_by` where it is the first to join: it joins a pending leave and is answered with
+`forced_by` where it is the first force to turn the still-graceful leave forced (not a
+later join, nor one into a leave a declared bound already turned forced): it joins a pending leave and is answered with
 that leave's `Left`, a later join receiving the same `Left` and named nowhere, or is
 refused `OutOfOrder` where none is pending (the forced unload, joining; I1).
 **`Unloading`** is the refusal a request meets during the graceful unload's drain, "the

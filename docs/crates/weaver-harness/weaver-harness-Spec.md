@@ -2201,9 +2201,10 @@ does this crate close its end of the gate channel and reap the gate, closure bei
 to the gate per `weaver-harness-gate-contract` section 1. The save point is still taken, and a leg it misses comes down as the forced
 leave's does rather than stopping in S9; a force heard while the legs run does not
 abandon them. The pending leave keeps its own cause, the graceful caller's, and records
-the first joining cause as `forced_by` on `unload`, and every dialer is answered with the
-same `Left { forced: true }` (I2); a later join is answered with that `Left` and named
-nowhere. `JoinLeave` with no leave pending is `OutOfOrder`, which
+the joining cause as `forced_by` on `unload` where that join is the first force to turn
+the still-graceful leave forced, and every dialer is answered with the same `Left {
+forced: true }` (I2); a later join, or a join into a leave a declared bound already
+turned forced, is answered with that `Left` and named nowhere. `JoinLeave` with no leave pending is `OutOfOrder`, which
 tells admin the lock's holder is no unload; while a leave is pending a second unforced
 `Leave` and a `SavePoint` meet a living holder's lock at admin first, refused
 `InvocationInFlight` before it dials (I1). Where the holder has died in S4 to S6, **a
@@ -2229,11 +2230,14 @@ they wait on, and the dials that land while this crate waits on what cannot be p
 beside it, the SPU's release, the trace's drain and the reaps, are swept from the
 listener's backlog before the leave's dialers are answered, by the from-S7 rule. **The
 listener is sealed first** (`weaver-admin-Spec` section 3, the seal; Codex on #109, round
-18): once the leave's outcome is fixed this crate closes the coordination listener, and
-only then sweeps the backlog, answering each dial it holds as the leave stands, a
-`Leave` or a `JoinLeave` with the `Left` and an `Observe` with `InTransition`, so no
-dial lands behind a listener left open until the worker exits; a dial after the seal is
-refused at connect, which admin reads as a run past its outcome.
+18 and 19): once the leave's outcome is fixed this crate (a) unlinks the coordination
+socket's pathname, so no new connect can reach it; (b) drains the accept backlog with
+non-blocking accepts, answering each dial it holds as the leave stands, a `Leave` or a
+`JoinLeave` with the `Left` and an `Observe` with `InTransition`; and (c) only then
+closes the listening descriptor, whose close would discard a backlog not yet accepted.
+No dial lands behind a listener left open until the worker exits, none already
+connected goes unanswered, and a dial after the seal finds no socket at connect, which
+admin reads as a run past its outcome.
 
 **The drain and the wind-down are unbounded by default, and every other leg is bounded**
 (I3; the operator's ruling of 2026-10-09 on #1; #107, area 1, R2). The turn in flight
