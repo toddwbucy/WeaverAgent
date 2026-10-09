@@ -518,9 +518,10 @@ absent, has no counterpart on the way up.
    reaches a running worker, per section 6. Everything between the directive and
    the answer is the harness's, in its own order: it stops Gate first where one
    stands, so a Gate
-   process never outlives the interior it protects and nothing new arrives, and it
-   refuses while a turn is in flight rather than racing one, because a turn
-   interrupted mid-decode leaves the SPU holding a session. At rest it authors its
+   process never outlives the interior it protects and nothing new arrives. A
+   graceful leave lets a turn in flight finish and winds down before it lowers the
+   gate; a forced one cancels the turn (`weaver-admin-Spec` section 3, the two
+   unloads). After the save point it authors its
    `unload` event, closing the bracket, drains the writer's queue to the stream,
    then releases the SPU, so residency ends and the device is freed. The answer
    carries left, or a refusal naming where the sequence stopped. Admin holds no

@@ -216,6 +216,10 @@ pub enum Kind {
     #[serde(rename = "model.measurement")]    ModelMeasurement,
     #[serde(rename = "classify.request")]     ClassifyRequest,
     #[serde(rename = "classify.output")]      ClassifyOutput,
+    #[serde(rename = "recall")]               Recall,
+    #[serde(rename = "message.restored")]     MessageRestored,
+    #[serde(rename = "score")]                Score,
+    #[serde(rename = "save_point")]           SavePoint,
 }
 
 #[serde(untagged)]
@@ -234,6 +238,9 @@ pub enum Payload {
     ModelMeasurement(Box<serde_json::value::RawValue>),
     ClassifyRequest(ClassifyAsk),
     ClassifyOutput(ClassifyScored),
+    Recall(RecallAccount),
+    Score(TaskScore),
+    SavePoint(SavePointTaken),
     Deferred(Box<serde_json::value::RawValue>),
 }
 
@@ -310,6 +317,7 @@ pub struct UnloadClose {
     pub grant_surface: Option<GrantSurface>,
     pub cause: Option<Cause>,
     pub forced: bool,
+    pub forced_by: Option<Cause>,
 }
 
 pub enum GrantSurface {
@@ -657,10 +665,31 @@ the payload-free case counting as one of them. `refusal` carries `Refusal`, spli
 organ's own account of what it turned away. `session.closed` and `turn.started` carry
 `None`, and `unload` carries `UnloadClose`, its grant surface present where a member
 stood, its cause where a leave directive asked, and, as of A3.2 on the operator's
-ruling of 2026-10-06 on #1 (A3.0 item 6), `forced`, true where admin's `force-unload`
-ended the run without its leave save point, so the record says the loss was the
-operator's choice, or where a load's rollback left the run it undid, which has nothing
-to keep. `load` carries `Elections`. The five
+ruling of 2026-10-06 on #1 (A3.0 item 6), `forced`, true where the leave came down
+forced: admin's `force-unload` directed it so or joined it, or a bound the declaration
+set for the drain or the wind-down passed (`weaver-types-Spec` section 2's
+`[lifecycle]`), the gate lowered at once and the turn in flight cancelled. **A load's
+rollback also writes `forced` true and is the named exemption from I2**
+(`weaver-admin-Spec` section 3, S1 x Leave): the harness tells it by its own state, a
+run never `Entered` past `Ready`, takes no save point for it, and admin leaves the
+marker `Open`, so its `unload` says `forced` over a run that kept nothing and agrees
+with no closed marker. Since the
+lifecycle act (2026-10-09, the lifecycle state table approved by the operator that day,
+recorded on #1, which `weaver-admin-Spec` section 3 holds) `forced` no longer says the
+leave's save point was lost: a forced leave takes it as any leave does, and whether it
+was taken is told by the `save_point` event before `unload`, or, where it could not be,
+by a `refusal` of the leave naming `save_point_not_taken` and its leg, so the record
+says what state the operator's choice kept. **`forced_by` names the account that forced
+a leave another account asked for** (`weaver-admin-Spec` section 3, the forced unload,
+joining, and I2): where a `force-unload` joined a graceful unload's pending leave,
+`cause` stays the leave's own, the graceful caller's, and `forced_by` carries the first
+joining caller's cause, so the record keeps both accounts rather than attributing the
+force to the caller who asked for a graceful unload; a later join receives the same
+answer and is named nowhere. It is absent where no force joined, a sole forced unload
+included, whose `cause` already names it, and a leave turned forced by a declared
+bound, whose `cause` stays the graceful caller's, and is never written null; an optional member on a standing kind's payload, it names no new kind. The
+`unload` event's `forced` and `forced_by` agree with the `Left` answer's `forced` and
+the marker admin writes, per I2, the rollback excepted by name. `load` carries `Elections`. The five
 message kinds carry `Message`. `turn.closed` carries `TurnClosed`. `fault` carries
 `Fault`. `flush` carries `FlushCounts`, the resident token counts before and after, both
 plain integers. **`elision` carries `ElisionSpan` and not those counts**: an elision
@@ -822,7 +851,7 @@ at as `through`. `reset` stands beside `lineage` and apart from it, present only
 the agent's last run did not end in a clean unload, whether or not a save point stands,
 and carries that run as `prior_run` and the reason as admin resolved it,
 `no-clean-unload` or, as of A3.2, `forced-unload` where the operator's `force-unload`
-closed that run without its leave save point. Both are copied from the enter per `weaver-types-Spec`
+closed that run and its leave save point could not be taken. Both are copied from the enter per `weaver-types-Spec`
 section 4 and never the save point's path, which the
 harness does not hold. `stack` is the digests of the organ binaries admin started and of
 the agent's SPU and the gate it hands the worker to fork, keyed by the binary's name,
@@ -840,9 +869,10 @@ constitution**: it says who could read the run from outside, and it joins neithe
 declaration's digest nor the tuple, so granting a reader never makes the record another
 agent's. `cause` is who changed the agent, the uid sudo reports and nothing else, which
 person asked being WeaverWeb's record and never this one. It rides the `load` event, the
-`unload` event's `UnloadClose` where a leave asked, the worker's own unwind after a
-fault carrying none, and a turn closed by the operator's stop, where `Stopped` carries
-it and every other stop reason carries none. The harness authors all three from what
+`unload` event's `UnloadClose` where a leave asked, beside `forced_by` where a force
+joined another account's leave, the worker's own unwind after a fault carrying none,
+and a turn closed by the operator's stop or by the agent's unload, where `Stopped`
+carries it, the stop's cause or the leave's, and every other stop reason carries none. The harness authors all three from what
 admin handed it, admin never writing this record. A read or a refusal changes nothing in
 the agent and is admin's operations log's, never the trace's.
 
@@ -960,7 +990,22 @@ set is four seam vocabularies wide and grows with the seams, and declaring
 it here would make this crate depend on what it must not depend on and
 version what it does not own.
 
-**`StopReason` gains `Refused`**, per the charter's same-act edit. It is a
+**`StopReason` gains `Unload`, and the tool outcome's `by` gains `unload`**, with the
+lifecycle act (2026-10-09), so the record names an unload's interruption and not only
+that something stopped the turn. **A turn that finished closes `Clean`** during a
+graceful unload as at any other time (`weaver-admin-Spec` section 3, S4 x turn closes),
+and **only a turn the unload ended closes `Stopped { reason: unload, cause }`** with the
+leave's cause: a forced leave's cancelled turn (the forced unload), and a graceful
+leave's turn that closed without a tool return the drain blocked (S4 x tool return).
+That call completes interrupted, `by: unload` in the `tool.call.completed` outcome per
+`weaver-types-Spec` section 4.1, the gate's answer to the harness's `ToolInterrupt`, as
+does a call the wind-down asked for, which is never sent and which the harness completes
+in its own word (S5 x tool return), so the call reads as never finished and re-runnable after the reload. Two
+values on members that stand, `reason` on the close and `by` on the outcome, rather
+than a new member, because each already says what ended its thing; and `unload` rather
+than the stop's `directive`, because a re-run after the reload is owed to an unload's
+interruption and not to an operator's stop. **`StopReason` gains `Refused`**, per the
+charter's same-act edit. It is a
 satellite by section 12 and its variants are not enumerated here, but the
 addition is the charter's rather than a naming choice: a close that cannot
 say a refusal ended the turn says something else instead.
@@ -1082,9 +1127,31 @@ holdings it names were taken, so a save point could never hold its own event and
 rebuild that landed it would hold what no restore holds, and `distill` refuses the kind
 before the election is consulted. The diagnostic record carries no save point, a
 diagnostic binding taking none. A restore at a load rides the `load` event's lineage, marked `named_at_restore`, and a
-forced unload rides the `unload` event's `forced`, no kind being named ahead of its
-emitter; the live restore's own event is the loop act's (A5), and the reset rides the
-`load` event's `reset` member above.
+forced unload rides the `unload` event's `forced` and, where a force joined, its
+`forced_by`, no kind being named ahead of its emitter; the live restore's own event is
+the loop act's (A5), and the reset rides the `load` event's `reset` member above.
+
+**The run's record order is `weaver-admin-Spec` section 3, I9**, the lifecycle state
+table's, and this crate's kinds carry it without a kind of their own: within a run,
+`load` first; the seeding turn's `message.system`, where the agent is seeded in this
+run, before any user turn; `save_point` before `unload`; and `unload` last. **An unload's
+own account rides standing kinds** (`weaver-admin-Spec` section 3, the graceful unload
+and the forced unload): a request the drain refuses through the gate is a `refusal` of
+the leave, one per request, carrying the lifecycle refusal `unloading` that answered it,
+per `weaver-types-Spec` section 4.2 (S4 and S5 x dialer request, and I5), as is a frame a forced leave's lower meets (S6 x dialer
+request); a turn the unload ended closes `Stopped { reason: unload }` and its
+interrupted call completes `by: unload`, per the clause on `StopReason` above; the
+wind-down turn is a turn of the run, its bracket and its request and summary under the
+message kinds `weaver-harness-Spec` section 6 names, before `save_point`, its own calls
+completing `by: unload` (S5); and a forced leave whose save point could not be taken
+records the miss as a `refusal` of the leave carrying `save_point_not_taken` and its leg
+before `unload`. **A run with no `unload` event never answered `Left`** (I2), the
+harness answering `Left` only after the writer's queue has drained `unload` to the
+sink, per `weaver-admin-harness-contract` section 4, so a reader keys a run's close on
+`unload` and its `forced` and never infers one from the record's end. The converse does
+not hold: a worker that dies in S7, after `unload` and before `Left`, leaves an
+`unload` with no answer, which admin meets as S8 with the marker `Open` (S7 x worker or
+member dies).
 
 **`score` and the classify pair are the precedents for every loop judgment**, per the
 charter's section 3.1 on the operator's ruling of 2026-10-02: a judgment the loop makes,
@@ -1889,6 +1956,11 @@ the fact exists.
   name and cause, per section 3, authored by the harness before `unload` from the
   member's finished answer, watched to fail when `unload` is authored before the ask, and never
   distilled by the tee, watched to fail when `distill` stops refusing the kind.
+- The `unload` event names a joining force apart, per section 3, owed by the lifecycle
+  act's code: `forced_by` is absent from a payload no force joined, watched to fail when
+  its `skip_serializing_if` is removed, and a joined leave's `unload` carries the
+  leave's own `cause` and the force's `forced_by`, watched to fail when the harness
+  writes the joining cause into `cause`.
 - A score is recorded turnless with the verdict and the ratio's two terms, per section
   3: the recorder refuses one carrying a turn or another kind's payload, watched to fail
   when the kind leaves `turn_forbidden` or its pairing row, and the port records one per

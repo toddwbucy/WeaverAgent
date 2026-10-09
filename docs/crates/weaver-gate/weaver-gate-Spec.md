@@ -332,8 +332,12 @@ election's receive obligation as every receiving crate does, per
 envelope bound, a read returning with `MSG_TRUNC` set is a channel fault and
 never a message, and the same bound is asserted on this crate's sends. A
 directive out of order for the channel's state answers `OutOfOrder`, per
-`weaver-harness-gate-contract` section 3, and the state has three positions,
-before-raise, raised, and lowered, the last terminal.
+`weaver-harness-gate-contract` section 3, and the state has four positions,
+before-raise, raised, draining and lowered, the last terminal, per the gate state of
+the lifecycle state table approved by the operator on 2026-10-09, recorded on #1, whose
+text is `weaver-admin-Spec` section 3. Draining is the graceful unload's, between
+`Quiesce` and `Lower` (`weaver-admin-Spec` section 3, the graceful unload, steps 2 to
+5).
 
 ```graph
 node: gate-truncation-is-a-fault
@@ -633,15 +637,12 @@ from: weaver-gate
 to: gate-agent-uid-denied-by-construction
 ```
 
-**The lower closes the listener first and confirms after.** Stopped is
-answered only after the close has returned, per the contract, so nothing
-new can arrive anywhere in the interior once the harness proceeds. What
-happens to an in-flight connection at lower is section 4's and is
-chartered rather than deferred: the listener closes first, then every
-accepted connection with whatever its buffer still held undelivered, per
-charter section 13.3. **This clause read deferred with the token workflow
-until 2026-09-15**, which the turn half had already settled and the
-charter had already contradicted.
+**The listener closes first and every answer confirms after.** At a graceful unload
+the listener closes at `Quiesce`, and at a forced one at `Lower` from the raised
+position; either way stopped is answered only after every close has returned, per the
+contract, so nothing new can arrive anywhere in the interior once the harness proceeds.
+What happens to an accepted connection at the quiesce and the lower is section 4's and
+is chartered rather than deferred, per charter section 13.3.
 
 ```graph
 node: gate-stopped-follows-close
@@ -692,7 +693,9 @@ harness's own.** Between ready and stopped this crate waits against the
 listener, every accepted client connection, and the channel end, and wakes on
 the first ready. A listener wake accepts and judges the predicate, per
 section 3. A connection wake reads octets. A channel wake reads the envelope,
-a response frame to route out or the lower directive. Service is serial, one
+a response frame to route out, the quiesce or the lower directive; from the
+quiesce the listener and the connection reads leave the wait, per the unload
+clause below. Service is serial, one
 wake handled at a time, and no executor enters: section 1's ground held
 because the client traffic was deferred, and it holds now because `poll` and
 a serial loop serve it, the same election `weaver-harness-Spec` section 2.4
@@ -740,12 +743,33 @@ from: weaver-gate
 to: gate-one-exchange-open-per-connection
 ```
 
-**A lower closes in order, and stopped answers last.** The lower read from
-the channel closes the listener first, then every accepted connection with
-whatever its buffer still held undelivered, and answers stopped only after
-the closes return, per charter section 13.3 and the ordering the lifecycle
-half already pins. No turn is in flight at a lower, leave refusing while
-one is, so what the closes drop is deliveries at most and never turns.
+**A graceful unload quiesces first, and from it the gate accepts no further input**
+(`weaver-admin-Spec` section 3, the graceful unload, step 2; I5). `Quiesce` from the
+raised position closes the listener, so no new connection is accepted; closes every
+connection owed nothing, whose input was never received as a request; stops reading
+every connection that stands; sends every frame still waiting on the channel's
+writability; and only then answers `GateQuiesced`, so every request this crate admitted
+reaches the harness ahead of the answer and the harness refuses each it had not started
+through this crate, the connection standing (S4 x dialer request). `Quiesce` from any
+other position is out of order. **Draining routes and reads nothing**: a response frame
+still routes to the connection owed it, so the turn in flight gives its final output and
+a request received but not started gets its refusal, each on its own connection, while
+no line is read and no exchange opens; a tool execution opens only in the raised
+position, the harness interrupting one out before it quiesces.
+
+**`Lower` from draining answers last**: `GateStopped` is deferred until every owed
+response has been written, the relay dropped then, under the lower bound of
+`weaver-harness-Spec` section 6; a connection whose client has not read its answer when
+that bound passes closes with its delivery lost, the lost-delivery case of charter
+section 13.4, and this crate names it on standard error with the dialer's uid, so the
+operator can see why the drain stood. **`Lower` from the raised position is the forced
+unload's close** (`weaver-admin-Spec` section 3, the forced unload (sole); I5): the
+listener and every accepted connection close at once, whatever they awaited, every
+frame still waiting on the channel's writability sent first so the harness records each
+refused with `Unloading`, and stopped is answered after the closes return, the operator having chosen no
+time to finish. **A force that joins a drain closes the channel** rather than sending
+`Lower` (the forced unload (joining)): this crate meets closure, closes its listener and
+every connection undelivered, and exits, per section 2's closure rule.
 
 **A frame carries the dialer beside its octets**, as of the operator's ruling of
 2026-10-06 (#1): the `turn-frame` this crate opens inward names the connection's
@@ -946,7 +970,7 @@ rather than one for the reason the bind-site absence divides below.
 - The floor's three wire enums are exhaustive, so every directive, answer,
   and refusal case reaches this crate's matches loudly.
 - Descriptors are owned types end to end.
-- The channel state's three positions are a type, so a directive against a
+- The channel state's four positions are a type, so a directive against a
   lowered hook is refused by a match arm rather than a flag check.
 
 **Enforced by compile-fail tests.** One absence is this crate's own to pin:
@@ -1055,7 +1079,7 @@ decision staying where it belongs.
 follows the bind and stopped follows the close are this crate's own sequencing
 inside its own domain, presented at its edge as guarantees the contract states,
 and apex section 5.5 says nothing about what happens inside a domain. The channel
-state's three positions are the representation that makes the refusal mechanical
+state's four positions are the representation that makes the refusal mechanical
 rather than the refusal itself, and grounding a representation in an invariant
 about what crosses would read the scope limit backwards. The one claim that
 invariant's presents-nothing-to-any-peer clause would reach here, that this
@@ -1309,24 +1333,29 @@ command that exited in its first millisecond until the caller's clock ran
 out. On a cancel the group is
 signaled at once by the same path every ending takes, the drain finishes
 bounded as it does at the clock, and the answer is a kill naming the cancel
-as its cause, the partial riding as it rides at the clock. Nothing the
-contract permits arrives on the channel during an execution but the cancel
-and closure, executions being serial and the harness blocked in its wait, so
-an envelope there is the cancel or it is the closure the charter already
-requires this crate to exit on, and closure breaks the same loop, which
+as its cause, the partial riding as it rides at the clock. **An interrupt is
+the unload's cancel** (`weaver-admin-Spec` section 3, S4 x tool return): the
+harness sends `ToolInterrupt` where an unload, graceful or forced, meets a
+tool call out, and it ends the execution by the cancel's path, the answer a
+kill naming the unload, `Killed { by: unload }`, so the record reads the call
+as never finished and re-runnable at the reload. Nothing the
+contract permits arrives on the channel during an execution but the cancel,
+the interrupt and closure, executions being serial and the harness blocked in
+its wait, so an envelope there is one of the two or it is the closure the
+charter already requires this crate to exit on, and closure breaks the same loop, which
 kills the group before the exit as every ending does. The cancel adds no
 clock: the caller's number still bounds the wait, and a supervisor that
 never reads the cancel still answers by it.
 
-**A cancel that arrives past the answer is dropped, never refused.** The
+**A cancel or an interrupt that arrives past the answer is dropped, never refused.** The
 exchange it names closed from this side when the answer was sent, and the
 two directions crossing is the channel's ordinary case, so the envelope is
 read and discarded and the next open is served as if nothing arrived. A
 refusal in its place would put an envelope on the channel the harness has no
 exchange to correlate, which is the stray answer the contract's ordering rule
 exists to prevent. The out-of-order refusal stays what it is for every other
-misplaced envelope, and this is the one continue-position envelope this
-crate reads.
+misplaced envelope, and the cancel and the interrupt are the two
+continue-position envelopes this crate reads.
 
 ```graph
 node: gate-shell-the-one-held-tool

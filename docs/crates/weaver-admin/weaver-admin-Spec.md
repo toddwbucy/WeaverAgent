@@ -201,8 +201,8 @@ per section 6; `restore`, naming the save point the next load restores, which is
 the declaration's `[restore]` names, judged loadable now and, where no line names it,
 entered in the manifest as named at a restore, per section 4, so a file that arrived by
 no publication becomes loadable only by this verb and `RestoreNamed` means named and
-judged loadable now; and `force-unload`, the unload that completes without its leave save point,
-per section 3. Each is one fixed command line with no argument: the save point `restore`
+judged loadable now; and `force-unload`, the unload that stops the work and keeps the state, its save
+point taken as at any unload, per section 3. Each is one fixed command line with no argument: the save point `restore`
 names is the declaration's and never the caller's, which is why the verb takes none, and
 the operator's rule grants all three, the observer's none. **The live restore of a
 running agent waits on the decode seam's `Reopen`**, the loop act's (A5): a restore is a
@@ -367,6 +367,133 @@ overlapping was the in-flight flag of the map this crate once held across agents
 section 3 states where that obligation lands now.
 
 ## 3. The verbs, the agent's state, and rollback
+
+### 3.0 The lifecycle state table
+
+**This table is the authority for the agent's lifecycle**: the lifecycle state table approved by the operator on 2026-10-09, recorded on #1. Every other section of this Spec, `weaver-harness-Spec` section 6, `weaver-gate-Spec`, and the admin-harness, harness-gate, gate-world and admin-operator contracts implement it and cite the row or invariant they implement. They do not restate it. The prose of this section after 3.0 applies the table to this crate's verbs. Where any text disagrees with the table, the table holds and the text is wrong.
+
+**Why a table.** A step list describes one ordering. The table states every state the agent can be in, what each actor may do there, and what must hold in all of them, so an ordering of two actors is checked against the table rather than found one review round at a time.
+
+**Actors.**
+
+| Actor | Acts through | May cause |
+|---|---|---|
+| Operator, graceful | `weaver-admin unload` (root, or the connector's sudo rule) | the graceful unload |
+| Operator, force | `weaver-admin force-unload` | the forced unload |
+| Operator, other verbs | `load`, `save-point`, `restore`, `show`, `validate`, `stop` | as named |
+| Dialer | a connection to the gate, admitted by uid | a request; from the operator's uid alone, a seeding line |
+| Tool | a return through the gate | a tool result |
+| Harness (the worker) | the coordination socket, the gate channel, the state seam, the decode seam | turns, the record, answers |
+| Member (`weaver-state`) | the state seam | answers, and save-point files in its room |
+| Gate | the gate channel and its listener | admission, relays, quiesce, stop |
+| SPU | the decode seam | generation |
+| Failure | the kernel | any process dying, at any point |
+
+**Shared resources.**
+
+| Resource | Owner | What it says |
+|---|---|---|
+| Invocation lock (`admin.lock` in the run directory) | the admin invocation holding it | one invocation mutates the agent; `show` takes it shared, briefly |
+| Run lock (`run.lock`, held by the run's processes) | the run | a run stands, and nothing about its lifecycle state |
+| Marker (`run.marker` in the config root) | this crate | `Open{run}`: a run started and has not closed; `Closed{run}`: it closed with its state kept; `Forced{run}`: it ended without its leave save point |
+| Manifest and published save points (`save-points/` in the territory) | this crate, under the invocation lock | what is loadable, and the latest |
+| Room (`state/` in the territory) | the member | parts and finished save points not yet published |
+| Trace | the harness authors it; this crate never reads it | what happened |
+| Harness channel state | the harness | `BeforeEnter`; `Entered` (at rest, turn in flight, or leave pending); `Left` |
+| Gate state | the gate | `BeforeRaise`, `Raised`, `Draining`, `Lowered` |
+
+**States.** The agent's state is the tuple of the resources above; these are its named, reachable combinations.
+
+| # | State | Locks | Harness | Gate | Marker |
+|---|---|---|---|---|---|
+| S0 | Down, clean | none | no worker | none | `Closed` or none |
+| S0d | Down, dirty (a run ended without closing) | none | no worker | none | `Open` or `Forced` |
+| S1 | Loading | invocation (load), run | starting, then `BeforeEnter` | `BeforeRaise`, then `Raised` | as found, until the enter answers |
+| S2 | Serving, at rest | run | `Entered`, no turn | `Raised` | `Open{run}` |
+| S3 | Serving, turn in flight (a tool call out through the gate, and the seeding turn, included) | run | `Entered`, turn | `Raised` | `Open{run}` |
+| S4 | Graceful: draining | invocation (unload), run | leave pending; a turn may still run | `Draining` | `Open{run}` |
+| S5 | Graceful: winding down | invocation (unload), run | the wind-down turn | `Draining` | `Open{run}` |
+| S6 | Lowering and saving | invocation, run | lower, then the save point's four legs | `Draining`, then `Lowered` | `Open{run}` |
+| S7 | Leaving (after the save point) | invocation, run | `unload` authored, organs released | `Lowered` | `Open{run}` |
+| S8 | Concluding | invocation only (the run lock has freed) | gone | gone | being written |
+| S9 | Unload stopped (the save point not taken, the member alive) | run (the invocation lock released at the refusal) | `Entered` at rest, gate lowered | `Lowered` | `Open{run}` |
+| S10 | Forcing | as the force finds it (the forced unload, below) | turn cancelled; lower; the save point attempted | `Lowered` at once | `Open{run}` |
+| S11 | Escalating (a worker that will not answer) | the escalating invocation | being ended | being ended | `Forced{run}`, written after the kill |
+
+**Transitions: the operator's verbs.** Each cell is the next state, what is recorded and what is answered. "Refuse X" leaves the state unchanged. The lock rule precedes the state: a verb that needs the invocation lock while another invocation holds it refuses `InvocationInFlight`, whatever the state, and only `force-unload` and `show` act beside a holder.
+
+| State | `load` | `unload` (graceful) | `force-unload` | `save-point` | `restore` | `show` |
+|---|---|---|---|---|---|---|
+| S0 | S1 | nothing to do: `Unloaded` | nothing to do: `Unloaded` | refuse `OutOfOrder` | names the save point for the next load | `Unloaded` |
+| S0d | S1: the load publishes the room's finished save points as recovered, and records the reset from the marker | as S0 | as S0 | refuse `OutOfOrder` | as S0 | `Unloaded` |
+| S1 | refuse `InvocationInFlight` | refuse `InvocationInFlight` | joins nothing, no run being entered: waits for the invocation lock, then acts on what it finds | refuse `InvocationInFlight` | refuse `InvocationInFlight` | `InTransition` |
+| S2 | refuse `AgentRunning` | S4, and with no turn, straight to S5 | S10, sole | a save point at rest, published at once; the `save_point` event | names the save point for the next load | `Idle` |
+| S3 | refuse `AgentRunning` | S4; the turn continues | S10, sole | refuse `ActivityNotAtRest` | as S2 | `Active` |
+| S4, S5, S6, S7 | refuse `InvocationInFlight` | refuse `InvocationInFlight` | joins lock-free (`JoinLeave`): the leave turns forced from where it stands; from S7 on, the join gets the `Left` as it stands and changes nothing | refuse `InvocationInFlight` | refuse `InvocationInFlight` | `InTransition` |
+| S8 | refuse `InvocationInFlight` | refuse `InvocationInFlight` | waits for the invocation lock; finds S0 or S0d | refuse | refuse | `InTransition` |
+| S9 | refuse `AgentRunning` | retry: S6, the lower being done, straight to the save point | S10, sole | a save point at rest (stays S9); an `unload` may follow | as S2 | `Idle`, the gate lowered |
+| S10, S11 | refuse `InvocationInFlight` | refuse `InvocationInFlight` | joins (S10); waits (S11) | refuse | refuse | `InTransition` |
+
+The live restore, a reload of state without a process restart, is A5's, with the decode seam's `Reopen`; A5 adds its row. Until then `restore` names the save point the next load restores, in every state.
+
+**Transitions: events inside a run.**
+
+| State | Dialer request | Tool return | Turn closes | Member misses a save-point leg | Worker or member dies |
+|---|---|---|---|---|---|
+| S2 | admitted: S3 | - | - | - | S0d (marker `Open`); the trace ends unclosed |
+| S3 | queued behind the turn, and served after it | delivered to the turn | S2; `turn.closed` | - | S0d |
+| S4 | refused through the gate, its connection standing ("the agent is unloading"), and recorded as a refusal of the leave, `Unloading`; a seeding line is refused as any request is | blocked by the gate (`ToolInterrupt`, answered `Killed{by: unload}`): the call is recorded interrupted by the unload, re-runnable at the reload, and the turn closes without it | S5; `turn.closed`, `Clean` where the turn finished, `Stopped{reason: unload}` with the leave's cause only where the unload ended it | - | S0d |
+| S5 | refused as in S4 | the wind-down's own calls are never sent, and are recorded interrupted | S6 (the wind-down's request and summary on the record and in state) | - | S0d |
+| S6 | the gate already refuses; at the lower, a frame met is recorded refused and its connection closes | - | - | S9: `SavePointNotTaken` naming the leg; nothing more is authored; the run entered at rest, the gate lowered | S0d |
+| S7 | - | - | - | - | S8 as far as this crate can tell (the run lock frees); the trace may end before `unload` |
+| S9 | the gate is lowered: the connection is refused | - | - | - | S0d |
+
+**A load's rollback (S1 x `Leave`).** A load that fails after its enter directs a forced leave to undo a run that never served. The harness tells it from a force by its own state, a run never `Entered` past `Ready`, and takes no save point; `unload` carries the load's cause, and the marker stays `Open` on that run (the operator's ruling of 2026-10-08 on #99, K1), so the next load records `NoCleanUnload`. It is exempt from I2 by name: a run that never served is not an unload.
+
+**Why there are two unloads**, on the operator's word of 2026-10-09. The graceful unload
+lets the agent finish its thought before it goes down: the turn in flight completes, then
+the wind-down summarizes for resumption, then the save point is taken. That may take a
+while, and it is meant to, which is why the drain and the wind-down carry no bound by
+default. Where it is too long, the operator chooses the force, giving up the thought in
+flight and its output to bring the agent down now, the state up to that point still
+saved. The choice is the operator's, and a declared drain or wind-down bound is the same
+choice made in advance, for an operator who will not stand watch.
+
+**The graceful unload (`unload`): drain, finish, wind down, save, down.**
+
+1. This crate takes the invocation lock and **holds it until it concludes**, and directs `Leave{cause}` (S4).
+2. The harness sends `Quiesce`. The gate closes its listener, closes connections owed nothing, stops reading, flushes every frame it admitted, then answers `GateQuiesced`. The harness refuses each flushed frame through the gate, recording it.
+3. A turn in flight finishes what it can without further input; a tool call out has its return blocked and recorded interrupted, and the turn's answer goes to its caller (S4 to S5).
+4. The wind-down turn: the harness asks the model to summarize for resumption, one generation, its calls not sent; the request and the summary are on the record and in state (S5 to S6).
+5. `Lower`: the gate answers `GateStopped` after every owed response is written, then drops the relay.
+6. The leave save point's four legs (write, answer, acknowledge, finished); the harness authors `save_point` on the finished answer.
+7. The harness authors `unload` (S7), releases the SPU and the member, and answers `Left{save_point, forced: false}`.
+8. This crate waits for the run lock to free (S8), publishes the reported save point (first come, by its digest), closes the marker `Closed`, and releases the lock (S0). A save point that did not publish refuses `SavePointNotTaken` naming the publication, and the marker stays `Open` (S0d).
+
+**The forced unload (`force-unload`): stop the work, keep the state.**
+
+- **Sole**, it taking the invocation lock: it directs `Leave{forced}` (S10). The gate is lowered at once, with no drain; the turn is cancelled and recorded as a stop with `reason: unload`; there is no wind-down; the leave save point is taken and published as at any unload; `unload` is authored with `forced: true`; the answer is `Left{forced: true}`. The marker closes `Closed` where the save point published, and `Forced` where it could not be taken; a save point taken that did not publish refuses `SavePointNotTaken` naming the publication and leaves the marker `Open`, as the graceful unload's does (I4).
+- **Joining**, the invocation lock held by a graceful unload in S4 to S7: `JoinLeave{cause}`, lock-free. The harness turns the pending leave forced from where it stands, skipping what remains of the drain and the wind-down, records the first joining cause as `forced_by` on `unload` (a later join gets the same `Left` and is not named), and answers both dialers with the same `Left{forced: true}`. The lock holder concludes; the force publishes nothing, touches no marker, and answers `Unloaded` only once the run lock has freed, so `Unloaded` always means the processes are gone. From S7 on, the record being final, the join gets the `Left` as it stands and changes nothing.
+- **Behind another holder** (a `show`, a refused `save-point`, a load in S1): it retries the join every second and the lock between, and acts as sole when it gets the lock.
+- **A silent harness**: a join unanswered within the join bound ends the run's processes without the lock (S11), **then** writes `Forced{run}`. The lock holder reads end-of-file and concludes with no save point; the marker stands `Forced`.
+
+**An invocation killed during S4 to S8** releases the invocation lock with the kernel. The harness may still finish the leave and answer `Left` to nobody; the member's finished save point stays in the room, and the next verb publishes it as recovered. The marker stays `Open`, so the next load records `NoCleanUnload` though the state was kept: the label is conservative, and nothing is lost.
+
+**Invariants.** Every transition above keeps all of these, and an ordering is checked against them.
+
+| # | Invariant | Held by |
+|---|---|---|
+| I1 | **One owner.** At most one admin invocation mutates the agent at a time. From a graceful unload's first step to its conclusion it holds the invocation lock; a force beside it acts only through the harness (`JoinLeave`) or through process ends, never through publication or the marker. | the lock held throughout; the forced unload |
+| I2 | **Agreement.** For any run that ends with `Left`, the `unload` event's `forced`, the `Left` answer's `forced`, and the marker agree, and `forced_by` names any joining force. A run with no `unload` event never answered `Left`, and its marker is `Open` or `Forced`; a worker that dies in S7, after `unload` and before `Left`, is S8 as far as this crate can tell, and its marker stays `Open`. A load's rollback (S1 x `Leave`, below) is exempt by name. | both unloads; `Left.forced`; `forced_by` |
+| I3 | **Force always ends the run within a bound**: the leave bound for a harness that answers, plus the escalation for one that does not, whatever else holds the lock. Every leg of the leave is bounded, and the legs' bounds sum inside this crate's. | the forced unload; the bounds below |
+| I4 | **Nothing lost silently.** Any run whose state since its last published save point is not kept leaves its marker `Open` or `Forced`, and the next load records the reset with its reason (`NoCleanUnload` or `ForcedUnload`) on the trace. A `Closed` marker means a save point of this run's state published. | the graceful unload, step 8; the forced unload |
+| I5 | **No request untraced.** Every request the gate admitted reaches the harness and is either answered or recorded refused. After `Quiesce` it is answered through the gate; at a `Lower` with no drain, a force's, it is recorded refused and its connection closes. | the graceful unload, step 2; the lower's record |
+| I6 | **Only what this crate published loads.** A save point is loadable only with a manifest line, judged by its bytes; a finished name exists only for an acknowledged save point; the latest is the manifest's highest ordinal that judges sound. | section 6 |
+| I7 | **Cache and state agree.** A load or a restore seats only the state member's identity answer and replays nothing; the KV cache is built from it. | the rulings of 2026-10-06 |
+| I8 | **A load never ends a run.** A held run lock refuses it and changes nothing. | this section |
+| I9 | **Record order.** Within a run: `load` first; the seeding turn's system message, where it is seeded in this run, before any user turn; `save_point` before `unload`; `unload` last. | `weaver-harness-Spec` section 6 |
+
+**The bounds (I3)**, on the operator's ruling of 2026-10-09 recorded on #1. The drain (S4) and the wind-down (S5) are unbounded by default, and `force-unload` is the recourse. An agent may declare a drain bound and a wind-down bound, in seconds, in its declaration's `[lifecycle]` table (`drain-bound`, `wind-down-bound`, per `weaver-types-Spec` section 2); where it does, a leg past its bound turns the leave forced from where it stands, with no `forced_by`, the cause staying the graceful caller's. This crate's wait follows: with no bounds declared, a graceful unload waits for `Left` without a deadline, a force joining lock-free so I3 holds; with both declared, its bound is the drain's plus the wind-down's plus 150 seconds. The legs from the lower on (the lower, the save point's four legs, `unload`, the release) are bounded each, as `weaver-harness-Spec` section 6 names them, and sum inside 150 seconds. A join's escalation bound is the leave's 150 seconds: a joined forced leave still takes its save point, whose answer leg is 120 seconds.
 
 **Two locks the kernel holds answer the two questions a per-invocation crate cannot keep
 across verbs**, per the operator's ruling of 2026-10-03 on #50. Both stand in the
@@ -609,25 +736,25 @@ left and the member's and the relay's with it, read as the run lock's release,
 publishing the member's finished save points per section 6 once the member has stopped,
 the leave's own among them, which the harness's `Left` answer names, and answer
 provisioned-and-unloaded **only once the lock is free**. The publication adds no step to
-the three, being the second step's tail. A refusal on leave, `ActivityNotAtRest` above
-all, returns to the operator unchanged and answers nothing further; `ActivityNotAtRest`
-covers a frame the gate admitted that the harness's loop has not yet taken, per
-`weaver-harness-Spec` section 6, so an unload that meets one is retried after the turn.
+the three, being the second step's tail. The leave is the graceful unload of 3.0: a turn
+in flight, or a frame the gate admitted, no longer refuses it, the leave draining both
+(S3 x `unload`; I5), and the invocation lock is held from the first step to the
+conclusion (I1).
 
 **An unload whose leave save point is not finished does not complete**, on the operator's rulings of 2026-10-06 on #1 (the A3.0 items)
 (item 6). The harness takes the leave's save point before it authors `unload`, per
 `weaver-harness-Spec` section 6, and where that save point is not finished, the write
 having failed, the answer or the acknowledgement having missed its bound, or the member
 being dead, it answers `SavePointNotTaken` naming which, authors no `unload`, and stays
-entered at rest: the run stays open with its gate lowered, since the harness lowers the
-gate before it takes the leave's save point, the constituents keep the run lock, this verb prints
-the refusal and exits non-zero, and nothing silent happens. If the member is alive the
-operator retries, `save-point` and then `unload`; if it is dead the operator issues
-`force-unload`, which directs the leave with `forced` set, so the harness leaves without
-the save point and records on the `unload` event that the leave's save point was not
-taken, and this crate leaves the clean-unload marker open under `ForcedUnload`, so the
-next load restores the latest published save point with that reset recorded. The loss is
-the operator's recorded choice, never this crate's. **Nor does an unload complete whose
+entered at rest: the run stays open with its gate lowered (S9), the constituents keep
+the run lock, this verb prints the refusal and exits non-zero, and nothing silent
+happens. If the member is alive the operator retries `unload`, which goes straight to the
+save point, the lower being done, or takes a `save-point` first (S9 x `unload`, S9 x
+`save-point`); if it is dead the operator issues `force-unload`, which attempts the leave
+save point as at any unload and, where it cannot be taken, authors `unload` with
+`forced: true` and closes the marker `Forced`, so the next load restores the latest
+published save point with `ForcedUnload` recorded (the forced unload, sole; I4). The loss
+is the operator's recorded choice, never this crate's. **Nor does an unload complete whose
 leave save point did not publish** (Codex on #94, round 9), publication being part of
 taking it: the leave's reported digest must be among the lines section 6's publication
 appended at the unload, and where it is not, a room file past the bound or any
@@ -635,7 +762,8 @@ publication that does not land, this verb refuses `SavePointNotTaken` naming the
 publication, the fifth leg and this crate's own, and leaves the marker open, so the next
 load records `NoCleanUnload` and recovers the room's file or names it as unpublishable,
 never restoring an older save point in silence behind an `Unloaded`. A forced unload
-reports no save point and is unchanged. **A leave whose lock outlives the after-left
+publishes its save point the same way where it took one, and where it did not, closes
+the marker `Forced` (the forced unload, sole). **A leave whose lock outlives the after-left
 wait keeps its report** (the #94 survey's S7): the escalation ends the holders and the
 reported save point is published as on a lock that freed, the same refusal following
 where it does not land, so `Unloaded` is never answered over a leave save point left in
@@ -666,16 +794,19 @@ forced. **A force does not depend on the territory** (the operator's ruling of
 writes nothing into the unjudged territory and reads nothing from it: no `admin.log`
 line, which goes to standard error alone, and no publication, the room's files waiting
 for a load, which judges the territory first. The marker, in the root, closes `Forced`,
-so the next load records the loss. Force always works. `force-unload` is `unload` in
-every other respect, the same waits and the same escalation.
+so the next load records the loss. Force always works (I3). Its sole, joining and
+waiting forms, and its escalation of a silent harness, are the forced unload of 3.0.
 
-**The leave has a bound of its own, 150 seconds from the verb's start**, once the
-invocation lock is held: past the harness's 120 seconds for the save point's answer leg
+**The leave has a bound of its own, 150 seconds**, as 3.0's bounds state it: from the
+verb's start for a forced leave; for a graceful one, after a declared drain and wind-down
+bound, and with none declared no deadline at all, a force joining being the recourse
+(I3). The 150 seconds run past the harness's 120 seconds for the save point's answer leg
 and its two-second legs (the operator's ruling of 2026-10-08 on #1, `weaver-harness-Spec`
 section 6), so admin never abandons a save point the harness still awaits. The
-observation and both dials spend it, so `unload` holds the invocation lock at most those
-150 seconds and the escalation's forty-five, 195 in all, **before the publication that
-follows `Left`** (the #99 area 1 review): copying the leave's save point and any recovered
+observation and both dials spend it, so a forced `unload` holds the invocation lock at
+most those 150 seconds and the escalation's forty-five, 195 in all, and a graceful one
+those 195 past its declared drain and wind-down bounds, or as long as the drain and the
+wind-down take where none is declared, **before the publication that follows `Left`** (the #99 area 1 review): copying the leave's save point and any recovered
 file the room holds, at most section 6's 32 of up to a gibibyte each, is bounded by that
 cap and the copy's own speed and not by time, so a caller builds against 195 seconds plus
 the copy of what the room holds, never against 195 seconds alone, beside `show`'s short
@@ -998,7 +1129,11 @@ reset the marker could not say. **The marker is this crate's, and it is written 
 once a run stands**,
 on the operator's rulings of 2026-10-06 on #1 (the A3.0 items) (item 5): at every load, after the enter answers `Ready`, this crate
 writes, in the agent's config root under its own custody, a marker naming the run it
-minted as open, and a clean unload marks that run closed. **A load that rolls back after
+minted as open, and an unload whose leave save point published marks that run closed,
+graceful or forced alike (3.0, the graceful unload step 8 and the forced unload; I4). Only
+the invocation holding the lock writes it: a force that joins a graceful unload publishes
+nothing and touches no marker, and a force that escalates a silent harness writes
+`Forced` after the kill and never before it (3.0, the forced unload; I1, I3). **A load that rolls back after
 its `load` event is on the trace leaves the marker open on that run** (the operator's
 ruling of 2026-10-08 on #99), whether or not this crate read its `Ready`: an enter refused
 after `load`, or a `Ready` past the load bound, authored `load` all the same, so the next

@@ -79,9 +79,10 @@ The named endpoint the raise directive carries, supplied by the harness and boun
 the gate, per `weaver-gate-PRD` section 2. **What kind of endpoint it is and where it
 lives are the Spec's**, and a consumer needs neither: it is given the name and finds a
 listener there. The access rule beside it is the operator's, so what the world meets is
-a door the program placed and a predicate the operator wrote. It exists between raise
-and lower and at no other time: a connection before ready or after stopped finds no
-listener, which is the boundary the lifecycle protects.
+a door the program placed and a predicate the operator wrote. It exists from the raise
+until an unload closes it, at the quiesce of a graceful unload or the lower of a forced
+one, and at no other time: a dial before ready or after that close finds no listener,
+which is the boundary the lifecycle protects.
 
 **Admission is by verified peer identity.** Every connection carries a principal
 identity **the channel authenticates rather than the caller asserts**, and that
@@ -173,21 +174,45 @@ response path, as extensions to this page rather than replacements of it.
   settled it: clients may speak at once, the gate relays each as its own
   exchange, and the harness serves them one at a time in arrival order, per
   `weaver-harness-gate-contract` sections 2 and 3. A client is owed order on
-  its own connection and is promised nothing across clients.
+  its own connection and is promised nothing across clients. From an unload's
+  start a waiting request is refused rather than served, per section 5.
 
 ## 5. Failure
 
 - A peer that fails the predicate is refused at accept, before any content is read.
-- A request while the hook is lowered finds no listener, which is refusal by absence
-  and not a typed answer.
-- A leave refused at its save point leaves the run loaded with the hook lowered until
-  the operator retries the unload or forces it, per `weaver-harness-Spec` section 6, so
-  a request in that window also finds no listener.
-- A request the gate admitted while the agent is unloading, accepted before the hook
-  came down, is recorded on the trace as refused, and its connection closes with no
-  answer: the gate drops every served connection when it is lowered, per
-  `weaver-harness-Spec` section 6. A request answered through an unload is the
-  lifecycle protocol's, a later act.
+- **What a dialer sees, state by state**, per the lifecycle state table approved by
+  the operator on 2026-10-09, recorded on #1, whose text is `weaver-admin-Spec`
+  section 3, and `weaver-harness-Spec` section 6. No request the gate admitted is
+  dropped unanswered and unrecorded (I5).
+  - **Serving, at rest**: the request is admitted and its turn runs (S2 x dialer
+    request).
+  - **Serving, a turn in flight**: the request is admitted and queued behind the
+    turn, and served after it (S3 x dialer request).
+  - **Unloading, gracefully** (S4 and S5), with no time limit unless the agent's
+    declaration sets one, `force-unload` being the recourse: a dial finds no listener, and a connection
+    that has sent no request is closed. A request whose turn is running gets that
+    turn's answer on its connection, the turn finishing what it can without further
+    input; a tool call it had out is interrupted and the turn closes there, its
+    answer given. A request the gate received and the agent had not started is
+    answered on its still-standing connection with the refused close naming the
+    unload, `{"kind":"refused","reason":"the agent is unloading"}`, which names no
+    turn, and the refusal is recorded as `Unloading` (S4 x dialer request). A seeding line is
+    refused the same way. Lines a connection sends after the gate stopped reading it
+    are never read. The agent then runs one wind-down turn of its own, which answers
+    no dialer.
+  - **Lowering, and after** (S6 onward): the gate goes down only after the answers
+    above are written, inside the bound `weaver-harness-Spec` section 6 names; a
+    client that has not read its answer when that bound passes loses the delivery,
+    not the turn, per section 3. From then a dial finds no listener: connection
+    refused, by absence and not by a typed answer.
+  - **Unload stopped at its save point** (S9): the run stays loaded with the hook
+    lowered until the operator retries the unload or forces it, so a dial finds no
+    listener (S9 x dialer request).
+  - **Forced unload**: the listener and every connection close at once with no
+    answer, the turn in flight cancelled and recorded as a stop naming the unload,
+    and every request the gate admitted and the agent had not started is recorded
+    refused as `Unloading` (`weaver-admin-Spec` section 3, the forced unload; I5). A force that
+    joins a graceful unload closes every connection still standing the same way.
 - A line that does not parse is a refused turn, per section 2.
 - A line that exceeds the Spec's bound with no delimiter found has left the
   framing, and the connection closes at that layer, below any turn: nothing

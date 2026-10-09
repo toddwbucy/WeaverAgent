@@ -23,9 +23,9 @@ party may open an exchange by the channel's mechanics, and the two-initiator cha
 what makes admin an organ: an organ owns a domain and holds a two-initiator channel with
 the harness, both properties and not either, and admin owns the lifecycle domain. The
 property is the channel's rather than the exchange census's, the same reading the
-half-chartered organ seams take, so the census standing at five exchanges since the
-save point exchange of A3.2 (2026-10-06), all admin's since the fault-carrier ruling of
-2026-08-01 rerouted the fault to the stream, retires no half of what makes admin an
+half-chartered organ seams take, so the census standing at six exchanges since the join
+exchange of the lifecycle act (2026-10-09), all admin's since the fault-carrier ruling
+of 2026-08-01 rerouted the fault to the stream, retires no half of what makes admin an
 organ. The invariant is authored in the apex and this document is downstream of it.
 
 **Two layers meet in this document and the boundary between them is a draw.** Sections 1
@@ -69,8 +69,8 @@ and nothing of it is restated here.
 
 One fact of this seam lands at that layer. Either party may open an exchange on this
 channel, the census of chartered exchanges is section 3's, and every one of them is
-admin's today, per the fault-carrier ruling of 2026-08-01, and the census is four since
-the observation exchange of 2026-09-04.
+admin's today, per the fault-carrier ruling of 2026-08-01, and the census is six since
+the join exchange of the lifecycle act (2026-10-09).
 
 ## 2. The channel
 
@@ -161,7 +161,11 @@ as long as its verb.** The lifetime rule of `weaver-organ-channel` section 2 lan
 on the listener: bound once at the worker's start, closed by the worker's death,
 shared with no second worker. Each accepted connection is one invocation's, closed
 by admin when the verb answers, and the harness serves one connection at a time, a
-second dial waiting at the listener rather than being answered concurrently. **An answer
+second dial waiting at the listener rather than being answered concurrently, **except
+while a leave is pending**: every wait of the leave hears the listener, so a
+`JoinLeave` is served beside the leave's own connection, per section 3 and
+`weaver-admin-Spec` section 3, I3, and a dial carrying any other directive meanwhile is
+refused `OutOfOrder`, per section 4. **An answer
 the harness cannot deliver ends nothing** (the operator's ruling of 2026-10-08 on #99):
 where the caller went away before its answer, an operator's interrupt, a connector's
 own timeout or a killed invocation, the harness says so on its standard error and
@@ -170,28 +174,30 @@ loss ends service, and a run ends only by the directive that ends it.
 
 ## 3. The exchanges
 
-Five, and no others, all opened by admin.
+Six, and no others, all opened by admin.
 
-**Save a point, and leave with or without one**, as of A3.2 on the operator's rulings
-of 2026-10-06 on #1. `SavePoint`, opened by admin, carries the cause; the harness, at
-rest, asks the member for a save point through `weaver-harness-state-contract` section
-2's four legs, authors the `save_point` event, and answers `SavePointTaken` naming the
-digest, the finished name, the position the save point covers and the trace position of
-the event, its own run and sequence, or refuses `ActivityNotAtRest` where a turn runs, or `SavePointNotTaken`
+**Every exchange of the lifecycle implements a row of the lifecycle state table**
+approved by the operator on 2026-10-09, recorded on #1, which `weaver-admin-Spec`
+section 3 holds as the one authority: the states S0 to S11, the transitions between
+them and the invariants I1 to I9 are its. This section names what each row puts on this
+seam and cites the row, never restating it, and where this text and the table disagree
+the table holds.
+
+**Save a point**, as of A3.2 on the operator's rulings of 2026-10-06 on #1.
+`SavePoint`, opened by admin, carries the cause; the harness, at rest, asks the member
+for a save point through `weaver-harness-state-contract` section 2's four legs, authors
+the `save_point` event, and answers `SavePointTaken` naming the digest, the finished
+name, the position the save point covers and the trace position of the event, its own
+run and sequence (`weaver-admin-Spec` section 3, S2 x save-point and S9 x save-point, a
+run whose unload stopped at its save point taking one at rest as any other does). It
+refuses `ActivityNotAtRest` where a turn runs (S3 x save-point), `SavePointNotTaken`
 naming which leg missed, or `OutOfOrder` where the run takes no save point, a diagnostic
 binding or a serving run with no member seam, which has no member to ask and is never
-reported as the member dead. `Leave` carries `forced` beside its cause: the harness takes the
-leave's save point before it authors `unload`, and answers `Left` naming it as
-`SavePointTaken` does so admin publishes it under the same ordinal rule; where the save
-point is not finished and `forced` is false it answers `SavePointNotTaken` and stays
-entered, the run open, and where `forced` is true it leaves without one and the `unload`
-event says so. The legs the harness names are the answer, the finished answer and the
-member dead, a member's failed write arriving as the answer missed; admin names a fourth
-of its own, `published`, at the unload and the `save-point` verb, where the save point
-was reported and its publication did not land, per
-`weaver-admin-operator-contract` section 3. A `Left` with no save point is a forced leave, a leave under a
-diagnostic binding, or a leave of a serving run with no member seam, the last two taking
-none.
+reported as the member dead, and wherever a leave is pending (S4 to S7, and S10).
+The legs the harness names are the answer, the finished answer and the member dead, a
+member's failed write arriving as the answer missed; admin names a fourth of its own,
+`published`, at the unload and the `save-point` verb, where the save point was reported
+and its publication did not land, per `weaver-admin-operator-contract` section 3.
 
 **Enter the run.** Opened by admin. Admin directs the harness to enter, supplying the
 session identity, the run reference, the kind of the binding, the trace sink handle, the
@@ -202,8 +208,8 @@ per `weaver-state-PRD` section 4, the lineage of the save point the load restore
 whether the declaration's `restore` names it or the inventory selected the latest
 published by default, marked where it was named at a restore, and none where no save
 point stands, beside it and apart from it the reset, where the agent's last run did not
-end in a clean unload or was forced to end without its save point, that run and the
-reason, whether or not a save point stands, the digests of the organ binaries admin
+end in a clean unload or was forced to end and its leave save point could not be taken,
+that run and the reason, per `weaver-admin-Spec` section 3, I4, whether or not a save point stands, the digests of the organ binaries admin
 started and of the two it hands the worker to fork, the agent's SPU and the gate, the
 digest of the declaration, as of 2026-10-03 the digest of the agent's boundary file, `roles.toml`, marked boundary and
 never constitution, and the cause, the uid sudo reports, on the operator's rulings on
@@ -233,18 +239,81 @@ was built without asking a second question. The answer, either way, closes the e
 and is the aggregate: one directive out, one answer back, and the organs appear in the
 answer's content rather than as parties to this seam.
 
-**Leave the run.** Opened by admin. Admin directs the harness to leave, supplying the
-cause as the enter does, which the harness records on its closing event. The harness
-stops Gate first where one stands, refuses while a turn is in flight, authors
-its closing event, `unload` on a serving binding and the diagnostic
-mechanism's counterpart where that vocabulary is elected,
-drains the writer's queue to the stream, and releases the SPU. It answers left, or
-it refuses, and a refusal names where the sequence stopped. **After answering left the
+**Leave the run.** Opened by admin. `Leave` carries the cause, as the enter does, which
+the harness records on its closing event, and `forced`. **A leave is never refused for
+activity**: one heard mid-turn is pending from that moment and the turn is handled as
+below (`weaver-admin-Spec` section 3, S3 x unload and S3 x force-unload).
+
+**Unforced, it is the graceful unload** (`weaver-admin-Spec` section 3, the graceful
+unload, steps 2 to 7, and S2 x unload and S3 x unload). The harness quiesces the gate
+(`Quiesce`, answered `GateQuiesced`) and refuses through the gate each frame the gate
+flushes to it with `Unloading`, recording each as a refusal of the leave (S4 x dialer
+request, I5). A turn in flight finishes what it can without further input, a tool call
+out interrupted (`ToolInterrupt`, answered `Killed { by: unload }`) and the turn's
+answer going to its caller (S4 x tool return and S4 x turn closes). It runs the
+wind-down turn (S5). **The drain and the wind-down are unbounded unless the declaration
+bounds them** (the operator's ruling of 2026-10-09 recorded on #1, `weaver-types-Spec`
+section 2's `[lifecycle]`): past a declared bound the harness turns the leave forced
+from where it stands, with no `forced_by`, the leave's `cause` staying the graceful
+caller's, and comes down as a forced leave does. It lowers the gate (`Lower`,
+answered `GateStopped`), takes the leave's save point through the four legs of
+`weaver-harness-state-contract` section 2 and authors `save_point` (S6), then authors
+`unload` with `forced` false, drains the writer's queue to the stream, releases the SPU
+and the member, and answers `Left` naming the save point as `SavePointTaken` does, so
+admin publishes it under the same ordinal rule, with `forced` false (S7). **Where the
+save point is not finished it answers `SavePointNotTaken`** naming the leg, authors
+nothing more, and stays entered at rest with the gate lowered, the leave no longer
+pending (S6 x member misses a save-point leg, and S9). A later unforced `Leave` from
+there goes straight to the save point, the lower being done (S9 x unload).
+
+**Forced, it stops the work and keeps the state** (`weaver-admin-Spec` section 3, the
+forced unload, sole, and S10). The gate is lowered at once with no drain, a frame it
+holds recorded refused and its connection closed (I5); a turn in flight is cancelled and
+closes as a stop with `reason: unload`; no wind-down runs; the leave's save point is
+taken as at any leave; `unload` is authored with `forced` true; and the answer is
+`Left` with `forced` true, naming the save point where it was taken and none where it
+could not be, the miss then recorded as a refusal of the leave naming the leg.
+
+**The load's rollback is its own row** (`weaver-admin-Spec` section 3, S1 x Leave): a
+forced `Leave` that reaches a run never `Entered` past `Ready`, as the harness knows by
+its own state, takes no save point, the run having nothing to keep, authors `unload`
+with `forced` true, and answers `Left` with none; admin leaves the marker `Open`, and
+the rollback is the exemption I2 names. No directive of its own marks it.
+
+**`Left` carries `forced`**, required on the wire with no default, true where the leave
+came down forced, directed so, joined, or turned so past a declared bound, so the
+invocation that concludes the leave closes the marker as the leave ended, and the
+answer's `forced`, the `unload` event's `forced` and its `forced_by` agree
+(`weaver-admin-Spec` section 3, I2, the rollback excepted by name). A `Left` with no save
+point is a forced leave whose save point could not be taken, a rollback's leave, a
+leave under a diagnostic binding, or a leave of a serving run with no member seam, the
+last three taking none. **After answering left the
 worker exits**, its run being its only purpose, and admin reads that exit as the run
-lock's release, per `weaver-admin-Spec` section 3. The stream ends where
-the run did, finalized by nothing, per the ruling of 2026-08-01. As with enter, the
-answer is the aggregate and the organs appear in its content rather than as parties
-to this seam.
+lock's release (S8). The stream ends where the run did, finalized by nothing, per the
+ruling of 2026-08-01. As with enter, the answer is the aggregate and the organs appear
+in its content rather than as parties to this seam.
+
+**Join the leave**, as of the lifecycle act (2026-10-09). Opened by admin's
+`force-unload` when another invocation holds the invocation lock, so a force acts
+beside the lock's holder only through this exchange or by ending the run's processes
+(`weaver-admin-Spec` section 3, the forced unload, joining, and I1). `JoinLeave` carries
+the forcing caller's cause and nothing else. **Where a graceful leave is pending** (S4
+to S6) the harness turns it forced from where it stands, skipping what remains of the
+drain and the wind-down, and comes down as a forced leave does; the leave's own `cause`
+stays the caller who asked for it and the first joining cause is recorded as
+`forced_by` on `unload`; and the join and the leave's own dialer are answered with the
+same `Left`, `forced` true (S4, S5, S6 x force-unload). A later join receives the same
+`Left` and is named nowhere. **From S7 on**, `unload` being authored and
+the record final, the join changes nothing and is answered with the `Left` as it stands
+(S7 x force-unload). **Where a forced leave is pending** (S10) the join is answered with
+that leave's `Left` (S10 x force-unload). **The harness hears a join in every wait of
+the leave**: the wait for `GateQuiesced`, the turn's finish, the wind-down, the lower,
+the save point's legs and the unwind after them, so a forced leave never waits on what
+remains (I3). **With no leave pending** (S2, S3, S9, or before the enter) the harness
+refuses `OutOfOrder`, which tells admin the lock's holder is no unload, and admin
+retries the lock and the join in turn (the forced unload, behind another holder). A join
+unanswered within 150 seconds is a silent harness, which admin ends without the lock
+(S11, and I3); this seam carries nothing of that escalation.
 
 **Stop the turn.** Opened by admin. Admin conveys the operator's intent to stop, one bit
 and no work beside its cause, which the harness records on the stop's turn close. A stop
@@ -329,18 +398,30 @@ an obligation on the party that could break it.
   the run does not.
 - Enter is first and happens exactly once in a worker's life.
 - Stop is valid only between a completed enter and a leave, and a stop arriving at
-  rest answers at rest rather than refusing.
+  rest answers at rest rather than refusing, a run whose unload stopped at its save
+  point (`weaver-admin-Spec` section 3, S9) included.
 - An organ fault before the enter aggregate is answered is a refusal on the enter
   exchange naming the arm, rather than a `fault` event, the report to admin and
   the account on the stream being two different things.
-- Leave is last, happens at most once, and is terminal for the worker.
+- Leave is terminal for the worker and is pending at most once. While one is pending
+  (`weaver-admin-Spec` section 3, S4 to S7 and S10), every directive but `JoinLeave`
+  is refused `OutOfOrder`, a second `Leave` included, admin's invocation lock having
+  refused the verb before it dialed (I1). A leave refused `SavePointNotTaken` is no
+  longer pending, and the run stands entered at rest for a retried or a forced `Leave`
+  (S9).
+- `JoinLeave` is valid only while a leave is pending, and is refused `OutOfOrder`
+  otherwise, before the enter included.
+- Within the run, the record's order is `weaver-admin-Spec` section 3, I9: the
+  harness authors `save_point` before `unload`, and `unload` last, per
+  `weaver-trace-Spec` section 3.
 - Messages within one exchange are ordered.
 - An answer to enter arrives only after the working structure is standing, the
   model is admitted, and Gate is started, so admin may rely on a ready answer meaning
   the interior is serving rather than starting. The reliance is exactly as large as
   the fan-out, per section 3.
 - An answer to leave arrives only after the queue is drained, so admin may rely on a
-  left answer meaning what was admitted reached the stream.
+  left answer meaning what was admitted reached the stream. The `Left` a join receives
+  is the same answer, sent after the same drain.
 - A directive that arrives out of this order is refused and is not queued.
 
 ## 5. What each party supplies and guarantees
@@ -361,7 +442,7 @@ it covers, whether it was named at a restore, where the offline builder made it 
 record that record's session and the run and turn of its cut, resolved by admin from the
 save point's stamp and the manifest's line and never the save point's path, beside it
 and apart from it the reset, where the agent's last run did not end in a clean unload or
-was forced to end without its leave save point, that run and the reason, whether or not
+was forced to end and its leave save point could not be taken, that run and the reason, whether or not
 a save point stands, on the operator's rulings of 2026-10-02 on #58, so the harness names where
 its state came from without opening anything, the digests of the organ binaries admin
 started and of the agent's SPU and the gate it hands the worker, keyed by name, the
@@ -371,7 +452,8 @@ record can both name what they were built from, the operator's uid as the root's
 `weaver-gate-world-contract` section 2 from the operator alone, the boundary file's
 digest, so the record declares who could read the run without that file
 joining the tuple, the cause of every load, unload, save point and stop, the uid sudo reports, whether
-a leave is forced (by `force-unload` or by a load's rollback), the engine libraries'
+a leave is forced (by `force-unload` or by a load's rollback, the latter told by the
+harness from its own state, per section 3), the forcing caller's cause on a join, the engine libraries'
 directory where the agent's root names one, and the intent to stop. Admin never writes the trace: it hands these facts to the harness,
 the single writer, as it hands the declaration's digest.
 
@@ -383,10 +465,15 @@ and
 that the boundary the worker runs inside exists and is correct, because
 admin verified it before the worker started and is the only party positioned to. The
 guarantee is of verification rather than of authorship, since the boundary is the
-operator's artifact. It guarantees that no directive carries work of any kind.
+operator's artifact. It guarantees that no directive carries work of any kind. It
+guarantees that a `force-unload` acting beside a holder of the invocation lock acts
+only through `JoinLeave` or by ending the run's processes, never through publication or
+the marker, and that where it ends them it writes the marker `Forced` only after they
+are gone (`weaver-admin-Spec` section 3, I1 and I3).
 
 **The harness supplies** its readiness as the aggregate of the enter fan-out, its
-confirmation of departure naming the leave's save point where it took one, a save
+confirmation of departure naming the leave's save point where it took one and whether
+the leave came down forced, the same confirmation to a join, a save
 point's report (digest, finished name, covered position and the event's trace position)
 or the leg that missed, the turn's fate on a stop, and its state with the load's facts
 on an observation.
@@ -404,7 +491,11 @@ fan-out stopped, so that admin rolls back on the answer alone. It guarantees tha
 fault the worker survives is authored to the stream as a `fault` event, per the
 fault-carrier ruling, and that no run blocks on anything downstream of the
 emission. It guarantees that a stop answer follows the close event it reports, so
-the record holds the abort before the channel does.
+the record holds the abort before the channel does. It guarantees that `Left`'s
+`forced`, the `unload` event's `forced` and its `forced_by` agree (`weaver-admin-Spec`
+section 3, I2, the rollback's leave excepted by name), that every wait of a pending leave hears a join (I3), and that every
+frame the gate admitted is answered or recorded refused before the leave's save point
+is taken (I5).
 
 **Non-inheritance is the receiver's, and only the receiver can supply it.** The flag
 rides the handle rather than the open file description, so it does not cross with
@@ -431,8 +522,15 @@ ask, because admin answers nothing. The cases:
 - an organ the enter fans out to refused, and the refusal names which organ and
   carries its reason, so the aggregate answer is one refusal rather than a report to
   parse
-- the directive is out of order for the channel's state
-- activity is not at rest, so the run cannot be left
+- the directive is out of order for the channel's state, a `JoinLeave` with no leave
+  pending and any directive but `JoinLeave` while one is pending among them
+- activity is not at rest, so no save point is taken on demand (`weaver-admin-Spec`
+  section 3, S3 x save-point); a leave is never refused for activity
+- the leave's save point is not finished on an unforced leave, which names the leg and
+  leaves the run entered at rest with the gate lowered (S9)
+
+`Unloading` is no refusal on this seam: it is the harness's answer through the gate to
+a request the drain meets, per `weaver-harness-gate-contract`.
 
 **A stop at rest is not a refusal.** Nothing was in flight, the intent is satisfied
 by the state, and the answer says at rest. The out-of-order case above still covers a
@@ -451,20 +549,30 @@ no state, and nothing reaches back to erase what was authored.
 **A worker that dies is not a refusal.** Admin observes the process exit and the
 channel closure together, and what that leaves on the stream is a run whose `load`
 has no `unload`, a truthful account of a death rather than corruption to repair,
-per `weaver-admin-PRD` section 5.
+per `weaver-admin-PRD` section 5. A death while a leave is pending ends the run with no
+`Left`, and the marker stays `Open` (`weaver-admin-Spec` section 3, S4 to S7 x worker or
+member dies, I2 and I4): a run whose record holds no `unload` never answered `Left`, and
+a death in S7 is S8 as far as admin can tell, the marker `Open`.
 
-**Nothing on this seam retries.** A refused directive returns to admin, which either
-rolls back or reports. A harness that retried an author, or an admin that re-sent a
-directive after a refusal, would put two attempts behind one operator intent.
+**Nothing on this seam retries, but the join.** A refused directive returns to admin,
+which either rolls back or reports. A harness that retried an author, or an admin that
+re-sent a directive after a refusal, would put two attempts behind one operator intent.
+**The one exception is `JoinLeave` refused `OutOfOrder`**, which `force-unload` retries
+with an attempt at the invocation lock between (`weaver-admin-Spec` section 3, the forced
+unload, behind another holder): that refusal says only that no leave is pending, so the
+intent, to bring the run down, is unanswered rather than refused, and the force acts
+alone once it holds the lock.
 
 ## 7. Prohibitions
 
 **On admin.** It sends no work, in any form and under any framing, and a run in progress
 narrows nothing about that. It sends no path. It asks for no event to be authored on its
 behalf. Into a running
-turn it conveys the operator's intent to stop and nothing narrower, because the abort's
-mechanics are the harness's, per `weaver-admin-PRD` section 3, and unload still waits on
-rest rather than racing it.
+turn it conveys the operator's intent to stop or to leave and nothing narrower, because
+the abort's mechanics are the harness's, per `weaver-admin-PRD` section 3: a graceful
+leave waits for the turn's close rather than racing it, and a forced one has the harness
+cancel the turn as a stop does (`weaver-admin-Spec` section 3, S3 x unload and S3 x
+force-unload).
 
 **On the harness.** It opens no exchange at all, the alert retired to the stream by
 the fault-carrier ruling, and this is the prohibition that replaces the older one
@@ -689,7 +797,10 @@ its cases, and a refusal with its cases is what sections 1, 3, and 6 demand, and
 fifth added because a fifth felt tidy would be a reserved slot in data form. The
 stop exchange adds a case to `lifecycle-directive` and a case to `lifecycle-answer` and
 adds no fifth definition, which is the enumeration growing where the shape already
-lives. `harness-alert` was the fifth until the fault-carrier ruling of 2026-08-01
+lives, and the join exchange of the lifecycle act does the same: `JoinLeave` is a case
+of `lifecycle-directive` and `Left`'s `forced` a required member of a case that stands, per
+`weaver-types-Spec` section 4.2. `Quiesce` and `GateQuiesced` are cases of the same two
+enumerations that cross the gate's seam and not this one. `harness-alert` was the fifth until the fault-carrier ruling of 2026-08-01
 retired the alert exchange, the fault travelling as a `fault` event on the stream,
 and the definition left `weaver-types-PRD` section 2.3 in the same act.
 

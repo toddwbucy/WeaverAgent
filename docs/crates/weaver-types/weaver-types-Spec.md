@@ -212,10 +212,16 @@ pub struct AgentConfig {
     pub state_store: Option<StateStore>,
     pub loop_file: Option<PathBuf>,
     pub restore: Option<Restore>,
+    pub lifecycle: Option<Lifecycle>,
 }
 
 pub struct Restore {
     pub save_point: String,
+}
+
+pub struct Lifecycle {
+    pub drain_bound: Option<u64>,
+    pub wind_down_bound: Option<u64>,
 }
 ```
 
@@ -616,6 +622,20 @@ it under its own custody, per `weaver-admin-Spec` section 4, and the harness nev
 it; the record-and-cut form of before A3.2 retired with the record restore. A save point the
 operator built offline from a record names that record and cut inside itself, not here,
 so a branch from a record is the builder's act and this member keeps one meaning.
+**`lifecycle` bounds the graceful unload, and its absence leaves it unbounded**, on the
+operator's ruling of 2026-10-09 recorded on #1. The drain and the wind-down of
+`weaver-admin-Spec` section 3's graceful unload (S4 and S5) are unbounded by default,
+`force-unload` being the recourse (I3). An agent may declare either in an optional
+`[lifecycle]` table: `drain-bound`, the seconds the drain may take from the leave's
+arrival, and `wind-down-bound`, the seconds the wind-down turn may take, each a whole
+number of seconds above zero, refusing `BadValue` naming `lifecycle.drain-bound` or
+`lifecycle.wind-down-bound` otherwise, an unknown key refusing as every table's does.
+Past a declared bound the harness turns the leave forced, with no `forced_by`, the
+leave's `cause` staying the graceful caller's. Admin's wait for `Left` follows: with
+both declared it is their sum and 150 seconds, and with either absent it has no
+deadline, the phase it would cover being unbounded, per `weaver-admin-Spec` section 3's
+bounds. The table changes no elected behaviour beyond the two bounds and joins no
+other member; the parser's change is the code act's.
 
 ```graph
 node: types-required-field-refuses
@@ -1078,6 +1098,7 @@ pub enum Payload {
     Tool(ToolExecution),
     ToolAnswer(ToolOutcome),
     ToolCancel,
+    ToolInterrupt,
 }
 
 pub enum RefusingOrgan {
@@ -1205,6 +1226,13 @@ the trio's directive and answer already take. `ToolCancel` joined them on
 2026-09-22, the cancel that contract's section 2 sends inside an open
 execution at the continue position, a unit case because it carries nothing
 beyond its kind, and the first traffic in this program to take that position.
+`ToolInterrupt` joined them with the lifecycle act (2026-10-09), on the operator's
+ruling of that date recorded on #1: the harness sends it as it sends the cancel, inside
+an open execution at the continue position, when the agent's unload interrupts a tool
+call, and the gate ends the execution and answers `Killed { by: unload }`
+(`weaver-admin-Spec` section 3, S4 x tool return). A unit case, for the cancel's reason,
+and a case apart from the cancel because what it owes differs: an interrupted call is
+re-runnable after the reload, and a cancelled one owes nothing.
 
 ```rust
 pub struct ToolExecution {
@@ -1223,6 +1251,7 @@ pub enum ToolOutcome {
 pub enum KillCause {
     Clock,
     Cancel,
+    Unload,
 }
 ```
 
@@ -1244,7 +1273,13 @@ channel fault, because each is a fact the model must learn. Since 2026-09-22 a
 kill names what ended it, the clock or the caller's cancel, in a field rather
 than a fifth case, because the rule beneath the four is who speaks and nobody
 speaks in either kill: one content with two causes, so the record can tell a
-tool that ran out of time from one the operator stopped.
+tool that ran out of time from one the operator stopped. **`Unload` joined them with the
+lifecycle act (2026-10-09)**, `by: unload`: a call the agent's unload interrupted, its
+return blocked during the graceful unload's drain, which the gate answers to
+`ToolInterrupt`, or the call never sent from the wind-down, which the harness completes
+in its own word, which the record names as the unload's so the call reads as never finished
+and re-runnable after the reload (`weaver-admin-Spec` section 3, S4 x tool return and
+S5 x tool return), and not as the caller's cancel, which owes no re-run.
 
 **The two definitions are owed to the charter and no act has carried them.**
 `weaver-types-PRD` section 2.3 admits a wire definition when a contract draws
@@ -1262,12 +1297,14 @@ ruling.
 pub enum LifecycleDirective {
     Enter { payload: Box<EnterPayload> },
     Leave { cause: Cause, forced: bool },
+    JoinLeave { cause: Cause },
     SavePoint { cause: Cause },
     Stop { cause: Cause },
     Observe,
     Admit { instruction: SpuInstruction },
     Release,
     Raise { instruction: GateInstruction, socket: PathBuf },
+    Quiesce,
     Lower,
     Load { agent: AgentName },
     Unload { agent: AgentName },
@@ -1280,7 +1317,7 @@ pub enum LifecycleDirective {
 
 pub enum LifecycleAnswer {
     Ready,
-    Left { save_point: Option<SavePointReport> },
+    Left { save_point: Option<SavePointReport>, forced: bool },
     SavePointTaken { report: SavePointReport },
     RestoreNamed { save_point: String, name: String },
     TurnAborted { turn: TurnKey },
@@ -1288,6 +1325,7 @@ pub enum LifecycleAnswer {
     Admitted,
     Released,
     GateReady,
+    GateQuiesced,
     GateStopped,
     Validated,
     State { state: AgentState, load: Option<Box<LoadFacts>>, constituents: Vec<u32> },
@@ -1311,8 +1349,36 @@ the leave's save point**, as of A3.2 on the operator's rulings of 2026-10-06 on 
 finished name the member gave it, the position it covers (`run`, `sequence`, `turn`) and
 the trace position of the `save_point` event, its own run and sequence (`event_run`,
 `position`), so admin's manifest records the event's position without reading the
-record; `Left` carries none where the leave was forced, the binding diagnostic, or the
-serving run has no member seam, its declaration electing no store.
+record; `Left` carries none where a forced leave's save point could not be taken, the
+binding is diagnostic, the serving run has no member seam, its declaration electing
+no store, or the leave is a load's rollback, which takes none (`weaver-admin-Spec`
+section 3, S1 x Leave), a forced leave otherwise taking its save point as any leave does
+(the forced unload).
+
+**The lifecycle act (2026-10-09) adds six cases and one member**, on the lifecycle
+state table approved by the operator on 2026-10-09, recorded on #1, which
+`weaver-admin-Spec` section 3 holds; each cites the row it carries and none restates
+it. **`Left`'s `forced`** is true where the leave came down forced, directed so by a
+`force-unload` holding the invocation lock or turned so by one joining, and false
+otherwise, so the invocation that concludes the leave closes the marker as the leave
+ended, and it agrees with the `unload` event's `forced` (I2). It is always on the wire,
+and a `Left` without it refuses at the parse, as `Leave.forced` does: no default carries
+an older writer forward (the operator's ruling of 2026-10-08 on #1). **`JoinLeave`** is a `force-unload` that does not hold the invocation lock,
+carrying the forcing caller's cause, which the harness records as the `unload` event's
+`forced_by` where it is the first to join: it joins a pending leave and is answered with
+that leave's `Left`, a later join receiving the same `Left` and named nowhere, or is
+refused `OutOfOrder` where none is pending (the forced unload, joining; I1).
+**`Unloading`** is the refusal a request meets during the graceful unload's drain, "the
+agent is unloading": the harness answers each frame the gate flushes to it with it
+through the gate, the connection standing, and records it as a refusal of the leave
+(`weaver-admin-Spec` section 3, S4 and S5 x dialer request, and I5). One fact, the
+agent leaving, and no claim about the request.
+**`Quiesce`** is the harness's to the gate, the graceful unload's first act at the gate,
+and **`GateQuiesced`** the gate's answer once it has closed its listener, stopped
+reading and flushed every frame it admitted to the harness (the graceful unload, step 2;
+I5). The verbs need no new case: `unload` and `force-unload` mirror the command line as
+before, and what each prints in each state is `weaver-admin-operator-contract` section
+4.1's.
 `RestoreNamed` is the `restore` verb's answer, the save point it judged and entered in
 the manifest. The three verbs mirror the command line as `SavePointVerb`, `Restore` and
 `ForceUnload`, the first named apart from the directive the worker receives.
@@ -1368,6 +1434,7 @@ pub enum LifecycleRefusal {
     OrganRefused { organ: RefusingOrgan, reason: Box<LifecycleRefusal> },
     ActivityNotAtRest,
     SavePointNotTaken { missed: SavePointLeg },
+    Unloading,
 }
 
 pub enum SavePointLeg {
@@ -1464,8 +1531,8 @@ point still owes the record its reset, on the operator's ruling of 2026-10-02 on
 that an unclean stop resets to the latest known-good save point and records the reset:
 admin resolves it from its own clean-unload marker, per `weaver-admin-Spec` section 4,
 naming the prior run and the reason, `NoCleanUnload` where the marker says the run never
-unloaded cleanly, `ForcedUnload` where admin's `force-unload` ended it without its leave
-save point (A3.2), `UnitFailed` having retired with the unit it read on 2026-10-03 (#50),
+unloaded cleanly, `ForcedUnload` where admin's `force-unload` ended it and its leave
+save point could not be taken (A3.2, and `weaver-admin-Spec` section 3, I4), `UnitFailed` having retired with the unit it read on 2026-10-03 (#50),
 and the harness authors the reset event from it. It never carries the save point's path,
 which admin read under its own custody and the harness has no business holding, on the
 same discipline as the sink. The harness names the save point on the load event, its
@@ -1626,21 +1693,24 @@ contradiction it was.
 
 **One directive type for loop 0, carrying every case that crosses any of its four
 seams, and each contract's vocabulary clause names the subset that crosses its
-own:** enter, leave, and stop at coordination, admit and release at residency,
-raise and lower at the gate, and the verbs with the observations at the operator
-surface. The answer and the refusal follow the same rule.
+own:** enter, leave, join, save point, stop and observation at coordination, admit
+and release at residency, raise, quiesce and lower at the gate, and the verbs at the
+operator surface. The answer and the refusal follow the same rule.
 
 **Every directive receives exactly one answer, and the mapping from directive to
 answering case is stated because the operator contract requires that and a builder would
 otherwise invent it.** The case is determined per directive, and for `Stop` by what it
-interrupted. `Enter` answers `Ready`, `Leave` answers `Left`, `Stop` answers
-`TurnAborted` or `AtRest`, `Admit` answers `Admitted`, `Release` answers `Released`,
-`Raise` answers `GateReady`, `Lower` answers `GateStopped`, `Validate` answers
-`Validated`, `Load`, `Unload`, `Show`, and `Observe` answer `State`, the last carrying
-the load's facts beside the state where a run stands. Eleven of the twelve have a
-single answering case. `Stop` has two, `TurnAborted` or
-`AtRest`, selected by whether a turn was in flight, and both are clean closes rather
-than a refusal, per `weaver-admin-harness-contract` section 3. Any directive may answer
+interrupted. `Enter` answers `Ready`, `Leave` and `JoinLeave` answer `Left`,
+`SavePoint` and `SavePointVerb` answer `SavePointTaken`, `Stop` answers `TurnAborted`
+or `AtRest`, `Admit` answers `Admitted`, `Release` answers `Released`, `Raise` answers
+`GateReady`, `Quiesce` answers `GateQuiesced`, `Lower` answers `GateStopped`, `Validate`
+answers `Validated`, `Restore` answers `RestoreNamed`, `Load`, `Unload`, `ForceUnload`
+and `Observe` answer `State`, the last carrying the load's facts beside the state where
+a run stands, and `Show` answers `State` or `InTransition`. Sixteen of the eighteen have
+a single answering case. `Stop` has two, `TurnAborted` or `AtRest`, selected by whether
+a turn was in flight, and both are clean closes rather than a refusal, per
+`weaver-admin-harness-contract` section 3, and `Show` has two, `InTransition` where
+another invocation holds the invocation lock, per `weaver-admin-Spec` section 3. Any directive may answer
 a `LifecycleRefusal` instead, which is the second half of what one answer per request
 means. `Validated` exists because validation reports an outcome without transitioning
 anything, per `weaver-admin-PRD` section 4.3, and answering it with a state would report

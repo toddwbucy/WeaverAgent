@@ -388,10 +388,10 @@ the named one.
 
 **An unload that cannot take its save point does not complete.** It answers
 `{"kind":"save_point_not_taken","missed":...}` naming the leg that missed. Before the
-`published` leg the run stays loaded with its lock, and nothing is lost: retry with `save-point` and `unload` if the
-member is alive, or `force-unload` if it is dead, which leaves without the save point
-and records on the trace that it was not taken; the next load then restores the latest
-published save point with the reset recorded. The loss is your recorded choice. Where
+`published` leg the run stays loaded with its lock, its gate lowered, and nothing is lost:
+retry `unload`, which goes straight to the save point, if the member is alive, or `force-unload` if it is dead, which attempts the save point as
+any unload does and, where it cannot be taken, records that on the trace; the next load
+then restores the latest published save point with the reset recorded. The loss is your recorded choice. Where
 `missed` is `published`, the run has already ended and the save point waits in the
 member's room: retry `unload`, which publishes it first, and read `admin.log` if it
 refuses again.

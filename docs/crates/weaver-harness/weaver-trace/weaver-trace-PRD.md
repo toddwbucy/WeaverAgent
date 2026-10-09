@@ -375,8 +375,12 @@ decode seam's `Reopen`. Each
 of these kinds is named and shaped by the act that lands its emitter, on the rule
 above, and added here then: the take landed as `save_point` on 2026-10-05; a restore at a load is a load and rides
 the `load` event's lineage with its named-at-restore mark, and a forced unload is an
-unload and rides the `unload` event's `forced`, both as of A3.2 (2026-10-06), no kind
-being named ahead of its emitter, so the live restore's own event, a reload within a
+unload and rides the `unload` event's `forced`, both as of A3.2 (2026-10-06), a force
+that joined another account's leave naming the first joining caller in the optional
+`forced_by` beside the leave's own `cause`, a load's rollback writing `forced` as the
+exemption `weaver-admin-Spec` section 3's I2 names, as of the lifecycle act (2026-10-09, on the lifecycle
+state table approved by the operator that day, recorded on #1, which `weaver-admin-Spec`
+section 3 holds), no kind being named ahead of its emitter, so the live restore's own event, a reload within a
 residency, is the loop act's (A5) to name with its `Reopen`; the reset
 riding the `load` event per `weaver-trace-Spec` section 3. **The `save_point` kind never crosses the tee into
 state**, whatever the election: it is provenance about the holdings, authored after
@@ -588,7 +592,7 @@ point by digest, the run, sequence and last turn it covers, whether it was named
 at a restore, where the offline builder made it from a record that record's session and
 the run and turn of its cut, and, apart from the lineage and whether or not a save point
 stands, where the agent's last run did not end in a clean unload, or was forced to end
-without its save point, that run and the reason, so a resume and a branch each say what they came from,
+and its leave save point could not be taken, that run and the reason, so a resume and a branch each say what they came from,
 and every load names the digests of the organ binaries that ran it, keyed by name, so a
 record is sufficient for its own conditions and the experiment deposits stop being where
 the stack is remembered. The record is the canonical form and a save point is a cache of
@@ -655,8 +659,10 @@ turn ran to its own end and the bracket closed whole, the cut being a fact
 about the generation that `model.output.finish` carries and the answered
 close may surface as `finish: "length"` per the world contract, while the
 stopped close stays reserved for the aborts, the stop directive's, a
-fault's, and as of 2026-08-22 a refusal's, so the kinds of ending never
-share a spelling.
+fault's, as of 2026-08-22 a refusal's, and as of the lifecycle act of
+2026-10-09 an unload's, `reason: unload`, only where the unload ended the
+turn, one that finished during an unload closing clean, and a tool call the unload
+interrupted completing `by: unload`, so the kinds of ending never share a spelling.
 
 **A turn ended by a seam refusal gains its own stop reason**, per the
 operator's ruling on the refusal class. The close had two reasons and a
