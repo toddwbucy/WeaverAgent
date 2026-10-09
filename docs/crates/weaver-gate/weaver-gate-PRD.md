@@ -584,11 +584,15 @@ clients, and none is needed, since a client sees only its own connection.
 
 ### 13.3 Lowering with traffic present
 
-**Drain is modest by construction and this section states why.** A lower
-arrives only when the run is at rest, per the coordination seam's own rule
-that leave refuses while a turn is in flight, so no turn is outstanding when
-the seams close. What remains is connections a peer is holding open on either
-seam, which this crate closes after the seams and before answering stopped. A
+**The drain is the graceful unload's, and this section states its shape.** A
+graceful unload quiesces this crate first, once any tool call out is interrupted: the
+listener closes, connections owed
+nothing close, every admitted frame is flushed to the harness, which answers it
+through this crate as refused, and only then does the lower come, after every owed
+response is written. A forced unload lowers at once, every admitted frame recorded
+refused and its connection closed (`weaver-admin-Spec` section 3, the two unloads;
+I5). What remains at the lower is connections a peer is holding open on either seam,
+which this crate closes after the seams and before answering stopped. A
 peer that reconnects finds nothing standing, which is refusal by absence and
 the boundary the lifecycle protects.
 

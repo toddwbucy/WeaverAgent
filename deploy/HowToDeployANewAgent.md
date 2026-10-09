@@ -351,7 +351,7 @@ sudo /opt/weaver/bin/weaver-admin show <name>         # the state and the run's 
 sudo /opt/weaver/bin/weaver-admin save-point <name>   # a save point now, published at once
 sudo /opt/weaver/bin/weaver-admin unload <name>       # answers {"kind":"state","state":"unloaded"}
 sudo /opt/weaver/bin/weaver-admin restore <name>      # make [restore]'s save point the latest, which the next load restores
-sudo /opt/weaver/bin/weaver-admin force-unload <name> # unload without the leave's save point
+sudo /opt/weaver/bin/weaver-admin force-unload <name> # stop the work at once, still taking the leave's save point
 ```
 
 **The save points and the manifest.** Every unload takes a save point at the leave and
@@ -386,25 +386,36 @@ both save points, rather than restore the older state over the newer. Remove `[r
 `sudoedit` to continue from the latest, or run `restore <name>` again to continue from
 the named one.
 
-**An unload that cannot take its save point does not complete.** It answers
+**An unload that cannot take its save point does not complete**, where the unload
+stayed graceful. It answers
 `{"kind":"save_point_not_taken","missed":...}` naming the leg that missed. Before the
-`published` leg the run stays loaded with its lock, and nothing is lost: retry with `save-point` and `unload` if the
-member is alive, or `force-unload` if it is dead, which leaves without the save point
-and records on the trace that it was not taken; the next load then restores the latest
-published save point with the reset recorded. The loss is your recorded choice. Where
+`published` leg the run stays loaded with its lock, its gate lowered, and nothing is lost:
+retry `unload`, which goes straight to the save point, if the member is alive, or `force-unload` if it is dead, which attempts the save point as
+any unload does and, where it cannot be taken, records that on the trace; the next load
+then restores the latest published save point with the reset recorded. The loss is your recorded choice. Where
 `missed` is `published`, the run has already ended and the save point waits in the
 member's room: retry `unload`, which publishes it first, and read `admin.log` if it
-refuses again.
+refuses again. An unload that turned forced, by the one definition of `forced` in `weaver-admin-Spec`
+section 3 (joined by a `force-unload`, past a declared `[lifecycle]` bound, or with the
+gate or SPU dead), does not stop there: it comes down without the save point,
+the marker stands `Forced`, and the next load restores the latest published save point
+and records `ForcedUnload`.
 
 Or `sudo deploy/verify-load.sh <name> --keep` to load with the read-back and leave it
 serving. No unit and no init system is involved. The worker, the state member and the
 relay are processes admin started, detached from the invoking terminal, holding the run
 lock between them, and they live in the containment the load was invoked from: a load
 run from a login shell's scope lives in that scope. `unload` asks the agent to leave,
-then ends whatever still holds the run lock, within 195 seconds, then publishes the
-leave's save point, which takes as long as copying it does. Admin's own acts on
-this agent are in `<territory>/admin.log`, and the worker's output in `worker.log`
-beside it, both root's and yours to read through the access group.
+letting it finish the turn in flight and write a wind-down summary before its save
+point, which has no time limit unless the declaration's `[lifecycle]` table sets a
+`drain-bound` and a `wind-down-bound`; with both set it ends the run within their sum
+plus 195 seconds. `force-unload` stops the work at once and
+still saves the state, ending the run within 195 seconds; issued while an `unload` is
+in progress it joins it, waiting out one already finishing, and
+beside any other command it refuses, reading which command holds the agent from the
+verb that command records in `admin.lock`, one command at a time being yours to keep. Either then publishes the leave's save point, which takes as long as copying it does. Admin's
+own acts on this agent are in `<territory>/admin.log`, and the worker's output in
+`worker.log` beside it, both root's and yours to read through the access group.
 
 **The connector's rule** is `/etc/sudoers.d/weaver-<name>`, which create-agent writes:
 

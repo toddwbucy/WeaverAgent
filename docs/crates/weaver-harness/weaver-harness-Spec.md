@@ -765,7 +765,8 @@ ordering exists to prevent, admin's bounded retry covering what remains.
 than a handed end, and the earlier declared-open route retires with the party
 that placed it.
 
-**The bind never unlinks, and admin's start step is why it does not have to.** A Unix
+**The bind never unlinks an occupied name, and admin's start step is why it does not
+have to.** A Unix
 socket's pathname outlives the process that bound it, so a bind against a name a dead
 worker left would fail. The directory this socket lives in now outlives the worker, the
 init system that removed it having left the agent on 2026-10-03 (#50), so admin's start
@@ -775,9 +776,15 @@ no other invocation can start one, per `weaver-admin-Spec` section 3. The worker
 therefore meets no inherited name and has nothing to clear. **A bind that finds its name
 occupied is a fault and never a thing to remove**, because the only ways a name is
 occupied are that a live worker holds it, in which case unlinking would strand the
-running agent's supervisor, or that the start step did not clear it, in which case the
-program's assumption is wrong and it should say so rather than repair. The instrument is
-review, no test in this crate being able to produce a manager that misbehaves.
+running agent, or that the start step did not clear it, in which case the program's
+assumption is wrong and it should say so rather than repair. The instrument is review,
+no test in this crate being able to produce a manager that misbehaves. **The seal is
+another act and unlinks only the worker's own name** (`weaver-admin-Spec` section 3, the
+seal; section 6 item 6): once the leave's outcome is fixed this crate unlinks the name it
+bound itself, while the run lock is still held, so no other worker can hold that name
+and nothing it unlinks belongs to another run; the rule above, about a name found
+occupied before the bind, stands as written. After a seal the next start step finds no
+name to clear, which it meets as it meets a clean directory.
 
 ```graph
 node: harness-bind-never-unlinks
@@ -1027,8 +1034,9 @@ to: harness-failed-set-refuses-construction
 at a time arrives, is judged against the channel's state, and is answered or
 refused, per the ordering rules of `weaver-admin-harness-contract` section 4. A
 directive out of order for the state answers `OutOfOrder` and is not queued.
-The state has three positions, before enter, entered, and left, the last
-terminal, and the middle one carries the run. **The positions and the refusal
+The state's positions are before enter, entered, and left, the last
+terminal, and the middle one carries the run and its sub-positions, at rest, turn
+in flight and leave pending, per the leave below. **The positions and the refusal
 take two records and two instruments,** the split `weaver-gate-Spec` section 6
 takes on the same channel state. The positions are a type and take the
 compiler, which pins that a directive out of order for the state reaches a
@@ -1331,15 +1339,20 @@ from: weaver-harness
 to: harness-scoped-refusal-account
 ```
 
-**Leave runs the reverse order and drains before it answers.** Lower the gate first
-where one stands, the run state's arm answering whether it does, refuse
-`ActivityNotAtRest` while a turn is in flight, author the `unload` event with the leave
-directive's cause, drain the writer's queue, and release the SPU. Left is answered only
-after the drain returns, which is what makes the answer mean what
-`weaver-admin-harness-contract` section 4 says it means, that everything admitted
-reached the stream. **The ordering is review's by election,** a double sink that drains
-slowly reaching it, which is the shape the gate's ready-follows-bind test takes for its
-own ordering, and this suite not buying one.
+**Leave runs the reverse order and drains before it answers.** The entered position
+has three sub-positions, at rest, turn in flight and leave pending, per the lifecycle
+state table approved by the operator on 2026-10-09, recorded on #1, whose text is
+`weaver-admin-Spec` section 3 and whose rows section 6 implements and cites. A leave is
+heard at rest or mid-turn and is never refused for a turn in flight: it becomes the
+pending leave, and from there it quiesces the gate where one stands, the run state's
+arm answering whether it does, lets the turn finish or cancels it, runs the wind-down,
+lowers the gate, takes the leave's save point, releases the SPU and the member,
+authors the `unload` event with the leave directive's cause and the release outcome,
+the terminal event, and drains the writer's queue, each step as section 6 states it. Left is answered only after the drain returns, which is what makes
+the answer mean what `weaver-admin-harness-contract` section 4 says it means, that
+everything admitted reached the stream. **The ordering is review's by election,** a
+double sink that drains slowly reaching it, which is the shape the gate's
+ready-follows-bind test takes for its own ordering, and this suite not buying one.
 
 ```graph
 node: harness-left-follows-drain
@@ -1365,7 +1378,11 @@ is `Unloaded` with no load. Entered, it is `Idle` where no turn key stands in fl
 `Active` where one does, with `LoadFacts` beside it read from the run: the session and
 run, the declaration's digest the enter carried, the artifact, the elections, the store
 and whether the member's end arrived, and the composer `serve` was handed, the same
-facts the load event was authored from and held on the run for this exchange. After a
+facts the load event was authored from and held on the run for this exchange. **While a
+leave is pending the answer is `InTransition`**, whether a turn runs or not, so in S4 to
+S6 and S10 `show` answers the same whether the unload's invocation still holds the lock
+or has died (`weaver-admin-Spec` section 3, S4 to S7 and S10 x `show`; the operator's
+ruling of 2026-10-09). An `Observe` reaches a pending leave only where its holder has died, outside the envelope, and is answered `InTransition`. After a
 leave the answer is `Unloaded` with no load, the position being terminal and the
 observation not an act, so it is the one directive the left position answers rather than
 refuses. No event is authored and no bracket touched: an observation mid-turn reads the
@@ -1562,7 +1579,10 @@ to: harness-refused-submission-not-retried
 recorder's queue depth after authoring and, on the crossing of the high-water
 mark, authors the `fault` event naming `FaultCase::RecorderCommitPressure`,
 per `weaver-trace-Spec` section 6, carrying the floor's `fault-report` as
-section 3 states. **The depth is read rather than returned** as of
+section 3 states. **The terminal `unload` is the one exception**: the leave reads the
+depth before it authors `unload` and reports any pressure then, and once `unload` is
+authored no event follows, the check after it skipped (`weaver-admin-Spec` section 3,
+I9; section 6 item 6). **The depth is read rather than returned** as of
 2026-08-22: it arrived as a `Failure` the recorder handed back after the
 event had already landed, so acting on it meant treating a recorded event as
 a lost one.
@@ -2064,29 +2084,187 @@ and a save point of them would be published and could be selected by a later ser
 load as production state. The offline builder's save point is the builder's write, per
 `weaver-state-PRD` section 3, and never a diagnostic load's. The asks go under the
 dead-peer conversion every state ask takes, per the operator's rulings of 2026-10-02 on
-#58. **The leave's save point is taken at rest, before the `unload` event, and the leave
-does not complete without it**, on the operator's rulings of 2026-10-06 on #1 (A3.0
-items 4 and 6), which close the open item that stood here. **The gate is lowered first**
-(Codex on #94, round 12): this crate lowers the gate, then sends the leave's `snapshot`
-ask, then authors `unload`, so no turn is admitted while the save point is taken and
-none the lower would drop ever crosses the at-rest boundary; and traffic the gate has
-sent that this loop has not yet taken is activity (Codex on #94, round 13), the leave
-refusing `ActivityNotAtRest` as for a turn in flight rather than lowering a gate whose
-admitted frame would be dropped untraced and unanswered, the loop taking the frame next
-and the operator retrying. **And the lower reads its channel until the gate's own
-answer** (Codex on #94, round 14): a frame the gate admits between that look and the
-`Lower` reaches the channel ahead of `GateStopped`, and the lower authors it as a
-refusal of the leave, so no admitted request goes unrecorded. **It sends no response
-for it** (Codex on #94, round 15): the gate drops its relay and every served connection
-when it takes the `Lower`, before it answers, so a response would be discarded and the
-request's client reads the end of its connection. Answering such a request is the
-drain's, which is the lifecycle protocol's act and not this one. The two are not one
-check twice: the look refuses the whole leave while traffic already stands, so a queued
-turn is served and not refused, and the reading loop covers only the window between the
-look and the lower, which no look can close; a leave refused at its save
-point leaves the run entered at rest with the gate lowered, which the retry or the force
-finds so. This crate sends the leave's
-`snapshot` ask after the last turn and before it authors `unload`, so the save point
+#58. **The leave's save point is taken at rest, before the `unload` event**, on the
+operator's rulings of 2026-10-06 on #1 (A3.0 items 4 and 6). **The leave itself is the
+lifecycle state table's**, approved by the operator on 2026-10-09 and recorded on #1,
+whose text is `weaver-admin-Spec` section 3: its states S0 to S11, its transitions and its
+invariants I1 to I9 are the authority, and each rule below cites the row or invariant it
+implements rather than restating it.
+
+**The graceful leave drains, in the table's order** (`weaver-admin-Spec` section 3, the
+graceful unload, steps 2 to 7). A `Leave` with `forced` false is heard at rest or
+mid-turn, never refused for a turn in flight, and becomes the pending leave (S2 x unload,
+S3 x unload); heard mid-turn, its dialer's connection leaves the turn's verb slot so the
+listener is heard again, and it runs at the turn's close before any held request is
+served.
+
+1. **Quiesce** (step 2; S4). Where a gate stands (a diagnostic binding has none, and skips
+   this item and item 4's lower), this crate sends `Quiesce` the moment the leave is heard,
+   after the interrupt of item 2 where a tool call is out at the gate, since a gate
+   executing a tool reads only that execution's continuation until it ends. It reads the
+   gate channel until `GateQuiesced`, which the gate sends only after every frame it
+   admitted, per `weaver-harness-gate-contract` section 2. Every frame met there, and
+   every frame this crate held unserved behind the turn, a seeding line among them, is
+   refused on its own exchange with the `refused` close naming the unload, `the agent is
+   unloading`, while its connection still stands, and is recorded as a refusal of the
+   leave carrying `Unloading`; none opens a turn (S4 x dialer request, S5 x dialer
+   request, I5).
+2. **The turn in flight finishes** what it can without further input, its answer going
+   to its dialer through the still-standing connection (step 3; S4 x turn closes). A tool
+   call out at the gate when the leave is heard has its return blocked: this crate sends
+   `ToolInterrupt` on the open execution, which the gate answers `Killed { by: unload }`;
+   a call the model asks after the leave was heard is never sent and is recorded killed
+   by the unload in this crate's own word. Either way the call reads as never finished
+   and re-runnable at the reload, and the turn closes there without it (S4 x tool return).
+   **The first outcome wins**: where the gate's result was already sent when the
+   interrupt reached it, the result stands, is recorded completed and delivered to the
+   turn as in S3, and is never re-runnable; only a call the interrupt actually ended is
+   `Killed { by: unload }` (`weaver-harness-gate-contract` section 2).
+   The turn's close is `Clean` where the turn finished, and `Stopped { reason: unload,
+   cause }`, the leave's cause, only where the unload ended it (S4 x turn closes).
+3. **The wind-down turn** (step 4; S5). This crate tells the model the agent is
+   unloading and asks it to summarize the work and where it stands for resuming after the
+   reload: the request a `user` message it authors, its text the constant
+   `WIND_DOWN_REQUEST`, "The agent is unloading now. Summarize the work so far and where
+   it stands, so that it can be resumed after the agent is reloaded. Do not call any
+   tool; a tool call will not run.", one generation, the request and the summary on the
+   record and teed into state as elected, no dialer to answer. A tool call the model makes
+   there is never sent and is recorded interrupted, the turn closing there (S5 x tool
+   return). This crate runs it outside the loop, as it runs the seeding turn
+   (`Ports::seed`); a storeless agent runs it, the record alone holding it; an unseeded
+   one runs it with no identity prefix; a diagnostic binding runs none, having no gate and
+   no work to resume.
+4. **Lower** (step 5; S6). `GateStopped` comes only once every owed response is written,
+   the relay dropped then, per `weaver-harness-gate-contract` section 2; the drain left
+   nothing unanswered for the lower to meet.
+5. **The leave's save point** (step 6): the four legs below, the `save_point` event
+   authored on the finished answer.
+6. **The release, then `unload`** (step 7; S7): the SPU and the member are released
+   first: the SPU by its `Release`, answered `Released` (`Confirmed`) or not
+   (`Unconfirmed`), an SPU that dies in it authored as a `fault` per
+   `weaver-harness-spu-contract` section 5; the member by closing the state seam, it
+   having no release exchange and retiring on its own (`Closed`, or `Unconfirmed` where
+   the seam was already dead or the close failed). The leave then reads the recorder's
+   queue depth and authors any pressure `fault` the crossing calls for, as the pressure
+   rule of section 4 states; then `unload` is authored with `forced`, the leave's cause
+   and the release outcome, the run's terminal event, nothing authored after it (I9); the
+   writer is drained, and `Left { save_point, forced, no_state }` answered, `no_state` true
+   where the run has no state to keep (every diagnostic binding, and a serving run with no
+   member seam), `forced` on both being
+   the leave's state at its end per `weaver-admin-Spec` section 3's definition
+   (directed forced, joined, a declared bound passing, or a dead gate or SPU; I2). The member,
+   released before `unload`, needs nothing after it: its save point is taken and its
+   grant surface read before the release, and no save point ever carries `unload`. A run with no `unload` event never answered `Left`: the worker's death in S7 is S8b
+   as far as admin can tell, the marker left `Open` (S7 x the worker dies).
+
+**A missed leg stops a leave that stayed graceful in S9** (S6 x member misses a save-point leg):
+the run stays entered at rest with the gate lowered, as the leg rule below states. The
+retry goes straight to the save point, the lower being done (S9 x unload); a
+`save-point` at rest is taken as from S2 (S9 x save-point); a force acts as the sole
+forced leave from there (S9 x force-unload); and a dialer meets no listener (S9 x dialer
+request).
+
+**The forced leave stops work and keeps state** (`weaver-admin-Spec` section 3, the
+forced unload (sole); S2, S3 and S9 x force-unload). A `Leave` with `forced` true and `rollback` false, set by
+admin's `force-unload`, has this crate interrupt a tool call out as item 2 does, then
+lower the gate at once from its raised position (**a gate step this crate skips where
+the gate is already lowered, S9, or absent, a diagnostic binding: it sends no
+`ToolInterrupt`, `Quiesce` or `Lower` there, `Lower` being once only, and from S9, no
+turn running, the forced leave goes straight to the save point**; Codex on #109, round 47), with no quiesce and no drain, reading
+the channel to `GateStopped` and recording every frame met there refused, carrying
+`Unloading`, its connection
+closed by the gate unanswered (I5); cancel the turn in flight as a stop does, recorded as
+a stop naming the unload, state holding what landed up to the cancel; run no wind-down;
+take the leave's save point and report it as any leave does; release the SPU and the
+member as item 6 does; and author `unload` last with `forced` true and the release
+outcome, answering `Left { save_point, forced: true, no_state }`. Where the save point cannot
+be taken, the member dead or a leg unanswered, the forced leave comes down without one,
+`Left` naming none and the miss recorded as a lifecycle refusal of the leave naming the
+leg, so the next load carries the reset admin resolves from its marker (I4).
+
+**The rollback's leave is its own row** (`weaver-admin-Spec` section 3, S1 x Leave; K1).
+A load's rollback directs a `Leave` with `rollback` true (and `forced` true), which
+this crate tells apart by the directive and never by its own position, a `Ready` that
+lands just after admin's enter deadline leaving it `Entered` while admin rolls back
+(Codex on #109, round 28): in any position it takes no save point and runs no wind-down, releases what it admitted, and
+where the bracket stands it authors `unload` last with `forced` true and the release
+outcome, the `unload` carrying the load's cause. It is exempt from I2 by name, admin
+writing the marker by its marker-write rule (K1).
+
+**A force that joins a pending leave turns it forced from where it stands**
+(`weaver-admin-Spec` section 3, the forced unload (joining); S4, S5 and S6 x
+force-unload). `JoinLeave { cause }`, the force admin sends without the invocation lock
+beside the graceful unload that holds it, joins it: the one overlap the operating
+envelope admits (`weaver-agent-PRD` section 6.1). Its caller, answered `Left`,
+concludes as every answered caller does (`weaver-admin-Spec` section 3, the
+conclusion). What remains of the quiesce's wait, the drain and the wind-down is
+skipped: a tool call out is interrupted, the turn or the wind-down's generation is
+cancelled as a stop, and a gate already quiescing or draining is brought down with
+`Lower`, as the sole force's is: the gate sends every frame it admitted and had not yet
+sent, this crate records each refused with `Unloading` and its connection closes (I5),
+inside the lower bound. Only where the gate does not answer `Lower` inside that bound
+does this crate close its end of the gate channel and reap the gate, closure being death
+to the gate per `weaver-harness-gate-contract` section 1. The save point is still taken, and a leg it misses comes down as the forced
+leave's does rather than stopping in S9; a force heard while the legs run does not
+abandon them. The pending leave keeps its own cause, the graceful caller's, and records
+the joining cause as `forced_by` on `unload` where that join is the first force to turn
+the still-graceful leave forced, and every dialer is answered with the same `Left {
+forced: true }` (I2); a later join, or a join into a leave a declared bound already
+turned forced, is answered with that `Left` and named nowhere. `JoinLeave` with no leave pending is `OutOfOrder`, and so is one against a pending leave
+an `unload` did not direct, a force's (S10) or a rollback's, joins being admitted only
+into an unload's leave (S4 to S7); admin sends one only where the
+invocation lock's recorded verb is `unload`, so this crate never tells a holder's kind. **A `Leave` meeting a pending leave is
+`OutOfOrder`, forced or not**, as is a `SavePoint`: while the holder lives admin's lock
+refuses them before they dial (I1), and where it has died, outside the envelope, the
+refusal is admin's cue for its conservative answer (`weaver-admin-Spec` section 3,
+outside the envelope), this crate taking over no leave.
+
+**From S7 on, a join gets the `Left` as it stands** (`weaver-admin-Spec` section 3, the
+forced unload (joining), and the ordering of #94's round 21; I2). From S7 on the
+leave's outcome is fixed, its save point taken or missed, so a join held at the seal adds nothing to the record,
+records no `forced_by`, and is answered with the same `Left` the leave's own dialer
+gets, its `forced` as the leave came down; its caller concludes all the same
+(`weaver-admin-Spec` section 3, the conclusion).
+
+**Every wait of the leave hears the coordination listener** (Codex on #94, round 17; I1,
+I3), through one helper: the wait for `GateQuiesced`, the drain, the wind-down, the
+lower, the save point's four legs and the grants read-back poll the listener beside what
+they wait on, and the dials that land while this crate waits on what cannot be polled
+beside it, the SPU's release, the trace's drain and the reaps, are swept from the
+listener's backlog before the leave's dialers are answered, by the from-S7 rule. **S7
+runs the seal's steps** (`weaver-admin-Spec` section 3, the seal: S7's own steps, the
+authority, not restated here): the pathname unlinked, the backlog drained into held
+connections, the release, `unload`, the writer's drain, and only then the `Left` to the
+leave's dialer and every held `JoinLeave`, before the listening descriptor closes and the
+worker exits.
+
+**The drain and the wind-down are unbounded by default, and every other leg is bounded**
+(I3; the operator's ruling of 2026-10-09 on #1; #107, area 1, R2). The drain, which is
+the wait for `GateQuiesced` and the turn in flight finishing together, and the
+wind-down's one generation have no bound unless the declaration sets
+`[lifecycle] drain-bound` and `wind-down-bound`, in seconds, per `weaver-types-Spec`;
+without them `force-unload` is the recourse, admin waiting for `Left` with no deadline.
+This crate reads the two from the enter, `EnterPayload.drain_bound` and
+`wind_down_bound`, its only source, since it holds no declaration; each absent means that
+phase is unbounded, and admin's own wait comes from the same parse it put on the enter,
+so the two agree by construction.
+Where the declaration sets one, a leg past its bound turns the leave forced from where it
+stands, as a join does, with no `forced_by` and the cause staying the graceful caller's,
+`unload` and `Left` then carrying `forced` true and a missed leg coming down as a forced
+leave's does; with both set, admin's bound is their sum and 150 seconds, per `weaver-admin-Spec`
+section 3. Every other leg is bounded in this crate: the save point's ask and `finished`
+legs and the grants read-back under `ANSWER_BOUND_MS`, its answer leg under
+`SNAPSHOT_ANSWER_BOUND_MS`, and `GateStopped` from a draining gate under the lower bound,
+past which an unread delivery is lost per `weaver-gate-PRD` section 13.4; these, the
+trace's drain, the SPU's `Release` and the reaps sum inside admin's 150 seconds. The wait
+for `GateQuiesced` is the drain's, not one of these legs: a declared `drain-bound`
+covers it and the turn's finish together, and with none declared it is unbounded, a
+force being the recourse (Codex on #109, round 40). A force, sole or joining, skips the drain and the wind-down, so its
+legs sit inside those 150 seconds, and a harness that does not answer within them is
+escalated by admin (I3).
+
+This crate sends the leave's `snapshot` ask after the last turn, the wind-down's
+included, and before it authors `unload`, so the save point
 holds every elected event of the run but the `unload` event's own distillate, which is
 lifecycle provenance the record keeps and no holding needs, and the next load replays no
 tail; the holdings restored at a load therefore never carry the prior run's `unload`
@@ -2105,12 +2283,16 @@ the operator's ruling of 2026-10-08: 120 seconds (`SNAPSHOT_ANSWER_BOUND_MS`), e
 the member to write a 1 GiB image before it answers, while the ask, the `finished` leg
 and the small asks keep the two seconds of `ANSWER_BOUND_MS`, `restored` having its own
 120 seconds (section 6.1) and a parked ask (`replay`, or `identity` under a diagnostic
-binding) the parked bound of 600 seconds. **Where any leg misses, the leave does not
-complete**: this crate authors no `unload`, answers admin `SavePointNotTaken` naming
-which leg, the answer (a member's failed write among its causes), the
-acknowledgement's answer, or the member being dead, and stays entered at rest with the run open, so the operator retries with
-`save-point` and `unload` or, where the member is dead, forces the unload; nothing is
-silent and the dead-peer conversion does not apply to this ask at the leave. **The seam
+binding) the parked bound of 600 seconds. **Where any leg misses, a leave that stayed
+graceful does not complete** (S6 x member misses a save-point leg): this crate authors no
+`unload`, answers admin `SavePointNotTaken` naming which leg, the answer (a member's
+failed write among its causes), the acknowledgement's answer, or the member being dead,
+and stays entered at rest with the gate lowered and the run open (S9), so the operator
+retries with `save-point` and `unload` or, where the member is dead, forces the unload;
+nothing is silent and the dead-peer conversion does not apply to this ask at the leave.
+A leave forced at the miss, by `weaver-admin-Spec` section 3's definition (directed forced, joined, a declared bound passing, or a dead gate or SPU), comes down
+without the save point, as the forced leave
+above states. **The seam
 stays alive across the miss**: a missed answer or finished leg retires nothing, and before
 its next ask the seam drains, without blocking, whatever lines or part of one the member
 sent late, discarding them and saying so in one diagnostic line with the count, the
@@ -2127,10 +2309,7 @@ bound, so a late save-point frame never misses the next ask and never retires th
 only a line that is neither the awaited answer nor such a frame misses it. A
 late finished answer's file stands in the room unrecorded and is published as recovered
 at the next publication, the leave's at the latest. A missed write, the ask itself unsent, is the dead peer as every send failure is.
-**A forced leave takes no save point**: the `Leave` directive's `forced` member, set by admin's
-`force-unload` and by a load's rollback, which leaves a run it undoes forced, has this crate author `unload` with `forced` true, recording that
-the leave's save point was not taken, so the next load, restoring the latest published
-save point, carries the reset admin resolves from its marker. **A save point on demand
+**A save point on demand
 is the `SavePoint` directive's**, admin's `save-point` verb over the coordination
 channel: at rest, the same four legs, the same event, and the answer `SavePointTaken`
 naming the digest, the finished name, the position covered and the trace position of
@@ -2529,13 +2708,13 @@ contract's second ruling of 2026-08-12. A report never arrives mid-stream,
 the contract's ordering emitting it only while no exchange is outstanding,
 so the stream's poll of 6.1 hears tokens and the close and nothing else. The
 gate channel carries the raise's answer at enter, the frames between, and
-the lower at leave. Section 2.4's `poll` election covers this wait as it
+the quiesce and the lower at leave. Section 2.4's `poll` election covers this wait as it
 covers the stream's, one mechanism in two states, and the no-runtime rule
 of section 1 stands.
 
 **Dispatch is by payload kind, and only the frame grants the seat.** A
 directive is the lifecycle interior's, served as section 3 serves it, a leave
-at rest proceeding and a stop at rest answering nothing in flight. A report
+at rest proceeding at once and a stop at rest answering nothing in flight. A report
 is clerked: the harness authors the `fault` event from what it was handed,
 per the fault-carrier ruling, and answers nothing, the receipt having
 retired with the second ruling of 2026-08-12, and no turn opens and no seat
@@ -2565,8 +2744,11 @@ no seat is outstanding, which is what leaves the leave free to proceed, and a
 stop mid-turn forces what the return otherwise yields: the cancel of 6.1
 closes the generation or the cancel below closes the invocation, the turn
 closes stopped, and the entry returns the seat with the stopped outcome. A
-leave mid-turn is refused, per the coordination contract, so the seat is
-never reclaimed by force from a live turn. **The election flagged for the
+leave mid-turn is held pending, per section 6 (`weaver-admin-Spec` section 3,
+S3 x unload), and the seat returns by the turn's own close, the blocked tool
+return of section 6 included; only a forced leave cancels the turn, as a stop
+does (S3 x force-unload), so the seat is never reclaimed by force but through
+the stop's own path. **The election flagged for the
 operator: the seat is granted per frame
 with the wait staying loop 0's, rather than lent for the run with a receive
 port granted to loop 1.** The ground is the boundary rule above and the
@@ -2866,6 +3048,19 @@ none of their content appears, watched to fail when the filter widens.
 - Descriptors are owned types end to end, so a handle that escapes its owner
   is a move the borrow checker sees, not an integer copied silently.
 
+**The in-run event table is enforced by a decision function and its table**, on the
+operator's agreement of 2026-10-09 recorded on #1, owed by the lifecycle act's code.
+`weaver-admin-Spec` section 3's transitions for events inside a run (state x dialer
+request, tool return, turn close, a missed save point leg, a death) are this crate's
+decision: one pure function from the run's position and the event to what this crate
+does and records, an exhaustive `match` with no wildcard arm, so a new position or
+event does not compile until it has a row: a compile-time pin. It is paired with a
+table-driven test transcribed row for row from that table, which fails when any row's
+expected act or record changes. **The I/O paths take the decision's result and do not
+decide**: the gate's refusals, the record's authoring and the save point's legs are
+given what the function returned, and are tested by integration cases over those
+paths, not one per row.
+
 **Enforced by compile-fail tests, because the property is an absence.**
 
 - One constructor: code constructing a `Harness` other than through `adopt`
@@ -3048,9 +3243,11 @@ for the organs whose side is unwritten.
   see the substitution at all, which is why the boundary the type was elected
   to buy needs a watch of its own, per section 2.1.
 - A directive out of order is refused and not queued: a leave arriving before
-  any enter answers `OutOfOrder` and reaches no unwind, and a directive of any
-  kind arriving after a leave answers the same, the left position being
-  terminal. The compile pin of section 3 holds that the refusal reaches a match
+  any enter answers `OutOfOrder` and reaches no unwind, and a directive
+  arriving after a leave answers the same, the left position being terminal,
+  but for `Observe`, answered `InTransition` while a leave is pending and
+  `Unloaded` once it is left, and `JoinLeave` while a leave is pending, the one
+  join the envelope admits. The compile pin of section 3 holds that the refusal reaches a match
   arm rather than a flag check, and this holds what the arm then does, an arm
   being free to queue or to answer the wrong refusal while compiling exactly as
   well. Confirmed twice, by watching the early leave reach the unwind path when
@@ -3058,6 +3255,41 @@ for the organs whose side is unwritten.
   an enter when the terminal arm is collapsed into the entered one. The refusal
   is owed to each organ by `weaver-types-Spec` section 5, which enforces it
   nowhere, and this discharges this crate's side of that owing alone.
+- The unload's tool interrupt and the first outcome (`weaver-admin-Spec` section 3,
+  the graceful unload step 2 and S4 x tool return; section 6 item 2), owed by the
+  lifecycle act's code: with a tool call out when a leave is heard, this crate sends
+  `ToolInterrupt` before `Quiesce`; a result that crossed the interrupt is recorded
+  completed with its result, delivered to the turn and not re-runnable, and only a
+  call the interrupt ended is recorded `Killed { by: unload }`. Confirmed by watching
+  the test fail when the crossed result is recorded interrupted, and when `Quiesce` is
+  sent ahead of the interrupt.
+- The declared bounds turn the leave forced (`weaver-admin-Spec` section 3, the bounds;
+  section 6), owed by the lifecycle act's code: under an enter carrying `drain_bound`
+  and `wind_down_bound`, a drain or a wind-down past its bound turns the leave forced
+  from where it stands, `Left.forced` true, the `unload` event naming no `forced_by` and
+  keeping the graceful caller's `cause`; under an enter carrying neither, the same
+  stand-in turn is waited for; under an enter carrying `drain_bound` alone, a drain past
+  it turns the leave forced and the forced leave runs no wind-down, while under
+  `wind_down_bound` alone the drain is waited for without a bound and a wind-down past
+  its bound turns the leave forced. The bounds are read from the enter alone. Confirmed by
+  watching the test fail when the harness ignores the enter's bound, when it writes
+  a `forced_by`, when a lone bound is applied to the other phase too, and when a leave the drain bound
+  turned forced runs the wind-down.
+- `Observe` answers `InTransition` while a leave is pending (`weaver-admin-Spec`
+  section 3, `show` in S4 to S7 and S10; section 4), whether a turn runs or not, owed by
+  the lifecycle act's code: an `Observe` heard in the drain with a turn running, and
+  one heard in the wind-down's save point legs with none, each answers `InTransition`
+  and authors nothing. Confirmed by watching the test fail when the drain's answer is
+  `Active`.
+- `unload` is the run's terminal event (`weaver-admin-Spec` section 3, I9; section 6
+  item 6), owed by the lifecycle act's code: with a stand-in SPU that dies in its
+  release, the record carries the `fault` and then `unload`, whose `release.spu` reads
+  `Unconfirmed`, and no line follows `unload`; with both organs releasing cleanly,
+  `release.spu` reads `Confirmed` and `release.member` reads `Closed`; and with a
+  recorder whose queue crosses its high-water mark at the `unload` submit, no pressure
+  `fault` follows `unload`. Confirmed by watching the test fail when the release is
+  moved after `unload`, the fault then landing past the terminal event, and when the
+  depth check runs after `unload`, a pressure report landing past it.
 - Announce-after-record: a stop's answer follows the close event's placement,
   confirmed by watching the answer precede the record when the two are
   reordered.

@@ -3,8 +3,8 @@
 **Status:** MERGED. In `main` and the source of truth, per the human's ruling
 of 2026-08-01 that a document on `main` is merged and not a draft. This content
 replaces the placeholder of 2026-07-29 at its own name, which is the consumption the
-v0.6 stub ruling shapes. It governs the lifecycle half of this seam, the raise and
-the lower. The exchanges that carry work arrive with the token workflow.
+v0.6 stub ruling shapes. It governs the lifecycle half of this seam, the raise, the
+quiesce and the lower. The exchanges that carry work arrive with the token workflow.
 
 **Date filed:** 2026-07-31
 **Document ID:** `weaver-harness-gate-contract`
@@ -123,8 +123,8 @@ per `weaver-gate-PRD` section 7.
 
 ## 2. The exchanges
 
-Five, and no others in this pass. Three are opened by the harness, raise, lower,
-and the tool execution as of the tool workflow's opening act of 2026-08-17, and
+Six, and no others in this pass. Four are opened by the harness, raise, quiesce,
+lower, and the tool execution as of the tool workflow's opening act of 2026-08-17, and
 two by the gate, the turn and the fault report, which is the two-initiator
 channel carrying both directions as of the token workflow's gate act. **The
 egress ruling of 2026-08-07 gave the gate a second seam toward the world**, the
@@ -143,13 +143,39 @@ translation, which is what makes `weaver-admin-harness-contract` section 6's
 refusing-organ case one refusal rather than a report to parse. The answer, either
 way, closes the exchange.
 
-**Lower the hook.** Opened by the harness, first in the leave fan-out. The gate
-closes the listener and answers stopped. **Stopped is sent only after the close has
-returned,** so nothing new can arrive anywhere in the interior once the harness
-proceeds, which is what stopped-first protects. Drain is modest by
-construction, per the token workflow's act: leave waits on rest, so no turn
-is in flight at a lower, and the gate closes its accepted connections after
-the listener, holding nothing that needs finishing.
+**The unload's half of this seam is the lifecycle state table's**, approved by the
+operator on 2026-10-09 and recorded on #1, whose text is `weaver-admin-Spec` section 3;
+the two exchanges below implement its graceful and forced unloads and cite their rows.
+
+**Quiesce the hook.** Opened by the harness, the graceful leave's first step, at once
+when the leave is heard, at rest or mid-turn, after the interrupt of an execution where
+one is out (`weaver-admin-Spec` section 3, the graceful unload, step 2). The gate closes
+the listener, closes every connection owed nothing, stops reading the rest, and answers
+`GateQuiesced`. **Every turn frame the gate admitted precedes that answer on the
+channel**, the gate sending what waited on writability before it answers, so the
+harness reading to `GateQuiesced` has met every request it will ever be sent, and it
+answers each it had not started with the `refused` close naming the unload while the
+connection still stands, recording the refusal with `Unloading` (S4 x dialer request;
+I5).
+
+**Lower the hook.** Opened by the harness, after the drain and the wind-down on a
+graceful leave, or at once on a forced one. **From a quiescing gate, `GateStopped` is
+sent only once every response the harness sent has been written to its connection**, so
+a dialer the drain answered has its answer before the gate goes, inside the lower bound
+of `weaver-harness-Spec` section 6, a delivery the bound outruns being lost and not the
+turn (step 5). **From a raised gate, the forced path** (the forced unload (sole)), the
+listener and every connection close at once, every frame the gate admitted reaching
+the channel ahead of the answer so the harness records each refused with `Unloading`,
+its connection
+closing unanswered (I5). **Stopped is sent only after the closes have returned,** so
+nothing new can arrive anywhere in the interior once the harness proceeds. **A force
+that joins a leave whose gate is quiescing or draining sends `Lower` as well** (the
+forced unload (joining)): the gate sends every frame it admitted
+and had not yet sent ahead of its answer, the harness recording each refused with
+`Unloading`, writes what it owes inside the lower bound, closes, and answers stopped
+(I5). Closing the harness's end of this channel is only the escalation, where the gate
+does not answer `Lower` inside the lower bound, the gate then meeting closure per
+section 1.
 
 **Carry a turn.** Opened by the gate, one exchange per client request, from
 the token workflow's act of 2026-08-02. The gate relays the client's line
@@ -232,6 +258,19 @@ exchange, which makes an orphaned process the common case, and narrowing the
 stop promise to the next point the harness listens, which contradicts the
 charters' unconditional wording, per the W1c characterization of #646.
 
+**Interrupt the execution for the unload.** `ToolInterrupt`, sent by the harness as
+the cancel is, inside an open execution at the continue position, where an unload,
+graceful or forced, meets a tool call out (`weaver-admin-Spec` section 3, S4 x tool
+return). The gate ends the execution as at a cancel and answers `Killed { by: unload }`,
+so the record names the unload in the gate's own word and the call reads as never
+finished, re-runnable at the reload. It adds no clock, as the cancel adds none, and one
+that crosses the answer is dropped as a cancel is. **The first outcome wins**: where the
+tool's result is already sent when the interrupt reaches the gate, the result stands,
+the call is recorded completed with its result and delivered to the turn as in S3, and
+it is never re-runnable, so a completed tool, perhaps one with side effects, never runs
+again after the reload; only a call the interrupt actually ended is answered `Killed {
+by: unload }` and is re-runnable.
+
 **Every opened execution completes with an answer, and the answer carries
 one of four contents**, told apart by tag alone, the rule beneath the four
 being who speaks in the return:
@@ -247,16 +286,17 @@ being who speaks in the return:
 - **Errored.** The invocation machinery failed - the fork, a pipe, the
   supervisor - and the account's speaker is the infrastructure, never the
   tool.
-- **Killed.** The caller's clock expired, or the caller cancelled, and the
-  gate killed the invocation's whole process group, descendants included,
+- **Killed.** The caller's clock expired, the caller cancelled, or the
+  unload interrupted, and the gate killed the invocation's whole process group, descendants included,
   because a kill that reaped only the leader would leave the pipes held open
   and the promise above false. The case carries no account from the tool by
   construction - the absence of the tool's words is the fact - and output
   drained before the kill rides the case as an attachment, never folded into
   a result, so a partial cannot masquerade as an answer. The case names
-  which of the two ended it, the clock or the cancel, because the record
-  holding the answer cannot otherwise tell a tool that ran out of time from
-  one the operator stopped, the two being alike in every other field.
+  which of the three ended it, the clock, the cancel or the unload, because
+  the record holding the answer cannot otherwise tell a tool that ran out of
+  time from one the operator stopped or one the unload ended and owes a re-run, the
+  three being alike in every other field.
 
 All four are content rather than channel faults, per the layer split every
 seam of this program runs, because each is a fact the model must learn: a
@@ -296,22 +336,28 @@ that exchange.
 ## 3. Ordering
 
 - Raise is first and happens exactly once on a channel.
+- Quiesce, where it comes, comes once, after the raise and before the lower.
 - Lower is last, happens at most once, and is terminal on the channel.
 - A lower with no completed raise before it is refused and is not queued, because
   there is no listener for it to close.
-- Turn exchanges, tool executions, and fault reports are valid only between a
-  completed raise and a lower, the window being the raised hook.
+- Turn exchanges and tool executions are opened only between a completed raise
+  and a quiesce, or a lower where no quiesce came, the window being the raised
+  hook; their responses and answers, and fault reports, are valid until the
+  lower.
 - More than one turn exchange may be open at once, the harness serving them
   one at a time in arrival order, per section 2.
 - Messages within one exchange are ordered.
-- A cancel is valid only inside an open execution exchange, after its open and
-  before its answer, and at most one crosses per exchange. One that crosses the
+- A cancel or an interrupt is valid only inside an open execution exchange,
+  after its open and before its answer, and at most one of them crosses per
+  exchange. One that crosses the
   answer is dropped rather than refused, per section 2, the two directions
   crossing being the channel's ordinary case and not an ordering fault.
 - A directive that arrives out of this order is refused and is not queued.
-- An answer to raise arrives only after the bind has returned, and an answer to
-  lower only after the close has returned, so each answer is a fact about the
-  listener rather than a statement of intent.
+- An answer to raise arrives only after the bind has returned, an answer to
+  quiesce only after the listener's close and every admitted frame, and an answer
+  to lower only after the closes have returned and, from a quiescing gate, every
+  owed response is written or its bound has passed, so each answer is a fact about
+  the listener rather than a statement of intent.
 
 **Closure is not an answer, per `weaver-organ-channel` section 2, and it is not
 restated here.** What a closure means on this seam is section 5's.
@@ -323,10 +369,10 @@ exchange payload change is a supplies change by construction, and a Spec writer 
 this list.
 
 **The harness supplies** the gate instruction it was handed in the enter directive,
-the directive to lower, and, per call, the tool execution's name, arguments
+the directives to quiesce and to lower, and, per call, the tool execution's name, arguments
 as the family parse recovered them, and the caller's clock, uninterpreted,
-opened serially in emission order, and at most one cancel per execution while
-its exchange stands open from the harness's side.
+opened serially in emission order, and at most one cancel or interrupt per
+execution while its exchange stands open from the harness's side.
 
 **The gate guarantees** an answer to every execution opened inside the raised
 window, carrying one of the four contents of section 2, so the harness's
@@ -345,12 +391,17 @@ cancelled one by one. It guarantees that it creates this seam's channel and
 passes that end to the child it creates and no other, **every other handle it holds
 being withheld from that child at the moment it is created**, per section 1. It
 guarantees that it raises the
-gate
-last and lowers it first within the fan-outs, per apex section 6. It guarantees that
+gate last in the enter fan-out and, at a leave, quiesces it first and lowers it
+before the leave's save point, per apex section 6 and `weaver-admin-Spec` section 3,
+the graceful unload. It guarantees that every turn frame it reads is answered or
+recorded refused: a frame met before `GateQuiesced` and not started is answered with the
+refusal naming the unload and recorded, and a frame a forced lower meets is recorded
+refused, its connection closed by the gate (I5). It guarantees that
 it does not treat an answer as authorization for anything beyond the exchange that
 produced it.
 
-**The gate supplies** its confirmation of ready, its confirmation of stopped, its
+**The gate supplies** its confirmation of ready, its confirmation of quiesced, its
+confirmation of stopped, its
 refusal with the reason, the turn frames it relays inward, and its fault
 reports.
 
@@ -365,7 +416,9 @@ exchange's own account rather than silence.
 time in arrival order, and that every answer is the turn's close rendered as
 the frame the world contract fixes, clean or stopped with its kind named.
 
-**The gate guarantees** that ready follows the bind and stopped follows the close. It
+**The gate guarantees** that ready follows the bind, quiesced follows the listener's
+close and every frame it admitted, and stopped follows the closes and, from a quiescing
+gate, every owed write inside the lower bound. It
 guarantees that a refusal leaves nothing held, no listener and no half-bound socket,
 so a refusal is true about the boundary rather than merely true about the attempt. It
 guarantees that it answers a refusal rather than exiting on one. It guarantees that
@@ -398,7 +451,13 @@ exchange naming this arm, per the rule `weaver-admin-harness-contract` section 4
 applies to a fault before ready. After the aggregate, the death is the loss of the
 agent's reachability, observed through closure and authored to the stream as the
 `fault` event, per the fault-carrier ruling of 2026-08-01, the operator's tooling
-keying on it there.
+keying on it there. A tool execution open when the gate dies has no answer coming: the
+harness closes it `Killed { by: fault }`, **its outcome indeterminate and never re-run
+automatically**, since the shell the gate supervised runs in its own process group with
+no parent-death signal of its own (`weaver-gate-Spec` section 8, the shell forked in its
+own group; the gate's parent-death signal is elected for the gate alone), so it may still
+run or may have completed (`weaver-admin-Spec` section 3, the organ-death table; Codex on
+#109, round 43).
 
 **Nothing on this seam retries.** A refused directive returns to the harness, which
 unwinds, and a re-sent directive would put two attempts behind one operator intent.

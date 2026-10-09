@@ -841,6 +841,54 @@ The lifecycle is the system's largest behavioral contract - four parties over
 three sockets - and it is filed at this level rather than under any one crate,
 because it belongs to none of them.
 
+### 6.1 The operating envelope
+
+**The lifecycle is specified for this envelope and no wider**, on the operator's ruling
+of 2026-10-09 recorded on #1. A scenario inside it
+has an exact, specified outcome. A scenario outside it gets no mechanism of its own:
+it is recovered conservatively, as stated below, and a review finding that needs it is
+filed as out of the envelope, not fixed.
+
+**Commands, one at a time.** An operator or a connector issues one admin command and
+waits for its answer. The invocation lock refuses a second command while one is in
+flight (`InvocationInFlight`), and avoiding overlap is the caller's job. **The one
+admitted overlap is `force-unload` issued while an `unload` is in progress**, which
+joins it, so that the operator can always choose to give up the thought in flight.
+**Both bindings are inside it**: the serving binding, and the diagnostic binding,
+which has no gate and keeps no state (the operator's ruling of 2026-10-09).
+
+**Failures inside the envelope**, each with an exact outcome:
+- a constituent process dying: the worker, the state member, the SPU, the gate or the
+  trace relay;
+- a turn, a drain or a wind-down that does not end, which `force-unload` ends;
+- a save point leg missed, a publication refused, a territory that does not judge;
+- a declared drain or wind-down bound passing;
+- a load whose agent does not start, rolled back.
+
+**Failures outside the envelope**, recovered conservatively:
+- an admin invocation itself killed mid-command (its terminal closed, SIGKILL);
+- the host stopping (power loss, a crash) while a run stands;
+- any interleaving of two commands other than the admitted join.
+
+**What happens outside the envelope.** No command takes over another command's work.
+- The run in flight finishes or dies on its own, and `force-unload` still ends whatever
+  stands, within its bound.
+- The next load recovers: it publishes any finished save point left in the room, as
+  recovered, and records the reset the marker carries.
+
+**The promise.**
+- Inside the envelope, the outcome is exact: clean where clean, forced where forced,
+  and the state kept where it was kept.
+- Outside it, the promise is that nothing is lost or reported clean silently. A
+  finished save point is always recovered, and the label may be conservative, for
+  example `NoCleanUnload` though the state was kept, but never `Closed` where it was
+  not.
+
+**For review.** A finding is in scope only if its scenario lies inside this envelope.
+A finding outside it is filed against the lifecycle's out-of-envelope issue (#110) with
+the scenario named. Widening the envelope is the operator's ruling and a PRD change, never
+a Spec fix.
+
 ## 7. Scope criteria
 
 Material crosses from the prior tree, or is written fresh, only if it satisfies

@@ -518,19 +518,22 @@ absent, has no counterpart on the way up.
    reaches a running worker, per section 6. Everything between the directive and
    the answer is the harness's, in its own order: it stops Gate first where one
    stands, so a Gate
-   process never outlives the interior it protects and nothing new arrives, and it
-   refuses while a turn is in flight rather than racing one, because a turn
-   interrupted mid-decode leaves the SPU holding a session. At rest it authors its
-   `unload` event, closing the bracket, drains the writer's queue to the stream,
-   then releases the SPU, so residency ends and the device is freed. The answer
+   process never outlives the interior it protects and nothing new arrives. A
+   graceful leave lets a turn in flight finish and winds down before it lowers the
+   gate; a forced one cancels the turn (`weaver-admin-Spec` section 3, the two
+   unloads). After the save point it releases the SPU and the member, so residency
+   ends and the device is freed, then authors its `unload` event, closing the bracket
+   with the release outcome, and drains the writer's queue to the stream. The answer
    carries left, or a refusal naming where the sequence stopped. Admin holds no
    channel to Gate or the SPU, per section 6, so this directive is the whole of
    admin's part in their unwinding.
 2. **Await the run's exit.** The worker exits after it answers left, the member and
    the relay with it, and the kernel releases the run lock when the last of them is
-   gone, which is what this step waits on. The leave has a bound of its own, and where
-   it expires or the run does not exit a bounded escalation ends every holder of the
-   lock, per the Spec's section 3.
+   gone, which is what this step waits on. A forced leave has a bound of its own, and a
+   graceful one where the declaration bounds both its drain and its wind-down; where
+   that bound expires or the run does not exit, a bounded escalation ends every holder
+   of the lock, per the Spec's section 3. A graceful leave with either bound undeclared
+   waits on the agent, and `force-unload` is the recourse.
 3. **Publish provisioned and unloaded.** Which is a different state from absent, and
    absent is reached by an operator act rather than by a verb.
 
@@ -759,7 +762,8 @@ and the very socket the worker was expected to dial, which is the defect the
 review of PR 67 found. And its credential check expected the agent uid, which is
 exactly what an elected tool holds, so the check could not tell the worker from
 the tool and the one-accept closure carried the refusal alone. Inverted, the
-closure is not even wanted: the listener lives as long as the worker and answers
+closure is not even wanted: the listener lives from the worker's start until the
+leave's seal and answers
 each verb's dial, one connection at a time, because a per-invocation admin has no
 standing end to keep.
 

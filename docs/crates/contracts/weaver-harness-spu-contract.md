@@ -343,10 +343,12 @@ authored to the stream as the `fault` event per the fault-carrier ruling of
 2026-08-01, its case set deferred per section 8.
 
 **A release that cannot be confirmed is reported unconfirmed.** The harness does not
-synthesize a release from a closure and does not retry one. What makes this survivable
-is that the device is reclaimed when the process exits and admin's own stop of the
-unit follows the leave answer regardless, so an unconfirmed release is a reporting
-failure rather than a leaked residency.
+synthesize a release from a closure and does not retry one. The release comes before
+the `unload` event, which carries its outcome, `Confirmed` or `Unconfirmed`, and a death
+in the release is the `fault` above, authored before `unload` (`weaver-admin-Spec`
+section 3, I9). What makes this survivable is that the device is reclaimed when the
+process exits and the worker's exit follows the leave answer regardless, so an
+unconfirmed release is a reporting failure rather than a leaked residency.
 
 **Nothing on this seam retries.** A refused directive returns to the harness, which
 unwinds along the same seams it fanned out on and returns the refusal to admin. A

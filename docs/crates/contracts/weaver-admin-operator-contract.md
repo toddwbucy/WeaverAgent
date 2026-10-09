@@ -81,7 +81,10 @@ rulings of 2026-10-03 on #50, and, as of A3.2 on the operator's rulings of 2026-
 #1, `save-point`, which takes a save point of the running agent and publishes it at
 once, `restore`, which names the save point the next load restores, the one the
 declaration's `[restore]` names and never one the caller chooses, and `force-unload`,
-the unload that completes without its leave save point and records the loss.
+the unload that stops the work and keeps the state: it waits for no turn and runs no
+wind-down, takes the leave save point all the same, and comes down without it, the loss
+recorded, only where it cannot be taken, per section 4 and `weaver-admin-Spec` section
+3, the forced unload.
 **Which lines a caller may run is the rule the operator installs**: an observer's rule
 grants `show`, and an operator's adds `validate`, `load`, `unload`, `stop`, `save-point`,
 `restore` and `force-unload`, the role split of #50 mapped onto command lines. Nothing else crosses in:
@@ -160,10 +163,17 @@ other status, or a status with no object, is a fault the caller answers by readi
 next `show`. **`show` names the run's constituents** where a run holds the agent's run
 lock, on toddwbucy/WeaverWeb#15: the process id of every one of them, the worker, the
 state member and the trace relay, so a caller can check that each sits in its own
-containment at every load. They are absent where no run stands. Standard error carries
+containment at every load. They are absent where no run stands. **`Unloaded` means
+nothing resident**, and `show` prints it only once the run lock is free: while any
+constituent still holds it and no worker answers, a run that never entered or one
+ending, `show` prints `InTransition` with the constituents named (`weaver-admin-Spec`
+section 5). Standard error carries
 human-readable diagnostics no caller parses. A
 `load` answers once the agent is up or refused, within admin's own bound of 900 seconds
-by default, which a caller's bound must exceed. **An invocation finishes even when its
+by default on the agent's start, which a caller's bound must exceed, after any
+publication of recovered files from an unclosed run, which is bounded by their size and
+not by time; a load whose agent does not start inside that bound rolls back before it
+answers, which takes at most 195 seconds more. **An invocation finishes even when its
 caller disappears**, its outcome recorded in the agent's `admin.log`, so a caller that
 gives up reads the outcome from the next `show`.
 
@@ -207,6 +217,137 @@ comes back by running a verb, per section 6.
   ordered two asks was one connection serving them in turn, and what orders them now
   is that each is a process the operator starts, per `weaver-admin-Spec` section 3.
 
+### 4.1 What each command line answers, in each state of the agent
+
+**The agent's lifecycle is the lifecycle state table** approved by the operator on
+2026-10-09, recorded on #1, which `weaver-admin-Spec` section 3 holds: its states S0 to
+S11 and invariants I1 to I9 are that section's, cited here by their ids. This
+subsection is the table read from the caller's side: what each granted line prints in
+each state. Where it and the table disagree, the table holds. A caller never names a
+state; it reads `show` and acts on what it prints.
+
+| State | `load` | `unload` | `force-unload` | `save-point` | `restore` | `show` |
+|---|---|---|---|---|---|---|
+| S0, down, clean | the load's answer, or its refusal | `Unloaded`, nothing to do | `Unloaded`, nothing to do | `OutOfOrder` | `RestoreNamed` | `Unloaded` |
+| S0d, down, a run ended without closing | as S0, the load recording the reset | publishes the save points the run left as recovered, then `Unloaded`, or `SavePointNotTaken` naming `published` where that fails; the marker left as it stands, the next load records the cause it carries (`NoCleanUnload` where the run was left open, `ForcedUnload` where a force closed it) | publishes them the same way, then `Unloaded`, or refuses as `unload` does; the marker is left as it stands, a force on an agent already down having ended nothing, and the next load records the cause it carries | `OutOfOrder` | `RestoreNamed` | `Unloaded` |
+| S1, loading | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight`, a load being no unload to join | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+| S2, serving at rest | `AgentRunning` | the graceful unload, below | the forced unload, below | `SavePointTaken` | `RestoreNamed` | `Idle` |
+| S3, serving, a turn in flight | `AgentRunning` | the graceful unload, after the turn | the forced unload, the turn cancelled | `ActivityNotAtRest` | `RestoreNamed` | `Active` |
+| S4 to S7, a graceful unload in progress | `InvocationInFlight` | `InvocationInFlight` | joins, below | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+| S8a, an unload concluding | `InvocationInFlight` | `InvocationInFlight` | waits for the unload to finish, then prints `Unloaded` | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+| S8b, the worker gone with no answer (it died), a process still holding the run | `AgentRunning` until the run ends, then as S0d | ends what still holds the run, then publishes what the run left as recovered; the next load records `NoCleanUnload` | the same as `unload`, the marker left as it stands | `OutOfOrder` | `RestoreNamed` | `InTransition` with the run's processes named, then `Unloaded` |
+| S9, an unload stopped at its save point | `AgentRunning` | retried: the save point, then down | the forced unload | `SavePointTaken` | `RestoreNamed` | `Idle`, the gate lowered |
+| S10, a force in progress | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+| S11, a silent worker being ended | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+
+**The table is for one command at a time** (`weaver-agent-PRD` section 6.1, the
+operating envelope): a caller issues one command and waits for its answer, the one
+admitted overlap being `force-unload` joining an `unload`. **A command killed
+mid-command is outside the envelope** and gets no takeover: the run finishes or dies on
+its own, and a later command finding the agent's lock free mid-transition answers
+conservatively (`weaver-admin-Spec` section 3, outside the envelope): `load` refuses
+`AgentRunning`; `unload` refuses `OutOfOrder` where a leave is already in progress, or
+ends a run whose agent no longer listens; `force-unload` ends whatever stands, marking
+it forced where it ended a live agent mid-unload, and leaving the marker as it stands
+where the agent had already died (S8b), the crash and not the force having ended the run; `save-point` refuses `OutOfOrder`. The next load recovers any save point
+left in the room, and its reset may be conservative but is never clean where the state
+was not kept.
+
+`restore` names the save point the next load restores in every state that answers it,
+the live restore being A5's. `stop` and `validate` take the invocation lock as every
+line but `show` does, so each refuses `InvocationInFlight` wherever the table shows an
+invocation holding it (S1, S4 to S7, S8a, S10, S11); a `stop` in S9 answers `AtRest`,
+and in S8b, where no invocation holds it, both take the free lock: `stop`, no worker
+listening, refuses `Unanswered` once the dial's bound passes, and `validate` answers as
+it does in any state, starting nothing. The
+lock is taken before the state is read, so a line that meets a held lock refuses
+`InvocationInFlight` whatever the state behind it. `show` alone reads beside a holder, and
+what it prints is one ladder (`weaver-admin-Spec` section 3): `InTransition` at once
+where another command holds the agent; otherwise the agent's own word where it answers
+(`Idle` or `Active`, or `InTransition` while an unload is in progress); `Unanswered`
+where it accepts and does not answer in time, a worker wedged; `InTransition` with the
+run's processes named where no agent listens and a process still holds the run, a run
+that never started or one ending; and `Unloaded` only once nothing holds the run.
+
+**`unload` drains, winds down, saves, then goes down** (`weaver-admin-Spec` section 3,
+the graceful unload). It may take the length of the turn in flight and one generation
+more: from its first step the agent takes no new request, each one it had admitted and
+not started refused on its own connection with `Unloading`, "the agent is unloading", the operator's
+seeding line among them (S4 x dialer request); the turn in flight finishes what it can
+without further input, and a tool call it has out is interrupted, its return recorded
+interrupted by the unload and re-runnable after the reload, unless its result was
+already on its way, which stands, is delivered and is never re-run (S4 x tool return); the agent
+then writes one wind-down turn summarizing where the work stands, for the reload (S5);
+then the gate closes and the leave's save point is taken. The `unload` holds the
+invocation lock throughout (I1). It prints `Unloaded` with the marker closed, so the
+next load records no reset; or, where the unload stayed graceful to the miss,
+`SavePointNotTaken` naming the leg the save point missed, the run left standing at rest with its gate closed, for a retried `unload`, a
+`save-point` and then an `unload`, or a `force-unload` (S9), while one that turned forced, by
+`weaver-admin-Spec` section 3's definition of `forced` (directed forced, joined, a
+declared bound passing, or a dead gate or SPU), comes down without it, prints `Unloaded` with the
+marker `Forced`, and the next load records `ForcedUnload`; or `SavePointNotTaken`
+naming `published`, the run ended and its save point standing unpublished, so the next
+load records `NoCleanUnload` and recovers the file (S0d).
+
+**The graceful unload has no time bound unless the agent declares one**, on the
+operator's ruling of 2026-10-09 recorded on #1: the drain and the wind-down are
+unbounded by default, and `force-unload` is the caller's recourse (I3). An agent may
+declare `drain-bound` and `wind-down-bound`, in seconds, in its declaration's
+`[lifecycle]` table, per `weaver-types-Spec` section 2; past a declared bound the leave
+turns forced, the record naming no `forced_by` and keeping the `unload`'s caller as the
+leave's cause, and the `unload` concludes as a forced leave does. With no bound
+declared, or one alone, the `unload` waits for the agent's answer with no deadline, and
+a caller's own timeout must allow for that; with both declared it waits their sum and
+150 seconds, then escalates as `weaver-admin-Spec` section 3 states. The escalation's
+waits and the publication after the answer come on top, as before.
+
+**`force-unload` always ends the run, alone or joining an `unload`** (I3).
+- **Alone** (S2, S3, S9): the gate closes at once
+  and every request it holds is recorded refused and its connection closed; the turn in
+  flight is cancelled and recorded as a stop for the unload; no wind-down runs; the
+  leave save point is taken as at any unload. It prints `Unloaded`. Where the save point
+  published, the marker closes and the next load records no reset; where it could not
+  be taken, the marker stands `Forced` and the next load records `ForcedUnload`; where it
+  was taken and did not publish, the force has still ended the run, but it refuses
+  `SavePointNotTaken` naming `published` with the marker left open, so the next load
+  records `NoCleanUnload` and recovers the file (I4).
+- **Beside a graceful `unload`** (S4 to S7): it joins without the lock, turning the
+  pending leave forced from where it stands, and the record names both callers, the
+  `unload`'s as the leave's cause and, as `forced_by`, the first force's that turned it
+  forced while it was still graceful (I2), a later force, or one joining a leave a
+  declared bound already turned forced, named nowhere. Every caller the agent answers concludes
+  the same way (`weaver-admin-Spec` section 3, the conclusion): the `unload` holding the
+  lock first, publishing and closing the marker, and the force after it, finding the run
+  concluded and changing nothing (I1); each prints only once the run lock has freed,
+  never on the agent's answer alone, so `Unloaded` means no constituent still runs. From
+  S7 on, the leave's outcome being fixed, the join adds nothing to it and concludes the same way,
+  and once the agent no longer listens it waits for the unload to finish: at most 150
+  seconds and then the escalation while the agent's processes still hold the run, and
+  with no deadline once they are gone and the unload is publishing, a publication taking
+  as long as its copy does; it then prints `Unloaded`, nothing
+  being resident: ending the run was its job, and whether the unload's save point
+  published is the unload's own answer and the marker's, for the next load.
+- **Beside any other command** (a load in S1, its rollback included, a `save-point`,
+  another force): it refuses `InvocationInFlight` and takes over nothing, one command
+  at a time being the caller's to keep (`weaver-agent-PRD` section 6.1). **It knows the
+  command by the verb the lock's holder records beside the lock**, never by guessing
+  from the agent's answers (`weaver-admin-Spec` section 3, the invocation lock). A `show`'s
+  brief shared hold is waited out, as by every command.
+- **On a worker that answers nothing** (S11): a join unanswered within 150 seconds ends
+  the run's processes without the lock (I3), and only then writes the marker `Forced`,
+  by `weaver-admin-Spec` section 4's marker-write rule. The `unload` holding the lock is answered no `Left`,
+  so it concludes nothing and releases the lock, and the marker stands `Forced`, the
+  escalator's. The force prints `Unloaded`, or `LockHolderUnknown` or `WorkerWouldNotExit`
+  where the escalation cannot end the run, per section 5.
+
+**A caller whose invocation is killed mid-command is outside the envelope**
+(`weaver-agent-PRD` section 6.1): no later command takes over its work. The run finishes
+or dies on its own, `force-unload` ends whatever still stands, and the next load
+publishes any save point left in the member's room as recovered and records the reset
+the marker carries, `NoCleanUnload` where the state was in fact kept being a
+conservative label with nothing lost (`weaver-admin-Spec` section 3, outside the
+envelope).
+
 ## 5. Failure
 
 **At the sink, one failure.** A sink that cannot be opened refuses the load, per
@@ -216,7 +357,8 @@ reader.
 
 **At a command line, the floor's refusals**, per `weaver-admin-Spec` section 3: a verb
 arriving while another invocation holds this agent's invocation lock refuses
-`InvocationInFlight` before touching anything, and `show` then answers `InTransition`. A
+`InvocationInFlight` before touching anything, `force-unload` alone excepted, which
+joins, waits or escalates per section 4, and `show` then answers by the ladder above. A
 second `load` of a running agent answers `AgentRunning` and touches nothing, a load
 never ending an existing run, whether or not that run ever entered. A missing or
 malformed boundary file refuses `ConfigInvalid` naming `roles.toml`. An `unload` that
@@ -227,8 +369,11 @@ state. An `unload` whose leave save point was reported and did not publish refus
 the next load's reset, per `weaver-admin-Spec` section 3: unlike every other leg, the
 run has ended and the save point stands unpublished in the member's room. A
 `save-point` whose publication does not land refuses `SavePointNotTaken` naming
-`published` too, the run still open. `force-unload` reports no save point and is
-unchanged. A `stop` or a `show` whose answer does not arrive within its bound refuses
+`published` too, the run still open. `force-unload` takes the leave save point as
+`unload` does and ends the run whether or not it can be taken, refusing
+`SavePointNotTaken` naming `published` where it was taken and did not publish, per
+section 4.1. A `stop`
+or a `show` whose answer does not arrive within its bound refuses
 `Unanswered`, and so does a `load` meeting a run whose worker is silent, each leaving
 the run as it stands for `unload`. **Recovery from a killed invocation is the
 caller's**: admin-con reads `show`'s facts and issues `unload`, which ends whatever
@@ -340,6 +485,9 @@ gate rather than a defect in this clause.
   record-based session resume left the corpus, `weaver-types-PRD` section 2.1
   gained `trace-sink` on this contract's demand, and what the batch left behind is
   the enter cell `weaver-admin-PRD` section 10 holds.
+- The lifecycle act, 2026-10-09: `weaver-admin-Spec` section 3 holds the lifecycle
+  state table, and section 4.1 here reads it from the caller's side, landing in one act
+  with the admin-harness, harness-gate and gate-world contracts.
 - The agent leaving systemd, 2026-10-03 (#50), landing in one act.
   `weaver-admin-systemd-contract` retires. `weaver-admin-PRD` sections 1, 2, 4, 5, 6, 7,
   8 and 10 and `weaver-admin-Spec` sections 2, 3, 6, 8, 9, 10 and 11 move to the start

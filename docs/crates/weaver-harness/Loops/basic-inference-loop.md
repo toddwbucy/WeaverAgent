@@ -211,9 +211,11 @@ every step of that fan-out has confirmed, or it refuses naming where the fan-out
 stopped, so that admin rolls back without asking a second question. Per contract
 section 3 and `weaver-admin-PRD` section 4.1.
 
-**Leave the run.** Admin directs the harness to leave. The harness stops Gate
-first, refuses while a turn is in flight, authors its unload event, which is the
-run closing, drains the writer's queue to the stream, and releases the SPU last.
+**Leave the run.** Admin directs the harness to leave. The harness interrupts a tool
+call out, quiesces and drains Gate, lets a turn in flight finish and winds down, or under a force cancels
+the turn, lowers Gate, takes the leave's save point, releases the SPU and the member,
+authors its unload event, which is the run closing and its last event, and drains the
+writer's queue to the stream.
 It answers left. The stream ends where the run did, finalized by nothing, which is
 why session close is only the authoring of its own event. Per contract section 3
 and `weaver-admin-PRD` section 4.2. Gate last up, Gate first down: the agent is
