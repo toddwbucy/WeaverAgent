@@ -46,6 +46,7 @@ mod sink;
 mod stack;
 mod start;
 mod surface;
+mod verb_table;
 mod verbs;
 
 /// A path under the temp directory for this crate's tests, removed when the
