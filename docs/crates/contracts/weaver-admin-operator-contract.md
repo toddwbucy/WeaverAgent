@@ -230,20 +230,26 @@ state; it reads `show` and acts on what it prints.
 |---|---|---|---|---|---|---|
 | S0, down, clean | the load's answer, or its refusal | `Unloaded`, nothing to do | `Unloaded`, nothing to do | `OutOfOrder` | `RestoreNamed` | `Unloaded` |
 | S0d, down, a run ended without closing | as S0, the load recording the reset | publishes the save points the run left as recovered, then `Unloaded`, or `SavePointNotTaken` naming `published` where that fails; the marker left as it stands, the next load records the cause it carries (`NoCleanUnload` where the run was left open, `ForcedUnload` where a force closed it) | publishes them the same way, then `Unloaded`, or refuses as `unload` does; the marker is left as it stands, a force on an agent already down having ended nothing, and the next load records the cause it carries | `OutOfOrder` | `RestoreNamed` | `Unloaded` |
-| S1, loading | `InvocationInFlight`; the lock free, `AgentRunning` while a process holds the run, else as S0d | `InvocationInFlight`; the lock free, ends whatever holds the run, else as S0d | waits for the load's publication of recovered files, bounded by their size, then at most the load's bound, then, where the agent did not start inside it, the load's rollback (at most 195 seconds), then answers as the state it finds; the lock free, ends whatever holds the run as `unload` does | `InvocationInFlight`; the lock free, `OutOfOrder` unless the agent had started serving | `InvocationInFlight`; the lock free, `RestoreNamed` | `InTransition`; the lock free, `InTransition` with the run's processes named while they stand, then `Unloaded` |
+| S1, loading | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight`, a load being no unload to join | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S2, serving at rest | `AgentRunning` | the graceful unload, below | the forced unload, below | `SavePointTaken` | `RestoreNamed` | `Idle` |
 | S3, serving, a turn in flight | `AgentRunning` | the graceful unload, after the turn | the forced unload, the turn cancelled | `ActivityNotAtRest` | `RestoreNamed` | `Active` |
-| S4 to S6, a graceful unload in progress | `InvocationInFlight`; the lock free, `AgentRunning` | `InvocationInFlight`; the lock free, adopts the leave and is answered when it completes, or `OutOfOrder` where the leave was already forced | joins, below; the lock free, takes over and joins the same way | `InvocationInFlight`; the lock free, `OutOfOrder` | `InvocationInFlight`; the lock free, `RestoreNamed` | `InTransition` |
-| S7, the unload finishing | `InvocationInFlight`; the lock free, `AgentRunning` | `InvocationInFlight`; the lock free, answered as the leave stands where it reached the agent before the agent stopped listening, or, after that, waits for the run to end and finds it ended | joins as at S4, or, after the agent stopped listening, waits for the run to end, escalating past the leave's 150 seconds and 45 more | `InvocationInFlight`; the lock free, `OutOfOrder` | `InvocationInFlight`; the lock free, `RestoreNamed` | `InTransition`, with the run's processes named once the agent stopped listening |
-| S8, an unload concluding | `InvocationInFlight`; the lock free, `AgentRunning` while a process still holds the run, else as S0d | `InvocationInFlight`; the lock free, waits for the run to end, then as S0d | waits, then as S0 or S0d; the lock free, waits for the run to end, escalating past 150 seconds and 45 more, then as S0d | `InvocationInFlight`; the lock free, `OutOfOrder` while a process still holds the run, else as S0d | `InvocationInFlight`; the lock free, `RestoreNamed` | `InTransition` with the run's processes named, then `Unloaded` once they are gone |
+| S4 to S7, a graceful unload in progress | `InvocationInFlight` | `InvocationInFlight` | joins, below | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+| S8, an unload concluding | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight`, no leave left to join | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S9, an unload stopped at its save point | `AgentRunning` | retried: the save point, then down | the forced unload | `SavePointTaken` | `RestoreNamed` | `Idle`, the gate lowered |
-| S10, a force in progress | `InvocationInFlight`; the lock free, `AgentRunning` | `InvocationInFlight`; the lock free, `OutOfOrder` | joins; the lock free, takes over and joins the same way | `InvocationInFlight`; the lock free, `OutOfOrder` | `InvocationInFlight`; the lock free, `RestoreNamed` | `InTransition` |
-| S11, a silent worker being ended | `InvocationInFlight`; with the lock free while the processes are being ended, `AgentRunning` | `InvocationInFlight`; the lock free, waits for the run to end | waits, then as S0 or S0d | `InvocationInFlight`; the lock free, `OutOfOrder` | `InvocationInFlight`; the lock free while the processes are being ended, `RestoreNamed` | `InTransition`, or `Unanswered` while a wedged agent still accepts and does not answer, then `InTransition` with the run's processes named once it no longer listens, then `Unloaded` once they are gone |
+| S10, a force in progress | `InvocationInFlight` | `InvocationInFlight` | joins the forced leave | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+| S11, a silent worker being ended | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 
-**"The lock free" is what admin observes**: no other command holds the agent's invocation
-lock, whether its caller was killed or an escalation is ending the run's processes
-without it (`weaver-admin-Spec` section 3); each split cell is keyed on that, not on
-whether a caller lives.
+**The table is for one command at a time** (`weaver-agent-PRD` section 6.1, the
+operating envelope): a caller issues one command and waits for its answer, the one
+admitted overlap being `force-unload` joining an `unload`. **A command killed
+mid-command is outside the envelope** and gets no takeover: the run finishes or dies on
+its own, and a later command finding the agent's lock free mid-transition answers
+conservatively (`weaver-admin-Spec` section 3, outside the envelope): `load` refuses
+`AgentRunning`; `unload` refuses `OutOfOrder` where a leave is already in progress, or
+ends a run whose agent no longer listens; `force-unload` ends whatever stands, marking
+it forced; `save-point` refuses `OutOfOrder`. The next load recovers any save point
+left in the room, and its reset may be conservative but is never clean where the state
+was not kept.
 
 `restore` names the save point the next load restores in every state that answers it,
 the live restore being A5's. `stop` and `validate` take the invocation lock as every
@@ -251,7 +257,7 @@ line but `show` does, so each refuses `InvocationInFlight` wherever the table sh
 invocation holding it (S1, S4 to S8, S10, S11); a `stop` in S9 answers `AtRest`. The
 lock is taken before the state is read, so a line that meets a held lock refuses
 `InvocationInFlight` whatever the state behind it. `show` alone reads beside a holder, and
-what it prints is one ladder (`weaver-admin-Spec` section 5): `InTransition` at once
+what it prints is one ladder (`weaver-admin-Spec` section 3): `InTransition` at once
 where another command holds the agent; otherwise the agent's own word where it answers
 (`Idle` or `Active`, or `InTransition` while an unload is in progress); `Unanswered`
 where it accepts and does not answer in time, a worker wedged; `InTransition` with the
@@ -287,14 +293,10 @@ leave's cause, and the `unload` concludes as a forced leave does. With no bound
 declared, or one alone, the `unload` waits for the agent's answer with no deadline, and
 a caller's own timeout must allow for that; with both declared it waits their sum and
 150 seconds, then escalates as `weaver-admin-Spec` section 3 states. The escalation's
-waits and the publication after the answer come on top, as before. These bounds cover a
-leave the `unload` directs, not the recovery of a run already past its outcome: an
-`unload` that finds the agent no longer listening while a process still holds the run
-waits for it with no deadline (`weaver-admin-Spec` section 3, the seal's table), and
-`force-unload` is the recourse.
+waits and the publication after the answer come on top, as before.
 
-**`force-unload` can be issued in any state, and it always ends the run** (I3).
-- **Alone** (S2, S3, S9, and wherever it finds the lock free): the gate closes at once
+**`force-unload` always ends the run, alone or joining an `unload`** (I3).
+- **Alone** (S2, S3, S9): the gate closes at once
   and every request it holds is recorded refused and its connection closed; the turn in
   flight is cancelled and recorded as a stop for the unload; no wind-down runs; the
   leave save point is taken as at any unload. It prints `Unloaded`. Where the save point
@@ -312,57 +314,26 @@ waits for it with no deadline (`weaver-admin-Spec` section 3, the seal's table),
   lock first, publishing and closing the marker, and the force after it, finding the run
   concluded and changing nothing (I1); each prints only once the run lock has freed,
   never on the agent's answer alone, so `Unloaded` means no constituent still runs. From
-  S7 on, the leave's outcome being fixed, the join adds nothing to it and concludes the same way.
-- **Behind any other holder of the lock** (a load in S1, a `show`, a `save-point`, an
-  unload concluding in S8): it retries the join and the lock in turn, and acts alone
-  once it holds the lock. It first waits the holder's own bound and takes over none.
-  Behind a load it waits for the load to publish the recovered files it found from an
-  unclosed run, which is bounded by their size and not by time, then at most that
-  load's bound (900 seconds unless the agent's root names another), which bounds the
-  enter alone, the load concluding inside it; where the agent does not start inside it,
-  the force also waits the load's rollback, a forced leave of at most 150 seconds and
-  the escalation's 45. Behind a holder that is
-  publishing (a `save-point`'s publication, or another caller's conclusion) it waits for
-  that publication's copy, which is bounded by size and not by time, since a publication
-  interrupted midway is worse than one waited for. The escalation applies to an
-  unanswered join, never to these waits. So, from the moment it can act, a force ends
-  the run within 150 seconds plus the escalation's 45, after the load's publication, its
-  bound and, where the agent did not start, its rollback, where a load is in flight (I3). That bound ends before the publication: copying the leave's
-  save point, and any recovered file the room holds, is bounded by their size and the
-  copy's speed and not by time (`weaver-admin-Spec` section 3), so the command prints
-  once that copy is done.
-- **On an orphaned force** (a `force-unload` whose invocation was killed in S10 before
-  the agent wrote its `unload`): a later force takes the lock alone and joins the forced
-  leave, receives its outcome, and concludes as every answered caller does.
-- **On an orphaned unload** (an `unload` whose invocation was killed in S4 to S6): the
-  lock is free and the leave still pending, so the force takes the lock alone and its
-  leave joins the pending one, turning it forced, the record naming its cause as
-  `forced_by`; the force concludes as every answered caller does. A second `unload` in the same case adopts the leave instead,
-  keeping it graceful: it waits for the drain and the wind-down, then concludes as every
-  answered caller does, and the record names it as `adopted_by` (the operator's
-  ruling of 2026-10-09).
+  S7 on, the leave's outcome being fixed, the join adds nothing to it and concludes the same way,
+  and once the agent no longer listens it refuses `InvocationInFlight`, the unload concluding.
+- **Beside any other command** (a load in S1, a `save-point`, another force, an unload
+  concluding in S8): it refuses `InvocationInFlight` and takes over nothing, one command
+  at a time being the caller's to keep (`weaver-agent-PRD` section 6.1). A `show`'s
+  brief shared hold is waited out, as by every command.
 - **On a worker that answers nothing** (S11): a join unanswered within 150 seconds ends
   the run's processes without the lock (I3), and only then writes the marker `Forced`,
-  by `weaver-admin-Spec` section 6's marker-write rule: holding the invocation lock, and
-  leaving a marker that names another run or is already closed for this one as it
-  stands. The `unload` holding the lock is answered no `Left`,
+  by `weaver-admin-Spec` section 4's marker-write rule. The `unload` holding the lock is answered no `Left`,
   so it concludes nothing and releases the lock, and the marker stands `Forced`, the
   escalator's. The force prints `Unloaded`, or `LockHolderUnknown` or `WorkerWouldNotExit`
   where the escalation cannot end the run, per section 5.
 
-**A caller whose invocation is killed during an unload** (S4 to S8) leaves the next
-caller the agent answers to conclude: a force or a second `unload` as above while the
-leave can still change, S4 to S6, or from S7 on a later `force-unload` or `unload`, which
-the agent answers with the leave as it stood, adding nothing to the record, where it
-reached the agent before the agent stopped listening, the answer coming once the agent
-has written its record; one after that waits for the run to end and finds it ended,
-publishing what the run left as recovered, as `weaver-admin-Spec` section 3's table for
-the seal gives, a `force-unload` waiting at most 150 seconds and then the escalation's
-45. With no
-answered caller the agent finishes the leave unanswered: the save point stays in the member's room for the next verb
-to publish, and the marker stays open, so the next load records `NoCleanUnload` although
-the state was kept, a conservative label with nothing lost (`weaver-admin-Spec` section
-3, the conclusion, and an invocation killed during S4 to S8).
+**A caller whose invocation is killed mid-command is outside the envelope**
+(`weaver-agent-PRD` section 6.1): no later command takes over its work. The run finishes
+or dies on its own, `force-unload` ends whatever still stands, and the next load
+publishes any save point left in the member's room as recovered and records the reset
+the marker carries, `NoCleanUnload` where the state was in fact kept being a
+conservative label with nothing lost (`weaver-admin-Spec` section 3, outside the
+envelope).
 
 ## 5. Failure
 

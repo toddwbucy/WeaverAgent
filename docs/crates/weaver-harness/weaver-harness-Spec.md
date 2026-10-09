@@ -1382,10 +1382,10 @@ facts the load event was authored from and held on the run for this exchange. **
 leave is pending the answer is `InTransition`**, whether a turn runs or not, so in S4 to
 S6 and S10 `show` answers the same whether the unload's invocation still holds the lock
 or has died (`weaver-admin-Spec` section 3, S4 to S7 and S10 x `show`; the operator's
-ruling of 2026-10-09). In S7 an observation the harness holds before the unlink is answered `InTransition` when it is accepted, and one after the unlink finds no socket, which admin answers by its general rule, `InTransition` with the run's constituents named while the run lock is held and `Unloaded` once it frees (`weaver-admin-Spec` section 3, the seal's table). After a
+ruling of 2026-10-09). An `Observe` reaches a pending leave only where its holder has died, outside the envelope, and is answered `InTransition`. After a
 leave the answer is `Unloaded` with no load, the position being terminal and the
-observation not an act, so it is, beside a late caller's `Leave` answered the `Left` as it
-stands, a directive the left position answers rather than refuses. No event is authored and no bracket touched: an observation mid-turn reads the
+observation not an act, so it is the one directive the left position answers rather than
+refuses. No event is authored and no bracket touched: an observation mid-turn reads the
 turn key and the held facts and disturbs nothing. **The state the observation answers is
 true of the run.** Since 2026-09-05 the turn key stands on the run from the bracket's
 open until its close lands, set by the seat where the key is minted and cleared where
@@ -2188,18 +2188,10 @@ writing the marker by its marker-write rule (K1).
 **A force that joins a pending leave turns it forced from where it stands**
 (`weaver-admin-Spec` section 3, the forced unload (joining); S4, S5 and S6 x
 force-unload). `JoinLeave { cause }`, the force admin sends without the invocation lock
-beside the graceful unload that holds it, joins it. **Any forced `Leave` that arrives
-while any leave is pending joins it the same way**, by this crate's own state: that
-happens only where the invocation holding the pending leave died while it could still
-change, a graceful unload's in S4 to S6 or a force's in S10,
-and a force took the freed lock as sole; a pending forced leave answers it with its own
-`Left` (the orphaned leave of `weaver-admin-Spec` section 3; I1, I3), and its caller,
-answered `Left`, concludes as every answered caller does (`weaver-admin-Spec` section 3,
-the conclusion). From S7 on, a graceful or a forced
-leave's save point taken or missed and its outcome fixed, a forced or an unforced `Leave` from a late caller, its dial held at the seal's step 3, is answered the `Left`
-as it stands and adds nothing to the record, neither `forced_by` nor `adopted_by` (the
-late caller of `weaver-admin-Spec` section 3, who concludes as every caller this crate
-answers with `Left` does; I2). What remains of the quiesce's wait, the drain and the wind-down is
+beside the graceful unload that holds it, joins it: the one overlap the operating
+envelope admits (`weaver-agent-PRD` section 6.1). Its caller, answered `Left`,
+concludes as every answered caller does (`weaver-admin-Spec` section 3, the
+conclusion). What remains of the quiesce's wait, the drain and the wind-down is
 skipped: a tool call out is interrupted, the turn or the wind-down's generation is
 cancelled as a stop, and a gate already quiescing or draining is brought down with
 `Lower`, as the sole force's is: the gate sends every frame it admitted and had not yet
@@ -2212,21 +2204,16 @@ abandon them. The pending leave keeps its own cause, the graceful caller's, and 
 the joining cause as `forced_by` on `unload` where that join is the first force to turn
 the still-graceful leave forced, and every dialer is answered with the same `Left {
 forced: true }` (I2); a later join, or a join into a leave a declared bound already
-turned forced, is answered with that `Left` and named nowhere. `JoinLeave` with no leave pending is `OutOfOrder`, and so are a `JoinLeave` and a forced `Leave` meeting a pending rollback leave, a rollback never being joined (`weaver-admin-Spec` section 3, S1 x force-unload; K1); the first
-tells admin the lock's holder is no unload; while a leave is pending a second unforced
-`Leave` and a `SavePoint` meet a living holder's lock at admin first, refused
-`InvocationInFlight` before it dials (I1). Where the holder has died in S4 to S6, **a
-second unforced `Leave` adopts the pending graceful leave** (`weaver-admin-Spec` section 3, the adopted
-leave; the operator's ruling of 2026-10-09): this crate keeps the leave graceful, with
-its own cause, drain and wind-down, records the first adopting caller's cause as
-`adopted_by` on `unload`, and answers the adopter with the leave's `Left` when it
-completes. A `SavePoint` while a leave is pending stays `OutOfOrder`, holder living or
-not: only `Leave` adopts. An unforced `Leave` meeting a pending forced leave (S10) is
-`OutOfOrder` too, the forced leave's own `Left` being what a force's join receives.
+turned forced, is answered with that `Left` and named nowhere. `JoinLeave` with no leave pending is `OutOfOrder`, which
+tells admin the lock's holder is no unload. **A `Leave` meeting a pending leave is
+`OutOfOrder`, forced or not**, as is a `SavePoint`: while the holder lives admin's lock
+refuses them before they dial (I1), and where it has died, outside the envelope, the
+refusal is admin's cue for its conservative answer (`weaver-admin-Spec` section 3,
+outside the envelope), this crate taking over no leave.
 
 **From S7 on, a join gets the `Left` as it stands** (`weaver-admin-Spec` section 3, the
 forced unload (joining), and the ordering of #94's round 21; I2). From S7 on the
-leave's outcome is fixed, its save point taken or missed, so a force heard then adds nothing to the record,
+leave's outcome is fixed, its save point taken or missed, so a join held at the seal adds nothing to the record,
 records no `forced_by`, and is answered with the same `Left` the leave's own dialer
 gets, its `forced` as the leave came down; its caller concludes all the same
 (`weaver-admin-Spec` section 3, the conclusion).
@@ -2237,11 +2224,11 @@ lower, the save point's four legs and the grants read-back poll the listener bes
 they wait on, and the dials that land while this crate waits on what cannot be polled
 beside it, the SPU's release, the trace's drain and the reaps, are swept from the
 listener's backlog before the leave's dialers are answered, by the from-S7 rule. **S7
-runs the seal's steps** (`weaver-admin-Spec` section 3, the seal: S7's own steps, whose
-table is the authority and is not restated here): the pathname unlinked, the backlog
-accepted into held connections, the release, `unload`, the writer's drain, and only
-then the `Left` to the leave's dialer and every held `Leave` and `JoinLeave`, before the
-listening descriptor closes and the worker exits.
+runs the seal's steps** (`weaver-admin-Spec` section 3, the seal: S7's own steps, the
+authority, not restated here): the pathname unlinked, the backlog drained into held
+connections, the release, `unload`, the writer's drain, and only then the `Left` to the
+leave's dialer and every held `JoinLeave`, before the listening descriptor closes and the
+worker exits.
 
 **The drain and the wind-down are unbounded by default, and every other leg is bounded**
 (I3; the operator's ruling of 2026-10-09 on #1; #107, area 1, R2). The turn in flight
@@ -3248,9 +3235,8 @@ for the organs whose side is unwritten.
   any enter answers `OutOfOrder` and reaches no unwind, and a directive
   arriving after a leave answers the same, the left position being terminal,
   but for `Observe`, answered `InTransition` while a leave is pending and
-  `Unloaded` once it is left, and `JoinLeave` and the `Leave`s section 6 admits
-  while a leave is pending or once it is answered (a join, an adoption, a late
-  caller answered the `Left` as it stands). The compile pin of section 3 holds that the refusal reaches a match
+  `Unloaded` once it is left, and `JoinLeave` while a leave is pending, the one
+  join the envelope admits. The compile pin of section 3 holds that the refusal reaches a match
   arm rather than a flag check, and this holds what the arm then does, an arm
   being free to queue or to answer the wrong refusal while compiling exactly as
   well. Confirmed twice, by watching the early leave reach the unwind path when

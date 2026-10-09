@@ -318,7 +318,6 @@ pub struct UnloadClose {
     pub cause: Option<Cause>,
     pub forced: bool,
     pub forced_by: Option<Cause>,
-    pub adopted_by: Option<Cause>,
     pub release: Option<Release>,
 }
 
@@ -707,13 +706,7 @@ forced, the bound having been first. It is absent where no force joined, a sole 
 included, whose `cause` already names it, and a leave turned forced by a declared
 bound, whose `cause` stays the graceful caller's, and is never written null; absent at the
 read in a record written before the lifecycle act, which no force could join, so the
-absence reads the same, per section 3's rule for an added member; an optional member on a standing kind's payload, it names no new kind. **`adopted_by` names the
-account whose `unload` adopted an orphaned graceful leave**, in S4 to S6
-(`weaver-admin-Spec` section 3, the adopted leave; the operator's ruling of 2026-10-09);
-from S7 on the leave's outcome is fixed and a late caller is named nowhere: `cause` stays the leave's own,
-and `adopted_by` carries the first adopting caller's cause, one name; absent where no
-caller adopted the leave, a record written before the lifecycle act, which no caller
-could adopt, included, and never written null. **`release` says how the run's organs let go**, on the lifecycle act's I9 (`weaver-admin-Spec`
+absence reads the same, per section 3's rule for an added member; an optional member on a standing kind's payload, it names no new kind. **`release` says how the run's organs let go**, on the lifecycle act's I9 (`weaver-admin-Spec`
 section 3): the SPU and the member are released before `unload` is authored, so
 `unload` is the run's terminal event and carries the outcome. The SPU's is `Confirmed`
 or `Unconfirmed`, its `Release` answered `Released` or not, per
@@ -728,7 +721,7 @@ at the read**, per section 3's rule for an added member: this crate always write
 so a current record always carries it, and its absence means only that the record was
 written before the member existed and the release was not recorded, never that it was
 confirmed. The
-`unload` event's `forced`, `forced_by` and `adopted_by` agree with the `Left` answer's
+`unload` event's `forced` and `forced_by` agree with the `Left` answer's
 `forced`, each the leave's state at its end, and the marker is the conclusion's outcome
 row for that `Left` (`weaver-admin-Spec` section 3), per I2, the rollback excepted by name. `load` carries `Elections`. The five
 message kinds carry `Message`. `turn.closed` carries `TurnClosed`. `fault` carries
@@ -2010,11 +2003,6 @@ the fact exists.
   writes the joining cause into `cause`; and where a declared bound turns the leave
   forced and a force joins after it, `forced_by` is absent, the bound having been first,
   watched to fail when the harness records the join.
-- The `unload` event names an adopting caller apart, per section 3, owed by the
-  lifecycle act's code: `adopted_by` is absent from a payload no caller adopted, watched
-  to fail when its `skip_serializing_if` is removed, and an adopted leave's `unload`
-  carries the leave's own `cause` and the adopter's `adopted_by`, watched to fail when
-  `adopted_by` is absent, written null, or carries the original cause.
 - A score is recorded turnless with the verdict and the ratio's two terms, per section
   3: the recorder refuses one carrying a turn or another kind's payload, watched to fail
   when the kind leaves `turn_forbidden` or its pairing row, and the port records one per

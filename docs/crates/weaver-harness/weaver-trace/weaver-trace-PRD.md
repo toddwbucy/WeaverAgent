@@ -377,8 +377,7 @@ above, and added here then: the take landed as `save_point` on 2026-10-05; a res
 the `load` event's lineage with its named-at-restore mark, and a forced unload is an
 unload and rides the `unload` event's `forced`, both as of A3.2 (2026-10-06), a force
 that joined another account's still-graceful leave, the first to turn it forced, naming its caller in the optional
-`forced_by` beside the leave's own `cause`, and an `unload` that adopted an orphaned
-graceful leave naming its caller in the optional `adopted_by`, a load's rollback writing `forced` as the
+`forced_by` beside the leave's own `cause`, a load's rollback writing `forced` as the
 exemption `weaver-admin-Spec` section 3's I2 names, as of the lifecycle act (2026-10-09, on the lifecycle
 state table approved by the operator that day, recorded on #1, which `weaver-admin-Spec`
 section 3 holds), no kind being named ahead of its emitter, so the live restore's own event, a reload within a

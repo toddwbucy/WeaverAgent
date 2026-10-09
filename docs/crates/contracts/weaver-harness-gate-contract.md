@@ -170,7 +170,7 @@ its connection
 closing unanswered (I5). **Stopped is sent only after the closes have returned,** so
 nothing new can arrive anywhere in the interior once the harness proceeds. **A force
 that joins a leave whose gate is quiescing or draining sends `Lower` as well** (the
-forced unload (joining), and the orphaned leave): the gate sends every frame it admitted
+forced unload (joining)): the gate sends every frame it admitted
 and had not yet sent ahead of its answer, the harness recording each refused with
 `Unloading`, writes what it owes inside the lower bound, closes, and answers stopped
 (I5). Closing the harness's end of this channel is only the escalation, where the gate

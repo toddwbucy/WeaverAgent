@@ -407,15 +407,11 @@ lock between them, and they live in the containment the load was invoked from: a
 run from a login shell's scope lives in that scope. `unload` asks the agent to leave,
 letting it finish the turn in flight and write a wind-down summary before its save
 point, which has no time limit unless the declaration's `[lifecycle]` table sets a
-`drain-bound` and a `wind-down-bound`; with both set it ends a leave it directs within
-their sum plus 195 seconds. That promise covers the leave `unload` directs, not the
-recovery of a run already past its outcome: an `unload` that finds the agent no longer
-listening while a process still holds the run waits for it with no deadline, and
-`force-unload` is the recourse there. `force-unload` stops the work at once and
-still saves the state, ending the run within 195 seconds (behind a load in progress,
-that load's copy of recovered files, its bound, and its rollback where the agent did not
-start, first; behind a `save-point` or an unload publishing, that copy first). Either
-then publishes the leave's save point, which takes as long as copying it does. Admin's
+`drain-bound` and a `wind-down-bound`; with both set it ends the run within their sum
+plus 195 seconds. `force-unload` stops the work at once and
+still saves the state, ending the run within 195 seconds; issued while an `unload` is
+in progress it joins it, and beside any other command it refuses, one command at a time
+being yours to keep. Either then publishes the leave's save point, which takes as long as copying it does. Admin's
 own acts on this agent are in `<territory>/admin.log`, and the worker's output in
 `worker.log` beside it, both root's and yours to read through the access group.
 
