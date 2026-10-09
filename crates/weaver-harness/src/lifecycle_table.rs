@@ -192,6 +192,7 @@ pub fn respond(position: Position, event: Event) -> Response {
         (S2(_), MemberDies) => ServeOnSeamRetired,
         (S2(_), GateDies) => GateFaultServeOn,
         (S2(Resident), SpuDies) => SpuFaultServeOnRefuseLater,
+        // 3.0, under (B): an SPU already dead does not die again.
         (S2(Dead), SpuDies) => NoCell,
 
         (S3, DialerRequest) => QueueBehindTurn,
@@ -209,6 +210,8 @@ pub fn respond(position: Position, event: Event) -> Response {
         (S4(Graceful, Diagnostic), TurnCloses) => CloseCleanToS6,
         (S4(Forced, _) | S10, TurnCloses) => CancelTurnNoWindDown,
         (S4(Graceful, _) | S5, BoundPasses) => ForceFromHere,
+        // 3.0, under the event table: a bound passing after the leave
+        // turned forced changes nothing, its late timer ignored.
         (S4(Forced, _), BoundPasses) => NoCell,
         (S4(..) | S5, LegMissed) => NoCell,
         (S4(..) | S5, MemberDies) => LeaveGoesOnSeamRetired,

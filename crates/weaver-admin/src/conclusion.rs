@@ -414,6 +414,45 @@ mod tests {
                 },
                 LeftKind::Reported { this_run: false },
             ),
+            // The cases each key admits beside the ones above.
+            (
+                Seen {
+                    rollback: Some(false),
+                    forced: true,
+                    ..base
+                },
+                LeftKind::Rollback {
+                    load_on_trace: false,
+                },
+            ),
+            (
+                Seen {
+                    no_state: true,
+                    forced: true,
+                    ..base
+                },
+                LeftKind::NoState,
+            ),
+            (
+                Seen { reported, ..base },
+                LeftKind::Reported { this_run: true },
+            ),
+            (
+                Seen {
+                    forced: true,
+                    reported,
+                    ..base
+                },
+                LeftKind::Reported { this_run: true },
+            ),
+            (
+                Seen {
+                    forced: true,
+                    reported: Some(Reported { this_run: false }),
+                    ..base
+                },
+                LeftKind::Reported { this_run: false },
+            ),
         ] {
             assert_eq!(classify(seen), Ok(kind), "{seen:?}");
         }

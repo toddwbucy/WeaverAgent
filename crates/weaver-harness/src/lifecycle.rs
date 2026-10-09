@@ -3907,6 +3907,21 @@ mod tests {
                                         "<undeliverable> exchange {}",
                                         late.exchange.ordinal
                                     ));
+                                    // A second `Lower` is answered, so a
+                                    // harness that lowers twice finishes and
+                                    // its test reads the mark, not a hang.
+                                    if matches!(
+                                        late.payload,
+                                        weaver_types::Payload::Directive(LifecycleDirective::Lower)
+                                    ) {
+                                        let _ = channel.send(&OrganEnvelope {
+                                            exchange: late.exchange,
+                                            position: Position::Close,
+                                            payload: weaver_types::Payload::Answer(
+                                                LifecycleAnswer::GateStopped,
+                                            ),
+                                        });
+                                    }
                                 }
                             }
                         }));
@@ -4428,15 +4443,19 @@ mod tests {
     /// on #1 (A3.0 item 6): the harness refuses `SavePointNotTaken` naming
     /// the finished leg, authors no `save_point` and no `unload`, and stays
     /// entered at rest with the run open; and **a forced leave takes none**,
-    /// the `unload` event saying so and `Left` naming no save point.
+    /// the `unload` event saying so and `Left` naming no save point. **The
+    /// stopped run keeps its gate lowered** (S9, `weaver-admin-Spec` 3.0): the
+    /// leave that follows, here the fixture's own unwind on the same
+    /// `lower_gate` path a retried `Leave` takes, sends no second `Lower`.
     ///
     /// Perturbations: convert the missed leg under the dead-peer rule and
     /// the leave completes, the first case's `unload` appearing; take the
     /// save point on a forced leave and the second case's record carries
-    /// one.
+    /// one; keep the gate in `lower_gate` and the S9 case's stand-in meets a
+    /// second `Lower`.
     #[test]
     fn a_leave_without_its_save_point_stops_and_a_forced_leave_takes_none() {
-        let (events, _, _, answer, still_entered) = enter_against_a_member_leaving(
+        let (events, _, s9_read, answer, still_entered) = enter_against_a_member_leaving(
             None,
             false,
             EMPTY_RESTORED,
@@ -4455,6 +4474,17 @@ mod tests {
             "the missed leg is named"
         );
         assert!(still_entered, "the run stays open at rest");
+        let lowers: Vec<&String> = s9_read
+            .iter()
+            .filter(|line| {
+                line.starts_with("<gate lowered>") || line.starts_with("<undeliverable>")
+            })
+            .collect();
+        assert_eq!(
+            lowers,
+            vec!["<gate lowered>"],
+            "S9 keeps its gate lowered: the leave after it sends no second `Lower`"
+        );
         let kinds: Vec<&str> = events.iter().map(|e| e["kind"].as_str().unwrap()).collect();
         // The run was then unwound by the fixture itself; what the refused
         // leave authored is nothing, so the first unload is the fixture's.

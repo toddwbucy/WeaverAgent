@@ -76,7 +76,15 @@ pub enum AdminView {
     /// A living holder of any other verb: S1, S10, S8a or S11 under a force,
     /// and the verbs outside the table holding briefly.
     HeldByOther,
-    /// A worker answers at rest or with a turn: S2, S3, S9.
+    /// A worker answers at rest or with a turn: S2, S3, S9. **Admin directs
+    /// and the harness tells the three apart**, each split pinned there:
+    /// S3's `ActivityNotAtRest` to a save point by
+    /// `lifecycle::tests::a_save_point_or_a_leave_with_a_turn_in_flight_is_refused_not_at_rest`
+    /// and `engine::tests::a_save_point_or_a_leave_mid_turn_is_refused_not_at_rest`;
+    /// `show`'s word by `lifecycle::tests::observe_answers_from_any_position_and_authors_nothing`
+    /// and `engine::tests::an_observation_dialed_mid_stream_answers_active_and_disturbs_nothing`;
+    /// S9's lowered gate, never lowered twice, by
+    /// `lifecycle::tests::a_leave_without_its_save_point_stops_and_a_forced_leave_takes_none`.
     Serving,
     /// A worker accepts and does not answer: S2, S3 or S9, wedged.
     Wedged,
@@ -204,6 +212,9 @@ pub fn act(verb: Verb, view: AdminView) -> VerbAction {
             EndByEscalation
         }
 
+        // A wedged worker is S2, S3 or S9 to the verbs (3.0, a worker that
+        // accepts and does not answer): the directive goes, and its bound
+        // answers `Unanswered`.
         (Verb::SavePoint, Serving | Wedged) => DirectSavePoint,
         (Verb::SavePoint, Down | LeavePendingUnheld | NeverEntered | WorkerGone) => {
             RefuseOutOfOrder
