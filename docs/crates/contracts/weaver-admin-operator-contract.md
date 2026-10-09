@@ -226,7 +226,7 @@ state; it reads `show` and acts on what it prints.
 | S1, loading | `InvocationInFlight` | `InvocationInFlight` | waits for the load, at most its bound, then answers as the state it finds | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S2, serving at rest | `AgentRunning` | the graceful unload, below | the forced unload, below | `SavePointTaken` | `RestoreNamed` | `Idle` |
 | S3, serving, a turn in flight | `AgentRunning` | the graceful unload, after the turn | the forced unload, the turn cancelled | `ActivityNotAtRest` | `RestoreNamed` | `Active` |
-| S4 to S7, a graceful unload in progress | `InvocationInFlight` | `InvocationInFlight` | joins, below | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+| S4 to S7, a graceful unload in progress | `InvocationInFlight` | `InvocationInFlight`, or, the holder having died, adopts the leave | joins, below | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S8, an unload concluding | `InvocationInFlight` | `InvocationInFlight` | waits, then as S0 or S0d | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S9, an unload stopped at its save point | `AgentRunning` | retried: the save point, then down | the forced unload | `SavePointTaken` | `RestoreNamed` | `Idle`, the gate lowered |
 | S10, a force in progress | `InvocationInFlight` | `InvocationInFlight` | joins | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
@@ -296,7 +296,10 @@ waits and the publication after the answer come on top, as before.
   lock is free and the leave still pending, so the force takes the lock alone and its
   leave joins the pending one, turning it forced; the force concludes as a force alone
   does, publishing the save point and closing the marker, and the record names its
-  cause as `forced_by`.
+  cause as `forced_by`. A second `unload` in the same case adopts the leave instead,
+  keeping it graceful: it waits for the drain and the wind-down, then concludes and
+  prints as any `unload` does, and the record names it as `adopted_by` (the operator's
+  ruling of 2026-10-09).
 - **On a worker that answers nothing** (S11): a join unanswered within 150 seconds ends
   the run's processes without the lock and only then writes the marker `Forced` (I3).
   The `unload` holding the lock concludes with no save point and the marker stands

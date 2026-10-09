@@ -2172,10 +2172,15 @@ the first joining cause as `forced_by` on `unload`, and every dialer is answered
 same `Left { forced: true }` (I2); a later join is answered with that `Left` and named
 nowhere. `JoinLeave` with no leave pending is `OutOfOrder`, which
 tells admin the lock's holder is no unload; while a leave is pending a second unforced
-`Leave` and a `SavePoint` are `OutOfOrder`: while the graceful unload's invocation lives,
-admin refuses those verbs `InvocationInFlight` before it dials (I1); where it has died,
-the verb reaches this crate and is refused here, the operator's recourse being
-`force-unload`, whose forced `Leave` joins (I3).
+`Leave` and a `SavePoint` meet a living holder's lock at admin first, refused
+`InvocationInFlight` before it dials (I1). Where the holder has died, **a second unforced
+`Leave` adopts the pending graceful leave** (`weaver-admin-Spec` section 3, the adopted
+leave; the operator's ruling of 2026-10-09): this crate keeps the leave graceful, with
+its own cause, drain and wind-down, records the first adopting caller's cause as
+`adopted_by` on `unload`, and answers the adopter with the leave's `Left` when it
+completes. A `SavePoint` while a leave is pending stays `OutOfOrder`, holder living or
+not: only `Leave` adopts. An unforced `Leave` meeting a pending forced leave (S10) is
+`OutOfOrder` too, the forced leave's own `Left` being what a force's join receives.
 
 **From S7 on, a join gets the `Left` as it stands** (`weaver-admin-Spec` section 3, the
 forced unload (joining), and the ordering of #94's round 21; I2). Once `unload` is
