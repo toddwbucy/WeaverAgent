@@ -1024,8 +1024,10 @@ set is four seam vocabularies wide and grows with the seams, and declaring
 it here would make this crate depend on what it must not depend on and
 version what it does not own.
 
-**`StopReason` gains `Unload`, and the tool outcome's `by` gains `unload`**, with the
-lifecycle act (2026-10-09), so the record names an unload's interruption and not only
+**`StopReason` gains `Unload`, and the tool outcome's `by` gains `unload` and `fault`**,
+with the lifecycle act (2026-10-09), `fault` closing a call the gate's death left
+unanswered, which the harness synthesizes and which reads re-runnable as an unload's
+does (`weaver-admin-Spec` section 3, the organ-death table; Codex on #109, round 38), so the record names an unload's interruption and not only
 that something stopped the turn. **A turn that finished closes `Clean`** during a
 graceful unload as at any other time (`weaver-admin-Spec` section 3, S4 x turn closes),
 and **only a turn the unload ended closes `Stopped { reason: unload, cause }`** with the

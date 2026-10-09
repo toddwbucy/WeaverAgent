@@ -3259,12 +3259,13 @@ for the organs whose side is unwritten.
   and `wind_down_bound`, a drain or a wind-down past its bound turns the leave forced
   from where it stands, `Left.forced` true, the `unload` event naming no `forced_by` and
   keeping the graceful caller's `cause`; under an enter carrying neither, the same
-  stand-in turn is waited for; under an enter carrying `drain_bound` alone, the drain
-  past it turns the leave forced while a wind-down past any time is waited for, and
-  under `wind_down_bound` alone the reverse, each phase held to its own bound or to
-  none. The bounds are read from the enter alone. Confirmed by
+  stand-in turn is waited for; under an enter carrying `drain_bound` alone, a drain past
+  it turns the leave forced and the forced leave runs no wind-down, while under
+  `wind_down_bound` alone the drain is waited for without a bound and a wind-down past
+  its bound turns the leave forced. The bounds are read from the enter alone. Confirmed by
   watching the test fail when the harness ignores the enter's bound, when it writes
-  a `forced_by`, and when a lone bound is applied to the other phase too.
+  a `forced_by`, when a lone bound is applied to the other phase too, and when a leave the drain bound
+  turned forced runs the wind-down.
 - `Observe` answers `InTransition` while a leave is pending (`weaver-admin-Spec`
   section 3, `show` in S4 to S7 and S10; section 4), whether a turn runs or not, owed by
   the lifecycle act's code: an `Observe` heard in the drain with a turn running, and

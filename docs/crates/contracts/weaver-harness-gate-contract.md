@@ -451,7 +451,9 @@ exchange naming this arm, per the rule `weaver-admin-harness-contract` section 4
 applies to a fault before ready. After the aggregate, the death is the loss of the
 agent's reachability, observed through closure and authored to the stream as the
 `fault` event, per the fault-carrier ruling of 2026-08-01, the operator's tooling
-keying on it there.
+keying on it there. A tool execution open when the gate dies has no answer coming: the
+harness closes it `Killed { by: fault }`, a call never finished and re-runnable, as an
+unload's interrupted call is (`weaver-admin-Spec` section 3, the organ-death table).
 
 **Nothing on this seam retries.** A refused directive returns to the harness, which
 unwinds, and a re-sent directive would put two attempts behind one operator intent.

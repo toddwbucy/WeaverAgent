@@ -754,8 +754,8 @@ every connection that stands; sends every frame still waiting on the channel's
 writability; and only then answers `GateQuiesced`, so every request this crate admitted
 reaches the harness ahead of the answer and the harness refuses each it had not started
 through this crate, the connection standing (S4 x dialer request). `Quiesce` from any
-other position is out of order. **Draining routes and reads nothing**: a response frame
-still routes to the connection owed it, so the turn in flight gives its final output and
+other position is out of order. **Draining reads no client input and opens no exchange, and still routes the frames it
+owes**: a response frame still routes to the connection owed it, so the turn in flight gives its final output and
 a request received but not started gets its refusal, each on its own connection, while
 no line is read and no exchange opens; a tool execution opens only in the raised
 position, the harness interrupting one out before it quiesces.
