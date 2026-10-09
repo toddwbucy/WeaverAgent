@@ -449,8 +449,11 @@ an obligation on the party that could break it.
   forced leave is refused `OutOfOrder`. A leave refused `SavePointNotTaken`, one that stayed graceful to its
   miss (a forced one answering `Left` instead), is no longer pending, and the run stands entered at rest for a retried or a forced `Leave`
   (S9).
-- `JoinLeave` is valid only while a leave is pending, and is refused `OutOfOrder`
-  otherwise, before the enter included.
+- `JoinLeave` is valid only while a leave other than a rollback's is pending, and is
+  refused `OutOfOrder` otherwise, before the enter included: a `JoinLeave` against a
+  pending `Leave` with `rollback` true is refused, which is how a force beside a load
+  refuses `InvocationInFlight` (`weaver-admin-Spec` section 3, the forced unload,
+  joining).
 - Within the run, the record's order is `weaver-admin-Spec` section 3, I9: the
   harness authors `save_point` before `unload`, releases the SPU and the member before
   `unload`, any fault of that release and any recorder pressure authored before it, and
@@ -571,7 +574,7 @@ ask, because admin answers nothing. The cases:
   carries its reason, so the aggregate answer is one refusal rather than a report to
   parse
 - the directive is out of order for the channel's state: a `JoinLeave` with no leave
-  pending; and, while a leave is pending, any directive but `Observe` (answered
+  pending, or against a pending rollback leave; and, while a leave is pending, any directive but `Observe` (answered
   `InTransition`) and `JoinLeave`, a `Leave` of either kind included
 - activity is not at rest, so no save point is taken on demand (`weaver-admin-Spec`
   section 3, S3 x save-point); a leave is never refused for activity

@@ -2206,7 +2206,8 @@ abandon them. The pending leave keeps its own cause, the graceful caller's, and 
 the joining cause as `forced_by` on `unload` where that join is the first force to turn
 the still-graceful leave forced, and every dialer is answered with the same `Left {
 forced: true }` (I2); a later join, or a join into a leave a declared bound already
-turned forced, is answered with that `Left` and named nowhere. `JoinLeave` with no leave pending is `OutOfOrder`, which
+turned forced, is answered with that `Left` and named nowhere. `JoinLeave` with no leave pending is `OutOfOrder`, and so is one against a pending
+rollback leave (`Leave` with `rollback` true), which
 tells admin the lock's holder is no unload. **A `Leave` meeting a pending leave is
 `OutOfOrder`, forced or not**, as is a `SavePoint`: while the holder lives admin's lock
 refuses them before they dial (I1), and where it has died, outside the envelope, the
