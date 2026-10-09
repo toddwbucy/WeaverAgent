@@ -765,7 +765,8 @@ ordering exists to prevent, admin's bounded retry covering what remains.
 than a handed end, and the earlier declared-open route retires with the party
 that placed it.
 
-**The bind never unlinks, and admin's start step is why it does not have to.** A Unix
+**The bind never unlinks an occupied name, and admin's start step is why it does not
+have to.** A Unix
 socket's pathname outlives the process that bound it, so a bind against a name a dead
 worker left would fail. The directory this socket lives in now outlives the worker, the
 init system that removed it having left the agent on 2026-10-03 (#50), so admin's start
@@ -775,9 +776,15 @@ no other invocation can start one, per `weaver-admin-Spec` section 3. The worker
 therefore meets no inherited name and has nothing to clear. **A bind that finds its name
 occupied is a fault and never a thing to remove**, because the only ways a name is
 occupied are that a live worker holds it, in which case unlinking would strand the
-running agent's supervisor, or that the start step did not clear it, in which case the
-program's assumption is wrong and it should say so rather than repair. The instrument is
-review, no test in this crate being able to produce a manager that misbehaves.
+running agent, or that the start step did not clear it, in which case the program's
+assumption is wrong and it should say so rather than repair. The instrument is review,
+no test in this crate being able to produce a manager that misbehaves. **The seal is
+another act and unlinks only the worker's own name** (`weaver-admin-Spec` section 3, the
+seal; section 6 item 6): once the leave's outcome is fixed this crate unlinks the name it
+bound itself, while the run lock is still held, so no other worker can hold that name
+and nothing it unlinks belongs to another run; the rule above, about a name found
+occupied before the bind, stands as written. After a seal the next start step finds no
+name to clear, which it meets as it meets a clean directory.
 
 ```graph
 node: harness-bind-never-unlinks

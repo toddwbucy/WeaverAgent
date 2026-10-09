@@ -762,7 +762,8 @@ and the very socket the worker was expected to dial, which is the defect the
 review of PR 67 found. And its credential check expected the agent uid, which is
 exactly what an elected tool holds, so the check could not tell the worker from
 the tool and the one-accept closure carried the refusal alone. Inverted, the
-closure is not even wanted: the listener lives as long as the worker and answers
+closure is not even wanted: the listener lives from the worker's start until the
+leave's seal and answers
 each verb's dial, one connection at a time, because a per-invocation admin has no
 standing end to keep.
 

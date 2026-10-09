@@ -605,7 +605,9 @@ exists.** The invocation lock is taken first. The run lock is then taken by the
 invocation itself, without waiting, and where it is held the load refuses
 `AgentRunning`, or `Unanswered` where the worker is silent, and touches nothing: a load
 never ends an existing run. Everything the start step does next, repairing the runtime
-directory, clearing a dead worker's names and a dead relay's `trace.sock`, standing the
+directory, clearing a dead worker's names (after a sealed leave there is none, the
+harness having unlinked its own, which the step meets as a clean directory) and a dead
+relay's `trace.sock`, standing the
 member and the relay, and forking the worker, happens holding both locks, which is what
 makes clearing safe: no other invocation can start a constituent while this one holds
 the invocation lock, and no constituent of an earlier run holds the run lock this one
@@ -2256,7 +2258,7 @@ the earlier design, the bind ordering, the directory's mode, the credential
 check, and the listener's closure after one accept, retire with the acts they
 described. The closure is not merely relocated: a listener that answers one
 verb and closes would leave every later verb with nothing to dial, so the
-harness's listener lives as long as the worker and the property that replaced
+harness's listener lives from the worker's start until the seal (section 3, S7), and the property that replaced
 the closure is the check itself.
 
 **The receive discipline is the shared obligation.** The receive buffer is

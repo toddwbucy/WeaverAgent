@@ -156,10 +156,10 @@ calls,
 so no set-again ordering exists on the worker's side, and admin's dialing end is
 flagged at its connect and dies with the verb.
 
-**The listener lives exactly as long as the worker, and a connection lives exactly
-as long as its verb.** The lifetime rule of `weaver-organ-channel` section 2 lands
-on the listener: bound once at the worker's start, closed by the worker's death,
-shared with no second worker, **and sealed once the leave's outcome is fixed** (S7):
+**The listener lives from the worker's start until the seal (S7), and a connection
+lives exactly as long as its verb.** The lifetime rule of `weaver-organ-channel` section 2 lands
+on the listener: bound once at the worker's start, closed by the seal or, short of it,
+by the worker's death, shared with no second worker, **and sealed once the leave's outcome is fixed** (S7):
 the harness unlinks the socket's pathname, so no new connect reaches it; drains the
 accept backlog with non-blocking accepts, answering each dial it holds as the leave
 stands; and only then closes the listening descriptor, whose close would discard a
