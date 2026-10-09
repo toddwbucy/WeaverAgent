@@ -319,7 +319,7 @@ pub struct UnloadClose {
     pub forced: bool,
     pub forced_by: Option<Cause>,
     pub adopted_by: Option<Cause>,
-    pub release: Release,
+    pub release: Option<Release>,
 }
 
 pub struct Release {
@@ -699,17 +699,24 @@ joining caller's cause, so the record keeps both accounts rather than attributin
 force to the caller who asked for a graceful unload; a later join receives the same
 answer and is named nowhere. It is absent where no force joined, a sole forced unload
 included, whose `cause` already names it, and a leave turned forced by a declared
-bound, whose `cause` stays the graceful caller's, and is never written null; an optional member on a standing kind's payload, it names no new kind. **`adopted_by` names the
+bound, whose `cause` stays the graceful caller's, and is never written null; absent at the
+read in a record written before the lifecycle act, which no force could join, so the
+absence reads the same, per section 3's rule for an added member; an optional member on a standing kind's payload, it names no new kind. **`adopted_by` names the
 account whose `unload` adopted an orphaned graceful leave**, in S4 to S6
 (`weaver-admin-Spec` section 3, the adopted leave; the operator's ruling of 2026-10-09);
-from S7 on the record is final and a late caller is named nowhere: `cause` stays the leave's own,
+from S7 on the leave's outcome is fixed and a late caller is named nowhere: `cause` stays the leave's own,
 and `adopted_by` carries the first adopting caller's cause, one name; absent where no
-caller adopted the leave, and never written null. **`release` says how the run's organs let go**, on the lifecycle act's I9 (`weaver-admin-Spec`
+caller adopted the leave, a record written before the lifecycle act, which no caller
+could adopt, included, and never written null. **`release` says how the run's organs let go**, on the lifecycle act's I9 (`weaver-admin-Spec`
 section 3): the SPU and the member are released before `unload` is authored, so
 `unload` is the run's terminal event and carries the outcome, `Confirmed` or
 `Unconfirmed` per organ, `member` absent where the run stands no member, per
 `weaver-harness-spu-contract` section 5; an organ that dies in its release is a `fault`
-authored before `unload`, and its outcome reads `Unconfirmed`. The
+authored before `unload`, and its outcome reads `Unconfirmed`. **`release` is optional
+at the read**, per section 3's rule for an added member: this crate always writes it,
+so a current record always carries it, and its absence means only that the record was
+written before the member existed and the release was not recorded, never that it was
+confirmed. The
 `unload` event's `forced`, `forced_by` and `adopted_by` agree with the `Left` answer's
 `forced`, each the leave's state at its end, and the marker is the conclusion's outcome
 row for that `Left` (`weaver-admin-Spec` section 3), per I2, the rollback excepted by name. `load` carries `Elections`. The five

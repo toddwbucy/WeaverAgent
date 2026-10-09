@@ -1373,7 +1373,9 @@ a declared drain or wind-down bound, and false where the leave stayed graceful: 
 leave's state at its end, never the directive it began as, so every invocation answered `Left` concludes by it, the first closing the
 marker as the leave ended (`weaver-admin-Spec` section 3, the conclusion), and it agrees with the `unload` event's `forced` (I2). It is always on the wire,
 and a `Left` without it refuses at the parse, as `Leave.forced` does: no default carries
-an older writer forward (the operator's ruling of 2026-10-08 on #1). **`JoinLeave`** is a `force-unload` that does not hold the invocation lock,
+an older writer forward (the operator's ruling of 2026-10-08 on #1). The wire is not
+durable, a frame being read by the process it was sent to and never stored, so the record's rule that an added payload member
+is optional at the read (`weaver-trace-Spec` section 3) does not apply to it. **`JoinLeave`** is a `force-unload` that does not hold the invocation lock,
 carrying the forcing caller's cause, which the harness records as the `unload` event's
 `forced_by` where it is the first to join: it joins a pending leave and is answered with
 that leave's `Left`, a later join receiving the same `Left` and named nowhere, or is
