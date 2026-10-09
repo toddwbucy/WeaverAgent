@@ -609,7 +609,8 @@ fn append_line_with(
         diag!("weaver-admin: the manifest {MANIFEST} {what}");
         LifecycleRefusal::BoundaryUnverified
     };
-    let mut file = if !entry_stands(directory, MANIFEST) {
+    let created = !entry_stands(directory, MANIFEST);
+    let mut file = if created {
         // **Created exclusively, mode 0644, and the directory synced**, so a
         // manifest exists only where this crate made it and the entry is
         // durable before the line is; through the directory's descriptor,
@@ -631,15 +632,23 @@ fn append_line_with(
         // process's effective gid, and a root shell whose egid is not 0 would
         // leave a manifest its own judgment refuses, stopping every later
         // publication.
-        chown(file.as_fd(), owner.uid, owner.gid)
-            .map_err(|e| refuse(format!("does not take its owner and group: {e}")))?;
-        nix::sys::stat::fchmod(
-            file.as_fd(),
-            nix::sys::stat::Mode::from_bits_truncate(0o644),
-        )
-        .map_err(|e| refuse(format!("does not take mode 0644: {e}")))?;
-        nix::unistd::fsync(directory)
-            .map_err(|e| refuse(format!("'s directory does not sync: {e}")))?;
+        let laid = chown(file.as_fd(), owner.uid, owner.gid)
+            .map_err(|e| refuse(format!("does not take its owner and group: {e}")))
+            .and_then(|()| {
+                nix::sys::stat::fchmod(
+                    file.as_fd(),
+                    nix::sys::stat::Mode::from_bits_truncate(0o644),
+                )
+                .map_err(|e| refuse(format!("does not take mode 0644: {e}")))
+            })
+            .and_then(|()| {
+                nix::unistd::fsync(directory)
+                    .map_err(|e| refuse(format!("'s directory does not sync: {e}")))
+            });
+        if let Err(refusal) = laid {
+            unmake(directory);
+            return Err(refusal);
+        }
         file
     } else {
         // Read as well as append: the tail is read back and a torn one
@@ -660,7 +669,35 @@ fn append_line_with(
             Err(e) => return Err(refuse(format!("does not open for appending: {e}"))),
         }
     };
-    judge_manifest(&file, owner)?;
+    let appended = append_to(&mut file, owner, line, &refuse);
+    // **A manifest this call made and could not finish is unmade** (#99, W1;
+    // #107): left standing empty, or under the invoker's group, it would be
+    // a manifest every later publication and load refuses. The name was
+    // made exclusively in the directory this crate alone writes, so the
+    // unlink takes only what this call made.
+    if appended.is_err() && created {
+        unmake(directory);
+    }
+    appended
+}
+
+/// **The manifest this call created, unlinked and the directory synced**,
+/// per `append_line_with`'s undo: best effort, a failure leaving the entry
+/// for the judgment to refuse as before.
+fn unmake(directory: BorrowedFd<'_>) {
+    let _ = nix::unistd::unlinkat(directory, MANIFEST, nix::unistd::UnlinkatFlags::NoRemoveDir);
+    let _ = nix::unistd::fsync(directory);
+}
+
+/// The append itself, on the opened manifest: judged, its torn tail
+/// truncated, the line written whole or rolled back.
+fn append_to(
+    file: &mut std::fs::File,
+    owner: Owner,
+    line: &ManifestLine,
+    refuse: &dyn Fn(String) -> LifecycleRefusal,
+) -> Result<(), LifecycleRefusal> {
+    judge_manifest(file, owner)?;
     // **A torn tail is truncated before the line goes**, and **a write that
     // fails part way is rolled back to the length it found**, so the
     // manifest holds whole lines or nothing of a failed one.
@@ -1391,6 +1428,21 @@ fn open_judged(
             "{name} is not mode 0640, root's and read by the access group"
         )));
     }
+    // **And no access entry beyond its mode** (#99 area 2, H5; #107): an
+    // entry granting another principal read hides under the mask.
+    match crate::carries_access_entries_fd(std::os::fd::AsFd::as_fd(&file)) {
+        Ok(false) => {}
+        Ok(true) => {
+            return Err(fault(format!(
+                "{name} carries an access-control entry beyond its mode"
+            )));
+        }
+        Err(e) => {
+            return Err(fault(format!(
+                "{name} does not say whether it carries an access-control entry: {e}"
+            )));
+        }
+    }
     if metadata.len() > SAVE_POINT_BOUND {
         return Err(fault(format!(
             "{name} is {} bytes, past the bound of {SAVE_POINT_BOUND}",
@@ -1977,6 +2029,57 @@ pub(crate) mod tests {
         );
     }
 
+    /// **A manifest whose creation does not finish is unmade** (#99, W1;
+    /// #107): a chown that fails after the exclusive create refuses and
+    /// leaves no manifest, so the next append creates one afresh rather
+    /// than meeting an empty file every later publication would refuse.
+    /// Perturbation: drop the unlink and the manifest stands empty after the
+    /// refusal, and the second append meets it.
+    #[test]
+    fn a_manifest_whose_creation_fails_is_unmade_and_the_next_append_succeeds() {
+        let scratch = crate::scratch::Scratch(std::env::temp_dir().join(format!(
+            "weaver-admin-manifest-unmade-{}",
+            std::process::id()
+        )));
+        let dir = scratch.0.clone();
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_fd = open_directory(&dir).unwrap();
+        let mine = Owner {
+            uid: nix::unistd::getuid().as_raw(),
+            gid: nix::unistd::getgid().as_raw(),
+        };
+        let line = ManifestLine {
+            ordinal: 1,
+            digest: "ab".into(),
+            name: "ab.save-point".into(),
+            stamp: Stamp {
+                run: "r-1".into(),
+                sequence: 1,
+                turn: 0,
+                schema: String::new(),
+                wall_ns: 0,
+            },
+            position: None,
+            arrived: Arrival::Leave,
+        };
+        let mut failing = |_: BorrowedFd<'_>, _: u32, _: u32| -> nix::Result<()> {
+            Err(nix::errno::Errno::EPERM)
+        };
+        assert_eq!(
+            append_line_with(dir_fd.as_fd(), mine, &line, &mut failing),
+            Err(LifecycleRefusal::BoundaryUnverified),
+            "a chown that fails refuses"
+        );
+        assert!(
+            !entry_stands(dir_fd.as_fd(), MANIFEST),
+            "and leaves no manifest behind"
+        );
+        let mut fine = |_: BorrowedFd<'_>, _: u32, _: u32| -> nix::Result<()> { Ok(()) };
+        append_line_with(dir_fd.as_fd(), mine, &line, &mut fine)
+            .expect("the next append creates the manifest afresh");
+        assert_eq!(read_manifest(dir_fd.as_fd(), mine).unwrap().len(), 1);
+    }
+
     /// **A new manifest takes its owner and group explicitly** (Codex on
     /// #94): the first line creates the manifest and sets its owner and
     /// group to the expected owner's, whatever the creating process's
@@ -2158,6 +2261,59 @@ pub(crate) mod tests {
             .unwrap()
             .is_some(),
             "and selects it under its own"
+        );
+    }
+
+    /// **A published file carrying an access entry beyond its mode is
+    /// refused** (#99 area 2, H5; #107): the same file without the entry
+    /// reads. Skips, naming why, where setfacl cannot set the entry.
+    /// Perturbation: drop the look from `open_judged` and the entry reads.
+    #[test]
+    fn a_published_file_carrying_an_access_entry_is_refused() {
+        let scratch = crate::scratch::Scratch(
+            std::env::temp_dir().join(format!("weaver-admin-published-acl-{}", std::process::id())),
+        );
+        let dir = scratch.0.clone();
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_fd = open_directory(&dir).unwrap();
+        let mine = Owner {
+            uid: nix::unistd::getuid().as_raw(),
+            gid: nix::unistd::getgid().as_raw(),
+        };
+        let bytes = save_point("r-8", 8, 0, 8_000_000_000, b"entry");
+        let name = published_name(&judge(&bytes).unwrap());
+        let path = dir.join(&name);
+        std::fs::write(&path, &bytes).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        }
+        let set = std::process::Command::new("setfacl")
+            .args(["-m", "u:nobody:r"])
+            .arg(&path)
+            .status();
+        if !set.is_ok_and(|status| status.success()) {
+            eprintln!("SKIP: setfacl could not set an entry here");
+            return;
+        }
+        assert!(
+            open_judged(dir_fd.as_fd(), &name, (mine.uid, mine.gid)).is_err(),
+            "a save point another principal could read through an entry"
+        );
+        let cleared = std::process::Command::new("setfacl")
+            .arg("-b")
+            .arg(&path)
+            .status();
+        assert!(cleared.is_ok_and(|status| status.success()));
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        }
+        assert!(
+            open_judged(dir_fd.as_fd(), &name, (mine.uid, mine.gid))
+                .unwrap()
+                .is_some(),
+            "and without it the file reads"
         );
     }
 

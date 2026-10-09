@@ -964,7 +964,7 @@ the manifest, and no manifest and no file is an agent's first load; a listing of
 point's bytes are judged here**, before any process exists, under this crate's custody
 through the descriptor it opens and never by path: the entry judgment of section 9 (a
 regular file, not a link, root's, mode 0640, grouped to the access group (judged by
-name, section 9)), a stamp line
+name, section 9), carrying no access-control entry beyond its mode), a stamp line
 of the format's seven members, a check over the bytes that holds, a digest equal to the
 manifest's and a published name computable from the stamp per `weaver-state-Spec`
 section 3, and any of these failing refuses `ConfigInvalid` naming the save point, so a
@@ -1180,8 +1180,9 @@ rule. **The open goes through that directory** write-only with `O_APPEND`, `O_CL
 `O_NOFOLLOW` and `O_NONBLOCK`, so a link at the trace's name refuses and a FIFO there
 never blocks, and the descriptor must be a regular file. **An existing trace stands as
 the territory lays it out** (#56): owned by root or the admin principal, grouped to
-`weaver-<agent>-trace`, mode 0640, and any other is a trace replaced or never
-provisioned, which refuses rather than being appended to. Where the flag is set and no
+`weaver-<agent>-trace`, mode 0640, carrying no access-control entry beyond its mode, and
+any other is a trace replaced or never provisioned, which refuses rather than being
+appended to. Where the flag is set and no
 trace stands, admin creates it exclusively (`O_CREAT|O_EXCL`) and gives it that layout,
 so the next load finds it as provisioning would have. Every refusal here is
 `BoundaryUnverified`, naming the path on stderr. An absent trace without the flag is
@@ -1747,7 +1748,10 @@ point is published: that is intended, a restore meaning "continue from here" (th
 operator's ruling of 2026-10-08 on #99). **Each publication appends one
 line to the manifest**, `save-points.manifest` in the territory's `save-points/`, a file
 this crate creates root-owned and mode `0644` and opens for reading and appending, never
-rewriting a line, a torn tail alone truncated as below: one JSON object per line carrying `ordinal`, a monotonic integer minted under the
+rewriting a line, a manifest whose creation does not finish (its owner, its mode, the
+directory's sync, its judgment or its first line failing) unlinked again with the
+directory synced, so the next publication creates it afresh rather than meeting a file
+every later publication would refuse (#99, W1), a torn tail alone truncated as below: one JSON object per line carrying `ordinal`, a monotonic integer minted under the
 lock as one past the highest line standing; `digest`; `name`, the published name;
 `stamp`, the run, sequence, turn and schema digest the stamp line carries; `taken`, its
 wall clock; `position`, the trace position of the `save_point` event that named it, the
@@ -2236,7 +2240,8 @@ hold the access group (section 9). The operator and the connector read it throug
 access group: it is root's, grouped to the access group, mode `0640`,
 set through the open descriptor. This crate appends to it as root, opening
 it with `O_NOFOLLOW` so a link planted at the name is refused rather than followed, and
-non-blocking and judged a regular file before a line is written, so a FIFO planted at
+non-blocking and judged a regular file carrying no access-control entry beyond its mode
+before a line is written, so a FIFO planted at
 the name neither holds the verb nor takes a line. `worker.log` is opened and owned the
 same way, and the member's `state.log` in its own room is opened without following a
 link and judged a regular file, and set to root and the member's group, `0640`, so the
@@ -2373,7 +2378,8 @@ operator's ruling of 2026-10-08 on #1 that an agent of an older layout is recrea
 never migrated: `declaration-directory` (the layout of before 2026-10-07), and
 `agent.toml`, `run-tool`, `control-tool`, `unit-properties`, `log-path` and
 `log-directory` (the layout of before #50) each refuse `ConfigInvalid` naming the key,
-and the diagnostic says to recreate the agent with `deploy/create-agent.sh` after its
+whatever stands at the name, a file, a directory or a link, judged before the root's
+other entries so the generic refusal never hides it (#107), and the diagnostic says to recreate the agent with `deploy/create-agent.sh` after its
 take-down by `deploy/HowToDeployANewAgent.md` section 7. **Every path a key names is
 absolute**, `worker-binary`, `spu-binary`, `gate-binary`, `coordination-root`,
 `territory` and `library-path` alike, and a relative
@@ -2465,7 +2471,10 @@ connector join, and nothing for the agent's own uid, which holds neither the sta
 group nor the access group, so section 4's denial of the sink's directory to the agent's
 uid holds of the territory that holds the trace; and carrying no access-control entry
 beyond its mode. **The wall is
-each file's own mode**: the member's room is the member's `0700`, the trace is
+each file's own mode, and no access-control entry beyond it** (#99 area 2, H5): an entry
+granting the member read would hide under the mask, which still shows the mode, so the
+declaration, the logs, the trace and each published save point are judged on their
+descriptors for one, and one refuses: the member's room is the member's `0700`, the trace is
 `root:weaver-<agent>-trace 0640`, the logs and `save-points/` are the access group's
 and closed to other, and `agent.toml` and `system-prompt.md` are
 `root:weaver-<agent>-admin 0640`, read through the access group alone, which the member
@@ -2484,8 +2493,8 @@ crate reads is held closed**, and is read only by the verbs that need it, `valid
 `load` and `restore` (the #94 survey's S8), never by the verbs that end or read a run, so
 a declaration saved invalid while a run stands never strands it: `agent.toml` is opened
 with no link followed and without blocking, and judged on its descriptor a regular file, owned by uid 0, grouped to the
-access group and mode `0640` exactly, so the access group reads it and never rewrites it
-and no other uid reads it; a declaration at any other owner, group or mode refuses
+access group and mode `0640` exactly with no access-control entry beyond it, so the
+access group reads it and never rewrites it and no other uid reads it; a declaration at any other owner, group or mode refuses
 `BoundaryUnverified`, the provisioning being wrong rather than the declaration.
 Of the territory's other entries this crate reads `save-points/` and the member's room
 only as sections 4 and 6 say, creates and appends to `admin.log` and `worker.log`
@@ -2940,8 +2949,19 @@ directive is asserted where the run happens.
 - The root check: the binary run as a non-root uid refuses before touching any
   agent, confirmed by watching a verb proceed when the check is removed.
 - A root holding a key of an older layout refuses naming it, per section 9, for every
-  verb and the force, confirmed by watching a root holding one load when the judgment is
-  removed (`a_root_holding_a_retired_key_refuses_by_its_name`).
+  verb and the force, whether the key stands as a file, a directory or a dangling link,
+  confirmed by watching a root holding one load when the judgment is removed, and the
+  directory and the link refuse unnamed when the entries are judged first
+  (`a_root_holding_a_retired_key_refuses_by_its_name`).
+- A territory file carrying an access-control entry beyond its mode refuses, per section
+  9 (#99 area 2, H5): the declaration and a log
+  (`a_declaration_or_a_log_carrying_an_access_entry_refuses`), the trace
+  (`a_trace_carrying_an_access_entry_refuses`) and a published save point
+  (`a_published_file_carrying_an_access_entry_is_refused`), each confirmed by watching it
+  read when its look is removed.
+- A manifest whose creation does not finish is unmade, per section 6 (#99, W1),
+  confirmed by watching a failed chown leave an empty manifest when the unlink is
+  removed (`a_manifest_whose_creation_fails_is_unmade_and_the_next_append_succeeds`).
 - The territory is root's and closed, per section 9 as of 2026-10-08: a directory of
   any mode but `0710`, the earlier `0711` among them, one under any group but the state
   group, one named through a link above it, one

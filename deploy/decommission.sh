@@ -2,16 +2,16 @@
 # Take every weaver agent off this box, archive what stood, and remove it.
 #
 #   sudo deploy/decommission.sh                      plan: what stands, what would go
-#   sudo deploy/decommission.sh --archive [DIR]      archive to DIR, default
-#                                                    /mnt/bulk-store/dev-archive-<date>-<host>
-#   sudo deploy/decommission.sh --purge [DIR]        remove what DIR's PURGE-LIST names;
+#   sudo deploy/decommission.sh --archive DIR        archive to DIR, which is required:
+#                                                    no directory stands on every box
+#   sudo deploy/decommission.sh --purge DIR          remove what DIR's PURGE-LIST names;
 #                                                    refuses unless DIR verifies
 #
 # Box-agnostic, and discovered rather than written: the config bases are every
 # `/etc/weaver/admin*`, each agent's root is a directory under one, the install
 # and territory paths are read out of them, the agents are the union of every
-# root, every allow-list and declaration of the box-wide layout before
-# 2026-10-01, and every `weaver-*` account and group. A box fact this script
+# root, every allow-list of the box-wide layout before 2026-10-01, and every
+# `weaver-*` account and group. A box fact this script
 # needs and cannot find is printed
 # as unknown, never guessed, and the plan is the same reads the archive and the
 # purge make.
@@ -36,6 +36,16 @@
 # in the territories' archive and go with the agent. The operator's home is
 # never touched: a box from before that ruling keeps its `~/.weaveragent/`
 # directories where they stand, unarchived and unpurged, the operator's own.
+# So the box-wide layout's `agent-config-directory` is not read, and a
+# territory base or a root's territory under the operator's home (the stack
+# record's `agent-directory` defaulted there from 2026-10-02 to 2026-10-07) is
+# said and skipped, never listed, archived or purged.
+#
+# **A territory is archived and purged only where it stands as create-agent.sh
+# lays it** (#99 area 2 review, H4): every root's territory is looked at by
+# its canonical path, as root, and one that is not root's and grouped
+# `weaver-<agent>-state` is named with what was found, and refuses the archive
+# and the purge.
 # The sudo rules `/etc/sudoers.d/weaver-*` and the run directories under each
 # coordination root go with the agent.
 #
@@ -68,23 +78,38 @@ say()  { printf '\n== %s\n' "$*"; }
 plan() { printf '   %s\n' "$*"; }
 die()  { printf '\nREFUSED: %s\n' "$*" >&2; exit 1; }
 
-[ "$(id -u)" -eq 0 ] || die "run under sudo: territories, the record and the log are not the operator's to read"
-
 MODE=plan
 DEST=""
+# **No archive directory is assumed**: none stands on every box, so a mode that
+# writes or reads an archive refuses without one (#39).
 case "${1:-}" in
   "") ;;
-  --archive) MODE=archive; DEST="${2:-}" ;;
-  --purge)   MODE=purge;   DEST="${2:-}" ;;
+  --archive) MODE=archive; DEST="${2:-}"
+             [ -n "$DEST" ] || die "--archive needs a directory to write the archive to: --archive DIR. No default is assumed, since no directory stands on every box" ;;
+  --purge)   MODE=purge;   DEST="${2:-}"
+             [ -n "$DEST" ] || die "--purge needs the directory --archive wrote: --purge DIR" ;;
   *) die "unknown argument $1" ;;
 esac
+
+[ "$(id -u)" -eq 0 ] || die "run under sudo: territories, the record and the log are not the operator's to read"
 
 # The operator is whoever invoked sudo, and the agent config directory is
 # read out of admin's config rather than derived from the operator's home.
 OPERATOR=${SUDO_USER:-$(logname 2>/dev/null || echo root)}
 HOST=$(hostname)
-STAMP=$(date +%Y%m%d)
-[ -n "$DEST" ] || DEST="/mnt/bulk-store/dev-archive-$STAMP-$HOST"
+# **The operator's home, never touched** (the operator's ruling of 2026-10-07
+# on #1), canonical, or empty where it does not resolve.
+OP_HOME=$(getent passwd "$OPERATOR" | cut -d: -f6)
+OP_HOME=$( [ -n "$OP_HOME" ] && realpath -e -- "$OP_HOME" 2>/dev/null || true)
+# in_operator_home PATH: 0 where PATH, canonical, is the operator's home or
+# under it.
+in_operator_home() {
+  local c
+  [ -n "${OP_HOME:-}" ] && [ "$OP_HOME" != / ] || return 1
+  c=$(realpath -e -- "$1" 2>/dev/null) || c=$1
+  case "$c" in "$OP_HOME"|"$OP_HOME"/*) return 0 ;; esac
+  return 1
+}
 
 # ------------------------------------------------------------- 1. discovery
 say "box"
@@ -92,7 +117,7 @@ plan "host      $HOST"
 plan "operator  $OPERATOR"
 plan "date      $(date -Iseconds)"
 plan "mode      $MODE"
-plan "archive   $DEST"
+plan "archive   ${DEST:-none: plan only (--archive DIR names one)}"
 
 CONFIG_ROOTS=()
 for d in /etc/weaver/admin*; do [ -d "$d" ] && CONFIG_ROOTS+=("$d"); done
@@ -101,7 +126,7 @@ read_key() { cat "$1/$2" 2>/dev/null || true; }
 
 # Every path admin's configs name, so the install tree is the one the box
 # actually ran and not the one this script remembers.
-declare -A BIN_DIRS=() AGENT_DIRS=() LOG_PATHS=() COORD_ROOTS=()
+declare -A BIN_DIRS=() LOG_PATHS=() COORD_ROOTS=()
 ALLOWED=""
 # **The per-agent roots**: every directory under a base, named as admin's name
 # check admits it, a link never one. Each names its binaries, its territory
@@ -124,7 +149,6 @@ for root in "${CONFIG_ROOTS[@]}"; do
   for k in worker-binary spu-binary gate-binary; do
     v=$(read_key "$root" "$k"); [ -n "$v" ] && BIN_DIRS["$(dirname "$v")"]=1
   done
-  v=$(read_key "$root" agent-config-directory); [ -n "$v" ] && AGENT_DIRS["$v"]=1
   v=$(read_key "$root" log-path); [ -n "$v" ] && LOG_PATHS["$(dirname "$v")"]=1
   ALLOWED="$ALLOWED $(read_key "$root" allow-list | tr '\n' ' ')"
   v=$(read_key "$root" spu-implementations)
@@ -134,15 +158,9 @@ done
 declare -A PREFIXES=()
 for b in "${!BIN_DIRS[@]}"; do PREFIXES["$(dirname "$b")"]=1; done
 
-# Agents: allow-lists, declarations, and accounts.
+# Agents: roots, allow-lists, and accounts.
 declare -A AGENTS=()
 for a in $ALLOWED; do AGENTS["$a"]=1; done
-for d in "${!AGENT_DIRS[@]}"; do
-  for f in "$d"/*.toml "$d"/*.yaml; do
-    [ -f "$f" ] || continue
-    n=$(basename "$f"); n=${n%.*}; AGENTS["$n"]=1
-  done
-done
 mapfile -t WEAVER_USERS < <(getent passwd | awk -F: '$1 ~ /^weaver-/ {print $1}')
 mapfile -t WEAVER_GROUPS < <(getent group | awk -F: '$1 ~ /^weaver-/ {print $1}')
 # Every account and group the agent's provisioning makes carries one of the
@@ -156,15 +174,28 @@ strip_suffix() {
 }
 for u in "${WEAVER_USERS[@]}"; do AGENTS["$(strip_suffix "$u")"]=1; done
 for g in "${WEAVER_GROUPS[@]}"; do AGENTS["$(strip_suffix "$g")"]=1; done
-# The sudo rules create-agent.sh installs, root's to read, and any an archive of
-# this script disabled for its snapshot (a dot-name sudo never reads).
-mapfile -t SUDO_RULES < <(find /etc/sudoers.d -maxdepth 1 -type f \( -name 'weaver-*' -o -name '.weaver-*.decommissioning' \) 2>/dev/null | sort)
+# **sudo_rules DIR: the agents' sudo rules standing or held in DIR**: the
+# ones create-agent.sh installs, root's to read; any an archive of this
+# script disabled for its snapshot; and any an install of update-stack.sh
+# held for its window and, killed inside it, never put back (#107). The held
+# names are dot-names sudo never reads, archived and purged as the rest.
+sudo_rules() {
+  find "$1" -maxdepth 1 -type f \( -name 'weaver-*' -o -name '.weaver-*.decommissioning' \
+    -o -name '.weaver-*.updating' \) 2>/dev/null | sort
+}
+mapfile -t SUDO_RULES < <(sudo_rules /etc/sudoers.d)
 
 say "config roots"
 for r in "${CONFIG_ROOTS[@]}"; do plan "$r  (allow-list: $(read_key "$r" allow-list | tr '\n' ' '))"; done
 [ ${#CONFIG_ROOTS[@]} -gt 0 ] || plan "none under /etc/weaver"
 for r in "${AGENT_ROOTS[@]}"; do plan "$r  (territory: $(read_key "$r" territory))"; done
-for f in "${SUDO_RULES[@]}"; do plan "$f  (sudo rule)"; done
+for f in "${SUDO_RULES[@]}"; do
+  case "${f##*/}" in
+    *.updating) plan "$f  (sudo rule an install held and did not put back)" ;;
+    *.decommissioning) plan "$f  (sudo rule an archive disabled)" ;;
+    *) plan "$f  (sudo rule)" ;;
+  esac
+done
 
 say "install prefixes (models excluded from every mode)"
 for p in "${!PREFIXES[@]}"; do
@@ -180,10 +211,6 @@ for a in "${!AGENTS[@]}"; do
   line="$a:"
   id "weaver-$a" >/dev/null 2>&1 && line="$line user=weaver-$a"
   id "weaver-$a-state" >/dev/null 2>&1 && line="$line member=weaver-$a-state"
-  for d in "${!AGENT_DIRS[@]}"; do
-    [ -f "$d/$a.toml" ] && line="$line decl=$d/$a.toml"
-    [ -f "$d/$a.yaml" ] && line="$line decl=$d/$a.yaml"
-  done
   plan "$line"
 done
 plan "accounts: ${WEAVER_USERS[*]:-none}"
@@ -305,11 +332,18 @@ systemctl is-active --quiet "$SLICE" 2>/dev/null && plan "$SLICE active ($(syste
 
 say "territories, record, log"
 TERRITORY_PATHS=()
-for d in "${!AGENT_DIRS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"; done
 # The territories' bases: the per-agent layout's default and the stack record's
 # own `agent-directory`, where create-agent.sh made every territory.
 declare -A TERRITORY_BASES=([/var/lib/weaver-agent]=1)
 v=$(read_key /etc/weaver/stack agent-directory); [ -n "$v" ] && TERRITORY_BASES["$v"]=1
+# A base or a log directory under the operator's home is the layout retired
+# on 2026-10-07: said, and never archived or purged.
+for d in "${!TERRITORY_BASES[@]}"; do
+  in_operator_home "$d" && { plan "$d  under the operator's home: not touched"; unset 'TERRITORY_BASES[$d]'; }
+done
+for d in "${!LOG_PATHS[@]}"; do
+  in_operator_home "$d" && { plan "$d  under the operator's home: not touched"; unset 'LOG_PATHS[$d]'; }
+done
 for d in /var/lib/weaver "${!TERRITORY_BASES[@]}" "${!LOG_PATHS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"; done
 # **territories_outside BASE... -- ROOT...: each root's own territory that no
 # base covers**, read from the root's `territory` key (the operator's ruling of
@@ -324,8 +358,14 @@ for d in /var/lib/weaver "${!TERRITORY_BASES[@]}" "${!LOG_PATHS[@]}"; do [ -e "$
 # as `<base>/../elsewhere` is outside the base however it is spelled, and a
 # base or a territory that does not resolve is left out of the comparison,
 # an absent base covering nothing and an absent territory archiving nothing.
+# **Every root's territory is judged, covered or not** (#99 area 2 review,
+# H4 remainder): its canonical path is looked at as root, and one that is not
+# uid 0's and grouped `weaver-<agent>-state` is named with what was found, on
+# stderr, and the function answers 1 after listing the rest, which refuses
+# the archive and the purge. One under the operator's home (OP_HOME) is said
+# and skipped before it is judged, never touched.
 territories_outside() {
-  local bases=() b r v c covered
+  local bases=() b r v c covered found f_uid f_group f_mode refused=0 listed=()
   while [ $# -gt 0 ] && [ "$1" != -- ]; do
     c=$(realpath -e -- "$1" 2>/dev/null) && bases+=("$c")
     shift
@@ -338,12 +378,29 @@ territories_outside() {
     # this lists is archived and `rm -rf`'d, so a key naming anything but its
     # own agent's `weaver-<agent>` (a typo for `/var/lib`) is said and skipped.
     [ "${v##*/}" = "weaver-${r##*/}" ] || { printf 'skipped: %s names %s, not weaver-%s\n' "$r/territory" "$v" "${r##*/}" >&2; continue; }
+    if [ -n "${OP_HOME:-}" ] && [ "$OP_HOME" != / ]; then
+      case "$v" in "$OP_HOME"|"$OP_HOME"/*) printf "skipped: %s names %s, under the operator's home, which is never touched\n" "$r/territory" "$v" >&2; continue ;; esac
+    fi
+    found=$(stat -c '%u:%G:%a' -- "$v" 2>/dev/null) \
+      || { printf 'refused: %s names %s, whose owner and group cannot be read\n' "$r/territory" "$v" >&2; refused=1; continue; }
+    IFS=: read -r f_uid f_group f_mode <<< "$found"
+    if [ "$f_uid" != 0 ] || [ "$f_group" != "weaver-${r##*/}-state" ]; then
+      printf 'refused: %s names %s, which stands uid %s, group %s, mode %s, not root:weaver-%s-state\n' \
+        "$r/territory" "$v" "$f_uid" "$f_group" "$f_mode" "${r##*/}" >&2
+      refused=1; continue
+    fi
     covered=0
     for b in "${bases[@]}"; do case "$v" in "$b"/*) covered=1;; esac; done
-    [ "$covered" = 0 ] && printf '%s\n' "$v"
-  done | sort -u
+    [ "$covered" = 0 ] && listed+=("$v")
+  done
+  [ ${#listed[@]} -eq 0 ] || printf '%s\n' "${listed[@]}" | sort -u
+  return "$refused"
 }
-mapfile -t OWN_TERRITORIES < <(territories_outside "${!TERRITORY_BASES[@]}" -- "${AGENT_ROOTS[@]}")
+TERRITORIES_JUDGED=1
+OWN_LISTED=$(territories_outside "${!TERRITORY_BASES[@]}" -- "${AGENT_ROOTS[@]}") || TERRITORIES_JUDGED=0
+OWN_TERRITORIES=()
+[ -z "$OWN_LISTED" ] || mapfile -t OWN_TERRITORIES <<< "$OWN_LISTED"
+[ "$TERRITORIES_JUDGED" = 1 ] || plan "REFUSED: a territory a root names is not root:weaver-<agent>-state (see above); the archive and the purge refuse"
 for d in "${OWN_TERRITORIES[@]}"; do TERRITORY_PATHS+=("$d") && plan "$d  (a root's own territory, outside the bases) $(du -sh "$d" 2>/dev/null | cut -f1)"; done
 HOMES=()
 for u in "${WEAVER_USERS[@]}"; do
@@ -354,7 +411,8 @@ mapfile -t TMP_PATHS < <(find /tmp -maxdepth 1 \( -name 'weaver-*' -o -name 'tor
 [ ${#TMP_PATHS[@]} -gt 0 ] && plan "/tmp: ${#TMP_PATHS[@]} weaver-* entries"
 
 
-[ "$MODE" = plan ] && { say "plan only. rerun with --archive [DIR], then --purge [DIR]"; exit 0; }
+[ "$MODE" = plan ] && { say "plan only. rerun with --archive DIR, then --purge DIR"; exit 0; }
+[ "$TERRITORIES_JUDGED" = 1 ] || die "a territory a root names is not root:weaver-<agent>-state, named above, and only a territory standing as create-agent.sh lays it is archived and purged. Look at it by hand, then rerun"
 
 # **free_name NAME: a name no archive in DEST holds yet**, NAME itself or the
 # first NAME-2, NAME-3 that is free, so no archive is ever written over another
@@ -423,7 +481,8 @@ if [ "$MODE" = archive ]; then
     echo "operator  $OPERATOR"
     echo "date      $(date -Iseconds)"
     echo "kernel    $(uname -r)"
-    echo "driver    $(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -1 || echo none)"
+    driver=$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -1 || true)
+    echo "driver    ${driver:-none}"
     echo "nvcc      $([ -n "$NVCC" ] && "$NVCC" --version | tail -1 || echo none)"
     echo "cccl      $(pacman -Q cccl 2>/dev/null || echo unknown)"
     echo "toolchain $(as_op rustup show active-toolchain 2>/dev/null | cut -d' ' -f1 || echo unknown)"
@@ -488,7 +547,6 @@ if [ "$MODE" = archive ]; then
   # Each root's own territory the bases miss, by the path its root names.
   for d in "${OWN_TERRITORIES[@]}"; do archive_path "$(archive_name territory "$d")" "$d"; done
   for d in "${!LOG_PATHS[@]}"; do archive_path "$(archive_name log "$d")" "$d"; done
-  for d in "${!AGENT_DIRS[@]}"; do archive_path "$(archive_name agent-config "$d")" "$d"; done
   [ ${#HOMES[@]} -gt 0 ] && archive_path home-weaver-users "${HOMES[@]}"
   [ ${#TMP_PATHS[@]} -gt 0 ] && archive_path tmp-weaver "${TMP_PATHS[@]}"
 

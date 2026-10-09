@@ -93,7 +93,11 @@ plan "admin base    $ADMIN_BASE"
 plan "stack record  $STACK"
 plan "agent dir     $AGENT_DIR"
 plan "toolchain     $(rustup show active-toolchain 2>/dev/null | cut -d' ' -f1)"
-plan "driver        $(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -1 || echo none)"
+# **The fallback is applied after the pipeline** (#39): under `pipefail`, a
+# `head` that closes the pipe on a box with more than one card fails it, and an
+# `|| echo none` inside the substitution then printed a stray `none` line.
+DRIVER=$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -1 || true)
+plan "driver        ${DRIVER:-none}"
 plan "nvcc          $(nvcc --version 2>/dev/null | tail -1 | sed 's/^Build //' || echo none)"
 CCCL=$(pacman -Q cccl 2>/dev/null | awk '{print $2}' || true)
 plan "cccl          ${CCCL:-unknown}"

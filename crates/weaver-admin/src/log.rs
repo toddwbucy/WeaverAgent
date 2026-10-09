@@ -73,6 +73,18 @@ pub fn open_append(path: &Path, owner: Option<(u32, u32)>) -> std::io::Result<st
     if !file.metadata()?.file_type().is_file() {
         return Err(std::io::Error::other("a log is a regular file"));
     }
+    // **And carries no access entry beyond its mode** (#99 area 2, H5;
+    // #107): an entry granting the member read survives the 0640 set below,
+    // hidden under the mask, so such a log is refused rather than written.
+    match crate::carries_access_entries_fd(std::os::fd::AsFd::as_fd(&file)) {
+        Ok(false) => {}
+        Ok(true) => {
+            return Err(std::io::Error::other(
+                "a log carries an access-control entry beyond its mode",
+            ));
+        }
+        Err(e) => return Err(std::io::Error::from(e)),
+    }
     let raw = file.as_raw_fd();
     if let Some((uid, gid)) = owner {
         // SAFETY: fchown and fchmod on the descriptor just opened.

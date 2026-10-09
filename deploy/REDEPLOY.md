@@ -72,10 +72,11 @@ root shell:
    it defends. The operator quiesces the box first.
 
 ```sh
-sudo deploy/decommission.sh --archive              # -> /mnt/bulk-store/dev-archive-<date>-<host>
+sudo deploy/decommission.sh --archive <dir>
 ```
 
-The bulk store may squash root to nobody, as the thinkpad's mount of olympus's export does,
+The archive directory is required: no default is assumed, since no directory stands on
+every box, and `--archive` without one refuses. The bulk store may squash root to nobody, as the thinkpad's mount of olympus's export does,
 so the script reads as root and writes every byte under the archive directory as the
 operator, through `sudo -u`. Pass a directory the operator can create or already owns.
 
@@ -86,7 +87,12 @@ those with the admin that started them. **The snapshot is taken behind a shut do
 each sudo rule is first moved to `.weaver-<agent>.decommissioning`, a name sudo never
 reads, and every agent is asked again, a run found restoring the rules and refusing. The
 rules stay disabled until the purge removes them, and moving one back serves its agent
-again without a purge. The archive holds:
+again without a purge. A rule an `update-stack.sh --install` held as
+`.weaver-<agent>.updating` and never put back, the run killed inside its window, is
+found, archived and purged the same way. **A territory is archived and purged only where it stands as
+`create-agent.sh` lays it**: each root's territory is looked at as root, and one that is
+not root's and grouped `weaver-<agent>-state` is named with what was found and refuses
+the archive and the purge (#99 area 2 review, H4). The archive holds:
 
 - `box-facts.txt`: accounts, groups, units, sha256 of every installed binary,
   library and model, and the mode of everything archived. It records no PostgreSQL
@@ -96,8 +102,7 @@ again without a purge. The archive holds:
   `sudoers-weaver`, `ld-so-conf`, `opt-<prefix path>` (bin,
   lib, python-spu, the backup-* directories, never models), `territories-<base path>`
   for each territory base, `var-lib-weaver`, `log-<path>` (a box from before #50),
-  `agent-config-<path>` (the box-wide layout's declarations), `home-weaver-users`,
-  `tmp-weaver`. A name built from a path carries the whole path, its slashes made dashes
+  `home-weaver-users`, `tmp-weaver`. A name built from a path carries the whole path, its slashes made dashes
   (`territories-var-lib-weaver-agent`), and a name an archive already holds takes the
   first free `-2`, `-3`, so no archive is ever written over another.
 - `PURGE-LIST`: the exact paths, users and groups the purge may touch. Read it.
@@ -112,12 +117,14 @@ the installed one by 256 bytes, so the installed one is the only copy of itself.
 The territories' archive holds each agent whole: its declaration, prompt draft, two
 logs and published save points beside its state room and trace. A box from before
 2026-10-07 keeps its `~/.weaveragent/` directories where they stand, the operator's
-own, neither archived nor purged.
+own, neither archived nor purged: a territory base or a root's territory under the
+operator's home (the stack record's `agent-directory` defaulted there from 2026-10-02
+to 2026-10-07) is said in the plan and skipped.
 
 ## 2. Purge
 
 ```sh
-sudo deploy/decommission.sh --purge /mnt/bulk-store/dev-archive-<date>-<host>
+sudo deploy/decommission.sh --purge <dir>        # the directory --archive wrote
 ```
 
 Removes the sudo rules first, so no connector can start a run, then asks every agent
@@ -134,6 +141,11 @@ from before the service engine's retirement still runs: its `weaver_*` roles and
 databases and its authentication lines are the operator's to dump and drop by hand,
 since decommission no longer discovers them (it matched every `weaver%` database,
 #35).
+
+**Then log out and log in again** before section 3 (#39). The operator's running session
+still holds the gids of the groups the purge removed, and the accounts and groups that
+bootstrap and `create-agent.sh` make next can reuse those numbers, so the old session
+reports memberships that no longer mean what they meant. A fresh login clears it.
 
 ## 3. Build and install
 
@@ -235,6 +247,10 @@ event, checks every constituent `show` names (its account, its cgroup the invoke
 relay for a file sink), and unloads unless told `--keep`, checking that nothing of the
 run is left. A failed load needs no clearing by hand: whatever it started dies with its
 worker or is ended by the next `unload`. It does not retry the load.
+
+`verify-load.sh` proves a load; `deploy/turn.py <name> "<text>"` proves a turn, run as
+the operator from a session that holds the agent's group (a fresh login, or `newgrp`),
+after the seeding turn (`HowToDeployANewAgent.md` section 4).
 
 ## 5. What to record in the run log
 

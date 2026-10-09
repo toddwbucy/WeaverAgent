@@ -168,6 +168,18 @@ fn open_file(
             custody.trace_group
         )));
     }
+    // **And no access entry beyond its mode** (#99 area 2, H5; #107): the
+    // trace is the record the agent cannot reach, and an entry granting the
+    // member read hides under the mask, which still shows 0640.
+    match crate::carries_access_entries_fd(std::os::fd::AsFd::as_fd(&file)) {
+        Ok(false) => {}
+        Ok(true) => return Err(refuse("carries an access-control entry beyond its mode")),
+        Err(_) => {
+            return Err(refuse(
+                "does not say whether it carries an access-control entry",
+            ));
+        }
+    }
     let owned = OwnedFd::from(file);
     clear_nonblocking(&owned)?;
     Ok(owned)
@@ -514,6 +526,40 @@ mod tests {
                 "a trace grouped to other than the trace group"
             );
         }
+    }
+
+    /// **A trace carrying an access entry beyond its mode refuses** (#99 area
+    /// 2, H5; #107): an entry granting another principal read hides under
+    /// the mask, which still shows 0640. Skips, naming why, where setfacl
+    /// cannot set the entry. Perturbation: drop the look from `open_file` and
+    /// the trace opens.
+    #[test]
+    fn a_trace_carrying_an_access_entry_refuses() {
+        let dir = scratch("acl");
+        let path = laid_out_trace(&dir);
+        let set = std::process::Command::new("setfacl")
+            .args(["-m", "u:nobody:r"])
+            .arg(&path)
+            .status();
+        if !set.is_ok_and(|status| status.success()) {
+            eprintln!("SKIP: setfacl could not set an entry here");
+            return;
+        }
+        assert_eq!(
+            open(&file(&path, false), &custody()).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a trace the member could read through an entry"
+        );
+        let cleared = std::process::Command::new("setfacl")
+            .arg("-b")
+            .arg(&path)
+            .status();
+        assert!(cleared.is_ok_and(|status| status.success()));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert!(
+            open(&file(&path, false), &custody()).is_ok(),
+            "and without it the trace opens"
+        );
     }
 
     /// **A FIFO at the trace's name refuses without blocking**: with no reader

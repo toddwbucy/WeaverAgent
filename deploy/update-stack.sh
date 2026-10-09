@@ -20,6 +20,13 @@
 #
 # Plan mode writes git refs and build artifacts. On main it also fast-forwards
 # HEAD and rewrites the working tree. It invokes no sudo.
+# A box with no agent root is updated all the same: there is then nothing to
+# unload, reconcile or verify (#39).
+# **--install holds every agent out for its window** (#99 area 2 review, R2):
+# before any binary is replaced it takes each connector's sudo rule out of
+# sudo's reading as `/etc/sudoers.d/.weaver-<agent>.updating` and unloads
+# every agent, and it puts the rules back after the verify, or on any
+# rollback, refusal or INT, TERM or HUP. Every agent is left unloaded.
 # The plan is the point. An install that swaps every binary hides which act
 # actually moved, and the campaign's comparability rests on knowing that, so
 # this diffs deployed against built and installs only what differs.
@@ -290,7 +297,10 @@ for root in "$ADMIN_BASE"/*/; do
     || die "$agent: its root $root names no territory as a regular file, which admin refuses at every verb. $(recreate "$agent")"
   AGENTS="$AGENTS $agent"
 done
-[ -n "$AGENTS" ] || die "no agent root under $ADMIN_BASE: make one with create-agent.sh first"
+# **A stack with no agent is updated all the same** (#39): the refresh, the
+# test, the build and the install need no agent, and the steps that act on
+# agents (the window's hold and unload, the reconcile and the verify) each say
+# there is none and pass.
 
 # **One key of an agent's root, trimmed, an absolute path**, or a refusal by
 # name; empty where the key does not stand.
@@ -492,7 +502,7 @@ say "box"
 printf '  host          %s\n' "$(hostname)"
 printf '  stack record  %s\n' "$STACK"
 printf '  admin base    %s\n' "$ADMIN_BASE"
-printf '  agents       %s\n' "$AGENTS"
+printf '  agents        %s\n' "${AGENTS:-(none: nothing to unload, reconcile or verify)}"
 printf '  bin dir       %s\n' "$BIN_DIR"
 printf '  worker-binary %s\n' "$WORKER_BINARY"
 # **Each agent's binary paths are its own and this run does not move them.**
@@ -530,7 +540,11 @@ printf '  will install  %s\n' "$MEMBERS"
 # three lines into one `%s`, so two of them printed with no label and no
 # indent. The driver is the box's, not the card's, so the first answer is the
 # answer and a disagreement between cards is not a thing this can report.
-printf '  driver        %s\n' "$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 || echo none)"
+# **The fallback is applied after the pipeline** (#39): under `pipefail`, a
+# `head` that closes the pipe on a box with more than one card fails it, and an
+# `|| echo none` inside the substitution then printed a stray `none`.
+DRIVER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 || true)
+printf '  driver        %s\n' "${DRIVER:-none}"
 
 # The cccl window of #397. Outside it the engine does not compile, and a
 # failure here is cheaper than one twenty minutes into a build.
@@ -723,6 +737,21 @@ for b in $MEMBERS; do
     CHANGED+=("$b")
   fi
 done
+# **What --install does to the agents, said before it does it** (#99 area 2
+# review, R2): every agent's connector rule is held out of sudo's reading and
+# every agent unloaded before any binary is replaced, and the rules come back
+# after the verify. A plan moves no rule and unloads nothing.
+say "the install window"
+if [ -z "$AGENTS" ]; then
+  printf '  no agents: --install holds no connector rule and unloads none\n'
+else
+  for agent in $AGENTS; do
+    printf '  %-12s --install holds /etc/sudoers.d/weaver-%s as .weaver-%s.updating where it stands, then unloads %s; the rule comes back after the verify, and %s is left unloaded\n' \
+      "$agent" "$agent" "$agent" "$agent" "$agent"
+  done
+fi
+[ "$INSTALL" -eq 1 ] || printf '  plan only: no rule is moved and no agent unloaded\n'
+
 # **Binaries current is not the same as the box being finished.** A run that
 # installed and then died before reconciling leaves every digest matching
 # and an agent that will not load, so an early exit here would refuse to
@@ -831,14 +860,91 @@ rollback() {
 # **The trap is armed before the first binary moves**, not after the loop:
 # a `sudo install` that fails on the fourth of six would otherwise exit with
 # three replaced and nothing registered to put them back.
+# **A held connector rule comes back on every path** (#99 area 2 review,
+# R2): success puts the rules back after the verify, and this trap puts back
+# any still held after a rollback, a refusal, or an INT, TERM or HUP, each
+# made an exit so the trap runs. A SIGKILL or a host stop runs no trap, and
+# the next --install refuses on the `.updating` name it left.
 on_exit() {
   local rc=$?
   if [ "$COMPLETED" -eq 0 ] && [ "$INSTALL_DONE" -eq 1 ]; then
     printf '\n  the run did not complete (exit %d)\n' "$rc" >&2
     restore
   fi
+  if [ ${#HELD_RULES[@]} -gt 0 ]; then
+    restore_rules >&2 \
+      || printf '  CONNECTOR RULES NOT ALL RESTORED: each named above is still held under its .updating name; put it back by hand\n' >&2
+  fi
 }
 trap on_exit EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# **The connector's rules are held out for the install window** (#99 area 2
+# review, R2), as decommission.sh holds them for its snapshot: each
+# `/etc/sudoers.d/weaver-<agent>` is renamed within the directory to
+# `.weaver-<agent>.updating`, a dot-name sudo's includedir never reads, so no
+# connector can start a load while the binaries move. Each is registered in
+# HELD_RULES (`held|rule`) before it moves, so a run stopped between the two
+# finds it either still in place or held, and puts back the held one.
+SUDOERS_D=/etc/sudoers.d
+HELD_RULES=()
+# restore_rules: moves every registered rule that is held back to its name.
+# One whose name a rule stands at again is left held and named, never
+# written over. Answers 1 where any is left.
+restore_rules() {
+  local entry held rule failed=0
+  local -a left=()
+  for entry in "${HELD_RULES[@]}"; do
+    held=${entry%%|*}; rule=${entry##*|}
+    # Registered and never moved, or already put back: nothing is held.
+    sudo test -e "$held" || continue
+    if sudo test -e "$rule" || sudo test -L "$rule"; then
+      printf '  %s stands again beside the held %s, so the held rule is left for you to judge\n' "$rule" "$held"
+      failed=1; left+=("$entry"); continue
+    fi
+    if sudo mv -T -- "$held" "$rule"; then
+      printf '  restored %s\n' "$rule"
+    else
+      printf '  FAILED to restore %s from %s\n' "$rule" "$held"
+      failed=1; left+=("$entry")
+    fi
+  done
+  HELD_RULES=("${left[@]}")
+  return "$failed"
+}
+
+say "the install window: connector rules held, agents unloaded"
+[ -n "$AGENTS" ] || printf '  no agents: no connector rule to hold, none to unload\n'
+# **A held name already standing refuses before any rule moves**: it is a rule
+# an earlier run held and never put back (a SIGKILL or a host stop, which run
+# no trap), and `mv -T` would write over it.
+for agent in $AGENTS; do
+  held="$SUDOERS_D/.weaver-$agent.updating"
+  if sudo test -e "$held" || sudo test -L "$held"; then
+    die "$held already stands: an earlier run of this script held $SUDOERS_D/weaver-$agent there and ended without putting it back (a SIGKILL or a host stop). Judge it against $SUDOERS_D/weaver-$agent, put the right one back by hand, then rerun"
+  fi
+done
+for agent in $AGENTS; do
+  rule="$SUDOERS_D/weaver-$agent"
+  held="$SUDOERS_D/.weaver-$agent.updating"
+  if ! sudo test -e "$rule"; then
+    printf '  %-12s no connector rule at %s to hold\n' "$agent" "$rule"
+    continue
+  fi
+  HELD_RULES+=("$held|$rule")
+  sudo mv -T -- "$rule" "$held" || rollback "cannot hold $rule as $held"
+  printf '  %-12s held %s as %s\n' "$agent" "$rule" "$held"
+done
+# **Every agent is unloaded before any binary is replaced**: an agent left
+# running would serve on until its next unload from files the install moved
+# under it. An unload admin refuses rolls back, the rules put back.
+for agent in $AGENTS; do
+  unload_verified "$agent" \
+    || rollback "$agent: the unload before the install did not answer unloaded, so it would run on under the binaries this install replaces"
+  printf '  %-12s unloaded\n' "$agent"
+done
 
 if [ ${#CHANGED[@]} -gt 0 ]; then
   say "install"
@@ -897,6 +1003,7 @@ validate() {
 
 # -------------------------------------------------------- 8. reconcile agents
 say "reconcile declarations"
+[ -n "$AGENTS" ] || printf '  no agents to reconcile\n'
 for agent in $AGENTS; do
   decl=$(declaration_of "$agent") || exit 1
   if [ ! -f "$decl" ]; then
@@ -954,6 +1061,7 @@ member_said() {
 # the others' declarations changed and never loaded.
 say "verify"
 VERIFIED=0
+[ -n "$AGENTS" ] || printf '  no agents to verify\n'
 for AGENT in $AGENTS; do
   decl=$(declaration_of "$AGENT") || exit 1
   if [ ! -f "$decl" ]; then
@@ -1018,7 +1126,15 @@ for AGENT in $AGENTS; do
   LOADED_AGENT=""
   VERIFIED=$((VERIFIED + 1))
 done
-[ "$VERIFIED" -gt 0 ] || rollback "no agent root under $ADMIN_BASE could be verified"
+# **No agent is not a failed verify** (#39): with no root under the base there
+# is nothing to load, and the install stands on the test and the build alone.
+# Agents that stand and none of which verified still roll back.
+[ -z "$AGENTS" ] || [ "$VERIFIED" -gt 0 ] || rollback "no agent root under $ADMIN_BASE could be verified"
 
+# The verified install stands, so the held rules come back; every agent is
+# left unloaded, as the verify leaves it.
+say "the connector rules, put back"
+[ ${#HELD_RULES[@]} -gt 0 ] || printf '  none was held\n'
 COMPLETED=1
+restore_rules || die "the install stands verified, but a connector rule named above did not come back: put it back by hand"
 say "the box is at $AFTER"
