@@ -689,8 +689,9 @@ force to the caller who asked for a graceful unload; a later join receives the s
 answer and is named nowhere. It is absent where no force joined, a sole forced unload
 included, whose `cause` already names it, and a leave turned forced by a declared
 bound, whose `cause` stays the graceful caller's, and is never written null; an optional member on a standing kind's payload, it names no new kind. **`adopted_by` names the
-account whose `unload` adopted an orphaned graceful leave** (`weaver-admin-Spec` section
-3, the adopted leave; the operator's ruling of 2026-10-09): `cause` stays the leave's own,
+account whose `unload` adopted an orphaned graceful leave**, in S4 to S6
+(`weaver-admin-Spec` section 3, the adopted leave; the operator's ruling of 2026-10-09);
+from S7 on the record is final and a late caller is named nowhere: `cause` stays the leave's own,
 and `adopted_by` carries the first adopting caller's cause, one name; absent where no
 caller adopted the leave, and never written null. The
 `unload` event's `forced`, `forced_by` and `adopted_by` agree with the `Left` answer's

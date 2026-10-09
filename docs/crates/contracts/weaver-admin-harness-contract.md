@@ -315,11 +315,14 @@ freed lock as sole and directs `Leave{forced}`, which the harness joins to the p
 leave by its own state, exactly as it joins `JoinLeave`, `forced_by` naming the force's
 cause; the force, holding the lock, receives `Left{forced: true}` and concludes
 (`weaver-admin-Spec` section 3, the orphaned leave; I1, I3). **An orphaned graceful leave
-is adopted by an unforced `Leave`**: a second `unload` takes the freed lock, and the
+is adopted by an unforced `Leave`**, in S4 to S6: a second `unload` takes the freed lock, and the
 harness keeps the leave graceful with its own cause, records the adopter as `adopted_by`
 on `unload`, and answers it with the leave's `Left` when it completes; the adopter
 concludes as any graceful unload does (`weaver-admin-Spec` section 3, the adopted leave;
-the operator's ruling of 2026-10-09). **The harness hears a join in every wait of
+the operator's ruling of 2026-10-09). Both the orphan join and the adoption hold only
+while the leave can still change, S4 to S6; from S7 on a late caller's `Leave` is
+answered the `Left` as it stands and changes nothing (`weaver-admin-Spec` section 3, the
+late caller; I2). **The harness hears a join in every wait of
 the leave**: the wait for `GateQuiesced`, the turn's finish, the wind-down, the lower,
 the save point's legs and the unwind after them, so a forced leave never waits on what
 remains (I3). **With no leave pending** (S2, S3, S9, or before the enter) the harness
@@ -419,10 +422,13 @@ an obligation on the party that could break it.
 - Leave is terminal for the worker and is pending at most once. While one is pending
   (`weaver-admin-Spec` section 3, S4 to S7 and S10), every directive but `JoinLeave`
   and a `Leave` is refused `OutOfOrder`. While the holder lives, admin's invocation lock
-  refuses those verbs before it dials (I1). Where it has died, a forced `Leave` joins
-  the orphaned leave as `JoinLeave` does, and an unforced `Leave` adopts a pending
-  graceful one (the operator's ruling of 2026-10-09), `adopted_by` naming it; either
-  caller, holding the lock, concludes (I3, I4). An unforced `Leave` meeting a pending
+  refuses those verbs before it dials (I1). Where it has died in S4 to S6, a forced
+  `Leave` joins the orphaned leave as `JoinLeave` does, and an unforced `Leave` adopts a
+  pending graceful one (the operator's ruling of 2026-10-09), `adopted_by` naming it;
+  either caller, holding the lock, concludes (I3, I4). From S7 on, the record final,
+  either `Leave` is answered the `Left` as it stands and adds nothing to the record, the
+  late caller taking the recovery path with the marker left `Open` (`weaver-admin-Spec`
+  section 3, the late caller). An unforced `Leave` meeting a pending
   forced leave is refused `OutOfOrder`. A leave refused `SavePointNotTaken` is no
   longer pending, and the run stands entered at rest for a retried or a forced `Leave`
   (S9).

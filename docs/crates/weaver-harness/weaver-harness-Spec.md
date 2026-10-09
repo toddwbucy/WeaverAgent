@@ -2158,9 +2158,12 @@ marker `Open`.
 force-unload). `JoinLeave { cause }`, the force admin sends without the invocation lock
 beside the graceful unload that holds it, joins it. **A forced `Leave` that arrives while
 a leave is pending joins it the same way**, by this crate's own state: that happens only
-where the graceful unload's invocation died and a force took the freed lock as sole (the
-orphaned leave of `weaver-admin-Spec` section 3; I1, I3), and its caller, holding the
-lock, is the one that concludes. What remains of the quiesce's wait, the drain and the wind-down is
+where the graceful unload's invocation died in S4 to S6 and a force took the freed lock
+as sole (the orphaned leave of `weaver-admin-Spec` section 3; I1, I3), and its caller,
+holding the lock, is the one that concludes. From S7 on, `unload` authored and the
+record final, a forced or an unforced `Leave` from a late caller is answered the `Left`
+as it stands and adds nothing to the record, neither `forced_by` nor `adopted_by` (the
+late caller of `weaver-admin-Spec` section 3; I2). What remains of the quiesce's wait, the drain and the wind-down is
 skipped: a tool call out is interrupted, the turn or the wind-down's generation is
 cancelled as a stop, and a gate already quiescing or draining is brought down at once by
 this crate closing its end of the gate channel and reaping the gate, closure being death
@@ -2173,8 +2176,8 @@ same `Left { forced: true }` (I2); a later join is answered with that `Left` and
 nowhere. `JoinLeave` with no leave pending is `OutOfOrder`, which
 tells admin the lock's holder is no unload; while a leave is pending a second unforced
 `Leave` and a `SavePoint` meet a living holder's lock at admin first, refused
-`InvocationInFlight` before it dials (I1). Where the holder has died, **a second unforced
-`Leave` adopts the pending graceful leave** (`weaver-admin-Spec` section 3, the adopted
+`InvocationInFlight` before it dials (I1). Where the holder has died in S4 to S6, **a
+second unforced `Leave` adopts the pending graceful leave** (`weaver-admin-Spec` section 3, the adopted
 leave; the operator's ruling of 2026-10-09): this crate keeps the leave graceful, with
 its own cause, drain and wind-down, records the first adopting caller's cause as
 `adopted_by` on `unload`, and answers the adopter with the leave's `Left` when it
