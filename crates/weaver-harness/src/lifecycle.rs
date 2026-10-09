@@ -2435,6 +2435,10 @@ fn leave_after(
             grant_surface,
             cause: cause.map(crate::engine::trace_cause),
             forced,
+            // The join and the release outcome are the lifecycle act's
+            // plumbing (PR B, Tasks 7 and 8); until then neither is recorded.
+            forced_by: None,
+            release: None,
         }));
         let _ = run.author.author(
             &mut run.recorder,

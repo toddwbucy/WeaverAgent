@@ -350,6 +350,10 @@ pub enum StopReason {
     /// event says what was refused, and neither is recoverable from the
     /// other. It is the division `Fault` already runs on.
     Refused,
+    /// The agent's unload ended the turn, the forced leave's cancel or a
+    /// graceful leave's turn closed without a tool return the drain blocked,
+    /// per `weaver-trace-Spec` section 3 (the lifecycle act, 2026-10-09).
+    Unload,
 }
 
 /// The resident token counts either side of a flush, both the SPU's own, as
@@ -568,6 +572,42 @@ pub struct UnloadClose {
     /// then carrying the load's cause. The record says the loss was
     /// directed, never a fault.
     pub forced: bool,
+    /// **The first force that turned a still-graceful leave forced**, per
+    /// `weaver-trace-Spec` section 3 (the lifecycle act): absent where no
+    /// force joined, never written null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forced_by: Option<Cause>,
+    /// **How the run's organs let go**, the release coming before `unload`
+    /// (I9). Optional at the read: absent means the record predates the member
+    /// and the release was not recorded, never that it was confirmed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release: Option<Release>,
+}
+
+/// The release outcome `unload` carries, per `weaver-trace-Spec` section 3.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Release {
+    pub spu: ReleaseOutcome,
+    /// Absent where the run stands no member.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member: Option<MemberRelease>,
+}
+
+/// The SPU's release: its `Release` answered `Released`, or not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReleaseOutcome {
+    Confirmed,
+    Unconfirmed,
+}
+
+/// The member's release: it has no release exchange, so `Closed` says only that
+/// the harness closed the state seam, never that the member was seen to exit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemberRelease {
+    Closed,
+    Unconfirmed,
 }
 
 /// What the leave found, in the envelope the confirm drivers carry: the

@@ -556,6 +556,8 @@ fn the_unload_always_carries_its_close() {
             grant_surface: Some(weaver_trace::GrantSurface::Varied),
             cause: Some(weaver_trace::Cause { uid: 1000 }),
             forced: false,
+            forced_by: None,
+            release: None,
         }))
     };
     let bare = r.submit(event(Kind::Unload, None, None)).unwrap_err();
@@ -580,6 +582,8 @@ fn the_unload_always_carries_its_close() {
         grant_surface: Some(weaver_trace::GrantSurface::Unreadable),
         cause: Some(weaver_trace::Cause { uid: 1000 }),
         forced: false,
+        forced_by: None,
+        release: None,
     })
     .expect("renders");
     assert_eq!(
@@ -592,6 +596,8 @@ fn the_unload_always_carries_its_close() {
         grant_surface: None,
         cause: None,
         forced: false,
+        forced_by: None,
+        release: None,
     })
     .expect("renders");
     assert_eq!(bare, serde_json::json!({"forced": false}));
@@ -1470,5 +1476,62 @@ fn the_load_names_its_loop_and_its_member() {
         absent["state_member"],
         serde_json::json!(false),
         "false is written, not omitted"
+    );
+}
+
+/// **`forced_by` is absent from a payload no force joined, and `release` absent
+/// only where the release was not recorded**, per `weaver-trace-Spec` section 3
+/// (the lifecycle act): each is optional at the read, never written null.
+/// Perturbation: drop `skip_serializing_if` from either member and the bare
+/// rendering gains a null.
+#[test]
+fn forced_by_and_release_render_only_where_they_hold() {
+    let bare = serde_json::to_value(weaver_trace::UnloadClose {
+        grant_surface: None,
+        cause: Some(weaver_trace::Cause { uid: 1000 }),
+        forced: false,
+        forced_by: None,
+        release: None,
+    })
+    .expect("renders");
+    assert_eq!(
+        bare,
+        serde_json::json!({"cause": {"uid": 1000}, "forced": false})
+    );
+    let joined = serde_json::to_value(weaver_trace::UnloadClose {
+        grant_surface: None,
+        cause: Some(weaver_trace::Cause { uid: 1000 }),
+        forced: true,
+        forced_by: Some(weaver_trace::Cause { uid: 0 }),
+        release: Some(weaver_trace::Release {
+            spu: weaver_trace::ReleaseOutcome::Confirmed,
+            member: Some(weaver_trace::MemberRelease::Closed),
+        }),
+    })
+    .expect("renders");
+    assert_eq!(
+        joined,
+        serde_json::json!({
+            "cause": {"uid": 1000},
+            "forced": true,
+            "forced_by": {"uid": 0},
+            "release": {"spu": "confirmed", "member": "closed"}
+        })
+    );
+    let memberless = serde_json::to_value(weaver_trace::Release {
+        spu: weaver_trace::ReleaseOutcome::Unconfirmed,
+        member: None,
+    })
+    .expect("renders");
+    assert_eq!(memberless, serde_json::json!({"spu": "unconfirmed"}));
+}
+
+/// **A turn the unload ended closes `Stopped { reason: unload }`**, per
+/// `weaver-trace-Spec` section 3 (the lifecycle act).
+#[test]
+fn a_stop_for_an_unload_renders_unload() {
+    assert_eq!(
+        serde_json::to_value(weaver_trace::StopReason::Unload).expect("renders"),
+        serde_json::json!("unload")
     );
 }
