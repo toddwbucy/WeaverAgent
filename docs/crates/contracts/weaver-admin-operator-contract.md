@@ -245,7 +245,8 @@ more: from its first step the agent takes no new request, each one it had admitt
 not started refused on its own connection with `Unloading`, "the agent is unloading", the operator's
 seeding line among them (S4 x dialer request); the turn in flight finishes what it can
 without further input, and a tool call it has out is interrupted, its return recorded
-interrupted by the unload and re-runnable after the reload (S4 x tool return); the agent
+interrupted by the unload and re-runnable after the reload, unless its result was
+already on its way, which stands, is delivered and is never re-run (S4 x tool return); the agent
 then writes one wind-down turn summarizing where the work stands, for the reload (S5);
 then the gate closes and the leave's save point is taken. The `unload` holds the
 invocation lock throughout (I1). It prints `Unloaded` with the marker closed, so the

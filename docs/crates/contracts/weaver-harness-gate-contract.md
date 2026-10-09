@@ -260,7 +260,12 @@ graceful or forced, meets a tool call out (`weaver-admin-Spec` section 3, S4 x t
 return). The gate ends the execution as at a cancel and answers `Killed { by: unload }`,
 so the record names the unload in the gate's own word and the call reads as never
 finished, re-runnable at the reload. It adds no clock, as the cancel adds none, and one
-that crosses the answer is dropped as a cancel is.
+that crosses the answer is dropped as a cancel is. **The first outcome wins**: where the
+tool's result is already sent when the interrupt reaches the gate, the result stands,
+the call is recorded completed with its result and delivered to the turn as in S3, and
+it is never re-runnable, so a completed tool, perhaps one with side effects, never runs
+again after the reload; only a call the interrupt actually ended is answered `Killed {
+by: unload }` and is re-runnable.
 
 **Every opened execution completes with an answer, and the answer carries
 one of four contents**, told apart by tag alone, the rule beneath the four
@@ -286,7 +291,7 @@ being who speaks in the return:
   a result, so a partial cannot masquerade as an answer. The case names
   which of the three ended it, the clock, the cancel or the unload, because
   the record holding the answer cannot otherwise tell a tool that ran out of
-  time from one the operator stopped or one the unload owes a re-run, the
+  time from one the operator stopped or one the unload ended and owes a re-run, the
   three being alike in every other field.
 
 All four are content rather than channel faults, per the layer split every

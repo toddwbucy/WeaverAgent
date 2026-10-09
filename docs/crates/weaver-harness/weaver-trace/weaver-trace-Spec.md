@@ -1006,7 +1006,7 @@ leave's turn that closed without a tool return the drain blocked (S4 x tool retu
 That call completes interrupted, `by: unload` in the `tool.call.completed` outcome per
 `weaver-types-Spec` section 4.1, the gate's answer to the harness's `ToolInterrupt`, as
 does a call the wind-down asked for, which is never sent and which the harness completes
-in its own word (S5 x tool return), so the call reads as never finished and re-runnable after the reload. Two
+in its own word (S5 x tool return), so the call reads as never finished and re-runnable after the reload. A result that crossed the interrupt stands as the call's outcome, completed and never re-runnable: the first outcome wins, and only a call the interrupt actually ended reads `by: unload`. Two
 values on members that stand, `reason` on the close and `by` on the outcome, rather
 than a new member, because each already says what ended its thing; and `unload` rather
 than the stop's `directive`, because a re-run after the reload is owed to an unload's

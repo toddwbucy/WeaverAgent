@@ -2101,6 +2101,10 @@ served.
    a call the model asks after the leave was heard is never sent and is recorded killed
    by the unload in this crate's own word. Either way the call reads as never finished
    and re-runnable at the reload, and the turn closes there without it (S4 x tool return).
+   **The first outcome wins**: where the gate's result was already sent when the
+   interrupt reached it, the result stands, is recorded completed and delivered to the
+   turn as in S3, and is never re-runnable; only a call the interrupt actually ended is
+   `Killed { by: unload }` (`weaver-harness-gate-contract` section 2).
    The turn's close is `Clean` where the turn finished, and `Stopped { reason: unload,
    cause }`, the leave's cause, only where the unload ended it (S4 x turn closes).
 3. **The wind-down turn** (step 4; S5). This crate tells the model the agent is
@@ -2203,6 +2207,10 @@ listener's backlog before the leave's dialers are answered, by the from-S7 rule.
 finishing and the wind-down's one generation have no bound unless the declaration sets
 `[lifecycle] drain-bound` and `wind-down-bound`, in seconds, per `weaver-types-Spec`;
 without them `force-unload` is the recourse, admin waiting for `Left` with no deadline.
+This crate reads the two from the enter, `EnterPayload.drain_bound` and
+`wind_down_bound`, its only source, since it holds no declaration; each absent means that
+phase is unbounded, and admin's own wait comes from the same parse it put on the enter,
+so the two agree by construction.
 Where the declaration sets one, a leg past its bound turns the leave forced from where it
 stands, as a join does, with no `forced_by` and the cause staying the graceful caller's;
 with both set, admin's bound is their sum and 150 seconds, per `weaver-admin-Spec`

@@ -210,7 +210,10 @@ the member stands on, resolved to the embedded engine where the declaration is s
 per `weaver-state-PRD` section 4, the lineage of the save point the load restores,
 whether the declaration's `restore` names it or the inventory selected the latest
 published by default, marked where it was named at a restore, and none where no save
-point stands, beside it and apart from it the reset, where the agent's last run did not
+point stands, the graceful leave's drain bound and wind-down bound as the declaration's
+`[lifecycle]` sets them, each absent where it is silent and absence meaning unbounded,
+the harness's only source for timing S4 and S5 (`weaver-admin-Spec` section 3, the
+bounds), beside it and apart from it the reset, where the agent's last run did not
 end in a clean unload or was forced to end and its leave save point could not be taken,
 that run and the reason, per `weaver-admin-Spec` section 3, I4, whether or not a save point stands, the digests of the organ binaries admin
 started and of the two it hands the worker to fork, the agent's SPU and the gate, the

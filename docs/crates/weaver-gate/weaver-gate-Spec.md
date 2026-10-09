@@ -1338,7 +1338,7 @@ the unload's cancel** (`weaver-admin-Spec` section 3, S4 x tool return): the
 harness sends `ToolInterrupt` where an unload, graceful or forced, meets a
 tool call out, and it ends the execution by the cancel's path, the answer a
 kill naming the unload, `Killed { by: unload }`, so the record reads the call
-as never finished and re-runnable at the reload. Nothing the
+as never finished and re-runnable at the reload. **The first outcome wins**: a result the gate sent before the interrupt reached it stands, recorded completed with its result, delivered to the turn as in S3 and never re-runnable, the interrupt crossing it dropped as a cancel is; only a call the interrupt actually ended is `Killed { by: unload }` and re-runnable. Nothing the
 contract permits arrives on the channel during an execution but the cancel,
 the interrupt and closure, executions being serial and the harness blocked in
 its wait, so an envelope there is one of the two or it is the closure the

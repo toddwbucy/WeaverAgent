@@ -634,8 +634,15 @@ Past a declared bound the harness turns the leave forced, with no `forced_by`, t
 leave's `cause` staying the graceful caller's. Admin's wait for `Left` follows: with
 both declared it is their sum and 150 seconds, and with either absent it has no
 deadline, the phase it would cover being unbounded, per `weaver-admin-Spec` section 3's
-bounds. The table changes no elected behaviour beyond the two bounds and joins no
-other member; the parser's change is the code act's.
+bounds. **The bounds cross to the harness on the enter**: admin alone parses the
+declaration, and the harness, which times the drain and the wind-down, holds no
+declaration, so `EnterPayload` carries the two as admin resolved them,
+`drain_bound` and `wind_down_bound`, each absent where the declaration is silent and
+absence meaning unbounded, not a default for an older writer. The harness reads them
+from the enter, its only source, and admin's own deadline comes from the same parse it
+put on the enter, so the two sides agree by construction. The table changes no elected
+behaviour beyond the two bounds and joins no other member; the parser's change and the
+enter's two members are the code act's.
 
 ```graph
 node: types-required-field-refuses
@@ -1232,7 +1239,7 @@ an open execution at the continue position, when the agent's unload interrupts a
 call, and the gate ends the execution and answers `Killed { by: unload }`
 (`weaver-admin-Spec` section 3, S4 x tool return). A unit case, for the cancel's reason,
 and a case apart from the cancel because what it owes differs: an interrupted call is
-re-runnable after the reload, and a cancelled one owes nothing.
+re-runnable after the reload, and a cancelled one owes nothing. **The first outcome wins**: a result the gate sent before the interrupt reached it stands, recorded completed with its result, delivered to the turn as in S3 and never re-runnable, the interrupt crossing it dropped as a cancel is; only a call the interrupt actually ended is `Killed { by: unload }` and re-runnable.
 
 ```rust
 pub struct ToolExecution {
@@ -1279,7 +1286,9 @@ return blocked during the graceful unload's drain, which the gate answers to
 `ToolInterrupt`, or the call never sent from the wind-down, which the harness completes
 in its own word, which the record names as the unload's so the call reads as never finished
 and re-runnable after the reload (`weaver-admin-Spec` section 3, S4 x tool return and
-S5 x tool return), and not as the caller's cancel, which owes no re-run.
+S5 x tool return), and not as the caller's cancel, which owes no re-run. A result
+that crossed the interrupt stands and is never re-runnable (the first outcome wins,
+`weaver-harness-gate-contract` section 2).
 
 **The two definitions are owed to the charter and no act has carried them.**
 `weaver-types-PRD` section 2.3 admits a wire definition when a contract draws
@@ -1459,6 +1468,8 @@ pub struct EnterPayload {
     pub cause: Cause,
     pub operator: u32,
     pub library_path: Option<String>,
+    pub drain_bound: Option<u64>,
+    pub wind_down_bound: Option<u64>,
 }
 
 pub struct Lineage {
