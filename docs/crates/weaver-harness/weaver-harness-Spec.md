@@ -2156,9 +2156,11 @@ marker `Open`.
 **A force that joins a pending leave turns it forced from where it stands**
 (`weaver-admin-Spec` section 3, the forced unload (joining); S4, S5 and S6 x
 force-unload). `JoinLeave { cause }`, the force admin sends without the invocation lock
-beside the graceful unload that holds it, joins it; a forced `Leave` never arrives while a
-leave is pending, the graceful unload holding the lock (I1), and is refused `OutOfOrder`
-if it does. What remains of the quiesce's wait, the drain and the wind-down is
+beside the graceful unload that holds it, joins it. **A forced `Leave` that arrives while
+a leave is pending joins it the same way**, by this crate's own state: that happens only
+where the graceful unload's invocation died and a force took the freed lock as sole (the
+orphaned leave of `weaver-admin-Spec` section 3; I1, I3), and its caller, holding the
+lock, is the one that concludes. What remains of the quiesce's wait, the drain and the wind-down is
 skipped: a tool call out is interrupted, the turn or the wind-down's generation is
 cancelled as a stop, and a gate already quiescing or draining is brought down at once by
 this crate closing its end of the gate channel and reaping the gate, closure being death
@@ -2170,9 +2172,10 @@ the first joining cause as `forced_by` on `unload`, and every dialer is answered
 same `Left { forced: true }` (I2); a later join is answered with that `Left` and named
 nowhere. `JoinLeave` with no leave pending is `OutOfOrder`, which
 tells admin the lock's holder is no unload; while a leave is pending a second unforced
-`Leave` and a `SavePoint` are `OutOfOrder`, this crate's own defence for frames that are
-unreachable while admin holds the invocation lock (I1), admin refusing those verbs
-`InvocationInFlight` before it dials.
+`Leave` and a `SavePoint` are `OutOfOrder`: while the graceful unload's invocation lives,
+admin refuses those verbs `InvocationInFlight` before it dials (I1); where it has died,
+the verb reaches this crate and is refused here, the operator's recourse being
+`force-unload`, whose forced `Leave` joins (I3).
 
 **From S7 on, a join gets the `Left` as it stands** (`weaver-admin-Spec` section 3, the
 forced unload (joining), and the ordering of #94's round 21; I2). Once `unload` is

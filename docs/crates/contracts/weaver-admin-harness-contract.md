@@ -193,9 +193,10 @@ run whose unload stopped at its save point taking one at rest as any other does)
 refuses `ActivityNotAtRest` where a turn runs (S3 x save-point), `SavePointNotTaken`
 naming which leg missed, or `OutOfOrder` where the run takes no save point, a diagnostic
 binding or a serving run with no member seam, which has no member to ask and is never
-reported as the member dead, and wherever a leave is pending (S4 to S7, and S10), a
-case unreachable while admin holds the invocation lock (I1), admin refusing the verb
-`InvocationInFlight` before it dials.
+reported as the member dead, and wherever a leave is pending (S4 to S7, and S10): while
+the leave's invocation lives admin refuses the verb `InvocationInFlight` before it dials
+(I1), and where it has died the verb reaches the harness and is refused here, a force
+being the recourse (I3).
 The legs the harness names are the answer, the finished answer and the member dead, a
 member's failed write arriving as the answer missed; admin names a fourth of its own,
 `published`, at the unload and the `save-point` verb, where the save point was reported
@@ -308,7 +309,12 @@ same `Left`, `forced` true (S4, S5, S6 x force-unload). A later join receives th
 `Left` and is named nowhere. **From S7 on**, `unload` being authored and
 the record final, the join changes nothing and is answered with the `Left` as it stands
 (S7 x force-unload). **Where a forced leave is pending** (S10) the join is answered with
-that leave's `Left` (S10 x force-unload). **The harness hears a join in every wait of
+that leave's `Left` (S10 x force-unload). **An orphaned leave is joined by a forced
+`Leave`**: where the graceful unload's invocation died in S4 to S6, a force takes the
+freed lock as sole and directs `Leave{forced}`, which the harness joins to the pending
+leave by its own state, exactly as it joins `JoinLeave`, `forced_by` naming the force's
+cause; the force, holding the lock, receives `Left{forced: true}` and concludes
+(`weaver-admin-Spec` section 3, the orphaned leave; I1, I3). **The harness hears a join in every wait of
 the leave**: the wait for `GateQuiesced`, the turn's finish, the wind-down, the lower,
 the save point's legs and the unwind after them, so a forced leave never waits on what
 remains (I3). **With no leave pending** (S2, S3, S9, or before the enter) the harness
@@ -407,8 +413,10 @@ an obligation on the party that could break it.
   the account on the stream being two different things.
 - Leave is terminal for the worker and is pending at most once. While one is pending
   (`weaver-admin-Spec` section 3, S4 to S7 and S10), every directive but `JoinLeave`
-  is refused `OutOfOrder`, a second `Leave` included, admin's invocation lock having
-  refused the verb before it dialed (I1). A leave refused `SavePointNotTaken` is no
+  and a forced `Leave` is refused `OutOfOrder`, a second unforced `Leave` included.
+  While the holder lives, admin's invocation lock refuses those verbs before it dials
+  (I1); where it has died, a forced `Leave` joins the orphaned leave as `JoinLeave`
+  does, and its caller, holding the lock, concludes (I3). A leave refused `SavePointNotTaken` is no
   longer pending, and the run stands entered at rest for a retried or a forced `Leave`
   (S9).
 - `JoinLeave` is valid only while a leave is pending, and is refused `OutOfOrder`

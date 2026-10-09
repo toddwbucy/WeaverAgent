@@ -223,7 +223,7 @@ state; it reads `show` and acts on what it prints.
 |---|---|---|---|---|---|---|
 | S0, down, clean | the load's answer, or its refusal | `Unloaded`, nothing to do | `Unloaded`, nothing to do | `OutOfOrder` | `RestoreNamed` | `Unloaded` |
 | S0d, down, a run ended without closing | as S0, the load recording the reset | `Unloaded`, nothing to do | `Unloaded`, nothing to do | `OutOfOrder` | `RestoreNamed` | `Unloaded` |
-| S1, loading | `InvocationInFlight` | `InvocationInFlight` | waits for the load, then answers as the state it finds | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+| S1, loading | `InvocationInFlight` | `InvocationInFlight` | waits for the load, at most its bound, then answers as the state it finds | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S2, serving at rest | `AgentRunning` | the graceful unload, below | the forced unload, below | `SavePointTaken` | `RestoreNamed` | `Idle` |
 | S3, serving, a turn in flight | `AgentRunning` | the graceful unload, after the turn | the forced unload, the turn cancelled | `ActivityNotAtRest` | `RestoreNamed` | `Active` |
 | S4 to S7, a graceful unload in progress | `InvocationInFlight` | `InvocationInFlight` | joins, below | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
@@ -287,15 +287,24 @@ waits and the publication after the answer come on top, as before.
   the record being final, the join changes nothing.
 - **Behind any other holder of the lock** (a load in S1, a `show`, a `save-point`, an
   unload concluding in S8): it retries the join and the lock in turn, and acts alone
-  once it holds the lock.
+  once it holds the lock. Behind a load it waits at most that load's bound (900 seconds
+  unless the agent's root names another), the load concluding or rolling back inside
+  it; the escalation applies to an unanswered join, never to that wait. So a force
+  prints within the load's bound, where a load is in flight, plus 150 seconds plus the
+  escalation's 45 (I3).
+- **On an orphaned unload** (an `unload` whose invocation was killed in S4 to S6): the
+  lock is free and the leave still pending, so the force takes the lock alone and its
+  leave joins the pending one, turning it forced; the force concludes as a force alone
+  does, publishing the save point and closing the marker, and the record names its
+  cause as `forced_by`.
 - **On a worker that answers nothing** (S11): a join unanswered within 150 seconds ends
   the run's processes without the lock and only then writes the marker `Forced` (I3).
   The `unload` holding the lock concludes with no save point and the marker stands
   `Forced`. The force prints `Unloaded`, or `LockHolderUnknown` or `WorkerWouldNotExit`
   where the escalation cannot end the run, per section 5.
 
-**A caller whose invocation is killed during an unload** (S4 to S8) leaves the agent to
-finish the leave unanswered: the save point stays in the member's room for the next verb
+**A caller whose invocation is killed during an unload** (S4 to S8), where no force
+follows, leaves the agent to finish the leave unanswered: the save point stays in the member's room for the next verb
 to publish, and the marker stays open, so the next load records `NoCleanUnload` although
 the state was kept, a conservative label with nothing lost (`weaver-admin-Spec` section
 3, an invocation killed during S4 to S8).
