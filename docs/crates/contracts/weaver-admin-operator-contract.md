@@ -234,7 +234,7 @@ state; it reads `show` and acts on what it prints.
 | S2, serving at rest | `AgentRunning` | the graceful unload, below | the forced unload, below | `SavePointTaken` | `RestoreNamed` | `Idle` |
 | S3, serving, a turn in flight | `AgentRunning` | the graceful unload, after the turn | the forced unload, the turn cancelled | `ActivityNotAtRest` | `RestoreNamed` | `Active` |
 | S4 to S7, a graceful unload in progress | `InvocationInFlight` | `InvocationInFlight` | joins, below | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
-| S8, an unload concluding | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight`, no leave left to join | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+| S8, an unload concluding | `InvocationInFlight` | `InvocationInFlight` | waits for the unload to finish, then prints its outcome | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S9, an unload stopped at its save point | `AgentRunning` | retried: the save point, then down | the forced unload | `SavePointTaken` | `RestoreNamed` | `Idle`, the gate lowered |
 | S10, a force in progress | `InvocationInFlight` | `InvocationInFlight` | joins the forced leave | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S11, a silent worker being ended | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
@@ -315,7 +315,8 @@ waits and the publication after the answer come on top, as before.
   concluded and changing nothing (I1); each prints only once the run lock has freed,
   never on the agent's answer alone, so `Unloaded` means no constituent still runs. From
   S7 on, the leave's outcome being fixed, the join adds nothing to it and concludes the same way,
-  and once the agent no longer listens it refuses `InvocationInFlight`, the unload concluding.
+  and once the agent no longer listens it waits for the unload to finish, at most 150
+  seconds and then the escalation, and prints the unload's outcome.
 - **Beside any other command** (a load in S1, a `save-point`, another force, an unload
   concluding in S8): it refuses `InvocationInFlight` and takes over nothing, one command
   at a time being the caller's to keep (`weaver-agent-PRD` section 6.1). A `show`'s
