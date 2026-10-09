@@ -1189,7 +1189,7 @@ harness answering `Left` only after the writer's queue has drained `unload` to t
 sink, per `weaver-admin-harness-contract` section 4, so a reader keys a run's close on
 `unload` and its `forced` and never infers one from the record's end. The converse does
 not hold: a worker that dies in S7 after `unload` and before `Left` leaves an
-`unload` with no answer, which admin meets as S8 with the marker `Open` (S7 x the worker
+`unload` with no answer, which admin meets as S8b with the marker `Open` (S7 x the worker
 dies). A member that dies while the worker lives ends nothing on the record: in S4 to S6
 the leave's save point misses `MemberDead`, recorded as a `refusal` of the leave where
 the leave is forced, and in S7 a seam found dead at the release reads `Unconfirmed` in

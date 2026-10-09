@@ -2153,7 +2153,7 @@ served.
    the leave's state at its end, never the directive it began as: false where it stayed
    graceful, true where a join or a declared bound turned it forced (I2). The member,
    released before `unload`, needs nothing after it: its save point is taken and its
-   grant surface read before the release, and no save point ever carries `unload`. A run with no `unload` event never answered `Left`: the worker's death in S7 is S8
+   grant surface read before the release, and no save point ever carries `unload`. A run with no `unload` event never answered `Left`: the worker's death in S7 is S8b
    as far as admin can tell, the marker left `Open` (S7 x the worker dies).
 
 **A missed leg stops a leave that stayed graceful in S9** (S6 x member misses a save-point leg):

@@ -602,7 +602,7 @@ has no `unload`, a truthful account of a death rather than corruption to repair,
 per `weaver-admin-PRD` section 5. **The worker's death** while a leave is pending ends
 the run with no `Left`, and the marker stays `Open` (`weaver-admin-Spec` section 3, S4 to
 S10 x the worker dies, I2 and I4): a run whose record holds no `unload` never answered
-`Left`, and a worker's death in S7 is S8 as far as admin can tell, the marker `Open`.
+`Left`, and a worker's death in S2 to S7, S9 or S10 is S8b as far as admin can tell (`weaver-admin-Spec` section 3: the worker gone, no `Left`, the marker `Open`, S0d once the run lock frees).
 **The member's death, the worker alive,** ends nothing: it is the dead peer of
 `weaver-harness-state-contract` section 5, so in S4 to S6 the leave goes on and its save
 point misses `MemberDead` at S6, a leave that stayed graceful answering
