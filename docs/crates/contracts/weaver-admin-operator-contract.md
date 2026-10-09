@@ -230,28 +230,33 @@ state; it reads `show` and acts on what it prints.
 |---|---|---|---|---|---|---|
 | S0, down, clean | the load's answer, or its refusal | `Unloaded`, nothing to do | `Unloaded`, nothing to do | `OutOfOrder` | `RestoreNamed` | `Unloaded` |
 | S0d, down, a run ended without closing | as S0, the load recording the reset | publishes the save points the run left as recovered, then `Unloaded`, or `SavePointNotTaken` naming `published` where that fails; the next load records `NoCleanUnload` | publishes them the same way, then `Unloaded`, or refuses as `unload` does; the marker is left as it stands, a force on an agent already down having ended nothing | `OutOfOrder` | `RestoreNamed` | `Unloaded` |
-| S1, loading | `InvocationInFlight`; the load's caller killed, `AgentRunning` while a process holds the run, else as S0d | `InvocationInFlight`; the load killed, ends whatever holds the run, else as S0d | waits for the load's publication of recovered files, bounded by their size, then at most the load's bound, then, where the agent did not start inside it, the load's rollback (at most 195 seconds), then answers as the state it finds; the load killed, ends whatever holds the run as `unload` does | `InvocationInFlight`; the load killed, `OutOfOrder` unless the agent had started serving | `InvocationInFlight`; the load killed, `RestoreNamed` | `InTransition`; the load killed, `InTransition` with the run's processes named while they stand, then `Unloaded` |
+| S1, loading | `InvocationInFlight`; the lock free, `AgentRunning` while a process holds the run, else as S0d | `InvocationInFlight`; the lock free, ends whatever holds the run, else as S0d | waits for the load's publication of recovered files, bounded by their size, then at most the load's bound, then, where the agent did not start inside it, the load's rollback (at most 195 seconds), then answers as the state it finds; the lock free, ends whatever holds the run as `unload` does | `InvocationInFlight`; the lock free, `OutOfOrder` unless the agent had started serving | `InvocationInFlight`; the lock free, `RestoreNamed` | `InTransition`; the lock free, `InTransition` with the run's processes named while they stand, then `Unloaded` |
 | S2, serving at rest | `AgentRunning` | the graceful unload, below | the forced unload, below | `SavePointTaken` | `RestoreNamed` | `Idle` |
 | S3, serving, a turn in flight | `AgentRunning` | the graceful unload, after the turn | the forced unload, the turn cancelled | `ActivityNotAtRest` | `RestoreNamed` | `Active` |
-| S4 to S6, a graceful unload in progress | `InvocationInFlight`; the unload's caller killed, `AgentRunning` | `InvocationInFlight`; the caller killed, adopts the leave and is answered when it completes, or `OutOfOrder` where the leave was already forced | joins, below; the caller killed, takes over and joins the same way | `InvocationInFlight`; the caller killed, `OutOfOrder` | `InvocationInFlight`; the caller killed, `RestoreNamed` | `InTransition` |
-| S7, the unload finishing | `InvocationInFlight`; the caller killed, `AgentRunning` | `InvocationInFlight`; the caller killed, answered as the leave stands where it reached the agent before the agent stopped listening, or, after that, waits for the run to end and finds it ended | joins as at S4, or, after the agent stopped listening, waits for the run to end, escalating past the leave's 150 seconds and 45 more | `InvocationInFlight`; the caller killed, `OutOfOrder` | `InvocationInFlight`; the caller killed, `RestoreNamed` | `InTransition`, with the run's processes named once the agent stopped listening |
-| S8, an unload concluding | `InvocationInFlight`; the caller killed, `AgentRunning` while a process still holds the run, else as S0d | `InvocationInFlight`; the caller killed, waits for the run to end, then as S0d | waits, then as S0 or S0d; the caller killed, waits for the run to end, escalating past 150 seconds and 45 more, then as S0d | `InvocationInFlight`; the caller killed, `OutOfOrder` while a process still holds the run, else as S0d | `InvocationInFlight`; the caller killed, `RestoreNamed` | `InTransition` with the run's processes named, then `Unloaded` once they are gone |
+| S4 to S6, a graceful unload in progress | `InvocationInFlight`; the lock free, `AgentRunning` | `InvocationInFlight`; the lock free, adopts the leave and is answered when it completes, or `OutOfOrder` where the leave was already forced | joins, below; the lock free, takes over and joins the same way | `InvocationInFlight`; the lock free, `OutOfOrder` | `InvocationInFlight`; the lock free, `RestoreNamed` | `InTransition` |
+| S7, the unload finishing | `InvocationInFlight`; the lock free, `AgentRunning` | `InvocationInFlight`; the lock free, answered as the leave stands where it reached the agent before the agent stopped listening, or, after that, waits for the run to end and finds it ended | joins as at S4, or, after the agent stopped listening, waits for the run to end, escalating past the leave's 150 seconds and 45 more | `InvocationInFlight`; the lock free, `OutOfOrder` | `InvocationInFlight`; the lock free, `RestoreNamed` | `InTransition`, with the run's processes named once the agent stopped listening |
+| S8, an unload concluding | `InvocationInFlight`; the lock free, `AgentRunning` while a process still holds the run, else as S0d | `InvocationInFlight`; the lock free, waits for the run to end, then as S0d | waits, then as S0 or S0d; the lock free, waits for the run to end, escalating past 150 seconds and 45 more, then as S0d | `InvocationInFlight`; the lock free, `OutOfOrder` while a process still holds the run, else as S0d | `InvocationInFlight`; the lock free, `RestoreNamed` | `InTransition` with the run's processes named, then `Unloaded` once they are gone |
 | S9, an unload stopped at its save point | `AgentRunning` | retried: the save point, then down | the forced unload | `SavePointTaken` | `RestoreNamed` | `Idle`, the gate lowered |
-| S10, a force in progress | `InvocationInFlight`; the force's caller killed, `AgentRunning` | `InvocationInFlight`; the caller killed, `OutOfOrder` | joins; the caller killed, takes over and joins the same way | `InvocationInFlight`; the caller killed, `OutOfOrder` | `InvocationInFlight`; the caller killed, `RestoreNamed` | `InTransition` |
-| S11, a silent worker being ended | `InvocationInFlight`; with the unload's caller killed and the processes still being ended, `AgentRunning` | `InvocationInFlight`; the caller killed, waits for the run to end | waits, then as S0 or S0d | `InvocationInFlight`; the caller killed, `OutOfOrder` | `InvocationInFlight`; the caller killed while the processes are still being ended, `RestoreNamed` | `InTransition` with the run's processes named, then `Unloaded` once they are gone |
+| S10, a force in progress | `InvocationInFlight`; the lock free, `AgentRunning` | `InvocationInFlight`; the lock free, `OutOfOrder` | joins; the lock free, takes over and joins the same way | `InvocationInFlight`; the lock free, `OutOfOrder` | `InvocationInFlight`; the lock free, `RestoreNamed` | `InTransition` |
+| S11, a silent worker being ended | `InvocationInFlight`; with the lock free while the processes are being ended, `AgentRunning` | `InvocationInFlight`; the lock free, waits for the run to end | waits, then as S0 or S0d | `InvocationInFlight`; the lock free, `OutOfOrder` | `InvocationInFlight`; the lock free while the processes are being ended, `RestoreNamed` | `InTransition` with the run's processes named, then `Unloaded` once they are gone |
+
+**"The lock free" is what admin observes**: no other command holds the agent's invocation
+lock, whether its caller was killed or an escalation is ending the run's processes
+without it (`weaver-admin-Spec` section 3); each split cell is keyed on that, not on
+whether a caller lives.
 
 `restore` names the save point the next load restores in every state that answers it,
 the live restore being A5's. `stop` and `validate` take the invocation lock as every
 line but `show` does, so each refuses `InvocationInFlight` wherever the table shows an
 invocation holding it (S1, S4 to S8, S10, S11); a `stop` in S9 answers `AtRest`. The
 lock is taken before the state is read, so a line that meets a held lock refuses
-`InvocationInFlight` whatever the state behind it. `show` alone reads beside a holder: in
-S4 to S6 and S10 it prints `InTransition` whether the unload's caller lives or was killed;
-in S7 and S8 with the caller killed it prints `InTransition` where it reached the agent
-before the agent stopped listening, and after that `InTransition` with the run's
-processes named while they are still exiting, the outcome being fixed, and `Unloaded`
-only once they are gone (`weaver-admin-Spec` section
-3, the seal's table).
+`InvocationInFlight` whatever the state behind it. `show` alone reads beside a holder, and
+what it prints is one ladder (`weaver-admin-Spec` section 5): `InTransition` at once
+where another command holds the agent; otherwise the agent's own word where it answers
+(`Idle` or `Active`, or `InTransition` while an unload is in progress); `Unanswered`
+where it accepts and does not answer in time, a worker wedged; `InTransition` with the
+run's processes named where no agent listens and a process still holds the run, a run
+that never started or one ending; and `Unloaded` only once nothing holds the run.
 
 **`unload` drains, winds down, saves, then goes down** (`weaver-admin-Spec` section 3,
 the graceful unload). It may take the length of the turn in flight and one generation
@@ -364,8 +369,7 @@ reader.
 **At a command line, the floor's refusals**, per `weaver-admin-Spec` section 3: a verb
 arriving while another invocation holds this agent's invocation lock refuses
 `InvocationInFlight` before touching anything, `force-unload` alone excepted, which
-joins, waits or escalates per section 4, and `show` then answers `InTransition`, or
-in S7 and S8 with the caller killed as the paragraph above says. A
+joins, waits or escalates per section 4, and `show` then answers by the ladder above. A
 second `load` of a running agent answers `AgentRunning` and touches nothing, a load
 never ending an existing run, whether or not that run ever entered. A missing or
 malformed boundary file refuses `ConfigInvalid` naming `roles.toml`. An `unload` that
