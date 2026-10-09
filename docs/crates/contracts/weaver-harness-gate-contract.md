@@ -452,8 +452,12 @@ applies to a fault before ready. After the aggregate, the death is the loss of t
 agent's reachability, observed through closure and authored to the stream as the
 `fault` event, per the fault-carrier ruling of 2026-08-01, the operator's tooling
 keying on it there. A tool execution open when the gate dies has no answer coming: the
-harness closes it `Killed { by: fault }`, a call never finished and re-runnable, as an
-unload's interrupted call is (`weaver-admin-Spec` section 3, the organ-death table).
+harness closes it `Killed { by: fault }`, **its outcome indeterminate and never re-run
+automatically**, since the shell the gate supervised runs in its own process group with
+no parent-death signal of its own (`weaver-gate-Spec` section 8, the shell forked in its
+own group; the gate's parent-death signal is elected for the gate alone), so it may still
+run or may have completed (`weaver-admin-Spec` section 3, the organ-death table; Codex on
+#109, round 43).
 
 **Nothing on this seam retries.** A refused directive returns to the harness, which
 unwinds, and a re-sent directive would put two attempts behind one operator intent.

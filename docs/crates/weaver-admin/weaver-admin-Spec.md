@@ -459,7 +459,7 @@ The live restore, a reload of state without a process restart, is A5's, with the
 | State | The gate dies | The SPU dies | The trace relay dies (a file sink) |
 |---|---|---|---|
 | S2 | the run serves on with no gate, the agent unreachable: a `fault` authored (the loss of reachability); a later forced unload's lower meets no answer and the harness closes its end and reaps the gate (S10); a later graceful unload turns forced by (A) | the run serves on: a `fault` authored, the worker surviving; a later request is refused `NoResidency`, and the run stands (B); a later graceful unload turns forced by (A), and its release reads `release.spu` `Unconfirmed` | the worker serves on and the trace keeps landing in the sink; the trace door is closed until the next load and nothing records it; a later unload is unaffected |
-| S3 | a `fault` authored; a tool call out at the gate is closed by the harness `Killed { by: fault }`, the gate never answering it, and is re-runnable as at an unload, and the turn's answer to a connection the gate's death closed is a lost delivery, never a lost turn (`weaver-gate-PRD` section 13.4) | the turn in flight closes `Stopped { reason: fault }`, the SPU's `fault` recorded and the caller answered an error (B); later requests are refused `NoResidency`, and the run stands | as in S2 |
+| S3 | a `fault` authored; a tool call out at the gate is closed by the harness `Killed { by: fault }`, the gate never answering it, its outcome indeterminate and never re-run automatically, the shell possibly still running or done (`weaver-harness-gate-contract` section 5), and the turn's answer to a connection the gate's death closed is a lost delivery, never a lost turn (`weaver-gate-PRD` section 13.4) | the turn in flight closes `Stopped { reason: fault }`, the SPU's `fault` recorded and the caller answered an error (B); later requests are refused `NoResidency`, and the run stands | as in S2 |
 | S4, S5 | the leave turns forced at that moment (A): no `forced_by`, the graceful caller's cause kept; it skips the quiesce and the drain's refusals through the gate, still takes the save point, and the lower meets no answer and reaps the gate | S4: a turn in flight closes `Stopped { reason: fault }` and its caller is answered an error (B); S5: the wind-down, which has no dialer, closes `Stopped { reason: fault }` with no answer; either way the leave goes on turned forced (A), the wind-down being unable to run, and still takes the save point | as in S2 |
 | S6 | the lower meets no answer: the harness closes its end and reaps the gate, inside the lower bound, and the save point's legs go on | a `fault` authored; the save point's legs go on, needing no SPU; the release reads `release.spu` `Unconfirmed` | as in S2 |
 | S7 | - (the gate already lowered) | a `fault` authored before `unload`, `release.spu` `Unconfirmed` (I9) | as in S2 |
@@ -527,11 +527,11 @@ The label this gives may be conservative, `NoCleanUnload` or `Forced` where the 
 **The seal: S7's own steps.** S7 runs these steps in order:
 1. the outcome fixed, the save point taken or missed;
 2. the coordination socket's pathname unlinked, so no new dial reaches the harness;
-3. the accept backlog drained with non-blocking accepts: a `JoinLeave` held to step 7, any other directive answered `OutOfOrder`;
+3. the accept backlog drained with non-blocking accepts: a `JoinLeave` held to step 7, any other directive answered `OutOfOrder`, and, where the pending leave is a rollback's (`rollback` true), every held `JoinLeave` and forced `Leave` answered `OutOfOrder` too, so the force refuses `InvocationInFlight`;
 4. the SPU and the member released, an SPU fault authored;
 5. `unload` authored, the recorder's depth read before it;
 6. the writer drained;
-7. `Left` answered to the leave's own dialer and to every held `JoinLeave`;
+7. `Left` answered to the leave's own dialer and to every held `JoinLeave`, a rollback's `Left` to the load's own dialer alone;
 8. the listening descriptor closed, a close discarding any backlog not yet accepted, which is why the drain at step 3 comes first;
 9. the worker exits, the run lock freeing (S8a).
 

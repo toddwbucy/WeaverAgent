@@ -1290,8 +1290,9 @@ and re-runnable after the reload (`weaver-admin-Spec` section 3, S4 x tool retur
 S5 x tool return), and not as the caller's cancel, which owes no re-run. A result
 that crossed the interrupt stands and is never re-runnable (the first outcome wins,
 `weaver-harness-gate-contract` section 2). **`Fault` joined them with the same act** (Codex on #109, round 38), `by: fault`: a
-call the gate's death left unanswered, which the harness closes in its own word, never
-finished and re-runnable as an unload's is (`weaver-admin-Spec` section 3, the organ-death
+call the gate's death left unanswered, which the harness closes in its own word, its
+outcome indeterminate and never re-run automatically, the shell possibly still running
+or done, unlike an unload's interrupted call, which is re-runnable (`weaver-admin-Spec` section 3, the organ-death
 table; `weaver-harness-gate-contract` section 5). A new variant an older record cannot
 hold, it needs no optional-at-read rule.
 

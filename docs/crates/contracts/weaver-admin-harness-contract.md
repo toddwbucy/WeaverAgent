@@ -161,7 +161,8 @@ lives exactly as long as its verb.** The lifetime rule of `weaver-organ-channel`
 on the listener: bound once at the worker's start, closed by the seal or, short of it,
 by the worker's death, shared with no second worker, **and sealed once the leave's outcome is fixed** (S7),
 in the steps `weaver-admin-Spec` section 3 gives for the seal: a join already held is
-answered at the normal answer point, after the writer's drain, and a dial after the
+answered at the normal answer point, after the writer's drain, but a join held while
+the pending leave is a rollback's is answered `OutOfOrder` at the drain of the backlog, and a dial after the
 unlink finds no socket. Each
 accepted connection is one invocation's, closed
 by admin when the verb answers, and the harness serves one connection at a time, a
