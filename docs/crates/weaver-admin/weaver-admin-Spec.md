@@ -411,13 +411,13 @@ section 3 states where that obligation lands now.
 | S1 | Loading | invocation (load), run | starting, then `BeforeEnter` | `BeforeRaise`, then `Raised` | as found, until the enter answers |
 | S2 | Serving, at rest | run | `Entered`, no turn | `Raised` | `Open{run}` |
 | S3 | Serving, turn in flight (a tool call out through the gate, and the seeding turn, included) | run | `Entered`, turn | `Raised` | `Open{run}` |
-| S4 | Graceful: draining | invocation (unload), run | leave pending; a turn may still run | `Draining` | `Open{run}` |
+| S4 | Graceful: draining | invocation (unload), run | leave pending; a turn may still run | `Raised` while an execution is open (`ToolInterrupt` sent), then `Draining` once `Quiesce` is read | `Open{run}` |
 | S5 | Graceful: winding down | invocation (unload), run | the wind-down turn | `Draining` | `Open{run}` |
 | S6 | Lowering and saving | invocation, run | lower, then the save point's four legs | `Draining`, then `Lowered` | `Open{run}` |
 | S7 | Leaving (after the save point, taken or missed; the leave's outcome fixed) | invocation, run | the SPU and the member released, a fault met there authored, then `unload` authored, the terminal event | `Lowered` | `Open{run}` |
 | S8 | Concluding | invocation only (the run lock has freed) | gone | gone | being written |
-| S9 | Unload stopped (the save point not taken, the member alive) | run (the invocation lock released at the refusal) | `Entered` at rest, gate lowered | `Lowered` | `Open{run}` |
-| S10 | Forcing | as the force finds it (the forced unload, below) | turn cancelled; lower; the save point attempted | `Lowered` at once | `Open{run}` |
+| S9 | Unload stopped (a leave that stayed graceful, its save point not taken, the member alive) | run (the invocation lock released at the refusal) | `Entered` at rest, gate lowered | `Lowered` | `Open{run}` |
+| S10 | Forcing | as the force finds it (the forced unload, below) | a tool call out interrupted (`ToolInterrupt`); turn cancelled; lower; the save point attempted; then S7 | `Lowered` at once, or once an open execution has ended | `Open{run}` |
 | S11 | Escalating (a worker that will not answer) | the escalating invocation | being ended | being ended | `Forced{run}`, written after the kill |
 
 **Transitions: the operator's verbs.** Each cell is the next state, what is recorded and what is answered. "Refuse X" leaves the state unchanged. The lock rule precedes the state: a verb that needs the invocation lock while another invocation holds it refuses `InvocationInFlight`, whatever the state, and only `force-unload` and `show` act beside a holder.
@@ -438,15 +438,16 @@ The live restore, a reload of state without a process restart, is A5's, with the
 
 **Transitions: events inside a run.**
 
-| State | Dialer request | Tool return | Turn closes | Member misses a save-point leg | Worker or member dies |
-|---|---|---|---|---|---|
-| S2 | admitted: S3 | - | - | - | S0d (marker `Open`); the trace ends unclosed |
-| S3 | queued behind the turn, and served after it | delivered to the turn | S2; `turn.closed` | - | S0d |
-| S4 | refused through the gate, its connection standing ("the agent is unloading"), and recorded as a refusal of the leave, `Unloading`; a seeding line is refused as any request is | blocked by the gate (`ToolInterrupt`, answered `Killed{by: unload}`): the call is recorded interrupted by the unload, re-runnable at the reload, and the turn closes without it; the first outcome wins, a result already sent when the interrupt reached the gate standing, delivered to the turn as in S3 and never re-runnable | S5; `turn.closed`, `Clean` where the turn finished, `Stopped{reason: unload}` with the leave's cause only where the unload ended it | - | S0d |
-| S5 | refused as in S4 | the wind-down's own calls are never sent, and are recorded interrupted | S6 (the wind-down's request and summary on the record and in state) | - | S0d |
-| S6 | the gate already refuses; at the lower, a frame met is recorded refused and its connection closes | - | - | S9: `SavePointNotTaken` naming the leg; nothing more is authored; the run entered at rest, the gate lowered | S0d |
-| S7 | - | - | - | - | the worker: S8 as far as this crate can tell (the run lock frees), the trace possibly ending before `unload`; the SPU or the member dying in its release: a `fault` authored before `unload`, whose release outcome names it unconfirmed, and the leave goes on |
-| S9 | the gate is lowered: the connection is refused | - | - | - | S0d |
+| State | Dialer request | Tool return | Turn closes | A declared bound passes | Member misses a save-point leg | Worker or member dies |
+|---|---|---|---|---|---|---|
+| S2 | admitted: S3 | - | - | - | - | S0d (marker `Open`); the trace ends unclosed |
+| S3 | queued behind the turn, and served after it | delivered to the turn | S2; `turn.closed` | - | - | S0d |
+| S4 | refused through the gate, its connection standing ("the agent is unloading"), and recorded as a refusal of the leave, `Unloading`; a seeding line is refused as any request is; while the gate is still `Raised` behind an open execution, a request it admits reaches the harness and is refused the same way, the refusal crossing the gate once the execution has ended | blocked by the gate (`ToolInterrupt`, answered `Killed{by: unload}`): the call is recorded interrupted by the unload, re-runnable at the reload, and the turn closes without it; the first outcome wins, a result already sent when the interrupt reached the gate standing, delivered to the turn as in S3 and never re-runnable | the leave staying graceful: S5; `turn.closed`, `Clean` where the turn finished; a leave a join or a declared bound turned forced cancels the turn instead, `Stopped{reason: unload}` with the leave's cause, and goes to S6 with no wind-down | the leave turns forced from where it stands, no `forced_by`, the cause the graceful caller's: the turn cancelled, `Stopped{reason: unload}`, no wind-down, S6 | - | S0d |
+| S5 | refused as in S4 | the wind-down's own calls are never sent, and are recorded interrupted | S6 (the wind-down's request and summary on the record and in state) | the leave turns forced as in S4: the wind-down's generation cancelled, S6 | - | S0d |
+| S6 | the gate already refuses; at the lower, a frame met is recorded refused and its connection closes | - | - | - (the legs from the lower on are bounded in this crate's 150 seconds) | a leave that stayed graceful: S9, `SavePointNotTaken` naming the leg, nothing more authored, the run entered at rest with the gate lowered; a leave a join or a declared bound turned forced: the miss recorded as a refusal of the leave naming the leg, S7, `Left{forced: true}` with no save point, the outcome table's forced row, marker `Forced` | S0d |
+| S7 | - | - | - | - | - | the worker: S8 as far as this crate can tell (the run lock frees), the trace possibly ending before `unload`; the SPU or the member dying in its release: a `fault` authored before `unload`, whose release outcome names it unconfirmed, and the leave goes on |
+| S9 | the gate is lowered: the connection is refused | - | - | - | - | S0d |
+| S10 | the gate lowered at once (once an open execution has ended): a frame met at the lower is recorded refused and its connection closes | `ToolInterrupt`, answered `Killed{by: unload}`, the first outcome winning as in S4 | the turn cancelled: `turn.closed` `Stopped{reason: unload}` | - (no drain or wind-down runs) | the miss recorded as a refusal of the leave naming the leg, S7, `Left{forced: true}` with no save point, marker `Forced` | S0d |
 
 **A load's rollback (S1 x `Leave`).** A load that fails after its enter directs a forced leave to undo a run that never served. The harness tells it from a force by its own state, a run never `Entered` past `Ready`, and takes no save point; `unload` carries the load's cause, and the marker stays `Open` on that run (the operator's ruling of 2026-10-08 on #99, K1), so the next load records `NoCleanUnload`. It is exempt from I2 by name: a run that never served is not an unload.
 

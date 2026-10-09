@@ -386,7 +386,8 @@ both save points, rather than restore the older state over the newer. Remove `[r
 `sudoedit` to continue from the latest, or run `restore <name>` again to continue from
 the named one.
 
-**An unload that cannot take its save point does not complete.** It answers
+**An unload that cannot take its save point does not complete**, where the unload
+stayed graceful. It answers
 `{"kind":"save_point_not_taken","missed":...}` naming the leg that missed. Before the
 `published` leg the run stays loaded with its lock, its gate lowered, and nothing is lost:
 retry `unload`, which goes straight to the save point, if the member is alive, or `force-unload` if it is dead, which attempts the save point as
@@ -394,7 +395,10 @@ any unload does and, where it cannot be taken, records that on the trace; the ne
 then restores the latest published save point with the reset recorded. The loss is your recorded choice. Where
 `missed` is `published`, the run has already ended and the save point waits in the
 member's room: retry `unload`, which publishes it first, and read `admin.log` if it
-refuses again.
+refuses again. An unload that turned forced, joined by a `force-unload` or past a
+declared `[lifecycle]` bound, does not stop there: it comes down without the save point,
+the marker stands `Forced`, and the next load restores the latest published save point
+and records `ForcedUnload`.
 
 Or `sudo deploy/verify-load.sh <name> --keep` to load with the read-back and leave it
 serving. No unit and no init system is involved. The worker, the state member and the
