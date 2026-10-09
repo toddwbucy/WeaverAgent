@@ -285,11 +285,12 @@ waits and the publication after the answer come on top, as before.
 - **Beside a graceful `unload`** (S4 to S7): it joins without the lock, turning the
   pending leave forced from where it stands, and the record names both callers, the
   `unload`'s as the leave's cause and the first force's as `forced_by` (I2), a later
-  force joining the same leave named nowhere. The `unload` that holds the lock
-  concludes, publishes and prints the outcome; the force publishes nothing and touches no
-  marker (I1), and prints `Unloaded` only once the run lock has freed, never on the
-  agent's answer alone, so its `Unloaded` means no constituent still runs. From S7 on,
-  the record being final, the join changes nothing.
+  force joining the same leave named nowhere. Every caller the agent answers concludes
+  the same way (`weaver-admin-Spec` section 3, the conclusion): the `unload` holding the
+  lock first, publishing and closing the marker, and the force after it, finding the run
+  concluded and changing nothing (I1); each prints only once the run lock has freed,
+  never on the agent's answer alone, so `Unloaded` means no constituent still runs. From
+  S7 on, the record being final, the join adds nothing to it and concludes the same way.
 - **Behind any other holder of the lock** (a load in S1, a `show`, a `save-point`, an
   unload concluding in S8): it retries the join and the lock in turn, and acts alone
   once it holds the lock. Behind a load it waits at most that load's bound (900 seconds
@@ -302,29 +303,28 @@ waits and the publication after the answer come on top, as before.
   once that copy is done.
 - **On an orphaned force** (a `force-unload` whose invocation was killed in S10 before
   the agent wrote its `unload`): a later force takes the lock alone and joins the forced
-  leave, receives its outcome, and concludes it, publishing and closing the marker.
+  leave, receives its outcome, and concludes as every answered caller does.
 - **On an orphaned unload** (an `unload` whose invocation was killed in S4 to S6): the
   lock is free and the leave still pending, so the force takes the lock alone and its
-  leave joins the pending one, turning it forced; the force concludes as a force alone
-  does, publishing the save point and closing the marker, and the record names its
-  cause as `forced_by`. A second `unload` in the same case adopts the leave instead,
-  keeping it graceful: it waits for the drain and the wind-down, then concludes and
-  prints as any `unload` does, and the record names it as `adopted_by` (the operator's
+  leave joins the pending one, turning it forced, the record naming its cause as
+  `forced_by`; the force concludes as every answered caller does. A second `unload` in the same case adopts the leave instead,
+  keeping it graceful: it waits for the drain and the wind-down, then concludes as every
+  answered caller does, and the record names it as `adopted_by` (the operator's
   ruling of 2026-10-09).
 - **On a worker that answers nothing** (S11): a join unanswered within 150 seconds ends
   the run's processes without the lock and only then writes the marker `Forced` (I3).
-  The `unload` holding the lock concludes with no save point and the marker stands
-  `Forced`. The force prints `Unloaded`, or `LockHolderUnknown` or `WorkerWouldNotExit`
+  The `unload` holding the lock is answered no `Left`, so it concludes nothing, and the
+  marker stands `Forced`, the escalator's. The force prints `Unloaded`, or `LockHolderUnknown` or `WorkerWouldNotExit`
   where the escalation cannot end the run, per section 5.
 
-**A caller whose invocation is killed during an unload** (S4 to S8) is taken over only
-while the leave can still change, S4 to S6, by a force or a second `unload` as above.
-From S7 on the record is final: a later `force-unload` or `unload` prints the leave as
-it stood, adds nothing to the record, and leaves the marker open; with no later caller
-the agent finishes the leave unanswered: the save point stays in the member's room for the next verb
+**A caller whose invocation is killed during an unload** (S4 to S8) leaves the next
+caller the agent answers to conclude: a force or a second `unload` as above while the
+leave can still change, S4 to S6, or from S7 on a later `force-unload` or `unload`, which
+the agent answers with the leave as it stood, adding nothing to the record. With no
+answered caller the agent finishes the leave unanswered: the save point stays in the member's room for the next verb
 to publish, and the marker stays open, so the next load records `NoCleanUnload` although
 the state was kept, a conservative label with nothing lost (`weaver-admin-Spec` section
-3, an invocation killed during S4 to S8, and the late caller).
+3, the conclusion, and an invocation killed during S4 to S8).
 
 ## 5. Failure
 

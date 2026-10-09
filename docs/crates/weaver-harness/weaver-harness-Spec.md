@@ -2170,10 +2170,12 @@ happens only where the invocation holding the pending leave died while it could 
 change, a graceful unload's in S4 to S6 or a force's in S10 before `unload` is authored,
 and a force took the freed lock as sole; a pending forced leave answers it with its own
 `Left` (the orphaned leave of `weaver-admin-Spec` section 3; I1, I3), and its caller,
-holding the lock, is the one that concludes. From S7 on, or once a forced leave has
+answered `Left`, concludes as every answered caller does (`weaver-admin-Spec` section 3,
+the conclusion). From S7 on, or once a forced leave has
 authored `unload`, the record final, a forced or an unforced `Leave` from a late caller is answered the `Left`
 as it stands and adds nothing to the record, neither `forced_by` nor `adopted_by` (the
-late caller of `weaver-admin-Spec` section 3; I2). What remains of the quiesce's wait, the drain and the wind-down is
+late caller of `weaver-admin-Spec` section 3, who concludes as every caller this crate
+answers with `Left` does; I2). What remains of the quiesce's wait, the drain and the wind-down is
 skipped: a tool call out is interrupted, the turn or the wind-down's generation is
 cancelled as a stop, and a gate already quiescing or draining is brought down with
 `Lower`, as the sole force's is: the gate sends every frame it admitted and had not yet

@@ -1369,8 +1369,8 @@ state table approved by the operator on 2026-10-09, recorded on #1, which
 `weaver-admin-Spec` section 3 holds; each cites the row it carries and none restates
 it. **`Left`'s `forced`** is true where the leave came down forced, directed so by a
 `force-unload` holding the invocation lock or turned so by one joining, and false
-otherwise, so the invocation that concludes the leave closes the marker as the leave
-ended, and it agrees with the `unload` event's `forced` (I2). It is always on the wire,
+otherwise, so every invocation answered `Left` concludes by it, the first closing the
+marker as the leave ended (`weaver-admin-Spec` section 3, the conclusion), and it agrees with the `unload` event's `forced` (I2). It is always on the wire,
 and a `Left` without it refuses at the parse, as `Leave.forced` does: no default carries
 an older writer forward (the operator's ruling of 2026-10-08 on #1). **`JoinLeave`** is a `force-unload` that does not hold the invocation lock,
 carrying the forcing caller's cause, which the harness records as the `unload` event's
@@ -1715,13 +1715,15 @@ interrupted. `Enter` answers `Ready`, `Leave` and `JoinLeave` answer `Left`,
 `SavePoint` and `SavePointVerb` answer `SavePointTaken`, `Stop` answers `TurnAborted`
 or `AtRest`, `Admit` answers `Admitted`, `Release` answers `Released`, `Raise` answers
 `GateReady`, `Quiesce` answers `GateQuiesced`, `Lower` answers `GateStopped`, `Validate`
-answers `Validated`, `Restore` answers `RestoreNamed`, `Load`, `Unload`, `ForceUnload`
-and `Observe` answer `State`, the last carrying the load's facts beside the state where
-a run stands, and `Show` answers `State` or `InTransition`. Sixteen of the eighteen have
-a single answering case. `Stop` has two, `TurnAborted` or `AtRest`, selected by whether
-a turn was in flight, and both are clean closes rather than a refusal, per
-`weaver-admin-harness-contract` section 3, and `Show` has two, `InTransition` where
-another invocation holds the invocation lock, per `weaver-admin-Spec` section 3. Any directive may answer
+answers `Validated`, `Restore` answers `RestoreNamed`, `Load`, `Unload` and
+`ForceUnload` answer `State`, and `Observe` and `Show` each answer `State` or
+`InTransition`, `Observe`'s `State` carrying the load's facts beside the state where a
+run stands. Fifteen of the eighteen have a single answering case. `Stop` has two,
+`TurnAborted` or `AtRest`, selected by whether a turn was in flight, and both are clean
+closes rather than a refusal, per `weaver-admin-harness-contract` section 3; `Show` has
+two, `InTransition` where another invocation holds the invocation lock, per
+`weaver-admin-Spec` section 3; and `Observe` has two, `InTransition` while a leave is
+pending, per `weaver-harness-Spec` section 6. Any directive may answer
 a `LifecycleRefusal` instead, which is the second half of what one answer per request
 means. `Validated` exists because validation reports an outcome without transitioning
 anything, per `weaver-admin-PRD` section 4.3, and answering it with a state would report
@@ -1756,7 +1758,7 @@ state is the harness and no exchange asked it, and it was minted as a marker wit
 scheduled death, leaving exactly one thing to delete when the observation exchange
 landed. The exchange landed with issue #435: `weaver-admin-harness-contract` section 3
 charters `Observe`, the harness answers `State` from whichever position it holds with
-`LoadFacts` beside it where a run stands, and `show` answers rather than refuses. The case is deleted rather than kept, per the apex's rule that a case nothing
+`LoadFacts` beside it where a run stands, or `InTransition` while a leave is pending, and `show` answers rather than refuses. The case is deleted rather than kept, per the apex's rule that a case nothing
 produces is a reserved slot.
 
 **`LoadFacts` is what the observation carries beside the state, and it overlaps what the

@@ -251,11 +251,12 @@ activity**: one heard mid-turn is pending from that moment and the turn is handl
 below (`weaver-admin-Spec` section 3, S3 x unload and S3 x force-unload).
 
 **Unforced, it is the graceful unload** (`weaver-admin-Spec` section 3, the graceful
-unload, steps 2 to 7, and S2 x unload and S3 x unload). The harness quiesces the gate
-(`Quiesce`, answered `GateQuiesced`) and refuses through the gate each frame the gate
+unload, steps 2 to 7, and S2 x unload and S3 x unload). Where a tool call is out at the
+gate, the harness first interrupts it (`ToolInterrupt`, the first outcome winning); then
+it quiesces the gate (`Quiesce`, answered `GateQuiesced`) and refuses through the gate each frame the gate
 flushes to it with `Unloading`, recording each as a refusal of the leave (S4 x dialer
-request, I5). A turn in flight finishes what it can without further input, a tool call
-out interrupted (`ToolInterrupt`, answered `Killed { by: unload }`) and the turn's
+request, I5). A turn in flight finishes what it can without further input, the interrupted call
+answered `Killed { by: unload }` and the turn's
 answer going to its caller (S4 x tool return and S4 x turn closes). It runs the
 wind-down turn (S5). **The drain and the wind-down are unbounded unless the declaration
 bounds them** (the operator's ruling of 2026-10-09 recorded on #1, `weaver-types-Spec`
@@ -287,8 +288,9 @@ with `forced` true, and answers `Left` with none; admin leaves the marker `Open`
 the rollback is the exemption I2 names. No directive of its own marks it.
 
 **`Left` carries `forced`**, required on the wire with no default, true where the leave
-came down forced, directed so, joined, or turned so past a declared bound, so the
-invocation that concludes the leave closes the marker as the leave ended, and the
+came down forced, directed so, joined, or turned so past a declared bound, so every
+invocation answered `Left` concludes by it, the first closing the marker as the leave
+ended and the rest finding it closed (`weaver-admin-Spec` section 3, the conclusion), and the
 answer's `forced`, the `unload` event's `forced` and its `forced_by` agree
 (`weaver-admin-Spec` section 3, I2, the rollback excepted by name). A `Left` with no save
 point is a forced leave whose save point could not be taken, a rollback's leave, a
@@ -318,16 +320,16 @@ a graceful unload's in S4 to S6 or a force's in S10 before `unload` is authored,
 takes the freed lock as sole and directs `Leave{forced}`, which the harness joins to the
 pending leave by its own state, exactly as it joins `JoinLeave`, `forced_by` naming the
 force's cause where the leave was graceful, and a pending forced leave answering with its
-own `Left`; the force, holding the lock, receives `Left{forced: true}` and concludes
+own `Left`; the force, answered `Left`, concludes as every answered caller does
 (`weaver-admin-Spec` section 3, the orphaned leave; I1, I3). **An orphaned graceful leave
 is adopted by an unforced `Leave`**, in S4 to S6: a second `unload` takes the freed lock, and the
 harness keeps the leave graceful with its own cause, records the adopter as `adopted_by`
 on `unload`, and answers it with the leave's `Left` when it completes; the adopter
-concludes as any graceful unload does (`weaver-admin-Spec` section 3, the adopted leave;
+concludes as every answered caller does (`weaver-admin-Spec` section 3, the adopted leave;
 the operator's ruling of 2026-10-09). Both the orphan join and the adoption hold only
 while the leave can still change, S4 to S6; from S7 on a late caller's `Leave` is
-answered the `Left` as it stands and changes nothing (`weaver-admin-Spec` section 3, the
-late caller; I2). **The harness hears a join in every wait of
+answered the `Left` as it stands, adds nothing to the record, and its caller concludes as
+every answered caller does (`weaver-admin-Spec` section 3, the conclusion; I2). **The harness hears a join in every wait of
 the leave**: the wait for `GateQuiesced`, the turn's finish, the wind-down, the lower,
 the save point's legs and the unwind after them, so a forced leave never waits on what
 remains (I3). **With no leave pending** (S2, S3, S9, or before the enter) the harness
@@ -434,10 +436,9 @@ an obligation on the party that could break it.
   change (S4 to S6, or S10 before `unload` is authored), any forced `Leave` joins the
   orphaned leave as `JoinLeave` does, and an unforced `Leave` adopts a
   pending graceful one (the operator's ruling of 2026-10-09), `adopted_by` naming it;
-  either caller, holding the lock, concludes (I3, I4). From S7 on, the record final,
-  either `Leave` is answered the `Left` as it stands and adds nothing to the record, the
-  late caller taking the recovery path with the marker left `Open` (`weaver-admin-Spec`
-  section 3, the late caller). An unforced `Leave` meeting a pending
+  either caller, answered `Left`, concludes (I3, I4). From S7 on, the record final,
+  either `Leave` is answered the `Left` as it stands, adds nothing to the record, and
+  its caller concludes all the same (`weaver-admin-Spec` section 3, the conclusion). An unforced `Leave` meeting a pending
   forced leave is refused `OutOfOrder`. A leave refused `SavePointNotTaken` is no
   longer pending, and the run stands entered at rest for a retried or a forced `Leave`
   (S9).
