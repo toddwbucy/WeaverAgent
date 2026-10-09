@@ -826,7 +826,16 @@ fn open_declaration(
             "is not mode 0640, root's and read by the access group alone",
         ));
     }
-    Ok(file)
+    // **And no access entry beyond its mode** (#99 area 2, H5; #107): an
+    // entry granting the member read hides under the mask, which still
+    // shows 0640.
+    match carries_access_entries_fd(std::os::fd::AsFd::as_fd(&file)) {
+        Ok(false) => Ok(file),
+        Ok(true) => Err(refuse("carries an access-control entry beyond its mode")),
+        Err(_) => Err(refuse(
+            "does not say whether it carries an access-control entry",
+        )),
+    }
 }
 
 fn take_inventory(
@@ -2420,8 +2429,11 @@ fn load_service_config_judged(
     let root = base.join(agent);
     judge_root(&root, owner)?;
     let root = judge_ancestors(&root, &[owner, 0])?;
-    judge_entries(&root, owner)?;
+    // **The retired keys first** (#107): a retired name standing as a
+    // directory or a link would otherwise meet `judge_entries`' generic
+    // refusal and never be named.
     refuse_retired_keys(&root, agent)?;
+    judge_entries(&root, owner)?;
     let mut config = load_service_config_from(&root, agent).map_err(|failure| {
         diag!("weaver-admin: {failure}");
         // A value of the root's failing names no field; the boundary file is
@@ -2770,13 +2782,11 @@ fn judge_territory(
     })
 }
 
-/// Whether a path carries a POSIX access-control list, access or default,
-/// read without following a link.
-/// **Whether a directory carries an access-control entry, on its
-/// descriptor** (the custody audit's G7): either ACL attribute present is
-/// an entry; a filesystem without ACLs, or a directory without the
-/// attribute, carries none; any other failure to look is answered as the
-/// error, never as none.
+/// **Whether a directory or a file carries an access-control entry, on its
+/// descriptor** (the custody audit's G7; #99 area 2, H5): either ACL
+/// attribute present is an entry; a filesystem without ACLs, or a node
+/// without the attribute, carries none; any other failure to look is
+/// answered as the error, never as none.
 fn carries_access_entries_fd(directory: std::os::fd::BorrowedFd<'_>) -> nix::Result<bool> {
     use std::os::fd::AsRawFd;
     for name in [c"system.posix_acl_access", c"system.posix_acl_default"] {
@@ -2801,6 +2811,8 @@ fn carries_access_entries_fd(directory: std::os::fd::BorrowedFd<'_>) -> nix::Res
     Ok(false)
 }
 
+/// Whether a path carries a POSIX access-control list, access or default,
+/// read without following a link.
 fn carries_access_entries(path: &std::path::Path) -> bool {
     let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()) else {
         return true;
@@ -3625,6 +3637,33 @@ mod tests {
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
         let gid = nix::unistd::getegid().as_raw();
         assert!(load_and_read(&base, "alpha", me, gid).is_ok());
+        // A retired name refuses by its name whatever stands there: a file,
+        // a directory, a dangling link (#107). Perturbation: judge the
+        // entries before the retired names, and the directory and the link
+        // refuse `BoundaryUnverified` unnamed.
+        for (key, form) in RETIRED_ROOT_KEYS
+            .iter()
+            .flat_map(|(key, _)| ["directory", "dangling link"].map(|form| (*key, form)))
+        {
+            let stale = root.join(key);
+            if form == "directory" {
+                std::fs::create_dir(&stale).unwrap();
+            } else {
+                std::os::unix::fs::symlink(base.join("nowhere"), &stale).unwrap();
+            }
+            assert_eq!(
+                load_and_read(&base, "alpha", me, gid).err(),
+                Some(LifecycleRefusal::ConfigInvalid {
+                    field: Some(FieldName(key.to_string())),
+                }),
+                "{key} as a {form} refuses by its name"
+            );
+            if form == "directory" {
+                std::fs::remove_dir(&stale).unwrap();
+            } else {
+                std::fs::remove_file(&stale).unwrap();
+            }
+        }
         for (key, _) in RETIRED_ROOT_KEYS {
             let stale = root.join(key);
             std::fs::write(&stale, "/old\n").unwrap();
@@ -3801,6 +3840,64 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&base);
         let _ = std::fs::remove_dir_all(root.with_extension("territory"));
+    }
+
+    /// **The declaration and a log carrying an access entry beyond their mode
+    /// are refused** (#99 area 2, H5; #107): an entry granting the member read
+    /// hides under the mask, which still shows 0640. Skips, naming why, where
+    /// setfacl cannot set the entry. Perturbations: drop the look from
+    /// `open_declaration` and the declaration reads; from `log::open_append`
+    /// and the log opens.
+    #[test]
+    fn a_declaration_or_a_log_carrying_an_access_entry_refuses() {
+        use std::os::unix::fs::PermissionsExt;
+        let me = nix::unistd::getuid().as_raw();
+        let gid = nix::unistd::getegid().as_raw();
+        let base =
+            std::env::temp_dir().join(format!("weaver-admin-file-acl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("alpha");
+        let territory = write_root(&root);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let entry = |path: &std::path::Path, args: &[&str]| {
+            std::process::Command::new("setfacl")
+                .args(args)
+                .arg(path)
+                .status()
+                .is_ok_and(|status| status.success())
+        };
+        let declaration = territory.join("agent.toml");
+        if !entry(&declaration, &["-m", "u:nobody:r"]) {
+            eprintln!("SKIP: setfacl could not set an entry here");
+            let _ = std::fs::remove_dir_all(&base);
+            let _ = std::fs::remove_dir_all(&territory);
+            return;
+        }
+        assert_eq!(
+            load_and_read(&base, "alpha", me, gid).err(),
+            Some(LifecycleRefusal::BoundaryUnverified),
+            "a declaration the member could read through an entry"
+        );
+        assert!(entry(&declaration, &["-b"]));
+        std::fs::set_permissions(&declaration, std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert!(
+            load_and_read(&base, "alpha", me, gid).is_ok(),
+            "and without it it reads"
+        );
+        let log_path = base.join("worker.log");
+        std::fs::write(&log_path, "").unwrap();
+        assert!(entry(&log_path, &["-m", "u:nobody:r"]));
+        assert!(
+            log::open_append(&log_path, None).is_err(),
+            "a log the member could read through an entry"
+        );
+        assert!(entry(&log_path, &["-b"]));
+        assert!(
+            log::open_append(&log_path, None).is_ok(),
+            "and without it it opens"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&territory);
     }
 
     /// **A load with save points still waiting in the room refuses before it
