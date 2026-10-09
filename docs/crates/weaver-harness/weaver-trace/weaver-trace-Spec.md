@@ -681,10 +681,9 @@ the payload-free case counting as one of them. `refusal` carries `Refusal`, spli
 organ's own account of what it turned away. `session.closed` and `turn.started` carry
 `None`, and `unload` carries `UnloadClose`, its grant surface present where a member
 stood, its cause where a leave directive asked, and, as of A3.2 on the operator's
-ruling of 2026-10-06 on #1 (A3.0 item 6), `forced`, true where the leave came down
-forced: admin's `force-unload` directed it so or joined it, or a bound the declaration
-set for the drain or the wind-down passed (`weaver-types-Spec` section 2's
-`[lifecycle]`), the gate lowered at once and the turn in flight cancelled. **A load's
+ruling of 2026-10-06 on #1 (A3.0 item 6), `forced`, the leave's state at its end per
+`weaver-admin-Spec` section 3's definition (directed forced, joined, a declared bound passing, or a dead gate or SPU), a forced leave lowering the gate
+at once and cancelling the turn in flight. **A load's
 rollback also writes `forced` true and is the named exemption from I2**
 (`weaver-admin-Spec` section 3, S1 x Leave): the harness tells it by the `Leave`'s
 `rollback`, never by its own position, takes no save point for it, and admin leaves the

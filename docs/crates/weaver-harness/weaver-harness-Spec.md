@@ -2150,8 +2150,8 @@ served.
    writer is drained, and `Left { save_point, forced, no_state }` answered, `no_state` true
    where the run has no state to keep (every diagnostic binding, and a serving run with no
    member seam), `forced` on both being
-   the leave's state at its end, never the directive it began as: false where it stayed
-   graceful, true where a join or a declared bound turned it forced (I2). The member,
+   the leave's state at its end per `weaver-admin-Spec` section 3's definition
+   (directed forced, joined, a declared bound passing, or a dead gate or SPU; I2). The member,
    released before `unload`, needs nothing after it: its save point is taken and its
    grant surface read before the release, and no save point ever carries `unload`. A run with no `unload` event never answered `Left`: the worker's death in S7 is S8b
    as far as admin can tell, the marker left `Open` (S7 x the worker dies).
@@ -2284,7 +2284,7 @@ failed write among its causes), the acknowledgement's answer, or the member bein
 and stays entered at rest with the gate lowered and the run open (S9), so the operator
 retries with `save-point` and `unload` or, where the member is dead, forces the unload;
 nothing is silent and the dead-peer conversion does not apply to this ask at the leave.
-A leave forced at the miss, directed so, joined or past a declared bound, comes down
+A leave forced at the miss, by `weaver-admin-Spec` section 3's definition (directed forced, joined, a declared bound passing, or a dead gate or SPU), comes down
 without the save point, as the forced leave
 above states. **The seam
 stays alive across the miss**: a missed answer or finished leg retires nothing, and before

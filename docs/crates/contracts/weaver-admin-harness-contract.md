@@ -275,10 +275,8 @@ any recorder pressure,
 authors `unload` with `forced` and the release outcome, the terminal event, drains
 the writer's queue to the stream, and answers `Left` naming the save point as `SavePointTaken` does, so
 admin publishes it under the same ordinal rule, with the same `forced` (S7). **`forced`
-is the leave's state at its end, not the directive it began as**: false where the leave
-stayed graceful, true where a join or a declared bound turned it forced, the cause
-staying the graceful caller's and a bound naming no `forced_by` (`weaver-admin-Spec`
-section 3, I2). **Where the save point of a leave that stayed graceful is not finished
+is the leave's state at its end, per `weaver-admin-Spec` section 3's definition** (directed forced, joined, a declared bound passing, or a dead gate or SPU), the cause staying the graceful caller's where a bound or a dead organ
+turned it. **Where the save point of a leave that stayed graceful is not finished
 it answers `SavePointNotTaken`** naming the leg, authors
 nothing more, and stays entered at rest with the gate lowered, the leave no longer
 pending (S6 x member misses a save-point leg, and S9). A later unforced `Leave` from
@@ -302,8 +300,8 @@ with none. Admin leaves the marker as section 4's marker-write rule gives (K1), 
 rollback is the exemption I2 names. The directive marks it, never the harness's
 position.
 
-**`Left` carries `forced` and `no_state`**, each required on the wire with no default, `no_state` true where the run has no state to keep (every diagnostic binding, graceful or forced, and a serving run with no member seam), so a `Left` with no save point says on the wire whether there was nothing to keep or the save point was not taken; `forced` true where the leave
-came down forced, directed so, joined, or turned so past a declared bound, so every
+**`Left` carries `forced` and `no_state`**, each required on the wire with no default, `no_state` true where the run has no state to keep (every diagnostic binding, graceful or forced, and a serving run with no member seam), so a `Left` with no save point says on the wire whether there was nothing to keep or the save point was not taken; `forced` the leave's state at its
+end per `weaver-admin-Spec` section 3's definition (directed forced, joined, a declared bound passing, or a dead gate or SPU), so every
 invocation answered `Left` concludes by it, the first closing the marker as the leave
 ended and the rest finding it closed (`weaver-admin-Spec` section 3, the conclusion), and the
 answer's `forced`, the `unload` event's `forced` and its `forced_by` agree
@@ -579,7 +577,7 @@ ask, because admin answers nothing. The cases:
 - activity is not at rest, so no save point is taken on demand (`weaver-admin-Spec`
   section 3, S3 x save-point); a leave is never refused for activity
 - the leave's save point is not finished on a leave that stayed graceful to its miss
-  (one a join or a declared bound turned forced answers `Left` with none instead), which names the leg and
+  (one a join, a declared bound or a dead gate or SPU turned forced answers `Left` with none instead), which names the leg and
   leaves the run entered at rest with the gate lowered (S9)
 
 `Unloading` is no refusal on this seam: it is the harness's answer through the gate to
