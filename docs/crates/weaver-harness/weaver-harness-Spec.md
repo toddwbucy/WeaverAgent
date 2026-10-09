@@ -1371,7 +1371,11 @@ is `Unloaded` with no load. Entered, it is `Idle` where no turn key stands in fl
 `Active` where one does, with `LoadFacts` beside it read from the run: the session and
 run, the declaration's digest the enter carried, the artifact, the elections, the store
 and whether the member's end arrived, and the composer `serve` was handed, the same
-facts the load event was authored from and held on the run for this exchange. After a
+facts the load event was authored from and held on the run for this exchange. **While a
+leave is pending the answer is `InTransition`**, whether a turn runs or not, so `show`
+answers the same whether the unload's invocation still holds the lock or has died
+(`weaver-admin-Spec` section 3, S4 to S7 and S10 x `show`; the operator's ruling of
+2026-10-09). After a
 leave the answer is `Unloaded` with no load, the position being terminal and the
 observation not an act, so it is the one directive the left position answers rather than
 refuses. No event is authored and no bracket touched: an observation mid-turn reads the

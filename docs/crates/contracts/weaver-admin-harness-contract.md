@@ -361,7 +361,9 @@ any enter, `Unloaded` and no load. Entered, `Idle` where no turn is in flight an
 declaration's digest as admin read it at the enter, the artifact, the elections the load
 stands under, the store the member stands on and whether its end arrived, and the
 composing loop by binary and, where it is a file, path and digest, the same facts the
-`load` event carries and read from the run rather than the record. After a leave,
+`load` event carries and read from the run rather than the record. While a leave is
+pending, `InTransition`, so `show` answers the same whether the lock's holder lives or
+has died (`weaver-admin-Spec` section 3, S4 to S7 and S10 x `show`). After a leave,
 `Unloaded` and no load, the position being terminal. The answer is the harness's own
 word and never a read of the deployment, it touches no bracket and authors no event, and
 an observation arriving during a turn is answered from inside it, between tokens, as
