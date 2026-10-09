@@ -2212,7 +2212,7 @@ abandon them. The pending leave keeps its own cause, the graceful caller's, and 
 the joining cause as `forced_by` on `unload` where that join is the first force to turn
 the still-graceful leave forced, and every dialer is answered with the same `Left {
 forced: true }` (I2); a later join, or a join into a leave a declared bound already
-turned forced, is answered with that `Left` and named nowhere. `JoinLeave` with no leave pending is `OutOfOrder`, which
+turned forced, is answered with that `Left` and named nowhere. `JoinLeave` with no leave pending is `OutOfOrder`, and so are a `JoinLeave` and a forced `Leave` meeting a pending rollback leave, a rollback never being joined (`weaver-admin-Spec` section 3, S1 x force-unload; K1); the first
 tells admin the lock's holder is no unload; while a leave is pending a second unforced
 `Leave` and a `SavePoint` meet a living holder's lock at admin first, refused
 `InvocationInFlight` before it dials (I1). Where the holder has died in S4 to S6, **a

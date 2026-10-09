@@ -396,8 +396,9 @@ an observation arriving during a turn is answered from inside it, between tokens
 `Active` with the load's facts, since 2026-09-05 per issue #441, so the answer is
 trustworthy at every moment a dial is accepted, the one bound being the single token
 whose decode is in progress. Where no worker answers the dial at all, admin has no
-exchange to open and reports `Unloaded` from the absence, per `weaver-admin-Spec`
-section 3, the one place residency is read.
+exchange to open and answers by `weaver-admin-Spec` section 5's ladder for `show`:
+`InTransition` with the constituents named while the run lock is held, and `Unloaded`
+only once it is free, the one place residency is read.
 
 **There is no alert exchange, per the fault-carrier ruling of 2026-08-01.** A fault
 the worker survives is a `fault` event, authored by the harness into the stream
@@ -466,8 +467,11 @@ an obligation on the party that could break it.
   forced leave is refused `OutOfOrder`. A leave refused `SavePointNotTaken`, one that stayed graceful to its
   miss (a forced one answering `Left` instead), is no longer pending, and the run stands entered at rest for a retried or a forced `Leave`
   (S9).
-- `JoinLeave` is valid only while a leave is pending, and is refused `OutOfOrder`
-  otherwise, before the enter included.
+- `JoinLeave` is valid only while a leave other than a rollback's is pending, and is
+  refused `OutOfOrder` otherwise, before the enter included. **A rollback's leave is
+  never joined**: a `JoinLeave`, or a forced `Leave`, meeting a pending `Leave` with
+  `rollback` true is refused `OutOfOrder`, so the rollback keeps its outcome (K1) and the
+  force goes on waiting behind the load (`weaver-admin-Spec` section 3, S1 x force-unload; Codex on #109, round 29).
 - Within the run, the record's order is `weaver-admin-Spec` section 3, I9: the
   harness authors `save_point` before `unload`, releases the SPU and the member before
   `unload`, any fault of that release and any recorder pressure authored before it, and
@@ -587,7 +591,7 @@ ask, because admin answers nothing. The cases:
   carries its reason, so the aggregate answer is one refusal rather than a report to
   parse
 - the directive is out of order for the channel's state: a `JoinLeave` with no leave
-  pending; an unforced `Leave` meeting a pending forced leave; and, while a leave is
+  pending; a `JoinLeave` or a forced `Leave` meeting a pending rollback leave; an unforced `Leave` meeting a pending forced leave; and, while a leave is
   pending, any directive but `Observe` (answered `InTransition`), `JoinLeave` and the
   `Leave`s the ordering rule above admits (a forced `Leave` joining in S4 to S6 or in S10,
   an unforced one adopting a graceful leave in S4 to S6, and either from S7 on, answered
