@@ -1394,7 +1394,7 @@ carrying the forcing caller's cause, which the harness records as the `unload` e
 later join, nor one into a leave a declared bound already turned forced): it joins a pending leave and is answered with
 that leave's `Left`, a later join receiving the same `Left` and named nowhere, or is
 refused `OutOfOrder` where none is pending (the forced unload, joining; I1).
-**`Unloading`** is the refusal a request meets during the graceful unload's drain, "the
+**`NoResidency`**, standing as the SPU seam's refusal where no model is resident, is also the refusal a request meets after the agent's SPU has died, the run standing until its unload (`weaver-admin-Spec` section 3, ruling (B) of 2026-10-09); it adds no case. **`Unloading`** is the refusal a request meets during the graceful unload's drain, "the
 agent is unloading": the harness answers each frame the gate flushes to it with it
 through the gate, the connection standing, and records it as a refusal of the leave
 (`weaver-admin-Spec` section 3, S4 and S5 x dialer request, and I5). One fact, the

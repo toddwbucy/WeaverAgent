@@ -219,6 +219,12 @@ response path, as extensions to this page rather than replacements of it.
     and every request the gate admitted and the agent had not started is recorded
     refused as `Unloading` (`weaver-admin-Spec` section 3, the forced unload; I5). A force that
     joins a graceful unload closes every connection still standing the same way.
+- **The model gone** (the agent's model process died, the agent standing until it is
+  unloaded): a turn in flight closes as a failed turn, its answer an error; a request
+  after it is answered on its connection with the refused close
+  `{"kind":"refused","reason":"no model is resident"}`, which names no turn, and is
+  recorded as a refusal carrying `NoResidency` (`weaver-admin-Spec` section 3, ruling
+  (B) of 2026-10-09).
 - A line that does not parse is a refused turn, per section 2.
 - A line that exceeds the Spec's bound with no delimiter found has left the
   framing, and the connection closes at that layer, below any turn: nothing
