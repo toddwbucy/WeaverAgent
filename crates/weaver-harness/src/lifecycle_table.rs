@@ -4,10 +4,16 @@
 //! event meets the run in a position.
 //!
 //! The worker's own death is not here: a dead worker answers nothing, and the
-//! tables' "the worker dies" column is admin's to observe (S8b). A diagnostic
-//! binding needs no row of its own: it has no gate and keeps no state, so the
-//! gate's events and the member's never arise in it, and its positions are the
-//! ones it reaches (S4 straight to S6, S9 unreachable).
+//! tables' "the worker dies" column is admin's to observe (S8b). **A diagnostic
+//! binding differs in one cell**: it runs no wind-down, so its graceful S4 goes
+//! to S6 when the turn closes, skipping S5; S4 carries the binding for it. It has
+//! no gate and keeps no state, so the gate's events, a tool return and the
+//! member's never arise in it, and S9 is unreachable.
+//!
+//! The SPU's death is state the run carries: S2 says whether a model is
+//! resident, so a later request is refused `NoResidency` (ruling (B)). A leave
+//! directed after the gate or the SPU died starts forced (ruling (A)), which
+//! `leave_on_arrival` decides.
 
 /// Whether the pending leave is still graceful or has turned forced (a join, a
 /// declared bound passing, or a dead gate or SPU): S4 and S6 split on it.
@@ -26,14 +32,29 @@ pub enum Leave {
 )]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Position {
-    S2,
+    S2(Spu),
     S3,
-    S4(Leave),
+    S4(Leave, Binding),
     S5,
     S6(Leave),
     S7,
     S9,
     S10,
+}
+
+/// Whether a model is resident: an SPU that died at rest leaves the run
+/// standing with none (ruling (B)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Spu {
+    Resident,
+    Dead,
+}
+
+/// The run's binding: a diagnostic one runs no wind-down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Binding {
+    Serving,
+    Diagnostic,
 }
 
 /// An event meeting the run, one per column of the two tables but the worker's
@@ -62,9 +83,13 @@ pub enum Event {
 /// **What this crate does**, one variant per distinct cell meaning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Response {
-    /// A `-` cell: the event does not arise in this position.
+    /// A `-` cell: nothing happens. Where the event can still arise, such as
+    /// a bound's timer armed while the leave was graceful firing after a join
+    /// turned it forced, it is ignored, never treated as unreachable.
     NoCell,
     Admit,
+    /// Refused `NoResidency`, no model being resident (ruling (B)).
+    RefuseNoResidency,
     QueueBehindTurn,
     /// Refused through the gate, its connection standing, recorded `Unloading`.
     RefuseUnloading,
@@ -81,6 +106,9 @@ pub enum Response {
     CloseToS2,
     /// S5, `turn.closed`, `Clean` where the turn finished.
     CloseCleanToS5,
+    /// S6, `turn.closed`, `Clean` where the turn finished: a diagnostic
+    /// binding, which runs no wind-down.
+    CloseCleanToS6,
     /// The turn cancelled, `Stopped { reason: unload }`, no wind-down.
     CancelTurnNoWindDown,
     /// S6, the wind-down's request and summary on the record and in state.
@@ -89,8 +117,12 @@ pub enum Response {
     /// no `forced_by`, the graceful cause kept, to S6.
     ForceFromHere,
     /// Ruling (A) for the gate: forced from here, skipping the quiesce and the
-    /// drain's refusals, the lower meeting no answer and reaping the gate.
-    ForceFromHereGateDead,
+    /// drain's refusals, the lower meeting no answer and reaping the gate, and a
+    /// tool call out still open closed `Killed { by: fault }`, never re-run.
+    ForceFromHereGateDeadCallKilledFault,
+    /// The lower meets no answer, the gate reaped, and a tool call out still
+    /// open closed `Killed { by: fault }`, never re-run (a force under way).
+    ReapGateCallKilledFault,
     /// The lower meets no answer: close the gate channel and reap the gate.
     LowerUnansweredReap,
     /// A graceful leave stops in S9, `SavePointNotTaken` naming the leg.
@@ -145,18 +177,22 @@ pub enum Response {
     )
 )]
 pub fn respond(position: Position, event: Event) -> Response {
+    use Binding::{Diagnostic, Serving};
     use Event::*;
     use Leave::{Forced, Graceful};
     use Position::*;
     use Response::*;
+    use Spu::{Dead, Resident};
     match (position, event) {
-        (S2 | S3 | S4(_) | S5 | S6(_) | S7 | S9 | S10, RelayDies) => RelayDeathServeOn,
+        (S2(_) | S3 | S4(..) | S5 | S6(_) | S7 | S9 | S10, RelayDies) => RelayDeathServeOn,
 
-        (S2, DialerRequest) => Admit,
-        (S2, ToolReturn { .. } | TurnCloses | BoundPasses | LegMissed) => NoCell,
-        (S2, MemberDies) => ServeOnSeamRetired,
-        (S2, GateDies) => GateFaultServeOn,
-        (S2, SpuDies) => SpuFaultServeOnRefuseLater,
+        (S2(Resident), DialerRequest) => Admit,
+        (S2(Dead), DialerRequest) => RefuseNoResidency,
+        (S2(_), ToolReturn { .. } | TurnCloses | BoundPasses | LegMissed) => NoCell,
+        (S2(_), MemberDies) => ServeOnSeamRetired,
+        (S2(_), GateDies) => GateFaultServeOn,
+        (S2(Resident), SpuDies) => SpuFaultServeOnRefuseLater,
+        (S2(Dead), SpuDies) => NoCell,
 
         (S3, DialerRequest) => QueueBehindTurn,
         (S3, ToolReturn { .. }) => DeliverToTurn,
@@ -166,18 +202,20 @@ pub fn respond(position: Position, event: Event) -> Response {
         (S3, GateDies) => GateFaultToolKilledFault,
         (S3, SpuDies) => SpuFaultTurnFailed,
 
-        (S4(_) | S5, DialerRequest) => RefuseUnloading,
-        (S4(_) | S10, ToolReturn { crossed: false }) => InterruptKilledUnload,
-        (S4(_) | S10, ToolReturn { crossed: true }) => DeliverToTurn,
-        (S4(Graceful), TurnCloses) => CloseCleanToS5,
-        (S4(Forced) | S10, TurnCloses) => CancelTurnNoWindDown,
-        (S4(Graceful) | S5, BoundPasses) => ForceFromHere,
-        (S4(Forced), BoundPasses) => NoCell,
-        (S4(_) | S5, LegMissed) => NoCell,
-        (S4(_) | S5, MemberDies) => LeaveGoesOnSeamRetired,
-        (S4(Graceful) | S5, GateDies) => ForceFromHereGateDead,
-        (S4(Forced) | S6(_) | S10, GateDies) => LowerUnansweredReap,
-        (S4(_), SpuDies) => SpuFaultTurnFailedAndForce,
+        (S4(..) | S5, DialerRequest) => RefuseUnloading,
+        (S4(..) | S10, ToolReturn { crossed: false }) => InterruptKilledUnload,
+        (S4(..) | S10, ToolReturn { crossed: true }) => DeliverToTurn,
+        (S4(Graceful, Serving), TurnCloses) => CloseCleanToS5,
+        (S4(Graceful, Diagnostic), TurnCloses) => CloseCleanToS6,
+        (S4(Forced, _) | S10, TurnCloses) => CancelTurnNoWindDown,
+        (S4(Graceful, _) | S5, BoundPasses) => ForceFromHere,
+        (S4(Forced, _), BoundPasses) => NoCell,
+        (S4(..) | S5, LegMissed) => NoCell,
+        (S4(..) | S5, MemberDies) => LeaveGoesOnSeamRetired,
+        (S4(Graceful, _) | S5, GateDies) => ForceFromHereGateDeadCallKilledFault,
+        (S4(Forced, _) | S10, GateDies) => ReapGateCallKilledFault,
+        (S6(_), GateDies) => LowerUnansweredReap,
+        (S4(..), SpuDies) => SpuFaultTurnFailedAndForce,
 
         (S5, ToolReturn { .. }) => WindDownCallsNeverSent,
         (S5, TurnCloses) => WindDownClosesToS6,
@@ -206,6 +244,23 @@ pub fn respond(position: Position, event: Event) -> Response {
     }
 }
 
+/// **Ruling (A) at the leave's arrival**: a graceful leave directed with the
+/// gate or the SPU dead starts forced from where it stands, the graceful
+/// caller's cause kept and no `forced_by` authored.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired into the leave by the lifecycle plumbing, PR B"
+    )
+)]
+pub fn leave_on_arrival(directed: Leave, gate_or_spu_dead: bool) -> Leave {
+    match (directed, gate_or_spu_dead) {
+        (Leave::Graceful, false) => Leave::Graceful,
+        (Leave::Graceful, true) | (Leave::Forced, false | true) => Leave::Forced,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,39 +274,136 @@ mod tests {
         };
     }
 
+    use Binding::{Diagnostic, Serving};
     use Event::*;
     use Leave::{Forced, Graceful};
     use Position::*;
     use Response::*;
+    use Spu::{Dead, Resident};
 
     const OUT: Event = ToolReturn { crossed: false };
     const CROSSED: Event = ToolReturn { crossed: true };
 
-    // S2, serving at rest.
-    cell!(s2_x_dialer_request_admits, S2, DialerRequest, Admit);
-    cell!(s2_x_tool_return_has_no_cell, S2, OUT, NoCell);
-    cell!(s2_x_turn_closes_has_no_cell, S2, TurnCloses, NoCell);
-    cell!(s2_x_bound_passes_has_no_cell, S2, BoundPasses, NoCell);
-    cell!(s2_x_leg_missed_has_no_cell, S2, LegMissed, NoCell);
+    // S2(Resident), serving at rest.
+    cell!(
+        s2_x_dialer_request_admits,
+        S2(Resident),
+        DialerRequest,
+        Admit
+    );
+    cell!(s2_x_tool_return_has_no_cell, S2(Resident), OUT, NoCell);
+    cell!(
+        s2_x_turn_closes_has_no_cell,
+        S2(Resident),
+        TurnCloses,
+        NoCell
+    );
+    cell!(
+        s2_x_bound_passes_has_no_cell,
+        S2(Resident),
+        BoundPasses,
+        NoCell
+    );
+    cell!(s2_x_leg_missed_has_no_cell, S2(Resident), LegMissed, NoCell);
     cell!(
         s2_x_member_dies_serves_on_seam_retired,
-        S2,
+        S2(Resident),
         MemberDies,
         ServeOnSeamRetired
     );
     cell!(
         s2_x_gate_dies_serves_on_unreachable,
-        S2,
+        S2(Resident),
         GateDies,
         GateFaultServeOn
     );
     cell!(
         s2_x_spu_dies_serves_on_refusing_later,
-        S2,
+        S2(Resident),
         SpuDies,
         SpuFaultServeOnRefuseLater
     );
-    cell!(s2_x_relay_dies_serves_on, S2, RelayDies, RelayDeathServeOn);
+    cell!(
+        s2_x_relay_dies_serves_on,
+        S2(Resident),
+        RelayDies,
+        RelayDeathServeOn
+    );
+
+    // S2 with the SPU dead (B): later requests refused, the run standing.
+    cell!(
+        s2_spu_dead_x_dialer_request_refuses_no_residency,
+        S2(Dead),
+        DialerRequest,
+        RefuseNoResidency
+    );
+    cell!(s2_spu_dead_x_tool_return_has_no_cell, S2(Dead), OUT, NoCell);
+    cell!(
+        s2_spu_dead_x_turn_closes_has_no_cell,
+        S2(Dead),
+        TurnCloses,
+        NoCell
+    );
+    cell!(
+        s2_spu_dead_x_bound_passes_has_no_cell,
+        S2(Dead),
+        BoundPasses,
+        NoCell
+    );
+    cell!(
+        s2_spu_dead_x_leg_missed_has_no_cell,
+        S2(Dead),
+        LegMissed,
+        NoCell
+    );
+    cell!(
+        s2_spu_dead_x_member_dies_serves_on_seam_retired,
+        S2(Dead),
+        MemberDies,
+        ServeOnSeamRetired
+    );
+    cell!(
+        s2_spu_dead_x_gate_dies_serves_on_unreachable,
+        S2(Dead),
+        GateDies,
+        GateFaultServeOn
+    );
+    cell!(
+        s2_spu_dead_x_spu_dies_has_no_cell,
+        S2(Dead),
+        SpuDies,
+        NoCell
+    );
+    cell!(
+        s2_spu_dead_x_relay_dies_serves_on,
+        S2(Dead),
+        RelayDies,
+        RelayDeathServeOn
+    );
+
+    // S4 on a diagnostic binding: no wind-down, so straight to S6.
+    cell!(
+        s4_graceful_diagnostic_x_turn_closes_clean_to_s6,
+        S4(Graceful, Diagnostic),
+        TurnCloses,
+        CloseCleanToS6
+    );
+    cell!(
+        s4_forced_diagnostic_x_turn_closes_cancelled_no_wind_down,
+        S4(Forced, Diagnostic),
+        TurnCloses,
+        CancelTurnNoWindDown
+    );
+
+    /// **(A): a leave directed with the gate or the SPU dead starts forced**,
+    /// the graceful caller's cause kept; a forced one stays forced.
+    #[test]
+    fn a_leave_arriving_with_a_dead_organ_starts_forced() {
+        assert_eq!(leave_on_arrival(Graceful, false), Graceful);
+        assert_eq!(leave_on_arrival(Graceful, true), Forced);
+        assert_eq!(leave_on_arrival(Forced, false), Forced);
+        assert_eq!(leave_on_arrival(Forced, true), Forced);
+    }
 
     // S3, serving, a turn in flight.
     cell!(
@@ -293,61 +445,61 @@ mod tests {
     // S4, graceful: draining.
     cell!(
         s4_graceful_x_dialer_request_refuses_unloading,
-        S4(Graceful),
+        S4(Graceful, Serving),
         DialerRequest,
         RefuseUnloading
     );
     cell!(
         s4_graceful_x_tool_return_interrupted_by_the_unload,
-        S4(Graceful),
+        S4(Graceful, Serving),
         OUT,
         InterruptKilledUnload
     );
     cell!(
         s4_graceful_x_tool_return_crossed_the_first_outcome_wins,
-        S4(Graceful),
+        S4(Graceful, Serving),
         CROSSED,
         DeliverToTurn
     );
     cell!(
         s4_graceful_x_turn_closes_clean_to_s5,
-        S4(Graceful),
+        S4(Graceful, Serving),
         TurnCloses,
         CloseCleanToS5
     );
     cell!(
         s4_graceful_x_bound_passes_forces_from_here,
-        S4(Graceful),
+        S4(Graceful, Serving),
         BoundPasses,
         ForceFromHere
     );
     cell!(
         s4_graceful_x_leg_missed_has_no_cell,
-        S4(Graceful),
+        S4(Graceful, Serving),
         LegMissed,
         NoCell
     );
     cell!(
         s4_graceful_x_member_dies_leave_goes_on,
-        S4(Graceful),
+        S4(Graceful, Serving),
         MemberDies,
         LeaveGoesOnSeamRetired
     );
     cell!(
-        s4_graceful_x_gate_dies_forces_from_here_a,
-        S4(Graceful),
+        s4_graceful_x_gate_dies_forces_from_here_a_killing_the_call_by_fault,
+        S4(Graceful, Serving),
         GateDies,
-        ForceFromHereGateDead
+        ForceFromHereGateDeadCallKilledFault
     );
     cell!(
         s4_graceful_x_spu_dies_fails_the_turn_and_forces,
-        S4(Graceful),
+        S4(Graceful, Serving),
         SpuDies,
         SpuFaultTurnFailedAndForce
     );
     cell!(
         s4_graceful_x_relay_dies_serves_on,
-        S4(Graceful),
+        S4(Graceful, Serving),
         RelayDies,
         RelayDeathServeOn
     );
@@ -355,61 +507,61 @@ mod tests {
     // S4 with the leave turned forced (a join, a bound, a dead organ).
     cell!(
         s4_forced_x_dialer_request_refuses_unloading,
-        S4(Forced),
+        S4(Forced, Serving),
         DialerRequest,
         RefuseUnloading
     );
     cell!(
         s4_forced_x_tool_return_interrupted_by_the_unload,
-        S4(Forced),
+        S4(Forced, Serving),
         OUT,
         InterruptKilledUnload
     );
     cell!(
         s4_forced_x_tool_return_crossed_the_first_outcome_wins,
-        S4(Forced),
+        S4(Forced, Serving),
         CROSSED,
         DeliverToTurn
     );
     cell!(
         s4_forced_x_turn_closes_cancelled_no_wind_down,
-        S4(Forced),
+        S4(Forced, Serving),
         TurnCloses,
         CancelTurnNoWindDown
     );
     cell!(
         s4_forced_x_bound_passes_has_no_cell,
-        S4(Forced),
+        S4(Forced, Serving),
         BoundPasses,
         NoCell
     );
     cell!(
         s4_forced_x_leg_missed_has_no_cell,
-        S4(Forced),
+        S4(Forced, Serving),
         LegMissed,
         NoCell
     );
     cell!(
         s4_forced_x_member_dies_leave_goes_on,
-        S4(Forced),
+        S4(Forced, Serving),
         MemberDies,
         LeaveGoesOnSeamRetired
     );
     cell!(
-        s4_forced_x_gate_dies_lower_unanswered_reaps,
-        S4(Forced),
+        s4_forced_x_gate_dies_reaps_killing_the_call_by_fault,
+        S4(Forced, Serving),
         GateDies,
-        LowerUnansweredReap
+        ReapGateCallKilledFault
     );
     cell!(
         s4_forced_x_spu_dies_fails_the_turn_and_forces,
-        S4(Forced),
+        S4(Forced, Serving),
         SpuDies,
         SpuFaultTurnFailedAndForce
     );
     cell!(
         s4_forced_x_relay_dies_serves_on,
-        S4(Forced),
+        S4(Forced, Serving),
         RelayDies,
         RelayDeathServeOn
     );
@@ -448,10 +600,10 @@ mod tests {
         LeaveGoesOnSeamRetired
     );
     cell!(
-        s5_x_gate_dies_forces_from_here_a,
+        s5_x_gate_dies_forces_from_here_a_killing_the_call_by_fault,
         S5,
         GateDies,
-        ForceFromHereGateDead
+        ForceFromHereGateDeadCallKilledFault
     );
     cell!(
         s5_x_spu_dies_fails_the_wind_down_and_forces,
@@ -649,10 +801,10 @@ mod tests {
         ForcedMissToS7
     );
     cell!(
-        s10_x_gate_dies_lower_unanswered_reaps,
+        s10_x_gate_dies_reaps_killing_the_call_by_fault,
         S10,
         GateDies,
-        LowerUnansweredReap
+        ReapGateCallKilledFault
     );
     cell!(
         s10_x_spu_dies_force_goes_on,
