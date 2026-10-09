@@ -174,15 +174,28 @@ strip_suffix() {
 }
 for u in "${WEAVER_USERS[@]}"; do AGENTS["$(strip_suffix "$u")"]=1; done
 for g in "${WEAVER_GROUPS[@]}"; do AGENTS["$(strip_suffix "$g")"]=1; done
-# The sudo rules create-agent.sh installs, root's to read, and any an archive of
-# this script disabled for its snapshot (a dot-name sudo never reads).
-mapfile -t SUDO_RULES < <(find /etc/sudoers.d -maxdepth 1 -type f \( -name 'weaver-*' -o -name '.weaver-*.decommissioning' \) 2>/dev/null | sort)
+# **sudo_rules DIR: the agents' sudo rules standing or held in DIR**: the
+# ones create-agent.sh installs, root's to read; any an archive of this
+# script disabled for its snapshot; and any an install of update-stack.sh
+# held for its window and, killed inside it, never put back (#107). The held
+# names are dot-names sudo never reads, archived and purged as the rest.
+sudo_rules() {
+  find "$1" -maxdepth 1 -type f \( -name 'weaver-*' -o -name '.weaver-*.decommissioning' \
+    -o -name '.weaver-*.updating' \) 2>/dev/null | sort
+}
+mapfile -t SUDO_RULES < <(sudo_rules /etc/sudoers.d)
 
 say "config roots"
 for r in "${CONFIG_ROOTS[@]}"; do plan "$r  (allow-list: $(read_key "$r" allow-list | tr '\n' ' '))"; done
 [ ${#CONFIG_ROOTS[@]} -gt 0 ] || plan "none under /etc/weaver"
 for r in "${AGENT_ROOTS[@]}"; do plan "$r  (territory: $(read_key "$r" territory))"; done
-for f in "${SUDO_RULES[@]}"; do plan "$f  (sudo rule)"; done
+for f in "${SUDO_RULES[@]}"; do
+  case "${f##*/}" in
+    *.updating) plan "$f  (sudo rule an install held and did not put back)" ;;
+    *.decommissioning) plan "$f  (sudo rule an archive disabled)" ;;
+    *) plan "$f  (sudo rule)" ;;
+  esac
+done
 
 say "install prefixes (models excluded from every mode)"
 for p in "${!PREFIXES[@]}"; do

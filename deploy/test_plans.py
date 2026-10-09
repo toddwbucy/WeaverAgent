@@ -2710,6 +2710,25 @@ class DecommissionTests(unittest.TestCase):
                              env=env, text=True, capture_output=True, timeout=20)
         return run.stdout.strip()
 
+    def test_the_sudo_rules_found_include_a_held_install_rule(self):
+        # **A rule an install held and never put back is found** (#107): a
+        # SIGKILLed update-stack leaves `.weaver-<agent>.updating`, which the
+        # archive and the purge then take as they take a disabled rule, and
+        # never a file of another name. Perturbation: drop the `.updating`
+        # name from the find, and the held rule is left behind.
+        scratch = tempfile.TemporaryDirectory(prefix="weaver-sudo-rules-")
+        self.addCleanup(scratch.cleanup)
+        rules = Path(scratch.name) / "sudoers.d"
+        rules.mkdir()
+        for name in ("weaver-a", ".weaver-b.decommissioning", ".weaver-c.updating",
+                     "other-rule", ".weaver-d.staged"):
+            (rules / name).write_text("x\n")
+        found = self.run_fn("sudo_rules", str(rules)).splitlines()
+        self.assertEqual(sorted(Path(f).name for f in found),
+                         [".weaver-b.decommissioning", ".weaver-c.updating", "weaver-a"])
+        script = (DEPLOY / "decommission.sh").read_text()
+        self.assertIn("mapfile -t SUDO_RULES < <(sudo_rules /etc/sudoers.d)", script)
+
     def test_a_run_is_stopped_only_where_show_says_so(self):
         # A running, transitioning or unreadable agent refuses the archive and
         # the purge, never read as stopped. Perturbation: read a refusal, or an

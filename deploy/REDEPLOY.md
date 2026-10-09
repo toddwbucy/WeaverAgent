@@ -87,7 +87,9 @@ those with the admin that started them. **The snapshot is taken behind a shut do
 each sudo rule is first moved to `.weaver-<agent>.decommissioning`, a name sudo never
 reads, and every agent is asked again, a run found restoring the rules and refusing. The
 rules stay disabled until the purge removes them, and moving one back serves its agent
-again without a purge. **A territory is archived and purged only where it stands as
+again without a purge. A rule an `update-stack.sh --install` held as
+`.weaver-<agent>.updating` and never put back, the run killed inside its window, is
+found, archived and purged the same way. **A territory is archived and purged only where it stands as
 `create-agent.sh` lays it**: each root's territory is looked at as root, and one that is
 not root's and grouped `weaver-<agent>-state` is named with what was found and refuses
 the archive and the purge (#99 area 2 review, H4). The archive holds:
