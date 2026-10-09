@@ -2162,7 +2162,7 @@ forced leave from there (S9 x force-unload); and a dialer meets no listener (S9 
 request).
 
 **The forced leave stops work and keeps state** (`weaver-admin-Spec` section 3, the
-forced unload (sole); S2, S3 and S9 x force-unload). A `Leave` with `forced` true, set by
+forced unload (sole); S2, S3 and S9 x force-unload). A `Leave` with `forced` true and `rollback` false, set by
 admin's `force-unload`, has this crate interrupt a tool call out as item 2 does, then
 lower the gate at once from its raised position, with no quiesce and no drain, reading
 the channel to `GateStopped` and recording every frame met there refused, carrying
@@ -2177,12 +2177,13 @@ be taken, the member dead or a leg unanswered, the forced leave comes down witho
 leg, so the next load carries the reset admin resolves from its marker (I4).
 
 **The rollback's leave is its own row** (`weaver-admin-Spec` section 3, S1 x Leave; K1).
-A load's rollback directs a forced leave of a run that never served, which this crate
-tells apart by its own state, a run never entered past `Ready`, with no directive of its
-own: it takes no save point and runs no wind-down, releases what it admitted, and
+A load's rollback directs a `Leave` with `rollback` true (and `forced` true), which
+this crate tells apart by the directive and never by its own position, a `Ready` that
+lands just after admin's enter deadline leaving it `Entered` while admin rolls back
+(Codex on #109, round 28): in any position it takes no save point and runs no wind-down, releases what it admitted, and
 where the bracket stands it authors `unload` last with `forced` true and the release
-outcome. It is exempt from I2 by name, admin leaving the
-marker `Open`.
+outcome, the `unload` carrying the load's cause. It is exempt from I2 by name, admin
+writing the marker by its marker-write rule (K1).
 
 **A force that joins a pending leave turns it forced from where it stands**
 (`weaver-admin-Spec` section 3, the forced unload (joining); S4, S5 and S6 x

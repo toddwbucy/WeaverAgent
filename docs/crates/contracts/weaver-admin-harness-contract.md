@@ -251,7 +251,8 @@ and is the aggregate: one directive out, one answer back, and the organs appear 
 answer's content rather than as parties to this seam.
 
 **Leave the run.** Opened by admin. `Leave` carries the cause, as the enter does, which
-the harness records on its closing event, and `forced`. **A leave is never refused for
+the harness records on its closing event, `forced`, and `rollback`, true only on a
+load's rollback, each required on the wire with no default. **A leave is never refused for
 activity**: one heard mid-turn is pending from that moment and the turn is handled as
 below (`weaver-admin-Spec` section 3, S3 x unload and S3 x force-unload).
 
@@ -294,10 +295,13 @@ last, with `forced` true and the release outcome; and the answer is
 could not be, the miss then recorded as a refusal of the leave naming the leg.
 
 **The load's rollback is its own row** (`weaver-admin-Spec` section 3, S1 x Leave): a
-forced `Leave` that reaches a run never `Entered` past `Ready`, as the harness knows by
-its own state, takes no save point, the run having nothing to keep, authors `unload`
-with `forced` true, and answers `Left` with none; admin leaves the marker `Open`, and
-the rollback is the exemption I2 names. No directive of its own marks it.
+`Leave` with `rollback` true, which admin sends only to undo its own load, takes no save
+point and runs no wind-down in any position, `Entered` included, since a `Ready` can
+land just after admin's enter deadline and leave the harness `Entered` while admin rolls
+back; it authors `unload` with `forced` true and the load's cause, and answers `Left`
+with none. Admin leaves the marker as section 6's marker-write rule gives (K1), and the
+rollback is the exemption I2 names. The directive marks it, never the harness's
+position.
 
 **`Left` carries `forced`**, required on the wire with no default, true where the leave
 came down forced, directed so, joined, or turned so past a declared bound, so every

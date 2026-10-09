@@ -687,9 +687,9 @@ forced: admin's `force-unload` directed it so or joined it, or a bound the decla
 set for the drain or the wind-down passed (`weaver-types-Spec` section 2's
 `[lifecycle]`), the gate lowered at once and the turn in flight cancelled. **A load's
 rollback also writes `forced` true and is the named exemption from I2**
-(`weaver-admin-Spec` section 3, S1 x Leave): the harness tells it by its own state, a
-run never `Entered` past `Ready`, takes no save point for it, and admin leaves the
-marker `Open`, so its `unload` says `forced` over a run that kept nothing and agrees
+(`weaver-admin-Spec` section 3, S1 x Leave): the harness tells it by the `Leave`'s
+`rollback`, never by its own position, takes no save point for it, and admin leaves the
+marker `Open` once `load` is on the trace, so its `unload` says `forced` over a run that kept nothing and agrees
 with no closed marker. Since the
 lifecycle act (2026-10-09, the lifecycle state table approved by the operator that day,
 recorded on #1, which `weaver-admin-Spec` section 3 holds) `forced` no longer says the

@@ -1305,7 +1305,7 @@ ruling.
 ```rust
 pub enum LifecycleDirective {
     Enter { payload: Box<EnterPayload> },
-    Leave { cause: Cause, forced: bool },
+    Leave { cause: Cause, forced: bool, rollback: bool },
     JoinLeave { cause: Cause },
     SavePoint { cause: Cause },
     Stop { cause: Cause },
@@ -1352,8 +1352,14 @@ pub struct SavePointReport {
 }
 ```
 
-**`Leave` carries `forced`, `SavePoint` is the on-demand save point, and `Left` names
-the leave's save point**, as of A3.2 on the operator's rulings of 2026-10-06 on #1:
+**`Leave` carries `forced` and `rollback`, `SavePoint` is the on-demand save point, and
+`Left` names the leave's save point**, as of A3.2 on the operator's rulings of
+2026-10-06 on #1. `rollback` is true only on a load's rollback (`weaver-admin-Spec`
+section 3, S1 x `Leave`; Codex on #109, round 28), and always comes with `forced` true:
+the harness takes no save point and runs no wind-down for it in any position, `Entered`
+included, so a rollback is told by the directive, never by the harness's position. Like
+`forced`, it is required on the wire with no default, a `Leave` without it refusing at
+the parse.
 `SavePointReport` is what the harness reports of a finished save point, its digest, the
 finished name the member gave it, the position it covers (`run`, `sequence`, `turn`) and
 the trace position of the `save_point` event, its own run and sequence (`event_run`,

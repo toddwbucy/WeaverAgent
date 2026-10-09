@@ -287,7 +287,11 @@ leave's cause, and the `unload` concludes as a forced leave does. With no bound
 declared, or one alone, the `unload` waits for the agent's answer with no deadline, and
 a caller's own timeout must allow for that; with both declared it waits their sum and
 150 seconds, then escalates as `weaver-admin-Spec` section 3 states. The escalation's
-waits and the publication after the answer come on top, as before.
+waits and the publication after the answer come on top, as before. These bounds cover a
+leave the `unload` directs, not the recovery of a run already past its outcome: an
+`unload` that finds the agent no longer listening while a process still holds the run
+waits for it with no deadline (`weaver-admin-Spec` section 3, the seal's table), and
+`force-unload` is the recourse.
 
 **`force-unload` can be issued in any state, and it always ends the run** (I3).
 - **Alone** (S2, S3, S9, and wherever it finds the lock free): the gate closes at once
