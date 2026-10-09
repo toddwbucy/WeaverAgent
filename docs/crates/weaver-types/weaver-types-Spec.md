@@ -627,7 +627,7 @@ operator's ruling of 2026-10-09 recorded on #1. The drain and the wind-down of
 `weaver-admin-Spec` section 3's graceful unload (S4 and S5) are unbounded by default,
 `force-unload` being the recourse (I3). An agent may declare either in an optional
 `[lifecycle]` table: `drain-bound`, the seconds the drain may take from the leave's
-arrival, and `wind-down-bound`, the seconds the wind-down turn may take, each a whole
+arrival, the quiesce's wait and the turn's finish together, and `wind-down-bound`, the seconds the wind-down turn may take, each a whole
 number of seconds above zero, refusing `BadValue` naming `lifecycle.drain-bound` or
 `lifecycle.wind-down-bound` otherwise, an unknown key refusing as every table's does.
 Past a declared bound the harness turns the leave forced, with no `forced_by`, the

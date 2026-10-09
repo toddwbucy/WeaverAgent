@@ -316,8 +316,10 @@ waits and the publication after the answer come on top, as before.
   concluded and changing nothing (I1); each prints only once the run lock has freed,
   never on the agent's answer alone, so `Unloaded` means no constituent still runs. From
   S7 on, the leave's outcome being fixed, the join adds nothing to it and concludes the same way,
-  and once the agent no longer listens it waits for the unload to finish, at most 150
-  seconds and then the escalation, and prints the unload's outcome as the marker
+  and once the agent no longer listens it waits for the unload to finish: at most 150
+  seconds and then the escalation while the agent's processes still hold the run, and
+  with no deadline once they are gone and the unload is publishing, a publication taking
+  as long as its copy does; it then prints the unload's outcome as the marker
   records it: `Unloaded` where it closed, `Unloaded` and forced where it was forced, and
   `SavePointNotTaken` naming the publication where it stayed open.
 - **Beside any other command** (a load in S1, a `save-point`, another force): it refuses `InvocationInFlight` and takes over nothing, one command

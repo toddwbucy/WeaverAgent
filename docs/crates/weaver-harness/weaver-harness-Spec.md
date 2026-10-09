@@ -2233,8 +2233,9 @@ leave's dialer and every held `JoinLeave`, before the listening descriptor close
 worker exits.
 
 **The drain and the wind-down are unbounded by default, and every other leg is bounded**
-(I3; the operator's ruling of 2026-10-09 on #1; #107, area 1, R2). The turn in flight
-finishing and the wind-down's one generation have no bound unless the declaration sets
+(I3; the operator's ruling of 2026-10-09 on #1; #107, area 1, R2). The drain, which is
+the wait for `GateQuiesced` and the turn in flight finishing together, and the
+wind-down's one generation have no bound unless the declaration sets
 `[lifecycle] drain-bound` and `wind-down-bound`, in seconds, per `weaver-types-Spec`;
 without them `force-unload` is the recourse, admin waiting for `Left` with no deadline.
 This crate reads the two from the enter, `EnterPayload.drain_bound` and
@@ -2249,8 +2250,10 @@ section 3. Every other leg is bounded in this crate: the save point's ask and `f
 legs and the grants read-back under `ANSWER_BOUND_MS`, its answer leg under
 `SNAPSHOT_ANSWER_BOUND_MS`, and `GateStopped` from a draining gate under the lower bound,
 past which an unread delivery is lost per `weaver-gate-PRD` section 13.4; these, the
-wait for `GateQuiesced`, the trace's drain, the SPU's `Release` and the reaps sum inside
-admin's 150 seconds. A force, sole or joining, skips the drain and the wind-down, so its
+trace's drain, the SPU's `Release` and the reaps sum inside admin's 150 seconds. The wait
+for `GateQuiesced` is the drain's, not one of these legs: a declared `drain-bound`
+covers it and the turn's finish together, and with none declared it is unbounded, a
+force being the recourse (Codex on #109, round 40). A force, sole or joining, skips the drain and the wind-down, so its
 legs sit inside those 150 seconds, and a harness that does not answer within them is
 escalated by admin (I3).
 
