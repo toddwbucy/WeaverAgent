@@ -452,17 +452,19 @@ The live restore, a reload of state without a process restart, is A5's, with the
 | S9 | the gate is lowered: the connection is refused | - | - | - | - | S0d (marker `Open`) | stays S9: a retried `unload` refuses `SavePointNotTaken` naming `MemberDead` again, and `force-unload` is the recourse, coming down `Forced` |
 | S10 | the gate lowered at once (once an open execution has ended): a frame met at the lower is recorded refused and its connection closes | `ToolInterrupt`, answered `Killed{by: unload}`, the first outcome winning as in S4 | the turn cancelled: `turn.closed` `Stopped{reason: unload}` | - (no drain or wind-down runs) | the miss recorded as a refusal of the leave naming the leg, S7, `Left{forced: true}` with no save point, marker `Forced` | S0d (marker `Open`) | the save point not taken, `MemberDead`: as this row's missed-leg cell, marker `Forced` |
 
-**Transitions: a gate, an SPU or a trace relay dying inside a run**, transcribed from the contracts (`weaver-harness-gate-contract` section 5, a gate that dies; `weaver-harness-spu-contract` section 5, an SPU that dies; section 6 here, the relay's one remaining failure mode). A cell the contracts leave undefined says so and stops: it is listed for the operator's ruling (Codex on #109, round 37), not elected here.
+**Transitions: a gate, an SPU or a trace relay dying inside a run**, transcribed from the contracts (`weaver-harness-gate-contract` section 5, a gate that dies; `weaver-harness-spu-contract` section 5, an SPU that dies; section 6 here, the relay's one remaining failure mode). Six cells the contracts left undefined are filled by the operator's rulings of 2026-10-09 (recorded on #1), named (A) and (B) below the table.
 
 | State | The gate dies | The SPU dies | The trace relay dies (a file sink) |
 |---|---|---|---|
-| S2 | the run serves on with no gate, the agent unreachable: a `fault` authored (the loss of reachability); a later forced unload's lower meets no answer and the harness closes its end and reaps the gate (S10); **a later graceful unload's quiesce and drain are undefined** | the run serves on: a `fault` authored, the worker surviving; **a later turn is undefined**; a later unload's release reads `release.spu` `Unconfirmed` | the worker serves on and the trace keeps landing in the sink; the trace door is closed until the next load and nothing records it; a later unload is unaffected |
-| S3 | a `fault` authored; **the turn in flight, a tool call out at the gate among it, is undefined** | a `fault` authored; **the turn in flight is undefined** | as in S2 |
-| S4, S5 | **undefined**: the drain's refusals and the quiesce meet no gate | a `fault` authored; **the turn in flight and the wind-down's generation are undefined** | as in S2 |
+| S2 | the run serves on with no gate, the agent unreachable: a `fault` authored (the loss of reachability); a later forced unload's lower meets no answer and the harness closes its end and reaps the gate (S10); a later graceful unload turns forced by (A) | the run serves on: a `fault` authored, the worker surviving; a later turn is refused, there being no model, and the run stands (B); a later graceful unload turns forced by (A), and its release reads `release.spu` `Unconfirmed` | the worker serves on and the trace keeps landing in the sink; the trace door is closed until the next load and nothing records it; a later unload is unaffected |
+| S3 | a `fault` authored; a tool call out at the gate is recorded interrupted by the gate's fault, re-runnable as at an unload, and the turn's answer to a connection the gate's death closed is a lost delivery, never a lost turn (`weaver-gate-PRD` section 13.4) | the turn in flight closes `Stopped { reason: fault }`, the SPU's `fault` recorded and the caller answered an error (B); later turns are refused, and the run stands | as in S2 |
+| S4, S5 | the leave turns forced at that moment (A): no `forced_by`, the graceful caller's cause kept; it skips the quiesce and the drain's refusals through the gate, still takes the save point, and the lower meets no answer and reaps the gate | a turn in flight closes `Stopped { reason: fault }` and its caller is answered an error (B); the leave turns forced (A), the wind-down being unable to run, and still takes the save point | as in S2 |
 | S6 | the lower meets no answer: the harness closes its end and reaps the gate, inside the lower bound, and the save point's legs go on | a `fault` authored; the save point's legs go on, needing no SPU; the release reads `release.spu` `Unconfirmed` | as in S2 |
 | S7 | - (the gate already lowered) | a `fault` authored before `unload`, `release.spu` `Unconfirmed` (I9) | as in S2 |
 | S9 | - (the gate lowered) | a `fault` authored; the retried leave's release reads `release.spu` `Unconfirmed` | as in S2 |
 | S10 | the lower meets no answer: closed and reaped inside the lower bound, the force going on | a `fault` authored; the turn is cancelled as the force does; `release.spu` `Unconfirmed` | as in S2 |
+
+**(A) A graceful unload with the gate or the SPU dead turns forced from where it stands** (the operator's ruling of 2026-10-09, on #1): it skips what it cannot do, the quiesce and the drain's refusals without a gate, the wind-down without an SPU, still takes the save point, and records its outcome forced with no `forced_by`, the cause being the dead organ's as a bound's is the clock's, the graceful caller's cause kept (I2). **(B) The SPU dying with a turn in flight closes that turn failed** (same ruling): `Stopped { reason: fault }`, the SPU's `fault` recorded, the caller answered an error; later turns are refused, there being no model, until the unload, and the run stands.
 
 **A load's rollback (S1 x `Leave`).** A load that fails after its enter directs a forced leave to undo a run that never served. **The harness tells it by the directive, not by its position**: the rollback's `Leave` carries `rollback: true` (Codex on #109, round 28), because a `Ready` landing just after this crate's enter deadline leaves the harness `Entered` while this crate rolls back, and a forced `Leave` alone would read there as a sole force and take a save point. For a `Leave` with `rollback` true, in any position, `Entered` included, the harness takes no save point and runs no wind-down, lowers the gate at once, releases what it admitted, and authors `unload` with `forced` true and the load's cause; `unload` carries the load's cause, and, `load` being on the trace, the marker stands `Open` on that run (the operator's ruling of 2026-10-08 on #99, K1), so the next load records `NoCleanUnload`; a rollback before `load` is on the trace leaves the marker as the load found it, and the next load records whatever reset that marker carries (section 4, the marker-write rule). It is exempt from I2 by name: a run that never served is not an unload.
 
@@ -3360,6 +3362,16 @@ perturbation-verified:
   `InvocationInFlight`, watched to fail when it waits for the lock; and in each case the
   next load publishes the room's finished save point as recovered and records the
   reset, watched to fail when it publishes nothing.
+- **(A) A graceful unload with a dead gate or SPU turns forced**, owed by the lifecycle
+  act's code: a stand-in gate killed in S2, then a graceful `unload`, records `forced`
+  true with no `forced_by`, skips the quiesce and the drain, and still takes the save
+  point; the same with a stand-in SPU killed, the wind-down skipped. The perturbation
+  lets the graceful unload attempt the drain with the gate dead, and the test fails.
+- **(B) An SPU death with a turn in flight closes the turn failed**, owed by the
+  lifecycle act's code: a stand-in SPU killed mid-turn closes it `Stopped { reason:
+  fault }` with the `fault` recorded and the caller answered an error, and a later
+  request is refused while the run stands. The perturbation leaves the turn open
+  awaiting the dead SPU, and the test fails.
 - **The escalation ends every holder**, watched by a run left by a killed load whose
   stand-in member
   does not retire on the first door's end: the `unload` signals the worker and the
