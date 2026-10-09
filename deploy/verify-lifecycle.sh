@@ -100,6 +100,7 @@ PREFIX_ARG=""
 APPLY=0
 CLEANUP=0
 KEEP=0
+STAGED_KEY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --agent)        [ $# -ge 2 ] || die "--agent needs a name"; AGENT=$2; shift ;;
@@ -245,6 +246,22 @@ if [ "$CLEANUP" -eq 1 ]; then
   if [ -f "$R/territory" ]; then
     named=$(trim "$(cat -- "$R/territory")")
     [ "$named" = "$T" ] || die "$R/territory names $named, not $T, and --cleanup removes only the territory named for its agent"
+  fi
+  # **Step 8's staged key, left by a run stopped between its write and its
+  # removal** (#99, from #105's Codex round 2): admin refuses the root
+  # config_invalid at every verb while it stands, so the take-down's unload
+  # could not run. It is removed only where it is a regular file whose
+  # content, trimmed, is exactly $T, the value step 8 writes, on a root this
+  # script's marker names (checked above). Any other key refuses here, as
+  # admin's refusal would stop the take-down later; that is not this
+  # script's key, and the operator judges it.
+  if [ -e "$R/declaration-directory" ] || [ -L "$R/declaration-directory" ]; then
+    { [ -f "$R/declaration-directory" ] && [ ! -L "$R/declaration-directory" ]; } \
+      || die "$R/declaration-directory stands and is not a regular file, so it is not the key step 8 stages, and --cleanup removes only that key. Look at it by hand"
+    named=$(trim "$(cat -- "$R/declaration-directory")")
+    [ "$named" = "$T" ] \
+      || die "$R/declaration-directory names $named, not $T, the value step 8 stages, and --cleanup removes only that key. Look at it by hand"
+    STAGED_KEY=1
   fi
 else
   # **The agent is one this run makes**: nothing of it may stand.
@@ -986,6 +1003,8 @@ unload_for_teardown() {
 
 step_9() {
   begin_step 9 "HowToDeployANewAgent.md section 7" "take $A down alone, archived first"
+  [ "$STAGED_KEY" -eq 0 ] \
+    || run_line "rm -f $R/declaration-directory (step 8's staged key naming $T, left by a run stopped between its write and its removal)"
   run_line "weaver-admin unload $A (force-unload where it refuses); weaver-admin show $A"
   run_line "rm -f $RULE (and any staged .$AU.* rule)"
   run_line "tar --acls --xattrs -C $AGENT_DIR -cpf ${ARCHIVE:-<--archive>}/$AU-territory-<stamp>.tar $AU"
@@ -999,6 +1018,10 @@ step_9() {
   want "the accounts, the groups, $R, $RULE and $T are absent; each archive reads back"
   want "never decommission.sh, which takes every agent off the box; no other agent is touched"
   [ "$APPLY" -eq 1 ] || return 0
+  if [ "$STAGED_KEY" -eq 1 ]; then
+    sudo -n rm -f -- "$R/declaration-directory"
+    expect_eq "step 8's staged key is removed" absent "$(lay "$R/declaration-directory")"
+  fi
   if sudo -n test -d "$R"; then
     unload_for_teardown
   else

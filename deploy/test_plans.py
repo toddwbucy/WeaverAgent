@@ -306,7 +306,7 @@ class PlanTests(unittest.TestCase):
         for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
                      "VISUDO_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
                      "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS", "GROUP_WRITES",
-                     "LAYOUT_GROUPS", "FIXTURE_ADMIN"):
+                     "LAYOUT_GROUPS", "FIXTURE_ADMIN", "ADMIN_CALLS", "UNLOAD_ANSWER"):
             self.env.pop(name, None)
         # Redirect even shell builtin /home probes into the fixture. The
         # production scripts have no test-only path switches and never read
@@ -1818,10 +1818,12 @@ esac
         self.assertEqual(result.returncode, 0, result.stderr)
         agents_line = next(l for l in result.stdout.splitlines() if l.startswith("  agents"))
         self.assertEqual(agents_line.split(), ["agents", "existing"])
+        # With no root at all the plan goes on (#39), its agents none.
         shutil.rmtree(self.config / "existing")
+        shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
         result = self.run_script("update-stack.sh")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("no agent root under", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("no agent root under", result.stderr)
 
     def test_stack_refuses_a_root_naming_no_territory(self):
         # A root naming neither a territory nor a declaration-directory is
@@ -2056,6 +2058,162 @@ esac
         self.assertIn("its pipe sink is not a file a line count reads", result.stdout)
         self.assertIn("the box is at", result.stdout)
 
+    def test_stack_updates_a_box_with_no_agent(self):
+        """**A stack with no agent root is updated all the same** (#39): the
+        plan builds and plans, and --install installs, holds no rule,
+        unloads, reconciles and verifies nothing, saying so, and reports the
+        box at its commit. Perturbations: put back the "no agent root"
+        refusal and the plan exits 1; put back the bare `VERIFIED -gt 0`
+        rollback and the install rolls back."""
+        shutil.rmtree(self.config / "existing")
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("agents        (none: nothing to unload, reconcile or verify)", result.stdout)
+        self.assertIn("no agents: --install holds no connector rule and unloads none", result.stdout)
+        self.assertIn("== plan", result.stdout)
+        self.assertNotIn("REFUSED", result.stderr)
+        self.assert_unprivileged()
+        (self.root / "installed").mkdir(exist_ok=True)
+        admin = self.root / "fixture-admin"
+        admin.write_text("#!/bin/sh\necho \"$1\" >> \"$ADMIN_CALLS\"\nexit 2\n")
+        admin.chmod(0o755)
+        shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+        self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_ADMIN=str(admin),
+                        ADMIN_CALLS=str(self.root / "admin-calls"))
+        result = self.run_script("update-stack.sh", "--install")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for said in ("no agents: no connector rule to hold, none to unload", "no agents to reconcile",
+                     "no agents to verify", "the box is at"):
+            self.assertIn(said, result.stdout)
+        self.assertTrue([c for c in self.calls() if c[:2] == ["sudo", "install"]], self.calls())
+        self.assertFalse((self.root / "admin-calls").exists(), "no admin verb is asked")
+
+    def window_admin(self, extra=""):
+        """A stand-in admin for the install window: each verb logged with
+        whether the connector's rule stands at its name, unload and load
+        answering their states, validate validated. EXTRA runs first."""
+        rule = self.root / "etc" / "sudoers.d" / "weaver-existing"
+        admin = self.root / "fixture-admin"
+        admin.write_text(
+            "#!/bin/sh\n" + extra +
+            f"if [ -e '{rule}' ]; then at=in; else at=out; fi\n"
+            "echo \"$1 $at\" >> \"$ADMIN_CALLS\"\n"
+            "case \"$1\" in\n"
+            "  validate) echo '{\"kind\":\"validated\"}' ;;\n"
+            "  unload) echo \"${UNLOAD_ANSWER:-{\\\"kind\\\":\\\"state\\\",\\\"state\\\":\\\"unloaded\\\"}}\" ;;\n"
+            "  load) echo '{\"kind\":\"state\",\"state\":\"idle\"}' ;;\n"
+            "  *) exit 2 ;;\n"
+            "esac\n")
+        admin.chmod(0o755)
+        territory = self.existing_territory.resolve()
+        fifo = territory / "trace.pipe"
+        if not fifo.exists():
+            os.mkfifo(fifo)
+        (territory / "agent.toml").write_text(
+            f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "pipe"\npath = "{fifo}"\n')
+        (self.root / "installed").mkdir(exist_ok=True)
+        rule.write_text("weaver-existing-admincon ALL=(root) NOPASSWD: /fixture\n")
+        self.admin_calls = self.root / "admin-calls"
+        self.admin_calls.unlink(missing_ok=True)
+        self.log.unlink(missing_ok=True)
+        shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+        self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_ADMIN=str(admin), ADMIN_CALLS=str(self.admin_calls))
+        self.env.pop("UNLOAD_ANSWER", None)
+        return rule, rule.with_name(".weaver-existing.updating")
+
+    def test_the_install_window_holds_the_rules_and_unloads_every_agent_first(self):
+        """**--install holds each connector rule and unloads every agent before
+        any binary moves** (#99 area 2 review, R2): the rule is renamed to its
+        dot-name `.updating`, which sudo's includedir skips, before the first
+        unload; every agent is unloaded before the first binary is installed;
+        admin is asked nothing while the rule stands; the rule comes back
+        after the verify. The plan names the agent and moves nothing.
+        Perturbations: drop the hold and admin sees the rule in place; move
+        the unload after the install and the order fails; drop the restore
+        after the verify and the rule stays held."""
+        rule, held = self.window_admin()
+        self.env.pop("ALLOW_APPLY_CHECKS")
+        plan = self.run_script("update-stack.sh")
+        self.assertEqual(plan.returncode, 0, plan.stdout + plan.stderr)
+        self.assertIn("existing     --install holds /etc/sudoers.d/weaver-existing as .weaver-existing.updating "
+                      "where it stands, then unloads existing", plan.stdout)
+        self.assertIn("plan only: no rule is moved and no agent unloaded", plan.stdout)
+        self.assertTrue(rule.exists())
+        self.assertFalse(held.exists())
+        self.assert_unprivileged()
+        self.env["ALLOW_APPLY_CHECKS"] = "1"
+        shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+        self.log.unlink(missing_ok=True)
+        result = self.run_script("update-stack.sh", "--install")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"held /etc/sudoers.d/weaver-existing as /etc/sudoers.d/.weaver-existing.updating", result.stdout)
+        self.assertIn("restored /etc/sudoers.d/weaver-existing", result.stdout)
+        self.assertTrue(rule.exists())
+        self.assertFalse(held.exists())
+        verbs = self.admin_calls.read_text().split("\n")
+        self.assertEqual(verbs[0], "unload out", verbs)
+        self.assertFalse([v for v in verbs if v.endswith(" in")], verbs)
+        calls = self.calls()
+        def at(pred):
+            return next(i for i, c in enumerate(calls) if pred(c))
+        hold = at(lambda c: c[:2] == ["sudo", "mv"] and c[-1].endswith(".updating"))
+        unload = at(lambda c: c[0] == "sudo" and "unload" in c)
+        install = at(lambda c: c[:2] == ["sudo", "install"])
+        back = at(lambda c: c[:2] == ["sudo", "mv"] and c[-1].endswith("/weaver-existing"))
+        load = at(lambda c: c[0] == "sudo" and "load" in c)
+        self.assertLess(hold, unload)
+        self.assertLess(unload, install)
+        self.assertLess(load, back)
+        self.assertEqual(calls[hold][2:4], ["-T", "--"])
+
+    def test_a_refused_unload_rolls_back_with_the_rule_restored(self):
+        """**An unload admin refuses before the install rolls back** with no
+        binary moved and the held rule put back. Perturbation: drop the
+        rule's restore from the exit trap and it stays held."""
+        rule, held = self.window_admin()
+        self.env["UNLOAD_ANSWER"] = '{"kind":"refused","refusal":"activity_not_at_rest"}'
+        result = self.run_script("update-stack.sh", "--install")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("the unload before the install did not answer unloaded", result.stderr)
+        self.assertIn("restored /etc/sudoers.d/weaver-existing", result.stderr)
+        self.assertTrue(rule.exists())
+        self.assertFalse(held.exists())
+        self.assertFalse([c for c in self.calls() if c[:2] == ["sudo", "install"]], self.calls())
+
+    def test_a_held_name_already_standing_refuses_before_any_rule_moves(self):
+        """**A stale `.updating` refuses by name** (a run killed by SIGKILL or
+        a host stop leaves one): nothing is moved and admin is asked nothing.
+        Perturbation: drop the look, and `mv -T` meets the held name."""
+        rule, held = self.window_admin()
+        held.write_text("an earlier run's held rule\n")
+        result = self.run_script("update-stack.sh", "--install")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(f"/etc/sudoers.d/.weaver-existing.updating already stands", result.stderr)
+        self.assertEqual(held.read_text(), "an earlier run's held rule\n")
+        self.assertTrue(rule.exists())
+        self.assertFalse([c for c in self.calls() if c[:2] == ["sudo", "mv"]], self.calls())
+        self.assertFalse(self.admin_calls.exists())
+
+    def test_a_signal_in_the_window_puts_the_rule_back(self):
+        """**HUP, INT and TERM put the held rule back** through the exit
+        trap: the stand-in admin signals the run's whole process group at the
+        verify load, with the rule held and the binaries installed.
+        Perturbation: drop the three signal traps and the rule stays held."""
+        for sig, code in (("HUP", 129), ("INT", 130), ("TERM", 143)):
+            with self.subTest(signal=sig):
+                once = self.root / "signalled"
+                once.unlink(missing_ok=True)
+                rule, held = self.window_admin(
+                    f"if [ \"$1\" = load ] && [ ! -e '{once}' ]; then : > '{once}'; "
+                    f"kill -{sig} -- -$(ps -o pgid= -p $$ | tr -d ' '); sleep 5; fi\n")
+                run = subprocess.run(["bash", str(self.repo / "deploy" / "update-stack.sh"), "--install"],
+                                     env=self.env, text=True, capture_output=True, timeout=60,
+                                     start_new_session=True)
+                self.assertEqual(run.returncode, code, run.stdout + run.stderr)
+                self.assertTrue(rule.exists(), run.stdout + run.stderr)
+                self.assertFalse(held.exists())
+                self.assertIn("restored /etc/sudoers.d/weaver-existing", run.stderr)
+
     def test_stack_build_failure_cannot_claim_a_plan(self):
         self.env["BUILD_FAIL"] = "1"
         result = self.run_script("update-stack.sh")
@@ -2279,6 +2437,99 @@ esac
         self.assertIn("removes only the territory named for its agent", result.stderr)
 
 
+    def test_lifecycle_cleanup_removes_only_step_8s_staged_key(self):
+        """**--cleanup removes a `declaration-directory` key only where it is
+        step 8's** (#99, from #105's Codex round 2): a regular file naming
+        exactly the territory, trimmed, on a root the marker names, lets the
+        take-down's plan go on and names the removal; any other content, or
+        a key that is not a regular file, refuses by name. Perturbation: drop
+        the content check and the foreign key is planned for removal."""
+        marker = self.stack / "verify-lifecycle-m1"
+        marker.write_text('agent = "m1"\nmade-by = "deploy/verify-lifecycle.sh"\n')
+        root = self.config / "m1"
+        root.mkdir()
+        key = root / "declaration-directory"
+        territory = (self.root / "agents").resolve() / "weaver-m1"
+        key.write_text(f"  {territory}\n")
+        result = self.lifecycle("--cleanup")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"   $ rm -f {root}/declaration-directory (step 8's staged key naming {territory}",
+                      result.stdout)
+        self.assertLess(result.stdout.index("declaration-directory (step 8's"),
+                        result.stdout.index("weaver-admin unload m1"))
+        self.assert_unprivileged()
+        key.write_text("/somewhere/else\n")
+        result = self.lifecycle("--cleanup")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(f"{key} names /somewhere/else, not {territory}, the value step 8 stages", result.stderr)
+        key.unlink()
+        key.mkdir()
+        result = self.lifecycle("--cleanup")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("is not a regular file, so it is not the key step 8 stages", result.stderr)
+        key.rmdir()
+        result = self.lifecycle("--cleanup")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("step 8's staged key", result.stdout)
+
+    def test_the_driver_line_prints_no_stray_none(self):
+        """**The driver's fallback is applied after the pipeline** (#39): a
+        `head` that closes the pipe on a card list fails the pipeline under
+        `pipefail`, and the old `|| echo none` inside the substitution
+        printed the card and then `none`. Each script's line is run with a
+        stand-in nvidia-smi that writes after `head` has gone, and with none.
+        Perturbation: put `|| echo none` back inside any of the three."""
+        lines = {}
+        for name, var in (("bootstrap-stack.sh", "DRIVER"), ("update-stack.sh", "DRIVER"),
+                          ("decommission.sh", "driver")):
+            text = (DEPLOY / name).read_text()
+            line = next(l.strip() for l in text.splitlines() if l.strip().startswith(f"{var}=$(nvidia-smi"))
+            self.assertNotIn("echo none", line)
+            lines[name] = (line, var)
+        with tempfile.TemporaryDirectory() as scratch:
+            bin_dir = Path(scratch)
+            smi = bin_dir / "nvidia-smi"
+            smi.write_text("#!/bin/sh\necho 'card0, 1'\nsleep 0.3\necho 'card1, 1'\necho 'card2, 1'\n")
+            smi.chmod(0o755)
+            # The box's own nvidia-smi is never run: the second case puts one
+            # first on the path that answers nothing, as a box without a card.
+            silent = bin_dir / "silent"
+            silent.mkdir()
+            (silent / "nvidia-smi").write_text("#!/bin/sh\nexit 9\n")
+            (silent / "nvidia-smi").chmod(0o755)
+            for name, (line, var) in lines.items():
+                for path, want in ((f"{bin_dir}{os.pathsep}/usr/bin:/bin", "card0, 1"),
+                                   (f"{silent}{os.pathsep}/usr/bin:/bin", "none")):
+                    with self.subTest(script=name, want=want):
+                        run = subprocess.run(["bash", "-c", f'set -euo pipefail\n{line}\nprintf "%s\\n" "${{{var}:-none}}"'],
+                                             env={"PATH": path}, text=True, capture_output=True, timeout=20)
+                        self.assertEqual(run.stdout, want + "\n", run.stderr)
+
+    def test_turn_py_runs_as_the_runbooks_write_it(self):
+        """`deploy/turn.py <agent>` is how CLAUDE.md and the runbooks run it
+        (#39), so it is executable on disk and in the index. Perturbation:
+        `chmod -x`, or the index's mode back to 100644."""
+        self.assertTrue(os.access(DEPLOY / "turn.py", os.X_OK))
+        self.assertTrue((DEPLOY / "turn.py").read_text().startswith("#!/usr/bin/env python3\n"))
+        if (DEPLOY.parent / ".git").exists():
+            staged = subprocess.run(["git", "-C", str(DEPLOY.parent), "ls-files", "-s", "deploy/turn.py"],
+                                    text=True, capture_output=True, timeout=20).stdout
+            self.assertTrue(staged.startswith("100755 "), staged)
+
+    def test_the_runbook_takes_a_fresh_login_and_names_the_turn(self):
+        """REDEPLOY.md, as #39 asks: a fresh login after the purge and before
+        the build, and a line that verify-load proves a load while turn.py
+        proves a turn. Perturbation: drop either and this fails."""
+        text = (DEPLOY / "REDEPLOY.md").read_text()
+        purge, build, agents = (text.index(h) for h in ("## 2. Purge", "## 3. Build", "## 4. Agents"))
+        login = text.index("**Then log out and log in again**")
+        self.assertLess(purge, login)
+        self.assertLess(login, build)
+        turn = text.index('`verify-load.sh` proves a load; `deploy/turn.py <name> "<text>"` proves a turn')
+        self.assertLess(agents, turn)
+        self.assertNotIn("bulk-store/dev-archive", text)
+
+
 def admin_retired_root_keys():
     """The root keys weaver-admin refuses by name, read from its
     `RETIRED_ROOT_KEYS` so test_plans compares the scripts with admin's own
@@ -2437,10 +2688,26 @@ class DecommissionTests(unittest.TestCase):
 
     def setUp(self):
         self.script = (DEPLOY / "decommission.sh").read_text()
+        self.bin = tempfile.TemporaryDirectory(prefix="weaver-decommission-")
+        self.addCleanup(self.bin.cleanup)
+        stat = Path(self.bin.name) / "stat"
+        stat.write_text(DOUBLE)
+        stat.chmod(0o755)
 
-    def run_fn(self, name, *args):
+    def stat_env(self, fixture, **extra):
+        """The territory's look as root takes it (#99 area 2 review, H4): the
+        stat stand-in answers uid 0 under FIXTURE and, unless LAYOUT_GROUPS
+        says otherwise, the group the law names."""
+        env = {**os.environ, "PATH": self.bin.name + os.pathsep + os.environ["PATH"],
+               "FIXTURE_ROOT": str(fixture), "CALLS": os.devnull, **extra}
+        for name in ("BASH_ENV", "LAYOUT_GROUPS", "OP_HOME"):
+            if name not in extra:
+                env.pop(name, None)
+        return env
+
+    def run_fn(self, name, *args, env=None):
         run = subprocess.run(["bash", "-c", shell_function(self.script, name) + f'{name} "$@"', "x", *args],
-                             text=True, capture_output=True, timeout=20)
+                             env=env, text=True, capture_output=True, timeout=20)
         return run.stdout.strip()
 
     def test_a_run_is_stopped_only_where_show_says_so(self):
@@ -2504,7 +2771,8 @@ class DecommissionTests(unittest.TestCase):
                 if territory is not None:
                     (root / "territory").write_text(f"{territory}\n")
             listed = self.run_fn("territories_outside", str(base), "--",
-                                 str(roots / "a"), str(roots / "b"), str(roots / "c"))
+                                 str(roots / "a"), str(roots / "b"), str(roots / "c"),
+                                 env=self.stat_env(scratch))
             self.assertEqual(listed.splitlines(), [str(custom)])
             # Canonical, not lexical (Codex on #94, round 12): a territory
             # written as `<base>/../elsewhere` is outside the base, and one
@@ -2518,11 +2786,12 @@ class DecommissionTests(unittest.TestCase):
                 root.mkdir(parents=True)
                 (root / "territory").write_text(f"{territory}\n")
             listed = self.run_fn("territories_outside", str(base), "--",
-                                 str(dotted / "b"), str(dotted / "a"))
+                                 str(dotted / "b"), str(dotted / "a"), env=self.stat_env(scratch))
             self.assertEqual(listed.splitlines(), [str(custom.resolve())])
         self.assertIn('for d in "${OWN_TERRITORIES[@]}"; do archive_path "$(archive_name territory "$d")" "$d"; done',
                       self.script)
-        self.assertIn('mapfile -t OWN_TERRITORIES < <(territories_outside', self.script)
+        self.assertIn('OWN_LISTED=$(territories_outside', self.script)
+        self.assertIn('mapfile -t OWN_TERRITORIES <<< "$OWN_LISTED"', self.script)
 
     def test_a_territory_key_not_naming_its_agent_is_never_purged(self):
         """**A root's `territory` key is listed for the archive and the purge
@@ -2544,10 +2813,105 @@ class DecommissionTests(unittest.TestCase):
             run = subprocess.run(["bash", "-c", shell_function(self.script, "territories_outside")
                                   + 'territories_outside "$@"', "x", str(base), "--",
                                   str(roots / "a"), str(roots / "c")],
-                                 text=True, capture_output=True, timeout=20)
+                                 env=self.stat_env(scratch), text=True, capture_output=True, timeout=20)
             self.assertEqual(run.stdout, "", "neither key names its own agent's territory")
             self.assertIn(f"{roots / 'a'}/territory names {wrong.resolve()}, not weaver-a", run.stderr)
             self.assertIn(f"{roots / 'c'}/territory names {other.resolve()}, not weaver-c", run.stderr)
+
+    def test_a_territory_not_roots_and_its_state_groups_refuses(self):
+        """**Every root's territory is judged by owner and group before the
+        archive and the purge** (#99 area 2 review, H4 remainder): one not
+        uid 0's, or not grouped `weaver-<agent>-state`, is named with what
+        was found and the function answers 1, which refuses the archive and
+        the purge; one standing so is listed. A territory under the
+        operator's home is skipped before it is judged. The look is the
+        stat stand-in's, root for anything under the fixture.
+        Perturbation: drop the owner and group look and the misgrouped and
+        foreign territories are listed with an answer of 0."""
+        with tempfile.TemporaryDirectory() as scratch:
+            scratch = Path(scratch).resolve()
+            fixture = scratch / "fixture"
+            good = fixture / "srv" / "weaver-a"
+            grouped = fixture / "srv" / "weaver-b"
+            foreign = scratch / "elsewhere" / "weaver-c"
+            home = scratch / "home-op"
+            homed = home / ".weaveragent" / "weaver-d"
+            for d in (good, grouped, foreign, homed):
+                d.mkdir(parents=True)
+            base = fixture / "var-lib-weaver-agent"
+            base.mkdir()
+            roots = fixture / "admin"
+            for name, territory in (("a", good), ("b", grouped), ("c", foreign), ("d", homed)):
+                (roots / name).mkdir(parents=True)
+                (roots / name / "territory").write_text(f"{territory}\n")
+            env = self.stat_env(fixture, LAYOUT_GROUPS=json.dumps({str(grouped): "weaver-b-admin"}),
+                                OP_HOME=str(home))
+            run = subprocess.run(["bash", "-c", shell_function(self.script, "territories_outside")
+                                  + 'territories_outside "$@"', "x", str(base), "--",
+                                  *(str(roots / n) for n in "abcd")],
+                                 env=env, text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 1, run.stderr)
+            self.assertEqual(run.stdout.splitlines(), [str(good)], run.stderr)
+            self.assertIn(f"refused: {roots / 'b'}/territory names {grouped}, which stands uid 0, "
+                          f"group weaver-b-admin, mode 755, not root:weaver-b-state", run.stderr)
+            self.assertIn(f"refused: {roots / 'c'}/territory names {foreign}, which stands uid {os.getuid()}",
+                          run.stderr)
+            self.assertIn(f"skipped: {roots / 'd'}/territory names {homed}, under the operator's home",
+                          run.stderr)
+            ok = subprocess.run(["bash", "-c", shell_function(self.script, "territories_outside")
+                                 + 'territories_outside "$@"', "x", str(base), "--", str(roots / "a")],
+                                env=env, text=True, capture_output=True, timeout=20)
+            self.assertEqual((ok.returncode, ok.stdout.splitlines()), (0, [str(good)]), ok.stderr)
+        # The judgment refuses both modes, after the plan and before either acts.
+        refusal = self.script.index('[ "$TERRITORIES_JUDGED" = 1 ] || die ')
+        self.assertLess(self.script.index('[ "$MODE" = plan ] && { say "plan only.'), refusal)
+        self.assertLess(refusal, self.script.index('if [ "$MODE" = archive ]; then'))
+        self.assertIn("territories_outside \"${!TERRITORY_BASES[@]}\" -- \"${AGENT_ROOTS[@]}\") || TERRITORIES_JUDGED=0",
+                      self.script)
+
+    def test_the_archive_and_the_purge_name_their_directory(self):
+        """**No archive directory is assumed** (#39): `--archive` or `--purge`
+        without a directory refuses, asking for one, before anything is read,
+        and the script names no box-specific default. Perturbation: put back
+        the default and `--archive` alone goes on to the root check."""
+        for mode, said in (("--archive", "--archive needs a directory to write the archive to"),
+                           ("--purge", "--purge needs the directory --archive wrote")):
+            with self.subTest(mode=mode):
+                env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
+                run = subprocess.run(["bash", str(DEPLOY / "decommission.sh"), mode], env=env,
+                                     text=True, capture_output=True, timeout=20)
+                self.assertEqual(run.returncode, 1, run.stdout)
+                self.assertIn(said, run.stderr)
+        self.assertNotIn("bulk-store/dev-archive", self.script)
+        self.assertIn("#   sudo deploy/decommission.sh --archive DIR ", self.script)
+
+    def test_nothing_under_the_operators_home_is_listed(self):
+        """**The operator's home is never listed, archived or purged** (the
+        operator's ruling of 2026-10-07 on #1): the box-wide layout's
+        `agent-config-directory` is not read, and a territory base or a log
+        directory under the home (the stack record's `agent-directory`
+        defaulted to `~/.weaveragent` from 2026-10-02 to 2026-10-07) is said
+        and dropped. Perturbations: read the key again; drop the base's
+        filter and a base under the home is kept."""
+        code = [l for l in self.script.splitlines() if not l.lstrip().startswith("#")]
+        self.assertFalse([l for l in code if "agent-config-directory" in l or "AGENT_DIRS" in l])
+        self.assertNotIn('archive_name agent-config', self.script)
+        with tempfile.TemporaryDirectory() as scratch:
+            home = Path(scratch).resolve() / "home-op"
+            (home / ".weaveragent").mkdir(parents=True)
+            other = Path(scratch).resolve() / "var-lib-weaver-agent"
+            other.mkdir()
+            program = (shell_function(self.script, "in_operator_home")
+                       + "plan() { printf '%s\\n' \"$*\"; }\n"
+                       + f'OP_HOME={shlex.quote(str(home))}\n'
+                       + f'declare -A TERRITORY_BASES=([{shlex.quote(str(home / ".weaveragent"))}]=1 '
+                       + f'[{shlex.quote(str(other))}]=1)\ndeclare -A LOG_PATHS=()\n'
+                       + self.script[self.script.index('for d in "${!TERRITORY_BASES[@]}"; do\n  in_operator_home'):
+                                     self.script.index('for d in /var/lib/weaver "${!TERRITORY_BASES[@]}"')]
+                       + 'printf "kept %s\\n" "${!TERRITORY_BASES[@]}"')
+            run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
+            self.assertIn(f"{home / '.weaveragent'}  under the operator's home: not touched", run.stdout, run.stderr)
+            self.assertEqual([l for l in run.stdout.splitlines() if l.startswith("kept")], [f"kept {other}"])
 
     def test_a_running_agent_refuses_the_archive_and_the_purge(self):
         guard = '[ ${#RUNNING[@]} -eq 0 ] || die "agents still run or cannot be read'
@@ -2676,7 +3040,7 @@ class RoundOneOf79Tests(unittest.TestCase):
                                  text=True, capture_output=True, timeout=20)
             names.append(run.stdout)
         self.assertEqual(names, ["territories-srv-weaver-agent", "territories-var-lib-weaver-agent"])
-        for sink in ("opt", "territories", "log", "agent-config"):
+        for sink in ("opt", "territories", "log"):
             self.assertIn(f'archive_path "$(archive_name {sink} ', script)
         self.assertNotIn('$(basename "$d")" "$d"', script)
 
