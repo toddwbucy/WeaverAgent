@@ -71,7 +71,14 @@ pub enum Event {
     ToolReturn {
         crossed: bool,
     },
-    TurnCloses,
+    /// The turn closes. `unload_interrupted` where it closes without a tool
+    /// return because the unload's `ToolInterrupt` ended a call, answered
+    /// `Killed { by: unload }`: the turn knows, holding its calls' outcomes,
+    /// and the position does not need to (`weaver-trace-Spec`,
+    /// `StopReason::Unload`).
+    TurnCloses {
+        unload_interrupted: bool,
+    },
     BoundPasses,
     LegMissed,
     MemberDies,
@@ -106,6 +113,10 @@ pub enum Response {
     CloseToS2,
     /// S5, `turn.closed`, `Clean` where the turn finished.
     CloseCleanToS5,
+    /// S5, `turn.closed` `Stopped { reason: unload }` with the leave's cause:
+    /// the unload's interrupt ended a call, so the turn did not finish, and
+    /// the leave, still graceful, winds down.
+    CloseStoppedUnloadToS5,
     /// S6, `turn.closed`, `Clean` where the turn finished: a diagnostic
     /// binding, which runs no wind-down.
     CloseCleanToS6,
@@ -188,7 +199,7 @@ pub fn respond(position: Position, event: Event) -> Response {
 
         (S2(Resident), DialerRequest) => Admit,
         (S2(Dead), DialerRequest) => RefuseNoResidency,
-        (S2(_), ToolReturn { .. } | TurnCloses | BoundPasses | LegMissed) => NoCell,
+        (S2(_), ToolReturn { .. } | TurnCloses { .. } | BoundPasses | LegMissed) => NoCell,
         (S2(_), MemberDies) => ServeOnSeamRetired,
         (S2(_), GateDies) => GateFaultServeOn,
         (S2(Resident), SpuDies) => SpuFaultServeOnRefuseLater,
@@ -197,7 +208,8 @@ pub fn respond(position: Position, event: Event) -> Response {
 
         (S3, DialerRequest) => QueueBehindTurn,
         (S3, ToolReturn { .. }) => DeliverToTurn,
-        (S3, TurnCloses) => CloseToS2,
+        // No unload stands in S3, so no call of its turn is interrupted by one.
+        (S3, TurnCloses { .. }) => CloseToS2,
         (S3, BoundPasses | LegMissed) => NoCell,
         (S3, MemberDies) => ServeOnSeamRetired,
         (S3, GateDies) => GateFaultToolKilledFault,
@@ -206,9 +218,21 @@ pub fn respond(position: Position, event: Event) -> Response {
         (S4(..) | S5, DialerRequest) => RefuseUnloading,
         (S4(..) | S10, ToolReturn { crossed: false }) => InterruptKilledUnload,
         (S4(..) | S10, ToolReturn { crossed: true }) => DeliverToTurn,
-        (S4(Graceful, Serving), TurnCloses) => CloseCleanToS5,
-        (S4(Graceful, Diagnostic), TurnCloses) => CloseCleanToS6,
-        (S4(Forced, _) | S10, TurnCloses) => CancelTurnNoWindDown,
+        (
+            S4(Graceful, Serving),
+            TurnCloses {
+                unload_interrupted: false,
+            },
+        ) => CloseCleanToS5,
+        (
+            S4(Graceful, Serving),
+            TurnCloses {
+                unload_interrupted: true,
+            },
+        ) => CloseStoppedUnloadToS5,
+        // A diagnostic binding has no gate, so no call to interrupt.
+        (S4(Graceful, Diagnostic), TurnCloses { .. }) => CloseCleanToS6,
+        (S4(Forced, _) | S10, TurnCloses { .. }) => CancelTurnNoWindDown,
         (S4(Graceful, _) | S5, BoundPasses) => ForceFromHere,
         // 3.0, under the event table: a bound passing after the leave
         // turned forced changes nothing, its late timer ignored.
@@ -221,24 +245,31 @@ pub fn respond(position: Position, event: Event) -> Response {
         (S4(..), SpuDies) => SpuFaultTurnFailedAndForce,
 
         (S5, ToolReturn { .. }) => WindDownCallsNeverSent,
-        (S5, TurnCloses) => WindDownClosesToS6,
+        // The wind-down's own calls are never sent (S5 x tool return), and
+        // it closes as 3.0 says either way.
+        (S5, TurnCloses { .. }) => WindDownClosesToS6,
         (S5, SpuDies) => SpuFaultWindDownFailedAndForce,
 
         (S6(_) | S10, DialerRequest) => RecordRefusedAtLower,
-        (S6(_), ToolReturn { .. } | TurnCloses | BoundPasses) => NoCell,
+        (S6(_), ToolReturn { .. } | TurnCloses { .. } | BoundPasses) => NoCell,
         (S6(Graceful), LegMissed | MemberDies) => StopInS9,
         (S6(Forced) | S10, LegMissed | MemberDies) => ForcedMissToS7,
         (S6(_), SpuDies) => SpuFaultLegsGoOn,
 
         (
             S7,
-            DialerRequest | ToolReturn { .. } | TurnCloses | BoundPasses | LegMissed | GateDies,
+            DialerRequest
+            | ToolReturn { .. }
+            | TurnCloses { .. }
+            | BoundPasses
+            | LegMissed
+            | GateDies,
         ) => NoCell,
         (S7, MemberDies) => MemberUnconfirmedAtRelease,
         (S7, SpuDies) => SpuFaultBeforeUnload,
 
         (S9, DialerRequest) => ConnectionRefusedGateLowered,
-        (S9, ToolReturn { .. } | TurnCloses | BoundPasses | LegMissed | GateDies) => NoCell,
+        (S9, ToolReturn { .. } | TurnCloses { .. } | BoundPasses | LegMissed | GateDies) => NoCell,
         (S9, MemberDies) => StaysS9MemberDead,
         (S9, SpuDies) => SpuFaultRetriedReleaseUnconfirmed,
 
@@ -286,6 +317,13 @@ mod tests {
 
     const OUT: Event = ToolReturn { crossed: false };
     const CROSSED: Event = ToolReturn { crossed: true };
+    const CLOSES: Event = TurnCloses {
+        unload_interrupted: false,
+    };
+    /// The turn closes without a tool return the unload's interrupt ended.
+    const INTERRUPTED: Event = TurnCloses {
+        unload_interrupted: true,
+    };
 
     // S2(Resident), serving at rest.
     cell!(
@@ -295,12 +333,7 @@ mod tests {
         Admit
     );
     cell!(s2_x_tool_return_has_no_cell, S2(Resident), OUT, NoCell);
-    cell!(
-        s2_x_turn_closes_has_no_cell,
-        S2(Resident),
-        TurnCloses,
-        NoCell
-    );
+    cell!(s2_x_turn_closes_has_no_cell, S2(Resident), CLOSES, NoCell);
     cell!(
         s2_x_bound_passes_has_no_cell,
         S2(Resident),
@@ -344,7 +377,7 @@ mod tests {
     cell!(
         s2_spu_dead_x_turn_closes_has_no_cell,
         S2(Dead),
-        TurnCloses,
+        CLOSES,
         NoCell
     );
     cell!(
@@ -384,17 +417,46 @@ mod tests {
         RelayDeathServeOn
     );
 
+    // **A turn the unload ended closes stopped**, its tool call interrupted
+    // (weaver-trace-Spec, `StopReason::Unload`; 3.0 S4 x tool return): the
+    // leave stays graceful and goes on to the wind-down. A forced leave or a
+    // force cancels the turn either way, and the wind-down closes as it does.
+    cell!(
+        s4_x_turn_closes_after_an_interrupt_stops_unload,
+        S4(Graceful, Serving),
+        INTERRUPTED,
+        CloseStoppedUnloadToS5
+    );
+    cell!(
+        s4_forced_x_turn_closes_after_an_interrupt_is_cancelled,
+        S4(Forced, Serving),
+        INTERRUPTED,
+        CancelTurnNoWindDown
+    );
+    cell!(
+        s10_x_turn_closes_after_an_interrupt_is_cancelled,
+        S10,
+        INTERRUPTED,
+        CancelTurnNoWindDown
+    );
+    cell!(
+        s5_x_wind_down_closes_after_a_call_never_sent_to_s6,
+        S5,
+        INTERRUPTED,
+        WindDownClosesToS6
+    );
+
     // S4 on a diagnostic binding: no wind-down, so straight to S6.
     cell!(
         s4_graceful_diagnostic_x_turn_closes_clean_to_s6,
         S4(Graceful, Diagnostic),
-        TurnCloses,
+        CLOSES,
         CloseCleanToS6
     );
     cell!(
         s4_forced_diagnostic_x_turn_closes_cancelled_no_wind_down,
         S4(Forced, Diagnostic),
-        TurnCloses,
+        CLOSES,
         CancelTurnNoWindDown
     );
 
@@ -422,7 +484,7 @@ mod tests {
         CROSSED,
         DeliverToTurn
     );
-    cell!(s3_x_turn_closes_to_s2, S3, TurnCloses, CloseToS2);
+    cell!(s3_x_turn_closes_to_s2, S3, CLOSES, CloseToS2);
     cell!(s3_x_bound_passes_has_no_cell, S3, BoundPasses, NoCell);
     cell!(s3_x_leg_missed_has_no_cell, S3, LegMissed, NoCell);
     cell!(
@@ -467,7 +529,7 @@ mod tests {
     cell!(
         s4_graceful_x_turn_closes_clean_to_s5,
         S4(Graceful, Serving),
-        TurnCloses,
+        CLOSES,
         CloseCleanToS5
     );
     cell!(
@@ -529,7 +591,7 @@ mod tests {
     cell!(
         s4_forced_x_turn_closes_cancelled_no_wind_down,
         S4(Forced, Serving),
-        TurnCloses,
+        CLOSES,
         CancelTurnNoWindDown
     );
     cell!(
@@ -588,7 +650,7 @@ mod tests {
         CROSSED,
         WindDownCallsNeverSent
     );
-    cell!(s5_x_turn_closes_to_s6, S5, TurnCloses, WindDownClosesToS6);
+    cell!(s5_x_turn_closes_to_s6, S5, CLOSES, WindDownClosesToS6);
     cell!(
         s5_x_bound_passes_forces_from_here,
         S5,
@@ -632,7 +694,7 @@ mod tests {
     cell!(
         s6_graceful_x_turn_closes_has_no_cell,
         S6(Graceful),
-        TurnCloses,
+        CLOSES,
         NoCell
     );
     cell!(
@@ -683,7 +745,7 @@ mod tests {
     cell!(
         s6_forced_x_turn_closes_has_no_cell,
         S6(Forced),
-        TurnCloses,
+        CLOSES,
         NoCell
     );
     cell!(
@@ -726,7 +788,7 @@ mod tests {
     // S7, leaving.
     cell!(s7_x_dialer_request_has_no_cell, S7, DialerRequest, NoCell);
     cell!(s7_x_tool_return_has_no_cell, S7, OUT, NoCell);
-    cell!(s7_x_turn_closes_has_no_cell, S7, TurnCloses, NoCell);
+    cell!(s7_x_turn_closes_has_no_cell, S7, CLOSES, NoCell);
     cell!(s7_x_bound_passes_has_no_cell, S7, BoundPasses, NoCell);
     cell!(s7_x_leg_missed_has_no_cell, S7, LegMissed, NoCell);
     cell!(
@@ -752,7 +814,7 @@ mod tests {
         ConnectionRefusedGateLowered
     );
     cell!(s9_x_tool_return_has_no_cell, S9, OUT, NoCell);
-    cell!(s9_x_turn_closes_has_no_cell, S9, TurnCloses, NoCell);
+    cell!(s9_x_turn_closes_has_no_cell, S9, CLOSES, NoCell);
     cell!(s9_x_bound_passes_has_no_cell, S9, BoundPasses, NoCell);
     cell!(s9_x_leg_missed_has_no_cell, S9, LegMissed, NoCell);
     cell!(s9_x_member_dies_stays_s9, S9, MemberDies, StaysS9MemberDead);
@@ -787,7 +849,7 @@ mod tests {
     cell!(
         s10_x_turn_closes_cancelled_no_wind_down,
         S10,
-        TurnCloses,
+        CLOSES,
         CancelTurnNoWindDown
     );
     cell!(s10_x_bound_passes_has_no_cell, S10, BoundPasses, NoCell);
