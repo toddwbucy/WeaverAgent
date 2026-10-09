@@ -4,8 +4,8 @@
 //! The table is keyed by the agent's state, which admin never sees whole: it
 //! sees the invocation lock (and, held, the holder's recorded verb), the run
 //! lock and the worker's word to `Observe`, never the marker. So the decision
-//! is two functions, each with its own table test. `class_of` folds what admin saw
-//! into the classes it can tell apart, which is where two states that look
+//! is two functions, each with its own table test. `class_of` folds what admin
+//! saw into the classes it can tell apart, which is where two states that look
 //! alike to admin (S2, S3 and S9 all answering) meet. `act` gives each verb's
 //! action in each class, one case per cell or cells of 3.0 the class covers.
 //!

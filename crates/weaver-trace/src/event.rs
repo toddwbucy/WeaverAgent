@@ -565,12 +565,13 @@ pub struct UnloadClose {
     pub grant_surface: Option<GrantSurface>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cause: Option<Cause>,
-    /// True where the run ended without its leave save point at admin's
-    /// direction, as of A3.2 on the operator's ruling of 2026-10-06 on #1
-    /// (A3.0 item 6): the operator's `force-unload`, or a load's rollback
-    /// undoing a run that never served (the #94 survey's S10), the `unload`
-    /// then carrying the load's cause. The record says the loss was
-    /// directed, never a fault.
+    /// **The leave's state at its end**, per `weaver-trace-Spec` section 3 and
+    /// `weaver-admin-Spec` section 3's one definition: directed forced,
+    /// joined, a declared bound passing, or a dead gate or SPU; a load's
+    /// rollback writes it true as the named exemption from I2. It does not
+    /// say the save point was lost: a forced leave takes one as any leave
+    /// does, and whether it was taken is the `save_point` event before
+    /// `unload`, or a refusal of the leave naming the leg.
     pub forced: bool,
     /// **The first force that turned a still-graceful leave forced**, per
     /// `weaver-trace-Spec` section 3 (the lifecycle act): absent where no

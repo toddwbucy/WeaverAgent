@@ -1660,9 +1660,13 @@ fn roll_back(config: &ServiceConfig, standing: &mut Standing) -> String {
     // **The run being undone leaves forced** (the #94 survey's S10): it
     // takes no save point, a run rolled back having nothing to keep, and
     // its `unload` says forced.
-    let leave = standing
-        .entered
-        .then(|| direct_leave_within(config, std::time::Instant::now() + LEAVE_BOUND, true, true));
+    let leave = standing.entered.then(|| {
+        direct_leave_within(
+            config,
+            std::time::Instant::now() + LEAVE_BOUND,
+            LeaveDirected::Rollback,
+        )
+    });
     let left = matches!(leave, Some(Ok(_)));
     // **A run whose `load` is on the trace leaves the marker open on it**
     // (the #94 survey's S10, and the operator's ruling of 2026-10-08 on #99,
@@ -1847,7 +1851,7 @@ fn unload_within(
         Observation::State(..) | Observation::Silent => true,
     };
     if entered {
-        match direct_leave_within(config, leave_deadline, forced, false) {
+        match direct_leave_within(config, leave_deadline, LeaveDirected::of_unload(forced)) {
             Ok(report) => {
                 // **A leave whose lock outlives the after-left wait keeps its
                 // save point** (the #94 survey's S7): the escalation ends the
@@ -2223,17 +2227,39 @@ enum LeaveFault {
     Unanswered,
 }
 
-/// Directs leave, forced or not, and waits for its answer until `deadline`,
-/// the dial spending nothing of the bound. **The answer names the leave's
-/// save point**, per `weaver-admin-harness-contract` section 3 as of A3.2,
-/// none where the leave was forced or the binding diagnostic, so the
-/// publication that follows carries the event's position.
+/// **The three leaves admin directs**, each one wire shape: the graceful
+/// unload's, the force's, and a load's rollback, forced by definition. A
+/// rollback that is not forced is never sent, so it cannot be spelled.
+#[derive(Clone, Copy)]
+enum LeaveDirected {
+    Graceful,
+    Forced,
+    Rollback,
+}
+
+impl LeaveDirected {
+    /// The verb's leave: forced where the operator forced it.
+    fn of_unload(forced: bool) -> Self {
+        if forced { Self::Forced } else { Self::Graceful }
+    }
+}
+
+/// Directs leave, graceful, forced or a rollback, and waits for its answer
+/// until `deadline`, the dial spending nothing of the bound. **The answer names
+/// the leave's save point**, per `weaver-admin-harness-contract` section 3, none
+/// where none was taken (a rollback, a run with no state to keep, or a forced
+/// leave whose save point missed), so the publication that follows carries the
+/// event's position.
 fn direct_leave_within(
     config: &ServiceConfig,
     deadline: std::time::Instant,
-    forced: bool,
-    rollback: bool,
+    leave: LeaveDirected,
 ) -> Result<Option<weaver_types::SavePointReport>, LeaveFault> {
+    let (forced, rollback) = match leave {
+        LeaveDirected::Graceful => (false, false),
+        LeaveDirected::Forced => (true, false),
+        LeaveDirected::Rollback => (true, true),
+    };
     let Ok(mut coordination) = channel::dial(&config.coordination_socket()) else {
         return Err(LeaveFault::Unanswered);
     };
@@ -4682,7 +4708,7 @@ mod tests {
                 }),
                 weaver_types::Payload::Answer(LifecycleAnswer::Left {
                     save_point: None,
-                    forced: false,
+                    forced: true,
                     no_state: false,
                 }),
             ],
@@ -4733,7 +4759,7 @@ mod tests {
                 }),
                 weaver_types::Payload::Answer(LifecycleAnswer::Left {
                     save_point: None,
-                    forced: false,
+                    forced: true,
                     no_state: false,
                 }),
             ],
@@ -5584,7 +5610,7 @@ mod tests {
             &config,
             vec![weaver_types::Payload::Answer(LifecycleAnswer::Left {
                 save_point: None,
-                forced: false,
+                forced: true,
                 no_state: false,
             })],
         );
@@ -5655,7 +5681,7 @@ mod tests {
                     weaver_types::Payload::Answer(LifecycleAnswer::Left {
                         save_point: None,
                         forced: false,
-                        no_state: false,
+                        no_state: true,
                     }),
                 ],
             );
