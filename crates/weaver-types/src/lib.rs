@@ -46,6 +46,8 @@
 //!         LifecycleDirective::SavePointVerb { .. } => "save_point_verb",
 //!         LifecycleDirective::Restore { .. } => "restore",
 //!         LifecycleDirective::ForceUnload { .. } => "force_unload",
+//!         LifecycleDirective::JoinLeave { .. } => "join_leave",
+//!         LifecycleDirective::Quiesce => "quiesce",
 //!     }
 //! }
 //! fn answer_name(a: &LifecycleAnswer) -> &'static str {
@@ -60,6 +62,7 @@
 //!         LifecycleAnswer::Released => "released",
 //!         LifecycleAnswer::GateReady => "gate_ready",
 //!         LifecycleAnswer::GateStopped => "gate_stopped",
+//!         LifecycleAnswer::GateQuiesced => "gate_quiesced",
 //!         LifecycleAnswer::Validated => "validated",
 //!         LifecycleAnswer::InTransition => "in_transition",
 //!         LifecycleAnswer::State { .. } => "state",
@@ -88,6 +91,7 @@
 //!         LifecycleRefusal::OrganRefused { .. } => "organ_refused",
 //!         LifecycleRefusal::ActivityNotAtRest => "activity_not_at_rest",
 //!         LifecycleRefusal::SavePointNotTaken { .. } => "save_point_not_taken",
+//!         LifecycleRefusal::Unloading => "unloading",
 //!     }
 //! }
 //! ```

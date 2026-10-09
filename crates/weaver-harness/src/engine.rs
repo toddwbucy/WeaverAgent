@@ -3401,10 +3401,12 @@ mod tests {
             weaver_types::LifecycleDirective::Leave {
                 cause,
                 forced: false,
+                rollback: false,
             },
             weaver_types::LifecycleDirective::Leave {
                 cause,
                 forced: true,
+                rollback: false,
             },
         ] {
             let named = format!("{directive:?}");

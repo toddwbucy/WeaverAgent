@@ -522,10 +522,11 @@ fn the_cause_and_the_constituents_render_as_stated() {
     let leave = LifecycleDirective::Leave {
         cause: weaver_types::Cause { uid: 1000 },
         forced: false,
+        rollback: false,
     };
     assert_eq!(
         serde_json::to_string(&leave).unwrap(),
-        r#"{"kind":"leave","cause":{"uid":1000},"forced":false}"#
+        r#"{"kind":"leave","cause":{"uid":1000},"forced":false,"rollback":false}"#
     );
     let stop = LifecycleDirective::Stop {
         cause: weaver_types::Cause { uid: 0 },
@@ -587,7 +588,106 @@ fn the_cause_and_the_constituents_render_as_stated() {
         "and one carrying it reads, so the refusal is the field's"
     );
     assert_eq!(
-        serde_json::to_string(&LifecycleAnswer::Left { save_point: None }).unwrap(),
-        r#"{"kind":"left"}"#
+        serde_json::to_string(&LifecycleAnswer::Left {
+            save_point: None,
+            forced: false,
+            no_state: false
+        })
+        .unwrap(),
+        r#"{"kind":"left","forced":false,"no_state":false}"#
+    );
+}
+
+/// `Left.forced` is required on the wire with no default (`weaver-types-Spec`
+/// section 4.2, the lifecycle act): a `Left` without it refuses at the parse,
+/// so a worker that predates the act is never read as a clean leave.
+#[test]
+fn a_left_without_forced_refuses_at_the_parse() {
+    let v = r#"{"kind":"left","no_state":false}"#;
+    assert!(serde_json::from_str::<LifecycleAnswer>(v).is_err());
+}
+
+/// `Left.no_state` is required on the wire with no default, as `forced` is.
+#[test]
+fn a_left_without_no_state_refuses_at_the_parse() {
+    let v = r#"{"kind":"left","forced":true}"#;
+    assert!(serde_json::from_str::<LifecycleAnswer>(v).is_err());
+}
+
+/// `Leave.rollback` is required on the wire with no default: the harness tells
+/// a load's rollback by the directive, never by its own position.
+#[test]
+fn a_leave_without_rollback_refuses_at_the_parse() {
+    let v = r#"{"kind":"leave","cause":{"uid":0},"forced":true}"#;
+    assert!(serde_json::from_str::<LifecycleDirective>(v).is_err());
+}
+
+/// The lifecycle act's vocabulary crosses as stated and round-trips.
+#[test]
+fn the_lifecycle_vocabulary_round_trips() {
+    let join = LifecycleDirective::JoinLeave {
+        cause: weaver_types::Cause { uid: 7 },
+    };
+    assert_eq!(
+        serde_json::to_string(&join).unwrap(),
+        r#"{"kind":"join_leave","cause":{"uid":7}}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&LifecycleDirective::Quiesce).unwrap(),
+        r#"{"kind":"quiesce"}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&LifecycleAnswer::GateQuiesced).unwrap(),
+        r#"{"kind":"gate_quiesced"}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&LifecycleRefusal::Unloading).unwrap(),
+        r#"{"kind":"unloading"}"#
+    );
+    let left = LifecycleAnswer::Left {
+        save_point: None,
+        forced: true,
+        no_state: true,
+    };
+    assert_eq!(
+        serde_json::to_string(&left).unwrap(),
+        r#"{"kind":"left","forced":true,"no_state":true}"#
+    );
+    for directive in [
+        join,
+        LifecycleDirective::Quiesce,
+        LifecycleDirective::Leave {
+            cause: weaver_types::Cause { uid: 0 },
+            forced: true,
+            rollback: true,
+        },
+    ] {
+        let text = serde_json::to_string(&directive).unwrap();
+        assert_eq!(
+            serde_json::from_str::<LifecycleDirective>(&text).unwrap(),
+            directive
+        );
+    }
+    for answer in [LifecycleAnswer::GateQuiesced, left] {
+        let text = serde_json::to_string(&answer).unwrap();
+        assert_eq!(
+            serde_json::from_str::<LifecycleAnswer>(&text).unwrap(),
+            answer
+        );
+    }
+    for (cause, spelled) in [
+        (weaver_types::KillCause::Unload, r#""unload""#),
+        (weaver_types::KillCause::Fault, r#""fault""#),
+    ] {
+        assert_eq!(serde_json::to_string(&cause).unwrap(), spelled);
+        assert_eq!(
+            serde_json::from_str::<weaver_types::KillCause>(spelled).unwrap(),
+            cause
+        );
+    }
+    let interrupt = serde_json::to_string(&Payload::ToolInterrupt).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Payload>(&interrupt).unwrap(),
+        Payload::ToolInterrupt
     );
 }

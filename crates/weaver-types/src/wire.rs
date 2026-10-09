@@ -130,6 +130,11 @@ pub enum Payload {
     ToolAnswer(ToolOutcome),
     /// Cancel the open execution at the continue position.
     ToolCancel,
+    /// **Interrupt the open execution for the agent's unload**, at the continue
+    /// position, per `weaver-harness-gate-contract` section 2 as of the
+    /// lifecycle act (2026-10-09): the gate ends it by the cancel's path and
+    /// answers `Killed { by: unload }`, the first outcome winning.
+    ToolInterrupt,
 }
 
 /// One tool call as it crosses the gate seam: the name and arguments exactly
@@ -185,6 +190,12 @@ pub enum ToolOutcome {
 pub enum KillCause {
     Clock,
     Cancel,
+    /// The agent's unload interrupted the call (`ToolInterrupt`): never
+    /// finished, and re-runnable after the reload.
+    Unload,
+    /// The gate died with the call open and the harness closed it: its outcome
+    /// indeterminate, never re-run automatically.
+    Fault,
 }
 
 /// The organs that refuse inside a fan-out: only the SPU and the gate. Admin
@@ -222,6 +233,16 @@ pub enum LifecycleDirective {
     Leave {
         cause: crate::Cause,
         forced: bool,
+        /// **True only on a load's rollback**, required on the wire with no
+        /// default (the lifecycle act, 2026-10-09): the harness tells a
+        /// rollback by the directive and never by its own position.
+        rollback: bool,
+    },
+    /// **A `force-unload` joining an `unload`'s pending leave** without the
+    /// invocation lock, per `weaver-admin-Spec` section 3, the forced unload,
+    /// joining: the leave turns forced from where it stands.
+    JoinLeave {
+        cause: crate::Cause,
     },
     /// **A save point on demand**, admin's `save-point` verb, as of A3.2: the
     /// harness, at rest, takes one through the state seam's four legs,
@@ -242,6 +263,10 @@ pub enum LifecycleDirective {
         instruction: SpuInstruction,
     },
     Release,
+    /// **The graceful unload's first act at the gate**, a `ToolInterrupt`
+    /// preceding it where a tool call is out: the gate stops admitting and
+    /// answers `GateQuiesced` once every frame it admitted is flushed.
+    Quiesce,
     /// **Two fields because two authors.** The instruction is the operator's
     /// election carried uninterpreted, and the socket is the program's
     /// deployment fact, supplied by the harness inside the unit's runtime
@@ -340,6 +365,12 @@ pub enum LifecycleAnswer {
     Left {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         save_point: Option<SavePointReport>,
+        /// **The leave's state at its end**, per `weaver-admin-Spec` section
+        /// 3's definition of `forced`; required, with no default.
+        forced: bool,
+        /// **The run had no state to keep** (every diagnostic binding, and a
+        /// serving run with no member seam); required, with no default.
+        no_state: bool,
     },
     /// The `SavePoint` directive's answer.
     SavePointTaken {
@@ -360,6 +391,8 @@ pub enum LifecycleAnswer {
     Released,
     GateReady,
     GateStopped,
+    /// The gate's answer to `Quiesce`, once every frame it admitted is flushed.
+    GateQuiesced,
     Validated,
     /// **An answer, not a state**, per `weaver-types-Spec` section 3.1:
     /// `show` meets another invocation holding the agent's invocation lock,
@@ -483,6 +516,10 @@ pub enum LifecycleRefusal {
     SavePointNotTaken {
         missed: SavePointLeg,
     },
+    /// **A request the graceful unload's drain meets**, refused through the
+    /// gate with its connection standing (`weaver-admin-Spec` section 3, S4 x
+    /// dialer request).
+    Unloading,
 }
 
 /// What admin supplies in the enter directive, per

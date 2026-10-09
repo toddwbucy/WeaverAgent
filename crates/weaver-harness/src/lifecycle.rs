@@ -1251,7 +1251,16 @@ impl Harness {
                 }
                 Ok(None)
             }
-            (ChannelState::Entered(run), LifecycleDirective::Leave { cause, forced }) => {
+            // `rollback` is read in the lifecycle act's plumbing; until then a
+            // rollback is told as before (PR B, Task 8).
+            (
+                ChannelState::Entered(run),
+                LifecycleDirective::Leave {
+                    cause,
+                    forced,
+                    rollback: _,
+                },
+            ) => {
                 if run.turn_in_flight.is_some() {
                     self.refuse(connection, &exchange, LifecycleRefusal::ActivityNotAtRest)?;
                     return Ok(None);
@@ -1304,6 +1313,10 @@ impl Harness {
                         }
                     }
                 };
+                // **No state to keep**: a diagnostic binding, or a serving run
+                // with no member seam (`weaver-types-Spec` section 4.2,
+                // `Left.no_state`).
+                let no_state = run.recorder.serving().is_none() || run.state.is_none();
                 let mut run = match std::mem::replace(&mut self.state, ChannelState::Left) {
                     ChannelState::Entered(run) => *run,
                     // Unreachable: the match arm above proved the position.
@@ -1314,7 +1327,18 @@ impl Harness {
                 };
                 match leave_after(&mut run, Some(cause), forced, lowered) {
                     Ok(()) => {
-                        self.answer(connection, &exchange, LifecycleAnswer::Left { save_point })?;
+                        self.answer(
+                            connection,
+                            &exchange,
+                            // `forced` is the directive's until the lifecycle
+                            // act's plumbing makes it the leave's state at its
+                            // end (PR B, Task 7).
+                            LifecycleAnswer::Left {
+                                save_point,
+                                forced,
+                                no_state,
+                            },
+                        )?;
                     }
                     // Everything admitted did not reach the stream, so the
                     // answer says so rather than claiming a clean close.
@@ -3898,11 +3922,13 @@ mod tests {
                             LeaveMode::Directive { forced, .. } => LifecycleDirective::Leave {
                                 cause: weaver_types::Cause { uid: 1000 },
                                 forced,
+                                rollback: false,
                             },
                             LeaveMode::QueuedFrame | LeaveMode::FrameDuringLower => {
                                 LifecycleDirective::Leave {
                                     cause: weaver_types::Cause { uid: 1000 },
                                     forced: false,
+                                    rollback: false,
                                 }
                             }
                             _ => LifecycleDirective::SavePoint {
@@ -4176,6 +4202,8 @@ mod tests {
                     event_run: weaver_types::RunId("r-1".into()),
                     position,
                 }),
+                forced: false,
+                no_state: false,
             })),
             "Left names the leave's save point with the event's position in this run, the covered one in the prior"
         );
@@ -4402,7 +4430,9 @@ mod tests {
         assert_eq!(
             answer,
             Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
-                save_point: None
+                save_point: None,
+                forced: true,
+                no_state: false,
             }))
         );
         assert!(
@@ -4446,7 +4476,8 @@ mod tests {
             matches!(
                 answer,
                 Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
-                    save_point: Some(_)
+                    save_point: Some(_),
+                    ..
                 }))
             ),
             "the leave completes: {answer:?} {read:?}"
@@ -5250,10 +5281,12 @@ mod tests {
             LifecycleDirective::Leave {
                 cause,
                 forced: false,
+                rollback: false,
             },
             LifecycleDirective::Leave {
                 cause,
                 forced: true,
+                rollback: false,
             },
         ] {
             let named = format!("{directive:?}");

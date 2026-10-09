@@ -583,7 +583,11 @@ fn dispatch(state: &mut HookState, envelope: &OrganEnvelope) -> Payload {
             | LifecycleDirective::SavePoint { .. }
             | LifecycleDirective::SavePointVerb { .. }
             | LifecycleDirective::Restore { .. }
-            | LifecycleDirective::ForceUnload { .. },
+            | LifecycleDirective::ForceUnload { .. }
+            | LifecycleDirective::JoinLeave { .. }
+            // The drain's quiesce is the lifecycle act's plumbing (PR B,
+            // Task 6); until it lands the gate refuses it as out of order.
+            | LifecycleDirective::Quiesce,
         ) => Payload::Refusal(LifecycleRefusal::OutOfOrder),
     }
 }
@@ -893,11 +897,14 @@ mod tests {
             LifecycleDirective::Leave {
                 cause,
                 forced: false,
+                rollback: false,
             },
             LifecycleDirective::Leave {
                 cause,
                 forced: true,
+                rollback: true,
             },
+            LifecycleDirective::JoinLeave { cause },
             LifecycleDirective::SavePoint { cause },
             LifecycleDirective::Stop { cause },
             LifecycleDirective::Observe,

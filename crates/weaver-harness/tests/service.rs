@@ -264,6 +264,7 @@ fn leave_before_enter_is_refused() {
         LifecycleDirective::Leave {
             cause: weaver_types::Cause { uid: 0 },
             forced: false,
+            rollback: false,
         },
     );
     match peer.read() {
@@ -394,6 +395,7 @@ fn refused_enter_leaves_the_state_at_before_enter() {
         LifecycleDirective::Leave {
             cause: weaver_types::Cause { uid: 0 },
             forced: false,
+            rollback: false,
         },
     );
     assert!(
@@ -431,6 +433,7 @@ fn a_closed_connection_does_not_end_service() {
         LifecycleDirective::Leave {
             cause: weaver_types::Cause { uid: 0 },
             forced: false,
+            rollback: false,
         },
     );
     assert!(matches!(
@@ -447,6 +450,7 @@ fn a_closed_connection_does_not_end_service() {
         LifecycleDirective::Leave {
             cause: weaver_types::Cause { uid: 0 },
             forced: false,
+            rollback: false,
         },
     );
     assert!(

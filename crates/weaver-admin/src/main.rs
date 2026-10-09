@@ -1647,7 +1647,7 @@ fn roll_back(config: &ServiceConfig, standing: &mut Standing) -> String {
     // its `unload` says forced.
     let leave = standing
         .entered
-        .then(|| direct_leave_within(config, std::time::Instant::now() + LEAVE_BOUND, true));
+        .then(|| direct_leave_within(config, std::time::Instant::now() + LEAVE_BOUND, true, true));
     let left = matches!(leave, Some(Ok(_)));
     // **A run whose `load` is on the trace leaves the marker open on it**
     // (the #94 survey's S10, and the operator's ruling of 2026-10-08 on #99,
@@ -1832,7 +1832,7 @@ fn unload_within(
         Observation::State(..) | Observation::Silent => true,
     };
     if entered {
-        match direct_leave_within(config, leave_deadline, forced) {
+        match direct_leave_within(config, leave_deadline, forced, false) {
             Ok(report) => {
                 // **A leave whose lock outlives the after-left wait keeps its
                 // save point** (the #94 survey's S7): the escalation ends the
@@ -2217,6 +2217,7 @@ fn direct_leave_within(
     config: &ServiceConfig,
     deadline: std::time::Instant,
     forced: bool,
+    rollback: bool,
 ) -> Result<Option<weaver_types::SavePointReport>, LeaveFault> {
     let Ok(mut coordination) = channel::dial(&config.coordination_socket()) else {
         return Err(LeaveFault::Unanswered);
@@ -2228,12 +2229,15 @@ fn direct_leave_within(
             LifecycleDirective::Leave {
                 cause: invocation_cause(),
                 forced,
+                rollback,
             },
         )
         .map_err(|_| LeaveFault::Unanswered)?;
     match coordination.recv_within(deadline.saturating_duration_since(std::time::Instant::now())) {
         Ok(answer) => match answer.payload {
-            weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point }) => Ok(save_point),
+            weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point, .. }) => {
+                Ok(save_point)
+            }
             weaver_types::Payload::Refusal(refusal) => Err(LeaveFault::Refused(refusal)),
             _ => Err(LeaveFault::Refused(LifecycleRefusal::Malformed)),
         },
@@ -4661,7 +4665,11 @@ mod tests {
                     load: None,
                     constituents: Vec::new(),
                 }),
-                weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point: None }),
+                weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                    save_point: None,
+                    forced: false,
+                    no_state: false,
+                }),
             ],
         );
         assert_eq!(
@@ -4708,7 +4716,11 @@ mod tests {
                     load: None,
                     constituents: Vec::new(),
                 }),
-                weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point: None }),
+                weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                    save_point: None,
+                    forced: false,
+                    no_state: false,
+                }),
             ],
         );
         {
@@ -5062,6 +5074,8 @@ mod tests {
                 }),
                 weaver_types::Payload::Answer(LifecycleAnswer::Left {
                     save_point: Some(report()),
+                    forced: false,
+                    no_state: false,
                 }),
             ],
         );
@@ -5207,6 +5221,8 @@ mod tests {
                     }),
                     weaver_types::Payload::Answer(LifecycleAnswer::Left {
                         save_point: Some(report.clone()),
+                        forced: false,
+                        no_state: false,
                     }),
                 ],
             );
@@ -5368,6 +5384,8 @@ mod tests {
                         }),
                         weaver_types::Payload::Answer(LifecycleAnswer::Left {
                             save_point: Some(report.clone()),
+                            forced: false,
+                            no_state: false,
                         }),
                     ],
                 );
@@ -5551,6 +5569,8 @@ mod tests {
             &config,
             vec![weaver_types::Payload::Answer(LifecycleAnswer::Left {
                 save_point: None,
+                forced: false,
+                no_state: false,
             })],
         );
         let account = roll_back(&config, &mut standing);
@@ -5617,7 +5637,11 @@ mod tests {
                 &config,
                 vec![
                     observed,
-                    weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point: None }),
+                    weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                        save_point: None,
+                        forced: false,
+                        no_state: false,
+                    }),
                 ],
             );
             assert_eq!(
