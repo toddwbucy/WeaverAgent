@@ -511,7 +511,7 @@ fn check_lifecycle_bounds(source: &str) -> Result<(), ConfigError> {
         let Some(value) = lifecycle.get(key) else {
             continue;
         };
-        if !value.as_integer().is_some_and(|seconds| seconds > 0) {
+        if value.as_integer().is_none_or(|seconds| seconds <= 0) {
             return Err(ConfigError {
                 field: Some(FieldName(format!("lifecycle.{key}"))),
                 kind: ConfigErrorKind::BadValue,
