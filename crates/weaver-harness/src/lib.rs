@@ -103,6 +103,7 @@ mod channel;
 mod engine;
 mod failure;
 mod lifecycle;
+mod lifecycle_table;
 mod record;
 mod replay;
 mod spawn;
