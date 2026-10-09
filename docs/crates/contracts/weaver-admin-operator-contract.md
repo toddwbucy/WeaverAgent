@@ -166,7 +166,9 @@ state member and the trace relay, so a caller can check that each sits in its ow
 containment at every load. They are absent where no run stands. Standard error carries
 human-readable diagnostics no caller parses. A
 `load` answers once the agent is up or refused, within admin's own bound of 900 seconds
-by default, which a caller's bound must exceed. **An invocation finishes even when its
+by default on the agent's start, which a caller's bound must exceed, after any
+publication of recovered files from an unclosed run, which is bounded by their size and
+not by time. **An invocation finishes even when its
 caller disappears**, its outcome recorded in the agent's `admin.log`, so a caller that
 gives up reads the outcome from the next `show`.
 
@@ -294,14 +296,16 @@ waits and the publication after the answer come on top, as before.
 - **Behind any other holder of the lock** (a load in S1, a `show`, a `save-point`, an
   unload concluding in S8): it retries the join and the lock in turn, and acts alone
   once it holds the lock. It first waits the holder's own bound and takes over none.
-  Behind a load it waits at most that load's bound (900 seconds unless the agent's root
-  names another), the load concluding or rolling back inside it. Behind a holder that is
+  Behind a load it waits for the load to publish the recovered files it found from an
+  unclosed run, which is bounded by their size and not by time, then at most that
+  load's bound (900 seconds unless the agent's root names another), which bounds the
+  enter alone, the load concluding or rolling back inside it. Behind a holder that is
   publishing (a `save-point`'s publication, or another caller's conclusion) it waits for
   that publication's copy, which is bounded by size and not by time, since a publication
   interrupted midway is worse than one waited for. The escalation applies to an
   unanswered join, never to these waits. So, from the moment it can act, a force ends
-  the run within 150 seconds plus the escalation's 45, after the load's bound where a
-  load is in flight (I3). That bound ends before the publication: copying the leave's
+  the run within 150 seconds plus the escalation's 45, after the load's publication and
+  its bound where a load is in flight (I3). That bound ends before the publication: copying the leave's
   save point, and any recovered file the room holds, is bounded by their size and the
   copy's speed and not by time (`weaver-admin-Spec` section 3), so the command prints
   once that copy is done.

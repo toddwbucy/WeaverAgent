@@ -406,8 +406,8 @@ point, which has no time limit unless the declaration's `[lifecycle]` table sets
 `drain-bound` and a `wind-down-bound`; with both set it ends whatever still holds the
 run lock within their sum plus 195 seconds. `force-unload` stops the work at once and
 still saves the state, ending the run within 195 seconds (behind a load in progress,
-that load's bound first; behind a `save-point` or an unload publishing, that copy
-first). Either then publishes the leave's save point, which takes as long as copying it
+that load's copy of recovered files and then its bound first; behind a `save-point` or
+an unload publishing, that copy first). Either then publishes the leave's save point, which takes as long as copying it
 does. Admin's own acts on this agent are in `<territory>/admin.log`, and the worker's output in `worker.log`
 beside it, both root's and yours to read through the access group.
 
