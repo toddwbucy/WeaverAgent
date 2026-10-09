@@ -237,7 +237,7 @@ state; it reads `show` and acts on what it prints.
 | S8a, an unload concluding | `InvocationInFlight` | `InvocationInFlight` | waits for the unload to finish, then prints `Unloaded` | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S8b, the worker gone with no answer (it died), a process still holding the run | `AgentRunning` until the run ends, then as S0d | ends what still holds the run, then publishes what the run left as recovered; the next load records `NoCleanUnload` | the same as `unload`, the marker left as it stands | `OutOfOrder` | `RestoreNamed` | `InTransition` with the run's processes named, then `Unloaded` |
 | S9, an unload stopped at its save point | `AgentRunning` | retried: the save point, then down | the forced unload | `SavePointTaken` | `RestoreNamed` | `Idle`, the gate lowered |
-| S10, a force in progress | `InvocationInFlight` | `InvocationInFlight` | joins the forced leave | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+| S10, a force in progress | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S11, a silent worker being ended | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 
 **The table is for one command at a time** (`weaver-agent-PRD` section 6.1, the
@@ -322,8 +322,11 @@ waits and the publication after the answer come on top, as before.
   as long as its copy does; it then prints `Unloaded`, nothing
   being resident: ending the run was its job, and whether the unload's save point
   published is the unload's own answer and the marker's, for the next load.
-- **Beside any other command** (a load in S1, a `save-point`, another force): it refuses `InvocationInFlight` and takes over nothing, one command
-  at a time being the caller's to keep (`weaver-agent-PRD` section 6.1). A `show`'s
+- **Beside any other command** (a load in S1, its rollback included, a `save-point`,
+  another force): it refuses `InvocationInFlight` and takes over nothing, one command
+  at a time being the caller's to keep (`weaver-agent-PRD` section 6.1). **It knows the
+  command by the verb the lock's holder records beside the lock**, never by guessing
+  from the agent's answers (`weaver-admin-Spec` section 3, the invocation lock). A `show`'s
   brief shared hold is waited out, as by every command.
 - **On a worker that answers nothing** (S11): a join unanswered within 150 seconds ends
   the run's processes without the lock (I3), and only then writes the marker `Forced`,

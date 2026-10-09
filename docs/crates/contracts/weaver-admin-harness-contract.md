@@ -161,8 +161,7 @@ lives exactly as long as its verb.** The lifetime rule of `weaver-organ-channel`
 on the listener: bound once at the worker's start, closed by the seal or, short of it,
 by the worker's death, shared with no second worker, **and sealed once the leave's outcome is fixed** (S7),
 in the steps `weaver-admin-Spec` section 3 gives for the seal: a join already held is
-answered at the normal answer point, after the writer's drain, but a join held while
-the pending leave is a rollback's is answered `OutOfOrder` at the drain of the backlog, and a dial after the
+answered at the normal answer point, after the writer's drain, and a dial after the
 unlink finds no socket. Each
 accepted connection is one invocation's, closed
 by admin when the verb answers, and the harness serves one connection at a time, a
@@ -344,8 +343,9 @@ never a takeover (`weaver-admin-Spec` section 3, outside the envelope). **The ha
 the leave**: the wait for `GateQuiesced`, the turn's finish, the wind-down, the lower,
 the save point's legs and the unwind after them, so a forced leave never waits on what
 remains (I3). **With no leave pending** (S2, S3, S9, or before the enter) the harness
-refuses `OutOfOrder`, which tells admin the lock's holder is no unload, and the force
-refuses `InvocationInFlight` (the forced unload, joining). A join
+refuses `OutOfOrder`, which tells admin the unload holding the lock has not yet
+directed its leave, and the force retries the join while the lock's recorded verb is
+`unload` (`weaver-admin-Spec` section 3, the forced unload, joining). A join
 unanswered within 150 seconds is a silent harness, which admin ends without the lock
 (S11, and I3); this seam carries nothing of that escalation.
 
@@ -450,11 +450,10 @@ an obligation on the party that could break it.
   forced leave is refused `OutOfOrder`. A leave refused `SavePointNotTaken`, one that stayed graceful to its
   miss (a forced one answering `Left` instead), is no longer pending, and the run stands entered at rest for a retried or a forced `Leave`
   (S9).
-- `JoinLeave` is valid only while a leave other than a rollback's is pending, and is
-  refused `OutOfOrder` otherwise, before the enter included: a `JoinLeave` against a
-  pending `Leave` with `rollback` true is refused, which is how a force beside a load
-  refuses `InvocationInFlight` (`weaver-admin-Spec` section 3, the forced unload,
-  joining).
+- `JoinLeave` is valid only while a leave is pending, and is refused `OutOfOrder`
+  otherwise, before the enter included. Admin sends one only where the lock's recorded
+  verb is `unload` (`weaver-admin-Spec` section 3, the forced unload, joining), so the
+  harness never tells a force a holder's kind.
 - Within the run, the record's order is `weaver-admin-Spec` section 3, I9: the
   harness authors `save_point` before `unload`, releases the SPU and the member before
   `unload`, any fault of that release and any recorder pressure authored before it, and
@@ -575,7 +574,7 @@ ask, because admin answers nothing. The cases:
   carries its reason, so the aggregate answer is one refusal rather than a report to
   parse
 - the directive is out of order for the channel's state: a `JoinLeave` with no leave
-  pending, or against a pending rollback leave; and, while a leave is pending, any directive but `Observe` (answered
+  pending; and, while a leave is pending, any directive but `Observe` (answered
   `InTransition`) and `JoinLeave`, a `Leave` of either kind included
 - activity is not at rest, so no save point is taken on demand (`weaver-admin-Spec`
   section 3, S3 x save-point); a leave is never refused for activity
@@ -619,9 +618,9 @@ dies, the worker alive).
 **Nothing on this seam retries, but the join.** A refused directive returns to admin,
 which either rolls back or reports. A harness that retried an author, or an admin that
 re-sent a directive after a refusal, would put two attempts behind one operator intent.
-A `JoinLeave` refused `OutOfOrder` is not retried either: it tells admin the lock's
-holder is no unload, and the force refuses `InvocationInFlight` (`weaver-admin-Spec`
-section 3, the forced unload, joining).
+The one retry is a `JoinLeave` refused `OutOfOrder` while the lock's recorded verb is
+`unload`, the leave not yet directed (`weaver-admin-Spec` section 3, the forced unload,
+joining).
 
 ## 7. Prohibitions
 

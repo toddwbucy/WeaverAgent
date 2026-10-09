@@ -411,7 +411,8 @@ point, which has no time limit unless the declaration's `[lifecycle]` table sets
 plus 195 seconds. `force-unload` stops the work at once and
 still saves the state, ending the run within 195 seconds; issued while an `unload` is
 in progress it joins it, waiting out one already finishing, and
-beside any other command it refuses, one command at a time being yours to keep. Either then publishes the leave's save point, which takes as long as copying it does. Admin's
+beside any other command it refuses, reading which command holds the agent from the
+verb that command records in `admin.lock`, one command at a time being yours to keep. Either then publishes the leave's save point, which takes as long as copying it does. Admin's
 own acts on this agent are in `<territory>/admin.log`, and the worker's output in
 `worker.log` beside it, both root's and yours to read through the access group.
 
