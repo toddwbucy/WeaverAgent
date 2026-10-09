@@ -312,8 +312,8 @@ point is a forced leave whose save point could not be taken, a rollback's leave,
 leave under a diagnostic binding, or a leave of a serving run with no member seam, the
 last three taking none. Admin concludes each `Left`, with a save point or none, forced
 or not, as `weaver-admin-Spec` section 3's outcome table for the conclusion gives, one
-row per combination: the two runs electing no member close `Closed`, nothing having been
-kept to lose, the forced leave whose save point was not taken closes `Forced`, and the
+row per combination: a `Left` with `no_state` true, every diagnostic binding and a
+serving run with no member seam, closes `Closed`, nothing having been kept to lose, the forced leave whose save point was not taken closes `Forced`, and the
 rollback leaves the marker as K1 splits it, `Open` once `load` is on the trace. **After answering left the
 worker exits**, its run being its only purpose, and admin reads that exit as the run
 lock's release (S8). The stream ends where the run did, finalized by nothing, per the
