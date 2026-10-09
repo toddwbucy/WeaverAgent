@@ -1380,8 +1380,8 @@ leave's state at its end, never the directive it began as, so every invocation a
 marker as the leave ended (`weaver-admin-Spec` section 3, the conclusion), and it agrees with the `unload` event's `forced` (I2). It is always on the wire,
 and a `Left` without it refuses at the parse, as `Leave.forced` does: no default carries
 an older writer forward (the operator's ruling of 2026-10-08 on #1). **`Left`'s
-`no_state`** is true where the run elects no state member, a diagnostic binding or a
-serving run with no member seam, so that a `Left` with no save point says why on the
+`no_state`** means the run has no state to keep: true for every diagnostic binding,
+which keeps no state, and for a serving run with no member seam, so that a `Left` with no save point says why on the
 wire: `no_state` true is a run with nothing to keep (`Closed`), and `no_state` false with
 `forced` true is a forced leave whose save point was not taken (`Forced`), admin
 reading neither from the declaration (`weaver-admin-Spec` section 3, the conclusion's

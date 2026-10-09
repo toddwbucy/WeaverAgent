@@ -2148,7 +2148,8 @@ served.
    rule of section 4 states; then `unload` is authored with `forced`, the leave's cause
    and the release outcome, the run's terminal event, nothing authored after it (I9); the
    writer is drained, and `Left { save_point, forced, no_state }` answered, `no_state` true
-   where the run elects no state member, `forced` on both being
+   where the run has no state to keep (every diagnostic binding, and a serving run with no
+   member seam), `forced` on both being
    the leave's state at its end, never the directive it began as: false where it stayed
    graceful, true where a join or a declared bound turned it forced (I2). The member,
    released before `unload`, needs nothing after it: its save point is taken and its

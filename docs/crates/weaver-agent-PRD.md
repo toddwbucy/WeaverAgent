@@ -854,6 +854,8 @@ waits for its answer. The invocation lock refuses a second command while one is 
 flight (`InvocationInFlight`), and avoiding overlap is the caller's job. **The one
 admitted overlap is `force-unload` issued while an `unload` is in progress**, which
 joins it, so that the operator can always choose to give up the thought in flight.
+**Both bindings are inside it**: the serving binding, and the diagnostic binding,
+which has no gate and keeps no state (the operator's ruling of 2026-10-09).
 
 **Failures inside the envelope**, each with an exact outcome:
 - a constituent process dying: the worker, the state member, the SPU, the gate or the
