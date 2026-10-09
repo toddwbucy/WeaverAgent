@@ -2170,7 +2170,9 @@ the first joining cause as `forced_by` on `unload`, and every dialer is answered
 same `Left { forced: true }` (I2); a later join is answered with that `Left` and named
 nowhere. `JoinLeave` with no leave pending is `OutOfOrder`, which
 tells admin the lock's holder is no unload; while a leave is pending a second unforced
-`Leave` and a `SavePoint` are `OutOfOrder` (S4 to S7 x unload, S4 to S7 x save-point).
+`Leave` and a `SavePoint` are `OutOfOrder`, this crate's own defence for frames that are
+unreachable while admin holds the invocation lock (I1), admin refusing those verbs
+`InvocationInFlight` before it dials.
 
 **From S7 on, a join gets the `Left` as it stands** (`weaver-admin-Spec` section 3, the
 forced unload (joining), and the ordering of #94's round 21; I2). Once `unload` is

@@ -193,7 +193,9 @@ run whose unload stopped at its save point taking one at rest as any other does)
 refuses `ActivityNotAtRest` where a turn runs (S3 x save-point), `SavePointNotTaken`
 naming which leg missed, or `OutOfOrder` where the run takes no save point, a diagnostic
 binding or a serving run with no member seam, which has no member to ask and is never
-reported as the member dead, and wherever a leave is pending (S4 to S7, and S10).
+reported as the member dead, and wherever a leave is pending (S4 to S7, and S10), a
+case unreachable while admin holds the invocation lock (I1), admin refusing the verb
+`InvocationInFlight` before it dials.
 The legs the harness names are the answer, the finished answer and the member dead, a
 member's failed write arriving as the answer missed; admin names a fourth of its own,
 `published`, at the unload and the `save-point` verb, where the save point was reported
