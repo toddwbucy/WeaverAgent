@@ -3212,6 +3212,28 @@ for the organs whose side is unwritten.
   an enter when the terminal arm is collapsed into the entered one. The refusal
   is owed to each organ by `weaver-types-Spec` section 5, which enforces it
   nowhere, and this discharges this crate's side of that owing alone.
+- The unload's tool interrupt and the first outcome (`weaver-admin-Spec` section 3,
+  the graceful unload step 2 and S4 x tool return; section 6 item 2), owed by the
+  lifecycle act's code: with a tool call out when a leave is heard, this crate sends
+  `ToolInterrupt` before `Quiesce`; a result that crossed the interrupt is recorded
+  completed with its result, delivered to the turn and not re-runnable, and only a
+  call the interrupt ended is recorded `Killed { by: unload }`. Confirmed by watching
+  the test fail when the crossed result is recorded interrupted, and when `Quiesce` is
+  sent ahead of the interrupt.
+- The declared bounds turn the leave forced (`weaver-admin-Spec` section 3, the bounds;
+  section 6), owed by the lifecycle act's code: under an enter carrying `drain_bound`
+  and `wind_down_bound`, a drain or a wind-down past its bound turns the leave forced
+  from where it stands, `Left.forced` true, the `unload` event naming no `forced_by` and
+  keeping the graceful caller's `cause`; under an enter carrying neither, the same
+  stand-in turn is waited for. The bounds are read from the enter alone. Confirmed by
+  watching the test fail when the harness ignores the enter's bound, and when it writes
+  a `forced_by`.
+- `Observe` answers `InTransition` while a leave is pending (`weaver-admin-Spec`
+  section 3, `show` in S4 to S7 and S10; section 4), whether a turn runs or not, owed by
+  the lifecycle act's code: an `Observe` heard in the drain with a turn running, and
+  one heard in the wind-down's save point legs with none, each answers `InTransition`
+  and authors nothing. Confirmed by watching the test fail when the drain's answer is
+  `Active`.
 - Announce-after-record: a stop's answer follows the close event's placement,
   confirmed by watching the answer precede the record when the two are
   reordered.

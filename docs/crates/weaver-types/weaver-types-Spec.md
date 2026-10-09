@@ -2444,6 +2444,15 @@ apex's enforcement section exists to prevent.
 dependency tree, checked as `weaver-traits-Spec` section 7 checks its own, by a
 build-time assertion over the resolved external tree rather than by H2.
 
+**The `[lifecycle]` bounds are enforced by a perturbation-verified test at the parse
+and on the wire**, owed by the lifecycle act's code (section 2, `lifecycle`; the
+bounds of `weaver-admin-Spec` section 3): a declaration with both bounds parses to
+`Lifecycle` with each, one with a zero or a non-integer bound refuses `BadValue` naming
+the key, and an `EnterPayload` built from a silent declaration serializes neither
+`drain_bound` nor `wind_down_bound` while one built from a bounded declaration carries
+both and round-trips. Watched to fail when the parse drops the table, so the enter
+carries no bound where one is declared, and when a zero bound is admitted.
+
 **Enforced by a perturbation-verified test at the parse.** Section 2's rule
 that every identity message carries `role: system` is a `BadValue` naming
 `identity.<n>.role`, beside the empty-device-list check. The test declares

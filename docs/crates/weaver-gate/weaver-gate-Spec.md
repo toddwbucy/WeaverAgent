@@ -1157,6 +1157,14 @@ that format forbids.
 - Truncation is a fault: an over-bound envelope produces `Truncated` and
   no directive, confirmed by watching a silently shortened directive
   decode when the `MSG_TRUNC` check is removed.
+- The unload's interrupt and the first outcome (`weaver-admin-Spec` section 3, S4 x
+  tool return), owed by the lifecycle act's code: an execution open when
+  `ToolInterrupt` arrives is ended by the cancel's path and answered `Killed { by:
+  unload }`, and `Quiesce` is read only once that execution has ended; a result this
+  crate sent before the interrupt reached it stands, the interrupt dropped as a late
+  cancel is, and no `Killed` follows it. Confirmed by watching the test fail when the
+  crossed result is answered `Killed { by: unload }` after it, and when `Quiesce` is
+  read while the execution is still open.
 - A directive out of order is refused and not queued: a lower arriving
   before any raise answers `OutOfOrder` with no listener standing after
   it, and a directive of any kind arriving after a lower answers the
