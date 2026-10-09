@@ -2098,7 +2098,8 @@ S3 x unload); heard mid-turn, its dialer's connection leaves the turn's verb slo
 listener is heard again, and it runs at the turn's close before any held request is
 served.
 
-1. **Quiesce** (step 2; S4). This crate sends `Quiesce` the moment the leave is heard,
+1. **Quiesce** (step 2; S4). Where a gate stands (a diagnostic binding has none, and skips
+   this item and item 4's lower), this crate sends `Quiesce` the moment the leave is heard,
    after the interrupt of item 2 where a tool call is out at the gate, since a gate
    executing a tool reads only that execution's continuation until it ends. It reads the
    gate channel until `GateQuiesced`, which the gate sends only after every frame it
@@ -2166,7 +2167,10 @@ request).
 **The forced leave stops work and keeps state** (`weaver-admin-Spec` section 3, the
 forced unload (sole); S2, S3 and S9 x force-unload). A `Leave` with `forced` true and `rollback` false, set by
 admin's `force-unload`, has this crate interrupt a tool call out as item 2 does, then
-lower the gate at once from its raised position, with no quiesce and no drain, reading
+lower the gate at once from its raised position (**a gate step this crate skips where
+the gate is already lowered, S9, or absent, a diagnostic binding: it sends no
+`ToolInterrupt`, `Quiesce` or `Lower` there, `Lower` being once only, and from S9, no
+turn running, the forced leave goes straight to the save point**; Codex on #109, round 47), with no quiesce and no drain, reading
 the channel to `GateStopped` and recording every frame met there refused, carrying
 `Unloading`, its connection
 closed by the gate unanswered (I5); cancel the turn in flight as a stop does, recorded as

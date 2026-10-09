@@ -435,7 +435,7 @@ section 3 states where that obligation lands now.
 | S4, S5, S6, S7 | refuse `InvocationInFlight` | refuse `InvocationInFlight` | joins lock-free (`JoinLeave`): the leave turns forced from where it stands (S4 to S6), or, from S7 on, the join is answered the `Left` as it stands where the harness holds it at the seal and, once the harness no longer listens, waiting for the unload's conclusion, at most 150 seconds while the run lock is held and then the escalation (the forced unload, joining); answered, it concludes (the conclusion) | refuse `InvocationInFlight` | refuse `InvocationInFlight` | the ladder of section 3: (0), `InTransition` |
 | S8a | refuse `InvocationInFlight` | refuse `InvocationInFlight` | split by the run lock (the forced unload, joining): held, the worker gone but a member or relay still standing, at most the leave's 150 seconds, then the escalation (S11); free, the holder publishing, it waits for the invocation lock with no deadline and no escalation, a publication bounded by its size (section 6), then answers by the ladder, `Unloaded` | refuse `InvocationInFlight` | refuse `InvocationInFlight` | the ladder of section 3: (0), `InTransition` |
 | S8b | refuse `AgentRunning` while the run lock is held; freed, as S0d | ends what holds the run lock by the escalation, no worker listening (section 3, `unload` ends it, as for a run that never entered), the marker as it stands; then the S0d path, the room published as recovered | the same as `unload`, the marker as it stands, the worker's death being no operator's force | refuse `OutOfOrder`, no worker | names the save point for the next load | the ladder of section 3: (iii), `InTransition` with the constituents named, then (iv) |
-| S9 | refuse `AgentRunning` | retry: S6, the lower being done, straight to the save point | S10, sole | a save point at rest (stays S9); an `unload` may follow | as S2 | `Idle`, the gate lowered |
+| S9 | refuse `AgentRunning` | retry: S6, the lower being done, straight to the save point | S10, sole, the gate already lowered and no turn running: no `ToolInterrupt` and no `Lower`, straight to the save point | a save point at rest (stays S9); an `unload` may follow | as S2 | `Idle`, the gate lowered |
 | S10 | refuse `InvocationInFlight` | refuse `InvocationInFlight` | refuse `InvocationInFlight`, the holder's verb being `force-unload` | refuse `InvocationInFlight` | refuse `InvocationInFlight` | the ladder of section 3: (0), `InTransition` |
 | S11 | (a) and (b) refuse `InvocationInFlight`, the joined `unload` or the escalator holding the lock | refuse `InvocationInFlight` | refuse `InvocationInFlight` | refuse `InvocationInFlight` | refuse `InvocationInFlight` | the ladder of section 3: (0), `InTransition` |
 
@@ -575,9 +575,9 @@ worker of one agent.
 
 - **The invocation lock**, on `admin.lock`, says whether an invocation is changing this
   agent now, and **carries its holder's verb** (the operator's ruling of 2026-10-09, on
-  #1): an invocation that takes it exclusively writes `<verb> <pid>` as the file's whole
-  content under the lock (`load`, `unload`, `save-point`, `restore`, `stop` or
-  `force-unload`), truncating whatever the last holder left, and a reader holding nothing
+  #1): **every invocation that takes it exclusively writes its verb**, as `<verb> <pid>`, the
+  file's whole content, under the lock (`load`, `unload`, `force-unload`, `save-point`,
+  `restore`, `stop` and `validate` among them), truncating whatever the last holder left, and a reader holding nothing
   takes the verb only where the content's pid is the holder `F_GETLK` reports, the classic
   record lock naming its holder's pid, so a stale or half-written record reads as no
   verb. **A reader retries a record that does not name the holder** (Codex on #109,
