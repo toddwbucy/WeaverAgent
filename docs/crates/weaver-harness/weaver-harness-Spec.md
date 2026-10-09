@@ -2138,7 +2138,7 @@ served.
    graceful, true where a join or a declared bound turned it forced (I2). The member,
    released before `unload`, needs nothing after it: its save point is taken and its
    grant surface read before the release, and no save point ever carries `unload`. A run with no `unload` event never answered `Left`: a death in S7 is S8 as
-   far as admin can tell, the marker left `Open` (S7 x worker or member dies).
+   far as admin can tell, the marker left `Open` (S7 x the worker dies).
 
 **A missed leg stops a leave that stayed graceful in S9** (S6 x member misses a save-point leg):
 the run stays entered at rest with the gate lowered, as the leg rule below states. The
