@@ -1326,7 +1326,7 @@ pub enum LifecycleDirective {
 
 pub enum LifecycleAnswer {
     Ready,
-    Left { save_point: Option<SavePointReport>, forced: bool },
+    Left { save_point: Option<SavePointReport>, forced: bool, rollback: bool },
     SavePointTaken { report: SavePointReport },
     RestoreNamed { save_point: String, name: String },
     TurnAborted { turn: TurnKey },
@@ -1370,7 +1370,7 @@ no store, or the leave is a load's rollback, which takes none (`weaver-admin-Spe
 section 3, S1 x Leave), a forced leave otherwise taking its save point as any leave does
 (the forced unload).
 
-**The lifecycle act (2026-10-09) adds six cases and one member**, on the lifecycle
+**The lifecycle act (2026-10-09) adds six cases and three members**, `Left.forced` and `rollback` on `Leave` and on `Left`,, on the lifecycle
 state table approved by the operator on 2026-10-09, recorded on #1, which
 `weaver-admin-Spec` section 3 holds; each cites the row it carries and none restates
 it. **`Left`'s `forced`** is true where the leave came down forced, directed so by a
@@ -1379,7 +1379,13 @@ a declared drain or wind-down bound, and false where the leave stayed graceful: 
 leave's state at its end, never the directive it began as, so every invocation answered `Left` concludes by it, the first closing the
 marker as the leave ended (`weaver-admin-Spec` section 3, the conclusion), and it agrees with the `unload` event's `forced` (I2). It is always on the wire,
 and a `Left` without it refuses at the parse, as `Leave.forced` does: no default carries
-an older writer forward (the operator's ruling of 2026-10-08 on #1). The wire is not
+an older writer forward (the operator's ruling of 2026-10-08 on #1). **`Left`'s
+`rollback`** is true only on the answer to a `Leave` with `rollback` true, required on
+the wire with no default as `forced` is (Codex on #109, round 30): the harness can
+answer a rollback's `Left` to any caller it holds, a late caller swept at the seal
+included, and every caller answered concludes by the outcome table's rollback row
+wherever it is answered (`weaver-admin-Spec` section 3, the conclusion's outcomes), so
+no caller reads a rollback as a force and writes `Forced`. The wire is not
 durable, a frame being read by the process it was sent to and never stored, so the record's rule that an added payload member
 is optional at the read (`weaver-trace-Spec` section 3) does not apply to it. **`JoinLeave`** is a `force-unload` that does not hold the invocation lock,
 carrying the forcing caller's cause, which the harness records as the `unload` event's

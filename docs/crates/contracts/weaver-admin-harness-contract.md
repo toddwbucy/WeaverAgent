@@ -162,7 +162,7 @@ on the listener: bound once at the worker's start, closed by the seal or, short 
 by the worker's death, shared with no second worker, **and sealed once the leave's outcome is fixed** (S7),
 in the steps and with the answers `weaver-admin-Spec` section 3's table for the seal
 gives: a dial already held is answered at the normal answer point, after the writer's
-drain, and a dial after the unlink finds no socket, which admin reads as a run past its
+drain, with the same `Left`, its `rollback` saying whether it answers a rollback, and a dial after the unlink finds no socket, which admin reads as a run past its
 outcome. Each
 accepted connection is one invocation's, closed
 by admin when the verb answers, and the harness serves one connection at a time, a
@@ -303,7 +303,7 @@ with none. Admin leaves the marker as section 6's marker-write rule gives (K1), 
 rollback is the exemption I2 names. The directive marks it, never the harness's
 position.
 
-**`Left` carries `forced`**, required on the wire with no default, true where the leave
+**`Left` carries `forced` and `rollback`**, each required on the wire with no default, `rollback` true only on the answer to a rollback's `Leave`, so every caller the harness answers, a late caller swept at the seal included, concludes by the rollback row and never reads a rollback as a force (Codex on #109, round 30); `forced` true where the leave
 came down forced, directed so, joined, or turned so past a declared bound, so every
 invocation answered `Left` concludes by it, the first closing the marker as the leave
 ended and the rest finding it closed (`weaver-admin-Spec` section 3, the conclusion), and the
