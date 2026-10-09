@@ -248,7 +248,8 @@ its own, and a later command finding the agent's lock free mid-transition answer
 conservatively (`weaver-admin-Spec` section 3, outside the envelope): `load` refuses
 `AgentRunning`; `unload` refuses `OutOfOrder` where a leave is already in progress, or
 ends a run whose agent no longer listens; `force-unload` ends whatever stands, marking
-it forced; `save-point` refuses `OutOfOrder`. The next load recovers any save point
+it forced where it ended a live agent mid-unload, and leaving the marker as it stands
+where the agent had already died (S8b), the crash and not the force having ended the run; `save-point` refuses `OutOfOrder`. The next load recovers any save point
 left in the room, and its reset may be conservative but is never clean where the state
 was not kept.
 
