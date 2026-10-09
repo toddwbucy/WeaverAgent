@@ -449,8 +449,8 @@ an obligation on the party that could break it.
   either caller, answered `Left`, concludes (I3, I4). From S7 on, the leave's outcome fixed,
   either `Leave` is answered the `Left` as it stands, adds nothing to the record, and
   its caller concludes all the same (`weaver-admin-Spec` section 3, the conclusion). An unforced `Leave` meeting a pending
-  forced leave is refused `OutOfOrder`. A leave refused `SavePointNotTaken` is no
-  longer pending, and the run stands entered at rest for a retried or a forced `Leave`
+  forced leave is refused `OutOfOrder`. A leave refused `SavePointNotTaken`, one that stayed graceful to its
+  miss (a forced one answering `Left` instead), is no longer pending, and the run stands entered at rest for a retried or a forced `Leave`
   (S9).
 - `JoinLeave` is valid only while a leave is pending, and is refused `OutOfOrder`
   otherwise, before the enter included.
@@ -577,7 +577,8 @@ ask, because admin answers nothing. The cases:
   the `Left` as it stands)
 - activity is not at rest, so no save point is taken on demand (`weaver-admin-Spec`
   section 3, S3 x save-point); a leave is never refused for activity
-- the leave's save point is not finished on an unforced leave, which names the leg and
+- the leave's save point is not finished on a leave that stayed graceful to its miss
+  (one a join or a declared bound turned forced answers `Left` with none instead), which names the leg and
   leaves the run entered at rest with the gate lowered (S9)
 
 `Unloading` is no refusal on this seam: it is the harness's answer through the gate to
@@ -600,10 +601,17 @@ no state, and nothing reaches back to erase what was authored.
 **A worker that dies is not a refusal.** Admin observes the process exit and the
 channel closure together, and what that leaves on the stream is a run whose `load`
 has no `unload`, a truthful account of a death rather than corruption to repair,
-per `weaver-admin-PRD` section 5. A death while a leave is pending ends the run with no
-`Left`, and the marker stays `Open` (`weaver-admin-Spec` section 3, S4 to S7 x worker or
-member dies, I2 and I4): a run whose record holds no `unload` never answered `Left`, and
-a death in S7 is S8 as far as admin can tell, the marker `Open`.
+per `weaver-admin-PRD` section 5. **The worker's death** while a leave is pending ends
+the run with no `Left`, and the marker stays `Open` (`weaver-admin-Spec` section 3, S4 to
+S10 x the worker dies, I2 and I4): a run whose record holds no `unload` never answered
+`Left`, and a worker's death in S7 is S8 as far as admin can tell, the marker `Open`.
+**The member's death, the worker alive,** ends nothing: it is the dead peer of
+`weaver-harness-state-contract` section 5, so in S4 to S6 the leave goes on and its save
+point misses `MemberDead` at S6, a leave that stayed graceful answering
+`SavePointNotTaken` and standing in S9, a forced one answering `Left` with `forced` true
+and no save point; and in S7 a member dying in its release is a `fault` before `unload`,
+its release outcome `Unconfirmed` (`weaver-admin-Spec` section 3, S4 to S10 x the member
+dies, the worker alive).
 
 **Nothing on this seam retries, but the join.** A refused directive returns to admin,
 which either rolls back or reports. A harness that retried an author, or an admin that

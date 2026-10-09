@@ -189,8 +189,11 @@ response path, as extensions to this page rather than replacements of it.
   - **Serving, a turn in flight**: the request is admitted and queued behind the
     turn, and served after it (S3 x dialer request).
   - **Unloading, gracefully** (S4 and S5), with no time limit unless the agent's
-    declaration sets one, `force-unload` being the recourse: a dial finds no listener, and a connection
-    that has sent no request is closed. A request whose turn is running gets that
+    declaration sets one, `force-unload` being the recourse: once the agent stops listening a dial finds no
+    listener, and a connection that has sent no request is closed. While a tool call
+    of the turn in flight is still being interrupted, the agent still listens: a dial
+    then connects, and its request is refused as the unloading below, once the tool
+    call has ended. A request whose turn is running gets that
     turn's answer on its connection, the turn finishing what it can without further
     input; a tool call it had out is interrupted and the turn closes there, its
     answer given, unless the call's result had already come back, which stands

@@ -2137,8 +2137,8 @@ served.
    the leave's state at its end, never the directive it began as: false where it stayed
    graceful, true where a join or a declared bound turned it forced (I2). The member,
    released before `unload`, needs nothing after it: its save point is taken and its
-   grant surface read before the release, and no save point ever carries `unload`. A run with no `unload` event never answered `Left`: a death in S7 is S8 as
-   far as admin can tell, the marker left `Open` (S7 x the worker dies).
+   grant surface read before the release, and no save point ever carries `unload`. A run with no `unload` event never answered `Left`: the worker's death in S7 is S8
+   as far as admin can tell, the marker left `Open` (S7 x the worker dies).
 
 **A missed leg stops a leave that stayed graceful in S9** (S6 x member misses a save-point leg):
 the run stays entered at rest with the gate lowered, as the leg rule below states. The
@@ -2264,14 +2264,15 @@ the operator's ruling of 2026-10-08: 120 seconds (`SNAPSHOT_ANSWER_BOUND_MS`), e
 the member to write a 1 GiB image before it answers, while the ask, the `finished` leg
 and the small asks keep the two seconds of `ANSWER_BOUND_MS`, `restored` having its own
 120 seconds (section 6.1) and a parked ask (`replay`, or `identity` under a diagnostic
-binding) the parked bound of 600 seconds. **Where any leg misses, an unforced leave
-does not complete** (S6 x member misses a save-point leg): this crate authors no
+binding) the parked bound of 600 seconds. **Where any leg misses, a leave that stayed
+graceful does not complete** (S6 x member misses a save-point leg): this crate authors no
 `unload`, answers admin `SavePointNotTaken` naming which leg, the answer (a member's
 failed write among its causes), the acknowledgement's answer, or the member being dead,
 and stays entered at rest with the gate lowered and the run open (S9), so the operator
 retries with `save-point` and `unload` or, where the member is dead, forces the unload;
 nothing is silent and the dead-peer conversion does not apply to this ask at the leave.
-A forced leave whose leg misses comes down without the save point, as the forced leave
+A leave forced at the miss, directed so, joined or past a declared bound, comes down
+without the save point, as the forced leave
 above states. **The seam
 stays alive across the miss**: a missed answer or finished leg retires nothing, and before
 its next ask the seam drains, without blocking, whatever lines or part of one the member

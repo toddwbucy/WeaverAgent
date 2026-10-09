@@ -769,8 +769,10 @@ conclusion (I1).
 (item 6). The harness takes the leave's save point before it authors `unload`, per
 `weaver-harness-Spec` section 6, and where that save point is not finished, the write
 having failed, the answer or the acknowledgement having missed its bound, or the member
-being dead, it answers `SavePointNotTaken` naming which, authors no `unload`, and stays
-entered at rest: the run stays open with its gate lowered (S9), the constituents keep
+being dead, a leave that stayed graceful answers `SavePointNotTaken` naming which,
+authors no `unload`, and stays entered at rest (a leave a join or a declared bound
+turned forced does not stop there: it goes on to `Left{forced: true}` with no save point
+and the marker `Forced`, the outcome table's forced row): the run stays open with its gate lowered (S9), the constituents keep
 the run lock, this verb prints the refusal and exits non-zero, and nothing silent
 happens. If the member is alive the operator retries `unload`, which goes straight to the
 save point, the lower being done, or takes a `save-point` first (S9 x `unload`, S9 x
