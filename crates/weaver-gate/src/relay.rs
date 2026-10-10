@@ -155,6 +155,46 @@ impl Relay {
         Settled::Done { lost: owed }
     }
 
+    /// **The lower's flush, bounded by the settle instant** (Codex on #114):
+    /// sends what waits on the channel in order, waiting on its writability
+    /// no later than `until`, so a harness reading slowly cannot hold the gate
+    /// past the instant it must answer by. Frames still waiting then are
+    /// dropped, and the dialer of each is returned to be named lost.
+    pub fn flush_pending_until(
+        &mut self,
+        channel: &Channel,
+        until: std::time::Instant,
+    ) -> Result<Vec<u32>, ChannelFault> {
+        use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+        while let Some(front) = self.pending.front() {
+            if channel.try_send(front)? {
+                self.pending.pop_front();
+                continue;
+            }
+            let remaining = until.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let timeout = PollTimeout::try_from(
+                remaining.saturating_add(std::time::Duration::from_micros(999)),
+            )
+            .unwrap_or(PollTimeout::MAX);
+            let mut fds = [PollFd::new(channel.as_fd(), PollFlags::POLLOUT)];
+            match poll(&mut fds, timeout) {
+                Ok(_) | Err(nix::errno::Errno::EINTR) => {}
+                Err(_) => return Err(ChannelFault::Closed),
+            }
+        }
+        Ok(self
+            .pending
+            .drain(..)
+            .filter_map(|envelope| match envelope.payload {
+                Payload::Frame(frame) => frame.dialer,
+                _ => None,
+            })
+            .collect())
+    }
+
     /// The index of the connection owed this exchange's response, or none
     /// where the connection already left and the delivery is lost.
     pub fn owed(&self, ordinal: u64) -> Option<usize> {
@@ -524,6 +564,61 @@ mod tests {
         assert_eq!(relay.settle(false), Settled::Open);
         assert_eq!(relay.settle(true), Settled::Done { lost: vec![12345] });
         drop(client);
+    }
+
+    /// **The lower's flush stops at the settle instant** (Codex on #114): the
+    /// harness reading the channel slowly, or not at all, cannot hold the
+    /// gate past the instant; the frames still waiting are dropped and their
+    /// dialers named, as any delivery the bound outruns. Perturbation: flush
+    /// without the instant, and the call never returns while the channel is
+    /// full.
+    #[test]
+    fn the_lowers_flush_stops_at_the_settle_instant() {
+        use std::time::{Duration, Instant};
+        let (near, far) = nix::sys::socket::socketpair(
+            nix::sys::socket::AddressFamily::Unix,
+            nix::sys::socket::SockType::SeqPacket,
+            None,
+            nix::sys::socket::SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("pair");
+        let gate = crate::channel::from_owned(near);
+        let _unread_harness = crate::channel::from_owned(far);
+        let frame = |ordinal| OrganEnvelope {
+            exchange: ExchangeId {
+                opener: Opener::Gate,
+                ordinal,
+            },
+            position: Position::Open,
+            payload: Payload::Frame(TurnFrame::carry_from(&[b'x'; 30 * 1024], 777)),
+        };
+        // Fill the channel the harness is not reading.
+        let mut ordinal = 0;
+        while gate.try_send(&frame(ordinal)).expect("sends") {
+            ordinal += 1;
+        }
+        let mut relay = Relay::new();
+        relay.pending.push_back(frame(ordinal + 1));
+        relay.pending.push_back(frame(ordinal + 2));
+        let (done, finished) = std::sync::mpsc::channel();
+        let started = Instant::now();
+        std::thread::spawn(move || {
+            let lost = relay
+                .flush_pending_until(&gate, Instant::now() + Duration::from_millis(200))
+                .expect("a full channel is no fault");
+            done.send((lost, relay.pending.len())).ok();
+            drop(gate);
+        });
+        let (lost, left) = finished
+            .recv_timeout(Duration::from_secs(3))
+            .expect("the flush returns at the instant");
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(
+            lost,
+            vec![777, 777],
+            "each frame left is named by its dialer"
+        );
+        assert_eq!(left, 0, "and dropped");
     }
 
     /// **The envelopes waiting on the channel are flushed in order**, so a

@@ -378,6 +378,10 @@ fn serve_channel_event(channel: &Channel, state: &mut HookState) -> Result<(), E
             return Err(ExitCode::FAILURE);
         }
     };
+    // **The lower's clock starts when it is read** (Codex on #114): every
+    // wait the lower then takes, the flush and the deferral, runs against the
+    // settle instant measured from here, never from after a blocking step.
+    let heard = std::time::Instant::now();
 
     // A frame is a response and routes by identity. Everything else is the
     // lifecycle's, judged against the position and answered.
@@ -418,20 +422,35 @@ fn serve_channel_event(channel: &Channel, state: &mut HookState) -> Result<(), E
         // request ahead of the answer and refuses it `Unloading`. Nothing is
         // accepted or read while this runs, so flushing before the position
         // changes is the Spec's order.
-        if let Payload::Directive(LifecycleDirective::Quiesce | LifecycleDirective::Lower) =
-            &envelope.payload
-            && let Some(relay) = relay_of(state)
-        {
-            match relay.flush_pending(channel) {
-                Ok(()) => {}
-                Err(ChannelFault::Closed) => return Err(ExitCode::SUCCESS),
-                Err(fault) => {
-                    eprintln!("{}", fault_line(&fault));
-                    return Err(ExitCode::FAILURE);
+        // The quiesce's flush is the drain's wait, which only a declared
+        // `drain-bound` bounds (`weaver-harness-Spec` section 6); the lower's
+        // stops at the settle instant, each frame it could not send named
+        // lost.
+        let flushed = match (&envelope.payload, relay_of(state)) {
+            (Payload::Directive(LifecycleDirective::Quiesce), Some(relay)) => {
+                relay.flush_pending(channel).map(|()| Vec::new())
+            }
+            (Payload::Directive(LifecycleDirective::Lower), Some(relay)) => {
+                relay.flush_pending_until(channel, settle_instant(heard))
+            }
+            _ => Ok(Vec::new()),
+        };
+        match flushed {
+            Ok(lost) => {
+                for dialer in lost {
+                    eprintln!(
+                        "{}",
+                        serde_json::json!({"fault": "lost_delivery", "dialer": dialer, "at": "the lower's flush"})
+                    );
                 }
             }
+            Err(ChannelFault::Closed) => return Err(ExitCode::SUCCESS),
+            Err(fault) => {
+                eprintln!("{}", fault_line(&fault));
+                return Err(ExitCode::FAILURE);
+            }
         }
-        match dispatch(state, &envelope) {
+        match dispatch_at(state, &envelope, heard) {
             Dispatched::Answer(payload) => payload,
             // A lower from draining is answered last, by the serve loop.
             Dispatched::Deferred => return Ok(()),
@@ -640,7 +659,27 @@ impl PartialEq<Payload> for Dispatched {
 ///
 /// The match carries no wildcard arm over the directive, so a case added to
 /// loop 0 breaks this crate loudly in the act that edits the floor.
+/// The instant a lower heard at `heard` answers by: one settle margin inside
+/// the lower bound, so the answer reaches a harness still waiting the full
+/// bound.
+fn settle_instant(heard: std::time::Instant) -> std::time::Instant {
+    heard
+        + std::time::Duration::from_millis(
+            weaver_types::LOWER_BOUND_MS.saturating_sub(weaver_types::LOWER_SETTLE_MARGIN_MS),
+        )
+}
+
+/// `dispatch_at` with the directive heard now, for the position tests.
+#[cfg(test)]
 fn dispatch(state: &mut HookState, envelope: &OrganEnvelope) -> Dispatched {
+    dispatch_at(state, envelope, std::time::Instant::now())
+}
+
+fn dispatch_at(
+    state: &mut HookState,
+    envelope: &OrganEnvelope,
+    heard: std::time::Instant,
+) -> Dispatched {
     if envelope.position != Position::Open || envelope.exchange.opener != Opener::Harness {
         return Dispatched::Answer(Payload::Refusal(LifecycleRefusal::OutOfOrder));
     }
@@ -703,11 +742,7 @@ fn dispatch(state: &mut HookState, envelope: &OrganEnvelope) -> Dispatched {
                 relay.lower();
                 *stopping = Some(Stopping {
                     exchange: envelope.exchange.clone(),
-                    deadline: std::time::Instant::now()
-                        + std::time::Duration::from_millis(
-                            weaver_types::LOWER_BOUND_MS
-                                .saturating_sub(weaver_types::LOWER_SETTLE_MARGIN_MS),
-                        ),
+                    deadline: settle_instant(heard),
                 });
             }
             return Dispatched::Deferred;
@@ -1167,10 +1202,19 @@ mod tests {
             Payload::Answer(LifecycleAnswer::GateQuiesced)
         );
         assert!(matches!(state, HookState::Draining(_, None)));
-        assert!(
-            std::os::unix::net::UnixStream::connect(&*path).is_err(),
-            "no new connection is accepted from the quiesce"
-        );
+        // A parallel test in this binary that spawns a child holds a copy of
+        // every descriptor between its fork and its exec, the listener's
+        // among them, so one dial in that window still connects; the gate
+        // itself forks only for an execution, never during a quiesce. The
+        // listener is closed once a dial is refused, within a bound.
+        let refused = (0..50).any(|_| {
+            let refused = std::os::unix::net::UnixStream::connect(&*path).is_err();
+            if !refused {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            refused
+        });
+        assert!(refused, "no new connection is accepted from the quiesce");
         std::fs::remove_file(&*path).ok();
     }
 
@@ -1214,6 +1258,30 @@ mod tests {
         assert_eq!(
             stopping.exchange.ordinal, 1,
             "the first lower's exchange stands"
+        );
+    }
+
+    /// **The lower's settle instant runs from when it was heard** (Codex on
+    /// #114): a deferral judged after a slow step still answers by the
+    /// instant measured from the read, never from the judgment. Perturbation:
+    /// take the instant at the judgment, and the deadline moves late.
+    #[test]
+    fn the_settle_instant_runs_from_when_the_lower_was_heard() {
+        let heard = std::time::Instant::now() - std::time::Duration::from_secs(5);
+        let mut state = HookState::Draining(Box::new(Relay::new()), None);
+        assert!(matches!(
+            dispatch_at(&mut state, &opened(LifecycleDirective::Lower), heard),
+            Dispatched::Deferred
+        ));
+        let HookState::Draining(_, Some(stopping)) = &state else {
+            panic!("the lower waits");
+        };
+        assert_eq!(stopping.deadline, settle_instant(heard));
+        assert_eq!(
+            settle_instant(heard) - heard,
+            std::time::Duration::from_millis(
+                weaver_types::LOWER_BOUND_MS - weaver_types::LOWER_SETTLE_MARGIN_MS
+            )
         );
     }
 
