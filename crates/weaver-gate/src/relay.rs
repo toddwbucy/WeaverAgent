@@ -122,6 +122,24 @@ impl Relay {
         Ok(())
     }
 
+    /// **Whether a lower from draining can answer stopped** (`weaver-gate-Spec`
+    /// section 4): done once nothing is owed; still open while something is
+    /// and the lower bound has not passed; and, past it, done with the dialer
+    /// of every connection still owed named, its delivery lost.
+    pub fn settle(&self, past_the_bound: bool) -> Settled {
+        let owed: Vec<u32> = self
+            .served
+            .iter()
+            .filter(|served| served.owes())
+            .map(|served| served.dialer)
+            .collect();
+        match (owed.is_empty(), past_the_bound) {
+            (true, _) => Settled::Done { lost: Vec::new() },
+            (false, false) => Settled::Open,
+            (false, true) => Settled::Done { lost: owed },
+        }
+    }
+
     /// The index of the connection owed this exchange's response, or none
     /// where the connection already left and the delivery is lost.
     pub fn owed(&self, ordinal: u64) -> Option<usize> {
@@ -155,6 +173,16 @@ pub struct Served {
     /// exchange, and it leaves once what it is owed is written
     /// (`weaver-gate-Spec` section 4, draining).
     draining: bool,
+}
+
+/// Whether a draining relay has delivered what it owes, for the lower.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Settled {
+    /// Something is still owed and the lower bound has not passed.
+    Open,
+    /// The lower may answer stopped; `lost` names the dialer of each
+    /// connection whose delivery the bound outran.
+    Done { lost: Vec<u32> },
 }
 
 /// Why a connection left the relay. The name travels to standard error for
@@ -405,6 +433,36 @@ mod tests {
         );
         assert!(!draining.owes(), "delivered, it owes nothing");
         assert!(!draining.wants_read(), "and is still never read");
+    }
+
+    /// **A lower from draining settles when nothing is owed, or at the bound**
+    /// (`weaver-gate-Spec` section 4): open while a connection still owes and
+    /// the bound has not passed; done once every answer is written; and past
+    /// the bound done with each connection still owed named by its dialer's
+    /// uid, its delivery lost. Perturbation: settle while a connection still
+    /// owes inside the bound, and the first case fails; name no dialer past
+    /// it, and the last fails.
+    #[test]
+    fn a_lower_from_draining_settles_when_nothing_is_owed_or_at_the_bound() {
+        let (owed, mut client) = served_pair();
+        let mut relay = Relay::new();
+        relay.served.push(owed);
+        client.write_all(b"the request\n").expect("writes");
+        let Framed::Opened(_) = relay.read_one(0).expect("reads") else {
+            panic!("the request frames");
+        };
+        relay.quiesce();
+        assert_eq!(relay.settle(false), Settled::Open, "owed, inside the bound");
+        assert_eq!(
+            relay.settle(true),
+            Settled::Done { lost: vec![12345] },
+            "past the bound, the owed dialer is named"
+        );
+        relay.served[0]
+            .on_response(&TurnFrame::carry(b"the answer"))
+            .expect("routes");
+        relay.served[0].on_writable().expect("drains");
+        assert_eq!(relay.settle(false), Settled::Done { lost: vec![] });
     }
 
     /// **The envelopes waiting on the channel are flushed in order**, so a

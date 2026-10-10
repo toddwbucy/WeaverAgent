@@ -20,7 +20,8 @@ use weaver_gate::channel::{self, Channel, ChannelFault, EntryFault};
 use weaver_gate::hook::{AcceptOutcome, Hook, RaiseRefusal};
 use weaver_gate::relay::{self, Relay};
 use weaver_types::{
-    LifecycleAnswer, LifecycleDirective, LifecycleRefusal, Opener, OrganEnvelope, Payload, Position,
+    ExchangeId, LifecycleAnswer, LifecycleDirective, LifecycleRefusal, Opener, OrganEnvelope,
+    Payload, Position,
 };
 
 /// The hook's state, as a type rather than a flag.
@@ -49,8 +50,10 @@ enum HookState {
     Raised(Hook, Box<Relay>),
     /// The graceful unload's, between `Quiesce` and `Lower`: the listener is
     /// closed, so only the relay rides, and its connections are written and
-    /// never read, each leaving once what it is owed is delivered.
-    Draining(Box<Relay>),
+    /// never read, each leaving once what it is owed is delivered. A `Lower`
+    /// heard here waits as `Some`: `GateStopped` is answered once nothing is
+    /// owed, or at the lower bound with each lost delivery named.
+    Draining(Box<Relay>, Option<Stopping>),
     /// Terminal. A directive of any kind arriving here answers `OutOfOrder`.
     Lowered,
 }
@@ -105,6 +108,13 @@ fn refuse_everything(channel: Channel) -> ExitCode {
 /// gone: this crate closes its listener if one stands and exits, never treating
 /// closure as an answer. The listener's close is the drop of the position,
 /// which happens on the way out of this function.
+/// A `Lower` heard while draining, answered last: the exchange its
+/// `GateStopped` closes, and the lower bound's instant.
+struct Stopping {
+    exchange: ExchangeId,
+    deadline: std::time::Instant,
+}
+
 fn serve(channel: Channel) -> ExitCode {
     let mut state = HookState::BeforeRaise;
 
@@ -118,6 +128,47 @@ fn serve(channel: Channel) -> ExitCode {
     }
 
     loop {
+        // **A lower from draining answers last** (`weaver-gate-Spec` section
+        // 4): once nothing is owed, or at the lower bound, each connection
+        // still owed then named on standard error with its dialer, its
+        // delivery lost, and the relay dropped before `GateStopped`.
+        let mut timeout = PollTimeout::NONE;
+        if let HookState::Draining(relay, Some(stopping)) = &state {
+            let now = std::time::Instant::now();
+            match relay.settle(now >= stopping.deadline) {
+                relay::Settled::Open => {
+                    timeout =
+                        PollTimeout::try_from(stopping.deadline - now).unwrap_or(PollTimeout::MAX);
+                }
+                relay::Settled::Done { lost } => {
+                    for dialer in lost {
+                        eprintln!(
+                            "{}",
+                            serde_json::json!({"fault": "lost_delivery", "dialer": dialer, "at": "the lower bound"})
+                        );
+                    }
+                    let HookState::Draining(_, Some(stopping)) =
+                        std::mem::replace(&mut state, HookState::Lowered)
+                    else {
+                        unreachable!("matched above");
+                    };
+                    match channel.send(&OrganEnvelope {
+                        exchange: stopping.exchange,
+                        position: Position::Close,
+                        payload: Payload::Answer(LifecycleAnswer::GateStopped),
+                    }) {
+                        Ok(()) => {}
+                        Err(ChannelFault::Closed) => return ExitCode::SUCCESS,
+                        Err(fault) => {
+                            eprintln!("{}", fault_line(&fault));
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                    continue;
+                }
+            }
+        }
+
         // **Wait where a landing can arrive**, per Spec section 4: the
         // channel, and while raised the listener and every served
         // connection by what it wants, readable while no exchange is open
@@ -136,7 +187,7 @@ fn serve(channel: Channel) -> ExitCode {
             waiting.push(PollFd::new(hook.listener(), PollFlags::POLLIN));
             tags.push(Tag::Listener);
         }
-        if let HookState::Raised(_, relay) | HookState::Draining(relay) = &state {
+        if let HookState::Raised(_, relay) | HookState::Draining(relay, _) = &state {
             for (index, served) in relay.served.iter().enumerate() {
                 let mut flags = PollFlags::empty();
                 if served.wants_read() {
@@ -152,7 +203,7 @@ fn serve(channel: Channel) -> ExitCode {
                 tags.push(Tag::Conn(index));
             }
         }
-        match poll(&mut waiting, PollTimeout::NONE) {
+        match poll(&mut waiting, timeout) {
             Ok(_) => {}
             Err(nix::errno::Errno::EINTR) => continue,
             Err(errno) => {
@@ -363,6 +414,23 @@ fn serve_channel_event(channel: &Channel, state: &mut HookState) -> Result<(), E
                 }
             }
         }
+        // A lower from draining is answered last, by the serve loop: it
+        // records the exchange and the lower bound's instant, and no answer
+        // is sent now.
+        if let (
+            HookState::Draining(_, stopping @ None),
+            Payload::Directive(LifecycleDirective::Lower),
+        ) = (&mut *state, &envelope.payload)
+            && envelope.position == Position::Open
+            && envelope.exchange.opener == Opener::Harness
+        {
+            *stopping = Some(Stopping {
+                exchange: envelope.exchange,
+                deadline: std::time::Instant::now()
+                    + std::time::Duration::from_millis(weaver_types::LOWER_BOUND_MS),
+            });
+            return Ok(());
+        }
         dispatch(state, &envelope)
     };
     match channel.send(&OrganEnvelope {
@@ -519,7 +587,7 @@ fn judge_one(hook: &Hook, relay: &mut Relay) {
 /// The relay a position carries: raised, or draining after the quiesce.
 fn relay_of(state: &mut HookState) -> Option<&mut Relay> {
     match state {
-        HookState::Raised(_, relay) | HookState::Draining(relay) => Some(relay),
+        HookState::Raised(_, relay) | HookState::Draining(relay, _) => Some(relay),
         HookState::BeforeRaise | HookState::Lowered => None,
     }
 }
@@ -592,26 +660,26 @@ fn dispatch(state: &mut HookState, envelope: &OrganEnvelope) -> Payload {
             if let HookState::Raised(hook, mut relay) = previous {
                 hook.lower();
                 relay.quiesce();
-                *state = HookState::Draining(relay);
+                *state = HookState::Draining(relay, None);
             }
             Payload::Answer(LifecycleAnswer::GateQuiesced)
         }
-        (HookState::Draining(_), LifecycleDirective::Lower) => {
-            // Interim: closes at once. The deferral of `GateStopped` to the
-            // owed writes under the lower bound waits on the bound's value.
-            let previous = std::mem::replace(state, HookState::Lowered);
-            drop(previous);
-            Payload::Answer(LifecycleAnswer::GateStopped)
+        // The first lower from draining is deferred by the serve loop, which
+        // answers it last; reaching here is a second one while it waits.
+        (HookState::Draining(_, _), LifecycleDirective::Lower) => {
+            Payload::Refusal(LifecycleRefusal::OutOfOrder)
         }
         (HookState::Raised(_, _), LifecycleDirective::Lower) => {
             // The close happens here, before the answer is formed, so nothing
             // new can arrive once the harness reads stopped.
             let previous = std::mem::replace(state, HookState::Lowered);
             if let HookState::Raised(hook, relay) = previous {
-                // The served connections close with the listener, whatever
-                // their buffers still held undelivered, which is what makes
-                // a lowered hook find nothing standing: no turn is in flight
-                // at a lower, so what the closes drop is deliveries at most.
+                // **The forced unload's close** (`weaver-gate-Spec` section
+                // 4): the served connections close with the listener, a turn
+                // in flight among them, its connection closing unanswered, the
+                // operator having chosen no time to finish. Every frame this
+                // crate admitted was flushed to the channel first, so the
+                // harness records each refused with `Unloading`.
                 drop(relay);
                 hook.lower();
             }
@@ -937,7 +1005,7 @@ mod tests {
             dispatch(&mut state, &opened(LifecycleDirective::Quiesce)),
             Payload::Answer(LifecycleAnswer::GateQuiesced)
         );
-        assert!(matches!(state, HookState::Draining(_)));
+        assert!(matches!(state, HookState::Draining(_, None)));
         assert!(
             std::os::unix::net::UnixStream::connect(&*path).is_err(),
             "no new connection is accepted from the quiesce"
@@ -953,7 +1021,7 @@ mod tests {
     fn a_quiesce_outside_the_raised_position_is_out_of_order() {
         for mut state in [
             HookState::BeforeRaise,
-            HookState::Draining(Box::new(Relay::new())),
+            HookState::Draining(Box::new(Relay::new()), None),
             HookState::Lowered,
         ] {
             let before = std::mem::discriminant(&state);
