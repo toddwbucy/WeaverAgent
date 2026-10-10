@@ -29,7 +29,7 @@ use weaver_types::{
 /// `weaver_types::Position`, which is an envelope's place in its exchange and
 /// a different thing entirely.
 ///
-/// **Three positions, the last terminal.** A directive against a lowered hook
+/// **Four positions, the last terminal** (`weaver-gate-Spec` section 4). A directive against a lowered hook
 /// is refused by a match arm rather than by a flag check, which is what makes
 /// the ordering the compiler's business: adding a position breaks every match
 /// that judges one.
@@ -47,6 +47,10 @@ enum HookState {
     /// `weaver-gate-world-contract` section 5's "a request while the hook is
     /// lowered finds no listener" true of a connection that was already open.
     Raised(Hook, Box<Relay>),
+    /// The graceful unload's, between `Quiesce` and `Lower`: the listener is
+    /// closed, so only the relay rides, and its connections are written and
+    /// never read, each leaving once what it is owed is delivered.
+    Draining(Box<Relay>),
     /// Terminal. A directive of any kind arriving here answers `OutOfOrder`.
     Lowered,
 }
@@ -122,17 +126,17 @@ fn serve(channel: Channel) -> ExitCode {
         // the loop blocks on none of them.
         let mut waiting = Vec::with_capacity(4);
         let mut tags = Vec::with_capacity(4);
-        let channel_flags = match &state {
-            HookState::Raised(_, relay) if !relay.pending.is_empty() => {
-                PollFlags::POLLIN | PollFlags::POLLOUT
-            }
+        let channel_flags = match relay_of(&mut state) {
+            Some(relay) if !relay.pending.is_empty() => PollFlags::POLLIN | PollFlags::POLLOUT,
             _ => PollFlags::POLLIN,
         };
         waiting.push(PollFd::new(channel.as_fd(), channel_flags));
         tags.push(Tag::Channel);
-        if let HookState::Raised(hook, relay) = &state {
+        if let HookState::Raised(hook, _) = &state {
             waiting.push(PollFd::new(hook.listener(), PollFlags::POLLIN));
             tags.push(Tag::Listener);
+        }
+        if let HookState::Raised(_, relay) | HookState::Draining(relay) = &state {
             for (index, served) in relay.served.iter().enumerate() {
                 let mut flags = PollFlags::empty();
                 if served.wants_read() {
@@ -202,7 +206,7 @@ fn serve(channel: Channel) -> ExitCode {
             }
             Tag::Channel => {
                 // Writable alone: the pending envelopes drain, in order.
-                if let HookState::Raised(_, relay) = &mut state {
+                if let Some(relay) = relay_of(&mut state) {
                     while let Some(front) = relay.pending.front() {
                         match channel.try_send(front) {
                             Ok(true) => {
@@ -234,7 +238,7 @@ fn serve(channel: Channel) -> ExitCode {
                 }
             }
             Tag::Conn(at) => {
-                if let HookState::Raised(_, relay) = &mut state {
+                if let Some(relay) = relay_of(&mut state) {
                     // An errored connection surfaces through its own read,
                     // costing the connection and never the gate.
                     if revents
@@ -340,6 +344,25 @@ fn serve_channel_event(channel: &Channel, state: &mut HookState) -> Result<(), E
             }
         }
     } else {
+        // **The quiesce and the lower answer after every admitted frame**
+        // (`weaver-harness-gate-contract` section 2): what waits on the
+        // channel's writability is sent first, so the harness meets each
+        // request ahead of the answer and refuses it `Unloading`. Nothing is
+        // accepted or read while this runs, so flushing before the position
+        // changes is the Spec's order.
+        if let Payload::Directive(LifecycleDirective::Quiesce | LifecycleDirective::Lower) =
+            &envelope.payload
+            && let Some(relay) = relay_of(state)
+        {
+            match relay.flush_pending(channel) {
+                Ok(()) => {}
+                Err(ChannelFault::Closed) => return Err(ExitCode::SUCCESS),
+                Err(fault) => {
+                    eprintln!("{}", fault_line(&fault));
+                    return Err(ExitCode::FAILURE);
+                }
+            }
+        }
         dispatch(state, &envelope)
     };
     match channel.send(&OrganEnvelope {
@@ -375,7 +398,8 @@ fn route_response(
     envelope: &OrganEnvelope,
     frame: &weaver_types::TurnFrame,
 ) {
-    let HookState::Raised(_, relay) = state else {
+    // A draining relay still routes the responses it owes.
+    let Some(relay) = relay_of(state) else {
         eprintln!(
             "{}",
             serde_json::json!({"fault": "a response arrived with no hook raised"})
@@ -492,6 +516,14 @@ fn judge_one(hook: &Hook, relay: &mut Relay) {
     }
 }
 
+/// The relay a position carries: raised, or draining after the quiesce.
+fn relay_of(state: &mut HookState) -> Option<&mut Relay> {
+    match state {
+        HookState::Raised(_, relay) | HookState::Draining(relay) => Some(relay),
+        HookState::BeforeRaise | HookState::Lowered => None,
+    }
+}
+
 fn fault_line(fault: &ChannelFault) -> String {
     match fault {
         ChannelFault::Truncated { bound } => {
@@ -552,6 +584,25 @@ fn dispatch(state: &mut HookState, envelope: &OrganEnvelope) -> Payload {
                 }
             }
         }
+        (HookState::Raised(_, _), LifecycleDirective::Quiesce) => {
+            // The listener closes first and the answer confirms after: no new
+            // connection is accepted from here, every connection owed nothing
+            // closes, and the rest drain, read no more.
+            let previous = std::mem::replace(state, HookState::Lowered);
+            if let HookState::Raised(hook, mut relay) = previous {
+                hook.lower();
+                relay.quiesce();
+                *state = HookState::Draining(relay);
+            }
+            Payload::Answer(LifecycleAnswer::GateQuiesced)
+        }
+        (HookState::Draining(_), LifecycleDirective::Lower) => {
+            // Interim: closes at once. The deferral of `GateStopped` to the
+            // owed writes under the lower bound waits on the bound's value.
+            let previous = std::mem::replace(state, HookState::Lowered);
+            drop(previous);
+            Payload::Answer(LifecycleAnswer::GateStopped)
+        }
         (HookState::Raised(_, _), LifecycleDirective::Lower) => {
             // The close happens here, before the answer is formed, so nothing
             // new can arrive once the harness reads stopped.
@@ -590,8 +641,6 @@ fn dispatch(state: &mut HookState, envelope: &OrganEnvelope) -> Payload {
             | LifecycleDirective::Restore { .. }
             | LifecycleDirective::ForceUnload { .. }
             | LifecycleDirective::JoinLeave { .. }
-            // The drain's quiesce is the lifecycle act's plumbing (PR B,
-            // Task 6); until it lands the gate refuses it as out of order.
             | LifecycleDirective::Quiesce,
         ) => Payload::Refusal(LifecycleRefusal::OutOfOrder),
     }
@@ -867,6 +916,55 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
+    /// **A quiesce from the raised position closes the listener and drains**
+    /// (`weaver-gate-Spec` section 4; `weaver-admin-Spec` 3.0 graceful step
+    /// 2): it answers `GateQuiesced`, the position is draining, and a dial
+    /// finds no listener. Perturbation: answer `GateQuiesced` leaving the
+    /// position raised, and the position and the dial both fail.
+    #[test]
+    fn a_quiesce_from_raised_closes_the_listener_and_drains() {
+        let path = scratch("quiesce");
+        let mut state = HookState::BeforeRaise;
+        dispatch(
+            &mut state,
+            &opened(LifecycleDirective::Raise {
+                instruction: instruction(),
+                socket: path.to_path_buf(),
+            }),
+        );
+        assert!(matches!(state, HookState::Raised(_, _)));
+        assert_eq!(
+            dispatch(&mut state, &opened(LifecycleDirective::Quiesce)),
+            Payload::Answer(LifecycleAnswer::GateQuiesced)
+        );
+        assert!(matches!(state, HookState::Draining(_)));
+        assert!(
+            std::os::unix::net::UnixStream::connect(&*path).is_err(),
+            "no new connection is accepted from the quiesce"
+        );
+        std::fs::remove_file(&*path).ok();
+    }
+
+    /// **A quiesce anywhere but raised is out of order** (`weaver-gate-Spec`
+    /// section 4), not queued: before a raise, a second one while draining,
+    /// and after a lower. Perturbation: give `(Draining, Quiesce)` an arm
+    /// answering `GateQuiesced`, and the second case fails.
+    #[test]
+    fn a_quiesce_outside_the_raised_position_is_out_of_order() {
+        for mut state in [
+            HookState::BeforeRaise,
+            HookState::Draining(Box::new(Relay::new())),
+            HookState::Lowered,
+        ] {
+            let before = std::mem::discriminant(&state);
+            assert_eq!(
+                dispatch(&mut state, &opened(LifecycleDirective::Quiesce)),
+                Payload::Refusal(LifecycleRefusal::OutOfOrder)
+            );
+            assert_eq!(std::mem::discriminant(&state), before, "and is not queued");
+        }
+    }
+
     /// **A refused raise leaves nothing held.** The position is unchanged, so
     /// the aggregate's rollback has nothing of this crate's to unwind, and the
     /// refusal is answered rather than exited on.
@@ -920,9 +1018,6 @@ mod tests {
                 rollback: true,
             },
             LifecycleDirective::JoinLeave { cause },
-            // Refused until the drain's quiesce lands (PR B, Task 6), which
-            // moves it into the drawn vocabulary.
-            LifecycleDirective::Quiesce,
             LifecycleDirective::SavePoint { cause },
             LifecycleDirective::Stop { cause },
             LifecycleDirective::Observe,
