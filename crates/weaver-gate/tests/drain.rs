@@ -387,18 +387,23 @@ fn a_lower_from_a_raised_gate_drops_the_request_in_flight() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The watch: re-runs the two instruments inside `unshare --map-auto
+/// The watch: re-runs the four instruments inside `unshare --map-auto
 /// --map-root-user`, where the test is root and the gate runs as a mapped
-/// uid. A box with no user namespace says so and skips.
+/// uid; run as root already, it runs them in place, root having what the
+/// namespace grants (Codex on #114: it returned a pass there having run
+/// nothing), as the preload door's watch does. A box with no user namespace
+/// says so and skips.
 #[test]
 fn the_drain_is_watched_inside_a_user_namespace() {
-    if nix::unistd::geteuid().is_root() {
-        return;
-    }
     let exe = std::env::current_exe().expect("the test binary names itself");
-    let ran = Command::new("unshare")
-        .args(["--map-auto", "--map-root-user"])
-        .arg(&exe)
+    let mut command = if nix::unistd::geteuid().is_root() {
+        Command::new(&exe)
+    } else {
+        let mut unshare = Command::new("unshare");
+        unshare.args(["--map-auto", "--map-root-user"]).arg(&exe);
+        unshare
+    };
+    let ran = command
         .args(["--ignored", "--nocapture", "--test-threads=1"])
         .stdin(Stdio::null())
         .output();
