@@ -356,7 +356,7 @@ that exchange.
 - An answer to raise arrives only after the bind has returned, an answer to
   quiesce only after the listener's close and every admitted frame, and an answer
   to lower only after the closes have returned and, from a quiescing gate, every
-  owed response is written or its bound has passed, so each answer is a fact about
+  response the harness sent is written or its bound has passed, so each answer is a fact about
   the listener rather than a statement of intent.
 
 **Closure is not an answer, per `weaver-organ-channel` section 2, and it is not
