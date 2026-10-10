@@ -9,8 +9,9 @@
 //!
 //! **The exchange service is a serial loop over the channel.** A directive out
 //! of order for the channel's state answers `OutOfOrder`, per
-//! `weaver-harness-gate-contract` section 3, and the state has three positions,
-//! before-raise, raised, and lowered, the last terminal.
+//! `weaver-harness-gate-contract` section 3, and the state has four positions,
+//! before-raise, raised, draining and lowered, the last terminal
+//! (`weaver-gate-Spec` section 4).
 
 use std::process::ExitCode;
 
@@ -41,7 +42,8 @@ use weaver_types::{
 enum HookState {
     /// No raise has arrived. Only a raise is in order.
     BeforeRaise,
-    /// The hook stands. Only a lower is in order.
+    /// The hook stands. A quiesce or a lower is in order, and tool executions
+    /// open here alone.
     ///
     /// The relay rides with it, because its connections exist only while it
     /// does: the lower drops the hook and them together, which is what makes
@@ -690,15 +692,15 @@ fn dispatch(state: &mut HookState, envelope: &OrganEnvelope) -> Dispatched {
             }
             Payload::Answer(LifecycleAnswer::GateQuiesced)
         }
-        // The first lower from draining is deferred by the serve loop, which
-        // answers it last; reaching here is a second one while it waits.
         // **A lower from draining answers last** (`weaver-gate-Spec` section
         // 4): the position holds its exchange and the settle instant, one
         // margin inside the lower bound so the answer reaches a harness still
-        // waiting the full bound, and the serve loop answers once nothing is
-        // owed or at that instant.
+        // waiting the full bound; a request never answered closes now; and the
+        // serve loop answers once every response the harness sent is written,
+        // or at that instant.
         (HookState::Draining(_, None), LifecycleDirective::Lower) => {
-            if let HookState::Draining(_, stopping) = state {
+            if let HookState::Draining(relay, stopping) = state {
+                relay.lower();
                 *stopping = Some(Stopping {
                     exchange: envelope.exchange.clone(),
                     deadline: std::time::Instant::now()
@@ -887,6 +889,118 @@ mod tests {
         assert!(test_common::wait_bounded(&mut child, 5, "late-cancel child").success());
     }
 
+    /// **The unload's interrupt, then the quiesce, through the served loop**
+    /// (`weaver-gate-Spec` section 9's enforcement bullet, the unload's
+    /// interrupt and the first outcome; section 4, the quiesce): a `Quiesce`
+    /// read while an execution is open is answered `OutOfOrder` and the
+    /// execution carries on; `ToolInterrupt` ends it `Killed { by: unload }`;
+    /// and the `Quiesce` after it answers `GateQuiesced`. Perturbation: let the
+    /// supervision end the execution on any message, or name the interrupt a
+    /// cancel, and this fails.
+    #[test]
+    fn the_interrupt_then_the_quiesce_through_the_served_loop() {
+        use nix::sys::socket::{MsgFlags, recv, send};
+        use std::os::fd::AsRawFd;
+        if std::env::var_os("WEAVER_INTERRUPT_QUIESCE_CHILD").is_some() {
+            let channel = channel::adopt().expect("inherited channel");
+            assert_eq!(serve(channel), ExitCode::SUCCESS);
+            return;
+        }
+        let (harness, child_end) = test_common::seqpacket_pair();
+        test_common::bound_receives(&harness, 10);
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "tests::the_interrupt_then_the_quiesce_through_the_served_loop",
+                "--nocapture",
+            ])
+            .env("WEAVER_INTERRUPT_QUIESCE_CHILD", "1");
+        test_common::place_inherited(&mut command, &[child_end.as_raw_fd()]);
+        let mut child = command.spawn().unwrap();
+        drop(child_end);
+        let socket = scratch("interrupt-quiesce");
+        let ready = test_common::ask(
+            &harness,
+            1,
+            LifecycleDirective::Raise {
+                instruction: instruction(),
+                socket: socket.to_path_buf(),
+            },
+        );
+        assert_eq!(ready.payload, Payload::Answer(LifecycleAnswer::GateReady));
+        let write = |envelope: &OrganEnvelope| {
+            send(
+                harness.as_raw_fd(),
+                &serde_json::to_vec(envelope).unwrap(),
+                MsgFlags::empty(),
+            )
+            .unwrap();
+        };
+        let read = || {
+            let mut buffer = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
+            let n = recv(harness.as_raw_fd(), &mut buffer, MsgFlags::empty()).unwrap();
+            serde_json::from_slice::<OrganEnvelope>(&buffer[..n]).unwrap()
+        };
+        let execution = ExchangeId {
+            opener: Opener::Harness,
+            ordinal: 2,
+        };
+        write(&OrganEnvelope {
+            exchange: execution.clone(),
+            position: Position::Open,
+            payload: Payload::Tool(weaver_types::ToolExecution {
+                name: weaver_types::ToolName("bash".into()),
+                arguments: r#"{"command":"sleep 5"}"#.into(),
+                clock_ms: 8_000,
+            }),
+        });
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let early = ExchangeId {
+            opener: Opener::Harness,
+            ordinal: 3,
+        };
+        write(&OrganEnvelope {
+            exchange: early.clone(),
+            position: Position::Open,
+            payload: Payload::Directive(LifecycleDirective::Quiesce),
+        });
+        let refused = read();
+        assert_eq!(refused.exchange, early);
+        assert_eq!(
+            refused.payload,
+            Payload::Refusal(LifecycleRefusal::OutOfOrder),
+            "a quiesce while the execution is open"
+        );
+        write(&OrganEnvelope {
+            exchange: execution.clone(),
+            position: Position::Continue,
+            payload: Payload::ToolInterrupt,
+        });
+        let killed = read();
+        assert_eq!(
+            killed.exchange, execution,
+            "the execution carried on until the interrupt"
+        );
+        assert!(
+            matches!(
+                killed.payload,
+                Payload::ToolAnswer(weaver_types::ToolOutcome::Killed {
+                    by: weaver_types::KillCause::Unload,
+                    ..
+                })
+            ),
+            "{killed:?}"
+        );
+        let quiesced = test_common::ask(&harness, 4, LifecycleDirective::Quiesce);
+        assert_eq!(
+            quiesced.payload,
+            Payload::Answer(LifecycleAnswer::GateQuiesced)
+        );
+        drop(harness);
+        assert!(test_common::wait_bounded(&mut child, 10, "interrupt-quiesce child").success());
+    }
+
     fn opened(directive: LifecycleDirective) -> OrganEnvelope {
         OrganEnvelope {
             exchange: ExchangeId {
@@ -992,7 +1106,7 @@ mod tests {
     /// **A raise answers ready, and a lower after it answers stopped**, each
     /// once, in order.
     #[test]
-    fn raise_then_lower_walks_the_three_positions() {
+    fn raise_then_lower_walks_before_raise_raised_and_lowered() {
         let path = scratch("walk");
         let mut state = HookState::BeforeRaise;
 

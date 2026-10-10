@@ -282,20 +282,23 @@ fn a_client_that_hung_up_does_not_hold_the_lower() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// **A delivery the lower bound outruns is answered inside the harness's
-/// wait** (gate Spec section 4, the settle margin): a request never answered
-/// stays owed, and the gate answers `GateStopped` one margin inside the lower
-/// bound from hearing the `Lower`, so a harness waiting the full bound still
-/// reads it. Perturbation: settle at the full bound, and the answer comes
-/// after the harness would have given up.
+/// **A request never answered closes at the lower at once**
+/// (`weaver-harness-gate-contract` section 2: the lower waits on "every
+/// response the harness sent"): the channel is ordered, so an exchange still
+/// open when the `Lower` is read will never be answered; its connection
+/// closes unanswered, the harness having recorded it refused, and no lost
+/// delivery is named. A response sent and left unread is pinned in
+/// `relay.rs`, a single response always fitting the kernel's buffer here.
+/// Perturbation: count the open exchange as owed, and stopped waits for the
+/// settle instant.
 #[test]
 #[ignore = "needs root in a user namespace; run by the_drain_is_watched_inside_a_user_namespace"]
-fn a_lost_delivery_is_answered_inside_the_harnesss_wait() {
+fn a_request_never_answered_closes_at_the_lower_at_once() {
     assert!(
         nix::unistd::geteuid().is_root(),
         "this instrument needs euid 0"
     );
-    let path = scratch("drain", "lost");
+    let path = scratch("drain", "never-answered");
     let dir = path.parent().expect("a scratch dir").to_path_buf();
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).expect("the dir opens");
     let log = dir.join("gate.log");
@@ -326,23 +329,19 @@ fn a_lost_delivery_is_answered_inside_the_harnesss_wait() {
         stopped.payload,
         Payload::Answer(LifecycleAnswer::GateStopped)
     );
-    let bound = Duration::from_millis(weaver_types::LOWER_BOUND_MS);
     assert!(
-        waited < bound,
-        "stopped took {waited:?}, past the harness's {bound:?}"
+        waited < Duration::from_secs(2),
+        "stopped waited {waited:?} on a request that will never be answered"
     );
-    assert!(
-        waited + Duration::from_millis(2_000) > bound,
-        "stopped came at {waited:?}, long before the bound: nothing was owed?"
-    );
+    assert_eq!(read_line(&mut waiting), "", "closed unanswered");
     let named = std::fs::read_to_string(&log).unwrap_or_default();
     assert!(
-        named.contains("lost_delivery"),
-        "the lost delivery is named on standard error: {named}"
+        !named.contains("lost_delivery"),
+        "nothing the harness sent was lost: {named}"
     );
     drop(waiting);
     drop(harness);
-    assert!(wait_bounded(&mut child, 30, "the lost delivery").success());
+    assert!(wait_bounded(&mut child, 30, "the never-answered lower").success());
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -122,14 +122,25 @@ impl Relay {
         Ok(())
     }
 
+    /// **The lower's closes from draining** (`weaver-harness-gate-contract`
+    /// section 2): the channel is ordered, so when the `Lower` is read every
+    /// response the harness will send has arrived, and a connection whose
+    /// exchange is still open will never be answered: it closes now,
+    /// unanswered, the harness having recorded its request refused. Only a
+    /// connection with a response still to write stays.
+    pub fn lower(&mut self) {
+        self.served.retain(Served::wants_write);
+    }
+
     /// **Whether a lower from draining can answer stopped** (`weaver-gate-Spec`
-    /// section 4): done once nothing is owed; still open while something is
-    /// and the lower bound has not passed; and, past it, done with the dialer
-    /// of every connection still owed named, its delivery lost.
+    /// section 4): done once every response the harness sent is written;
+    /// still open while one is not and the settle instant has not passed;
+    /// and, past it, done with the dialer of each connection still writing
+    /// named, its delivery lost.
     pub fn settle(&self, past_the_bound: bool) -> Settled {
         // Walked once per wake while a lower waits, so the dialers are
         // collected only when they will be named.
-        if !self.served.iter().any(Served::owes) {
+        if !self.served.iter().any(Served::wants_write) {
             return Settled::Done { lost: Vec::new() };
         }
         if !past_the_bound {
@@ -138,7 +149,7 @@ impl Relay {
         let owed: Vec<u32> = self
             .served
             .iter()
-            .filter(|served| served.owes())
+            .filter(|served| served.wants_write())
             .map(|served| served.dialer)
             .collect();
         Settled::Done { lost: owed }
@@ -439,34 +450,80 @@ mod tests {
         assert!(!draining.wants_read(), "and is still never read");
     }
 
-    /// **A lower from draining settles when nothing is owed, or at the bound**
-    /// (`weaver-gate-Spec` section 4): open while a connection still owes and
-    /// the bound has not passed; done once every answer is written; and past
-    /// the bound done with each connection still owed named by its dialer's
-    /// uid, its delivery lost. Perturbation: settle while a connection still
-    /// owes inside the bound, and the first case fails; name no dialer past
-    /// it, and the last fails.
+    /// **At the lower, a request never answered closes at once, and only a
+    /// response the harness sent is waited on** (`weaver-harness-gate-contract`
+    /// section 2: "every response the harness sent has been written"): the
+    /// channel is ordered, so an exchange still open when the `Lower` is read
+    /// will never be answered, and its connection closes unanswered, the
+    /// harness having recorded the request refused. Perturbation: keep the
+    /// open exchange, and its client never reads the end.
     #[test]
-    fn a_lower_from_draining_settles_when_nothing_is_owed_or_at_the_bound() {
-        let (owed, mut client) = served_pair();
+    fn at_the_lower_a_request_never_answered_closes_at_once() {
+        use std::io::Read as _;
+        let (open, mut client) = served_pair();
         let mut relay = Relay::new();
-        relay.served.push(owed);
-        client.write_all(b"the request\n").expect("writes");
+        relay.served.push(open);
+        client.write_all(b"never answered\n").expect("writes");
         let Framed::Opened(_) = relay.read_one(0).expect("reads") else {
             panic!("the request frames");
         };
         relay.quiesce();
-        assert_eq!(relay.settle(false), Settled::Open, "owed, inside the bound");
-        assert_eq!(
-            relay.settle(true),
-            Settled::Done { lost: vec![12345] },
-            "past the bound, the owed dialer is named"
-        );
-        relay.served[0]
-            .on_response(&TurnFrame::carry(b"the answer"))
-            .expect("routes");
-        relay.served[0].on_writable().expect("drains");
+        assert_eq!(relay.served.len(), 1, "the quiesce keeps an open exchange");
+        relay.lower();
+        assert!(relay.served.is_empty(), "the lower closes it");
+        assert_eq!(client.read(&mut [0u8; 8]).expect("the end"), 0);
         assert_eq!(relay.settle(false), Settled::Done { lost: vec![] });
+    }
+
+    /// **A response written but unread is waited on, and named lost at the
+    /// settle instant** (`weaver-gate-Spec` section 4): with the gate's send
+    /// buffer smaller than the response, the write leaves part of it owed; the
+    /// lower keeps the connection, settle is open inside the instant and names
+    /// the dialer past it. At default buffers a single response always fits
+    /// (a 64 KiB envelope against about 176 KiB the kernel takes unread), so
+    /// this is reachable only where the gate's send buffer is small; the test
+    /// shrinks it. Perturbation: settle while a response is unwritten inside
+    /// the instant, or name no dialer past it, and this fails.
+    #[test]
+    fn a_response_written_but_unread_is_named_lost_at_the_settle_instant() {
+        use std::os::fd::AsFd as _;
+        let (near, mut client) = UnixStream::pair().expect("pair");
+        nix::sys::socket::setsockopt(&near.as_fd(), nix::sys::socket::sockopt::SndBuf, &4096)
+            .expect("a small send buffer");
+        let mut served = Served::admit(Admitted {
+            stream: near,
+            peer: PeerIdentity {
+                uid: 12345,
+                gid: 12345,
+                pid: 1,
+            },
+        })
+        .expect("admit");
+        let mut ordinal = 0u64;
+        client.write_all(b"the request\n").expect("writes");
+        let Framed::Opened(_) = served.on_readable(&mut ordinal).expect("reads") else {
+            panic!("the request frames");
+        };
+        let mut relay = Relay::new();
+        relay.served.push(served);
+        relay.quiesce();
+        relay.served[0]
+            .on_response(&TurnFrame::carry(&vec![b'x'; 60 * 1024]))
+            .expect("routes");
+        relay.served[0].on_writable().expect("writes what fits");
+        assert!(
+            relay.served[0].wants_write(),
+            "part of the response is unwritten"
+        );
+        relay.lower();
+        assert_eq!(
+            relay.served.len(),
+            1,
+            "a response the harness sent is waited on"
+        );
+        assert_eq!(relay.settle(false), Settled::Open);
+        assert_eq!(relay.settle(true), Settled::Done { lost: vec![12345] });
+        drop(client);
     }
 
     /// **The envelopes waiting on the channel are flushed in order**, so a
