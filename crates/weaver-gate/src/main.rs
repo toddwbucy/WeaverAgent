@@ -290,29 +290,16 @@ fn serve(channel: Channel) -> ExitCode {
             }
             Tag::Conn(at) => {
                 if let Some(relay) = relay_of(&mut state) {
-                    // An errored connection surfaces through its own read,
-                    // costing the connection and never the gate.
-                    if revents
-                        .intersects(PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR)
-                    {
-                        match relay.read_one(at) {
-                            Ok(relay::Framed::Opened(envelope)) => {
-                                if let Err(code) = send_or_pend(&channel, relay, *envelope) {
-                                    drop(state);
-                                    return code;
-                                }
-                            }
-                            Ok(relay::Framed::Waiting) => {
-                                // A half-closed peer with nothing left to
-                                // serve leaves quietly, its conversation
-                                // finished.
-                                if relay.served.get(at).is_some_and(relay::Served::spent) {
-                                    relay.served.swap_remove(at);
-                                }
-                            }
-                            Err(gone) => remove(relay, at, &gone),
-                        }
-                    } else if revents.contains(PollFlags::POLLOUT)
+                    // **Where an answer is owed, the write comes first**
+                    // (self-check on B1): a hang-up wakes as POLLOUT with
+                    // POLLHUP, and taking the read for it spun the loop
+                    // without ever trying the write whose failure removes
+                    // the connection. A connection is read only while it
+                    // wants a read, so a draining one never is.
+                    if relay.served.get(at).is_some_and(relay::Served::wants_write)
+                        && revents.intersects(
+                            PollFlags::POLLOUT | PollFlags::POLLHUP | PollFlags::POLLERR,
+                        )
                         && let Some(served) = relay.served.get_mut(at)
                     {
                         match served.on_writable() {
@@ -334,6 +321,28 @@ fn serve(channel: Channel) -> ExitCode {
                                         }
                                     }
                                     Err(gone) => remove(relay, at, &gone),
+                                }
+                            }
+                            Err(gone) => remove(relay, at, &gone),
+                        }
+                    } else if revents
+                        .intersects(PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR)
+                    {
+                        // An errored connection surfaces through its own
+                        // read, costing the connection and never the gate.
+                        match relay.read_one(at) {
+                            Ok(relay::Framed::Opened(envelope)) => {
+                                if let Err(code) = send_or_pend(&channel, relay, *envelope) {
+                                    drop(state);
+                                    return code;
+                                }
+                            }
+                            Ok(relay::Framed::Waiting) => {
+                                // A half-closed peer with nothing left to
+                                // serve leaves quietly, its conversation
+                                // finished.
+                                if relay.served.get(at).is_some_and(relay::Served::spent) {
+                                    relay.served.swap_remove(at);
                                 }
                             }
                             Err(gone) => remove(relay, at, &gone),

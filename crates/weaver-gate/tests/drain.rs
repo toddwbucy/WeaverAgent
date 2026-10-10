@@ -223,6 +223,65 @@ fn the_quiesce_answers_every_admitted_request_and_lowers_after_the_writes() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// **A client that hung up does not hold the lower** (self-check on B1): a
+/// draining connection whose client closed fully while its answer was owed
+/// is written once, the write fails, and the connection leaves, so
+/// `GateStopped` comes at once rather than at the lower bound, and the gate
+/// never reads a draining connection. Perturbation: take the read branch on
+/// a hang-up again, and stopped waits for the bound.
+#[test]
+#[ignore = "needs root in a user namespace; run by the_drain_is_watched_inside_a_user_namespace"]
+fn a_client_that_hung_up_does_not_hold_the_lower() {
+    assert!(
+        nix::unistd::geteuid().is_root(),
+        "this instrument needs euid 0"
+    );
+    let path = scratch("drain", "hung-up");
+    let dir = path.parent().expect("a scratch dir").to_path_buf();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).expect("the dir opens");
+    let log = dir.join("gate.log");
+    let (harness, child_end) = seqpacket_pair();
+    bound_receives(&harness, 20);
+    let mut child = spawn_gate_as(child_end.as_raw_fd(), &log);
+    let ready = ask(
+        &harness,
+        1,
+        LifecycleDirective::Raise {
+            instruction: root_admitted(),
+            socket: path.to_path_buf(),
+        },
+    );
+    assert_eq!(ready.payload, Payload::Answer(LifecycleAnswer::GateReady));
+    let mut gone = dial(&path);
+    gone.write_all(b"then gone\n").expect("writes");
+    let exchange = frame_of(&harness, "then gone");
+    let quiesced = ask(&harness, 2, LifecycleDirective::Quiesce);
+    assert_eq!(
+        quiesced.payload,
+        Payload::Answer(LifecycleAnswer::GateQuiesced)
+    );
+    drop(gone);
+    respond(
+        &harness,
+        &exchange,
+        r#"{"kind":"answered","text":"unread"}"#,
+    );
+    let started = std::time::Instant::now();
+    let stopped = ask(&harness, 3, LifecycleDirective::Lower);
+    assert_eq!(
+        stopped.payload,
+        Payload::Answer(LifecycleAnswer::GateStopped)
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "stopped waited {:?} on a client that hung up",
+        started.elapsed()
+    );
+    drop(harness);
+    assert!(wait_bounded(&mut child, 30, "the hung-up drain").success());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// **The forced path lowers at once** (`weaver-admin-Spec` 3.0, the forced
 /// unload (sole)): the admitted request's frame reaches the harness ahead of
 /// `GateStopped`, so the harness records it refused `Unloading`, and its
@@ -297,7 +356,7 @@ fn the_drain_is_watched_inside_a_user_namespace() {
         return;
     }
     assert!(
-        output.status.success() && stdout.contains("test result: ok. 2 passed"),
+        output.status.success() && stdout.contains("test result: ok. 3 passed"),
         "the drain instruments failed inside the namespace\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
 }
