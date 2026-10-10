@@ -762,8 +762,10 @@ position, the harness interrupting one out before it quiesces.
 
 **`Lower` from draining answers last**: `GateStopped` is deferred until every owed
 response has been written, the relay dropped then, under the lower bound, 10 s
-(`LOWER_BOUND_MS`, `weaver-harness-Spec` section 6); a connection whose client has not read its answer when
-that bound passes closes with its delivery lost, the lost-delivery case of charter
+(`LOWER_BOUND_MS`, `weaver-harness-Spec` section 6), and this crate answers at most one
+second inside it (`LOWER_SETTLE_MARGIN_MS`), timed from hearing the `Lower`, so its answer
+reaches a harness still waiting the full bound; a connection whose client has not read its
+answer when that margin's instant passes closes with its delivery lost, the lost-delivery case of charter
 section 13.4, and this crate names it on standard error with the dialer's uid, so the
 operator can see why the drain stood. **`Lower` from the raised position is the forced
 unload's close** (`weaver-admin-Spec` section 3, the forced unload (sole); I5): the

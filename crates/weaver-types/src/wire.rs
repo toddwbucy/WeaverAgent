@@ -46,6 +46,13 @@ pub const DECODE_MESSAGE_BOUND: usize = 8 * 1024 * 1024;
 /// Defined here once, the floor, so the gate and the harness read one value.
 pub const LOWER_BOUND_MS: u64 = 10_000;
 
+/// **The gate's settle margin**, per `weaver-gate-Spec` section 4: a draining
+/// gate answers `GateStopped` at most this far inside the lower bound, timed
+/// from hearing the `Lower`, so its answer reaches a harness still waiting the
+/// full bound (the operator's ruling of 2026-10-09 on #1, the mechanism of the
+/// 10-second bound and not a further leg).
+pub const LOWER_SETTLE_MARGIN_MS: u64 = 1_000;
+
 /// The segment series' preamble, per `weaver-types-Spec` section 4.4:
 /// exactly two members, both unsigned, and nothing else - the
 /// unknown-field refusal is what makes a three-member kindless frame a

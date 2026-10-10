@@ -435,8 +435,13 @@ fn serve_channel_event(channel: &Channel, state: &mut HookState) -> Result<(), E
         {
             *stopping = Some(Stopping {
                 exchange: envelope.exchange,
+                // One margin inside the lower bound, so the answer reaches
+                // a harness still waiting the full bound.
                 deadline: std::time::Instant::now()
-                    + std::time::Duration::from_millis(weaver_types::LOWER_BOUND_MS),
+                    + std::time::Duration::from_millis(
+                        weaver_types::LOWER_BOUND_MS
+                            .saturating_sub(weaver_types::LOWER_SETTLE_MARGIN_MS),
+                    ),
             });
             return Ok(());
         }
