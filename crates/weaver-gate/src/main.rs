@@ -102,19 +102,20 @@ fn refuse_everything(channel: Channel) -> ExitCode {
     }
 }
 
+/// A `Lower` heard while draining, answered last: the exchange its
+/// `GateStopped` closes, and the settle instant, one margin inside the lower
+/// bound.
+struct Stopping {
+    exchange: ExchangeId,
+    deadline: std::time::Instant,
+}
+
 /// The serial loop.
 ///
 /// **Closure is death.** A read that returns closure means the interior is
 /// gone: this crate closes its listener if one stands and exits, never treating
 /// closure as an answer. The listener's close is the drop of the position,
 /// which happens on the way out of this function.
-/// A `Lower` heard while draining, answered last: the exchange its
-/// `GateStopped` closes, and the lower bound's instant.
-struct Stopping {
-    exchange: ExchangeId,
-    deadline: std::time::Instant,
-}
-
 fn serve(channel: Channel) -> ExitCode {
     let mut state = HookState::BeforeRaise;
 
@@ -137,8 +138,12 @@ fn serve(channel: Channel) -> ExitCode {
             let now = std::time::Instant::now();
             match relay.settle(now >= stopping.deadline) {
                 relay::Settled::Open => {
-                    timeout =
-                        PollTimeout::try_from(stopping.deadline - now).unwrap_or(PollTimeout::MAX);
+                    // Rounded up to the next millisecond: poll counts whole
+                    // milliseconds, and a truncated timeout of zero in the
+                    // last fraction would spin until the instant.
+                    let remaining = (stopping.deadline - now)
+                        .saturating_add(std::time::Duration::from_micros(999));
+                    timeout = PollTimeout::try_from(remaining).unwrap_or(PollTimeout::MAX);
                 }
                 relay::Settled::Done { lost } => {
                     for dialer in lost {
@@ -170,14 +175,15 @@ fn serve(channel: Channel) -> ExitCode {
         }
 
         // **Wait where a landing can arrive**, per Spec section 4: the
-        // channel, and while raised the listener and every served
-        // connection by what it wants, readable while no exchange is open
-        // and writable while a response stands undelivered. The channel
+        // channel; while raised, the listener; and, raised or draining,
+        // every served connection by what it wants, readable while no
+        // exchange is open (never while draining) and writable while a
+        // response stands undelivered. The channel
         // adds writability exactly while pending envelopes wait on it, and
         // the loop blocks on none of them.
         let mut waiting = Vec::with_capacity(4);
         let mut tags = Vec::with_capacity(4);
-        let channel_flags = match relay_of(&mut state) {
+        let channel_flags = match relay_ref(&state) {
             Some(relay) if !relay.pending.is_empty() => PollFlags::POLLIN | PollFlags::POLLOUT,
             _ => PollFlags::POLLIN,
         };
@@ -187,7 +193,7 @@ fn serve(channel: Channel) -> ExitCode {
             waiting.push(PollFd::new(hook.listener(), PollFlags::POLLIN));
             tags.push(Tag::Listener);
         }
-        if let HookState::Raised(_, relay) | HookState::Draining(relay, _) = &state {
+        if let Some(relay) = relay_ref(&state) {
             for (index, served) in relay.served.iter().enumerate() {
                 let mut flags = PollFlags::empty();
                 if served.wants_read() {
@@ -580,7 +586,16 @@ fn judge_one(hook: &Hook, relay: &mut Relay) {
     }
 }
 
-/// The relay a position carries: raised, or draining after the quiesce.
+/// The relay a position carries, to read: raised, or draining after the
+/// quiesce.
+fn relay_ref(state: &HookState) -> Option<&Relay> {
+    match state {
+        HookState::Raised(_, relay) | HookState::Draining(relay, _) => Some(relay),
+        HookState::BeforeRaise | HookState::Lowered => None,
+    }
+}
+
+/// The relay a position carries, to change.
 fn relay_of(state: &mut HookState) -> Option<&mut Relay> {
     match state {
         HookState::Raised(_, relay) | HookState::Draining(relay, _) => Some(relay),

@@ -127,17 +127,21 @@ impl Relay {
     /// and the lower bound has not passed; and, past it, done with the dialer
     /// of every connection still owed named, its delivery lost.
     pub fn settle(&self, past_the_bound: bool) -> Settled {
+        // Walked once per wake while a lower waits, so the dialers are
+        // collected only when they will be named.
+        if !self.served.iter().any(Served::owes) {
+            return Settled::Done { lost: Vec::new() };
+        }
+        if !past_the_bound {
+            return Settled::Open;
+        }
         let owed: Vec<u32> = self
             .served
             .iter()
             .filter(|served| served.owes())
             .map(|served| served.dialer)
             .collect();
-        match (owed.is_empty(), past_the_bound) {
-            (true, _) => Settled::Done { lost: Vec::new() },
-            (false, false) => Settled::Open,
-            (false, true) => Settled::Done { lost: owed },
-        }
+        Settled::Done { lost: owed }
     }
 
     /// The index of the connection owed this exchange's response, or none
