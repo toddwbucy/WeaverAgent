@@ -754,16 +754,28 @@ every connection that stands; sends every frame still waiting on the channel's
 writability; and only then answers `GateQuiesced`, so every request this crate admitted
 reaches the harness ahead of the answer and the harness refuses each it had not started
 through this crate, the connection standing (S4 x dialer request). `Quiesce` from any
-other position is out of order. **Draining reads no client input and opens no exchange, and still routes the frames it
+other position is out of order. **A `Quiesce` that arrives while an execution is open
+is answered `OutOfOrder` and the execution carries on**, an open execution reading only
+its own continuation; the harness interrupts first. A line still waiting in a
+connection's residual behind the one it opened was never received as a request (one line
+in and one line out, `weaver-gate-world-contract` section 3), so draining never frames it
+and it closes with its connection. A `ToolCancel` or `ToolInterrupt` arriving at the
+continue position with no execution open has crossed its answer and is dropped silently,
+in every position. **Draining reads no client input and opens no exchange, and still routes the frames it
 owes**: a response frame still routes to the connection owed it, so the turn in flight gives its final output and
 a request received but not started gets its refusal, each on its own connection, while
 no line is read and no exchange opens; a tool execution opens only in the raised
 position, the harness interrupting one out before it quiesces.
 
-**`Lower` from draining answers last**: `GateStopped` is deferred until every owed
-response has been written, the relay dropped then, under the lower bound of
-`weaver-harness-Spec` section 6; a connection whose client has not read its answer when
-that bound passes closes with its delivery lost, the lost-delivery case of charter
+**`Lower` from draining answers last**: `GateStopped` is deferred until every response
+the harness sent has been written (`weaver-harness-gate-contract` section 2), the relay
+dropped then, under the lower bound, 10 s
+(`LOWER_BOUND_MS`, `weaver-harness-Spec` section 6), and this crate answers at most one
+second inside it (`LOWER_SETTLE_MARGIN_MS`), timed from hearing the `Lower`, so its answer
+reaches a harness still waiting the full bound. The channel being ordered, a connection
+whose exchange is still open when the `Lower` is read will never be answered: it closes at
+once, unanswered, the harness having recorded its request refused. A connection whose client has not read its
+answer when that margin's instant passes closes with its delivery lost, the lost-delivery case of charter
 section 13.4, and this crate names it on standard error with the dialer's uid, so the
 operator can see why the drain stood. **`Lower` from the raised position is the forced
 unload's close** (`weaver-admin-Spec` section 3, the forced unload (sole); I5): the
@@ -773,7 +785,7 @@ refused with `Unloading`, and stopped is answered after the closes return, the o
 time to finish. **A force that joins a quiesce or a drain sends `Lower` too** (the forced
 unload (joining); I5): this crate sends every frame it admitted and has not yet sent to
 the channel, so the harness records each refused with `Unloading`, writes what it owes
-inside the lower bound, closes the listener and every connection, and answers stopped.
+inside the lower bound, 10 s (`LOWER_BOUND_MS`), closes the listener and every connection, and answers stopped.
 Closure of the channel stays only the escalation, where this crate does not answer
 `Lower` inside its bound: it then meets closure and exits per section 2's closure rule.
 

@@ -31,6 +31,7 @@ use std::os::unix::net::UnixStream;
 
 use weaver_types::{ExchangeId, Opener, OrganEnvelope, Payload, Position, TurnFrame};
 
+use crate::channel::{Channel, ChannelFault};
 use crate::hook::Admitted;
 
 /// The client line's bound: 32 kibibytes of octets before the delimiter,
@@ -99,6 +100,101 @@ impl Relay {
         served.on_readable(&mut self.next_ordinal)
     }
 
+    /// **The quiesce's closes**, per `weaver-gate-Spec` section 4: every
+    /// connection owed nothing closes now, its input never received as a
+    /// request, and every one owed something drains, read no more.
+    pub fn quiesce(&mut self) {
+        self.served.retain(Served::owes);
+        for served in &mut self.served {
+            served.draining = true;
+        }
+    }
+
+    /// **Sends every envelope waiting on the channel, in order, blocking**,
+    /// so the answer that follows reaches the harness after every frame this
+    /// crate admitted (`weaver-harness-gate-contract` section 2, the quiesce
+    /// and the forced lower).
+    pub fn flush_pending(&mut self, channel: &Channel) -> Result<(), ChannelFault> {
+        while let Some(front) = self.pending.front() {
+            channel.send(front)?;
+            self.pending.pop_front();
+        }
+        Ok(())
+    }
+
+    /// **The lower's closes from draining** (`weaver-harness-gate-contract`
+    /// section 2): the channel is ordered, so when the `Lower` is read every
+    /// response the harness will send has arrived, and a connection whose
+    /// exchange is still open will never be answered: it closes now,
+    /// unanswered, the harness having recorded its request refused. Only a
+    /// connection with a response still to write stays.
+    pub fn lower(&mut self) {
+        self.served.retain(Served::wants_write);
+    }
+
+    /// **Whether a lower from draining can answer stopped** (`weaver-gate-Spec`
+    /// section 4): done once every response the harness sent is written;
+    /// still open while one is not and the settle instant has not passed;
+    /// and, past it, done with the dialer of each connection still writing
+    /// named, its delivery lost.
+    pub fn settle(&self, past_the_bound: bool) -> Settled {
+        // Walked once per wake while a lower waits, so the dialers are
+        // collected only when they will be named.
+        if !self.served.iter().any(Served::wants_write) {
+            return Settled::Done { lost: Vec::new() };
+        }
+        if !past_the_bound {
+            return Settled::Open;
+        }
+        let owed: Vec<u32> = self
+            .served
+            .iter()
+            .filter(|served| served.wants_write())
+            .map(|served| served.dialer)
+            .collect();
+        Settled::Done { lost: owed }
+    }
+
+    /// **The lower's flush, bounded by the settle instant** (Codex on #114):
+    /// sends what waits on the channel in order, waiting on its writability
+    /// no later than `until`, so a harness reading slowly cannot hold the gate
+    /// past the instant it must answer by. Frames still waiting then are
+    /// dropped, and the dialer of each is returned to be named lost.
+    pub fn flush_pending_until(
+        &mut self,
+        channel: &Channel,
+        until: std::time::Instant,
+    ) -> Result<Vec<u32>, ChannelFault> {
+        use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+        while let Some(front) = self.pending.front() {
+            if channel.try_send(front)? {
+                self.pending.pop_front();
+                continue;
+            }
+            let remaining = until.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let timeout = PollTimeout::try_from(
+                remaining.saturating_add(std::time::Duration::from_micros(999)),
+            )
+            .unwrap_or(PollTimeout::MAX);
+            let mut fds = [PollFd::new(channel.as_fd(), PollFlags::POLLOUT)];
+            match poll(&mut fds, timeout) {
+                Ok(_) | Err(nix::errno::Errno::EINTR) => {}
+                Err(_) => return Err(ChannelFault::Closed),
+            }
+        }
+        Ok(self
+            .pending
+            .drain(..)
+            .filter_map(|envelope| match envelope.payload {
+                Payload::Frame(frame) => frame.dialer,
+                _ => None,
+            })
+            .collect())
+    }
+
     /// The index of the connection owed this exchange's response, or none
     /// where the connection already left and the delivery is lost.
     pub fn owed(&self, ordinal: u64) -> Option<usize> {
@@ -128,6 +224,20 @@ pub struct Served {
     /// ends while everything owed still delivers, and the connection leaves
     /// only when it is spent.
     read_closed: bool,
+    /// The gate quiesced: this connection is never read again and opens no
+    /// exchange, and it leaves once what it is owed is written
+    /// (`weaver-gate-Spec` section 4, draining).
+    draining: bool,
+}
+
+/// Whether a draining relay has delivered what it owes, for the lower.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Settled {
+    /// Something is still owed and the lower bound has not passed.
+    Open,
+    /// The lower may answer stopped; `lost` names the dialer of each
+    /// connection whose delivery the bound outran.
+    Done { lost: Vec<u32> },
 }
 
 /// Why a connection left the relay. The name travels to standard error for
@@ -170,6 +280,7 @@ impl Served {
             outbound: Vec::new(),
             exchange: None,
             read_closed: false,
+            draining: false,
         })
     }
 
@@ -179,7 +290,13 @@ impl Served {
     /// per the Spec's own sentence. A read-closed connection wants nothing
     /// read again.
     pub fn wants_read(&self) -> bool {
-        !self.read_closed && self.exchange.is_none() && self.outbound.is_empty()
+        !self.read_closed && !self.draining && self.exchange.is_none() && self.outbound.is_empty()
+    }
+
+    /// Whether this connection is owed anything: an open exchange, or a
+    /// response not yet written.
+    pub fn owes(&self) -> bool {
+        self.exchange.is_some() || !self.outbound.is_empty()
     }
 
     /// Whether the write set wants this connection: only while a response
@@ -197,10 +314,11 @@ impl Served {
     /// is open, nothing is owed, and no complete line waits. A spent
     /// connection leaves the relay quietly, its conversation finished.
     pub fn spent(&self) -> bool {
-        self.read_closed
-            && self.exchange.is_none()
-            && self.outbound.is_empty()
-            && !self.input.contains(&DELIMITER)
+        (self.draining && !self.owes())
+            || self.read_closed
+                && self.exchange.is_none()
+                && self.outbound.is_empty()
+                && !self.input.contains(&DELIMITER)
     }
 
     /// A readable wake: read what is there, once, and try to frame a line.
@@ -238,7 +356,7 @@ impl Served {
         // The cap holds on both legs: no second exchange opens while one is
         // open or while its response stands undelivered, so the outbound
         // buffer carries at most one response.
-        if self.exchange.is_some() || !self.outbound.is_empty() {
+        if self.draining || self.exchange.is_some() || !self.outbound.is_empty() {
             return Ok(Framed::Waiting);
         }
         match self.input.iter().position(|byte| *byte == DELIMITER) {
@@ -319,6 +437,223 @@ mod tests {
         })
         .expect("admit");
         (served, far)
+    }
+
+    /// **A quiesce closes every connection owed nothing and reads no more**,
+    /// per `weaver-gate-Spec` section 4 (draining): a connection with no open
+    /// exchange closes, its client reading the end; one owed a response stays,
+    /// reads nothing, opens no exchange for a line already in its residual or
+    /// sent after, delivers what it is owed, and then owes nothing.
+    /// Perturbation: keep the idle connection, or let a draining one frame its
+    /// residual, and this fails.
+    #[test]
+    fn a_quiesce_closes_what_is_owed_nothing_and_reads_no_more() {
+        use std::io::Read as _;
+        let (owed, mut owed_client) = served_pair();
+        let (idle, mut idle_client) = served_pair();
+        let mut relay = Relay::new();
+        relay.served.push(owed);
+        relay.served.push(idle);
+        owed_client
+            .write_all(b"the request\nthe next line\n")
+            .expect("writes");
+        let Framed::Opened(opened) = relay.read_one(0).expect("reads") else {
+            panic!("the request frames");
+        };
+
+        relay.quiesce();
+
+        assert_eq!(relay.served.len(), 1, "the idle connection closed");
+        let mut got = [0u8; 8];
+        assert_eq!(idle_client.read(&mut got).expect("the end"), 0);
+        let draining = &mut relay.served[0];
+        assert!(draining.owes(), "the open exchange is owed");
+        assert!(
+            !draining.wants_read(),
+            "a draining connection is never read"
+        );
+        let mut ordinal = opened.exchange.ordinal;
+        draining
+            .on_response(&TurnFrame::carry(b"the answer"))
+            .expect("routes");
+        draining.on_writable().expect("drains");
+        let n = owed_client.read(&mut [0u8; 32]).expect("the answer");
+        assert_eq!(n, b"the answer\n".len());
+        assert!(
+            matches!(
+                draining.frame_one(&mut ordinal).expect("scans"),
+                Framed::Waiting
+            ),
+            "the residual's line never opens an exchange while draining"
+        );
+        assert!(!draining.owes(), "delivered, it owes nothing");
+        assert!(!draining.wants_read(), "and is still never read");
+    }
+
+    /// **At the lower, a request never answered closes at once, and only a
+    /// response the harness sent is waited on** (`weaver-harness-gate-contract`
+    /// section 2: "every response the harness sent has been written"): the
+    /// channel is ordered, so an exchange still open when the `Lower` is read
+    /// will never be answered, and its connection closes unanswered, the
+    /// harness having recorded the request refused. Perturbation: keep the
+    /// open exchange, and its client never reads the end.
+    #[test]
+    fn at_the_lower_a_request_never_answered_closes_at_once() {
+        use std::io::Read as _;
+        let (open, mut client) = served_pair();
+        let mut relay = Relay::new();
+        relay.served.push(open);
+        client.write_all(b"never answered\n").expect("writes");
+        let Framed::Opened(_) = relay.read_one(0).expect("reads") else {
+            panic!("the request frames");
+        };
+        relay.quiesce();
+        assert_eq!(relay.served.len(), 1, "the quiesce keeps an open exchange");
+        relay.lower();
+        assert!(relay.served.is_empty(), "the lower closes it");
+        assert_eq!(client.read(&mut [0u8; 8]).expect("the end"), 0);
+        assert_eq!(relay.settle(false), Settled::Done { lost: vec![] });
+    }
+
+    /// **A response written but unread is waited on, and named lost at the
+    /// settle instant** (`weaver-gate-Spec` section 4): with the gate's send
+    /// buffer smaller than the response, the write leaves part of it owed; the
+    /// lower keeps the connection, settle is open inside the instant and names
+    /// the dialer past it. At default buffers a single response always fits
+    /// (a 64 KiB envelope against about 176 KiB the kernel takes unread), so
+    /// this is reachable only where the gate's send buffer is small; the test
+    /// shrinks it. Perturbation: settle while a response is unwritten inside
+    /// the instant, or name no dialer past it, and this fails.
+    #[test]
+    fn a_response_written_but_unread_is_named_lost_at_the_settle_instant() {
+        use std::os::fd::AsFd as _;
+        let (near, mut client) = UnixStream::pair().expect("pair");
+        nix::sys::socket::setsockopt(&near.as_fd(), nix::sys::socket::sockopt::SndBuf, &4096)
+            .expect("a small send buffer");
+        let mut served = Served::admit(Admitted {
+            stream: near,
+            peer: PeerIdentity {
+                uid: 12345,
+                gid: 12345,
+                pid: 1,
+            },
+        })
+        .expect("admit");
+        let mut ordinal = 0u64;
+        client.write_all(b"the request\n").expect("writes");
+        let Framed::Opened(_) = served.on_readable(&mut ordinal).expect("reads") else {
+            panic!("the request frames");
+        };
+        let mut relay = Relay::new();
+        relay.served.push(served);
+        relay.quiesce();
+        relay.served[0]
+            .on_response(&TurnFrame::carry(&vec![b'x'; 60 * 1024]))
+            .expect("routes");
+        relay.served[0].on_writable().expect("writes what fits");
+        assert!(
+            relay.served[0].wants_write(),
+            "part of the response is unwritten"
+        );
+        relay.lower();
+        assert_eq!(
+            relay.served.len(),
+            1,
+            "a response the harness sent is waited on"
+        );
+        assert_eq!(relay.settle(false), Settled::Open);
+        assert_eq!(relay.settle(true), Settled::Done { lost: vec![12345] });
+        drop(client);
+    }
+
+    /// **The lower's flush stops at the settle instant** (Codex on #114): the
+    /// harness reading the channel slowly, or not at all, cannot hold the
+    /// gate past the instant; the frames still waiting are dropped and their
+    /// dialers named, as any delivery the bound outruns. Perturbation: flush
+    /// without the instant, and the call never returns while the channel is
+    /// full.
+    #[test]
+    fn the_lowers_flush_stops_at_the_settle_instant() {
+        use std::time::{Duration, Instant};
+        let (near, far) = nix::sys::socket::socketpair(
+            nix::sys::socket::AddressFamily::Unix,
+            nix::sys::socket::SockType::SeqPacket,
+            None,
+            nix::sys::socket::SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("pair");
+        let gate = crate::channel::from_owned(near);
+        let _unread_harness = crate::channel::from_owned(far);
+        let frame = |ordinal| OrganEnvelope {
+            exchange: ExchangeId {
+                opener: Opener::Gate,
+                ordinal,
+            },
+            position: Position::Open,
+            payload: Payload::Frame(TurnFrame::carry_from(&[b'x'; 30 * 1024], 777)),
+        };
+        // Fill the channel the harness is not reading.
+        let mut ordinal = 0;
+        while gate.try_send(&frame(ordinal)).expect("sends") {
+            ordinal += 1;
+        }
+        let mut relay = Relay::new();
+        relay.pending.push_back(frame(ordinal + 1));
+        relay.pending.push_back(frame(ordinal + 2));
+        let (done, finished) = std::sync::mpsc::channel();
+        let started = Instant::now();
+        std::thread::spawn(move || {
+            let lost = relay
+                .flush_pending_until(&gate, Instant::now() + Duration::from_millis(200))
+                .expect("a full channel is no fault");
+            done.send((lost, relay.pending.len())).ok();
+            drop(gate);
+        });
+        let (lost, left) = finished
+            .recv_timeout(Duration::from_secs(3))
+            .expect("the flush returns at the instant");
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(
+            lost,
+            vec![777, 777],
+            "each frame left is named by its dialer"
+        );
+        assert_eq!(left, 0, "and dropped");
+    }
+
+    /// **The envelopes waiting on the channel are flushed in order**, so a
+    /// quiesce's or a forced lower's answer follows every frame this crate
+    /// admitted (`weaver-harness-gate-contract` section 2). Perturbation:
+    /// flush only the first, and the second never arrives before the end.
+    #[test]
+    fn the_pending_envelopes_flush_in_order() {
+        let (near, far) = nix::sys::socket::socketpair(
+            nix::sys::socket::AddressFamily::Unix,
+            nix::sys::socket::SockType::SeqPacket,
+            None,
+            nix::sys::socket::SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("pair");
+        let (gate, harness) = (
+            crate::channel::from_owned(near),
+            crate::channel::from_owned(far),
+        );
+        let mut relay = Relay::new();
+        for ordinal in [7, 8] {
+            relay.pending.push_back(OrganEnvelope {
+                exchange: ExchangeId {
+                    opener: Opener::Gate,
+                    ordinal,
+                },
+                position: Position::Open,
+                payload: Payload::Frame(TurnFrame::carry(b"admitted")),
+            });
+        }
+        relay.flush_pending(&gate).expect("flushes");
+        assert!(relay.pending.is_empty());
+        for ordinal in [7, 8] {
+            assert_eq!(harness.recv().expect("arrives").exchange.ordinal, ordinal);
+        }
     }
 
     /// **Two lines in one write open two exchanges in order, one at a
