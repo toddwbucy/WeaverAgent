@@ -2202,7 +2202,7 @@ skipped: a tool call out is interrupted, the turn or the wind-down's generation 
 cancelled as a stop, and a gate already quiescing or draining is brought down with
 `Lower`, as the sole force's is: the gate sends every frame it admitted and had not yet
 sent, this crate records each refused with `Unloading` and its connection closes (I5),
-inside the lower bound. Only where the gate does not answer `Lower` inside that bound
+inside the lower bound, 10 s (`LOWER_BOUND_MS`). Only where the gate does not answer `Lower` inside that bound
 does this crate close its end of the gate channel and reap the gate, closure being death
 to the gate per `weaver-harness-gate-contract` section 1. The save point is still taken, and a leg it misses comes down as the forced
 leave's does rather than stopping in S9; a force heard while the legs run does not
@@ -2255,8 +2255,12 @@ leave's does; with both set, admin's bound is their sum and 150 seconds, per `we
 section 3. Every other leg is bounded in this crate: the save point's ask and `finished`
 legs and the grants read-back under `ANSWER_BOUND_MS`, its answer leg under
 `SNAPSHOT_ANSWER_BOUND_MS`, and `GateStopped` from a draining gate under the lower bound,
-past which an unread delivery is lost per `weaver-gate-PRD` section 13.4; these, the
-trace's drain, the SPU's `Release` and the reaps sum inside admin's 150 seconds. The wait
+10 seconds (`LOWER_BOUND_MS`, the operator's ruling of 2026-10-09 on #1, defined once in
+`weaver-types` and read by this crate and the gate), past which an unread delivery is lost
+per `weaver-gate-PRD` section 13.4; these, the trace's drain, the SPU's `Release` and the
+reaps sum inside admin's 150 seconds: the three two-second legs, the 120-second answer leg
+and the 10-second lower take 136 seconds, leaving 14 for the trace's drain, the release
+and the reaps. The wait
 for `GateQuiesced` is the drain's, not one of these legs: a declared `drain-bound`
 covers it and the turn's finish together, and with none declared it is unbounded, a
 force being the recourse (Codex on #109, round 40). A force, sole or joining, skips the drain and the wind-down, so its

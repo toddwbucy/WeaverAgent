@@ -161,8 +161,8 @@ I5).
 **Lower the hook.** Opened by the harness, after the drain and the wind-down on a
 graceful leave, or at once on a forced one. **From a quiescing gate, `GateStopped` is
 sent only once every response the harness sent has been written to its connection**, so
-a dialer the drain answered has its answer before the gate goes, inside the lower bound
-of `weaver-harness-Spec` section 6, a delivery the bound outruns being lost and not the
+a dialer the drain answered has its answer before the gate goes, inside the lower bound, 10 s
+(`LOWER_BOUND_MS`, `weaver-harness-Spec` section 6), a delivery the bound outruns being lost and not the
 turn (step 5). **From a raised gate, the forced path** (the forced unload (sole)), the
 listener and every connection close at once, every frame the gate admitted reaching
 the channel ahead of the answer so the harness records each refused with `Unloading`,
@@ -172,9 +172,9 @@ nothing new can arrive anywhere in the interior once the harness proceeds. **A f
 that joins a leave whose gate is quiescing or draining sends `Lower` as well** (the
 forced unload (joining)): the gate sends every frame it admitted
 and had not yet sent ahead of its answer, the harness recording each refused with
-`Unloading`, writes what it owes inside the lower bound, closes, and answers stopped
+`Unloading`, writes what it owes inside the lower bound, 10 s (`LOWER_BOUND_MS`), closes, and answers stopped
 (I5). Closing the harness's end of this channel is only the escalation, where the gate
-does not answer `Lower` inside the lower bound, the gate then meeting closure per
+does not answer `Lower` inside the lower bound, 10 s (`LOWER_BOUND_MS`), the gate then meeting closure per
 section 1.
 
 **Carry a turn.** Opened by the gate, one exchange per client request, from
@@ -418,7 +418,7 @@ the frame the world contract fixes, clean or stopped with its kind named.
 
 **The gate guarantees** that ready follows the bind, quiesced follows the listener's
 close and every frame it admitted, and stopped follows the closes and, from a quiescing
-gate, every owed write inside the lower bound. It
+gate, every owed write inside the lower bound, 10 s (`LOWER_BOUND_MS`). It
 guarantees that a refusal leaves nothing held, no listener and no half-bound socket,
 so a refusal is true about the boundary rather than merely true about the attempt. It
 guarantees that it answers a refusal rather than exiting on one. It guarantees that
