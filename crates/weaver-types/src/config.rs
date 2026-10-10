@@ -85,6 +85,24 @@ pub struct AgentConfig {
     /// whether the restore is a resume or a branch, judged at the inventory.
     #[serde(default)]
     pub restore: Option<Restore>,
+    /// **The graceful unload's bounds**, per `weaver-types-Spec` section 2 as
+    /// of the lifecycle act (2026-10-09): absent, the drain and the wind-down
+    /// are unbounded and `force-unload` is the recourse. Admin carries what it
+    /// parses here to the harness on the enter.
+    #[serde(default)]
+    pub lifecycle: Option<Lifecycle>,
+}
+
+/// The `[lifecycle]` table: the seconds the drain (the quiesce's wait and the
+/// turn's finish together) and the wind-down turn may each take, each optional
+/// and held apart from the other.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct Lifecycle {
+    #[serde(default)]
+    pub drain_bound: Option<u64>,
+    #[serde(default)]
+    pub wind_down_bound: Option<u64>,
 }
 
 /// The restore election, per `weaver-types-Spec` section 2 as of A3.2 on the
@@ -428,6 +446,7 @@ pub fn parse_boundary(source: &str) -> Result<crate::BoundaryFile, ConfigError> 
 #[cfg(feature = "config")]
 pub fn parse(source: &str) -> Result<AgentConfig, ConfigError> {
     check_provided_engine(source)?;
+    check_lifecycle_bounds(source)?;
     let config: AgentConfig =
         toml::from_str(source).map_err(|e| classify_toml_error(e.message()))?;
     if config
@@ -470,6 +489,34 @@ fn check_provided_engine(source: &str) -> Result<(), ConfigError> {
             field: Some(FieldName("state-store.engine".to_string())),
             kind: ConfigErrorKind::BadValue,
         });
+    }
+    Ok(())
+}
+
+/// **Each `[lifecycle]` bound is a whole number of seconds above zero**, per
+/// `weaver-types-Spec` section 2, refusing `BadValue` naming
+/// `lifecycle.drain-bound` or `lifecycle.wind-down-bound` otherwise. Read off
+/// the raw table, so a non-integer is refused by its own name rather than as
+/// the deserializer's unnamed type error. An unknown key is left to the
+/// parse, which refuses it as every table's.
+#[cfg(feature = "config")]
+fn check_lifecycle_bounds(source: &str) -> Result<(), ConfigError> {
+    let Ok(table) = source.parse::<toml::Table>() else {
+        return Ok(());
+    };
+    let Some(lifecycle) = table.get("lifecycle").and_then(|value| value.as_table()) else {
+        return Ok(());
+    };
+    for key in ["drain-bound", "wind-down-bound"] {
+        let Some(value) = lifecycle.get(key) else {
+            continue;
+        };
+        if value.as_integer().is_none_or(|seconds| seconds <= 0) {
+            return Err(ConfigError {
+                field: Some(FieldName(format!("lifecycle.{key}"))),
+                kind: ConfigErrorKind::BadValue,
+            });
+        }
     }
     Ok(())
 }

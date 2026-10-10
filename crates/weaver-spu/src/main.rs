@@ -1639,7 +1639,9 @@ fn dispatch(
             | LifecycleDirective::SavePoint { .. }
             | LifecycleDirective::SavePointVerb { .. }
             | LifecycleDirective::Restore { .. }
-            | LifecycleDirective::ForceUnload { .. },
+            | LifecycleDirective::ForceUnload { .. }
+            | LifecycleDirective::JoinLeave { .. }
+            | LifecycleDirective::Quiesce,
         ) => Payload::Refusal(LifecycleRefusal::OutOfOrder),
     }
 }
@@ -1870,11 +1872,15 @@ mod tests {
                 LifecycleDirective::Leave {
                     cause,
                     forced: false,
+                    rollback: false,
                 },
                 LifecycleDirective::Leave {
                     cause,
                     forced: true,
+                    rollback: false,
                 },
+                LifecycleDirective::JoinLeave { cause },
+                LifecycleDirective::Quiesce,
                 LifecycleDirective::SavePoint { cause },
                 LifecycleDirective::Stop { cause },
                 LifecycleDirective::Observe,

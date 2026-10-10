@@ -1251,7 +1251,16 @@ impl Harness {
                 }
                 Ok(None)
             }
-            (ChannelState::Entered(run), LifecycleDirective::Leave { cause, forced }) => {
+            // `rollback` is read in the lifecycle act's plumbing; until then a
+            // rollback is told as before (PR B, Task 8).
+            (
+                ChannelState::Entered(run),
+                LifecycleDirective::Leave {
+                    cause,
+                    forced,
+                    rollback: _,
+                },
+            ) => {
                 if run.turn_in_flight.is_some() {
                     self.refuse(connection, &exchange, LifecycleRefusal::ActivityNotAtRest)?;
                     return Ok(None);
@@ -1304,6 +1313,10 @@ impl Harness {
                         }
                     }
                 };
+                // **No state to keep**: a diagnostic binding, or a serving run
+                // with no member seam (`weaver-types-Spec` section 4.2,
+                // `Left.no_state`).
+                let no_state = run.recorder.serving().is_none() || run.state.is_none();
                 let mut run = match std::mem::replace(&mut self.state, ChannelState::Left) {
                     ChannelState::Entered(run) => *run,
                     // Unreachable: the match arm above proved the position.
@@ -1314,7 +1327,18 @@ impl Harness {
                 };
                 match leave_after(&mut run, Some(cause), forced, lowered) {
                     Ok(()) => {
-                        self.answer(connection, &exchange, LifecycleAnswer::Left { save_point })?;
+                        self.answer(
+                            connection,
+                            &exchange,
+                            // `forced` is the directive's until the lifecycle
+                            // act's plumbing makes it the leave's state at its
+                            // end (PR B, Task 7).
+                            LifecycleAnswer::Left {
+                                save_point,
+                                forced,
+                                no_state,
+                            },
+                        )?;
                     }
                     // Everything admitted did not reach the stream, so the
                     // answer says so rather than claiming a clean close.
@@ -2411,6 +2435,10 @@ fn leave_after(
             grant_surface,
             cause: cause.map(crate::engine::trace_cause),
             forced,
+            // The join and the release outcome are the lifecycle act's
+            // plumbing (PR B, Tasks 7 and 8); until then neither is recorded.
+            forced_by: None,
+            release: None,
         }));
         let _ = run.author.author(
             &mut run.recorder,
@@ -3102,6 +3130,8 @@ mod tests {
             cause: weaver_types::Cause { uid: 0 },
             operator: 1000,
             library_path: None,
+            drain_bound: None,
+            wind_down_bound: None,
             state_election: weaver_types::StateElection {
                 all_kinds: false,
                 keys: vec![weaver_types::ElectedKindConfig {
@@ -3224,6 +3254,8 @@ mod tests {
             cause: weaver_types::Cause { uid: 0 },
             operator: 1000,
             library_path: None,
+            drain_bound: None,
+            wind_down_bound: None,
             state_election: weaver_types::StateElection {
                 all_kinds: false,
                 keys: Vec::new(),
@@ -3382,6 +3414,8 @@ mod tests {
                 cause: weaver_types::Cause { uid: 0 },
                 operator: 1000,
                 library_path: None,
+                drain_bound: None,
+                wind_down_bound: None,
                 state_election: weaver_types::StateElection {
                     all_kinds: false,
                     keys: Vec::new(),
@@ -3494,6 +3528,8 @@ mod tests {
             cause: weaver_types::Cause { uid: 0 },
             operator: 1000,
             library_path: None,
+            drain_bound: None,
+            wind_down_bound: None,
             state_election: weaver_types::StateElection {
                 all_kinds: false,
                 keys: Vec::new(),
@@ -3694,6 +3730,8 @@ mod tests {
             cause: weaver_types::Cause { uid: 0 },
             operator: 1000,
             library_path: None,
+            drain_bound: None,
+            wind_down_bound: None,
             // Every kind crosses, so the member's log shows the unload's
             // distillate beside the asks.
             state_election: weaver_types::StateElection {
@@ -3869,6 +3907,21 @@ mod tests {
                                         "<undeliverable> exchange {}",
                                         late.exchange.ordinal
                                     ));
+                                    // A second `Lower` is answered, so a
+                                    // harness that lowers twice finishes and
+                                    // its test reads the mark, not a hang.
+                                    if matches!(
+                                        late.payload,
+                                        weaver_types::Payload::Directive(LifecycleDirective::Lower)
+                                    ) {
+                                        let _ = channel.send(&OrganEnvelope {
+                                            exchange: late.exchange,
+                                            position: Position::Close,
+                                            payload: weaver_types::Payload::Answer(
+                                                LifecycleAnswer::GateStopped,
+                                            ),
+                                        });
+                                    }
                                 }
                             }
                         }));
@@ -3898,11 +3951,13 @@ mod tests {
                             LeaveMode::Directive { forced, .. } => LifecycleDirective::Leave {
                                 cause: weaver_types::Cause { uid: 1000 },
                                 forced,
+                                rollback: false,
                             },
                             LeaveMode::QueuedFrame | LeaveMode::FrameDuringLower => {
                                 LifecycleDirective::Leave {
                                     cause: weaver_types::Cause { uid: 1000 },
                                     forced: false,
+                                    rollback: false,
                                 }
                             }
                             _ => LifecycleDirective::SavePoint {
@@ -4176,6 +4231,8 @@ mod tests {
                     event_run: weaver_types::RunId("r-1".into()),
                     position,
                 }),
+                forced: false,
+                no_state: false,
             })),
             "Left names the leave's save point with the event's position in this run, the covered one in the prior"
         );
@@ -4185,6 +4242,37 @@ mod tests {
                 .any(|line| line.contains(r#""kind":"save_point""#)),
             "the save point's event never crosses the tee: {read:?}"
         );
+    }
+
+    /// **A run with no state to keep says so on `Left`**, per
+    /// `weaver-types-Spec` section 4.2 (`Left.no_state`): a diagnostic
+    /// binding has no member, so its leave answers `no_state` true with no save
+    /// point, where the serving cases above answer it false. Perturbations:
+    /// answer `no_state` false always and this case fails; true always and
+    /// the serving cases fail.
+    #[test]
+    fn a_diagnostic_runs_leave_answers_no_state() {
+        for forced in [false, true] {
+            let (_, _, _, answer, still_entered) = enter_against_a_member_leaving(
+                None,
+                true,
+                EMPTY_RESTORED,
+                LeaveMode::Directive {
+                    forced,
+                    finished: true,
+                },
+            );
+            assert!(!still_entered, "forced = {forced}: the leave completes");
+            assert_eq!(
+                answer,
+                Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                    save_point: None,
+                    forced,
+                    no_state: true,
+                })),
+                "forced = {forced}"
+            );
+        }
     }
 
     /// **A save point demanded of a run that takes none is out of order**,
@@ -4355,15 +4443,19 @@ mod tests {
     /// on #1 (A3.0 item 6): the harness refuses `SavePointNotTaken` naming
     /// the finished leg, authors no `save_point` and no `unload`, and stays
     /// entered at rest with the run open; and **a forced leave takes none**,
-    /// the `unload` event saying so and `Left` naming no save point.
+    /// the `unload` event saying so and `Left` naming no save point. **The
+    /// stopped run keeps its gate lowered** (S9, `weaver-admin-Spec` 3.0): the
+    /// leave that follows, here the fixture's own unwind on the same
+    /// `lower_gate` path a retried `Leave` takes, sends no second `Lower`.
     ///
     /// Perturbations: convert the missed leg under the dead-peer rule and
     /// the leave completes, the first case's `unload` appearing; take the
     /// save point on a forced leave and the second case's record carries
-    /// one.
+    /// one; keep the gate in `lower_gate` and the S9 case's stand-in meets a
+    /// second `Lower`.
     #[test]
     fn a_leave_without_its_save_point_stops_and_a_forced_leave_takes_none() {
-        let (events, _, _, answer, still_entered) = enter_against_a_member_leaving(
+        let (events, _, s9_read, answer, still_entered) = enter_against_a_member_leaving(
             None,
             false,
             EMPTY_RESTORED,
@@ -4382,6 +4474,17 @@ mod tests {
             "the missed leg is named"
         );
         assert!(still_entered, "the run stays open at rest");
+        let lowers: Vec<&String> = s9_read
+            .iter()
+            .filter(|line| {
+                line.starts_with("<gate lowered>") || line.starts_with("<undeliverable>")
+            })
+            .collect();
+        assert_eq!(
+            lowers,
+            vec!["<gate lowered>"],
+            "S9 keeps its gate lowered: the leave after it sends no second `Lower`"
+        );
         let kinds: Vec<&str> = events.iter().map(|e| e["kind"].as_str().unwrap()).collect();
         // The run was then unwound by the fixture itself; what the refused
         // leave authored is nothing, so the first unload is the fixture's.
@@ -4402,7 +4505,9 @@ mod tests {
         assert_eq!(
             answer,
             Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
-                save_point: None
+                save_point: None,
+                forced: true,
+                no_state: false,
             }))
         );
         assert!(
@@ -4446,7 +4551,8 @@ mod tests {
             matches!(
                 answer,
                 Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
-                    save_point: Some(_)
+                    save_point: Some(_),
+                    ..
                 }))
             ),
             "the leave completes: {answer:?} {read:?}"
@@ -4616,6 +4722,8 @@ mod tests {
             cause: weaver_types::Cause { uid: 0 },
             operator: 1000,
             library_path: None,
+            drain_bound: None,
+            wind_down_bound: None,
             state_election: weaver_types::StateElection {
                 all_kinds: false,
                 keys: Vec::new(),
@@ -4717,6 +4825,8 @@ mod tests {
                 cause: weaver_types::Cause { uid: 1000 },
                 operator: 1000,
                 library_path: Some("/opt/weaver/lib".to_string()),
+                drain_bound: None,
+                wind_down_bound: None,
                 state_election: weaver_types::StateElection {
                     all_kinds: false,
                     keys: vec![weaver_types::ElectedKindConfig {
@@ -4873,6 +4983,8 @@ mod tests {
             cause: weaver_types::Cause { uid: 0 },
             operator: 1000,
             library_path: None,
+            drain_bound: None,
+            wind_down_bound: None,
             state_election: weaver_types::StateElection::default(),
         };
 
@@ -4999,6 +5111,8 @@ mod tests {
             cause: weaver_types::Cause { uid: 0 },
             operator: 1000,
             library_path: None,
+            drain_bound: None,
+            wind_down_bound: None,
             state_election: weaver_types::StateElection::default(),
         };
 
@@ -5250,10 +5364,12 @@ mod tests {
             LifecycleDirective::Leave {
                 cause,
                 forced: false,
+                rollback: false,
             },
             LifecycleDirective::Leave {
                 cause,
                 forced: true,
+                rollback: false,
             },
         ] {
             let named = format!("{directive:?}");

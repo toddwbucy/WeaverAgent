@@ -65,47 +65,7 @@ fn organ_refused_carries_the_inner_reason_unchanged() {
 #[test]
 fn the_boxed_payloads_cross_as_the_payloads_do() {
     let enter = LifecycleDirective::Enter {
-        payload: Box::new(weaver_types::EnterPayload {
-            session: weaver_types::SessionId("s-1".into()),
-            run: weaver_types::RunId("r-1".into()),
-            spu_instruction: weaver_types::SpuInstruction {
-                classify: None,
-                decoder: weaver_types::DecoderInstruction {
-                    model_binding: weaver_types::ModelBinding {
-                        artifact: weaver_types::ArtifactRef("/models/a.gguf".into()),
-                        devices: vec![weaver_types::DeviceOrdinal(0)],
-                    },
-                    residual_readout_election: false,
-                    field_election: None,
-                    surprisal_election: false,
-                    refeed_permission: false,
-                    column_permission: false,
-                    tunable_values: Default::default(),
-                },
-            },
-            binding: weaver_types::EnterBinding::Serving {
-                gate_instruction: weaver_types::GateInstruction {
-                    access_rule: weaver_types::AccessRule {
-                        allowed_uids: Default::default(),
-                        allowed_gids: Default::default(),
-                        denied_uids: Default::default(),
-                    },
-                },
-            },
-            state_store: weaver_types::StateStore::default(),
-            declaration: String::new(),
-            restore: None,
-            reset: None,
-            stack: Default::default(),
-            boundary: String::new(),
-            cause: weaver_types::Cause { uid: 0 },
-            operator: 1000,
-            library_path: None,
-            state_election: weaver_types::StateElection {
-                all_kinds: false,
-                keys: Vec::new(),
-            },
-        }),
+        payload: Box::new(sample_enter_payload()),
     };
     let json = serde_json::to_string(&enter).expect("serializes");
     assert!(json.starts_with("{\"kind\":\"enter\",\"payload\":{\"session\":\"s-1\""));
@@ -522,10 +482,11 @@ fn the_cause_and_the_constituents_render_as_stated() {
     let leave = LifecycleDirective::Leave {
         cause: weaver_types::Cause { uid: 1000 },
         forced: false,
+        rollback: false,
     };
     assert_eq!(
         serde_json::to_string(&leave).unwrap(),
-        r#"{"kind":"leave","cause":{"uid":1000},"forced":false}"#
+        r#"{"kind":"leave","cause":{"uid":1000},"forced":false,"rollback":false}"#
     );
     let stop = LifecycleDirective::Stop {
         cause: weaver_types::Cause { uid: 0 },
@@ -587,7 +548,188 @@ fn the_cause_and_the_constituents_render_as_stated() {
         "and one carrying it reads, so the refusal is the field's"
     );
     assert_eq!(
-        serde_json::to_string(&LifecycleAnswer::Left { save_point: None }).unwrap(),
-        r#"{"kind":"left"}"#
+        serde_json::to_string(&LifecycleAnswer::Left {
+            save_point: None,
+            forced: false,
+            no_state: false
+        })
+        .unwrap(),
+        r#"{"kind":"left","forced":false,"no_state":false}"#
     );
+}
+
+/// `Left.forced` is required on the wire with no default (`weaver-types-Spec`
+/// section 4.2, the lifecycle act): a `Left` without it refuses at the parse,
+/// so a worker that predates the act is never read as a clean leave.
+#[test]
+fn a_left_without_forced_refuses_at_the_parse() {
+    let v = r#"{"kind":"left","no_state":false}"#;
+    assert!(serde_json::from_str::<LifecycleAnswer>(v).is_err());
+}
+
+/// `Left.no_state` is required on the wire with no default, as `forced` is.
+#[test]
+fn a_left_without_no_state_refuses_at_the_parse() {
+    let v = r#"{"kind":"left","forced":true}"#;
+    assert!(serde_json::from_str::<LifecycleAnswer>(v).is_err());
+}
+
+/// `Leave.rollback` is required on the wire with no default: the harness tells
+/// a load's rollback by the directive, never by its own position.
+#[test]
+fn a_leave_without_rollback_refuses_at_the_parse() {
+    let v = r#"{"kind":"leave","cause":{"uid":0},"forced":true}"#;
+    assert!(serde_json::from_str::<LifecycleDirective>(v).is_err());
+}
+
+/// The lifecycle act's vocabulary crosses as stated and round-trips.
+#[test]
+fn the_lifecycle_vocabulary_round_trips() {
+    let join = LifecycleDirective::JoinLeave {
+        cause: weaver_types::Cause { uid: 7 },
+    };
+    assert_eq!(
+        serde_json::to_string(&join).unwrap(),
+        r#"{"kind":"join_leave","cause":{"uid":7}}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&LifecycleDirective::Quiesce).unwrap(),
+        r#"{"kind":"quiesce"}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&LifecycleAnswer::GateQuiesced).unwrap(),
+        r#"{"kind":"gate_quiesced"}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&LifecycleRefusal::Unloading).unwrap(),
+        r#"{"kind":"unloading"}"#
+    );
+    let left = LifecycleAnswer::Left {
+        save_point: None,
+        forced: true,
+        no_state: true,
+    };
+    assert_eq!(
+        serde_json::to_string(&left).unwrap(),
+        r#"{"kind":"left","forced":true,"no_state":true}"#
+    );
+    for directive in [
+        join,
+        LifecycleDirective::Quiesce,
+        LifecycleDirective::Leave {
+            cause: weaver_types::Cause { uid: 0 },
+            forced: true,
+            rollback: true,
+        },
+    ] {
+        let text = serde_json::to_string(&directive).unwrap();
+        assert_eq!(
+            serde_json::from_str::<LifecycleDirective>(&text).unwrap(),
+            directive
+        );
+    }
+    for answer in [LifecycleAnswer::GateQuiesced, left] {
+        let text = serde_json::to_string(&answer).unwrap();
+        assert_eq!(
+            serde_json::from_str::<LifecycleAnswer>(&text).unwrap(),
+            answer
+        );
+    }
+    for (cause, spelled) in [
+        (weaver_types::KillCause::Unload, r#""unload""#),
+        (weaver_types::KillCause::Fault, r#""fault""#),
+    ] {
+        assert_eq!(serde_json::to_string(&cause).unwrap(), spelled);
+        assert_eq!(
+            serde_json::from_str::<weaver_types::KillCause>(spelled).unwrap(),
+            cause
+        );
+    }
+    let interrupt = serde_json::to_string(&Payload::ToolInterrupt).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Payload>(&interrupt).unwrap(),
+        Payload::ToolInterrupt
+    );
+}
+
+/// One enter payload, the shape every enter test starts from.
+fn sample_enter_payload() -> weaver_types::EnterPayload {
+    weaver_types::EnterPayload {
+        session: weaver_types::SessionId("s-1".into()),
+        run: weaver_types::RunId("r-1".into()),
+        spu_instruction: weaver_types::SpuInstruction {
+            classify: None,
+            decoder: weaver_types::DecoderInstruction {
+                model_binding: weaver_types::ModelBinding {
+                    artifact: weaver_types::ArtifactRef("/models/a.gguf".into()),
+                    devices: vec![weaver_types::DeviceOrdinal(0)],
+                },
+                residual_readout_election: false,
+                field_election: None,
+                surprisal_election: false,
+                refeed_permission: false,
+                column_permission: false,
+                tunable_values: Default::default(),
+            },
+        },
+        binding: weaver_types::EnterBinding::Serving {
+            gate_instruction: weaver_types::GateInstruction {
+                access_rule: weaver_types::AccessRule {
+                    allowed_uids: Default::default(),
+                    allowed_gids: Default::default(),
+                    denied_uids: Default::default(),
+                },
+            },
+        },
+        state_store: weaver_types::StateStore::default(),
+        declaration: String::new(),
+        restore: None,
+        reset: None,
+        stack: Default::default(),
+        boundary: String::new(),
+        cause: weaver_types::Cause { uid: 0 },
+        operator: 1000,
+        library_path: None,
+        drain_bound: None,
+        wind_down_bound: None,
+        state_election: weaver_types::StateElection {
+            all_kinds: false,
+            keys: Vec::new(),
+        },
+    }
+}
+
+/// **The bounds cross to the harness on the enter**, per `weaver-types-Spec`
+/// section 2: an enter from a silent declaration carries neither, absent
+/// rather than null.
+#[test]
+fn an_enter_from_a_silent_declaration_carries_no_bound() {
+    let json = serde_json::to_string(&sample_enter_payload()).expect("serializes");
+    assert!(!json.contains("drain-bound"), "{json}");
+    assert!(!json.contains("wind-down-bound"), "{json}");
+}
+
+/// **Each lone bound crosses with the other absent, and round-trips**.
+/// Perturbation: carry the drain bound into the wind-down field and the
+/// first case fails.
+#[test]
+fn an_enter_with_one_bound_round_trips_with_the_other_absent() {
+    for (drain, wind_down) in [(Some(30), None), (None, Some(60)), (Some(30), Some(60))] {
+        let mut payload = sample_enter_payload();
+        payload.drain_bound = drain;
+        payload.wind_down_bound = wind_down;
+        let json = serde_json::to_string(&payload).expect("serializes");
+        assert_eq!(
+            json.contains("\"drain-bound\":30"),
+            drain.is_some(),
+            "{json}"
+        );
+        assert_eq!(
+            json.contains("\"wind-down-bound\":60"),
+            wind_down.is_some(),
+            "{json}"
+        );
+        let back: weaver_types::EnterPayload = serde_json::from_str(&json).expect("reads");
+        assert_eq!(back, payload);
+    }
 }

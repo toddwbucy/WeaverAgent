@@ -131,6 +131,7 @@ fn a_directive_outside_the_vocabulary_is_refused_on_the_seam() {
         LifecycleDirective::Leave {
             cause: weaver_types::Cause { uid: 0 },
             forced: false,
+            rollback: false,
         },
         LifecycleDirective::Stop {
             cause: weaver_types::Cause { uid: 0 },
