@@ -423,29 +423,11 @@ fn serve_channel_event(channel: &Channel, state: &mut HookState) -> Result<(), E
                 }
             }
         }
-        // A lower from draining is answered last, by the serve loop: it
-        // records the exchange and the lower bound's instant, and no answer
-        // is sent now.
-        if let (
-            HookState::Draining(_, stopping @ None),
-            Payload::Directive(LifecycleDirective::Lower),
-        ) = (&mut *state, &envelope.payload)
-            && envelope.position == Position::Open
-            && envelope.exchange.opener == Opener::Harness
-        {
-            *stopping = Some(Stopping {
-                exchange: envelope.exchange,
-                // One margin inside the lower bound, so the answer reaches
-                // a harness still waiting the full bound.
-                deadline: std::time::Instant::now()
-                    + std::time::Duration::from_millis(
-                        weaver_types::LOWER_BOUND_MS
-                            .saturating_sub(weaver_types::LOWER_SETTLE_MARGIN_MS),
-                    ),
-            });
-            return Ok(());
+        match dispatch(state, &envelope) {
+            Dispatched::Answer(payload) => payload,
+            // A lower from draining is answered last, by the serve loop.
+            Dispatched::Deferred => return Ok(()),
         }
-        dispatch(state, &envelope)
     };
     match channel.send(&OrganEnvelope {
         exchange: envelope.exchange,
@@ -616,25 +598,40 @@ fn fault_line(fault: &ChannelFault) -> String {
     }
 }
 
-/// **The two exchanges of `weaver-harness-gate-contract`, judged against the
+/// What a directive's judgment gives: its answer now, or, for a lower from
+/// draining, an answer the serve loop sends last.
+#[derive(Debug)]
+enum Dispatched {
+    Answer(Payload),
+    Deferred,
+}
+
+#[cfg(test)]
+impl PartialEq<Payload> for Dispatched {
+    fn eq(&self, other: &Payload) -> bool {
+        matches!(self, Dispatched::Answer(payload) if payload == other)
+    }
+}
+
+/// **The exchanges of `weaver-harness-gate-contract`, judged against the
 /// channel's position first.**
 ///
-/// The contract draws raise and lower. Everything else, including a well-formed
+/// The contract draws raise, quiesce and lower. Everything else, including a well-formed
 /// directive at the wrong position, a directive that does not open its
 /// exchange, and an exchange claiming an opener that is not the harness,
 /// answers `OutOfOrder` before the hook is touched.
 ///
 /// The match carries no wildcard arm over the directive, so a case added to
 /// loop 0 breaks this crate loudly in the act that edits the floor.
-fn dispatch(state: &mut HookState, envelope: &OrganEnvelope) -> Payload {
+fn dispatch(state: &mut HookState, envelope: &OrganEnvelope) -> Dispatched {
     if envelope.position != Position::Open || envelope.exchange.opener != Opener::Harness {
-        return Payload::Refusal(LifecycleRefusal::OutOfOrder);
+        return Dispatched::Answer(Payload::Refusal(LifecycleRefusal::OutOfOrder));
     }
     let Payload::Directive(directive) = &envelope.payload else {
-        return Payload::Refusal(LifecycleRefusal::OutOfOrder);
+        return Dispatched::Answer(Payload::Refusal(LifecycleRefusal::OutOfOrder));
     };
 
-    match (&*state, directive) {
+    let answer = match (&*state, directive) {
         (
             HookState::BeforeRaise,
             LifecycleDirective::Raise {
@@ -680,7 +677,27 @@ fn dispatch(state: &mut HookState, envelope: &OrganEnvelope) -> Payload {
         }
         // The first lower from draining is deferred by the serve loop, which
         // answers it last; reaching here is a second one while it waits.
-        (HookState::Draining(_, _), LifecycleDirective::Lower) => {
+        // **A lower from draining answers last** (`weaver-gate-Spec` section
+        // 4): the position holds its exchange and the settle instant, one
+        // margin inside the lower bound so the answer reaches a harness still
+        // waiting the full bound, and the serve loop answers once nothing is
+        // owed or at that instant.
+        (HookState::Draining(_, None), LifecycleDirective::Lower) => {
+            if let HookState::Draining(_, stopping) = state {
+                *stopping = Some(Stopping {
+                    exchange: envelope.exchange.clone(),
+                    deadline: std::time::Instant::now()
+                        + std::time::Duration::from_millis(
+                            weaver_types::LOWER_BOUND_MS
+                                .saturating_sub(weaver_types::LOWER_SETTLE_MARGIN_MS),
+                        ),
+                });
+            }
+            return Dispatched::Deferred;
+        }
+        // One `Lower` per leave: a second while the first waits is out of
+        // order, the first's exchange standing.
+        (HookState::Draining(_, Some(_)), LifecycleDirective::Lower) => {
             Payload::Refusal(LifecycleRefusal::OutOfOrder)
         }
         (HookState::Raised(_, _), LifecycleDirective::Lower) => {
@@ -725,7 +742,8 @@ fn dispatch(state: &mut HookState, envelope: &OrganEnvelope) -> Payload {
             | LifecycleDirective::JoinLeave { .. }
             | LifecycleDirective::Quiesce,
         ) => Payload::Refusal(LifecycleRefusal::OutOfOrder),
-    }
+    };
+    Dispatched::Answer(answer)
 }
 
 #[cfg(test)]
@@ -1025,6 +1043,49 @@ mod tests {
             "no new connection is accepted from the quiesce"
         );
         std::fs::remove_file(&*path).ok();
+    }
+
+    /// **A lower from draining is answered last, and a second one is out of
+    /// order** (`weaver-gate-Spec` section 4): the first is deferred, the
+    /// position holding its exchange and the settle instant one margin inside
+    /// the lower bound; a second while it waits answers `OutOfOrder` and
+    /// leaves the first's exchange in place, one `Lower` per leave (the
+    /// harness never sends two). Perturbation: answer the first at once, or
+    /// let the second replace the first's exchange, and this fails.
+    #[test]
+    fn a_lower_from_draining_is_deferred_and_a_second_is_out_of_order() {
+        let mut state = HookState::Draining(Box::new(Relay::new()), None);
+        let heard = std::time::Instant::now();
+        assert!(matches!(
+            dispatch(&mut state, &opened(LifecycleDirective::Lower)),
+            Dispatched::Deferred
+        ));
+        let HookState::Draining(_, Some(stopping)) = &state else {
+            panic!("the lower waits in the draining position");
+        };
+        assert_eq!(stopping.exchange.ordinal, 1);
+        let settle = std::time::Duration::from_millis(
+            weaver_types::LOWER_BOUND_MS - weaver_types::LOWER_SETTLE_MARGIN_MS,
+        );
+        assert!(stopping.deadline >= heard + settle);
+        assert!(
+            stopping.deadline
+                < heard + std::time::Duration::from_millis(weaver_types::LOWER_BOUND_MS)
+        );
+
+        let mut second = opened(LifecycleDirective::Lower);
+        second.exchange.ordinal = 2;
+        assert_eq!(
+            dispatch(&mut state, &second),
+            Payload::Refusal(LifecycleRefusal::OutOfOrder)
+        );
+        let HookState::Draining(_, Some(stopping)) = &state else {
+            panic!("still waiting");
+        };
+        assert_eq!(
+            stopping.exchange.ordinal, 1,
+            "the first lower's exchange stands"
+        );
     }
 
     /// **A quiesce anywhere but raised is out of order** (`weaver-gate-Spec`
