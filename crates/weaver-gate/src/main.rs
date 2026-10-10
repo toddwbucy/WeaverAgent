@@ -314,10 +314,15 @@ fn serve_channel_event(channel: &Channel, state: &mut HookState) -> Result<(), E
         return Ok(());
     }
 
-    // A cancel may cross the answer in flight. It has no answer of its own.
+    // A cancel or the unload's interrupt may cross the answer in flight:
+    // the result already sent stands (the first outcome wins), and neither
+    // has an answer of its own.
     if envelope.exchange.opener == Opener::Harness
         && envelope.position == Position::Continue
-        && matches!(envelope.payload, Payload::ToolCancel)
+        && matches!(
+            envelope.payload,
+            Payload::ToolCancel | Payload::ToolInterrupt
+        )
     {
         return Ok(());
     }
@@ -605,6 +610,10 @@ mod tests {
     /// conforms: gate-cancel-past-the-answer-is-dropped
     /// The real served channel must not insert a refusal before the next
     /// execution's answer. Removing only the late-cancel drop fails this.
+    /// **The unload's interrupt crossing the answer is dropped the same way**
+    /// (the first outcome wins, `weaver-harness-gate-contract` section 2):
+    /// the result already sent stands, and no `Killed` and no refusal follow
+    /// it. Removing the late-interrupt drop fails the third execution.
     #[test]
     fn a_cancel_past_the_answer_is_dropped() {
         use nix::sys::socket::{MsgFlags, recv, send};
@@ -650,7 +659,7 @@ mod tests {
             let n = recv(harness.as_raw_fd(), &mut buffer, MsgFlags::empty()).unwrap();
             serde_json::from_slice::<OrganEnvelope>(&buffer[..n]).unwrap()
         };
-        for ordinal in [2, 3] {
+        for ordinal in [2, 3, 4] {
             let exchange = weaver_types::ExchangeId {
                 opener: Opener::Harness,
                 ordinal,
@@ -673,11 +682,16 @@ mod tests {
                 ),
                 "{answer:?}"
             );
-            if ordinal == 2 {
+            let late = match ordinal {
+                2 => Some(Payload::ToolCancel),
+                3 => Some(Payload::ToolInterrupt),
+                _ => None,
+            };
+            if let Some(payload) = late {
                 write(&OrganEnvelope {
                     exchange,
                     position: Position::Continue,
-                    payload: Payload::ToolCancel,
+                    payload,
                 });
             }
         }
@@ -690,11 +704,12 @@ mod tests {
                 }),
             ),
             (Position::Open, Payload::ToolCancel),
+            (Position::Open, Payload::ToolInterrupt),
         ] {
             write(&OrganEnvelope {
                 exchange: weaver_types::ExchangeId {
                     opener: Opener::Harness,
-                    ordinal: 4,
+                    ordinal: 5,
                 },
                 position,
                 payload,

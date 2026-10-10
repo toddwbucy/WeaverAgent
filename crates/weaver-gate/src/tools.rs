@@ -205,8 +205,8 @@ fn run_in_home(
                 }
                 let slice = remaining.min(std::time::Duration::from_millis(25));
                 match supervision_wait(channel, exchange, slice) {
-                    Ok(true) => break Ok(Some(KillCause::Cancel)),
-                    Ok(false) => {}
+                    Ok(Some(by)) => break Ok(Some(by)),
+                    Ok(None) => {}
                     Err(fault) => break Err(ShellEnd::Channel(fault)),
                 }
             }
@@ -256,28 +256,32 @@ fn run_in_home(
     Ok(output)
 }
 
-/// Wait for a cancel without postponing the next unreaped exit check.
+/// Wait for a cancel or the unload's interrupt without postponing the next
+/// unreaped exit check, answering which one ended the execution: the cancel,
+/// or the interrupt, which ends it by the same path and names the unload
+/// (`weaver-harness-gate-contract` section 2).
 fn supervision_wait(
     channel: &Channel,
     exchange: &ExchangeId,
     slice: std::time::Duration,
-) -> Result<bool, ChannelFault> {
+) -> Result<Option<KillCause>, ChannelFault> {
     use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
     let mut fds = [PollFd::new(channel.as_fd(), PollFlags::POLLIN)];
     let timeout = PollTimeout::try_from(slice).expect("the supervision slice fits poll");
     #[cfg(test)]
     tests::wait_entered();
     match poll(&mut fds, timeout) {
-        Ok(0) | Err(nix::errno::Errno::EINTR) => return Ok(false),
+        Ok(0) | Err(nix::errno::Errno::EINTR) => return Ok(None),
         Err(_) => return Err(ChannelFault::Closed),
         Ok(_) => {}
     }
     let envelope = channel.recv()?;
-    if envelope.exchange == *exchange
-        && envelope.position == Position::Continue
-        && matches!(envelope.payload, Payload::ToolCancel)
-    {
-        return Ok(true);
+    if envelope.exchange == *exchange && envelope.position == Position::Continue {
+        match envelope.payload {
+            Payload::ToolCancel => return Ok(Some(KillCause::Cancel)),
+            Payload::ToolInterrupt => return Ok(Some(KillCause::Unload)),
+            _ => {}
+        }
     }
     // A misplaced message is refused as at rest. Continue supervising the
     // live group regardless, and never let a bad sender bypass cleanup.
@@ -286,7 +290,7 @@ fn supervision_wait(
         position: Position::Close,
         payload: Payload::Refusal(LifecycleRefusal::OutOfOrder),
     })?;
-    Ok(false)
+    Ok(None)
 }
 
 /// Captured bytes from one pipe. I/O failure travels as an error, never as
@@ -511,6 +515,55 @@ mod tests {
         assert!(
             started.elapsed() < Duration::from_millis(800),
             "cancel spent the clock: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// **The unload's interrupt ends an open execution by the cancel's path**,
+    /// per `weaver-harness-gate-contract` section 2 and `weaver-admin-Spec`
+    /// 3.0 S4 x tool return: answered `Killed { by: unload }`, its partial
+    /// riding, with no clock added, so the record reads the call as never
+    /// finished and re-runnable at the reload. Perturbation: answer the
+    /// interrupt as a misplaced message, and the clock kills it instead.
+    #[test]
+    fn an_interrupt_kills_an_open_execution_by_unload() {
+        use std::time::{Duration, Instant};
+        let (gate, harness) = pair();
+        let (entered, waiting) = std::sync::mpsc::sync_channel(1);
+        WAIT_ENTERED.with(|slot| *slot.borrow_mut() = Some(entered));
+        let peer = std::thread::spawn(move || {
+            waiting
+                .recv_timeout(Duration::from_secs(2))
+                .expect("supervision entered");
+            std::thread::sleep(Duration::from_millis(50));
+            harness
+                .send(&OrganEnvelope {
+                    exchange: exchange(),
+                    position: Position::Continue,
+                    payload: Payload::ToolInterrupt,
+                })
+                .unwrap();
+            harness
+        });
+        let started = Instant::now();
+        let outcome = super::execute(
+            &ToolExecution {
+                name: ToolName(SHELL_NAME.into()),
+                arguments: r#"{"command":"echo partial; sleep 5"}"#.into(),
+                clock_ms: 2_000,
+            },
+            &gate,
+            &exchange(),
+        )
+        .unwrap();
+        let _harness = peer.join().unwrap();
+        assert!(
+            matches!(outcome, ToolOutcome::Killed { by: KillCause::Unload, ref partial } if partial.as_deref().is_some_and(|text| text.contains("partial"))),
+            "{outcome:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(800),
+            "the interrupt spent the clock: {:?}",
             started.elapsed()
         );
     }
