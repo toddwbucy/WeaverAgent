@@ -78,35 +78,72 @@ read_key() { cat "$STACK/$1" 2>/dev/null || true; }
 # with its save point still taken, and the force's answer is the one read.
 # Killing the unload instead would leave its leave pending and the force
 # unable to join it. Which of the two ended the run is printed.
+# **The unload in flight is the script's, not the function's** (Codex on
+# #126, round 3): the exit trap concludes it before it restores anything
+# (`conclude_pending_unload`), so an INT, TERM or HUP never puts binaries or
+# rules back under an agent still leaving.
+UNLOAD_AGENT=""
+UNLOAD_RUNNER=""
+UNLOAD_DIR=""
+UNLOAD_UNTIL=0
+UNLOAD_BOUND=0
+UNLOAD_SAID=""
+UNLOAD_HOW=""
 unload_verified() {
-  local said dir runner waited=0 how=unload bound=${UNLOAD_TIMEOUT:-300}
-  dir=$(mktemp -d)
-  ( sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" unload "$1" >"$dir/said" 2>&1 || true
-    : >"$dir/done" ) &
-  runner=$!
-  while [ ! -e "$dir/done" ] && [ "$waited" -lt "$bound" ]; do
-    sleep 1
-    waited=$((waited + 1))
-  done
-  if [ -e "$dir/done" ]; then
-    wait "$runner" || true
-    said=$(cat "$dir/said")
-  else
-    printf '  %s: the unload passed %ss; force-unload joins it\n' "$1" "$bound" >&2
-    how=force-unload
-    said=$(sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" force-unload "$1" 2>&1) || true
-    wait "$runner" || true
-    [ ! -s "$dir/said" ] || sed 's/^/  admin (the joined unload): /' "$dir/said" >&2
-  fi
-  rm -rf -- "$dir"
+  local said bound=${UNLOAD_TIMEOUT:-300}
+  UNLOAD_AGENT=$1
+  UNLOAD_DIR=$(mktemp -d)
+  UNLOAD_BOUND=$bound
+  UNLOAD_UNTIL=$((SECONDS + bound))
+  ( sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" unload "$1" >"$UNLOAD_DIR/said" 2>&1 || true
+    : >"$UNLOAD_DIR/done" ) &
+  UNLOAD_RUNNER=$!
+  await_unload
+  said=$UNLOAD_SAID
   [ -z "$said" ] || printf '%s\n' "$said" | sed '$d' | sed 's/^/  admin: /' >&2
   said=$(printf '%s\n' "$said" | sed -n '$p')
   if answered_state "$said" unloaded; then
-    printf '  %s: unloaded by %s\n' "$1" "$how"
+    printf '  %s: unloaded by %s\n' "$1" "$UNLOAD_HOW"
     return 0
   fi
   printf '  admin answered the unload of %s: %s\n' "$1" "${said:-nothing}" >&2
   return 1
+}
+
+# await_unload: waits on the unload in flight until its bound, then has
+# `force-unload` join it; sets UNLOAD_SAID to the answer read (the force's
+# where it joined) and UNLOAD_HOW to which ended the run, and clears the
+# unload in flight.
+await_unload() {
+  while [ ! -e "$UNLOAD_DIR/done" ] && [ "$SECONDS" -lt "$UNLOAD_UNTIL" ]; do
+    sleep 1
+  done
+  if [ -e "$UNLOAD_DIR/done" ]; then
+    UNLOAD_HOW=unload
+    wait "$UNLOAD_RUNNER" 2>/dev/null || true
+    UNLOAD_SAID=$(cat "$UNLOAD_DIR/said")
+  else
+    printf '  %s: the unload passed %ss; force-unload joins it\n' "$UNLOAD_AGENT" "$UNLOAD_BOUND" >&2
+    UNLOAD_HOW=force-unload
+    UNLOAD_SAID=$(sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" force-unload "$UNLOAD_AGENT" 2>&1) || true
+    wait "$UNLOAD_RUNNER" 2>/dev/null || true
+    [ ! -s "$UNLOAD_DIR/said" ] || sed 's/^/  admin (the joined unload): /' "$UNLOAD_DIR/said" >&2
+  fi
+  rm -rf -- "$UNLOAD_DIR"
+  UNLOAD_RUNNER=""
+  UNLOAD_DIR=""
+}
+
+# **An exit while an unload runs concludes it first** (Codex on #126, round
+# 3): the exit trap's first act, so the restore and the rules wait on the
+# agent's leave, within what remains of the unload's bound, then the joining
+# force. Nothing in flight, it does nothing.
+conclude_pending_unload() {
+  [ -n "${UNLOAD_RUNNER:-}" ] || return 0
+  printf '  %s: the run is ending with its unload in flight; it is concluded first\n' "$UNLOAD_AGENT" >&2
+  await_unload
+  printf '  %s: ended by %s; admin answered %s\n' "$UNLOAD_AGENT" "$UNLOAD_HOW" \
+    "$(printf '%s\n' "$UNLOAD_SAID" | sed -n '$p')" >&2
 }
 
 # **answered_state ANSWER STATE: admin's answer is the state named**, read as
@@ -908,6 +945,7 @@ rollback() {
 # the next --install refuses on the `.updating` name it left.
 on_exit() {
   local rc=$?
+  conclude_pending_unload
   if [ "$COMPLETED" -eq 0 ] && [ "$INSTALL_DONE" -eq 1 ]; then
     printf '\n  the run did not complete (exit %d)\n' "$rc" >&2
     restore

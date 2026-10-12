@@ -1776,7 +1776,8 @@ esac
         admin = self.root / "bin" / "weaver-admin"
         admin.parent.mkdir(parents=True, exist_ok=True)
         program = ('sudo() { [ "$1" = -n ] && shift; shift; "$@"; }\n'
-                   + shell_function(text, "unload_verified") + shell_function(text, "answered_state")
+                   + shell_function(text, "unload_verified") + shell_function(text, "await_unload")
+                   + shell_function(text, "answered_state")
                    + 'unload_verified m1')
         env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
         env.update(BIN_DIR=str(admin.parent), ADMIN_BASE=str(self.config))
@@ -1807,7 +1808,8 @@ esac
         admin.parent.mkdir(parents=True, exist_ok=True)
         calls = self.root / "admin-calls"
         program = ('sudo() { [ "$1" = -n ] && shift; shift; "$@"; }\n'
-                   + shell_function(text, "unload_verified") + shell_function(text, "answered_state")
+                   + shell_function(text, "unload_verified") + shell_function(text, "await_unload")
+                   + shell_function(text, "answered_state")
                    + 'unload_verified m1')
         env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
         env.update(BIN_DIR=str(admin.parent), ADMIN_BASE=str(self.config), UNLOAD_TIMEOUT="1")
@@ -1830,6 +1832,48 @@ esac
                 else:
                     self.assertEqual(sorted(verbs), ["force-unload", "unload"])
                     self.assertIn("m1: the unload passed 1s; force-unload joins it", ran.stderr)
+
+    def test_an_exit_mid_unload_concludes_the_unload_before_it_restores(self):
+        """**The exit trap concludes the unload in flight first** (Codex on
+        #126, round 3): an INT arriving while an agent's unload runs in the
+        background exits through `on_exit`, which waits that unload out, or
+        past its bound has `force-unload` join it, and only then restores,
+        so nothing is put back under an agent still leaving. Perturbation:
+        drop `conclude_pending_unload` from `on_exit`, and the restore runs
+        before the unload ends."""
+        text = (DEPLOY / "update-stack.sh").read_text()
+        admin = self.root / "bin" / "weaver-admin"
+        admin.parent.mkdir(parents=True, exist_ok=True)
+        calls = self.root / "trap-calls"
+        program = ('sudo() { [ "$1" = -n ] && shift; shift; "$@"; }\n'
+                   + shell_function(text, "unload_verified") + shell_function(text, "await_unload")
+                   + shell_function(text, "conclude_pending_unload")
+                   + shell_function(text, "answered_state") + shell_function(text, "on_exit")
+                   + f'restore() {{ echo restore >> {calls}; }}\n'
+                   + 'restore_rules() { :; }\n'
+                   + 'COMPLETED=0 INSTALL_DONE=1 HELD_RULES=()\n'
+                   + "trap on_exit EXIT\ntrap 'exit 130' INT\n"
+                   + '( sleep 0.5; kill -INT $$ ) &\n'
+                   + 'unload_verified m1\n')
+        env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
+        env.update(BIN_DIR=str(admin.parent), ADMIN_BASE=str(self.config))
+        for case, bound, last in (("waited out", "10", "unload done"),
+                                  ("joined past the bound", "2", "force-unload")):
+            with self.subTest(case=case):
+                calls.unlink(missing_ok=True)
+                admin.write_text(
+                    "#!/bin/sh\n"
+                    f"[ \"$1\" = unload ] && {{ sleep 4; echo 'unload done' >> {calls}; }}\n"
+                    f"[ \"$1\" = force-unload ] && echo force-unload >> {calls}\n"
+                    "echo '{\"kind\":\"state\",\"state\":\"unloaded\"}'\n")
+                admin.chmod(0o755)
+                ran = subprocess.run(["bash", "-c", program], env={**env, "UNLOAD_TIMEOUT": bound},
+                                     text=True, capture_output=True, timeout=30)
+                self.assertEqual(ran.returncode, 130, ran.stderr)
+                order = calls.read_text().splitlines()
+                self.assertEqual(order[-1], "restore", order)
+                self.assertIn(last, order[:-1], order)
+                self.assertIn("m1: the run is ending with its unload in flight", ran.stderr)
 
     def test_update_stack_reads_its_unload_timeout_and_refuses_what_it_does_not_know(self):
         # --unload-timeout takes whole seconds above zero, and an argument the
@@ -2363,6 +2407,23 @@ esac
                       'expect_eq "the lineage is the new line" "$spf"'):
             self.assertIn(check, body)
         self.assertNotIn("forced-unload", body)
+
+    def test_lifecycle_step_7_reads_show_by_the_ladder(self):
+        # After the worker's kill, show answers by weaver-admin-Spec section
+        # 3's ladder: in_transition naming the constituents where any still
+        # holds the run lock (rung iii), unloaded naming none where it is
+        # free; step 7 accepts exactly those two (Codex on #126, round 3).
+        # Perturbation: require unloaded after the kill again, and this fails.
+        result = self.lifecycle()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("in_transition naming the constituents where any still holds the run lock "
+                      "(rung iii), unloaded with none where the lock is free", result.stdout)
+        script = (self.repo / "deploy" / "verify-lifecycle.sh").read_text()
+        body = script[script.index("step_7() {"):script.index("step_8() {")]
+        self.assertIn("    in_transition/some)", body)
+        self.assertIn("    state/none)", body)
+        self.assertIn('fail "show after the kill answers by the ladder"', body)
+        self.assertNotIn('ask show; expect_state "show after the kill" unloaded', body)
 
     def test_lifecycle_step_8_is_a_plan_only_near_miss_and_8b_always_runs(self):
         # Step 8 stages a declaration-directory key on the throwaway root and
