@@ -1298,10 +1298,13 @@ impl Harness {
     /// **An organ's death, decided by the lifecycle table** (`weaver-admin-Spec`
     /// 3.0, the organ-death table): at rest the run serves on, a `fault`
     /// authored for the death, the dead organ's channel dropped and the organ
-    /// reaped; a gate dying with the gate already lowered (S9) is no cell. A
-    /// death mid-turn or mid-leave is met by the turn's and the leave's own
-    /// handling, so a cell for those positions reaching this wake ends the run
-    /// as an unforeseen death did before.
+    /// reaped; a gate dying with the gate already lowered (S9) is no cell.
+    /// **The position is read at rest** (`position(None)`), a leave the turn
+    /// held not entering it: a gate found dead at a turn's answer send, a
+    /// leave held, is served as S2's death here, and the held leave is then
+    /// carried out forced by (A) where it is carried out. A death mid-leave is
+    /// met by the leave's own handling; the cell that would end the run below
+    /// is reached by no caller.
     fn organ_died(&mut self, organ: OrganDeath) -> Result<(), ChannelFault> {
         use crate::lifecycle_table::{Event, Response, respond};
         let ChannelState::Entered(run) = &mut self.state else {
@@ -1344,7 +1347,7 @@ impl Harness {
                 }
                 if let Some(gate) = run.gate.take() {
                     drop(gate.channel);
-                    reap(gate.pid);
+                    reap_by(gate.pid, lower_window());
                 }
             }
             Response::SpuFaultServeOnRefuseLater | Response::SpuFaultRetriedReleaseUnconfirmed => {
@@ -3218,6 +3221,16 @@ fn drain_gate(
         })
         .is_err()
     {
+        // **A gate dead before the drain** (S4 x the gate dies): the
+        // quiesce's send failing on a hung-up gate is its death, met as the
+        // read's below is, (A).
+        if run
+            .gate
+            .as_ref()
+            .is_some_and(|gate| hung_up(gate.channel.as_fd()))
+        {
+            gate_died_in_leave(run, leave);
+        }
         return;
     }
     loop {
@@ -3332,7 +3345,7 @@ fn close_turn_on_death(run: &mut Run) -> Result<Option<TurnKey>, ChannelFault> {
     }
     if gate_dead && let Some(gate) = run.gate.take() {
         drop(gate.channel);
-        reap(gate.pid);
+        reap_by(gate.pid, lower_window());
     }
     if spu_dead && let Some(spu) = run.spu.take() {
         let pid = spu.pid;
@@ -3382,7 +3395,7 @@ fn gate_died_in_leave(run: &mut Run, leave: &mut PendingLeave) {
             "its channel was lost during the leave",
         );
         drop(gate.channel);
-        reap(gate.pid);
+        reap_by(gate.pid, lower_window());
     }
     leave.progress.leave = crate::lifecycle_table::Leave::Forced;
 }
@@ -3571,6 +3584,16 @@ fn hung_up(fd: std::os::fd::BorrowedFd<'_>) -> bool {
 /// that follows returns closure and the process exits.
 fn reap(pid: nix::unistd::Pid) {
     let _ = nix::sys::wait::waitpid(pid, None);
+}
+
+/// **A dead gate is reaped inside the lower bound** (`weaver-admin-Spec`
+/// 3.0, S4, S5, S6 and S10 x the gate dies: "reaps the gate, inside the
+/// lower bound"): a gate whose channel hung up but whose process lingers is
+/// killed at the bound, never waited on unbounded.
+fn lower_window() -> Option<std::time::Instant> {
+    std::time::Instant::now().checked_add(std::time::Duration::from_millis(
+        weaver_types::LOWER_BOUND_MS,
+    ))
 }
 
 /// [`reap`] by a deadline where one stands (`weaver-harness-Spec` section 6,
@@ -8342,9 +8365,48 @@ mod tests {
         );
     }
 
+    /// A member that answers the save point's legs and the grants read-back,
+    /// as the leave fixture's does, standing on `run`'s state seam.
+    fn saving_member(run: &mut Run) {
+        use std::io::{BufRead, BufReader, Write};
+        let (near, far) = std::os::unix::net::UnixStream::pair().expect("pair");
+        run.state = Some(crate::state::StateSeam::new(near));
+        std::thread::spawn(move || {
+            let mut answers = far.try_clone().expect("clone");
+            for line in BufReader::new(far).lines() {
+                let Ok(line) = line else { break };
+                let value: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
+                let answer = if line.starts_with(r#"{"ask":{"grants""#) {
+                    r#"{"answer":{"grants":{"surface":[]}}}"#.to_string()
+                } else if let Some(ordinal) = value["ask"]["snapshot"]["ask"].as_u64() {
+                    format!(
+                        concat!(
+                            r#"{{"answer":{{"snapshot":{{"ask":{},"save-point":"ab.save-point","run":"r-0","#,
+                            r#""sequence":5,"turn":1,"digest":"ab"}}}}}}"#
+                        ),
+                        ordinal
+                    )
+                } else if let Some(ordinal) = value["acknowledge"]["snapshot"]["ask"].as_u64() {
+                    format!(
+                        r#"{{"answer":{{"finished":{{"ask":{},"save-point":"ab.save-point"}}}}}}"#,
+                        ordinal
+                    )
+                } else {
+                    continue;
+                };
+                if answers.write_all(format!("{answer}\n").as_bytes()).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
     /// Where the gate dies in a graceful leave at rest.
     #[derive(Clone, Copy, Debug)]
     enum GateDeath {
+        /// Before the drain, between the turn's end and the quiesce, so the
+        /// quiesce's send itself fails (S4).
+        BeforeTheDrain,
         /// At the quiesce (S4), unanswered.
         AtQuiesce,
         /// After answering the quiesce, while the wind-down runs (S5).
@@ -8368,6 +8430,7 @@ mod tests {
         use std::os::fd::{AsFd, AsRawFd};
         let (mut run, _spare, sink_path) = entered_run(None);
         releasing_spu(&mut run);
+        saving_member(&mut run);
         let (near, far) = socketpair(
             AddressFamily::Unix,
             SockType::SeqPacket,
@@ -8418,29 +8481,35 @@ mod tests {
             last_word: crate::spawn::LastWord::quiet(),
         });
         let gate_peer = gate_peer.into_channel();
-        std::thread::spawn(move || {
-            while let Ok(asked) = gate_peer.recv() {
-                match (death, &asked.payload) {
-                    (
-                        GateDeath::AtQuiesce,
-                        weaver_types::Payload::Directive(LifecycleDirective::Quiesce),
-                    ) => return,
-                    (_, weaver_types::Payload::Directive(LifecycleDirective::Quiesce)) => {
-                        let _ = gate_peer.send(&OrganEnvelope {
-                            exchange: asked.exchange,
-                            position: Position::Close,
-                            payload: weaver_types::Payload::Answer(LifecycleAnswer::GateQuiesced),
-                        });
-                        if matches!(death, GateDeath::InWindDown) {
-                            std::thread::sleep(std::time::Duration::from_millis(300));
-                            return;
+        if matches!(death, GateDeath::BeforeTheDrain) {
+            drop(gate_peer);
+        } else {
+            std::thread::spawn(move || {
+                while let Ok(asked) = gate_peer.recv() {
+                    match (death, &asked.payload) {
+                        (
+                            GateDeath::AtQuiesce,
+                            weaver_types::Payload::Directive(LifecycleDirective::Quiesce),
+                        ) => return,
+                        (_, weaver_types::Payload::Directive(LifecycleDirective::Quiesce)) => {
+                            let _ = gate_peer.send(&OrganEnvelope {
+                                exchange: asked.exchange,
+                                position: Position::Close,
+                                payload: weaver_types::Payload::Answer(
+                                    LifecycleAnswer::GateQuiesced,
+                                ),
+                            });
+                            if matches!(death, GateDeath::InWindDown) {
+                                std::thread::sleep(std::time::Duration::from_millis(300));
+                                return;
+                            }
                         }
+                        (_, weaver_types::Payload::Directive(LifecycleDirective::Lower)) => return,
+                        _ => {}
                     }
-                    (_, weaver_types::Payload::Directive(LifecycleDirective::Lower)) => return,
-                    _ => {}
                 }
-            }
-        });
+            });
+        }
         let (mut harness, _dir) = harness_entered(run);
         let (verb_end, admin_end) = OrganChannel::pair().expect("admin pair");
         let admin = admin_end.into_channel();
@@ -8482,6 +8551,7 @@ mod tests {
     #[test]
     fn a_gate_dying_during_a_graceful_leave_turns_it_forced_and_answers_left() {
         for death in [
+            GateDeath::BeforeTheDrain,
             GateDeath::AtQuiesce,
             GateDeath::InWindDown,
             GateDeath::AtLower,
@@ -8490,9 +8560,17 @@ mod tests {
             assert!(
                 matches!(
                     left,
-                    weaver_types::Payload::Answer(LifecycleAnswer::Left { forced: true, .. })
+                    weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                        forced: true,
+                        save_point: Some(_),
+                        ..
+                    })
                 ),
-                "{death:?}: {left:?}"
+                "{death:?}: forced, the state still saved: {left:?}"
+            );
+            assert!(
+                events.iter().any(|e| e["kind"] == "save_point"),
+                "{death:?}: the save point's event: {events:?}"
             );
             let unload = events.last().expect("a record");
             assert_eq!(unload["kind"], "unload", "{death:?}: {events:?}");
@@ -8509,7 +8587,9 @@ mod tests {
                 .iter()
                 .any(|e| e.to_string().contains("The agent is unloading now"));
             match death {
-                GateDeath::AtQuiesce => assert!(!wound_down, "no wind-down after the drain"),
+                GateDeath::BeforeTheDrain | GateDeath::AtQuiesce => {
+                    assert!(!wound_down, "{death:?}: no wind-down after the drain")
+                }
                 GateDeath::InWindDown => assert!(cancelled, "the wind-down cancelled at the death"),
                 GateDeath::AtLower => assert!(wound_down && !cancelled),
             }
