@@ -1857,6 +1857,51 @@ fn a_joined_force_holds_the_lock_before_the_run_ends() {
     );
 }
 
+/// **A joined force behind another run's load ends nothing of it**
+/// (`weaver-admin-Spec` 3.0, the forced unload, joining; section 4, the
+/// marker-write rule (c); the Planner's ruling of 2026-10-12 on #126): a
+/// load won the lock between the holder and the force, outside the
+/// envelope, and its run stands. Under the lock the force reads the marker
+/// first, finds it open on that run, escalates nothing and writes nothing,
+/// and answers `AgentRunning` while that run holds the run lock. The run is
+/// untouched. Perturbation: drop the guard, and the after-left wait
+/// escalates the new run.
+#[test]
+fn a_joined_force_behind_another_runs_load_ends_nothing_of_it() {
+    let (config, _scratch) = scratch_config("join-behind-load");
+    save_points::write_marker(
+        &config.root,
+        Some(&save_points::Marker::Open { run: "r-1".into() }),
+    )
+    .unwrap();
+    // The run lock's holder stands for the run the load started.
+    let mut run = stand_in_holder(&config);
+    let holder = holding_as(&config, "unload");
+    let worker = recording_worker(&config, vec![left_forced()]);
+    let root = config.root.clone();
+    let ender = std::thread::spawn(move || {
+        let _ = worker.join();
+        // The load that won the lock opened its run's marker and let go.
+        save_points::write_marker(
+            &root,
+            Some(&save_points::Marker::Open { run: "r-2".into() }),
+        )
+        .unwrap();
+        end(holder);
+    });
+    let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+    ender.join().unwrap();
+    let standing = run.try_wait().unwrap().is_none();
+    end(run);
+    assert_eq!(answered, Err(LifecycleRefusal::AgentRunning));
+    assert!(standing, "the new run was not ended");
+    assert_eq!(
+        save_points::read_marker(&config.root),
+        Some(save_points::Marker::Open { run: "r-2".into() }),
+        "the new run's marker is left whole"
+    );
+}
+
 /// **A join refused `OutOfOrder` is retried every second while the
 /// holder's verb stays `unload`** (`weaver-admin-Spec` 3.0, the forced
 /// unload, joining): the refusal means only that the unload has not yet

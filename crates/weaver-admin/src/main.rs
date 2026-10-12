@@ -2127,9 +2127,46 @@ fn wait_after_left(
     let run_directory = config.run_directory();
     let _behind =
         start::take_invocation_lock_waiting(&run_directory, verb_table::HolderVerb::ForceUnload)?;
-    end_after_left(&run_directory, bounds)?;
     let run = run_noted(config, run)?;
+    if let Some(answer) = behind_another_run(config, bounds, run.as_deref())? {
+        return answer;
+    }
+    end_after_left(&run_directory, bounds)?;
     conclude_answered(config, run.as_deref(), left)
+}
+
+/// **Behind the lock, another run's marker is left whole** (Spec 3.0, the
+/// forced unload, joining; section 4, the marker-write rule (c); the
+/// Planner's ruling of 2026-10-12 on #126): a `load` that wins the lock
+/// between the holder and this force, outside the envelope, opens a run the
+/// force did not join. Read under the lock before anything is ended: where
+/// the marker stands open on another run, the force escalates nothing and
+/// writes nothing, answering `Unloaded` where the run lock frees within the
+/// after-left wait and `AgentRunning` where it is still held, a run standing
+/// that is not the force's, never `Unloaded` over it. Answers none where the
+/// marker is this run's, closed or absent, and the force goes on.
+fn behind_another_run(
+    config: &ServiceConfig,
+    bounds: UnloadBounds,
+    run: Option<&str>,
+) -> Result<Option<Result<LifecycleAnswer, LifecycleRefusal>>, LifecycleRefusal> {
+    let another = matches!(
+        read_marker_or_refuse(config)?,
+        Some(save_points::Marker::Open { run: ref open }) if Some(open.as_str()) != run
+    );
+    if !another {
+        return Ok(None);
+    }
+    diag!(
+        "weaver-admin: the force took the lock behind another run's load; it ends nothing of that run"
+    );
+    Ok(Some(
+        if start::wait_free(&config.run_directory(), bounds.after_left) {
+            Ok(unloaded_answer())
+        } else {
+            Err(LifecycleRefusal::AgentRunning)
+        },
+    ))
 }
 
 /// The run the joined force noted as it joined, or, where the marker did
@@ -2161,6 +2198,10 @@ fn wait_after_seal(
     }
     let _behind =
         start::take_invocation_lock_waiting(&run_directory, verb_table::HolderVerb::ForceUnload)?;
+    let run = run_noted(config, run)?;
+    if let Some(answer) = behind_another_run(config, bounds, run.as_deref())? {
+        return answer;
+    }
     Ok(unloaded_answer())
 }
 
@@ -2180,6 +2221,9 @@ fn escalate_joined(
     let _behind =
         start::take_invocation_lock_waiting(&run_directory, verb_table::HolderVerb::ForceUnload)?;
     let run = run_noted(config, run)?;
+    if let Some(answer) = behind_another_run(config, bounds, run.as_deref())? {
+        return answer;
+    }
     write_by_rule(config, run.as_deref(), conclusion::MarkerWrite::Forced)?;
     Ok(unloaded_answer())
 }
