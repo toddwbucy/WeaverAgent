@@ -1491,6 +1491,7 @@ impl Recorder {
     pub fn boundary(&self) -> Boundary
     pub fn drain(&mut self) -> Result<(), Failure>
     pub fn drain_by(&mut self, deadline: Instant) -> Result<Drained, Failure>
+    pub fn abandon(&mut self)
 }
 
 pub enum Drained { Emptied, Expired { queued: usize } }
@@ -1716,7 +1717,13 @@ forfeit itself. **The queue's last slot is the run's `unload`'s** (`UNLOAD_RESER
 other record's submit waits once the queue holds the depth less the reserve, so "the
 queue is full" means that depth for every record but `unload`, and the terminal event is
 admitted however the sink stalls. Only `unload` takes the reserve, and a run authors
-one.
+one. **`abandon` gives the writer up** after the caller's last bounded drain expired: the
+records still queued are forfeited, as at process death (`weaver-trace-PRD` section
+4.2), the writer begins no further record, and dropping the recorder detaches its thread
+rather than wait on a sink that stopped taking writes, so the process can exit; a record
+already in its write lands whole if the sink unblocks before the exit. The harness
+abandons after its leave's final drain expires (`weaver-harness-Spec` section 6, the
+shared deadline), answering no `Left`.
 
 ## 8. Instrumentation
 
