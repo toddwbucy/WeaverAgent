@@ -2357,12 +2357,29 @@ impl<'a> Ports<'a> {
                 Err(_) => return Err(TurnError::ChannelLost),
             }
             let woken = PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR;
+            if fds.iter().any(|fd| {
+                fd.revents()
+                    .is_some_and(|revents| revents.contains(PollFlags::POLLNVAL))
+            }) {
+                return Err(TurnError::ChannelLost);
+            }
+            // **The lifecycle wakes are scanned before the work** (Codex on
+            // #119, round 3; 3.0, S3 x force-unload): an SPU that keeps its
+            // channel readable must not starve a directive, a dial or the
+            // gate's death, the work being taken once none of them is ready.
+            let ready = |wake: &ExchangeWake, fd: &PollFd<'_>| {
+                fd.revents()
+                    .is_some_and(|revents| revents.intersects(woken))
+                    && !matches!(wake, ExchangeWake::Work)
+            };
+            if let Some((_, wake)) = fds.iter().zip(&wakes).find(|(fd, wake)| ready(wake, fd)) {
+                return Ok(*wake);
+            }
             for (fd, wake) in fds.iter().zip(&wakes) {
-                let revents = fd.revents().unwrap_or(PollFlags::empty());
-                if revents.contains(PollFlags::POLLNVAL) {
-                    return Err(TurnError::ChannelLost);
-                }
-                if revents.intersects(woken) {
+                if fd
+                    .revents()
+                    .is_some_and(|revents| revents.intersects(woken))
+                {
                     return Ok(*wake);
                 }
             }
@@ -4172,7 +4189,19 @@ mod tests {
         .unwrap();
         let decode = crate::channel::decode_from_owned(near);
         let (verb_end, admin_end) = crate::channel::OrganChannel::pair().unwrap();
-        let admin = admin_end.into_channel();
+        let admin = std::sync::Arc::new(admin_end.into_channel());
+        let leave = weaver_types::OrganEnvelope {
+            exchange: weaver_types::ExchangeId {
+                opener: weaver_types::Opener::Admin,
+                ordinal: 9,
+            },
+            position: weaver_types::Position::Open,
+            payload: weaver_types::Payload::Directive(weaver_types::LifecycleDirective::Leave {
+                cause: weaver_types::Cause { uid: 7 },
+                forced,
+                rollback: false,
+            }),
+        };
         let (gate_near, gate_child) = crate::channel::OrganChannel::pair().unwrap();
         let generated = |content, finish| {
             weaver_types::TokenAnswer::Generated(Generation {
@@ -4254,6 +4283,11 @@ mod tests {
             appends
         });
         let gate_finished = finished.clone();
+        // **The leave arrives during the call** where the case says so, sent
+        // once the gate holds the execution: the turn's wait scans the verb
+        // connection before its work, so a leave sent before the turn is
+        // heard during the generation, the before-the-call case.
+        let (leaver, during_call) = (admin.clone(), leave.clone());
         let gate_peer = std::thread::spawn(move || {
             let gate = gate_child.into_channel();
             let (mut interrupts, mut executions) = (0, 0);
@@ -4267,6 +4301,9 @@ mod tests {
                     match envelope.payload {
                         weaver_types::Payload::Tool(_) => {
                             executions += 1;
+                            if !before_call {
+                                leaver.send(&during_call).unwrap();
+                            }
                             let answer = |outcome| {
                                 gate.send(&weaver_types::OrganEnvelope {
                                     exchange: envelope.exchange.clone(),
@@ -4348,22 +4385,9 @@ mod tests {
         let (mut fullness, mut pressure_reported) = (None, false);
         let mut held: Option<PendingLeave> = None;
         let load_facts = test_load_facts();
-        admin
-            .send(&weaver_types::OrganEnvelope {
-                exchange: weaver_types::ExchangeId {
-                    opener: weaver_types::Opener::Admin,
-                    ordinal: 9,
-                },
-                position: weaver_types::Position::Open,
-                payload: weaver_types::Payload::Directive(
-                    weaver_types::LifecycleDirective::Leave {
-                        cause: weaver_types::Cause { uid: 7 },
-                        forced,
-                        rollback: false,
-                    },
-                ),
-            })
-            .unwrap();
+        if before_call {
+            admin.send(&leave).unwrap();
+        }
         let result = {
             let mut ports = Ports::grant(
                 &decode,
@@ -4698,6 +4722,140 @@ mod tests {
         .unwrap();
         assert_eq!(close["payload"]["reason"], "unload", "{close}");
         assert_eq!(close["payload"]["cause"]["uid"], 7, "{close}");
+    }
+
+    /// **A leave is heard while the SPU streams** (Codex on #119, round 3;
+    /// 3.0, S3 x force-unload): the turn's wait scans the lifecycle wakes
+    /// (the verb connection, the listener, the gate's hang-up) before the
+    /// SPU's work, so a generation that keeps its channel readable cannot
+    /// starve a forced `Leave` dialed mid-turn. The leave is held, the turn
+    /// cancelled. Perturbation: scan the work first, and the stream runs its
+    /// 3 s with the leave unread.
+    #[test]
+    fn a_leave_dialed_while_the_spu_streams_is_heard() {
+        use nix::poll::{PollFd, PollFlags, poll};
+        use std::os::fd::AsFd;
+        let (listener, _dir) = test_listener();
+        let (near, far) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let decode = crate::channel::decode_from_owned(near);
+        let (verb_end, admin_end) = crate::channel::OrganChannel::pair().unwrap();
+        let admin = admin_end.into_channel();
+        let peer = std::thread::spawn(move || {
+            let mut buf = vec![0; 65536];
+            let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).unwrap();
+            let _: TokenDirective = serde_json::from_slice(&buf[..n]).unwrap();
+            let started = std::time::Instant::now();
+            let token = serde_json::to_vec(&weaver_types::TokenAnswer::Token {
+                token: 1,
+                piece: "a".into(),
+            })
+            .unwrap();
+            let cancelled = loop {
+                let mut fds = [PollFd::new(far.as_fd(), PollFlags::POLLIN)];
+                if poll(&mut fds, 0u16).unwrap() > 0 {
+                    let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).unwrap();
+                    if matches!(
+                        serde_json::from_slice(&buf[..n]),
+                        Ok(TokenDirective::Cancel { .. })
+                    ) {
+                        break true;
+                    }
+                }
+                if started.elapsed() > std::time::Duration::from_secs(3) {
+                    break false;
+                }
+                while send(far.as_raw_fd(), &token, MsgFlags::MSG_DONTWAIT).is_ok() {}
+            };
+            let answer = weaver_types::TokenAnswer::Generated(Generation {
+                content: vec![],
+                emission: "streamed".into(),
+                finish: if cancelled {
+                    Finish::Stopped
+                } else {
+                    Finish::Completed
+                },
+                resident: 64,
+                capacity: 4096,
+                request: serde_json::value::RawValue::from_string(r#"{"rendered":"r"}"#.into())
+                    .unwrap(),
+                measurement: serde_json::value::RawValue::from_string("{}".into()).unwrap(),
+            });
+            send(
+                far.as_raw_fd(),
+                &serde_json::to_vec(&answer).unwrap(),
+                MsgFlags::empty(),
+            )
+            .unwrap();
+            (cancelled, started.elapsed(), far)
+        });
+        // The forced leave, sent once the stream is flowing.
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            admin
+                .send(&weaver_types::OrganEnvelope {
+                    exchange: weaver_types::ExchangeId {
+                        opener: weaver_types::Opener::Admin,
+                        ordinal: 9,
+                    },
+                    position: weaver_types::Position::Open,
+                    payload: weaver_types::Payload::Directive(
+                        weaver_types::LifecycleDirective::Leave {
+                            cause: weaver_types::Cause { uid: 7 },
+                            forced: true,
+                            rollback: false,
+                        },
+                    ),
+                })
+                .unwrap();
+            admin
+        });
+        let (mut recorder, author) = loaded_recorder();
+        let (mut turn_ordinal, mut turn_in_flight, mut slot) = (0, None, Some(verb_end));
+        let (mut fullness, mut pressure_reported) = (None, false);
+        let mut held: Option<PendingLeave> = None;
+        let load_facts = test_load_facts();
+        let outcome = {
+            let mut ports = Ports::grant(
+                &decode,
+                &author,
+                &mut recorder,
+                &mut turn_ordinal,
+                &mut turn_in_flight,
+                &load_facts,
+                None,
+                &listener,
+                Some(&mut slot),
+                None,
+                None,
+                None,
+                &mut fullness,
+                &mut pressure_reported,
+            );
+            ports.hold_leave(&mut held, None);
+            ports.turn(vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: "a long stream".into(),
+                }],
+            }])
+        };
+        let (cancelled, took, _far) = peer.join().unwrap();
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(
+            cancelled,
+            "the forced leave cancels the stream, after {took:?}"
+        );
+        assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+        assert_eq!(
+            held.expect("the leave is held").progress.directed,
+            crate::lifecycle_table::Leave::Forced
+        );
     }
 
     /// **A bound passes while the SPU streams** (Codex on #119, round 1): a
@@ -5150,7 +5308,11 @@ mod tests {
         .unwrap();
         let decode = crate::channel::decode_from_owned(near);
         let (verb_end, admin_end) = crate::channel::OrganChannel::pair().unwrap();
-        let admin = admin_end.into_channel();
+        let admin = Arc::new(admin_end.into_channel());
+        let stop_exchange = weaver_types::ExchangeId {
+            opener: weaver_types::Opener::Admin,
+            ordinal: 9,
+        };
         let (gate_near, gate_child) = crate::channel::OrganChannel::pair().unwrap();
         let generated = |content, finish| {
             weaver_types::TokenAnswer::Generated(Generation {
@@ -5218,6 +5380,11 @@ mod tests {
             appends
         });
         let gate_finished = finished.clone();
+        // **The stop is dialed during the execution**, once the gate holds
+        // it: the turn's wait scans the verb connection before its work, so
+        // a stop sent before the turn would be heard during the generation,
+        // and the invocation's own stop is what this fixture drives.
+        let (stopper, stop_sent) = (admin.clone(), stop_exchange.clone());
         let gate_peer = std::thread::spawn(move || {
             let gate = gate_child.into_channel();
             let mut fds = [PollFd::new(gate.as_fd(), PollFlags::POLLIN)];
@@ -5225,6 +5392,17 @@ mod tests {
             let open = gate.recv().unwrap();
             assert_eq!(open.position, weaver_types::Position::Open);
             assert!(matches!(open.payload, weaver_types::Payload::Tool(_)));
+            stopper
+                .send(&weaver_types::OrganEnvelope {
+                    exchange: stop_sent,
+                    position: weaver_types::Position::Open,
+                    payload: weaver_types::Payload::Directive(
+                        weaver_types::LifecycleDirective::Stop {
+                            cause: weaver_types::Cause { uid: 0 },
+                        },
+                    ),
+                })
+                .unwrap();
             let mut fds = [PollFd::new(gate.as_fd(), PollFlags::POLLIN)];
             let ready = poll(&mut fds, DELAY_MS).unwrap() > 0;
             let answer = |outcome| {
@@ -5343,19 +5521,6 @@ mod tests {
         let load_facts = test_load_facts();
 
         let stop_before = Instant::now();
-        let stop_exchange = weaver_types::ExchangeId {
-            opener: weaver_types::Opener::Admin,
-            ordinal: 9,
-        };
-        admin
-            .send(&weaver_types::OrganEnvelope {
-                exchange: stop_exchange.clone(),
-                position: weaver_types::Position::Open,
-                payload: weaver_types::Payload::Directive(weaver_types::LifecycleDirective::Stop {
-                    cause: weaver_types::Cause { uid: 0 },
-                }),
-            })
-            .unwrap();
         // Observe acknowledgment on its own thread, so an early send cannot
         // hide in the socket buffer until after turn() has returned.
         let acknowledgment = std::thread::spawn(move || {

@@ -2863,7 +2863,19 @@ fn lower_exchange(
                     .author
                     .author_fault(&mut run.recorder, Subsystem::Gate, None, &report);
             }
-            weaver_types::Payload::Answer(_) => return Ok(()),
+            // **Only the lower's own answer ends it** (Codex on #119, round
+            // 3): an answer or a refusal to another exchange, the drain's
+            // `GateQuiesced` left queued when a join cut the drain short, is
+            // read past, so a frame the gate still owes ahead of its
+            // `GateStopped` is read and recorded before the channel closes.
+            weaver_types::Payload::Answer(_) | weaver_types::Payload::Refusal(_)
+                if envelope.exchange
+                    != (ExchangeId {
+                        opener: Opener::Harness,
+                        ordinal,
+                    }) => {}
+            weaver_types::Payload::Answer(LifecycleAnswer::GateStopped) => return Ok(()),
+            weaver_types::Payload::Answer(_) => return Err(LifecycleRefusal::Malformed),
             weaver_types::Payload::Refusal(reason) => {
                 return Err(LifecycleRefusal::OrganRefused {
                     organ: weaver_types::RefusingOrgan::Gate,
@@ -3246,12 +3258,14 @@ fn drain_gate(
         // unanswered by it turns the leave forced from where it stands.
         // **The listener is heard beside the gate**: a join turns the leave
         // forced at once, the drain left there (S4 x force-unload).
-        match wait_either(gate.channel.as_fd(), listener.as_fd(), deadline) {
+        // **The listener is scanned before the gate** (Codex on #119, round
+        // 3): a gate whose channel never falls quiet must not starve a join.
+        match wait_either(listener.as_fd(), gate.channel.as_fd(), deadline) {
             None => {
                 leave.progress.leave = Leave::Forced;
                 return;
             }
-            Some(1) => {
+            Some(0) => {
                 hear_dials(listener, leave, false);
                 if leave.progress.leave == Leave::Forced {
                     return;
@@ -3533,8 +3547,9 @@ pub(crate) fn poll_timeout_until(deadline: Option<std::time::Instant>) -> nix::p
         .unwrap_or(PollTimeout::MAX)
 }
 
-/// Which of two descriptors is readable or hung up first, `0` or `1`, or
-/// `None` once `deadline` passes; with no deadline the wait is unbounded.
+/// Which of two descriptors is readable or hung up, `0` or `1`, the first
+/// argument winning where both are, so the caller ranks them; `None` once
+/// `deadline` passes, and with no deadline the wait is unbounded.
 fn wait_either(
     first: std::os::fd::BorrowedFd<'_>,
     second: std::os::fd::BorrowedFd<'_>,
@@ -8211,6 +8226,134 @@ mod tests {
         assert_eq!(unload["payload"]["forced_by"]["uid"], 9, "{unload}");
     }
 
+    /// **A join is heard while the gate floods frames at the drain** (Codex
+    /// on #119, round 3, the same class as the turn's wait): the drain scans
+    /// the listener before the gate, so a gate whose channel never falls
+    /// quiet cannot starve a force joining the unload. The gate floods frames
+    /// and never answers its quiesce; the join turns the leave forced and
+    /// both dialers read `Left { forced: true }`. Root, watched below.
+    /// Perturbation: scan the gate first, and the drain never ends.
+    #[test]
+    fn dialed_a_join_while_the_gate_floods_is_heard() {
+        use std::os::fd::AsRawFd;
+        if !nix::unistd::getuid().is_root() {
+            eprintln!("SKIP dialed join under a flood: the harness accepts root alone");
+            return;
+        }
+        let (mut run, _spare, _sink) = entered_run(None);
+        releasing_spu(&mut run);
+        let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+        run.gate = Some(GateChannel {
+            channel: gate_end,
+            pid: nix::unistd::Pid::from_raw(i32::MAX),
+            last_word: crate::spawn::LastWord::quiet(),
+        });
+        let gate_peer = std::sync::Arc::new(gate_peer.into_channel());
+        let reader = gate_peer.clone();
+        // Reads every refusal, and answers the lower when it comes.
+        let answers = gate_peer.clone();
+        std::thread::spawn(move || {
+            while let Ok(asked) = reader.recv() {
+                if matches!(
+                    asked.payload,
+                    weaver_types::Payload::Directive(LifecycleDirective::Lower)
+                ) {
+                    let _ = answers.send(&OrganEnvelope {
+                        exchange: asked.exchange,
+                        position: Position::Close,
+                        payload: weaver_types::Payload::Answer(LifecycleAnswer::GateStopped),
+                    });
+                }
+            }
+        });
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (flooder, halt) = (gate_peer.clone(), stop.clone());
+        std::thread::spawn(move || {
+            let mut ordinal = 1;
+            while !halt.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = flooder.send(&OrganEnvelope {
+                    exchange: ExchangeId {
+                        opener: Opener::Gate,
+                        ordinal,
+                    },
+                    position: Position::Open,
+                    payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry(
+                        b"{\"text\":\"more\"}",
+                    )),
+                });
+                ordinal += 1;
+            }
+        });
+        let (mut harness, dir) = harness_entered(run);
+        let socket = dir.join("c.sock");
+        let joiner = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let fd = nix::sys::socket::socket(
+                nix::sys::socket::AddressFamily::Unix,
+                nix::sys::socket::SockType::SeqPacket,
+                nix::sys::socket::SockFlag::SOCK_CLOEXEC,
+                None,
+            )
+            .expect("socket");
+            let address = nix::sys::socket::UnixAddr::new(&socket).expect("address");
+            nix::sys::socket::connect(fd.as_raw_fd(), &address).expect("connect");
+            let join = OrganEnvelope {
+                exchange: ExchangeId {
+                    opener: Opener::Admin,
+                    ordinal: 1,
+                },
+                position: Position::Open,
+                payload: weaver_types::Payload::Directive(LifecycleDirective::JoinLeave {
+                    cause: weaver_types::Cause { uid: 9 },
+                }),
+            };
+            nix::sys::socket::send(
+                fd.as_raw_fd(),
+                &serde_json::to_vec(&join).unwrap(),
+                nix::sys::socket::MsgFlags::empty(),
+            )
+            .expect("the join sends");
+            let mut buf = vec![0u8; 65536];
+            let n = nix::sys::socket::recv(
+                fd.as_raw_fd(),
+                &mut buf,
+                nix::sys::socket::MsgFlags::empty(),
+            )
+            .expect("the join's answer");
+            serde_json::from_slice::<OrganEnvelope>(&buf[..n]).expect("an envelope")
+        });
+        let (verb_end, admin_end) = OrganChannel::pair().expect("admin pair");
+        let admin = admin_end.into_channel();
+        harness
+            .dispatch_on(
+                &verb_end,
+                ExchangeId {
+                    opener: Opener::Admin,
+                    ordinal: 3,
+                },
+                LifecycleDirective::Leave {
+                    cause: weaver_types::Cause { uid: 7 },
+                    forced: false,
+                    rollback: false,
+                },
+                None,
+                None,
+            )
+            .expect("the leave dispatches");
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let left = admin.recv().expect("the leave's answer").payload;
+        let joined = joiner.join().expect("the joiner").payload;
+        for answer in [&left, &joined] {
+            assert!(
+                matches!(
+                    answer,
+                    weaver_types::Payload::Answer(LifecycleAnswer::Left { forced: true, .. })
+                ),
+                "{answer:?}"
+            );
+        }
+    }
+
     /// **The watch for the dialed tests** (#99 area 3's pattern): every
     /// `dialed_` test needs a root dialer and skips as any other uid, which
     /// is how every gate runs, so this re-executes them inside `unshare
@@ -8262,6 +8405,7 @@ mod tests {
         for name in [
             "dialed_a_join_during_the_drain_turns_the_leave_forced",
             "dialed_a_join_during_the_legs_turns_a_missed_leg_forced",
+            "dialed_a_join_while_the_gate_floods_is_heard",
         ] {
             assert!(
                 said.contains(&format!("{name} ... ok")),
@@ -9079,6 +9223,74 @@ mod tests {
             "the bound turned it forced"
         );
         assert!(took < std::time::Duration::from_secs(3), "{took:?}");
+    }
+
+    /// **The lower stops only on its own `GateStopped`** (Codex on #119,
+    /// round 3; `weaver-harness-gate-contract` section 2): a drain cut by a
+    /// join leaves its `GateQuiesced` queued on the channel, and the lower
+    /// reads past it, on its own exchange, to the gate's `GateStopped`, so a
+    /// frame the gate still owes ahead of that answer is read and recorded
+    /// before the channel closes. Perturbation: take any answer as the stop,
+    /// and the stale `GateQuiesced` closes the lower with the frame unread.
+    #[test]
+    fn the_lower_reads_past_a_stale_answer_to_its_own_gate_stopped() {
+        let (mut run, _spare, _sink) = entered_run(None);
+        let (channel, gate_peer) = OrganChannel::pair().expect("pair");
+        run.gate = Some(GateChannel {
+            channel,
+            pid: nix::unistd::Pid::from_raw(i32::MAX),
+            last_word: crate::spawn::LastWord::quiet(),
+        });
+        // The drain's quiesce was exchange 1; its answer is still queued.
+        run.gate_ordinal = 1;
+        let gate_peer = gate_peer.into_channel();
+        gate_peer
+            .send(&OrganEnvelope {
+                exchange: ExchangeId {
+                    opener: Opener::Harness,
+                    ordinal: 1,
+                },
+                position: Position::Close,
+                payload: weaver_types::Payload::Answer(LifecycleAnswer::GateQuiesced),
+            })
+            .expect("the stale answer");
+        let stand_in = std::thread::spawn(move || {
+            let lower = gate_peer.recv().expect("the lower");
+            // A frame the gate still owes, then its own answer.
+            gate_peer
+                .send(&OrganEnvelope {
+                    exchange: ExchangeId {
+                        opener: Opener::Gate,
+                        ordinal: 7,
+                    },
+                    position: Position::Open,
+                    payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry(
+                        b"{\"text\":\"owed\"}",
+                    )),
+                })
+                .expect("the owed frame");
+            gate_peer
+                .send(&OrganEnvelope {
+                    exchange: lower.exchange,
+                    position: Position::Close,
+                    payload: weaver_types::Payload::Answer(LifecycleAnswer::GateStopped),
+                })
+                .expect("the stop");
+        });
+        let (refused, died) = lower_gate_within(&mut run, 2_000, None);
+        stand_in.join().expect("the stand-in");
+        assert_eq!((refused, died), (None, false));
+        let refusals = run
+            .recorder
+            .structure()
+            .expect("the serving record")
+            .iter()
+            .filter(|r| r.kind == Kind::Refusal)
+            .count();
+        assert_eq!(
+            refusals, 1,
+            "the owed frame read and recorded before the close"
+        );
     }
 
     /// **A standing SPU's decode end**: every append is answered with one
