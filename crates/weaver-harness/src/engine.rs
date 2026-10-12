@@ -254,6 +254,10 @@ pub struct Ports<'a> {
     /// The leave cut the turn short, its bound passing or a join turning it
     /// forced: the generation cancelled or the call interrupted.
     cut_by_leave: bool,
+    /// The gate's channel hung up while the turn waited on something else
+    /// (`weaver-admin-Spec` 3.0, S3 to S5 x the gate dies): no longer
+    /// watched, its death the run's to author once the turn returns.
+    gate_lost: bool,
 }
 
 /// Why a turn did not complete. A refusal the seam typed is the session
@@ -362,6 +366,7 @@ impl<'a> Ports<'a> {
             wind_down_cause: None,
             deadline_passed: false,
             cut_by_leave: false,
+            gate_lost: false,
         }
     }
 
@@ -1440,6 +1445,28 @@ impl<'a> Ports<'a> {
             // **The leave's bound passed** (S4 and S5 x a bound passes):
             // the generation is cancelled as a stop's is, a call out
             // interrupted, and the leave turns forced from where it stands.
+            // **The gate died while the turn waited on the SPU** (3.0, S3 to
+            // S5 x the gate dies): with no leave held the turn goes on, its
+            // answer lost and the death authored once it returns (S3); a
+            // leave held still graceful turns forced at that moment (A),
+            // the turn cancelled (S4, S5).
+            ExchangeWake::GateLost => {
+                self.gate_lost = true;
+                let turned = match self.leave.as_deref_mut() {
+                    Some(Some(held))
+                        if held.progress.leave == crate::lifecycle_table::Leave::Graceful =>
+                    {
+                        held.progress.leave = crate::lifecycle_table::Leave::Forced;
+                        true
+                    }
+                    _ => false,
+                };
+                if turned {
+                    self.unload_interrupted = true;
+                    self.cut_by_leave = true;
+                    self.interrupt_running(turn, execution)?;
+                }
+            }
             ExchangeWake::Deadline => {
                 self.deadline_passed = true;
                 self.cut_by_leave = true;
@@ -2010,6 +2037,9 @@ impl<'a> Ports<'a> {
                 },
                 // A re-feed keeps no leave deadline; one met is spent.
                 ExchangeWake::Deadline => self.deadline_passed = true,
+                // A diagnostic replay stands no gate; a hang-up is not
+                // watched again.
+                ExchangeWake::GateLost => self.gate_lost = true,
                 // The coordination channel is heard while the re-feed
                 // streams, exactly as a generation hears it, and everything
                 // but a channel loss is refused: the replay has no stop
@@ -2294,6 +2324,18 @@ impl<'a> Ports<'a> {
                 // ear, the slot being the loop's own.
                 None => {}
             }
+            // **The gate is watched for its death** while the turn waits on
+            // the SPU (3.0, S3 to S5 x the gate dies): no events asked, so a
+            // client's frame queued there wakes nothing and a hang-up does.
+            // During an execution the gate is the work and is read already.
+            if let Some(gate) = self.gate.as_ref()
+                && !self.gate_lost
+                && std::os::fd::AsRawFd::as_raw_fd(&gate.channel.as_fd())
+                    != std::os::fd::AsRawFd::as_raw_fd(&work)
+            {
+                fds.push(PollFd::new(gate.channel.as_fd(), PollFlags::empty()));
+                wakes.push(ExchangeWake::GateLost);
+            }
             // **The leave's deadline bounds the wait** where one stands and
             // has not passed: the wind-down's, or a held leave's drain while
             // it stays graceful. Past it the wake is the deadline's.
@@ -2330,6 +2372,8 @@ enum ExchangeWake {
     Directive,
     /// The leave's deadline passed.
     Deadline,
+    /// The gate's channel hung up.
+    GateLost,
 }
 
 /// The load facts a test lends the seat, where no enter built them.

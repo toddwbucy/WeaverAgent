@@ -1177,14 +1177,30 @@ impl Harness {
         let Some(gate) = run.gate.as_ref() else {
             return Ok(());
         };
-        gate.channel.send(&OrganEnvelope {
+        let sent = gate.channel.send(&OrganEnvelope {
             exchange,
             position: Position::Close,
             payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry(
                 response.as_bytes(),
             )),
-        })?;
-        Ok(())
+        });
+        match sent {
+            Ok(()) => Ok(()),
+            // **The gate died while the turn ran** (3.0, S3 and S4 x the gate
+            // dies; the Planner's grade of #119): the answer is lost with it,
+            // as a delivery the gate cannot make is, and its death is decided
+            // by the table at rest: a `fault`, the run serving on; a leave
+            // the turn held is carried out forced by (A).
+            Err(_)
+                if {
+                    use std::os::fd::AsFd;
+                    hung_up(gate.channel.as_fd())
+                } =>
+            {
+                self.organ_died(OrganDeath::Gate)
+            }
+            Err(fault) => Err(fault),
+        }
     }
 
     /// One frame's turn, then the shelf, per [`Run::held_frames`]: the
@@ -1385,6 +1401,14 @@ impl Harness {
         // lands in this slot, and a join turns the lent leave forced and
         // cancels the generation (S5 x force-unload).
         let mut dialed: Option<OrganChannel> = None;
+        // **The gate is lent to be watched**: a call the wind-down asks is
+        // never sent, and a gate dying in it turns the leave forced at that
+        // moment (S5 x the gate dies).
+        let gate_port = run.gate.as_ref().map(|gate| crate::engine::GatePort {
+            channel: &gate.channel,
+            ordinal: &mut run.gate_ordinal,
+            held: &mut run.held_frames,
+        });
         let mut ports = crate::engine::Ports::grant(
             &spu.decode,
             &run.author,
@@ -1395,7 +1419,7 @@ impl Harness {
             None,
             &self.coordination,
             Some(&mut dialed),
-            None,
+            gate_port,
             run.state.as_mut(),
             run.classify.as_ref().map(|arm| &arm.channel),
             &mut run.fullness,
@@ -1449,6 +1473,17 @@ impl Harness {
         let cause = leave.cause;
         let rollback = leave.rollback;
         let mut held = Some(leave);
+        // **Ruling (A) where the leave is carried out**: a leave held from a
+        // turn meets the run as the turn left it, its gate or SPU perhaps
+        // gone since the leave arrived; a serving run with no gate a leave
+        // lowered, or no SPU, carries it out forced.
+        if let ChannelState::Entered(run) = &self.state {
+            let serving = run.diagnostic.is_none();
+            let dead = run.spu.is_none() || (serving && run.gate.is_none() && !run.gate_lowered);
+            if dead && let Some(leave) = held.as_mut() {
+                leave.progress.leave = Leave::Forced;
+            }
+        }
         let forced_now = |held: &Option<PendingLeave>| {
             held.as_ref()
                 .is_some_and(|l| l.progress.leave == Leave::Forced)
@@ -1491,7 +1526,21 @@ impl Harness {
         // start** (`weaver-harness-Spec` section 6).
         let shared = shared_deadline();
         held.as_mut().expect("the leave").progress.step = LeaveStep::Lowering;
-        let lowered = lower_gate(run, shared);
+        // A gate that died in the wind-down, or before the lower, is met here.
+        {
+            use std::os::fd::AsFd;
+            if run
+                .gate
+                .as_ref()
+                .is_some_and(|gate| hung_up(gate.channel.as_fd()))
+            {
+                gate_died_in_leave(run, held.as_mut().expect("the leave"));
+            }
+        }
+        let (lowered, died) = lower_gate(run, shared);
+        if died {
+            held.as_mut().expect("the leave").progress.leave = Leave::Forced;
+        }
         hear_dials(&self.coordination, held.as_mut().expect("the leave"), false);
         // **The leave's save point first, and the leave does not
         // complete without it**, per Spec section 6 on the operator's
@@ -2677,7 +2726,7 @@ fn leave(
     forced: bool,
 ) -> Result<(), LifecycleRefusal> {
     let shared = shared_deadline();
-    let lowered = lower_gate(run, shared);
+    let (lowered, _) = lower_gate(run, shared);
     leave_after(run, cause, forced, None, lowered, shared)
 }
 
@@ -2698,7 +2747,10 @@ fn shared_deadline() -> Option<std::time::Instant> {
 /// the channel drops rather than raced against it; a refusal is answered to
 /// the caller to name as the leave's first. A run with no gate standing
 /// lowers nothing.
-fn lower_gate(run: &mut Run, shared: Option<std::time::Instant>) -> Option<LifecycleRefusal> {
+fn lower_gate(
+    run: &mut Run,
+    shared: Option<std::time::Instant>,
+) -> (Option<LifecycleRefusal>, bool) {
     lower_gate_within(run, weaver_types::LOWER_BOUND_MS, shared)
 }
 
@@ -2707,8 +2759,10 @@ fn lower_gate_within(
     run: &mut Run,
     bound_ms: u64,
     shared: Option<std::time::Instant>,
-) -> Option<LifecycleRefusal> {
-    let gate = run.gate.take()?;
+) -> (Option<LifecycleRefusal>, bool) {
+    let Some(gate) = run.gate.take() else {
+        return (None, false);
+    };
     // Held as its own fact, since a gate that died leaves no gate too: a
     // leave stopped after this stands the run in S9 (3.0).
     run.gate_lowered = true;
@@ -2721,9 +2775,21 @@ fn lower_gate_within(
     // **Answered or not, the channel closes and the gate is reaped**: a gate
     // that did not answer inside the bound meets its channel closed, which is
     // death to it (`weaver-harness-gate-contract` section 1).
+    // **A gate that died at the lower** (S6 x the gate dies) is no refusal
+    // of the leave: its death is a `fault`, and the caller turns the leave
+    // forced (A). The second value says it died.
+    use std::os::fd::AsFd;
+    let died = lowered.is_err() && hung_up(gate.channel.as_fd());
+    if died {
+        author_gate_death(
+            run,
+            gate.last_word.take(),
+            "its channel was lost at the lower",
+        );
+    }
     drop(gate.channel);
     reap_by(gate.pid, [window, shared].into_iter().flatten().min());
-    lowered.err()
+    (if died { None } else { lowered.err() }, died)
 }
 
 /// **The lower reads its channel until the gate's own answer**, per Spec
@@ -3169,6 +3235,10 @@ fn drain_gate(
             Some(_) => {}
         }
         let Ok(envelope) = gate.channel.recv() else {
+            // **A gate dead at the drain** (S4 x the gate dies): (A).
+            if hung_up(gate.channel.as_fd()) {
+                gate_died_in_leave(run, leave);
+            }
             return;
         };
         match envelope.payload {
@@ -3289,6 +3359,43 @@ fn readable_by(channel: &OrganChannel, deadline: std::time::Instant) -> bool {
 /// unbounded.
 pub(crate) fn deadline_after(bound_s: Option<u64>) -> Option<std::time::Instant> {
     std::time::Instant::now().checked_add(std::time::Duration::from_secs(bound_s?))
+}
+
+/// **A gate dying during a leave turns it forced** (`weaver-admin-Spec` 3.0,
+/// S4, S5 and S6 x the gate dies, ruling (A)): its death is a `fault`, its
+/// channel dropped and the organ reaped, and the leave turns forced from where
+/// it stands, no `forced_by`, the graceful caller's cause kept. The save
+/// point's legs go on, needing no gate.
+fn gate_died_in_leave(run: &mut Run, leave: &mut PendingLeave) {
+    if let Some(gate) = run.gate.take() {
+        author_gate_death(
+            run,
+            gate.last_word.take(),
+            "its channel was lost during the leave",
+        );
+        drop(gate.channel);
+        reap(gate.pid);
+    }
+    leave.progress.leave = crate::lifecycle_table::Leave::Forced;
+}
+
+/// The gate's death as a `fault`, its last word riding the account where it
+/// spoke one that parses.
+fn author_gate_death(run: &mut Run, last_word: Option<String>, death: &str) {
+    let mut account = serde_json::json!({"organ": "gate", "death": death});
+    if let Some(line) = last_word {
+        account["last_word"] =
+            serde_json::from_str(&line).unwrap_or(serde_json::Value::String(line));
+    }
+    let _ = run.author.author_fault(
+        &mut run.recorder,
+        Subsystem::Harness,
+        None,
+        &crate::authorship::harness_report(
+            weaver_types::FaultCase::OrganDeathObserved,
+            &account.to_string(),
+        ),
+    );
 }
 
 /// **The leave's answer to every dialer it holds** (`weaver-admin-Spec`
@@ -6571,7 +6678,8 @@ mod tests {
     #[test]
     fn a_save_point_with_a_turn_in_flight_is_refused_not_at_rest() {
         let cause = weaver_types::Cause { uid: 0 };
-        for directive in [LifecycleDirective::SavePoint { cause }] {
+        {
+            let directive = LifecycleDirective::SavePoint { cause };
             let named = format!("{directive:?}");
             let (run, _spare, _sink_path) = entered_run(Some("t-1"));
             let before = run.recorder.structure().expect("record").len();
@@ -6723,7 +6831,11 @@ mod tests {
                 })
                 .expect("stopped");
         });
-        assert_eq!(lower_gate(&mut run, None), None, "the lower is answered");
+        assert_eq!(
+            lower_gate(&mut run, None),
+            (None, false),
+            "the lower is answered"
+        );
         stand_in.join().expect("the stand-in finishes");
         assert_eq!(run.position(None), crate::lifecycle_table::Position::S9);
     }
@@ -6899,7 +7011,7 @@ mod tests {
                 .expect("the answer sends");
         });
         let started = std::time::Instant::now();
-        let refused = lower_gate_within(&mut run, 2_000, None);
+        let (refused, _) = lower_gate_within(&mut run, 2_000, None);
         let took = started.elapsed();
         stand_in.join().expect("the stand-in");
         assert!(refused.is_none(), "{refused:?}");
@@ -6943,7 +7055,7 @@ mod tests {
             let _ = closed_tx.send(gate_peer.recv().is_err());
         });
         let started = std::time::Instant::now();
-        let refused = lower_gate_within(&mut run, BOUND_MS, None);
+        let (refused, _) = lower_gate_within(&mut run, BOUND_MS, None);
         let took = started.elapsed();
         assert!(refused.is_none(), "the leave goes on: {refused:?}");
         assert!(
@@ -8065,7 +8177,7 @@ mod tests {
         });
         let shared = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let started = std::time::Instant::now();
-        let refused = lower_gate_within(&mut run, BOUND_MS, Some(shared));
+        let (refused, _) = lower_gate_within(&mut run, BOUND_MS, Some(shared));
         assert!(refused.is_none(), "{refused:?}");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(5),
@@ -8108,6 +8220,365 @@ mod tests {
                 .iter()
                 .any(|r| r.kind == Kind::Fault && r.line.as_ref().contains(r#""subsystem":"gate""#)),
             "the gate's fault is on the record"
+        );
+    }
+
+    /// Where the gate dies in a graceful leave at rest.
+    #[derive(Clone, Copy, Debug)]
+    enum GateDeath {
+        /// At the quiesce (S4), unanswered.
+        AtQuiesce,
+        /// After answering the quiesce, while the wind-down runs (S5).
+        InWindDown,
+        /// At the lower, unanswered (S6).
+        AtLower,
+    }
+
+    /// A graceful leave at rest whose gate dies where `death` says, against
+    /// an SPU whose wind-down generation answers 3 s late unless cancelled.
+    /// Answers admin's answer, the record, and whether the wind-down was
+    /// cancelled.
+    fn a_leave_whose_gate_dies(
+        death: GateDeath,
+    ) -> (weaver_types::Payload, Vec<serde_json::Value>, bool) {
+        use nix::poll::{PollFd, PollFlags, poll};
+        use nix::sys::socket::{
+            AddressFamily, MsgFlags, SockFlag, SockType, recv as sock_recv, send as sock_send,
+            socketpair,
+        };
+        use std::os::fd::{AsFd, AsRawFd};
+        let (mut run, _spare, sink_path) = entered_run(None);
+        releasing_spu(&mut run);
+        let (near, far) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("socketpair");
+        run.spu.as_mut().expect("the arm").decode = crate::channel::decode_from_owned(near);
+        let decode_peer = std::thread::spawn(move || {
+            let mut buf = vec![0u8; 65536];
+            match sock_recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()) {
+                Ok(n) if n > 0 => {}
+                _ => return false,
+            }
+            let mut fds = [PollFd::new(far.as_fd(), PollFlags::POLLIN)];
+            let cancelled = poll(&mut fds, 3_000u16).unwrap_or(0) > 0
+                && sock_recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).is_ok_and(|n| {
+                    matches!(
+                        serde_json::from_slice(&buf[..n]),
+                        Ok(weaver_types::TokenDirective::Cancel { .. })
+                    )
+                });
+            let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+                content: vec![],
+                emission: "the summary".into(),
+                finish: if cancelled {
+                    weaver_types::Finish::Stopped
+                } else {
+                    weaver_types::Finish::Completed
+                },
+                resident: 64,
+                capacity: 4096,
+                request: serde_json::value::RawValue::from_string(r#"{"rendered":"r"}"#.into())
+                    .unwrap(),
+                measurement: serde_json::value::RawValue::from_string("{}".into()).unwrap(),
+            });
+            let _ = sock_send(
+                far.as_raw_fd(),
+                &serde_json::to_vec(&answer).unwrap(),
+                MsgFlags::empty(),
+            );
+            cancelled
+        });
+        let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+        run.gate = Some(GateChannel {
+            channel: gate_end,
+            pid: nix::unistd::Pid::from_raw(i32::MAX),
+            last_word: crate::spawn::LastWord::quiet(),
+        });
+        let gate_peer = gate_peer.into_channel();
+        std::thread::spawn(move || {
+            while let Ok(asked) = gate_peer.recv() {
+                match (death, &asked.payload) {
+                    (
+                        GateDeath::AtQuiesce,
+                        weaver_types::Payload::Directive(LifecycleDirective::Quiesce),
+                    ) => return,
+                    (_, weaver_types::Payload::Directive(LifecycleDirective::Quiesce)) => {
+                        let _ = gate_peer.send(&OrganEnvelope {
+                            exchange: asked.exchange,
+                            position: Position::Close,
+                            payload: weaver_types::Payload::Answer(LifecycleAnswer::GateQuiesced),
+                        });
+                        if matches!(death, GateDeath::InWindDown) {
+                            std::thread::sleep(std::time::Duration::from_millis(300));
+                            return;
+                        }
+                    }
+                    (_, weaver_types::Payload::Directive(LifecycleDirective::Lower)) => return,
+                    _ => {}
+                }
+            }
+        });
+        let (mut harness, _dir) = harness_entered(run);
+        let (verb_end, admin_end) = OrganChannel::pair().expect("admin pair");
+        let admin = admin_end.into_channel();
+        harness
+            .dispatch_on(
+                &verb_end,
+                ExchangeId {
+                    opener: Opener::Admin,
+                    ordinal: 3,
+                },
+                LifecycleDirective::Leave {
+                    cause: weaver_types::Cause { uid: 7 },
+                    forced: false,
+                    rollback: false,
+                },
+                None,
+                None,
+            )
+            .expect("the leave dispatches");
+        let left = admin.recv().expect("the leave's answer").payload;
+        drop(harness);
+        let cancelled = decode_peer.join().expect("the decode peer");
+        let events = std::fs::read_to_string(&sink_path)
+            .expect("the sink")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("a record line"))
+            .collect();
+        (left, events, cancelled)
+    }
+
+    /// **A gate dying during a graceful leave turns it forced, and the leave
+    /// still answers `Left`** (`weaver-admin-Spec` 3.0, S4, S5 and S6 x the
+    /// gate dies, ruling (A); the Planner's grade of #119): at the drain, in
+    /// the wind-down (whose generation is cancelled at that moment) or at the
+    /// lower, the gate's death is a `fault`, the gate is reaped, the save
+    /// point's legs go on, and `unload` and `Left` say `forced` true with no
+    /// `forced_by` and the graceful caller's cause. Perturbation: read the
+    /// dead channel as before, and the lower's failure refuses the leave.
+    #[test]
+    fn a_gate_dying_during_a_graceful_leave_turns_it_forced_and_answers_left() {
+        for death in [
+            GateDeath::AtQuiesce,
+            GateDeath::InWindDown,
+            GateDeath::AtLower,
+        ] {
+            let (left, events, cancelled) = a_leave_whose_gate_dies(death);
+            assert!(
+                matches!(
+                    left,
+                    weaver_types::Payload::Answer(LifecycleAnswer::Left { forced: true, .. })
+                ),
+                "{death:?}: {left:?}"
+            );
+            let unload = events.last().expect("a record");
+            assert_eq!(unload["kind"], "unload", "{death:?}: {events:?}");
+            assert_eq!(unload["payload"]["forced"], true, "{death:?}: {unload}");
+            assert_eq!(unload["payload"]["cause"]["uid"], 7, "{death:?}: {unload}");
+            assert!(unload["payload"].get("forced_by").is_none(), "{death:?}");
+            assert!(
+                events
+                    .iter()
+                    .any(|e| e["kind"] == "fault" && e["payload"]["account"]["organ"] == "gate"),
+                "{death:?}: the gate's death is a fault: {events:?}"
+            );
+            let wound_down = events
+                .iter()
+                .any(|e| e.to_string().contains("The agent is unloading now"));
+            match death {
+                GateDeath::AtQuiesce => assert!(!wound_down, "no wind-down after the drain"),
+                GateDeath::InWindDown => assert!(cancelled, "the wind-down cancelled at the death"),
+                GateDeath::AtLower => assert!(wound_down && !cancelled),
+            }
+        }
+    }
+
+    /// A frame's turn whose gate dies 300 ms into a generation that answers
+    /// 3 s late unless cancelled; with `leave`, a graceful leave is heard on
+    /// admin's connection first. Answers whether service stood, whether the
+    /// harness still stands entered with no gate, admin's answer where a
+    /// leave was sent, whether the generation was cancelled, and the record.
+    fn a_turn_whose_gate_dies(
+        leave: bool,
+    ) -> (
+        bool,
+        bool,
+        Option<weaver_types::Payload>,
+        bool,
+        Vec<serde_json::Value>,
+    ) {
+        use nix::poll::{PollFd, PollFlags, poll};
+        use nix::sys::socket::{
+            AddressFamily, MsgFlags, SockFlag, SockType, recv as sock_recv, send as sock_send,
+            socketpair,
+        };
+        use std::os::fd::{AsFd, AsRawFd};
+        let (mut run, _spare, sink_path) = entered_run(None);
+        releasing_spu(&mut run);
+        let (near, far) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("socketpair");
+        run.spu.as_mut().expect("the arm").decode = crate::channel::decode_from_owned(near);
+        let decode_peer = std::thread::spawn(move || {
+            let mut buf = vec![0u8; 65536];
+            match sock_recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()) {
+                Ok(n) if n > 0 => {}
+                _ => return false,
+            }
+            let mut fds = [PollFd::new(far.as_fd(), PollFlags::POLLIN)];
+            let cancelled = poll(&mut fds, 3_000u16).unwrap_or(0) > 0
+                && sock_recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).is_ok_and(|n| {
+                    matches!(
+                        serde_json::from_slice(&buf[..n]),
+                        Ok(weaver_types::TokenDirective::Cancel { .. })
+                    )
+                });
+            let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+                content: vec![],
+                emission: "late".into(),
+                finish: if cancelled {
+                    weaver_types::Finish::Stopped
+                } else {
+                    weaver_types::Finish::Completed
+                },
+                resident: 64,
+                capacity: 4096,
+                request: serde_json::value::RawValue::from_string(r#"{"rendered":"r"}"#.into())
+                    .unwrap(),
+                measurement: serde_json::value::RawValue::from_string("{}".into()).unwrap(),
+            });
+            let _ = sock_send(
+                far.as_raw_fd(),
+                &serde_json::to_vec(&answer).unwrap(),
+                MsgFlags::empty(),
+            );
+            cancelled
+        });
+        let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+        run.gate = Some(GateChannel {
+            channel: gate_end,
+            pid: nix::unistd::Pid::from_raw(i32::MAX),
+            last_word: crate::spawn::LastWord::quiet(),
+        });
+        let gate_peer = gate_peer.into_channel();
+        gate_peer
+            .send(&OrganEnvelope {
+                exchange: ExchangeId {
+                    opener: Opener::Gate,
+                    ordinal: 1,
+                },
+                position: Position::Open,
+                payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry(
+                    b"{\"text\":\"say a word\"}",
+                )),
+            })
+            .expect("the frame sends");
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            drop(gate_peer);
+        });
+        let (verb_end, admin_end) = OrganChannel::pair().expect("admin pair");
+        let admin = admin_end.into_channel();
+        if leave {
+            admin
+                .send(&OrganEnvelope {
+                    exchange: ExchangeId {
+                        opener: Opener::Admin,
+                        ordinal: 4,
+                    },
+                    position: Position::Open,
+                    payload: weaver_types::Payload::Directive(LifecycleDirective::Leave {
+                        cause: weaver_types::Cause { uid: 7 },
+                        forced: false,
+                        rollback: false,
+                    }),
+                })
+                .expect("the leave sends");
+        }
+        let (mut harness, _dir) = harness_entered(run);
+        let mut verb_slot = Some(verb_end);
+        let served = harness.serve_gate_wake(
+            "identity",
+            &[],
+            &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
+                ports.turn(vec![weaver_traits::Message {
+                    role: weaver_traits::Role::User,
+                    content: vec![weaver_traits::ContentBlock::Text {
+                        text: text.to_string(),
+                    }],
+                }])
+            },
+            &mut verb_slot,
+        );
+        let standing = matches!(&harness.state, ChannelState::Entered(run) if run.gate.is_none());
+        // Dropped first, so a leave never answered reads closed, not a hang.
+        drop(harness);
+        drop(verb_slot);
+        let answer = leave
+            .then(|| admin.recv().ok().map(|envelope| envelope.payload))
+            .flatten();
+        let cancelled = decode_peer.join().expect("the decode peer");
+        let events = std::fs::read_to_string(&sink_path)
+            .expect("the sink")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("a record line"))
+            .collect();
+        (served.is_ok(), standing, answer, cancelled, events)
+    }
+
+    /// **A gate dying while the SPU generates, no leave held, is a `fault`
+    /// and the run serves on** (`weaver-admin-Spec` 3.0, S3 x the gate dies;
+    /// the Planner's grade of #119): the turn goes on, its answer lost with
+    /// the gate, and the death is authored, the run entered with no gate.
+    /// Perturbation: send the answer with `?` again, and service ends.
+    #[test]
+    fn a_gate_dying_while_the_spu_generates_is_a_fault_and_the_run_serves_on() {
+        let (served, standing, _, cancelled, events) = a_turn_whose_gate_dies(false);
+        assert!(served, "service stands");
+        assert!(standing, "the run stands entered, its gate taken");
+        assert!(!cancelled, "with no leave the turn goes on");
+        assert!(
+            events
+                .iter()
+                .any(|e| e["kind"] == "fault" && e["payload"]["account"]["organ"] == "gate"),
+            "the gate's death is a fault: {events:?}"
+        );
+    }
+
+    /// **A gate dying mid-turn with a graceful leave held turns the leave
+    /// forced at that moment** (`weaver-admin-Spec` 3.0, S4 x the gate dies,
+    /// ruling (A); the Planner's grade of #119): the turn is cancelled, and
+    /// the leave carried out after it answers `Left { forced: true }`, no
+    /// wind-down run. Perturbation: leave the gate unwatched in the turn, and
+    /// the generation answers late and complete.
+    #[test]
+    fn a_gate_dying_mid_turn_with_a_leave_held_turns_it_forced() {
+        let (served, _, answer, cancelled, events) = a_turn_whose_gate_dies(true);
+        assert!(served, "the wake serves");
+        assert!(cancelled, "the turn is cancelled at the gate's death");
+        assert!(
+            matches!(
+                answer,
+                Some(weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                    forced: true,
+                    ..
+                }))
+            ),
+            "{answer:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.to_string().contains("The agent is unloading now")),
+            "no wind-down"
         );
     }
 
