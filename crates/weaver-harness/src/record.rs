@@ -119,6 +119,16 @@ impl Record {
         }
     }
 
+    /// **Abandon the writer** (#117; `weaver-trace-Spec` section 7), after
+    /// the leave's last bounded drain expired: its queued records are
+    /// forfeited and the recorder's drop detaches the writer. The diagnostic
+    /// writer is synchronous and has nothing to abandon.
+    pub fn abandon(&mut self) {
+        if let Record::Serving(recorder) = self {
+            recorder.abandon();
+        }
+    }
+
     /// The serving recorder where that is the arm, for the tee attach and
     /// the tests that read the structure back.
     pub fn serving(&self) -> Option<&weaver_trace::Recorder> {

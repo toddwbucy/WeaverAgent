@@ -64,6 +64,12 @@ pub struct Boundary {
 struct WriterShared {
     state: Mutex<WriterState>,
     drained: Condvar,
+    /// **The writer abandoned** (#117): set by [`Recorder::abandon`], after
+    /// the caller's last bounded drain expired.
+    /// The records still queued are forfeited (`weaver-trace-PRD` section
+    /// 4.2): the thread writes none it has not begun, and the writer's drop
+    /// detaches it rather than wait on a sink that stopped taking writes.
+    abandoned: std::sync::atomic::AtomicBool,
 }
 
 struct WriterState {
@@ -109,6 +115,7 @@ impl Writer {
                 queued: 0,
             }),
             drained: Condvar::new(),
+            abandoned: std::sync::atomic::AtomicBool::new(false),
         });
         let thread_shared = Arc::clone(&shared);
         let mut file = File::from(sink);
@@ -124,7 +131,13 @@ impl Writer {
                     .expect("writer state")
                     .failed
                     .is_some();
-                let outcome = (!already_failed).then(|| file.write_all(line.as_bytes()));
+                // An abandoned writer begins no further record: the run's
+                // tail is forfeited, never written after the run is done.
+                let abandoned = thread_shared
+                    .abandoned
+                    .load(std::sync::atomic::Ordering::Acquire);
+                let outcome =
+                    (!already_failed && !abandoned).then(|| file.write_all(line.as_bytes()));
                 // **The decrement and the notify happen under the mutex the
                 // drain waits on.** That is what closes the window: a waiter
                 // between its predicate read and its `wait` still holds this
@@ -267,7 +280,19 @@ impl Drop for Writer {
         // descriptor's writes ordered before the process moves on.
         let (closed, _) = sync_channel::<QueueItem>(1);
         let _ = std::mem::replace(&mut self.queue, closed);
-        if let Some(thread) = self.thread.take() {
+        // **An abandoned writer is detached, not joined** (#117): its thread
+        // may be blocked in a write the sink will never take, and the worker
+        // must still exit. It writes no record it has not begun; one already
+        // in its write lands whole if the sink unblocks before the process
+        // ends, a line the run admitted in its sequence, and the process's
+        // exit ends the thread.
+        if self
+            .shared
+            .abandoned
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            drop(self.thread.take());
+        } else if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
     }
@@ -425,6 +450,21 @@ impl Recorder {
     /// wait given up on them. The harness bounds its leave's drain so.
     pub fn drain_by(&mut self, deadline: std::time::Instant) -> Result<Drained, Failure> {
         self.writer.wait_drained_by(deadline)
+    }
+}
+
+impl Recorder {
+    /// **Abandon the writer** (#117; `weaver-trace-Spec` section 7): the
+    /// caller's last drain expired, so the records still queued are forfeited
+    /// (`weaver-trace-PRD` section 4.2). The writer begins no further record,
+    /// and dropping the recorder detaches its thread rather than wait on a
+    /// sink that stopped taking writes, so the process can exit. A drain after
+    /// it empties by discarding, never by writing.
+    pub fn abandon(&mut self) {
+        self.writer
+            .shared
+            .abandoned
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 }
 

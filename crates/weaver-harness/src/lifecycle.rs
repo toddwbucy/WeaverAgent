@@ -3004,7 +3004,12 @@ fn leave_after(
     let drained = match shared {
         Some(deadline) => match run.recorder.drain_by(deadline) {
             Ok(weaver_trace::Drained::Emptied) => Ok(()),
-            Ok(weaver_trace::Drained::Expired { .. }) => Err(LifecycleRefusal::DescriptorsUnusable),
+            // The writer is abandoned with its queue (#117): the worker
+            // must exit, and a stuck sink would otherwise hold it.
+            Ok(weaver_trace::Drained::Expired { .. }) => {
+                run.recorder.abandon();
+                Err(LifecycleRefusal::DescriptorsUnusable)
+            }
             Err(_) => Err(LifecycleRefusal::DescriptorsUnusable),
         },
         None => run
@@ -7538,23 +7543,29 @@ mod tests {
         reader
     }
 
-    /// The record a stalled writer held, read once `run` is dropped and the
-    /// writer has written it all.
-    fn read_stalled(run: Run, reader: std::io::PipeReader) -> Vec<serde_json::Value> {
-        use std::io::Read;
-        let drainer = std::thread::spawn(move || {
-            let mut reader = reader;
-            let mut sink = String::new();
-            let _ = reader.read_to_string(&mut sink);
-            sink
+    /// The record a stalled writer's run admitted, read from its structure,
+    /// then **the run dropped with its sink still stuck**: the drop must
+    /// return, the writer abandoned and detached (#117), so the worker can
+    /// exit. Answers the record.
+    fn record_then_drop(run: Run, reader: std::io::PipeReader) -> Vec<serde_json::Value> {
+        let events = run
+            .recorder
+            .structure()
+            .expect("the serving record")
+            .iter()
+            .map(|r| serde_json::from_str(r.line.as_ref()).expect("a record line"))
+            .collect();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            drop(run);
+            let _ = tx.send(());
         });
-        drop(run);
-        drainer
-            .join()
-            .expect("the reader")
-            .lines()
-            .map(|line| serde_json::from_str(line).expect("a record line"))
-            .collect()
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_secs(2)).is_ok(),
+            "the run drops with its sink stuck (#117)"
+        );
+        drop(reader);
+        events
     }
 
     /// An SPU lifecycle stand-in answering every directive `Released`.
@@ -7601,7 +7612,7 @@ mod tests {
             "no unload on the stream, no Left"
         );
         assert!(started.elapsed() < std::time::Duration::from_secs(3));
-        let events = read_stalled(run, reader);
+        let events = record_then_drop(run, reader);
         let kinds: Vec<&str> = events.iter().map(|e| e["kind"].as_str().unwrap()).collect();
         assert_eq!(kinds.last(), Some(&"unload"), "{kinds:?}");
         let forfeit = events
@@ -7650,7 +7661,7 @@ mod tests {
         );
         assert!(started.elapsed() < std::time::Duration::from_secs(3));
         assert!(left.is_err(), "no unload, so no Left: {left:?}");
-        let events = read_stalled(run, reader);
+        let events = record_then_drop(run, reader);
         assert_eq!(
             events.last().map(|e| e["kind"].clone()),
             Some(serde_json::json!("unload")),
@@ -7681,7 +7692,7 @@ mod tests {
             Err(LifecycleRefusal::DescriptorsUnusable),
             "the sink stalled"
         );
-        let events = read_stalled(run, reader);
+        let events = record_then_drop(run, reader);
         let kinds: Vec<&str> = events.iter().map(|e| e["kind"].as_str().unwrap()).collect();
         assert_eq!(kinds.last(), Some(&"unload"), "{kinds:?}");
         assert!(

@@ -783,6 +783,51 @@ fn a_drain_by_a_deadline_returns_at_it_naming_the_queued() {
     drainer.join().expect("the reader");
 }
 
+/// **An abandoned recorder is dropped without waiting on its stuck writer**
+/// (#117; Codex on #119, round 1): after `drain_by` answers `Expired` and the
+/// caller abandons the writer, its queued records forfeited
+/// (`weaver-trace-PRD` section 4.2), dropping the recorder returns with the
+/// sink still open and unread, and the worker can exit. Perturbation: join
+/// the writer on drop as before, and the drop never returns.
+#[test]
+fn a_recorder_whose_drain_expired_drops_without_waiting_on_its_writer() {
+    use weaver_trace::Drained;
+    let (reader, pipe_writer) = std::io::pipe().expect("pipe");
+    let mut r = Recorder::receive(
+        OwnedFd::from(pipe_writer),
+        RunRef("r-1".into()),
+        SessionRef("s-1".into()),
+    )
+    .expect("receives");
+    r.submit(event(Kind::Load, None, Some(elections())))
+        .unwrap();
+    let account = format!("{{\"kind\":\"{}\"}}", "x".repeat(8_192));
+    for _ in 0..32 {
+        r.submit(event(
+            Kind::Fault,
+            None,
+            Some(Payload::Fault(raw_payload(&account).unwrap())),
+        ))
+        .unwrap();
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+    assert!(matches!(
+        r.drain_by(deadline).expect("no failure"),
+        Drained::Expired { .. }
+    ));
+    r.abandon();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        drop(r);
+        let _ = tx.send(());
+    });
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_secs(2)).is_ok(),
+        "the drop returns with the sink still stuck"
+    );
+    drop(reader);
+}
+
 /// **The queue's last slot is the run's `unload`'s** (`weaver-trace-Spec`
 /// section 7, the reserve): every other record blocks once the queue holds
 /// `QUEUE_DEPTH - UNLOAD_RESERVE`, so a stalled sink can never leave the
