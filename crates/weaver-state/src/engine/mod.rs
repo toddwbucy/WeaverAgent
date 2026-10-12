@@ -6,6 +6,7 @@
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 
+// Test-only hook kept here (#118): a case every engine's suite runs against its own store.
 #[cfg(test)]
 fn raw_objects_survive_the_engine_and_answers(store: &mut dyn crate::store::Store) {
     use crate::store::{
@@ -66,6 +67,7 @@ fn raw_objects_survive_the_engine_and_answers(store: &mut dyn crate::store::Stor
 /// Four lines of a recorded trace, verbatim: karl's seated prefix, a user
 /// message, an assistant message and a measurement, from the olympus baseline
 /// of 2026-09-27 on the shared bulk store.
+// Test-only hook kept here (#118): the recorded lines the shared case below reads.
 #[cfg(test)]
 const RECORDED: &str = include_str!("recorded-karl.ndjson");
 
@@ -80,6 +82,7 @@ const RECORDED: &str = include_str!("recorded-karl.ndjson");
 /// record's. A second measurement crosses with its perplexity absent and is
 /// served with no perplexity. Each engine's caller then reads its own tables
 /// for the rows that prove the landing was typed.
+// Test-only hook kept here (#118): a case every engine's suite runs against its own store.
 #[cfg(test)]
 fn recorded_lines_land_typed_and_serve_what_the_record_reads(store: &mut dyn crate::store::Store) {
     use crate::store::parse_distillate;
@@ -170,6 +173,7 @@ fn recorded_lines_land_typed_and_serve_what_the_record_reads(store: &mut dyn cra
 /// typed only where every engine can hold it, a rule the retired service
 /// engine's `TEXT` forced. Each engine's caller then reads its own `field`
 /// table for the verbatim row.
+// Test-only hook kept here (#118): a case every engine's suite runs against its own store.
 #[cfg(test)]
 fn a_nul_in_a_message_lands_verbatim_and_serves_whole(store: &mut dyn crate::store::Store) {
     use crate::store::Distillate;
