@@ -27,24 +27,26 @@ private items, so `use super::*` and every private call keep working, and no `pu
 added anywhere. Nothing moves to `crates/<crate>/tests/` unless it already used only the
 public surface, and then only with the reason in the body.
 
-## 2. The baseline inventory, main at c70c992 (ddbfd0e carries the same shape plus #119's harness tests)
+## 2. The baseline inventory, main at ddbfd0e
 
 Embedded lines are counted from the last `#[cfg(test)] mod` declaration to the end of
-the file. Hooks are `#[cfg(test)]` items that are not modules: test-only functions,
-`thread_local!` counters, statements inside production functions.
+the file, so a module that sits mid-file reads high (`weaver-trace/src/event.rs`: 114
+counted, 77 moved). Files are those carrying an inline test module. Hooks are
+`#[cfg(test)]` items that are not modules: test-only functions, `thread_local!`
+counters, statements inside production functions.
 
 | crate | embedded lines | files | largest |
 |---|---|---|---|
-| weaver-harness | 9,332 | 10 | `src/lifecycle.rs` 3,945 of 6,766 |
-| weaver-admin | 8,890 | 12 | `src/main.rs` 3,561 of 6,584 |
-| weaver-spu | 6,145 | 9 | `src/decoder/session.rs` 1,384 |
-| weaver-state | 2,289 | 7 | `src/engine/sqlite.rs` 937 |
-| weaver-gate | 1,808 | 5 | `src/tools.rs` 659 |
+| weaver-harness | 14,258 | 9 | `src/lifecycle.rs` 7,681 of 11,608 |
+| weaver-admin | 8,890 | 13 | `src/main.rs` 3,561 of 6,586 |
+| weaver-spu | 6,145 | 17 | `src/decoder/session.rs` 1,384 |
+| weaver-state | 2,289 | 5 | `src/engine/sqlite.rs` 937 |
+| weaver-gate | 1,808 | 4 | `src/tools.rs` 659 |
 | weaver-trace | 300 | 2 | |
 | weaver-internal | 74 | 1 | |
 | weaver-types | 34 | 1 | |
 
-Total about 28,900 embedded lines in 53 files, beside 14,446 lines in 36 dedicated
+Total about 33,800 embedded lines in 52 files, beside 14,621 lines in 36 dedicated
 `tests/` files; 36 hooks in 20 files. The script that produced it, run from the
 repository root before and after each crate, its output kept for the body:
 
