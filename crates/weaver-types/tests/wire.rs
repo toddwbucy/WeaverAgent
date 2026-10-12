@@ -514,7 +514,10 @@ fn the_cause_and_the_constituents_render_as_stated() {
         r#"{"kind":"state","state":"unloaded","constituents":[4100,4101,4102]}"#
     );
     assert_eq!(
-        serde_json::to_string(&LifecycleAnswer::InTransition).unwrap(),
+        serde_json::to_string(&LifecycleAnswer::InTransition {
+            constituents: Vec::new()
+        })
+        .unwrap(),
         r#"{"kind":"in_transition"}"#
     );
     assert_eq!(
@@ -732,4 +735,34 @@ fn an_enter_with_one_bound_round_trips_with_the_other_absent() {
         let back: weaver_types::EnterPayload = serde_json::from_str(&json).expect("reads");
         assert_eq!(back, payload);
     }
+}
+
+/// **`InTransition` names the run's constituents only where admin fills
+/// them** (`weaver-types-Spec` section 3.1, on the Planner's ruling of
+/// 2026-10-12, B3): sent empty, as the harness's `Observe` answer and
+/// `show`'s rung (0) send it, it is byte-identical to the unit answer it
+/// was; filled by `show`'s rungs (i) and (iii) from the run lock's
+/// holders, it carries their pids, and both read back. Perturbation: drop
+/// the skip, and the empty answer gains a field on the wire.
+#[test]
+fn in_transition_carries_its_constituents_only_where_filled() {
+    use weaver_types::LifecycleAnswer;
+    let empty = LifecycleAnswer::InTransition {
+        constituents: Vec::new(),
+    };
+    let wire = serde_json::to_string(&empty).expect("renders");
+    assert_eq!(wire, r#"{"kind":"in_transition"}"#);
+    assert_eq!(
+        serde_json::from_str::<LifecycleAnswer>(&wire).expect("reads"),
+        empty
+    );
+    let named = LifecycleAnswer::InTransition {
+        constituents: vec![7, 9],
+    };
+    let wire = serde_json::to_string(&named).expect("renders");
+    assert_eq!(wire, r#"{"kind":"in_transition","constituents":[7,9]}"#);
+    assert_eq!(
+        serde_json::from_str::<LifecycleAnswer>(&wire).expect("reads"),
+        named
+    );
 }

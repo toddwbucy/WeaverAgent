@@ -1040,7 +1040,7 @@ fn observe(config: &ServiceConfig) -> Result<Observation, LifecycleRefusal> {
                 Ok(Observation::State(state, load))
             }
             // The harness's answer while a leave is pending, not a state.
-            weaver_types::Payload::Answer(LifecycleAnswer::InTransition) => {
+            weaver_types::Payload::Answer(LifecycleAnswer::InTransition { .. }) => {
                 Ok(Observation::InTransition)
             }
             weaver_types::Payload::Refusal(refusal) => Err(refusal),
@@ -1728,38 +1728,61 @@ impl AgentAccount {
     }
 }
 
-/// **`show` answers through the observation exchange**, per Spec section 3,
-/// holding the invocation lock shared: `InTransition` where an exclusive
-/// holder stands, `Unloaded` without dialing where the run lock is free, and
-/// otherwise the harness's word with the run's constituents beside it,
-/// `Unanswered` where the worker is silent.
+/// **`show` answers by the ladder** (`weaver-admin-Spec` section 3; 3.0,
+/// the verb table's `show` column), holding the invocation lock shared:
+/// (0) `InTransition` at once where an exclusive holder stands; (i) the
+/// worker's word, `Idle` or `Active` with its facts, `InTransition` while a
+/// leave is pending, and `InTransition` in place of an `Unloaded` while the
+/// run lock is held; (ii) `Unanswered` where the worker accepts and says
+/// nothing; (iii) `InTransition` where no worker listens and the run lock is
+/// held; (iv) `Unloaded` without dialing where the run lock is free.
+/// **Wherever a run holds the run lock, its constituents are named**
+/// (toddwbucy/WeaverWeb#15), on the worker's word and on `InTransition`
+/// alike; rung (0) names none, the holder being another invocation.
 fn show(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    use verb_table::{Seen, VerbAction, WorkerSeen};
     let run_directory = config.run_directory();
     let _shared = match start::take_shared_invocation_lock(&run_directory)? {
         start::Shared::Held(lock) => lock,
-        start::Shared::InTransition => return Ok(LifecycleAnswer::InTransition),
+        start::Shared::InTransition => {
+            return Ok(LifecycleAnswer::InTransition {
+                constituents: Vec::new(),
+            });
+        }
     };
-    if !start::run_lock_held(&run_directory)? {
-        return Ok(LifecycleAnswer::State {
-            state: weaver_types::AgentState::Unloaded,
-            load: None,
-            constituents: Vec::new(),
-        });
-    }
-    let (state, load) = match observe(config)? {
-        Observation::State(state, load) => (state, load),
-        // A leave pending: the worker's word (the ladder's rung (i)).
-        Observation::InTransition => return Ok(LifecycleAnswer::InTransition),
-        // The lock held with no worker listening: a run that never entered,
-        // whose constituents the caller may end with `unload`.
-        Observation::NoListener => (weaver_types::AgentState::Unloaded, None),
-        Observation::Silent => return Err(LifecycleRefusal::Unanswered),
-    };
-    Ok(LifecycleAnswer::State {
-        state,
-        load,
+    let (seen, load) = see_run(config)?;
+    let in_transition = || LifecycleAnswer::InTransition {
         constituents: constituents(&run_directory),
-    })
+    };
+    Ok(
+        match verb_table::act(verb_table::Verb::Show, verb_table::class_of(seen)) {
+            VerbAction::ShowUnloaded => LifecycleAnswer::State {
+                state: weaver_types::AgentState::Unloaded,
+                load: None,
+                constituents: Vec::new(),
+            },
+            VerbAction::ShowWorkersWord => match seen {
+                Seen::RunLockHeld(WorkerSeen::Idle) => LifecycleAnswer::State {
+                    state: weaver_types::AgentState::Idle,
+                    load,
+                    constituents: constituents(&run_directory),
+                },
+                Seen::RunLockHeld(WorkerSeen::Active) => LifecycleAnswer::State {
+                    state: weaver_types::AgentState::Active,
+                    load,
+                    constituents: constituents(&run_directory),
+                },
+                // A leave pending, the one other word the table answers.
+                _ => in_transition(),
+            },
+            VerbAction::ShowUnanswered => return Err(LifecycleRefusal::Unanswered),
+            VerbAction::ShowInTransitionConstituents => in_transition(),
+            // Rung (0) above, and no other action answers `show`.
+            _ => LifecycleAnswer::InTransition {
+                constituents: Vec::new(),
+            },
+        },
+    )
 }
 
 /// The run's constituent pids, every holder of the run lock's description,

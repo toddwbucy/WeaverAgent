@@ -1548,7 +1548,9 @@ impl<'a> Ports<'a> {
                                     exchange,
                                     position: weaver_types::Position::Close,
                                     payload: weaver_types::Payload::Answer(
-                                        weaver_types::LifecycleAnswer::InTransition,
+                                        weaver_types::LifecycleAnswer::InTransition {
+                                            constituents: Vec::new(),
+                                        },
                                     ),
                                 });
                             }
@@ -4586,7 +4588,9 @@ mod tests {
         assert!(finished);
         assert_eq!(
             answer,
-            weaver_types::Payload::Answer(weaver_types::LifecycleAnswer::InTransition)
+            weaver_types::Payload::Answer(weaver_types::LifecycleAnswer::InTransition {
+                constituents: Vec::new(),
+            })
         );
     }
 

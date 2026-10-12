@@ -1405,12 +1405,10 @@ fn show_reads_the_lock_and_names_the_constituents() {
     drop((high, lock));
     assert_eq!(
         show(&config),
-        Ok(LifecycleAnswer::State {
-            state: weaver_types::AgentState::Unloaded,
-            load: None,
+        Ok(LifecycleAnswer::InTransition {
             constituents: vec![child.id()],
         }),
-        "a held lock with no worker names who holds it"
+        "a held lock with no worker is no Unloaded: InTransition, naming who holds it"
     );
     let _ = child.kill();
     let _ = child.wait();
@@ -1431,6 +1429,84 @@ fn s8b_save_point_refuses_out_of_order() {
     let _ = holder.kill();
     let _ = holder.wait();
     assert_eq!(answered, Err(LifecycleRefusal::OutOfOrder));
+}
+
+/// **`show` answers by the ladder** (`weaver-admin-Spec` section 3, the
+/// ladder; 3.0, the verb table's `show` column), the rungs the tests above
+/// leave: (i) the worker's word, `Idle` with its facts, `InTransition` while
+/// a leave is pending, and `InTransition` naming the constituents in place
+/// of an `Unloaded` while the run lock is held; (ii) a worker that accepts
+/// and does not answer, `Unanswered`. Rung (0) is
+/// `show_answers_a_transition_in_flight`'s, and (iii) and (iv)
+/// `show_reads_the_lock_and_names_the_constituents`'. Perturbation: answer a
+/// held run's `Unloaded` word as `Unloaded`, and the third case fails.
+#[test]
+fn show_ladder_rung_0_to_iv() {
+    let state = |state| {
+        weaver_types::Payload::Answer(LifecycleAnswer::State {
+            state,
+            load: None,
+            constituents: Vec::new(),
+        })
+    };
+    // (case, the worker's answer or none for a wedged one, the answer for
+    // the run lock's holder `pid`)
+    type Want = fn(u32) -> Result<LifecycleAnswer, LifecycleRefusal>;
+    let cases: [(&str, Option<weaver_types::Payload>, Want); 4] = [
+        (
+            "(i) the worker's word, the constituents named",
+            Some(state(weaver_types::AgentState::Idle)),
+            |pid| {
+                Ok(LifecycleAnswer::State {
+                    state: weaver_types::AgentState::Idle,
+                    load: None,
+                    constituents: vec![pid],
+                })
+            },
+        ),
+        (
+            "(i) a leave pending",
+            Some(weaver_types::Payload::Answer(
+                LifecycleAnswer::InTransition {
+                    constituents: Vec::new(),
+                },
+            )),
+            |pid| {
+                Ok(LifecycleAnswer::InTransition {
+                    constituents: vec![pid],
+                })
+            },
+        ),
+        (
+            "(i) an Unloaded word under a held run lock",
+            Some(state(weaver_types::AgentState::Unloaded)),
+            |pid| {
+                Ok(LifecycleAnswer::InTransition {
+                    constituents: vec![pid],
+                })
+            },
+        ),
+        ("(ii) a wedged worker", None, |_| {
+            Err(LifecycleRefusal::Unanswered)
+        }),
+    ];
+    for (case, worker, want) in cases {
+        let (config, _scratch) = scratch_config("show-ladder");
+        let mut holder = stand_in_holder(&config);
+        let worker = match worker {
+            Some(answer) => {
+                answering_worker(&config, vec![answer]);
+                None
+            }
+            None => Some(silent_worker(&config)),
+        };
+        let answered = show(&config);
+        let pid = holder.id();
+        let _ = holder.kill();
+        let _ = holder.wait();
+        drop(worker);
+        assert_eq!(answered, want(pid), "{case}");
+    }
 }
 
 /// A scratch coordination root for one test, with the agent's run
@@ -2964,7 +3040,12 @@ fn show_answers_a_transition_in_flight() {
             drop(ready_write);
             let mut byte = [0u8; 1];
             nix::unistd::read(&ready_read, &mut byte).unwrap();
-            assert_eq!(show(&config), Ok(LifecycleAnswer::InTransition));
+            assert_eq!(
+                show(&config),
+                Ok(LifecycleAnswer::InTransition {
+                    constituents: Vec::new(),
+                })
+            );
             // SAFETY: kill on the child this test forked.
             unsafe { nix::libc::kill(child.as_raw(), nix::libc::SIGKILL) };
             let _ = nix::sys::wait::waitpid(child, None);

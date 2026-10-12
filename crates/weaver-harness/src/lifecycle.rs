@@ -3515,7 +3515,9 @@ fn hear_dial(connection: OrganChannel, leave: &mut crate::engine::PendingLeave, 
             return;
         }
         weaver_types::Payload::Directive(LifecycleDirective::Observe) => {
-            weaver_types::Payload::Answer(LifecycleAnswer::InTransition)
+            weaver_types::Payload::Answer(LifecycleAnswer::InTransition {
+                constituents: Vec::new(),
+            })
         }
         weaver_types::Payload::Directive(_) => {
             weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder)
@@ -7924,7 +7926,9 @@ mod tests {
         hear_dial(observe, &mut leave, false);
         assert_eq!(
             far.recv().expect("an answer").payload,
-            weaver_types::Payload::Answer(LifecycleAnswer::InTransition)
+            weaver_types::Payload::Answer(LifecycleAnswer::InTransition {
+                constituents: Vec::new(),
+            })
         );
         let (second, far) = dialed(LifecycleDirective::Leave {
             cause: weaver_types::Cause { uid: 9 },
