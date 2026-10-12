@@ -663,7 +663,71 @@ fn a_record_that_cannot_be_read_refuses_invocation_in_flight() {
     let read = read_holder_using(
         || Ok(HeldBy::Exclusive(4242)),
         || Err(std::io::Error::from_raw_os_error(nix::libc::EIO)),
+        HOLDER_WINDOW,
     );
+    assert_eq!(read, Err(LifecycleRefusal::InvocationInFlight));
+}
+
+/// **A holder whose record does not write still takes the lock** (section
+/// 3, the lock's verb; I3, on the Planner's ruling of 2026-10-12 on #126): a
+/// full or failing run directory never stops the taker, a force above all.
+/// Perturbation: refuse on the failed write, and the take answers
+/// `BoundaryUnverified`.
+#[test]
+fn a_holder_whose_record_cannot_be_written_takes_the_lock() {
+    let dir = scratch("holder-unwritten");
+    let path = dir.join("admin.lock");
+    let file = open_lock_file(&path).expect("the lock file");
+    let taken = recorded_with(
+        file,
+        crate::verb_table::HolderVerb::ForceUnload,
+        &path,
+        |_, _| Err(nix::errno::Errno::ENOSPC),
+    );
+    assert!(taken.is_ok(), "{taken:?}");
+}
+
+/// **A holder named with a verb this admin does not know is refused at
+/// once** (section 3, the lock's verb, on the Planner's ruling of 2026-10-12
+/// on #126): an admin of another version holding the lock names a verb this
+/// one cannot read, and the reader refuses `InvocationInFlight` rather than
+/// reading again. Perturbation: read an unknown verb as unnamed again, and
+/// the read waits out the whole window.
+#[test]
+fn a_holder_naming_an_unknown_verb_is_refused_at_once() {
+    let started = std::time::Instant::now();
+    let read = read_holder_using(
+        || Ok(HeldBy::Exclusive(4242)),
+        || Ok(b"repair 4242".to_vec()),
+        std::time::Duration::from_secs(3),
+    );
+    assert_eq!(read, Err(LifecycleRefusal::InvocationInFlight));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(1),
+        "refused at once: {:?}",
+        started.elapsed()
+    );
+}
+
+/// **A holder never named within the window is refused** (section 3, the
+/// lock's verb, on the Planner's ruling of 2026-10-12 on #126): one holder
+/// whose record never names it, a record that did not write, is read as a
+/// verb that is no `unload`, and the reader refuses `InvocationInFlight`
+/// past the window rather than reading for ever. Perturbation: drop the
+/// window, and the read never returns.
+#[test]
+fn a_holder_never_named_within_the_window_is_refused() {
+    let (answered, answer) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = answered.send(read_holder_using(
+            || Ok(HeldBy::Exclusive(4242)),
+            || Ok(b"load 1".to_vec()),
+            std::time::Duration::from_millis(300),
+        ));
+    });
+    let read = answer
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the reader answers past its window");
     assert_eq!(read, Err(LifecycleRefusal::InvocationInFlight));
 }
 
@@ -674,7 +738,7 @@ fn a_free_lock_reads_free_and_a_shared_one_reads_shared() {
     let dir = scratch("holder-free");
     assert_eq!(read_holder(&dir), Ok(LockHolder::Free));
     assert_eq!(
-        read_holder_using(|| Ok(HeldBy::Shared), || Ok(Vec::new())),
+        read_holder_using(|| Ok(HeldBy::Shared), || Ok(Vec::new()), HOLDER_WINDOW),
         Ok(LockHolder::Shared)
     );
 }

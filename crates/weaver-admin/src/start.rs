@@ -217,10 +217,34 @@ fn recorded(
     verb: crate::verb_table::HolderVerb,
     path: &Path,
 ) -> Result<InvocationLock, LifecycleRefusal> {
+    recorded_with(file, verb, path, |file, record| {
+        nix::unistd::ftruncate(file, 0)
+            .and_then(|()| nix::sys::uio::pwrite(file, record, 0))
+            .map(|_| ())
+    })
+}
+
+/// [`recorded`] over a write, apart for its tests. **A record that does not
+/// write never refuses the take** (section 3, the lock's verb; I3, on the
+/// Planner's ruling of 2026-10-12 on #126): a full or failing run directory
+/// must not stop a force ending the run, so the taker holds the lock and goes
+/// on, naming the failure on standard error, and a reader that never sees
+/// the holder named refuses `InvocationInFlight` past its window
+/// ([`read_holder`]).
+pub(crate) fn recorded_with(
+    file: OwnedFd,
+    verb: crate::verb_table::HolderVerb,
+    path: &Path,
+    write: impl FnOnce(&OwnedFd, &[u8]) -> nix::Result<()>,
+) -> Result<InvocationLock, LifecycleRefusal> {
     let record = format!("{} {}", verb.spelled(), std::process::id());
-    nix::unistd::ftruncate(&file, 0)
-        .and_then(|()| nix::sys::uio::pwrite(&file, record.as_bytes(), 0))
-        .map_err(|_| refuse_path("cannot record its holder's verb", path))?;
+    if let Err(e) = write(&file, record.as_bytes()) {
+        diag!(
+            "weaver-admin: {} cannot record its holder's verb ({e}); the {} goes on, and a force meeting it refuses",
+            path.display(),
+            verb.spelled()
+        );
+    }
     Ok(InvocationLock { _file: file })
 }
 
@@ -270,13 +294,21 @@ pub enum HeldBy {
 /// How often a reader reads a record that does not yet name its holder.
 const HOLDER_REREAD: std::time::Duration = std::time::Duration::from_millis(100);
 
+/// How long a reader waits for one holder to name itself: a holder's write
+/// follows its lock by microseconds, so five seconds is a holder whose record
+/// did not write, never one still writing.
+const HOLDER_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// **Reads the invocation lock's holder, holding nothing** (section 3, the
 /// lock's verb): free, `show`'s shared hold, or an exclusive holder's verb,
 /// taken only where the record's pid is the holder `F_GETLK` reports.
 /// **A record that does not name the holder is read again** every 100 ms
-/// with no ceiling (Codex on #109, rounds 45 and 46): empty, partial, or
-/// the last holder's, it is the window between the holder's lock and its
-/// write; a changed holder starts the read over. A record that cannot be
+/// (Codex on #109, rounds 45 and 46): empty, partial, or the last holder's,
+/// it is the window between the holder's lock and its write; a changed
+/// holder starts the read over. **One holder unnamed past five seconds is a
+/// holder whose record did not write** (the Planner's ruling of 2026-10-12 on
+/// #126), read as a verb that is no `unload`: the reader refuses
+/// `InvocationInFlight`, the conservative outcome. A record that cannot be
 /// read refuses `InvocationInFlight`.
 pub fn read_holder(run_directory: &Path) -> Result<LockHolder, LifecycleRefusal> {
     let file = open_lock_file(&run_directory.join("admin.lock"))?;
@@ -299,6 +331,7 @@ pub fn read_holder(run_directory: &Path) -> Result<LockHolder, LifecycleRefusal>
             record.truncate(read);
             Ok(record)
         },
+        HOLDER_WINDOW,
     )
 }
 
@@ -306,22 +339,40 @@ pub fn read_holder(run_directory: &Path) -> Result<LockHolder, LifecycleRefusal>
 pub(crate) fn read_holder_using(
     mut probe: impl FnMut() -> std::io::Result<HeldBy>,
     mut read: impl FnMut() -> std::io::Result<Vec<u8>>,
+    window: std::time::Duration,
 ) -> Result<LockHolder, LifecycleRefusal> {
+    let mut unnamed: Option<(i32, std::time::Instant)> = None;
     loop {
         let pid = match probe().map_err(|_| LifecycleRefusal::InvocationInFlight)? {
             HeldBy::Free => return Ok(LockHolder::Free),
             HeldBy::Shared => return Ok(LockHolder::Shared),
             HeldBy::Exclusive(pid) => pid,
         };
+        let since = match unnamed {
+            Some((held, since)) if held == pid => since,
+            _ => {
+                let now = std::time::Instant::now();
+                unnamed = Some((pid, now));
+                now
+            }
+        };
         let record = read().map_err(|_| LifecycleRefusal::InvocationInFlight)?;
+        // The record names this holder where its pid is the one `F_GETLK`
+        // reports; its verb is then read, and **a verb this admin does not
+        // know refuses** (an admin of another version holding the lock, on
+        // the Planner's ruling of 2026-10-12 on #126), the conservative
+        // outcome, rather than being read again for ever.
         let named = std::str::from_utf8(&record).ok().and_then(|text| {
             let (verb, recorded) = text.split_once(' ')?;
-            (recorded.parse::<i32>().ok()? == pid)
-                .then(|| crate::verb_table::HolderVerb::from_spelled(verb))
-                .flatten()
+            (recorded.parse::<i32>().ok()? == pid).then_some(verb)
         });
         if let Some(verb) = named {
-            return Ok(LockHolder::Exclusive(verb));
+            return crate::verb_table::HolderVerb::from_spelled(verb)
+                .map(LockHolder::Exclusive)
+                .ok_or(LifecycleRefusal::InvocationInFlight);
+        }
+        if since.elapsed() >= window {
+            return Err(LifecycleRefusal::InvocationInFlight);
         }
         std::thread::sleep(HOLDER_REREAD);
     }

@@ -2224,14 +2224,12 @@ fn leave_within(
         Err(LeaveFault::Unanswered) => {}
     }
     start::escalate_within(&run_directory, bounds.term, bounds.kill)?;
-    // **No `Left` is held**: the room's finished files are recovered at the
-    // next load, and the marker stays open, which the next load reads as
-    // `NoCleanUnload`, unless the operator forced this unload, in which case
-    // the escalation writes `Forced` by the marker-write rule (S11).
-    if forced {
-        let run = open_run(config)?;
-        write_by_rule(config, run.as_deref(), conclusion::MarkerWrite::Forced)?;
-    }
+    // **No `Left` is held, so the escalation writes `Forced`** (3.0, S11;
+    // section 4, the marker-write rule), whichever verb escalated: `Forced`
+    // names how the run ended, not who ended it, and the next load records
+    // `ForcedUnload`. The room's finished files are recovered at that load.
+    let run = open_run(config)?;
+    write_by_rule(config, run.as_deref(), conclusion::MarkerWrite::Forced)?;
     Ok(unloaded_answer())
 }
 

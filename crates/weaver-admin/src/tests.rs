@@ -2318,7 +2318,7 @@ fn idle_declaring(bounds: (Option<u64>, Option<u64>)) -> weaver_types::Payload {
 /// One unload against a run whose worker answers the observation `idle`
 /// after `observed` and the leave `Left{no_state}` after `left`; answers the
 /// verb's answer, how long it took, and the marker after. A `Left` concluded
-/// closes the marker; an escalation leaves it open, or `Forced` for a force.
+/// closes the marker; an escalation, holding no `Left`, writes `Forced`.
 fn leave_timed(
     tag: &str,
     forced: bool,
@@ -2411,9 +2411,11 @@ fn an_undeclared_graceful_unload_is_never_escalated() {
 
 /// **A declared graceful unload waits the leave's bound past both declared
 /// bounds** (`weaver-admin-Spec` 3.0, the bounds): a `Left` inside the sum
-/// concludes; one past it is escalated, the marker left open for the next
-/// load's reset. Perturbation: wait the leave's bound alone, and the first
-/// `Left` is escalated.
+/// concludes; one past it is escalated, and the escalation, holding no
+/// `Left`, writes `Forced` whatever verb escalated (3.0, S11), so the next
+/// load records `ForcedUnload`. Perturbations: wait the leave's bound alone,
+/// and the first `Left` is escalated; write `Forced` only for a force, and
+/// the second marker stays open.
 #[test]
 fn a_declared_graceful_unload_waits_the_sum_plus_150() {
     let window = TEST_UNLOAD_BOUNDS.leave + std::time::Duration::from_secs(2);
@@ -2440,7 +2442,7 @@ fn a_declared_graceful_unload_waits_the_sum_plus_150() {
     assert!(took >= window, "waited the whole window: {took:?}");
     assert_eq!(
         marker,
-        Some(save_points::Marker::Open { run: "r-1".into() })
+        Some(save_points::Marker::Forced { run: "r-1".into() })
     );
 }
 
