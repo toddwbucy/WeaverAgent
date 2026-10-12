@@ -881,7 +881,7 @@ step_7() {
   run_line "weaver-admin show $A; kill -9 the constituent whose comm is $WORKER_COMM and whose owner is $AU"
   run_line "weaver-admin show $A; where constituents remain: weaver-admin load $A, then unload $A"
   run_line "weaver-admin load $A"
-  want "the marker open before; show after the kill unloaded, with or without constituents"
+  want "the marker open before; show after the kill answers by the ladder: in_transition naming the constituents where any still holds the run lock (rung iii), unloaded with none where the lock is free"
   want "where constituents remain, load answers agent_running and unload answers unloaded"
   want "the marker still open; load idle with reset {prior_run, reason: no-clean-unload} and its lineage the manifest's latest; any new manifest line arrived recovered"
   [ "$APPLY" -eq 1 ] || return 0
@@ -901,13 +901,27 @@ step_7() {
   local i
   for i in 1 2 3 4 5 6 7 8 9 10; do [ -e "/proc/$worker" ] || break; sleep 1; done
   sleep 1
-  ask show; expect_state "show after the kill" unloaded
-  if [ "$(json_at "$ANSWER" constituents)" != absent ] && [ "$(json_at "$ANSWER" constituents)" != "[]" ]; then
-    ask load; expect_kind "load while a constituent holds the lock" agent_running
-    ask unload; expect_state unload unloaded
-  else
-    measured "no constituent outlived the worker, so load and unload were not asked"
-  fi
+  # **show answers by the ladder** (weaver-admin-Spec section 3, the show
+  # ladder; Codex on #126, round 3): with the worker gone and a member or
+  # relay still holding the run lock, no socket answers, which is rung
+  # (iii), InTransition naming the constituents; with the lock free,
+  # Unloaded naming none. Anything else fails.
+  ask show
+  local after left
+  after=$(json_at "$ANSWER" kind)
+  left=$(json_at "$ANSWER" constituents)
+  case "$after/$( { [ "$left" = absent ] || [ "$left" = "[]" ]; } && echo none || echo some)" in
+    in_transition/some)
+      pass "show after the kill answers in_transition naming $left (the ladder's rung iii)"
+      ask load; expect_kind "load while a constituent holds the lock" agent_running
+      ask unload; expect_state unload unloaded ;;
+    state/none)
+      expect_state "show after the kill" unloaded
+      measured "no constituent outlived the worker, so load and unload were not asked" ;;
+    *)
+      fail "show after the kill answers by the ladder" \
+        "in_transition naming the constituents, or unloaded naming none" "$ANSWER" ;;
+  esac
   expect_marker "$RUN" open
   ask load; expect_state load idle
   local load; load=$(last_event load)
