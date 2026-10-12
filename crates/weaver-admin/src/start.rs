@@ -169,13 +169,28 @@ pub enum Shared {
 /// another transition and refuses `InvocationInFlight` at once, and a shared
 /// holder is a `show` and is retried within `show`'s bound, judged afresh on
 /// every attempt, the starved case refusing with readers named as the cause.
-pub fn take_invocation_lock(run_directory: &Path) -> Result<InvocationLock, LifecycleRefusal> {
-    let file = open_lock_file(&run_directory.join("admin.lock"))?;
+///
+/// **Taken, it records its verb** (section 3, the lock's verb, on the
+/// operator's ruling of 2026-10-09 on #1): `<verb> <pid>`, the file's whole
+/// content, written under the lock after truncating whatever the last holder
+/// left, so a force meeting the lock reads which verb holds it
+/// ([`read_holder`]). A record that cannot be written refuses, since a force
+/// would otherwise wait on it forever.
+pub fn take_invocation_lock(
+    run_directory: &Path,
+    verb: crate::verb_table::HolderVerb,
+) -> Result<InvocationLock, LifecycleRefusal> {
+    let path = run_directory.join("admin.lock");
+    let file = open_lock_file(&path)?;
     let deadline = Instant::now() + SHARED_HOLD_WAIT;
     loop {
         let request = whole_file(nix::libc::F_WRLCK);
         // SAFETY: fcntl on a descriptor this frame owns, with a lock it built.
         if unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_SETLK, &request) } == 0 {
+            let record = format!("{} {}", verb.spelled(), std::process::id());
+            nix::unistd::ftruncate(&file, 0)
+                .and_then(|()| nix::sys::uio::pwrite(&file, record.as_bytes(), 0))
+                .map_err(|_| refuse_path("cannot record its holder's verb", &path))?;
             return Ok(InvocationLock { _file: file });
         }
         contended(&run_directory.join("admin.lock"))?;
@@ -197,6 +212,86 @@ pub fn take_invocation_lock(run_directory: &Path) -> Result<InvocationLock, Life
             // Released between the take and the read: try again at once.
             _ => {}
         }
+    }
+}
+
+/// Who holds the invocation lock, as a reader holding nothing sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockHolder {
+    Free,
+    /// A `show`, which takes the lock shared and records nothing.
+    Shared,
+    /// An exclusive holder, its record read once it names the holder.
+    Exclusive(crate::verb_table::HolderVerb),
+}
+
+/// What one `F_GETLK` probe found: the classic record lock names its
+/// exclusive holder's pid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeldBy {
+    Free,
+    Shared,
+    Exclusive(i32),
+}
+
+/// How often a reader reads a record that does not yet name its holder.
+const HOLDER_REREAD: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// **Reads the invocation lock's holder, holding nothing** (section 3, the
+/// lock's verb): free, `show`'s shared hold, or an exclusive holder's verb,
+/// taken only where the record's pid is the holder `F_GETLK` reports.
+/// **A record that does not name the holder is read again** every 100 ms
+/// with no ceiling (Codex on #109, rounds 45 and 46): empty, partial, or
+/// the last holder's, it is the window between the holder's lock and its
+/// write; a changed holder starts the read over. A record that cannot be
+/// read refuses `InvocationInFlight`.
+#[cfg_attr(not(test), expect(dead_code, reason = "read by the force, B3 Task 4"))]
+pub fn read_holder(run_directory: &Path) -> Result<LockHolder, LifecycleRefusal> {
+    let file = open_lock_file(&run_directory.join("admin.lock"))?;
+    read_holder_using(
+        || {
+            let mut probe = whole_file(nix::libc::F_WRLCK);
+            // SAFETY: fcntl on a descriptor this frame owns.
+            if unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_GETLK, &mut probe) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(match probe.l_type as i32 {
+                nix::libc::F_WRLCK => HeldBy::Exclusive(probe.l_pid),
+                nix::libc::F_RDLCK => HeldBy::Shared,
+                _ => HeldBy::Free,
+            })
+        },
+        || {
+            let mut record = vec![0u8; 64];
+            let read = nix::sys::uio::pread(&file, &mut record, 0).map_err(std::io::Error::from)?;
+            record.truncate(read);
+            Ok(record)
+        },
+    )
+}
+
+/// [`read_holder`]'s loop over a probe and a read, apart for its tests.
+pub(crate) fn read_holder_using(
+    mut probe: impl FnMut() -> std::io::Result<HeldBy>,
+    mut read: impl FnMut() -> std::io::Result<Vec<u8>>,
+) -> Result<LockHolder, LifecycleRefusal> {
+    loop {
+        let pid = match probe().map_err(|_| LifecycleRefusal::InvocationInFlight)? {
+            HeldBy::Free => return Ok(LockHolder::Free),
+            HeldBy::Shared => return Ok(LockHolder::Shared),
+            HeldBy::Exclusive(pid) => pid,
+        };
+        let record = read().map_err(|_| LifecycleRefusal::InvocationInFlight)?;
+        let named = std::str::from_utf8(&record).ok().and_then(|text| {
+            let (verb, recorded) = text.split_once(' ')?;
+            (recorded.parse::<i32>().ok()? == pid)
+                .then(|| crate::verb_table::HolderVerb::from_spelled(verb))
+                .flatten()
+        });
+        if let Some(verb) = named {
+            return Ok(LockHolder::Exclusive(verb));
+        }
+        std::thread::sleep(HOLDER_REREAD);
     }
 }
 

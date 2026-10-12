@@ -266,7 +266,8 @@ fn a_child_detaches_and_resets_its_signals() {
 fn an_exclusive_invocation_lock_refuses_every_other_take() {
     let dir = scratch("invocation");
     let path = dir.0.as_path().join("admin.lock");
-    let held = take_invocation_lock(dir.0.as_path()).expect("the first take");
+    let held = take_invocation_lock(dir.0.as_path(), crate::verb_table::HolderVerb::Load)
+        .expect("the first take");
     // Built before the fork, so the child only calls what a fork of a
     // threaded process may.
     let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
@@ -345,14 +346,14 @@ fn an_exclusive_take_waits_out_a_brief_reader_and_is_starved_by_a_long_one() {
     let path = dir.0.join("admin.lock");
     drop(open_lock_file(&path).unwrap());
     let brief = shared_holder(&path, Duration::from_millis(300));
-    let taken = take_invocation_lock(dir.0.as_path());
+    let taken = take_invocation_lock(dir.0.as_path(), crate::verb_table::HolderVerb::Load);
     assert!(taken.is_ok(), "a brief reader is waited out: {taken:?}");
     drop(taken);
     let _ = nix::sys::wait::waitpid(brief, None);
     let long = shared_holder(&path, Duration::from_secs(5));
     let started = Instant::now();
     assert_eq!(
-        take_invocation_lock(dir.0.as_path()).err(),
+        take_invocation_lock(dir.0.as_path(), crate::verb_table::HolderVerb::Load).err(),
         Some(LifecycleRefusal::InvocationInFlight),
         "a reader held past the bound starves the taker"
     );
@@ -452,5 +453,212 @@ fn the_run_directory_is_held_and_a_link_refused() {
     assert_eq!(
         hold_directory(&link, uid, gid, 0o755),
         Err(LifecycleRefusal::BoundaryUnverified)
+    );
+}
+
+/// **A stand-in holder of the invocation lock**, run only when re-executed by
+/// [`holding_invocation`] (a normal run passes at once). `F_GETLK` never
+/// reports a process's own lock, so the holder must be another process.
+/// `WEAVER_ADMIN_HOLDER_MODE` is `take:<verb>` to take the lock through
+/// [`take_invocation_lock`], the production writer, or `raw` to take it bare
+/// and write `WEAVER_ADMIN_HOLDER_FIRST`, then after
+/// `WEAVER_ADMIN_HOLDER_DELAY_MS` write `WEAVER_ADMIN_HOLDER_SECOND`, each with
+/// `{pid}` read as this process's pid. It then holds until killed.
+#[test]
+fn holder_stand_in() {
+    let (Ok(dir), Ok(mode)) = (
+        std::env::var("WEAVER_ADMIN_HOLDER_DIR"),
+        std::env::var("WEAVER_ADMIN_HOLDER_MODE"),
+    ) else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    let pid = std::process::id().to_string();
+    let _held = match mode.strip_prefix("take:") {
+        Some(verb) => {
+            let verb = crate::verb_table::HolderVerb::from_spelled(verb).expect("a verb");
+            Box::new(take_invocation_lock(&dir, verb).expect("the take")) as Box<dyn std::any::Any>
+        }
+        None => {
+            let file = open_lock_file(&dir.join("admin.lock")).expect("the lock file");
+            let request = whole_file(nix::libc::F_WRLCK);
+            // SAFETY: fcntl on a descriptor this frame owns.
+            assert_eq!(
+                unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_SETLK, &request) },
+                0
+            );
+            let write = |record: &str| {
+                let record = record.replace("{pid}", &pid);
+                nix::unistd::ftruncate(&file, 0).expect("truncate");
+                nix::sys::uio::pwrite(&file, record.as_bytes(), 0).expect("write");
+            };
+            write(&std::env::var("WEAVER_ADMIN_HOLDER_FIRST").unwrap_or_default());
+            let delay = std::env::var("WEAVER_ADMIN_HOLDER_DELAY_MS")
+                .ok()
+                .and_then(|ms| ms.parse().ok())
+                .unwrap_or(0);
+            if delay > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(delay));
+                write(&std::env::var("WEAVER_ADMIN_HOLDER_SECOND").unwrap_or_default());
+            }
+            Box::new(file) as Box<dyn std::any::Any>
+        }
+    };
+    std::thread::sleep(std::time::Duration::from_secs(20));
+}
+
+/// Re-executes this test binary as [`holder_stand_in`] with `vars`, and
+/// waits until the stand-in holds the invocation lock. Answers the child,
+/// killed by the caller.
+fn holding_invocation(dir: &Path, vars: &[(&str, &str)]) -> std::process::Child {
+    let mut command = std::process::Command::new(std::env::current_exe().expect("the test binary"));
+    command
+        .args([
+            "--exact",
+            "start::tests::holder_stand_in",
+            "--test-threads",
+            "1",
+        ])
+        .env("WEAVER_ADMIN_HOLDER_DIR", dir)
+        .stdout(std::process::Stdio::null());
+    for (name, value) in vars {
+        command.env(name, value);
+    }
+    // The caller kills and waits on the child it is handed.
+    #[allow(clippy::zombie_processes)]
+    let child = command.spawn().expect("the stand-in holder");
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let file = open_lock_file(&dir.join("admin.lock")).expect("the lock file");
+        let mut probe = whole_file(nix::libc::F_WRLCK);
+        // SAFETY: fcntl on a descriptor this frame owns.
+        unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_GETLK, &mut probe) };
+        if probe.l_type as i32 == nix::libc::F_WRLCK {
+            return child;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "the stand-in never held the lock"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// **A held lock reads its holder's verb** (section 3, the lock's verb;
+/// I1): a holder taking the lock through the production writer for each
+/// exclusive verb is read back as that verb, every `HolderVerb` spelled and
+/// parsed. Perturbation: write no record on the take, and the read never
+/// names the holder.
+#[test]
+fn every_exclusive_verb_records_its_name() {
+    use crate::verb_table::HolderVerb;
+    let dir = scratch("holder-verbs");
+    for verb in [
+        HolderVerb::Load,
+        HolderVerb::Unload,
+        HolderVerb::ForceUnload,
+        HolderVerb::SavePoint,
+        HolderVerb::Restore,
+        HolderVerb::Stop,
+        HolderVerb::Validate,
+    ] {
+        // Exhaustive: a new verb fails to compile here until it is listed.
+        match verb {
+            HolderVerb::Load
+            | HolderVerb::Unload
+            | HolderVerb::ForceUnload
+            | HolderVerb::SavePoint
+            | HolderVerb::Restore
+            | HolderVerb::Stop
+            | HolderVerb::Validate => {}
+        }
+        let mode = format!("take:{}", verb.spelled());
+        let mut child = holding_invocation(&dir, &[("WEAVER_ADMIN_HOLDER_MODE", &mode)]);
+        let read = read_holder(&dir);
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(read, Ok(LockHolder::Exclusive(verb)), "{verb:?}");
+    }
+}
+
+/// **A record not naming the holder is read again until it does** (section
+/// 3, the lock's verb; Codex on #109, rounds 45 and 46): a stale record, the
+/// last holder's, is never taken for this holder's verb; the reader reads
+/// every 100 ms until the record names the holder's pid. Perturbation: take
+/// the record without matching its pid, and the stale `load` is read.
+#[test]
+fn a_record_not_naming_the_holder_is_read_again_until_it_does() {
+    let dir = scratch("holder-stale");
+    let mut child = holding_invocation(
+        &dir,
+        &[
+            ("WEAVER_ADMIN_HOLDER_MODE", "raw"),
+            ("WEAVER_ADMIN_HOLDER_FIRST", "load 1"),
+            ("WEAVER_ADMIN_HOLDER_DELAY_MS", "300"),
+            ("WEAVER_ADMIN_HOLDER_SECOND", "save-point {pid}"),
+        ],
+    );
+    let started = std::time::Instant::now();
+    let read = read_holder(&dir);
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(
+        read,
+        Ok(LockHolder::Exclusive(
+            crate::verb_table::HolderVerb::SavePoint
+        ))
+    );
+    assert!(started.elapsed() >= std::time::Duration::from_millis(200));
+}
+
+/// **A pre-act empty record is read again and never taken for `unload`**
+/// (the plan's Review Focus 1): the window between the holder's lock and its
+/// write reads empty, and the reader waits it out rather than guessing.
+/// Perturbation: read an empty record as `unload`, and a force would join a
+/// load's rollback.
+#[test]
+fn a_pre_act_empty_record_is_read_again_and_never_taken_for_unload() {
+    let dir = scratch("holder-empty");
+    let mut child = holding_invocation(
+        &dir,
+        &[
+            ("WEAVER_ADMIN_HOLDER_MODE", "raw"),
+            ("WEAVER_ADMIN_HOLDER_FIRST", ""),
+            ("WEAVER_ADMIN_HOLDER_DELAY_MS", "300"),
+            ("WEAVER_ADMIN_HOLDER_SECOND", "load {pid}"),
+        ],
+    );
+    let read = read_holder(&dir);
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(
+        read,
+        Ok(LockHolder::Exclusive(crate::verb_table::HolderVerb::Load))
+    );
+}
+
+/// **A record that cannot be read refuses `InvocationInFlight`** (section 3,
+/// the forced unload, joining: "or the record cannot be read at all while
+/// the lock is held"), as distinct from one not yet naming the holder,
+/// which is read again. Perturbation: retry on a read error, and this never
+/// returns.
+#[test]
+fn a_record_that_cannot_be_read_refuses_invocation_in_flight() {
+    let read = read_holder_using(
+        || Ok(HeldBy::Exclusive(4242)),
+        || Err(std::io::Error::from_raw_os_error(nix::libc::EIO)),
+    );
+    assert_eq!(read, Err(LifecycleRefusal::InvocationInFlight));
+}
+
+/// **A free lock reads free, and a shared holder reads `show`'s** (section 3:
+/// `show` takes the lock shared and records nothing).
+#[test]
+fn a_free_lock_reads_free_and_a_shared_one_reads_shared() {
+    let dir = scratch("holder-free");
+    assert_eq!(read_holder(&dir), Ok(LockHolder::Free));
+    assert_eq!(
+        read_holder_using(|| Ok(HeldBy::Shared), || Ok(Vec::new())),
+        Ok(LockHolder::Shared)
     );
 }

@@ -365,7 +365,8 @@ fn validate(
     config: &ServiceConfig,
     agent: &AgentName,
 ) -> Result<LifecycleAnswer, LifecycleRefusal> {
-    let _invocation = start::take_invocation_lock(&config.run_directory())?;
+    let _invocation =
+        start::take_invocation_lock(&config.run_directory(), verb_table::HolderVerb::Validate)?;
     take_inventory(config, agent)?;
     Ok(LifecycleAnswer::Validated)
 }
@@ -1063,7 +1064,8 @@ struct Standing {
 /// changed. A held run lock refuses `AgentRunning`, or `Unanswered` where the
 /// worker is silent, and a load never ends an existing run.
 fn load(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer, LifecycleRefusal> {
-    let _invocation = start::take_invocation_lock(&config.run_directory())?;
+    let _invocation =
+        start::take_invocation_lock(&config.run_directory(), verb_table::HolderVerb::Load)?;
     let mut standing = Standing::default();
     match run_load(config, agent, &mut standing) {
         Ok(()) => Ok(LifecycleAnswer::State {
@@ -1422,7 +1424,8 @@ fn save_point(
     agent: &AgentName,
 ) -> Result<LifecycleAnswer, LifecycleRefusal> {
     let run_directory = config.run_directory();
-    let _invocation = start::take_invocation_lock(&run_directory)?;
+    let _invocation =
+        start::take_invocation_lock(&run_directory, verb_table::HolderVerb::SavePoint)?;
     if !start::run_lock_held(&run_directory)? {
         diag!("weaver-admin: no run stands, and a save point is taken of a running agent alone");
         return Err(LifecycleRefusal::OutOfOrder);
@@ -1478,7 +1481,8 @@ fn save_point(
 /// the loop act's `Reopen`; until then a restore is this verb and then a
 /// load.
 fn restore(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer, LifecycleRefusal> {
-    let _invocation = start::take_invocation_lock(&config.run_directory())?;
+    let _invocation =
+        start::take_invocation_lock(&config.run_directory(), verb_table::HolderVerb::Restore)?;
     let inventory = room_inventory(config, agent)?;
     let Some(named) = inventory.config.restore.as_ref() else {
         diag!(
@@ -1772,7 +1776,14 @@ fn unload_within(
     forced: bool,
 ) -> Result<LifecycleAnswer, LifecycleRefusal> {
     let run_directory = config.run_directory();
-    let _invocation = start::take_invocation_lock(&run_directory)?;
+    let _invocation = start::take_invocation_lock(
+        &run_directory,
+        if forced {
+            verb_table::HolderVerb::ForceUnload
+        } else {
+            verb_table::HolderVerb::Unload
+        },
+    )?;
     // **The leave's budget runs from here**, per Spec section 3: the
     // observation and both dials spend it, so the verb holds the invocation
     // lock at most the leave's 150 seconds and the escalation's forty-five.
@@ -2230,7 +2241,8 @@ fn direct_leave_within(
 /// under the stop's own bound: a worker that accepts stop and answers nothing
 /// is not ended, a stop being no unload, and the verb refuses `Unanswered`.
 fn stop(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
-    let _invocation = start::take_invocation_lock(&config.run_directory())?;
+    let _invocation =
+        start::take_invocation_lock(&config.run_directory(), verb_table::HolderVerb::Stop)?;
     let mut coordination =
         channel::dial(&config.coordination_socket()).map_err(|_| LifecycleRefusal::NoResidency)?;
     let ordinal = coordination.next_ordinal();

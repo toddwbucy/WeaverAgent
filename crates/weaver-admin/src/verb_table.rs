@@ -50,6 +50,37 @@ pub enum HolderVerb {
     Validate,
 }
 
+impl HolderVerb {
+    /// **The verb as `admin.lock` records it**, the operator's own spelling
+    /// of the verb (section 3, the lock's verb).
+    pub fn spelled(self) -> &'static str {
+        match self {
+            HolderVerb::Load => "load",
+            HolderVerb::Unload => "unload",
+            HolderVerb::ForceUnload => "force-unload",
+            HolderVerb::SavePoint => "save-point",
+            HolderVerb::Restore => "restore",
+            HolderVerb::Stop => "stop",
+            HolderVerb::Validate => "validate",
+        }
+    }
+
+    /// The verb a record spells, or none for any other text.
+    pub fn from_spelled(spelled: &str) -> Option<HolderVerb> {
+        [
+            HolderVerb::Load,
+            HolderVerb::Unload,
+            HolderVerb::ForceUnload,
+            HolderVerb::SavePoint,
+            HolderVerb::Restore,
+            HolderVerb::Stop,
+            HolderVerb::Validate,
+        ]
+        .into_iter()
+        .find(|verb| verb.spelled() == spelled)
+    }
+}
+
 /// The worker's word to `Observe`, or what stood in for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkerSeen {
