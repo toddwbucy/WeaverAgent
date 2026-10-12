@@ -957,8 +957,16 @@ rollback() {
 # any still held after a rollback, a refusal, or an INT, TERM or HUP, each
 # made an exit so the trap runs. A SIGKILL or a host stop runs no trap, and
 # the next --install refuses on the `.updating` name it left.
+# **A signal during the conclusion is held, not obeyed** (Codex on #126,
+# round 6): an `exit` trap firing inside this one leaves at once, the EXIT
+# trap never re-run, with the unload unawaited and the restore and the rules
+# cut short. From its first line every later INT, TERM or HUP prints one line
+# and the conclusion goes on; the exit code stays the first one's. Caught,
+# not ignored, so the children it forks (the joined force, the installs, the
+# rules' moves) keep their default dispositions.
 on_exit() {
   local rc=$?
+  trap 'printf "  the run is concluding; a signal now is held until the restore is done\n" >&2' INT TERM HUP
   conclude_pending_unload
   if [ "$COMPLETED" -eq 0 ] && [ "$INSTALL_DONE" -eq 1 ]; then
     printf '\n  the run did not complete (exit %d)\n' "$rc" >&2

@@ -1917,6 +1917,43 @@ esac
                 self.assertEqual(ran.returncode, 130, ran.stderr)
                 self.assertEqual(calls.read_text().splitlines(), expected, ran.stderr)
 
+    def test_a_second_signal_during_the_conclusion_is_held_until_the_restore(self):
+        """**A signal during the exit trap's conclusion is held** (Codex on
+        #126, round 6): after a first INT has entered `on_exit`, a second
+        arriving while it waits the unload out prints one line and the
+        conclusion goes on to the restore, the exit code the first signal's.
+        Here the first INT is raised at the `mktemp` and every `sleep` of the
+        wait raises another. Perturbation: drop the holding trap, and the
+        second INT leaves the trap with no restore."""
+        text = (DEPLOY / "update-stack.sh").read_text()
+        admin = self.root / "bin" / "weaver-admin"
+        admin.parent.mkdir(parents=True, exist_ok=True)
+        calls = self.root / "second-calls"
+        admin.write_text(
+            "#!/bin/sh\n"
+            f"[ \"$1\" = unload ] && {{ sleep 2; echo 'unload done' >> {calls}; }}\n"
+            f"[ \"$1\" = force-unload ] && echo force-unload >> {calls}\n"
+            "echo '{\"kind\":\"state\",\"state\":\"unloaded\"}'\n")
+        admin.chmod(0o755)
+        program = ('sudo() { [ "$1" = -n ] && shift; shift; "$@"; }\n'
+                   + shell_function(text, "unload_verified") + shell_function(text, "await_unload")
+                   + shell_function(text, "conclude_pending_unload")
+                   + shell_function(text, "answered_state") + shell_function(text, "on_exit")
+                   + f'restore() {{ echo restore >> {calls}; }}\n'
+                   + 'restore_rules() { :; }\n'
+                   + 'COMPLETED=0 INSTALL_DONE=1 HELD_RULES=()\n'
+                   + "trap on_exit EXIT\ntrap 'exit 130' INT\n"
+                   + 'mktemp() { command mktemp "$@"; kill -INT $$; }\n'
+                   + 'sleep() { kill -INT $$; command sleep "$@"; }\n'
+                   + 'unload_verified m1\n')
+        env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
+        env.update(BIN_DIR=str(admin.parent), ADMIN_BASE=str(self.config), UNLOAD_TIMEOUT="10")
+        ran = subprocess.run(["bash", "-c", program], env=env,
+                             text=True, capture_output=True, timeout=30)
+        self.assertEqual(ran.returncode, 130, ran.stderr)
+        self.assertEqual(calls.read_text().splitlines(), ["unload done", "restore"], ran.stderr)
+        self.assertIn("the run is concluding; a signal now is held until the restore is done", ran.stderr)
+
     def test_update_stack_reads_its_unload_timeout_and_refuses_what_it_does_not_know(self):
         # --unload-timeout takes whole seconds above zero, and an argument the
         # script does not know refuses rather than being ignored, so a
