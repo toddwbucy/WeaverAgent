@@ -2261,8 +2261,8 @@ so the two agree by construction.
 Where the declaration sets one, a leg past its bound turns the leave forced from where it
 stands, as a join does, with no `forced_by` and the cause staying the graceful caller's,
 `unload` and `Left` then carrying `forced` true and a missed leg coming down as a forced
-leave's does; with both set, admin's bound is their sum and 150 seconds, per `weaver-admin-Spec`
-section 3. Every other leg is bounded in this crate: the save point's ask and `finished`
+leave's does; with both set, admin's bound is as `weaver-admin-Spec` section 3's leave
+bound states it, from the leave's direction, which precedes this crate's hearing of it. Every other leg is bounded in this crate: the save point's ask and `finished`
 legs and the grants read-back under `ANSWER_BOUND_MS`, its answer leg under
 `SNAPSHOT_ANSWER_BOUND_MS`, and `GateStopped` from a draining gate under the lower bound,
 10 seconds (`LOWER_BOUND_MS`, the operator's ruling of 2026-10-09 on #1, defined once in

@@ -906,19 +906,25 @@ so the next load records the loss, and the force prints `Unloaded`: the outcome 
 row for an unjudged territory (3.0, the conclusion's outcomes). Force always works (I3). Its sole, joining and
 waiting forms, and its escalation of a silent harness, are the forced unload of 3.0.
 
-**The leave has a bound of its own, 150 seconds**, as 3.0's bounds state it: from the
-verb's start for a forced leave; for a graceful one, after its declared drain and
+**The leave has a bound of its own, 150 seconds** (`LEAVE_BOUND_MS`, defined once in
+`weaver-types`), as 3.0's bounds state it: **from the leave's direction**, the moment its
+dial sends `Leave`, for a forced leave; for a graceful one, after its declared drain and
 wind-down bounds where both are declared, and with either undeclared no deadline at all, a force joining being the recourse
-(I3). The 150 seconds run past the harness's 120 seconds for the save point's answer leg
+(I3). **The observation before it spends its own bound**, its dial's one second and its
+answer's five, never the leave's (the Planner's ruling of 2026-10-12, Codex on #119,
+round 2): the harness hears the leave only after that send and starts its shared deadline
+at its lower after that (`weaver-harness-Spec` section 6, the shared deadline), so this
+crate's window always ends at or after the harness's, and a `Left` seconds away is never
+escalated. The 150 seconds run past the harness's 120 seconds for the save point's answer leg
 and its two-second legs (the operator's ruling of 2026-10-08 on #1, `weaver-harness-Spec`
-section 6), so admin never abandons a save point the harness still awaits. The
-observation and both dials spend it, so a forced `unload` holds the invocation lock at
-most those 150 seconds and the escalation's forty-five, 195 in all, and a graceful one
-those 195 past its declared drain and wind-down bounds, or as long as the drain and the
+section 6), so admin never abandons a save point the harness still awaits. A forced
+`unload` holds the invocation lock at most the observation's six seconds, the leave's
+dial's one, those 150 seconds and the escalation's forty-five, 202 in all, and a graceful
+one those 202 past its declared drain and wind-down bounds, or as long as the drain and the
 wind-down take where either is undeclared, **before the publication that follows `Left`** (the #99 area 1 review): copying the leave's save point and any recovered
 file the room holds, at most section 6's 32 of up to a gibibyte each, is bounded by that
-cap and the copy's own speed and not by time, so a caller builds against 195 seconds plus
-the copy of what the room holds, never against 195 seconds alone, beside `show`'s short
+cap and the copy's own speed and not by time, so a caller builds against 202 seconds plus
+the copy of what the room holds, never against 202 seconds alone, beside `show`'s short
 wait for the lock. A worker
 that accepts leave and answers nothing inside a leave that has a bound (a forced one, or
 a graceful one with both bounds declared) is a worker that would not exit: the
@@ -3367,8 +3373,8 @@ perturbation-verified:
   never returns, and every later verb refuses `InvocationInFlight`.
 - **An undeclared graceful leave is never escalated**, watched by the same stand-in
   worker under a declaration with no `[lifecycle]` bounds: the graceful `unload` is still
-  waiting past 195 seconds, and a joining `force-unload` ends the run. The perturbation
-  imposes the 195 seconds on the graceful leave, and the test fails when the verb
+  waiting past 202 seconds, and a joining `force-unload` ends the run. The perturbation
+  imposes the 202 seconds on the graceful leave, and the test fails when the verb
   escalates.
 - **Outside the envelope, the conservative answer and no takeover** (3.0, outside the
   envelope; `weaver-agent-PRD` section 6.1), owed by the lifecycle act's code, one case
