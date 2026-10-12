@@ -650,16 +650,6 @@ impl PartialEq<Payload> for Dispatched {
     }
 }
 
-/// **The exchanges of `weaver-harness-gate-contract`, judged against the
-/// channel's position first.**
-///
-/// The contract draws raise, quiesce and lower. Everything else, including a well-formed
-/// directive at the wrong position, a directive that does not open its
-/// exchange, and an exchange claiming an opener that is not the harness,
-/// answers `OutOfOrder` before the hook is touched.
-///
-/// The match carries no wildcard arm over the directive, so a case added to
-/// loop 0 breaks this crate loudly in the act that edits the floor.
 /// The instant a lower heard at `heard` answers by: one settle margin inside
 /// the lower bound, so the answer reaches a harness still waiting the full
 /// bound.
@@ -677,6 +667,16 @@ fn dispatch(state: &mut HookState, envelope: &OrganEnvelope) -> Dispatched {
     dispatch_at(state, envelope, std::time::Instant::now())
 }
 
+/// **The exchanges of `weaver-harness-gate-contract`, judged against the
+/// channel's position first.**
+///
+/// The contract draws raise, quiesce and lower. Everything else, including a well-formed
+/// directive at the wrong position, a directive that does not open its
+/// exchange, and an exchange claiming an opener that is not the harness,
+/// answers `OutOfOrder` before the hook is touched.
+///
+/// The match carries no wildcard arm over the directive, so a case added to
+/// loop 0 breaks this crate loudly in the act that edits the floor.
 fn dispatch_at(
     state: &mut HookState,
     envelope: &OrganEnvelope,
