@@ -324,6 +324,27 @@ fn load_and_read(
     Ok(config)
 }
 
+/// **The Scratch guard removes its root's territory sibling** (#113):
+/// `write_root` lays the territory out beside the root, as
+/// `<root>.territory`, and a guard that removed only the root left one
+/// behind on every run. Perturbation: remove the root alone, and the
+/// sibling stays.
+#[test]
+fn scratch_removes_its_territory_sibling() {
+    let path = std::env::temp_dir().join(format!(
+        "weaver-admin-scratch-sibling-{}",
+        std::process::id()
+    ));
+    let sibling = path.with_extension("territory");
+    {
+        let root = crate::scratch::Scratch(path.clone());
+        write_root(&root);
+        assert!(sibling.is_dir(), "write_root lays the sibling out");
+    }
+    assert!(!path.exists(), "the root is removed");
+    assert!(!sibling.exists(), "the territory sibling is removed");
+}
+
 /// The values every root carries, written into a scratch root, with the
 /// agent's territory beside it, `<root>.territory`, laid out as the
 /// judgment asks with this test's uid in root's place: mode 0710, its
@@ -369,7 +390,10 @@ fn write_root(root: &std::path::Path) -> std::path::PathBuf {
 /// `judge_names` call from the read and the second assertion fails.
 #[test]
 fn a_root_naming_two_binaries_under_one_name_fails_the_read() {
-    let root = std::env::temp_dir().join(format!("weaver-admin-root-read-{}", std::process::id()));
+    // Held by the guard, so its territory sibling goes with it (#113).
+    let root = crate::scratch::Scratch(
+        std::env::temp_dir().join(format!("weaver-admin-root-read-{}", std::process::id())),
+    );
     let _ = std::fs::remove_dir_all(&root);
     write_root(&root);
     let config = load_service_config_from(&root, "alpha").expect("a sound root reads");
@@ -1192,7 +1216,10 @@ fn a_malformed_name_refuses_before_the_base_is_read() {
 /// enter's wait.
 #[test]
 fn a_relative_path_or_an_unreachable_bound_fails_the_read() {
-    let root = std::env::temp_dir().join(format!("weaver-admin-relative-{}", std::process::id()));
+    // Held by the guard, so its territory sibling goes with it (#113).
+    let root = crate::scratch::Scratch(
+        std::env::temp_dir().join(format!("weaver-admin-relative-{}", std::process::id())),
+    );
     let fresh = || {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
@@ -1238,7 +1265,10 @@ fn a_relative_path_or_an_unreachable_bound_fails_the_read() {
 /// following the link, as the second did, and the failing cases are accepted.
 #[test]
 fn an_optional_value_that_does_not_read_fails_the_read() {
-    let root = std::env::temp_dir().join(format!("weaver-admin-optional-{}", std::process::id()));
+    // Held by the guard, so its territory sibling goes with it (#113).
+    let root = crate::scratch::Scratch(
+        std::env::temp_dir().join(format!("weaver-admin-optional-{}", std::process::id())),
+    );
     let fresh = || {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
@@ -2013,13 +2043,30 @@ fn a_forced_verb_closes_the_marker_where_the_run_already_ended() {
             weaver_types::Payload::Refusal(LifecycleRefusal::DescriptorsUnusable),
         ],
     );
+    // **The holder goes down once the leave is answered** (#113, section
+    // 1): it was a 100 ms sleep, which under load could outrun the 300 ms
+    // after-left wait. The worker's thread ends once it has answered the
+    // observation and the leave, so the kill follows the refusal; the wait
+    // on it is bounded, so a regression fails rather than hangs.
+    let (answered_leave, leave_answered) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let directed = worker.join();
+        let _ = answered_leave.send(());
+        directed
+    });
     let ender = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        let in_time = leave_answered
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .is_ok();
         let _ = holder.kill();
         let _ = holder.wait();
+        in_time
     });
     let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
-    ender.join().unwrap();
+    assert!(
+        ender.join().unwrap(),
+        "the worker answered the leave inside the bound"
+    );
     let _ = worker.join();
     assert!(matches!(
         answered,

@@ -2034,12 +2034,89 @@ fn the_marker_round_trips_and_resolves_the_reset() {
     assert_eq!(read_marker(&root), None);
 }
 
+/// The process's umask as `/proc/self/status` reports it, read without
+/// changing it (a `umask` call both reads and sets).
+fn process_umask() -> Option<u32> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|line| line.starts_with("Umask:"))?;
+    u32::from_str_radix(line.split_whitespace().nth(1)?, 8).ok()
+}
+
+/// **Runs `body` in a child process** (#113): this test binary re-executed,
+/// filtered to the one test `name` names and told by the environment to run
+/// the body there. A umask is process-wide, so a test that sets one runs it
+/// where no sibling test lives. The parent passes only where the child ran
+/// that one test and it passed.
+fn in_a_child(name: &str, body: impl FnOnce()) {
+    const CHILD: &str = "WEAVER_ADMIN_IN_A_CHILD";
+    if std::env::var(CHILD).as_deref() == Ok(name) {
+        body();
+        return;
+    }
+    let path = format!("save_points::tests::{name}");
+    let ran = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .args(["--exact", &path, "--test-threads", "1"])
+        .env(CHILD, name)
+        .output()
+        .expect("the child runs");
+    let said = String::from_utf8_lossy(&ran.stdout);
+    assert!(
+        ran.status.success() && said.contains("test result: ok. 1 passed"),
+        "{name} in its child: {said}{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+}
+
+/// **The umask tests never change this process's umask** (#113): a umask is
+/// process-wide, and a sibling test creating directories while one of
+/// them ran under 000 left its scratch world-writable, which the boundary
+/// checks then refused. A watcher thread reads the umask without changing
+/// it while both tests run fifty times each; it must never see anything
+/// but the umask it started with. Perturbation: run their bodies in this
+/// process again, and the watcher sees 000 or 077.
+#[test]
+fn the_umask_tests_never_leak_their_umask() {
+    let Some(start) = process_umask() else {
+        eprintln!("SKIP: no /proc/self/status umask to watch");
+        return;
+    };
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
+    let (watching, into) = (done.clone(), seen.clone());
+    let watcher = std::thread::spawn(move || {
+        while !watching.load(std::sync::atomic::Ordering::Relaxed) {
+            if let Some(mask) = process_umask() {
+                into.lock().unwrap().insert(mask);
+            }
+        }
+    });
+    for _ in 0..50 {
+        the_marker_is_0644_whatever_the_umask();
+        the_published_copy_is_0640_whatever_the_umask();
+    }
+    done.store(true, std::sync::atomic::Ordering::Relaxed);
+    watcher.join().expect("the watcher");
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(
+        seen,
+        std::collections::BTreeSet::from([start]),
+        "the process umask stayed {start:o}"
+    );
+}
+
 /// **The marker is 0644 whatever the umask**, per Spec section 4 (Codex
 /// on #94, round 10): under a umask of 000 the create alone would leave
 /// it 0666 in the root; the mode is set through the descriptor.
 /// Perturbation: drop the `fchmod` and the marker reads 0666.
 #[test]
 fn the_marker_is_0644_whatever_the_umask() {
+    in_a_child(
+        "the_marker_is_0644_whatever_the_umask",
+        marker_mode_under_umask_000,
+    );
+}
+
+fn marker_mode_under_umask_000() {
     use std::os::unix::fs::PermissionsExt;
     let scratch = crate::scratch::Scratch(
         std::env::temp_dir().join(format!("weaver-admin-marker-umask-{}", std::process::id())),
@@ -2063,6 +2140,13 @@ fn the_marker_is_0644_whatever_the_umask() {
 /// `fchmod` and nothing publishes under that umask.
 #[test]
 fn the_published_copy_is_0640_whatever_the_umask() {
+    in_a_child(
+        "the_published_copy_is_0640_whatever_the_umask",
+        published_copy_mode_under_umask_077,
+    );
+}
+
+fn published_copy_mode_under_umask_077() {
     use std::os::unix::fs::PermissionsExt;
     let scratch = crate::scratch::Scratch(
         std::env::temp_dir().join(format!("weaver-admin-umask-{}", std::process::id())),
