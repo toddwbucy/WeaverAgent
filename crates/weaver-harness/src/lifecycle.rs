@@ -1677,8 +1677,8 @@ impl Harness {
                 }
                 Ok(None)
             }
-            // `rollback` is read in the lifecycle act's plumbing; until then a
-            // rollback is told as before (PR B, Task 8).
+            // A rollback is told by the directive's `rollback`, never by the
+            // position (`weaver-harness-Spec` section 6, the rollback's row).
             (
                 ChannelState::Entered(run),
                 LifecycleDirective::Leave {
@@ -1687,9 +1687,12 @@ impl Harness {
                     rollback,
                 },
             ) => {
+                // **A leave is never refused for activity**: mid-turn the
+                // engine holds it. A turn still standing here is one whose
+                // close could not be authored, the record having failed, so
+                // service ends and no `Left` is answered over it (I2).
                 if run.turn_in_flight.is_some() {
-                    self.refuse(connection, &exchange, LifecycleRefusal::ActivityNotAtRest)?;
-                    return Ok(None);
+                    return Err(ChannelFault::Closed);
                 }
                 // Traffic the gate sent and this loop has not taken is met by
                 // the graceful leave's drain, refused `Unloading` (3.0,
@@ -6559,29 +6562,16 @@ mod tests {
         }
     }
 
-    /// **`dispatch_on` refuses a save point or a leave while a turn stands**
-    /// (#99 area 3, P09 and P10). Mid-turn the engine's arm answers first
-    /// (`a_save_point_or_a_leave_mid_turn_is_refused_not_at_rest`); this is
-    /// the loop's own guard for a run left with a turn in flight, refusing
+    /// **`dispatch_on` refuses a save point while a turn stands** (#99 area
+    /// 3, P09). Mid-turn the engine's arm answers first; this is the loop's
+    /// own guard for a run left with a turn in flight, refusing
     /// `ActivityNotAtRest`, authoring nothing and leaving the run entered.
-    /// Perturbation: drop either turn-in-flight check and the directive
-    /// proceeds to the save point or the lower.
+    /// Perturbation: drop the turn-in-flight check and the directive proceeds
+    /// to the save point.
     #[test]
-    fn a_save_point_or_a_leave_with_a_turn_in_flight_is_refused_not_at_rest() {
+    fn a_save_point_with_a_turn_in_flight_is_refused_not_at_rest() {
         let cause = weaver_types::Cause { uid: 0 };
-        for directive in [
-            LifecycleDirective::SavePoint { cause },
-            LifecycleDirective::Leave {
-                cause,
-                forced: false,
-                rollback: false,
-            },
-            LifecycleDirective::Leave {
-                cause,
-                forced: true,
-                rollback: false,
-            },
-        ] {
+        for directive in [LifecycleDirective::SavePoint { cause }] {
             let named = format!("{directive:?}");
             let (run, _spare, _sink_path) = entered_run(Some("t-1"));
             let before = run.recorder.structure().expect("record").len();
@@ -6601,6 +6591,41 @@ mod tests {
                 run.recorder.structure().expect("record").len(),
                 before,
                 "{named}: a refusal for activity authors nothing"
+            );
+        }
+    }
+
+    /// **A leave is never refused for activity** (`weaver-admin-harness-contract`
+    /// section 3; the Planner's grade of #119): mid-turn the engine holds it.
+    /// The loop meets a turn still standing at rest only where its close
+    /// could not be authored, the engine leaving the key for the unwind to
+    /// name: the record has failed, so service ends, answering no `Left`
+    /// over a record without the turn's close (I2), admin reading S8b.
+    /// Perturbation: refuse it `ActivityNotAtRest` again, and the dialer
+    /// reads that refusal.
+    #[test]
+    fn a_leave_meeting_an_unclosed_turn_ends_service_answering_nothing() {
+        let cause = weaver_types::Cause { uid: 0 };
+        for forced in [false, true] {
+            let (run, _spare, _sink_path) = entered_run(Some("t-1"));
+            let (mut harness, _dir) = harness_at(ChannelState::Entered(Box::new(run)));
+            let (harness_end, peer_end) = OrganChannel::pair().expect("pair");
+            let dispatched = harness.dispatch_on(
+                &harness_end,
+                test_exchange(),
+                LifecycleDirective::Leave {
+                    cause,
+                    forced,
+                    rollback: false,
+                },
+                None,
+                None,
+            );
+            assert!(dispatched.is_err(), "forced = {forced}: service ends");
+            let peer = peer_end.into_channel();
+            assert!(
+                !channel_has_pending(&harness_end) && !channel_has_pending(&peer),
+                "forced = {forced}: nothing is answered"
             );
         }
     }
