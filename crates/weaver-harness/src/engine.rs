@@ -2341,6 +2341,12 @@ impl<'a> Ports<'a> {
             // it stays graceful. Past it the wake is the deadline's.
             let deadline = self.leave_deadline.or_else(|| self.held_drain_deadline());
             let deadline = deadline.filter(|_| !self.deadline_passed);
+            // **The clock is read before every wait** (Codex on #119, round
+            // 1): a generation that keeps its channel readable never lets the
+            // wait time out, and it is the one the bound exists to cut.
+            if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+                return Ok(ExchangeWake::Deadline);
+            }
             let wait = crate::lifecycle::poll_timeout_until(deadline);
             match poll(&mut fds, wait) {
                 Ok(0) if deadline.is_some_and(|d| std::time::Instant::now() >= d) => {
@@ -4692,6 +4698,135 @@ mod tests {
         .unwrap();
         assert_eq!(close["payload"]["reason"], "unload", "{close}");
         assert_eq!(close["payload"]["cause"]["uid"], 7, "{close}");
+    }
+
+    /// **A bound passes while the SPU streams** (Codex on #119, round 1): a
+    /// generation whose tokens keep its channel readable is the one a
+    /// declared bound exists to cut, so the deadline is read on every wake,
+    /// not only when the wait times out. The SPU keeps its channel full of
+    /// tokens past the drain's 1 s bound, and is cancelled at it. Perturbation: read
+    /// the deadline only on a timed-out wait, and the stream runs its 3 s.
+    #[test]
+    fn a_bound_passing_while_the_spu_streams_cancels_the_turn() {
+        use nix::poll::{PollFd, PollFlags, poll};
+        use std::os::fd::AsFd;
+        let (listener, _dir) = test_listener();
+        let (near, far) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let decode = crate::channel::decode_from_owned(near);
+        let (verb_end, admin_end) = crate::channel::OrganChannel::pair().unwrap();
+        let admin = admin_end.into_channel();
+        let peer = std::thread::spawn(move || {
+            let mut buf = vec![0; 65536];
+            let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).unwrap();
+            let _: TokenDirective = serde_json::from_slice(&buf[..n]).unwrap();
+            let started = std::time::Instant::now();
+            let token = serde_json::to_vec(&weaver_types::TokenAnswer::Token {
+                token: 1,
+                piece: "a".into(),
+            })
+            .unwrap();
+            let cancelled = loop {
+                let mut fds = [PollFd::new(far.as_fd(), PollFlags::POLLIN)];
+                if poll(&mut fds, 0u16).unwrap() > 0 {
+                    let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).unwrap();
+                    if matches!(
+                        serde_json::from_slice(&buf[..n]),
+                        Ok(TokenDirective::Cancel { .. })
+                    ) {
+                        break true;
+                    }
+                }
+                if started.elapsed() > std::time::Duration::from_secs(3) {
+                    break false;
+                }
+                // The channel kept full: a token always waits to be read.
+                while send(far.as_raw_fd(), &token, MsgFlags::MSG_DONTWAIT).is_ok() {}
+            };
+            let answer = weaver_types::TokenAnswer::Generated(Generation {
+                content: vec![],
+                emission: "streamed".into(),
+                finish: if cancelled {
+                    Finish::Stopped
+                } else {
+                    Finish::Completed
+                },
+                resident: 64,
+                capacity: 4096,
+                request: serde_json::value::RawValue::from_string(r#"{"rendered":"r"}"#.into())
+                    .unwrap(),
+                measurement: serde_json::value::RawValue::from_string("{}".into()).unwrap(),
+            });
+            send(
+                far.as_raw_fd(),
+                &serde_json::to_vec(&answer).unwrap(),
+                MsgFlags::empty(),
+            )
+            .unwrap();
+            (cancelled, started.elapsed(), far)
+        });
+        admin
+            .send(&weaver_types::OrganEnvelope {
+                exchange: weaver_types::ExchangeId {
+                    opener: weaver_types::Opener::Admin,
+                    ordinal: 9,
+                },
+                position: weaver_types::Position::Open,
+                payload: weaver_types::Payload::Directive(
+                    weaver_types::LifecycleDirective::Leave {
+                        cause: weaver_types::Cause { uid: 7 },
+                        forced: false,
+                        rollback: false,
+                    },
+                ),
+            })
+            .unwrap();
+        let (mut recorder, author) = loaded_recorder();
+        let (mut turn_ordinal, mut turn_in_flight, mut slot) = (0, None, Some(verb_end));
+        let (mut fullness, mut pressure_reported) = (None, false);
+        let mut held: Option<PendingLeave> = None;
+        let load_facts = test_load_facts();
+        let outcome = {
+            let mut ports = Ports::grant(
+                &decode,
+                &author,
+                &mut recorder,
+                &mut turn_ordinal,
+                &mut turn_in_flight,
+                &load_facts,
+                None,
+                &listener,
+                Some(&mut slot),
+                None,
+                None,
+                None,
+                &mut fullness,
+                &mut pressure_reported,
+            );
+            ports.hold_leave(&mut held, Some(1));
+            ports.turn(vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: "a long stream".into(),
+                }],
+            }])
+        };
+        let (cancelled, took, _far) = peer.join().unwrap();
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(
+            cancelled,
+            "the stream is cancelled at the bound, after {took:?}"
+        );
+        assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+        assert_eq!(
+            held.expect("the leave is held").progress.leave,
+            crate::lifecycle_table::Leave::Forced
+        );
     }
 
     /// **A declared drain bound passing mid-turn cancels the turn and turns

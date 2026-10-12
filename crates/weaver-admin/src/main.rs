@@ -1055,8 +1055,10 @@ const OBSERVE_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
 /// The leave's own bound, per Spec section 3: 150 seconds from the
 /// directive, past the harness's 120 for the save point's answer leg (the
 /// operator's ruling of 2026-10-08 on #1) and its two-second legs, so admin
-/// never gives up on a save point the harness is still waiting for.
-const LEAVE_BOUND: std::time::Duration = std::time::Duration::from_secs(150);
+/// never gives up on a save point the harness is still waiting for. The
+/// floor's `LEAVE_BOUND_MS`, the one value the harness's shared deadline reads.
+const LEAVE_BOUND: std::time::Duration =
+    std::time::Duration::from_millis(weaver_types::LEAVE_BOUND_MS);
 
 /// The stop's bound, per Spec section 3: sixty seconds from the directive.
 const STOP_BOUND: std::time::Duration = std::time::Duration::from_secs(60);

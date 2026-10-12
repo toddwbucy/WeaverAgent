@@ -1358,7 +1358,7 @@ impl Harness {
                 if let Some(spu) = run.spu.take() {
                     let pid = spu.pid;
                     drop(spu);
-                    reap(pid);
+                    reap_by(pid, lower_window());
                 }
             }
             // A cell of a turn or a leave in flight: not reachable from the
@@ -3350,7 +3350,7 @@ fn close_turn_on_death(run: &mut Run) -> Result<Option<TurnKey>, ChannelFault> {
     if spu_dead && let Some(spu) = run.spu.take() {
         let pid = spu.pid;
         drop(spu);
-        reap(pid);
+        reap_by(pid, lower_window());
     }
     Ok(turn)
 }
@@ -3361,7 +3361,13 @@ fn readable_by(channel: &OrganChannel, deadline: std::time::Instant) -> bool {
     use nix::poll::{PollFd, PollFlags, poll};
     use std::os::fd::AsFd;
     loop {
-        // An expiry is believed only once the clock agrees.
+        // **Past the deadline, nothing is read**, however readable the
+        // channel stays: a peer that floods it cannot hold the wait open
+        // (Codex on #119, round 1). An expiry is believed only once the clock
+        // agrees.
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
         let wait = poll_timeout_until(Some(deadline));
         let mut fds = [PollFd::new(channel.as_fd(), PollFlags::POLLIN)];
         match poll(&mut fds, wait) {
@@ -3531,6 +3537,10 @@ fn wait_either(
 ) -> Option<usize> {
     use nix::poll::{PollFd, PollFlags, poll};
     loop {
+        // Past the deadline, nothing is read, however readable either stays.
+        if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+            return None;
+        }
         let wait = poll_timeout_until(deadline);
         let mut fds = [
             PollFd::new(first, PollFlags::POLLIN),
@@ -3586,10 +3596,12 @@ fn reap(pid: nix::unistd::Pid) {
     let _ = nix::sys::wait::waitpid(pid, None);
 }
 
-/// **A dead gate is reaped inside the lower bound** (`weaver-admin-Spec`
+/// **A dead organ is reaped inside the lower bound** (`weaver-admin-Spec`
 /// 3.0, S4, S5, S6 and S10 x the gate dies: "reaps the gate, inside the
-/// lower bound"): a gate whose channel hung up but whose process lingers is
-/// killed at the bound, never waited on unbounded.
+/// lower bound"; and the SPU's death the run serves on past, Codex on #119,
+/// round 1): an organ whose channel hung up but whose process lingers is
+/// killed at the bound, never waited on unbounded, which would hold the run
+/// the table says serves on.
 fn lower_window() -> Option<std::time::Instant> {
     std::time::Instant::now().checked_add(std::time::Duration::from_millis(
         weaver_types::LOWER_BOUND_MS,
@@ -9001,6 +9013,61 @@ mod tests {
             stream.contains("The agent is unloading now"),
             "the wind-down ran"
         );
+    }
+
+    /// **A gate flooding frames cannot hold the drain past its bound** (Codex
+    /// on #119, round 1, the same class as the turn's wait): the drain's wait
+    /// reads the clock before every wait, so a channel that never falls quiet
+    /// still meets the deadline, and the leave turns forced. Perturbation:
+    /// read the deadline only on a timed-out wait, and the drain runs on.
+    #[test]
+    fn a_gate_flooding_frames_cannot_hold_the_drain_past_its_bound() {
+        use crate::lifecycle_table::Leave;
+        let (mut run, _spare, _sink) = entered_run(None);
+        let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+        run.gate = Some(GateChannel {
+            channel: gate_end,
+            pid: nix::unistd::Pid::from_raw(i32::MAX),
+            last_word: crate::spawn::LastWord::quiet(),
+        });
+        let gate_peer = std::sync::Arc::new(gate_peer.into_channel());
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // One thread reads (the quiesce, then every refusal), one floods.
+        let reader = gate_peer.clone();
+        std::thread::spawn(move || while reader.recv().is_ok() {});
+        let (flooder, halt) = (gate_peer.clone(), stop.clone());
+        let flood = std::thread::spawn(move || {
+            let mut ordinal = 1;
+            while !halt.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = flooder.send(&OrganEnvelope {
+                    exchange: ExchangeId {
+                        opener: Opener::Gate,
+                        ordinal,
+                    },
+                    position: Position::Open,
+                    payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry(
+                        b"{\"text\":\"more\"}",
+                    )),
+                });
+                ordinal += 1;
+            }
+        });
+        let (listener, _dir) = test_listener();
+        let (mut leave, _admin) = pending_leave(Leave::Graceful, Leave::Graceful, false);
+        leave.drain_deadline =
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(300));
+        let started = std::time::Instant::now();
+        drain_gate(&mut run, &listener, &mut leave);
+        let took = started.elapsed();
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        drop(run);
+        let _ = flood.join();
+        assert_eq!(
+            leave.progress.leave,
+            Leave::Forced,
+            "the bound turned it forced"
+        );
+        assert!(took < std::time::Duration::from_secs(3), "{took:?}");
     }
 
     /// **A standing SPU's decode end**: every append is answered with one
