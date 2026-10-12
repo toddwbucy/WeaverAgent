@@ -3286,10 +3286,9 @@ group and `0640`, and an ancestor
 - The rollback's account: a load failed at each step leaves exactly what
   charter section 5 names and the log records what was undone. The marker's part is
   two cases, split by whether `load` is on the trace (K1; section 6, the marker-write
-  rule). Before it, the marker stays as the load found it: pinned today by
-  `the_rollback_restores_the_marker_it_found`, which the lifecycle act renames to say
-  so, its perturbation writing the marker in `roll_back`. After it, the marker stands
-  `Open` on the run, owed by the lifecycle act as
+  rule). Before it, the marker stays as the load found it: pinned by
+  `the_rollback_before_load_leaves_the_marker_as_found`, its perturbation skipping the
+  marker in `roll_back`. After it, the marker stands `Open` on the run: pinned by
   `the_rollback_after_load_leaves_the_marker_open`, its perturbation restoring the
   marker found, and the next load recording no reset over a run that authored `load`.
   No test yet pins the log's account of the rollback.
