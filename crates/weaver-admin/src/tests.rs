@@ -2258,17 +2258,38 @@ fn refusals_past_the_seal() -> [LifecycleRefusal; 2] {
     ]
 }
 
+/// What a leave's dialer may be answered past the seal, with the refusal
+/// the verb returns for it: each refusal past the seal as itself, and an
+/// answer out of form, neither `Left` nor a refusal, as `Malformed`.
+fn answers_past_the_seal() -> Vec<(weaver_types::Payload, LifecycleRefusal)> {
+    let mut answers: Vec<_> = refusals_past_the_seal()
+        .into_iter()
+        .map(|refusal| (weaver_types::Payload::Refusal(refusal.clone()), refusal))
+        .collect();
+    answers.push((
+        weaver_types::Payload::Answer(LifecycleAnswer::State {
+            state: weaver_types::AgentState::Idle,
+            load: None,
+            constituents: Vec::new(),
+        }),
+        LifecycleRefusal::Malformed,
+    ));
+    answers
+}
+
 /// **A leave refused past the seal concludes as no answer**
 /// (`weaver-admin-Spec` 3.0, the conclusion: a leave refused in S7): the
 /// drain's `DescriptorsUnusable`, or the lower's refusal answered after the
 /// unwind ran whole, publishes nothing, leaves the marker `Open` though the
 /// verb was forced, ends the run's processes by the escalation where they
-/// still stand, and returns the refusal. Perturbations: conclude it as a
+/// still stand, and returns the refusal; an answer out of form reads as
+/// `Malformed` and concludes the same way. Perturbations: conclude it as a
 /// forced `Left` with no save point, and the marker reads `Forced`; return
-/// the lower's refusal at once, and the run is left standing.
+/// the lower's refusal at once, or read `Malformed` as met with the run
+/// standing, and the run is left standing.
 #[test]
 fn a_leave_refused_past_the_seal_concludes_as_no_answer() {
-    for refusal in refusals_past_the_seal() {
+    for (payload, refusal) in answers_past_the_seal() {
         let (config, _report, base) = territory_with_one_room_file("past-the-seal");
         save_points::write_marker(
             &config.root,
@@ -2284,7 +2305,7 @@ fn a_leave_refused_past_the_seal_concludes_as_no_answer() {
                     load: None,
                     constituents: Vec::new(),
                 }),
-                weaver_types::Payload::Refusal(refusal.clone()),
+                payload,
             ],
         );
         let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
@@ -2309,23 +2330,22 @@ fn a_leave_refused_past_the_seal_concludes_as_no_answer() {
     }
 }
 
-/// **A join refused past the seal concludes as no answer**, as the
-/// holder's leave does (`weaver-admin-Spec` 3.0, the conclusion; I3): the
-/// joined force ends the run's processes where they still stand and
-/// returns the refusal, the marker as it stands. Perturbation: return the
-/// refusal at once, and the run is left standing.
+/// **A join refused past the seal, or answered out of form, concludes as
+/// no answer**, as the holder's leave does (`weaver-admin-Spec` 3.0, the
+/// conclusion; I3; Codex on #126, round 2): the joined force ends the run's
+/// processes where they still stand and returns the refusal, `Malformed`
+/// for an answer that is neither `Left` nor a refusal, the marker as it
+/// stands. Perturbations: return the refusal at once, or `Malformed` at once
+/// for the out-of-form answer, and the run is left standing.
 #[test]
 fn a_join_refused_past_the_seal_ends_the_run() {
-    for refusal in refusals_past_the_seal() {
+    for (payload, refusal) in answers_past_the_seal() {
         let (config, _scratch) = scratch_config("join-past-the-seal");
         let open = save_points::Marker::Open { run: "r-1".into() };
         save_points::write_marker(&config.root, Some(&open)).unwrap();
         let mut run = stand_in_holder(&config);
         let holder = holding_as(&config, "unload");
-        let worker = recording_worker(
-            &config,
-            vec![weaver_types::Payload::Refusal(refusal.clone())],
-        );
+        let worker = recording_worker(&config, vec![payload]);
         let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
         let _ = worker.join();
         let ended = run.try_wait().unwrap();

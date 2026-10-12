@@ -2093,15 +2093,21 @@ fn join_within(
                         return Ok(None);
                     }
                 }
-                // **A join refused past the seal concludes as no answer**, as
-                // the holder's leave does: the run's processes ended, the
-                // marker left as it stands, the refusal returned (I3).
+                // **A join refused past the seal, or answered out of form,
+                // concludes as no answer**, as the holder's leave does: the
+                // run's processes ended, the marker left as it stands, the
+                // refusal returned (I3). An out-of-form answer reads as
+                // `Malformed`, as the sole force's does (Codex on #126,
+                // round 2).
                 LeaveAnswer::Refused(refusal) if follows_the_unwind(&refusal) => {
                     end_after_left(&run_directory, bounds)?;
                     return Err(refusal);
                 }
+                LeaveAnswer::Other => {
+                    end_after_left(&run_directory, bounds)?;
+                    return Err(LifecycleRefusal::Malformed);
+                }
                 LeaveAnswer::Refused(refusal) => return Err(refusal),
-                LeaveAnswer::Other => return Err(LifecycleRefusal::Malformed),
             },
             Err(_) => return escalate_joined(config, bounds, run).map(Some),
         }
