@@ -1377,8 +1377,10 @@ way, which is what `basic-inference-loop` section 7 already records.
 is `Unloaded` with no load. Entered, it is `Idle` where no turn key stands in flight and
 `Active` where one does, with `LoadFacts` beside it read from the run: the session and
 run, the declaration's digest the enter carried, the artifact, the elections, the store
-and whether the member's end arrived, and the composer `serve` was handed, the same
-facts the load event was authored from and held on the run for this exchange. **While a
+and whether the member's end arrived, the composer `serve` was handed, and the drain and
+wind-down bounds the enter carried, absent where it carried none, the same facts the load
+event was authored from and held on the run for this exchange (the bounds ride on
+`LoadFacts` for admin's deadline, `weaver-admin-Spec` 3.0, the bounds). **While a
 leave is pending the answer is `InTransition`**, whether a turn runs or not, so in S4 to
 S6 and S10 `show` answers the same whether the unload's invocation still holds the lock
 or has died (`weaver-admin-Spec` section 3, S4 to S7 and S10 x `show`; the operator's

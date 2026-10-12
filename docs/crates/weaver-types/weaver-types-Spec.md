@@ -639,8 +639,9 @@ declaration, and the harness, which times the drain and the wind-down, holds no
 declaration, so `EnterPayload` carries the two as admin resolved them,
 `drain_bound` and `wind_down_bound`, each absent where the declaration is silent and
 absence meaning unbounded, not a default for an older writer. The harness reads them
-from the enter, its only source, and admin's own deadline comes from the same parse it
-put on the enter, so the two sides agree by construction. The table changes no elected
+from the enter, its only source, and answers them back on `Observe` (`LoadFacts`, section
+4.2), from which admin's unload reads its own deadline, so the two sides agree by
+construction. The table changes no elected
 behaviour beyond the two bounds and joins no other member; the parser's change and the
 enter's two members are the code act's.
 
@@ -1435,6 +1436,8 @@ pub struct LoadFacts {
     pub state_store: StateStore,
     pub state_member: bool,
     pub composer: Composer,
+    pub drain_bound: Option<u64>,
+    pub wind_down_bound: Option<u64>,
 }
 
 pub struct Composer {
@@ -1797,7 +1800,12 @@ carries in its envelope rather than its payload, the declaration's digest as adm
 the file at the enter, the artifact, which the event does not carry, the readout, field,
 and surprisal elections, the tee's election under the name `state_election`, where the
 event spells it `tee`, the store the member stands on and whether its end arrived, and
-the composing loop by binary and, where it is a file, path and digest. It lacks the
+the composing loop by binary and, where it is a file, path and digest. **It carries the
+declared drain and wind-down bounds the run holds**, in seconds, as the enter carried them
+(`EnterPayload.drain_bound`, `wind_down_bound`), each absent where the declaration is
+silent and then absent from the wire, so a run that declared none answers byte-identical to
+before (the Planner's ruling of 2026-10-12, B3): admin reads them at the observation before
+every leave, and its deadline follows them (`weaver-admin-Spec` 3.0, the bounds). It lacks the
 event's stack, lineage, reset and prompt digest, the last for the reason the enter
 payload's clause above gives, so a consumer storing both stores two shapes, and the
 rework of `show` (#52 and the load confirmation) is where a shared core is weighed.
