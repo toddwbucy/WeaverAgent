@@ -1059,11 +1059,21 @@ fn observe(config: &ServiceConfig) -> Result<Observation, LifecycleRefusal> {
 fn see_run(
     config: &ServiceConfig,
 ) -> Result<(verb_table::Seen, Option<Box<weaver_types::LoadFacts>>), LifecycleRefusal> {
-    use verb_table::{Seen, WorkerSeen};
+    use verb_table::Seen;
     if !start::run_lock_held(&config.run_directory())? {
         return Ok((Seen::RunLockFree, None));
     }
-    let (worker, load) = match observe(config)? {
+    let (worker, load) = worker_seen(observe(config)?);
+    Ok((Seen::RunLockHeld(worker), load))
+}
+
+/// The worker's word as `verb_table` reads it, with the load's facts where
+/// the worker named them.
+fn worker_seen(
+    observation: Observation,
+) -> (verb_table::WorkerSeen, Option<Box<weaver_types::LoadFacts>>) {
+    use verb_table::WorkerSeen;
+    match observation {
         Observation::State(weaver_types::AgentState::Idle, load) => (WorkerSeen::Idle, load),
         Observation::State(weaver_types::AgentState::Active, load) => (WorkerSeen::Active, load),
         // A worker answering that nothing is resident: a run never entered.
@@ -1074,8 +1084,7 @@ fn see_run(
         Observation::InTransition => (WorkerSeen::InTransition, None),
         Observation::NoListener => (WorkerSeen::NoSocket, None),
         Observation::Silent => (WorkerSeen::Silent, None),
-    };
-    Ok((Seen::RunLockHeld(worker), load))
+    }
 }
 
 /// What a load has stood up, for its rollback: the run lock it took, whether
@@ -1797,12 +1806,13 @@ fn constituents(run_directory: &std::path::Path) -> Vec<u32> {
     pids
 }
 
-/// **`unload` ends whatever holds the run lock**, per Spec section 3: its own
-/// promise, acting on the lock and not on a classification. Where the
-/// observation answers `Idle`, or the worker is silent, it directs leave under
-/// the leave's bound; where it answers `Unloaded`, or no worker listens, no run
-/// was entered and it goes straight to the escalation. It answers
-/// provisioned-and-unloaded only once the lock is free.
+/// **`unload` ends whatever holds the run lock**, per Spec section 3 and its
+/// row in the 3.0 verb table: where the worker answers `Idle` or `Active`, or
+/// is silent, it directs leave under the leave's bound; where it answers
+/// `Unloaded`, or no worker listens, no run was entered and the escalation
+/// ends it, the room then published; where a leave is pending it refuses
+/// `OutOfOrder`. It answers provisioned-and-unloaded only once the lock is
+/// free.
 fn unload(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
     unload_within(config, UNLOAD_BOUNDS, false)
 }
@@ -1812,7 +1822,10 @@ fn unload(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
 /// leave directed with `forced`, so the harness leaves without its save
 /// point and records that it was not taken, and the marker stays open under
 /// `ForcedUnload` for the next load's reset. The loss is the operator's
-/// recorded choice.
+/// recorded choice. Where the harness refuses the forced leave `OutOfOrder`,
+/// a leave pending or a run never entered, the escalation ends the run and
+/// the marker reads `Forced`; where no worker listens, or the run is already
+/// down, the marker is left as it stands (3.0, S0d and S8b).
 fn force_unload(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
     unload_within(config, UNLOAD_BOUNDS, true)
 }
@@ -1855,61 +1868,117 @@ fn unload_within(
     // observation and both dials spend it, so the verb holds the invocation
     // lock at most the leave's 150 seconds and the escalation's forty-five.
     let leave_deadline = std::time::Instant::now() + bounds.leave;
-    if !start::run_lock_held(&run_directory)? {
-        return conclude_ended(config, forced);
-    }
     // **A refused observation is silence**, `unload`'s promise being to end
     // whatever holds the lock: it directs leave as for any silent run.
-    let entered = match observe(config).unwrap_or(Observation::Silent) {
-        Observation::State(weaver_types::AgentState::Unloaded, _) | Observation::NoListener => {
-            false
-        }
-        Observation::State(..) | Observation::InTransition | Observation::Silent => true,
+    let seen = if start::run_lock_held(&run_directory)? {
+        let (worker, _) = worker_seen(observe(config).unwrap_or(Observation::Silent));
+        verb_table::Seen::RunLockHeld(worker)
+    } else {
+        verb_table::Seen::RunLockFree
     };
-    if entered {
-        match direct_leave_within(config, leave_deadline, LeaveDirected::of_unload(forced)) {
-            Ok(report) => {
-                // **A leave whose lock outlives the after-left wait keeps its
-                // save point** (the #94 survey's S7): the escalation ends the
-                // holders, and the report is published as on a lock that
-                // freed, so `Unloaded` is never answered over a leave save
-                // point left unpublished in the room.
-                if !start::wait_free(&run_directory, bounds.after_left) {
-                    start::escalate_within(&run_directory, bounds.term, bounds.kill)?;
-                }
-                return conclude_left(config, report, forced);
-            }
-            // A refusal on leave returns to the operator unchanged and
-            // answers nothing further: `ActivityNotAtRest` above all, and
-            // since A3.2 `SavePointNotTaken`, on which the unload does not
-            // complete, the run staying open with its lock, per Spec section
-            // 3 on A3.0 item 6, so the operator retries or forces.
-            Err(LeaveFault::Refused(refusal)) => {
-                // **A refusal after the run ended still closes the forced
-                // marker** (Codex on #94, round 6): a refusal the harness
-                // sends past `Left`, its organs going down behind it, ends
-                // the run all the same, so where the lock frees inside the
-                // after-left wait the marker closes as forced before the
-                // refusal returns.
-                // **Only a refusal that can follow `Left` is waited on** (the
-                // #99 area 1 review, K3): `ActivityNotAtRest` and
-                // `OutOfOrder` are answered with the run plainly standing or
-                // never entered, so waiting the after-left wait on them only
-                // holds the invocation lock and answers late.
-                let can_follow_left = !matches!(
-                    refusal,
-                    LifecycleRefusal::ActivityNotAtRest | LifecycleRefusal::OutOfOrder
-                );
-                if forced && can_follow_left && start::wait_free(&run_directory, bounds.after_left)
-                {
-                    close_marker(config, true)?;
-                }
-                return Err(refusal);
-            }
-            // The leave went unanswered inside its bound: a worker that
-            // would not exit, so the escalation follows.
-            Err(LeaveFault::Unanswered) => {}
+    let verb = if forced {
+        verb_table::Verb::ForceUnload
+    } else {
+        verb_table::Verb::Unload
+    };
+    match verb_table::act(verb, verb_table::class_of(seen)) {
+        // **The marker as it stands** (3.0, S0d x force-unload): a force on
+        // an agent already down ended nothing, so the next load records the
+        // cause the marker holds.
+        verb_table::VerbAction::PublishRoomThenUnloaded => conclude_ended(config),
+        verb_table::VerbAction::DirectLeave | verb_table::VerbAction::DirectForcedLeave => {
+            leave_within(config, bounds, leave_deadline, forced, false)
         }
+        // **A force on a pending leave or a run never entered directs its
+        // forced leave first** (3.0, outside the envelope), and only where the
+        // harness refuses it `OutOfOrder` ends the run by the escalation.
+        verb_table::VerbAction::ForcedLeaveElseEscalateForced => {
+            leave_within(config, bounds, leave_deadline, true, true)
+        }
+        // **No worker listens, or none entered** (3.0, S8b): the escalation
+        // ends what holds the run lock, then the S0d path publishes the room
+        // as recovered, the marker as it stands.
+        verb_table::VerbAction::EndByEscalation => {
+            start::escalate_within(&run_directory, bounds.term, bounds.kill)?;
+            conclude_ended(config)
+        }
+        // **An unload meeting a pending leave directs nothing** (3.0, outside
+        // the envelope): the leave finishes on its own, `force-unload` being
+        // the recourse.
+        verb_table::VerbAction::RefuseOutOfOrder => Err(LifecycleRefusal::OutOfOrder),
+        // The invocation lock is this verb's, taken above, so no other
+        // holder is seen: the arms below are the table's for other verbs.
+        verb_table::VerbAction::Join
+        | verb_table::VerbAction::RefuseInvocationInFlight
+        | verb_table::VerbAction::RefuseAgentRunning
+        | verb_table::VerbAction::RefuseUnanswered
+        | verb_table::VerbAction::Start
+        | verb_table::VerbAction::DirectSavePoint
+        | verb_table::VerbAction::NameForNextLoad
+        | verb_table::VerbAction::ShowUnloaded
+        | verb_table::VerbAction::ShowWorkersWord
+        | verb_table::VerbAction::ShowUnanswered
+        | verb_table::VerbAction::ShowInTransition
+        | verb_table::VerbAction::ShowInTransitionConstituents => {
+            Err(LifecycleRefusal::InvocationInFlight)
+        }
+    }
+}
+
+/// **The leave directed and concluded**, per Spec section 3: `forced` names
+/// the leave's kind, and `escalate_out_of_order` the force on a pending leave
+/// or a run never entered, where an `OutOfOrder` refusal is answered by the
+/// escalation and a `Forced` marker rather than returned.
+fn leave_within(
+    config: &ServiceConfig,
+    bounds: UnloadBounds,
+    leave_deadline: std::time::Instant,
+    forced: bool,
+    escalate_out_of_order: bool,
+) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    let run_directory = config.run_directory();
+    match direct_leave_within(config, leave_deadline, LeaveDirected::of_unload(forced)) {
+        Ok(report) => {
+            // **A leave whose lock outlives the after-left wait keeps its
+            // save point** (the #94 survey's S7): the escalation ends the
+            // holders, and the report is published as on a lock that
+            // freed, so `Unloaded` is never answered over a leave save
+            // point left unpublished in the room.
+            if !start::wait_free(&run_directory, bounds.after_left) {
+                start::escalate_within(&run_directory, bounds.term, bounds.kill)?;
+            }
+            return conclude_left(config, report, forced);
+        }
+        Err(LeaveFault::Refused(LifecycleRefusal::OutOfOrder)) if escalate_out_of_order => {}
+        // A refusal on leave returns to the operator unchanged and
+        // answers nothing further: `ActivityNotAtRest` above all, and
+        // since A3.2 `SavePointNotTaken`, on which the unload does not
+        // complete, the run staying open with its lock, per Spec section
+        // 3 on A3.0 item 6, so the operator retries or forces.
+        Err(LeaveFault::Refused(refusal)) => {
+            // **A refusal after the run ended still closes the forced
+            // marker** (Codex on #94, round 6): a refusal the harness
+            // sends past `Left`, its organs going down behind it, ends
+            // the run all the same, so where the lock frees inside the
+            // after-left wait the marker closes as forced before the
+            // refusal returns.
+            // **Only a refusal that can follow `Left` is waited on** (the
+            // #99 area 1 review, K3): `ActivityNotAtRest` and
+            // `OutOfOrder` are answered with the run plainly standing or
+            // never entered, so waiting the after-left wait on them only
+            // holds the invocation lock and answers late.
+            let can_follow_left = !matches!(
+                refusal,
+                LifecycleRefusal::ActivityNotAtRest | LifecycleRefusal::OutOfOrder
+            );
+            if forced && can_follow_left && start::wait_free(&run_directory, bounds.after_left) {
+                close_marker(config, true)?;
+            }
+            return Err(refusal);
+        }
+        // The leave went unanswered inside its bound: a worker that
+        // would not exit, so the escalation follows.
+        Err(LeaveFault::Unanswered) => {}
     }
     start::escalate_within(&run_directory, bounds.term, bounds.kill)?;
     // A run that had to be ended by force took no leave save point: the
@@ -2003,21 +2072,15 @@ fn open_run(config: &ServiceConfig) -> Result<Option<String>, LifecycleRefusal> 
 /// (the #94 survey's S11), per Spec section 3: after an unload refused
 /// `SavePointNotTaken` naming `published`, the leave's save point stands in
 /// the room and the operator retries, plainly or forced. A publication that
-/// refuses or leaves a file refuses `published` again. **The marker never
-/// closes clean here** (Codex on #94 at 197e80b), on the rule that nothing
-/// is lost silently, a `Closed` marker meaning a save point of this run's
-/// state published: with the run gone, nothing tells a leave whose
-/// publication failed from a run that crashed with an on-demand save point
-/// in its room, and a published file proves no leave. So a forced verb closes the marker as forced, the
-/// operator's choice (Codex on #94, round 6), and an unforced one closes
-/// nothing, the next load recording `NoCleanUnload`: a conservative label,
-/// never a false one. A retry after `published` may so record a reset over
-/// a leave that did take its save point; the leave's provenance in the
-/// marker is the lifecycle act's.
-fn conclude_ended(
-    config: &ServiceConfig,
-    forced: bool,
-) -> Result<LifecycleAnswer, LifecycleRefusal> {
+/// refuses or leaves a file refuses `published` again. **The marker is left
+/// as it stands** (3.0, S0d and S8b x force-unload): with the run gone,
+/// nothing tells a leave whose publication failed from a run that crashed,
+/// and a force on a run already ended ended nothing, so the next load
+/// records the cause the marker holds, `NoCleanUnload` on an open one: a
+/// conservative label, never a false one. A retry after `published` may so
+/// record a reset over a leave that did take its save point; the leave's
+/// provenance in the marker is the lifecycle act's.
+fn conclude_ended(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
     let not_published = || {
         record(
             config,
@@ -2032,9 +2095,6 @@ fn conclude_ended(
         .map_err(|_| not_published())?;
     if deferred {
         return Err(not_published());
-    }
-    if forced {
-        close_marker(config, true)?;
     }
     Ok(unloaded_answer())
 }

@@ -1509,6 +1509,146 @@ fn show_ladder_rung_0_to_iv() {
     }
 }
 
+/// The verb's answer once the run has ended.
+fn unloaded() -> Result<LifecycleAnswer, LifecycleRefusal> {
+    Ok(LifecycleAnswer::State {
+        state: weaver_types::AgentState::Unloaded,
+        load: None,
+        constituents: Vec::new(),
+    })
+}
+
+/// **A force on an agent already down leaves the marker as it stands**
+/// (`weaver-admin-Spec` 3.0, S0d x force-unload): it publishes the room as
+/// `unload` does and answers `Unloaded`, a force on an agent already down
+/// having ended nothing, so the next load records the cause the marker
+/// holds. Perturbation: close the marker `Forced` as before, and it reads
+/// forced.
+#[test]
+fn a_force_on_a_down_agent_leaves_the_marker_as_it_stands() {
+    let (config, _scratch) = scratch_config("force-down");
+    let open = save_points::Marker::Open { run: "r-1".into() };
+    save_points::write_marker(&config.root, Some(&open)).unwrap();
+    assert_eq!(force_unload(&config), unloaded());
+    assert_eq!(save_points::read_marker(&config.root), Some(open));
+}
+
+/// **A run whose worker is gone is ended by the escalation, its room then
+/// published, the marker as it stands** (`weaver-admin-Spec` 3.0, S8b x
+/// unload and x force-unload): no worker listens, so neither verb directs a
+/// leave; the escalation ends what holds the run lock, and the S0d path
+/// publishes the room as recovered; a force leaves the marker as `unload`
+/// does, the worker's death being no operator's force. Perturbation: close
+/// the forced marker, or skip the publication, and the case fails.
+#[test]
+fn s8b_unload_and_force_end_by_the_escalation_then_publish_the_room() {
+    for forced in [false, true] {
+        let (config, _report, base) = territory_with_one_room_file(&format!("s8b-{forced}"));
+        let open = save_points::Marker::Open { run: "r-1".into() };
+        save_points::write_marker(&config.root, Some(&open)).unwrap();
+        let mut holder = stand_in_holder(&config);
+        let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, forced);
+        let _ = holder.kill();
+        let _ = holder.wait();
+        assert_eq!(answered, unloaded(), "forced = {forced}");
+        assert_eq!(
+            manifest_lines(&config).len(),
+            1,
+            "forced = {forced}: the room published"
+        );
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(open),
+            "forced = {forced}: the marker as it stands"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+/// **A force on a run never entered, or on a leave pending, directs its
+/// forced leave first** (`weaver-admin-Spec` 3.0, outside the envelope:
+/// `force-unload` directs `Leave{forced}`), and only where the harness
+/// refuses it `OutOfOrder` ends the run by the escalation and writes
+/// `Forced` by the marker-write rule. Perturbation: escalate without the
+/// leave, and no `Leave` is directed.
+#[test]
+fn a_force_on_a_run_never_entered_directs_the_leave_first() {
+    for (case, word) in [
+        (
+            "a run never entered",
+            weaver_types::Payload::Answer(LifecycleAnswer::State {
+                state: weaver_types::AgentState::Unloaded,
+                load: None,
+                constituents: Vec::new(),
+            }),
+        ),
+        (
+            "a leave pending",
+            weaver_types::Payload::Answer(LifecycleAnswer::InTransition {
+                constituents: Vec::new(),
+            }),
+        ),
+    ] {
+        let (config, _scratch) = scratch_config("force-unentered");
+        let open = save_points::Marker::Open { run: "r-1".into() };
+        save_points::write_marker(&config.root, Some(&open)).unwrap();
+        let mut holder = stand_in_holder(&config);
+        let worker = recording_worker(
+            &config,
+            vec![
+                word,
+                weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder),
+            ],
+        );
+        let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+        let _ = holder.kill();
+        let _ = holder.wait();
+        let directed = worker.join().unwrap();
+        assert_eq!(answered, unloaded(), "{case}");
+        assert!(
+            matches!(
+                directed.get(1),
+                Some(weaver_types::Payload::Directive(
+                    LifecycleDirective::Leave { forced: true, .. }
+                ))
+            ),
+            "{case}: the forced leave directed first: {directed:?}"
+        );
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Forced { run: "r-1".into() }),
+            "{case}"
+        );
+    }
+}
+
+/// **An unload meeting a pending leave refuses `OutOfOrder`** (`weaver-admin-
+/// Spec` 3.0, outside the envelope: `unload` observes first, and where the
+/// harness answers `InTransition` it directs nothing, the leave finishing on
+/// its own and `force-unload` the recourse). Perturbation: direct the leave
+/// anyway, and a second `Leave` reaches the worker.
+#[test]
+fn unload_meeting_a_pending_leave_refuses_out_of_order() {
+    let (config, _scratch) = scratch_config("unload-pending");
+    let mut holder = stand_in_holder(&config);
+    let worker = recording_worker(
+        &config,
+        vec![weaver_types::Payload::Answer(
+            LifecycleAnswer::InTransition {
+                constituents: Vec::new(),
+            },
+        )],
+    );
+    let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, false);
+    let directed = worker.join().unwrap();
+    let standing = start::run_lock_held(&config.run_directory()).unwrap();
+    let _ = holder.kill();
+    let _ = holder.wait();
+    assert_eq!(answered, Err(LifecycleRefusal::OutOfOrder));
+    assert_eq!(directed.len(), 1, "the observation alone: {directed:?}");
+    assert!(standing, "nothing was ended");
+}
+
 /// A scratch coordination root for one test, with the agent's run
 /// directory made inside it as this test's user.
 fn scratch_config(tag: &str) -> (ServiceConfig, crate::scratch::Scratch) {
@@ -1686,7 +1826,6 @@ fn answering_worker(
     })
 }
 
-/// Short bounds for the unload path, the production values being fixed.
 /// A worker that answers as `answering_worker` does and keeps every
 /// directive it was sent, so a test reads what admin directed.
 fn recording_worker(
@@ -1694,11 +1833,17 @@ fn recording_worker(
     answers: Vec<weaver_types::Payload>,
 ) -> std::thread::JoinHandle<Vec<weaver_types::Payload>> {
     let listener = silent_worker(config);
+    nix::fcntl::fcntl(
+        &listener,
+        nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
+    )
+    .unwrap();
     std::thread::spawn(move || {
         let mut directed = Vec::new();
         for payload in answers {
-            let Ok(raw) = nix::sys::socket::accept(std::os::fd::AsRawFd::as_raw_fd(&listener))
-            else {
+            // A dial that never comes ends the worker rather than hanging
+            // the test that joins it.
+            let Some(raw) = accept_within(&listener, std::time::Duration::from_secs(5)) else {
                 break;
             };
             let fd = unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(raw) };
@@ -1713,6 +1858,23 @@ fn recording_worker(
         }
         directed
     })
+}
+
+/// One dial accepted on a non-blocking listener within `bound`, or none.
+fn accept_within(
+    listener: &std::os::fd::OwnedFd,
+    bound: std::time::Duration,
+) -> Option<std::os::fd::RawFd> {
+    let deadline = std::time::Instant::now() + bound;
+    loop {
+        match nix::sys::socket::accept(std::os::fd::AsRawFd::as_raw_fd(listener)) {
+            Ok(raw) => return Some(raw),
+            Err(nix::errno::Errno::EAGAIN) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 fn report() -> weaver_types::SavePointReport {
@@ -2016,7 +2178,8 @@ fn a_force_refused_before_left_answers_without_the_wait() {
 /// refuses, every other verb refuses at the configuration, while the
 /// force's configuration stands marked unjudged; the force over a run
 /// already ended publishes nothing from the room, writes no `admin.log`
-/// line, and closes the marker forced. Perturbation: judge the territory
+/// line, and leaves the marker as it stands (3.0, S0d x force-unload).
+/// Perturbation: judge the territory
 /// for the force too and its configuration refuses.
 #[test]
 fn a_force_ends_the_run_where_the_territory_does_not_judge() {
@@ -2074,7 +2237,7 @@ fn a_force_ends_the_run_where_the_territory_does_not_judge() {
     record(&config, "force-unload", "unloaded");
     assert_eq!(
         save_points::read_marker(&config.root),
-        Some(save_points::Marker::Forced { run: "r-1".into() })
+        Some(save_points::Marker::Open { run: "r-1".into() })
     );
     assert!(
         room.join(format!("{digest}.save-point")).exists(),
@@ -2093,16 +2256,17 @@ fn a_force_ends_the_run_where_the_territory_does_not_judge() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// **A forced verb closes the marker where the run already ended**, per
-/// Spec section 3 (Codex on #94, round 6): with the lock free and an open
-/// marker standing, `force-unload` answers unloaded and the marker reads
-/// forced, while `unload` leaves it open as the unclean stop it is; and a
+/// **The marker where the run already ended**, per Spec section 3: with the
+/// lock free and an open marker standing, `unload` and `force-unload` both
+/// answer unloaded and leave it open as the unclean stop it is, a force on an
+/// agent already down having ended nothing (3.0, S0d x force-unload); and a
 /// forced leave refused by a harness that then goes down closes the marker
-/// as forced inside the after-left wait, the refusal still returned.
-/// Perturbations: skip the early branch's close and the first marker
-/// stays open; return the refusal without the wait and the third does.
+/// as forced inside the after-left wait, the refusal still returned (Codex
+/// on #94, round 6). Perturbations: close the marker forced on the
+/// lock-free force and the second marker reads forced; return the refusal
+/// without the wait and the third stays open.
 #[test]
-fn a_forced_verb_closes_the_marker_where_the_run_already_ended() {
+fn the_marker_where_the_run_already_ended() {
     let (config, _scratch) = scratch_config("forced-ended");
     let open = |run: &str| save_points::Marker::Open { run: run.into() };
     save_points::write_marker(&config.root, Some(&open("r-1"))).unwrap();
@@ -2129,8 +2293,8 @@ fn a_forced_verb_closes_the_marker_where_the_run_already_ended() {
     ));
     assert_eq!(
         save_points::read_marker(&config.root),
-        Some(save_points::Marker::Forced { run: "r-1".into() }),
-        "the forced verb records the operator's choice"
+        Some(open("r-1")),
+        "a force on an agent already down leaves the marker as it stands"
     );
     // The refusal arm: the holder keeps the lock while the worker
     // refuses the leave past `Left`, a drain that failed being one such
@@ -2209,7 +2373,7 @@ fn the_members_group_set_carries_no_access_group() {
 /// bound or any publication that does not land), the verb refuses
 /// `SavePointNotTaken` naming the publication and the marker stays open,
 /// so the next load records `NoCleanUnload`. The forced unload's case,
-/// no save point reported, is `a_forced_verb_closes_the_marker_where_the_run_already_ended`.
+/// no save point reported, is `the_marker_where_the_run_already_ended`.
 /// Perturbation: discard the publication's result again and the verb
 /// answers unloaded with the marker closed.
 #[test]
@@ -2434,8 +2598,8 @@ fn a_leave_ended_by_the_escalation_still_publishes_its_save_point() {
 /// **A retry on a run already ended publishes the room first** (the #94
 /// survey's S11): after an unload refused `published`, the leave's save
 /// point stands in the room; a `force-unload` with the run lock free
-/// publishes it and closes the marker as forced, never clean, since a
-/// published file proves no leave (Codex on #94 at 197e80b).
+/// publishes it and leaves the marker as it stands (3.0, S0d), never clean,
+/// since a published file proves no leave (Codex on #94 at 197e80b).
 /// Perturbation: drop the publication from the lock-free branch and the
 /// file stays in the room.
 #[test]
@@ -2453,7 +2617,7 @@ fn a_retry_on_an_ended_run_publishes_the_room_first() {
     assert_eq!(manifest_digests(&config), [report.save_point]);
     assert_eq!(
         save_points::read_marker(&config.root),
-        Some(save_points::Marker::Forced { run: "r-1".into() })
+        Some(save_points::Marker::Open { run: "r-1".into() })
     );
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -2757,6 +2921,7 @@ fn the_rollback_restores_the_marker_it_found() {
     assert_eq!(save_points::read_marker(&config.root), Some(closed));
 }
 
+/// Short bounds for the unload path, the production values being fixed.
 const TEST_UNLOAD_BOUNDS: UnloadBounds = UnloadBounds {
     leave: std::time::Duration::from_secs(2),
     after_left: std::time::Duration::from_millis(300),
