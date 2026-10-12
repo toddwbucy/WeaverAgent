@@ -193,6 +193,36 @@ fn a_bound_past_the_clock_waits_and_reads() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// **A timeout of poll's capped wait with time left waits again**: a
+/// declared drain and wind-down can make the leave's window longer than
+/// poll's longest wait (about 24.8 days), and the read answers `Unanswered`
+/// only once the window is spent. Here the cap is 20 ms and the answer
+/// comes at 150 ms within a 2 s bound. Perturbation: answer `Unanswered`
+/// at the first timeout, and the read gives up at 20 ms.
+#[test]
+fn a_capped_poll_timeout_with_time_left_waits_again() {
+    let dir = scratch("poll-cap");
+    let (listener, path) = harness_listener(&dir);
+    let admin = dial(&path).expect("dial");
+    let worker = Coordination::adopt(harness_accepts(&listener));
+    let answering = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        worker.send(&directive(9, "alpha")).expect("write");
+        worker
+    });
+    TEST_POLL_CAP_MS.with(|cap| cap.set(Some(20)));
+    let read = admin.recv_within(Duration::from_secs(2));
+    TEST_POLL_CAP_MS.with(|cap| cap.set(None));
+    let worker = answering.join().expect("the peer");
+    assert_eq!(
+        read.expect("read past the capped waits").exchange.ordinal,
+        9
+    );
+    drop(worker);
+    drop(listener);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// **Truncation is a fault**, never a message: a read returning with
 /// `MSG_TRUNC` set carries a prefix the kernel shortened.
 ///

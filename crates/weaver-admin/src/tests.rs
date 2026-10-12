@@ -2133,44 +2133,99 @@ fn a_joined_force_concludes_where_the_holder_did_not() {
     );
 }
 
-/// **A leave refused `DescriptorsUnusable` concludes as no answer**
-/// (`weaver-admin-Spec` 3.0, the conclusion: a leave refused in S7): nothing
-/// published, the marker left `Open` though the verb was forced, the run's
-/// processes ended by the escalation where they still stand, and the
-/// refusal returned. Perturbation: conclude it as a forced `Left` with no
-/// save point, and the marker reads `Forced`.
+/// The refusals the harness answers past the seal, the unwind run whole:
+/// the drain's, and the lower's (`weaver-harness-Spec` section 6).
+fn refusals_past_the_seal() -> [LifecycleRefusal; 2] {
+    [
+        LifecycleRefusal::DescriptorsUnusable,
+        LifecycleRefusal::OrganRefused {
+            organ: weaver_types::RefusingOrgan::Gate,
+            reason: Box::new(LifecycleRefusal::Malformed),
+        },
+    ]
+}
+
+/// **A leave refused past the seal concludes as no answer**
+/// (`weaver-admin-Spec` 3.0, the conclusion: a leave refused in S7): the
+/// drain's `DescriptorsUnusable`, or the lower's refusal answered after the
+/// unwind ran whole, publishes nothing, leaves the marker `Open` though the
+/// verb was forced, ends the run's processes by the escalation where they
+/// still stand, and returns the refusal. Perturbations: conclude it as a
+/// forced `Left` with no save point, and the marker reads `Forced`; return
+/// the lower's refusal at once, and the run is left standing.
 #[test]
-fn a_leave_refused_descriptors_unusable_concludes_as_no_answer() {
-    let (config, _report, base) = territory_with_one_room_file("descriptors-unusable");
-    save_points::write_marker(
-        &config.root,
-        Some(&save_points::Marker::Open { run: "r-1".into() }),
-    )
-    .unwrap();
-    let mut holder = stand_in_holder(&config);
-    let worker = recording_worker(
-        &config,
-        vec![
-            weaver_types::Payload::Answer(LifecycleAnswer::State {
-                state: weaver_types::AgentState::Idle,
-                load: None,
-                constituents: Vec::new(),
-            }),
-            weaver_types::Payload::Refusal(LifecycleRefusal::DescriptorsUnusable),
-        ],
-    );
-    let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
-    let _ = worker.join();
-    let ended = holder.try_wait().unwrap();
-    end(holder);
-    assert_eq!(answered, Err(LifecycleRefusal::DescriptorsUnusable));
-    assert!(ended.is_some(), "the escalation ended the standing run");
-    assert_eq!(
-        save_points::read_marker(&config.root),
-        Some(save_points::Marker::Open { run: "r-1".into() })
-    );
-    assert!(manifest_lines(&config).is_empty(), "nothing published");
-    let _ = std::fs::remove_dir_all(&base);
+fn a_leave_refused_past_the_seal_concludes_as_no_answer() {
+    for refusal in refusals_past_the_seal() {
+        let (config, _report, base) = territory_with_one_room_file("past-the-seal");
+        save_points::write_marker(
+            &config.root,
+            Some(&save_points::Marker::Open { run: "r-1".into() }),
+        )
+        .unwrap();
+        let mut holder = stand_in_holder(&config);
+        let worker = recording_worker(
+            &config,
+            vec![
+                weaver_types::Payload::Answer(LifecycleAnswer::State {
+                    state: weaver_types::AgentState::Idle,
+                    load: None,
+                    constituents: Vec::new(),
+                }),
+                weaver_types::Payload::Refusal(refusal.clone()),
+            ],
+        );
+        let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+        let _ = worker.join();
+        let ended = holder.try_wait().unwrap();
+        end(holder);
+        assert_eq!(answered, Err(refusal.clone()));
+        assert!(
+            ended.is_some(),
+            "{refusal:?}: the escalation ended the standing run"
+        );
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(save_points::Marker::Open { run: "r-1".into() }),
+            "{refusal:?}"
+        );
+        assert!(
+            manifest_lines(&config).is_empty(),
+            "{refusal:?}: nothing published"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+/// **A join refused past the seal concludes as no answer**, as the
+/// holder's leave does (`weaver-admin-Spec` 3.0, the conclusion; I3): the
+/// joined force ends the run's processes where they still stand and
+/// returns the refusal, the marker as it stands. Perturbation: return the
+/// refusal at once, and the run is left standing.
+#[test]
+fn a_join_refused_past_the_seal_ends_the_run() {
+    for refusal in refusals_past_the_seal() {
+        let (config, _scratch) = scratch_config("join-past-the-seal");
+        let open = save_points::Marker::Open { run: "r-1".into() };
+        save_points::write_marker(&config.root, Some(&open)).unwrap();
+        let mut run = stand_in_holder(&config);
+        let holder = holding_as(&config, "unload");
+        let worker = recording_worker(
+            &config,
+            vec![weaver_types::Payload::Refusal(refusal.clone())],
+        );
+        let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+        let _ = worker.join();
+        let ended = run.try_wait().unwrap();
+        end(run);
+        end(holder);
+        assert_eq!(answered, Err(refusal.clone()));
+        assert!(ended.is_some(), "{refusal:?}: the run was ended");
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            Some(open),
+            "{refusal:?}"
+        );
+    }
 }
 
 /// **A marker closed for a run is never rewritten** (`weaver-admin-Spec`

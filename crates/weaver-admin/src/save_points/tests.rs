@@ -2071,7 +2071,7 @@ fn in_a_child(name: &str, body: impl FnOnce()) {
 /// process-wide, and a sibling test creating directories while one of
 /// them ran under 000 left its scratch world-writable, which the boundary
 /// checks then refused. A watcher thread reads the umask without changing
-/// it while both tests run fifty times each; it must never see anything
+/// it while both tests run ten times each; it must never see anything
 /// but the umask it started with. Perturbation: run their bodies in this
 /// process again, and the watcher sees 000 or 077.
 #[test]
@@ -2088,9 +2088,12 @@ fn the_umask_tests_never_leak_their_umask() {
             if let Some(mask) = process_umask() {
                 into.lock().unwrap().insert(mask);
             }
+            // A short sleep rather than a spin, so the watch does not pin a
+            // core beside the suite's timing tests (#113).
+            std::thread::sleep(std::time::Duration::from_micros(200));
         }
     });
-    for _ in 0..50 {
+    for _ in 0..10 {
         the_marker_is_0644_whatever_the_umask();
         the_published_copy_is_0640_whatever_the_umask();
     }

@@ -58,17 +58,20 @@ impl HolderVerb {
 
     /// The verb a record spells, or none for any other text.
     pub fn from_spelled(spelled: &str) -> Option<HolderVerb> {
-        [
-            HolderVerb::Load,
-            HolderVerb::Unload,
-            HolderVerb::ForceUnload,
-            HolderVerb::SavePoint,
-            HolderVerb::Restore,
-            HolderVerb::Stop,
-            HolderVerb::Validate,
-        ]
-        .into_iter()
-        .find(|verb| verb.spelled() == spelled)
+        // Each arm spelled through `spelled()`, so the two directions
+        // cannot drift; `every_exclusive_verb_records_its_name` reads every
+        // variant back.
+        let verb = match spelled {
+            "load" => HolderVerb::Load,
+            "unload" => HolderVerb::Unload,
+            "force-unload" => HolderVerb::ForceUnload,
+            "save-point" => HolderVerb::SavePoint,
+            "restore" => HolderVerb::Restore,
+            "stop" => HolderVerb::Stop,
+            "validate" => HolderVerb::Validate,
+            _ => return None,
+        };
+        (verb.spelled() == spelled).then_some(verb)
     }
 }
 

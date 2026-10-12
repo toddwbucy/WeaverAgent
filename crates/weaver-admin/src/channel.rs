@@ -272,7 +272,9 @@ impl Coordination {
             if remaining.is_zero() {
                 return Err(ChannelFault::Unanswered);
             }
-            let millis = remaining.as_millis().min(i32::MAX as u128) as i32;
+            // Rounded up, so less than a millisecond left waits one rather
+            // than spinning on a zero timeout.
+            let millis = remaining.as_nanos().div_ceil(1_000_000).min(poll_cap_ms()) as i32;
             let mut poll = nix::libc::pollfd {
                 fd: self.fd.as_raw_fd(),
                 events: nix::libc::POLLIN,
@@ -280,8 +282,12 @@ impl Coordination {
             };
             // SAFETY: poll over one pollfd this frame owns.
             match unsafe { nix::libc::poll(&mut poll, 1, millis) } {
-                0 if deadline.is_none() => {}
-                0 => return Err(ChannelFault::Unanswered),
+                // **A timeout is read against the deadline, never alone**:
+                // poll's longest wait is about 24.8 days, shorter than a
+                // declared drain and wind-down can make the leave's window,
+                // so a timeout with time left waits again; the loop's head
+                // answers `Unanswered` once none is left.
+                0 => {}
                 n if n > 0 => return self.recv(),
                 _ if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted => {}
                 _ => return Err(ChannelFault::Closed),
@@ -295,6 +301,24 @@ impl Coordination {
     pub fn adopt(fd: OwnedFd) -> Self {
         Coordination { fd, ordinal: 0 }
     }
+}
+
+/// poll's longest wait, in milliseconds.
+fn poll_cap_ms() -> u128 {
+    // #118: a test-only hook, kept beside the production code it observes.
+    #[cfg(test)]
+    if let Some(cap) = TEST_POLL_CAP_MS.with(std::cell::Cell::get) {
+        return cap;
+    }
+    i32::MAX as u128
+}
+
+// A shorter cap on poll's wait, so a test meets the cap inside a bound
+// it can wait out.
+// #118: a test-only hook, kept beside the production code it observes.
+#[cfg(test)]
+thread_local! {
+    static TEST_POLL_CAP_MS: std::cell::Cell<Option<u128>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
