@@ -1782,16 +1782,28 @@ fn show(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
         }
     };
     let (seen, load) = see_run(config)?;
-    let in_transition = || LifecycleAnswer::InTransition {
-        constituents: constituents(&run_directory),
+    let unloaded = || LifecycleAnswer::State {
+        state: weaver_types::AgentState::Unloaded,
+        load: None,
+        constituents: Vec::new(),
+    };
+    // **The constituents are read after the run lock, so an empty read is
+    // read against the lock again** (Codex on #126, round 4): the last
+    // member or relay can let go during the observation's failed dial, and
+    // `InTransition` naming nothing over a run that is down would be false.
+    // The lock free, the run is down, rung (iv); still held, something holds
+    // it that the inventory does not list, and `InTransition` naming none is
+    // the truthful answer.
+    let in_transition = || -> Result<LifecycleAnswer, LifecycleRefusal> {
+        let pids = constituents(&run_directory);
+        if pids.is_empty() && !start::run_lock_held(&run_directory)? {
+            return Ok(unloaded());
+        }
+        Ok(LifecycleAnswer::InTransition { constituents: pids })
     };
     Ok(
         match verb_table::act(verb_table::Verb::Show, verb_table::class_of(seen)) {
-            VerbAction::ShowUnloaded => LifecycleAnswer::State {
-                state: weaver_types::AgentState::Unloaded,
-                load: None,
-                constituents: Vec::new(),
-            },
+            VerbAction::ShowUnloaded => unloaded(),
             VerbAction::ShowWorkersWord => match seen {
                 Seen::RunLockHeld(WorkerSeen::Idle) => LifecycleAnswer::State {
                     state: weaver_types::AgentState::Idle,
@@ -1804,10 +1816,10 @@ fn show(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
                     constituents: constituents(&run_directory),
                 },
                 // A leave pending, the one other word the table answers.
-                _ => in_transition(),
+                _ => in_transition()?,
             },
             VerbAction::ShowUnanswered => return Err(LifecycleRefusal::Unanswered),
-            VerbAction::ShowInTransitionConstituents => in_transition(),
+            VerbAction::ShowInTransitionConstituents => in_transition()?,
             // Rung (0) above, and no other action answers `show`.
             _ => LifecycleAnswer::InTransition {
                 constituents: Vec::new(),

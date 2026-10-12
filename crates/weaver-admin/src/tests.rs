@@ -1789,6 +1789,27 @@ fn a_force_beside_an_unload_joins_and_both_conclude_once() {
     );
 }
 
+/// **`show` reads an empty constituent scan against the run lock again**
+/// (`weaver-admin-Spec` section 3, the show ladder; Codex on #126, round 4):
+/// the run lock is held when `show` reads it, no worker listens, and the
+/// last holder lets go during the observation's failed dial; the scan that
+/// follows finds no constituent, and `show` answers `Unloaded` (rung iv), the
+/// run being down, never `InTransition` naming nothing. Perturbation: drop
+/// the recheck, and `show` answers an empty `InTransition`.
+#[test]
+fn show_reads_an_empty_scan_against_the_run_lock_again() {
+    let (config, _scratch) = scratch_config("show-recheck");
+    let holder = stand_in_holder(&config);
+    // The dial's ceiling is one second; the run ends well inside it.
+    let ender = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        end(holder);
+    });
+    let answered = show(&config);
+    ender.join().unwrap();
+    assert_eq!(answered, unloaded());
+}
+
 /// **A joined force answered `Left` takes the invocation lock before the
 /// run lock frees** (`weaver-admin-Spec` 3.0, the conclusion: "it takes the
 /// invocation lock first"; Codex on #126, round 1): the holder lets go while
