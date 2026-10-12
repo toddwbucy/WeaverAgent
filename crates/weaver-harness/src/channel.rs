@@ -420,9 +420,41 @@ impl CoordinationListener {
         }
         Ok(OrganChannel { end: connection })
     }
+
+    /// **An accept that does not wait**, for the leave's sweeps of the
+    /// backlog (`weaver-admin-Spec` section 3, the seal, step 3): `None`
+    /// where no dial is pending, else [`Self::accept_root`]'s answer.
+    pub fn try_accept_root(&self) -> Result<Option<OrganChannel>, ChannelFault> {
+        use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+        let mut fds = [PollFd::new(self.fd.as_fd(), PollFlags::POLLIN)];
+        match poll(&mut fds, PollTimeout::ZERO) {
+            Ok(0) => Ok(None),
+            Ok(_) => self.accept_root().map(Some),
+            Err(nix::errno::Errno::EINTR) => Ok(None),
+            Err(_) => Err(ChannelFault::Closed),
+        }
+    }
+
+    /// **The seal's unlink** (`weaver-admin-Spec` section 3, the seal, step
+    /// 2; `weaver-harness-Spec` section 2.3): the worker's own pathname
+    /// removed once the leave's outcome is fixed, so no new dial reaches it.
+    /// The listening descriptor stands, and the backlog already queued is
+    /// still accepted.
+    pub fn unlink(&self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 impl OrganChannel {
+    /// A second handle on the same connection, so a leave carried out at
+    /// rest holds its dialer's connection as one held from a turn does.
+    pub fn try_clone(&self) -> Result<OrganChannel, ChannelFault> {
+        self.end
+            .try_clone()
+            .map(|end| OrganChannel { end })
+            .map_err(|_| ChannelFault::Closed)
+    }
+
     /// Creates a pair with close-on-exec set atomically at creation by
     /// `SOCK_CLOEXEC` in the `socketpair` call rather than by a later `fcntl`.
     ///

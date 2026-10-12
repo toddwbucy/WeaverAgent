@@ -37,6 +37,12 @@ use crate::tee::Tee;
 /// against loop 0's traffic.
 pub const QUEUE_DEPTH: usize = 1024;
 
+/// **The queue's slots reserved for the run's `unload`**
+/// (`weaver-trace-Spec` section 7): every other record waits once the queue
+/// holds `QUEUE_DEPTH - UNLOAD_RESERVE`, so the terminal event always has
+/// room, however the sink stalls.
+pub const UNLOAD_RESERVE: usize = 1;
+
 /// The depth at which pressure is reported rather than the depth of the queue
 /// itself. An open election per section 12, settled by a measurement against a
 /// real sink at a real rate; the interim value keeps the report ahead of the
@@ -146,8 +152,17 @@ impl Writer {
         }
     }
 
-    fn enqueue(&self, sequence: Sequence, line: Line) {
-        self.shared.state.lock().expect("writer state").queued += 1;
+    fn enqueue(&self, sequence: Sequence, line: Line, unload: bool) {
+        // **The reserve** ([`UNLOAD_RESERVE`]): any record but the run's
+        // `unload` waits here until the queue holds fewer than the depth
+        // less the reserve, the writer notifying on every record it takes,
+        // so the terminal event's slot is never another record's.
+        let mut state = self.shared.state.lock().expect("writer state");
+        while !unload && state.queued >= QUEUE_DEPTH - UNLOAD_RESERVE {
+            state = self.shared.drained.wait(state).expect("writer state");
+        }
+        state.queued += 1;
+        drop(state);
         // A full queue blocks here until the writer frees space: the
         // deployment's loss bound expressed as backpressure rather than loss,
         // reached only after the high-water report warned the harness. After a
@@ -211,6 +226,28 @@ impl Writer {
                 None => Ok(()),
             },
         }
+    }
+
+    /// [`Writer::wait_drained`] with a deadline: what is still queued at it
+    /// is named and forfeited to the wait, the writer going on with it.
+    fn wait_drained_by(&self, deadline: std::time::Instant) -> Result<Drained, Failure> {
+        let mut state = self.shared.state.lock().expect("writer state");
+        while state.queued > 0 {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Ok(Drained::Expired {
+                    queued: state.queued,
+                });
+            }
+            state = self
+                .shared
+                .drained
+                .wait_timeout(state, remaining)
+                .expect("writer state")
+                .0;
+        }
+        drop(state);
+        self.wait_drained().map(|()| Drained::Emptied)
     }
 
     fn boundary(&self, admitted: Option<Sequence>) -> Boundary {
@@ -331,7 +368,8 @@ impl Recorder {
             self.tee = None;
             self.tee_lost = true;
         }
-        self.writer.enqueue(sequence, line);
+        self.writer
+            .enqueue(sequence, line, event.envelope.kind == Kind::Unload);
         // **The event has landed and the answer says so**, per
         // `weaver-trace-Spec` section 9 as of 2026-08-22. Pressure was
         // returned here as a `Failure` after this point, so a caller reading
@@ -380,6 +418,23 @@ impl Recorder {
     pub fn drain(&mut self) -> Result<(), Failure> {
         self.writer.wait_drained()
     }
+
+    /// **The drain, bounded by a deadline** (`weaver-trace-Spec` section 7):
+    /// as [`Recorder::drain`] where the queue empties by `deadline`, and
+    /// otherwise `Expired` naming how many records were still queued, the
+    /// wait given up on them. The harness bounds its leave's drain so.
+    pub fn drain_by(&mut self, deadline: std::time::Instant) -> Result<Drained, Failure> {
+        self.writer.wait_drained_by(deadline)
+    }
+}
+
+/// What a bounded drain found at its return.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Drained {
+    /// The queue emptied: everything admitted reached the sink.
+    Emptied,
+    /// The deadline passed with `queued` records not yet written.
+    Expired { queued: usize },
 }
 
 /// Admission, step one: the envelope's identity fields bind the event by

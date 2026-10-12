@@ -158,4 +158,6 @@ pub use event::{
 pub use failure::{Failure, FieldName, SubmitRefusal, WriteError};
 pub use structure::{Record, WorkingStructure};
 pub use tee::{ElectedKind, Election, Tee, distill, opener};
-pub use writer::{Boundary, HIGH_WATER_MARK, Pressure, QUEUE_DEPTH, Recorder};
+pub use writer::{
+    Boundary, Drained, HIGH_WATER_MARK, Pressure, QUEUE_DEPTH, Recorder, UNLOAD_RESERVE,
+};

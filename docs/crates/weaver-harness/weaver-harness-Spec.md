@@ -2142,9 +2142,11 @@ served.
 6. **The release, then `unload`** (step 7; S7): the SPU and the member are released
    first: the SPU by its `Release`, answered `Released` (`Confirmed`) or not
    (`Unconfirmed`), an SPU that dies in it authored as a `fault` per
-   `weaver-harness-spu-contract` section 5; the member by closing the state seam, it
-   having no release exchange and retiring on its own (`Closed`, or `Unconfirmed` where
-   the seam was already dead or the close failed). The leave then reads the recorder's
+   `weaver-harness-spu-contract` section 5; the member by closing this crate's ask end of
+   the state seam, it having no release exchange and retiring on its own once the tee's
+   end closes with the writer, so `unload` still crosses the tee and state holds the run's
+   terminal record (`Closed`, or `Unconfirmed` where the seam was already dead or the
+   close failed). The leave then reads the recorder's
    queue depth and authors any pressure `fault` the crossing calls for, as the pressure
    rule of section 4 states; then `unload` is authored with `forced`, the leave's cause
    and the release outcome, the run's terminal event, nothing authored after it (I9); the
@@ -2260,7 +2262,17 @@ legs and the grants read-back under `ANSWER_BOUND_MS`, its answer leg under
 per `weaver-gate-PRD` section 13.4; these, the trace's drain, the SPU's `Release` and the
 reaps sum inside admin's 150 seconds: the three two-second legs, the 120-second answer leg
 and the 10-second lower take 136 seconds, leaving 14 for the trace's drain, the release
-and the reaps. The wait
+and the reaps. **Those three share one deadline**, the lower's start plus the leave bound,
+150 seconds (`LEAVE_BOUND_MS`, defined once in `weaver-types` and read by this crate and
+admin), so they get whatever the lower and the legs left (the Planner's ruling of
+2026-10-09); past it the drain stops waiting and the records still queued are forfeited, a
+`fault` naming them authored before `unload` where the writer's queue has room below
+`unload`'s reserved slot (`weaver-trace-Spec` section 7), `release.spu` reads
+`Unconfirmed`, and an organ not yet reaped is killed (`SIGKILL`), then reaped. **`Left` is
+answered only where `unload` reached the stream** (I2, on the Planner's ruling of
+2026-10-10): `unload` always takes its reserved slot, and a drain that has not written it
+by the deadline refuses the leave `DescriptorsUnusable`, admin concluding as for no answer
+(`weaver-admin-Spec` section 3). The wait
 for `GateQuiesced` is the drain's, not one of these legs: a declared `drain-bound`
 covers it and the turn's finish together, and with none declared it is unbounded, a
 force being the recourse (Codex on #109, round 40). A force, sole or joining, skips the drain and the wind-down, so its

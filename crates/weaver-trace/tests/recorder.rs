@@ -737,6 +737,116 @@ fn high_water_reports_on_recorded_events() {
     );
 }
 
+/// **A drain bounded by a deadline returns at it, naming what it forfeits**
+/// (`weaver-trace-Spec` section 7): a sink that takes nothing leaves records
+/// queued, and `drain_by` answers `Expired` with their count at the deadline
+/// rather than waiting on them; once the sink takes them again it answers
+/// `Emptied`. Perturbation: wait without the deadline, and the call never
+/// returns.
+#[test]
+fn a_drain_by_a_deadline_returns_at_it_naming_the_queued() {
+    use weaver_trace::Drained;
+    let (reader, pipe_writer) = std::io::pipe().expect("pipe");
+    let mut r = Recorder::receive(
+        OwnedFd::from(pipe_writer),
+        RunRef("r-1".into()),
+        SessionRef("s-1".into()),
+    )
+    .expect("receives");
+    r.submit(event(Kind::Load, None, Some(elections())))
+        .unwrap();
+    // Enough to fill the pipe and leave records queued behind the writer.
+    let account = format!("{{\"kind\":\"{}\"}}", "x".repeat(8_192));
+    for _ in 0..32 {
+        r.submit(event(
+            Kind::Fault,
+            None,
+            Some(Payload::Fault(raw_payload(&account).unwrap())),
+        ))
+        .unwrap();
+    }
+    let started = std::time::Instant::now();
+    let deadline = started + std::time::Duration::from_millis(200);
+    match r.drain_by(deadline).expect("no failure") {
+        Drained::Expired { queued } => assert!(queued > 0, "{queued}"),
+        Drained::Emptied => panic!("the pipe took 256 KiB unread"),
+    }
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    let drainer = std::thread::spawn(move || {
+        let mut reader = reader;
+        let mut sink = Vec::new();
+        let _ = reader.read_to_end(&mut sink);
+    });
+    let far = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    assert_eq!(r.drain_by(far).expect("no failure"), Drained::Emptied);
+    drop(r);
+    drainer.join().expect("the reader");
+}
+
+/// **The queue's last slot is the run's `unload`'s** (`weaver-trace-Spec`
+/// section 7, the reserve): every other record blocks once the queue holds
+/// `QUEUE_DEPTH - UNLOAD_RESERVE`, so a stalled sink can never leave the
+/// terminal event without room, and `unload` is admitted at once there.
+/// Perturbation: admit every kind to the full depth, and a fault takes the
+/// last slot.
+#[test]
+fn the_queues_last_slot_is_reserved_for_unload() {
+    use weaver_trace::{QUEUE_DEPTH, UNLOAD_RESERVE};
+    let (reader, pipe_writer) = std::io::pipe().expect("pipe");
+    let mut r = Recorder::receive(
+        OwnedFd::from(pipe_writer),
+        RunRef("r-1".into()),
+        SessionRef("s-1".into()),
+    )
+    .expect("receives");
+    r.submit(event(Kind::Load, None, Some(elections())))
+        .unwrap();
+    let account = format!("{{\"pad\":\"{}\"}}", "x".repeat(1_024));
+    let fault = move || {
+        event(
+            Kind::Fault,
+            None,
+            Some(Payload::Fault(raw_payload(&account).unwrap())),
+        )
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let submitter = std::thread::spawn(move || {
+        while r.pressure().queued < QUEUE_DEPTH - UNLOAD_RESERVE {
+            r.submit(fault()).unwrap();
+        }
+        tx.send("filled").unwrap();
+        // The unload is admitted into its reserved slot at once.
+        r.submit(event(
+            Kind::Unload,
+            None,
+            Some(Payload::Unload(weaver_trace::UnloadClose {
+                grant_surface: None,
+                cause: None,
+                forced: false,
+                forced_by: None,
+                release: None,
+            })),
+        ))
+        .unwrap();
+        tx.send("unload admitted").unwrap();
+        // Any other record waits on the stalled sink.
+        let _ = r.submit(fault());
+        tx.send("a fault admitted").unwrap();
+    });
+    let wait = std::time::Duration::from_secs(5);
+    assert_eq!(rx.recv_timeout(wait), Ok("filled"));
+    assert_eq!(rx.recv_timeout(wait), Ok("unload admitted"));
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(300))
+            .is_err(),
+        "a record other than unload waits for room"
+    );
+    drop(reader);
+    submitter
+        .join()
+        .expect("the submitter ends once the sink fails");
+}
+
 /// **The subsystem's wire spellings are pinned, every case, and the organ and
 /// its engine are distinct values.** The field is the record's attribution and
 /// a consumer keys on the strings, so a variant rename or a serde-scheme

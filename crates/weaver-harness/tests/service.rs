@@ -487,16 +487,37 @@ fn non_directive_payload_is_a_fault() {
 /// The previous version of this test asserted that a descriptor number was
 /// above 2, which the kernel guarantees for any process with the standard
 /// streams open - it never constructed a `Harness` and could not fail. This
-/// one constructs, drops, and observes the descriptor is gone. Run in a forked
-/// child because `listen` clears the dumpable flag process-wide.
+/// one constructs, drops, and observes the descriptor is gone. Run in a child
+/// process because `listen` clears the dumpable flag process-wide; the child
+/// is this test binary re-executed, never a bare fork: a fork inside the
+/// multi-threaded test process copied whatever lock another test's thread
+/// held, and the child's allocations then hung on it under load (#113).
+///
+/// Perturbation: leak the harness instead of dropping it, and the child
+/// reports the descriptor still open.
 #[test]
 fn dropping_the_harness_closes_the_listener() {
-    let (report_r, report_w) = nix::unistd::pipe().expect("pipe");
-    // SAFETY: the child adopts, drops, probes, reports, and _exits.
-    // The directory is made and guarded here, before the fork: the child
-    // `_exit`s and drops nothing, so the parent's guard is what removes it,
-    // pass or fail. Fresh per run by the clock, so a recycled pid never
-    // meets a stale socket.
+    const CHILD: &str = "WEAVER_DROP_LISTENER_DIR";
+    if let Some(dir) = std::env::var_os(CHILD) {
+        let dir = std::path::PathBuf::from(dir);
+        let listener = bind_coordination(&dir.join("c.sock")).expect("bind");
+        let raw = listener.as_fd().as_raw_fd();
+        let harness = Harness::listen(
+            listener,
+            OrganBinaries {
+                classify: None,
+                spu: "/nonexistent/spu".into(),
+                gate: "/nonexistent/gate".into(),
+            },
+            weaver_harness::OrganParameters::default(),
+        )
+        .expect("listen");
+        drop(harness);
+        let flags = unsafe { nix::libc::fcntl(raw, nix::libc::F_GETFD) };
+        std::process::exit(if flags == -1 { 0 } else { 3 });
+    }
+    // Fresh per run by the clock, so a recycled pid never meets a stale
+    // socket; the guard removes it, pass or fail.
     let dir = Scratch(std::env::temp_dir().join(format!(
         "weaver-drop-{}-{:?}",
         std::process::id(),
@@ -506,34 +527,22 @@ fn dropping_the_harness_closes_the_listener() {
             .unwrap_or(0)
     )));
     std::fs::create_dir_all(&dir.0).expect("scratch");
-    match unsafe { nix::unistd::fork() }.expect("fork") {
-        nix::unistd::ForkResult::Child => {
-            let listener = bind_coordination(&dir.0.join("c.sock")).expect("bind");
-            let raw = listener.as_fd().as_raw_fd();
-            let harness = Harness::listen(
-                listener,
-                OrganBinaries {
-                    classify: None,
-                    spu: "/nonexistent/spu".into(),
-                    gate: "/nonexistent/gate".into(),
-                },
-                weaver_harness::OrganParameters::default(),
-            )
-            .expect("listen");
-            drop(harness);
-            let flags = unsafe { nix::libc::fcntl(raw, nix::libc::F_GETFD) };
-            let closed = (flags == -1) as u8;
-            let _ = nix::unistd::write(report_w.as_fd(), &[closed]);
-            unsafe { nix::libc::_exit(0) };
-        }
-        nix::unistd::ForkResult::Parent { child } => {
-            drop(report_w);
-            let mut byte = [0u8; 1];
-            let _ = nix::unistd::read(report_r.as_fd(), &mut byte);
-            let _ = nix::sys::wait::waitpid(child, None);
-            assert_eq!(byte[0], 1, "the adopted end is closed when its owner drops");
-        }
-    }
+    let status = std::process::Command::new(std::env::current_exe().expect("the binary"))
+        .args([
+            "--exact",
+            "dropping_the_harness_closes_the_listener",
+            "--nocapture",
+        ])
+        .env(CHILD, &dir.0)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .status()
+        .expect("the child runs");
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "the adopted end is closed when its owner drops"
+    );
 }
 
 /// **The accept refuses a peer that is not root.** The socket lives inside the
@@ -657,9 +666,10 @@ fn serving_enter(session: &str) -> LifecycleDirective {
 /// composer, the peer plays admin and sends the enter with its sink over
 /// `SCM_RIGHTS`, with and without a state end beside it, and the load is
 /// authored before the fan-out. The organs do not exist, so the enter is
-/// refused after the load and service then ends on their death, which is
-/// the harness's own rule for a dead organ and not this test's doing. The
-/// record the path wrote names both. Per `weaver-harness-Spec` section 6.1
+/// refused after the load; the run serves on past its organs' deaths
+/// (`weaver-admin-Spec` 3.0, the organ-death table), and admin's rollback
+/// leave, which the peer sends as admin's load does, ends it. The record
+/// the path wrote names both. Per `weaver-harness-Spec` section 6.1
 /// and `weaver-trace-Spec` section 3.
 ///
 /// Perturbation: have `serve` keep a compiled composer instead of the one it
@@ -725,13 +735,23 @@ fn the_load_names_what_serve_was_handed_and_what_the_enter_carried() {
                 panic!("no answer ({error}): service ended with {ended:?}");
             }
         }
-        // Service ends on the organs' death, after the refusal was answered:
-        // the join is what proves serving did not panic. The peer holds the
-        // scratch directory, so it outlives the read of the record.
+        // Admin's load rolls back a refused enter with a forced leave; the
+        // run, serving on past its dead organs, leaves on it, and the join
+        // is what proves serving did not panic. The peer holds the scratch
+        // directory, so it outlives the read of the record.
+        peer.send(
+            2,
+            LifecycleDirective::Leave {
+                cause: weaver_types::Cause { uid: 0 },
+                forced: true,
+                rollback: true,
+            },
+        );
+        let left = peer.try_read();
         let outcome = handle.join().expect("service thread did not panic");
         assert!(
-            matches!(outcome, Err(weaver_harness::ChannelFault::Closed)),
-            "service ended on the dead organs, not by a panic: {outcome:?}"
+            matches!(outcome, Ok(weaver_harness::Outcome::Left)),
+            "service ended on the rollback's leave, not by a panic: {outcome:?} (answered {left:?})"
         );
         let held = std::fs::read_to_string(&sink_path).expect("the sink reads back");
         let load: serde_json::Value =

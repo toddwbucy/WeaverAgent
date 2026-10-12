@@ -26,10 +26,6 @@ pub enum Leave {
 /// The run's position, as the tables name it. S4 and S6 carry the leave's
 /// state; S5 is graceful by definition, a forced leave running no wind-down;
 /// S10 is a force's.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "constructed by the lifecycle plumbing, PR B")
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Position {
     S2(Spu),
@@ -57,11 +53,36 @@ pub enum Binding {
     Diagnostic,
 }
 
+/// Where a pending leave stands among 3.0's states (`weaver-harness-Spec`
+/// section 6, the graceful leave's items): draining (S4), winding down (S5),
+/// lowering and taking the save point (S6), releasing (S7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaveStep {
+    Draining,
+    WindingDown,
+    Lowering,
+    Saving,
+    Releasing,
+}
+
+/// A pending leave's progress, the part of it the position is derived from:
+/// how it was directed, what it is now (a join, a bound or a dead organ
+/// turning a graceful one forced), and its step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LeaveProgress {
+    pub directed: Leave,
+    pub leave: Leave,
+    pub step: LeaveStep,
+}
+
 /// An event meeting the run, one per column of the two tables but the worker's
 /// own death.
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "constructed by the lifecycle plumbing, PR B")
+    expect(
+        dead_code,
+        reason = "ToolReturn, BoundPasses, MemberDies and RelayDies are cells the harness meets without asking the table: the engine's interrupt, the leave's deadlines, the retired seam and the relay's own lane"
+    )
 )]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
@@ -180,13 +201,6 @@ pub enum Response {
 
 /// **The two tables, one exhaustive match and no wildcard arm**: a new position
 /// or event does not compile until it has a cell.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into the leave by the lifecycle plumbing, PR B"
-    )
-)]
 pub fn respond(position: Position, event: Event) -> Response {
     use Binding::{Diagnostic, Serving};
     use Event::*;
@@ -281,13 +295,6 @@ pub fn respond(position: Position, event: Event) -> Response {
 /// **Ruling (A) at the leave's arrival**: a graceful leave directed with the
 /// gate or the SPU dead starts forced from where it stands, the graceful
 /// caller's cause kept and no `forced_by` authored.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into the leave by the lifecycle plumbing, PR B"
-    )
-)]
 pub fn leave_on_arrival(directed: Leave, gate_or_spu_dead: bool) -> Leave {
     match (directed, gate_or_spu_dead) {
         (Leave::Graceful, false) => Leave::Graceful,

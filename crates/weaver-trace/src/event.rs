@@ -603,7 +603,8 @@ pub enum ReleaseOutcome {
 }
 
 /// The member's release: it has no release exchange, so `Closed` says only that
-/// the harness closed the state seam, never that the member was seen to exit.
+/// the harness closed its ask end of the state seam, never that the member was
+/// seen to exit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemberRelease {
