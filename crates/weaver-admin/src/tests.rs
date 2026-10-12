@@ -1417,6 +1417,22 @@ fn show_reads_the_lock_and_names_the_constituents() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// **A save point asked of a worker that is gone refuses `OutOfOrder`**
+/// (`weaver-admin-Spec` 3.0, S8b x save-point: no worker): the run lock is
+/// held by a constituent and no worker listens, so the verb table answers
+/// `OutOfOrder` rather than the dial's `Unanswered`. Perturbation: dial the
+/// harness without observing, and the verb answers `Unanswered`.
+#[test]
+fn s8b_save_point_refuses_out_of_order() {
+    let (config, _scratch) = scratch_config("s8b-save-point");
+    let agent = AgentName("alpha".into());
+    let mut holder = stand_in_holder(&config);
+    let answered = save_point(&config, &agent);
+    let _ = holder.kill();
+    let _ = holder.wait();
+    assert_eq!(answered, Err(LifecycleRefusal::OutOfOrder));
+}
+
 /// A scratch coordination root for one test, with the agent's run
 /// directory made inside it as this test's user.
 fn scratch_config(tag: &str) -> (ServiceConfig, crate::scratch::Scratch) {
@@ -1803,9 +1819,14 @@ fn the_save_point_verb_answers_the_report_and_is_out_of_order_without_a_run() {
     let mut holder = stand_in_holder(&config);
     let worker = recording_worker(
         &config,
-        vec![weaver_types::Payload::Answer(
-            LifecycleAnswer::SavePointTaken { report: report() },
-        )],
+        vec![
+            weaver_types::Payload::Answer(LifecycleAnswer::State {
+                state: weaver_types::AgentState::Idle,
+                load: None,
+                constituents: Vec::new(),
+            }),
+            weaver_types::Payload::Answer(LifecycleAnswer::SavePointTaken { report: report() }),
+        ],
     );
     // This box holds no member account and the fixture no room, so
     // nothing is published and the verb refuses rather than answering a
@@ -1822,8 +1843,13 @@ fn the_save_point_verb_answers_the_report_and_is_out_of_order_without_a_run() {
         "answers only a published save point"
     );
     let directed = worker.join().unwrap();
+    // The verb observes first, by the verb table (3.0), then directs.
     assert!(matches!(
         directed[0],
+        weaver_types::Payload::Directive(LifecycleDirective::Observe)
+    ));
+    assert!(matches!(
+        directed[1],
         weaver_types::Payload::Directive(LifecycleDirective::SavePoint { .. })
     ));
     let _ = holder.kill();
@@ -1834,11 +1860,16 @@ fn the_save_point_verb_answers_the_report_and_is_out_of_order_without_a_run() {
     let mut holder = stand_in_holder(&config);
     let worker = recording_worker(
         &config,
-        vec![weaver_types::Payload::Answer(
-            LifecycleAnswer::SavePointTaken {
+        vec![
+            weaver_types::Payload::Answer(LifecycleAnswer::State {
+                state: weaver_types::AgentState::Idle,
+                load: None,
+                constituents: Vec::new(),
+            }),
+            weaver_types::Payload::Answer(LifecycleAnswer::SavePointTaken {
                 report: report.clone(),
-            },
-        )],
+            }),
+        ],
     );
     let answered = save_point(&config, &agent);
     let _ = worker.join();

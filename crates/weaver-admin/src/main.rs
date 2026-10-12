@@ -1007,6 +1007,9 @@ enum Observation {
         weaver_types::AgentState,
         Option<Box<weaver_types::LoadFacts>>,
     ),
+    /// The worker answered `InTransition`: a leave is pending
+    /// (`weaver-types-Spec` section 3.1).
+    InTransition,
     /// No worker listens: no name bound, or the connection refused, through
     /// the dial's whole bound.
     NoListener,
@@ -1036,11 +1039,43 @@ fn observe(config: &ServiceConfig) -> Result<Observation, LifecycleRefusal> {
             weaver_types::Payload::Answer(LifecycleAnswer::State { state, load, .. }) => {
                 Ok(Observation::State(state, load))
             }
+            // The harness's answer while a leave is pending, not a state.
+            weaver_types::Payload::Answer(LifecycleAnswer::InTransition) => {
+                Ok(Observation::InTransition)
+            }
             weaver_types::Payload::Refusal(refusal) => Err(refusal),
             _ => Err(LifecycleRefusal::Malformed),
         },
         Err(_) => Ok(Observation::Silent),
     }
+}
+
+/// **What admin sees with the invocation lock its own** (`weaver-admin-Spec`
+/// 3.0, the verb table; `verb_table`'s `Seen`): the run lock first, then,
+/// where it is held, the worker's word to `Observe`. Answers the load's facts
+/// beside it where the worker named them, for `show`'s rung (i). A worker
+/// that refuses the observation is the caller's to read: `show` answers the
+/// refusal, `unload` reads it as silence.
+fn see_run(
+    config: &ServiceConfig,
+) -> Result<(verb_table::Seen, Option<Box<weaver_types::LoadFacts>>), LifecycleRefusal> {
+    use verb_table::{Seen, WorkerSeen};
+    if !start::run_lock_held(&config.run_directory())? {
+        return Ok((Seen::RunLockFree, None));
+    }
+    let (worker, load) = match observe(config)? {
+        Observation::State(weaver_types::AgentState::Idle, load) => (WorkerSeen::Idle, load),
+        Observation::State(weaver_types::AgentState::Active, load) => (WorkerSeen::Active, load),
+        // A worker answering that nothing is resident: a run never entered.
+        Observation::State(
+            weaver_types::AgentState::Unloaded | weaver_types::AgentState::Absent,
+            _,
+        ) => (WorkerSeen::Unloaded, None),
+        Observation::InTransition => (WorkerSeen::InTransition, None),
+        Observation::NoListener => (WorkerSeen::NoSocket, None),
+        Observation::Silent => (WorkerSeen::Silent, None),
+    };
+    Ok((Seen::RunLockHeld(worker), load))
 }
 
 /// What a load has stood up, for its rollback: the run lock it took, whether
@@ -1426,9 +1461,16 @@ fn save_point(
     let run_directory = config.run_directory();
     let _invocation =
         start::take_invocation_lock(&run_directory, verb_table::HolderVerb::SavePoint)?;
-    if !start::run_lock_held(&run_directory)? {
-        diag!("weaver-admin: no run stands, and a save point is taken of a running agent alone");
-        return Err(LifecycleRefusal::OutOfOrder);
+    // **By the verb table** (3.0): a save point is directed to a worker
+    // that answers or is wedged; with none to take it (down, a leave
+    // pending, a run never entered, the worker gone) it is out of order.
+    let (seen, _) = see_run(config)?;
+    match verb_table::act(verb_table::Verb::SavePoint, verb_table::class_of(seen)) {
+        verb_table::VerbAction::DirectSavePoint => {}
+        _ => {
+            diag!("weaver-admin: no worker stands to take a save point");
+            return Err(LifecycleRefusal::OutOfOrder);
+        }
     }
     let mut coordination =
         channel::dial(&config.coordination_socket()).map_err(|_| LifecycleRefusal::Unanswered)?;
@@ -1706,6 +1748,8 @@ fn show(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
     }
     let (state, load) = match observe(config)? {
         Observation::State(state, load) => (state, load),
+        // A leave pending: the worker's word (the ladder's rung (i)).
+        Observation::InTransition => return Ok(LifecycleAnswer::InTransition),
         // The lock held with no worker listening: a run that never entered,
         // whose constituents the caller may end with `unload`.
         Observation::NoListener => (weaver_types::AgentState::Unloaded, None),
@@ -1797,7 +1841,7 @@ fn unload_within(
         Observation::State(weaver_types::AgentState::Unloaded, _) | Observation::NoListener => {
             false
         }
-        Observation::State(..) | Observation::Silent => true,
+        Observation::State(..) | Observation::InTransition | Observation::Silent => true,
     };
     if entered {
         match direct_leave_within(config, leave_deadline, LeaveDirected::of_unload(forced)) {
