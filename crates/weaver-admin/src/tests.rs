@@ -1789,6 +1789,74 @@ fn a_force_beside_an_unload_joins_and_both_conclude_once() {
     );
 }
 
+/// **A joined force answered `Left` takes the invocation lock before the
+/// run lock frees** (`weaver-admin-Spec` 3.0, the conclusion: "it takes the
+/// invocation lock first"; Codex on #126, round 1): the holder lets go while
+/// the run's processes still stand, and the force holds the lock from then
+/// on, so a `load` meeting it in that gap, another process, is refused
+/// rather than starting a run the force would answer `Unloaded` over; the
+/// force then waits the run out and concludes the old run by its `Left`'s
+/// row. Perturbation: wait on the run lock first, and the load takes the
+/// lock.
+#[test]
+fn a_joined_force_holds_the_lock_before_the_run_ends() {
+    let (config, _scratch) = scratch_config("join-lock-first");
+    save_points::write_marker(
+        &config.root,
+        Some(&save_points::Marker::Open { run: "r-1".into() }),
+    )
+    .unwrap();
+    let run = stand_in_holder(&config);
+    let holder = holding_as(&config, "unload");
+    let worker = recording_worker(&config, vec![left_forced()]);
+    let run_directory = config.run_directory();
+    let gap = std::thread::spawn(move || {
+        let _ = worker.join();
+        end(holder);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        // The gap: the holder gone, the run still standing. A load in
+        // another process tries the lock without waiting; refused, the
+        // stand-in's take panics and it exits.
+        let mut load = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "start::tests::holder_stand_in",
+                "--test-threads",
+                "1",
+            ])
+            .env("WEAVER_ADMIN_HOLDER_DIR", &run_directory)
+            .env("WEAVER_ADMIN_HOLDER_MODE", "take:load")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let refused = loop {
+            if let Some(status) = load.try_wait().unwrap() {
+                break !status.success();
+            }
+            if std::time::Instant::now() >= until {
+                break false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        end(load);
+        end(run);
+        refused
+    });
+    let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+    assert!(
+        gap.join().unwrap(),
+        "the load in the gap was refused the lock"
+    );
+    assert_eq!(answered, unloaded());
+    assert_eq!(
+        save_points::read_marker(&config.root),
+        Some(save_points::Marker::Forced { run: "r-1".into() }),
+        "the old run concluded by its Left's row"
+    );
+}
+
 /// **A join refused `OutOfOrder` is retried every second while the
 /// holder's verb stays `unload`** (`weaver-admin-Spec` 3.0, the forced
 /// unload, joining): the refusal means only that the unload has not yet

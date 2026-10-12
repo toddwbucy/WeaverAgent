@@ -2108,12 +2108,16 @@ fn join_within(
     }
 }
 
-/// **The joined force answered `Left` waits for the holder's conclusion**
-/// (Spec section 3, the forced unload, joining, and the after-left wait):
-/// the run lock frees within the after-left wait or the run's processes are
-/// ended lock-free, and the force then takes the invocation lock behind the
-/// holder, which concludes first, and concludes by its own `Left`, finding
-/// the marker closed where the holder did and changing nothing.
+/// **The joined force answered `Left` concludes behind the holder**
+/// (Spec 3.0, the conclusion: "it takes the invocation lock first"): it
+/// queues on the invocation lock behind the holder, which concludes first,
+/// and only then, holding the lock, waits for the run lock (the after-left
+/// wait, the processes ended where they outlive it) and concludes by its own
+/// `Left`, finding the marker closed where the holder did and changing
+/// nothing. **The lock comes first** (Codex on #126, round 1): a force that
+/// waited on the run lock first left a gap after the holder let go, in
+/// which a `load` could take the lock and start a run the force then
+/// answered `Unloaded` over.
 fn wait_after_left(
     config: &ServiceConfig,
     bounds: UnloadBounds,
@@ -2121,9 +2125,9 @@ fn wait_after_left(
     left: &Left,
 ) -> Result<LifecycleAnswer, LifecycleRefusal> {
     let run_directory = config.run_directory();
-    end_after_left(&run_directory, bounds)?;
     let _behind =
         start::take_invocation_lock_waiting(&run_directory, verb_table::HolderVerb::ForceUnload)?;
+    end_after_left(&run_directory, bounds)?;
     let run = run_noted(config, run)?;
     conclude_answered(config, run.as_deref(), left)
 }
