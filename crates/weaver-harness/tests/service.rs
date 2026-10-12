@@ -613,7 +613,7 @@ fn the_listener_survives_an_accept() {
 /// The enter payload a serving load carries, against organs that do not
 /// exist: the load is authored before the fan-out fails, which is what lets
 /// a test read the record the production path wrote.
-fn serving_enter(session: &str) -> LifecycleDirective {
+fn serving_enter(session: &str, bounds: (Option<u64>, Option<u64>)) -> LifecycleDirective {
     LifecycleDirective::Enter {
         payload: Box::new(weaver_types::EnterPayload {
             session: weaver_types::SessionId(session.into()),
@@ -651,8 +651,8 @@ fn serving_enter(session: &str) -> LifecycleDirective {
             cause: weaver_types::Cause { uid: 0 },
             operator: 1000,
             library_path: None,
-            drain_bound: None,
-            wind_down_bound: None,
+            drain_bound: bounds.0,
+            wind_down_bound: bounds.1,
             state_election: weaver_types::StateElection {
                 all_kinds: false,
                 keys: Vec::new(),
@@ -670,11 +670,14 @@ fn serving_enter(session: &str) -> LifecycleDirective {
 /// (`weaver-admin-Spec` 3.0, the organ-death table), and admin's rollback
 /// leave, which the peer sends as admin's load does, ends it. The record
 /// the path wrote names both. Per `weaver-harness-Spec` section 6.1
-/// and `weaver-trace-Spec` section 3.
+/// and `weaver-trace-Spec` section 3. **The run's observation carries the
+/// bounds the enter declared** (`weaver-admin-Spec` 3.0, the bounds), and
+/// none where it declared none, read before the rollback.
 ///
 /// Perturbation: have `serve` keep a compiled composer instead of the one it
 /// was handed, and this fails on the binary, the first member read back.
-/// Watched under exactly that change.
+/// Watched under exactly that change. Fill the load's bounds with none, and
+/// the declared case fails on the observation.
 #[test]
 fn the_load_names_what_serve_was_handed_and_what_the_enter_carried() {
     if !root_or_skip("the_load_names_what_serve_was_handed_and_what_the_enter_carried") {
@@ -720,7 +723,12 @@ fn the_load_names_what_serve_was_handed_and_what_the_enter_carried() {
                 }
             })
         });
-        peer.send_with(1, serving_enter("s-named"), &descriptors);
+        let bounds = if standing {
+            (Some(7), Some(9))
+        } else {
+            (None, None)
+        };
+        peer.send_with(1, serving_enter("s-named", bounds), &descriptors);
         match peer.try_read() {
             Ok(Some(Payload::Refusal(_))) => {}
             Ok(Some(other)) => panic!("the missing organs refuse after the load, got {other:?}"),
@@ -735,12 +743,24 @@ fn the_load_names_what_serve_was_handed_and_what_the_enter_carried() {
                 panic!("no answer ({error}): service ended with {ended:?}");
             }
         }
+        peer.send(2, LifecycleDirective::Observe);
+        match peer.try_read() {
+            Ok(Some(Payload::Answer(weaver_types::LifecycleAnswer::State {
+                load: Some(load),
+                ..
+            }))) => assert_eq!(
+                (load.drain_bound, load.wind_down_bound),
+                bounds,
+                "the observation carries the bounds the enter declared"
+            ),
+            other => panic!("the standing run observes with its load, got {other:?}"),
+        }
         // Admin's load rolls back a refused enter with a forced leave; the
         // run, serving on past its dead organs, leaves on it, and the join
         // is what proves serving did not panic. The peer holds the scratch
         // directory, so it outlives the read of the record.
         peer.send(
-            2,
+            3,
             LifecycleDirective::Leave {
                 cause: weaver_types::Cause { uid: 0 },
                 forced: true,

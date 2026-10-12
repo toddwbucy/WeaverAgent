@@ -2239,6 +2239,11 @@ impl Harness {
                         sha256: loop_identity.sha256,
                     }
                 },
+                // **The bounds the run holds ride on its facts**, from the
+                // enter alone (`weaver-harness-Spec` section 6), so admin's
+                // deadline reads what this run times its leave by.
+                drain_bound: payload.drain_bound,
+                wind_down_bound: payload.wind_down_bound,
             },
             fullness: None,
             pressure_reported: false,
@@ -4143,6 +4148,8 @@ mod tests {
                         file: None,
                         sha256: None,
                     },
+                    drain_bound: None,
+                    wind_down_bound: None,
                 },
                 fullness: None,
                 pressure_reported: false,

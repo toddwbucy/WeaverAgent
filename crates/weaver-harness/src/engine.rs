@@ -2420,6 +2420,8 @@ pub(crate) fn test_load_facts() -> weaver_types::LoadFacts {
             file: None,
             sha256: None,
         },
+        drain_bound: None,
+        wind_down_bound: None,
     }
 }
 

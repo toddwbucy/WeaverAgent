@@ -93,6 +93,8 @@ fn the_boxed_payloads_cross_as_the_payloads_do() {
                 file: None,
                 sha256: None,
             },
+            drain_bound: None,
+            wind_down_bound: None,
         })),
         constituents: Vec::new(),
     };
@@ -735,6 +737,57 @@ fn an_enter_with_one_bound_round_trips_with_the_other_absent() {
         let back: weaver_types::EnterPayload = serde_json::from_str(&json).expect("reads");
         assert_eq!(back, payload);
     }
+}
+
+/// **The load's facts carry the declared bounds only where declared**
+/// (`weaver-types-Spec` section 4.2, on the Planner's ruling of 2026-10-12,
+/// B3): a run that declared none answers byte-identical to the shape
+/// `the_boxed_payloads_cross_as_the_payloads_do` pins; one that declared both
+/// carries them, and both read back. Perturbation: drop the skip, and the
+/// undeclared run's answer gains two fields on the wire.
+#[test]
+fn load_facts_carry_the_declared_bounds_only_where_declared() {
+    let facts = |drain_bound, wind_down_bound| weaver_types::LoadFacts {
+        session: weaver_types::SessionId("s-1".into()),
+        run: weaver_types::RunId("r-1".into()),
+        declaration: "d".into(),
+        artifact: weaver_types::ArtifactRef("a".into()),
+        residual_readout: false,
+        field: None,
+        surprisal: false,
+        state_election: weaver_types::StateElection {
+            all_kinds: false,
+            keys: Vec::new(),
+        },
+        state_store: weaver_types::StateStore::default(),
+        state_member: false,
+        composer: weaver_types::Composer {
+            binary: "b".into(),
+            file: None,
+            sha256: None,
+        },
+        drain_bound,
+        wind_down_bound,
+    };
+    let silent = serde_json::to_string(&facts(None, None)).expect("renders");
+    assert!(
+        silent.ends_with(r#""composer":{"binary":"b"}}"#),
+        "{silent}"
+    );
+    let declared = facts(Some(30), Some(60));
+    let wire = serde_json::to_string(&declared).expect("renders");
+    assert!(
+        wire.ends_with(r#""composer":{"binary":"b"},"drain_bound":30,"wind_down_bound":60}"#),
+        "{wire}"
+    );
+    assert_eq!(
+        serde_json::from_str::<weaver_types::LoadFacts>(&wire).expect("reads"),
+        declared
+    );
+    assert_eq!(
+        serde_json::from_str::<weaver_types::LoadFacts>(&silent).expect("reads"),
+        facts(None, None)
+    );
 }
 
 /// **`InTransition` names the run's constituents only where admin fills

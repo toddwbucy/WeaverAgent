@@ -1660,13 +1660,9 @@ fn roll_back(config: &ServiceConfig, standing: &mut Standing) -> String {
     // **The run being undone leaves forced** (the #94 survey's S10): it
     // takes no save point, a run rolled back having nothing to keep, and
     // its `unload` says forced.
-    let leave = standing.entered.then(|| {
-        direct_leave_within(
-            config,
-            std::time::Instant::now() + LEAVE_BOUND,
-            LeaveDirected::Rollback,
-        )
-    });
+    let leave = standing
+        .entered
+        .then(|| direct_leave_within(config, LEAVE_BOUND, LeaveDirected::Rollback));
     let left = matches!(leave, Some(Ok(_)));
     // **A run whose `load` is on the trace leaves the marker open on it**
     // (the #94 survey's S10, and the operator's ruling of 2026-10-08 on #99,
@@ -1866,8 +1862,12 @@ struct UnloadBounds {
 }
 
 /// Spec section 3's values: the leave's 150 seconds, thirty after `left`,
-/// ten from `SIGTERM` to `SIGKILL` and five for the last read, at most 195
-/// seconds in all, a number WeaverWeb builds against.
+/// ten from `SIGTERM` to `SIGKILL` and five for the last read. A forced
+/// unload holds the invocation lock at most 202 seconds before its
+/// publication: the observation's dial 1 and answer 5, the leave's dial 1,
+/// the leave 150, the escalation 45 (thirty, ten and five); a graceful one
+/// those past its declared drain and wind-down bounds, or without a deadline
+/// where either is undeclared. A number WeaverWeb builds against.
 const UNLOAD_BOUNDS: UnloadBounds = UnloadBounds {
     leave: LEAVE_BOUND,
     after_left: start::AFTER_LEFT,
@@ -1889,17 +1889,16 @@ fn unload_within(
     } else {
         start::take_invocation_lock(&run_directory, verb_table::HolderVerb::Unload)?
     };
-    // **The leave's budget runs from here**, per Spec section 3: the
-    // observation and both dials spend it, so the verb holds the invocation
-    // lock at most the leave's 150 seconds and the escalation's forty-five.
-    let leave_deadline = std::time::Instant::now() + bounds.leave;
     // **A refused observation is silence**, `unload`'s promise being to end
     // whatever holds the lock: it directs leave as for any silent run.
-    let seen = if start::run_lock_held(&run_directory)? {
-        let (worker, _) = worker_seen(observe(config).unwrap_or(Observation::Silent));
-        verb_table::Seen::RunLockHeld(worker)
+    let (seen, window) = if start::run_lock_held(&run_directory)? {
+        let (worker, load) = worker_seen(observe(config).unwrap_or(Observation::Silent));
+        (
+            verb_table::Seen::RunLockHeld(worker),
+            leave_window(bounds, forced, worker, load.as_deref()),
+        )
     } else {
-        verb_table::Seen::RunLockFree
+        (verb_table::Seen::RunLockFree, bounds.leave)
     };
     let verb = if forced {
         verb_table::Verb::ForceUnload
@@ -1912,13 +1911,13 @@ fn unload_within(
         // cause the marker holds.
         verb_table::VerbAction::PublishRoomThenUnloaded => conclude_ended(config),
         verb_table::VerbAction::DirectLeave | verb_table::VerbAction::DirectForcedLeave => {
-            leave_within(config, bounds, leave_deadline, forced, false)
+            leave_within(config, bounds, window, forced, false)
         }
         // **A force on a pending leave or a run never entered directs its
         // forced leave first** (3.0, outside the envelope), and only where the
         // harness refuses it `OutOfOrder` ends the run by the escalation.
         verb_table::VerbAction::ForcedLeaveElseEscalateForced => {
-            leave_within(config, bounds, leave_deadline, true, true)
+            leave_within(config, bounds, bounds.leave, true, true)
         }
         // **No worker listens, or none entered** (3.0, S8b): the escalation
         // ends what holds the run lock, then the S0d path publishes the room
@@ -1947,6 +1946,42 @@ fn unload_within(
         | verb_table::VerbAction::ShowInTransitionConstituents => {
             Err(LifecycleRefusal::InvocationInFlight)
         }
+    }
+}
+
+/// **The leave's window, from its direction** (Spec section 3, the leave's
+/// bound; 3.0, the bounds), run from the moment the leave is sent, the
+/// observation having spent its own bound. A forced leave has the leave's
+/// bound. A graceful one has it past the drain and wind-down bounds the run
+/// holds, read from the observation's load facts, the harness's own (so the
+/// two agree by construction), with no deadline where either is undeclared,
+/// a joining force the recourse. **Where the observation taught no bounds**,
+/// a silent harness or a leave pending, the leave's bound alone. The sum
+/// saturates: a bound past the clock reads as no deadline.
+fn leave_window(
+    bounds: UnloadBounds,
+    forced: bool,
+    worker: verb_table::WorkerSeen,
+    load: Option<&weaver_types::LoadFacts>,
+) -> std::time::Duration {
+    use verb_table::WorkerSeen;
+    if forced {
+        return bounds.leave;
+    }
+    match worker {
+        WorkerSeen::Idle | WorkerSeen::Active => {
+            match load.map(|facts| (facts.drain_bound, facts.wind_down_bound)) {
+                Some((Some(drain), Some(wind_down))) => bounds
+                    .leave
+                    .saturating_add(std::time::Duration::from_secs(drain))
+                    .saturating_add(std::time::Duration::from_secs(wind_down)),
+                _ => std::time::Duration::MAX,
+            }
+        }
+        WorkerSeen::Silent
+        | WorkerSeen::InTransition
+        | WorkerSeen::Unloaded
+        | WorkerSeen::NoSocket => bounds.leave,
     }
 }
 
@@ -2138,12 +2173,12 @@ fn escalate_joined(
 fn leave_within(
     config: &ServiceConfig,
     bounds: UnloadBounds,
-    leave_deadline: std::time::Instant,
+    window: std::time::Duration,
     forced: bool,
     escalate_out_of_order: bool,
 ) -> Result<LifecycleAnswer, LifecycleRefusal> {
     let run_directory = config.run_directory();
-    match direct_leave_within(config, leave_deadline, LeaveDirected::of_unload(forced)) {
+    match direct_leave_within(config, window, LeaveDirected::of_unload(forced)) {
         Ok(left) => {
             // **A leave whose lock outlives the after-left wait keeps its
             // save point** (the #94 survey's S7): the escalation ends the
@@ -2571,14 +2606,15 @@ impl LeaveDirected {
 }
 
 /// Directs leave, graceful, forced or a rollback, and waits for its answer
-/// until `deadline`, the dial spending nothing of the bound. **The answer names
+/// `window` from the send, the dial spending nothing of it, `Duration::MAX`
+/// waiting without a deadline. **The answer names
 /// the leave's save point**, per `weaver-admin-harness-contract` section 3, none
 /// where none was taken (a rollback, a run with no state to keep, or a forced
 /// leave whose save point missed), so the publication that follows carries the
 /// event's position.
 fn direct_leave_within(
     config: &ServiceConfig,
-    deadline: std::time::Instant,
+    window: std::time::Duration,
     leave: LeaveDirected,
 ) -> Result<Left, LeaveFault> {
     let (forced, rollback) = match leave {
@@ -2600,7 +2636,7 @@ fn direct_leave_within(
             },
         )
         .map_err(|_| LeaveFault::Unanswered)?;
-    match coordination.recv_within(deadline.saturating_duration_since(std::time::Instant::now())) {
+    match coordination.recv_within(window) {
         Ok(answer) => match answer.payload {
             weaver_types::Payload::Answer(LifecycleAnswer::Left {
                 save_point,

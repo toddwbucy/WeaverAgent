@@ -2230,6 +2230,209 @@ fn another_runs_open_marker_is_left_alone() {
     assert_eq!(save_points::read_marker(&config.root), Some(theirs));
 }
 
+/// The worker's `Idle` word, its load's facts declaring `bounds`.
+fn idle_declaring(bounds: (Option<u64>, Option<u64>)) -> weaver_types::Payload {
+    weaver_types::Payload::Answer(LifecycleAnswer::State {
+        state: weaver_types::AgentState::Idle,
+        load: Some(Box::new(weaver_types::LoadFacts {
+            session: weaver_types::SessionId("s-1".into()),
+            run: weaver_types::RunId("r-1".into()),
+            declaration: String::new(),
+            artifact: weaver_types::ArtifactRef("a".into()),
+            residual_readout: false,
+            field: None,
+            surprisal: false,
+            state_election: weaver_types::StateElection {
+                all_kinds: false,
+                keys: Vec::new(),
+            },
+            state_store: weaver_types::StateStore::default(),
+            state_member: false,
+            composer: weaver_types::Composer {
+                binary: "b".into(),
+                file: None,
+                sha256: None,
+            },
+            drain_bound: bounds.0,
+            wind_down_bound: bounds.1,
+        })),
+        constituents: Vec::new(),
+    })
+}
+
+/// One unload against a run whose worker answers the observation `idle`
+/// after `observed` and the leave `Left{no_state}` after `left`; answers the
+/// verb's answer, how long it took, and the marker after. A `Left` concluded
+/// closes the marker; an escalation leaves it open, or `Forced` for a force.
+fn leave_timed(
+    tag: &str,
+    forced: bool,
+    idle: weaver_types::Payload,
+    observed: std::time::Duration,
+    left: std::time::Duration,
+) -> (
+    Result<LifecycleAnswer, LifecycleRefusal>,
+    std::time::Duration,
+    Option<save_points::Marker>,
+) {
+    let (config, _scratch) = scratch_config(tag);
+    save_points::write_marker(
+        &config.root,
+        Some(&save_points::Marker::Open { run: "r-1".into() }),
+    )
+    .unwrap();
+    let holder = stand_in_holder(&config);
+    let _worker = timed_worker(
+        &config,
+        vec![
+            (observed, idle),
+            (
+                left,
+                weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                    save_point: None,
+                    forced,
+                    no_state: true,
+                }),
+            ),
+        ],
+    );
+    let began = std::time::Instant::now();
+    let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, forced);
+    let took = began.elapsed();
+    end(holder);
+    (answered, took, save_points::read_marker(&config.root))
+}
+
+/// **The leave's deadline runs from its direction** (`weaver-admin-Spec`
+/// section 3, the leave's bound, as amended on #119): the observation
+/// spends its own bound, so a `Left` that lands inside the leave's bound
+/// from the send, though past it from the verb's start, concludes and is
+/// never escalated. Perturbation: take the deadline at the verb's start,
+/// and the leave is escalated, the marker `Forced`.
+#[test]
+fn the_leave_deadline_runs_from_the_leaves_direction() {
+    let step = TEST_UNLOAD_BOUNDS.leave * 3 / 4;
+    let (answered, took, marker) =
+        leave_timed("direction", true, idle_declaring((None, None)), step, step);
+    assert_eq!(answered, unloaded());
+    assert!(
+        took > TEST_UNLOAD_BOUNDS.leave,
+        "past the bound from the start: {took:?}"
+    );
+    assert_eq!(
+        marker,
+        Some(save_points::Marker::Closed { run: "r-1".into() }),
+        "the Left concluded, no escalation"
+    );
+}
+
+/// **An undeclared graceful unload is never escalated** (`weaver-admin-Spec`
+/// 3.0, the bounds): with either bound undeclared the graceful leave waits
+/// for `Left` without a deadline, a joining force the recourse.
+/// Perturbation: arm the leave's bound for every leave, and the late `Left`
+/// is escalated, the marker left open.
+#[test]
+fn an_undeclared_graceful_unload_is_never_escalated() {
+    for (tag, bounds) in [
+        ("undeclared", (None, None)),
+        ("drain-only", (Some(1), None)),
+    ] {
+        let late = TEST_UNLOAD_BOUNDS.leave + std::time::Duration::from_secs(1);
+        let (answered, _took, marker) = leave_timed(
+            tag,
+            false,
+            idle_declaring(bounds),
+            std::time::Duration::ZERO,
+            late,
+        );
+        assert_eq!(answered, unloaded(), "{tag}");
+        assert_eq!(
+            marker,
+            Some(save_points::Marker::Closed { run: "r-1".into() }),
+            "{tag}: the late Left concluded"
+        );
+    }
+}
+
+/// **A declared graceful unload waits the leave's bound past both declared
+/// bounds** (`weaver-admin-Spec` 3.0, the bounds): a `Left` inside the sum
+/// concludes; one past it is escalated, the marker left open for the next
+/// load's reset. Perturbation: wait the leave's bound alone, and the first
+/// `Left` is escalated.
+#[test]
+fn a_declared_graceful_unload_waits_the_sum_plus_150() {
+    let window = TEST_UNLOAD_BOUNDS.leave + std::time::Duration::from_secs(2);
+    let (answered, _took, marker) = leave_timed(
+        "declared-inside",
+        false,
+        idle_declaring((Some(1), Some(1))),
+        std::time::Duration::ZERO,
+        window - std::time::Duration::from_secs(1),
+    );
+    assert_eq!(answered, unloaded());
+    assert_eq!(
+        marker,
+        Some(save_points::Marker::Closed { run: "r-1".into() })
+    );
+    let (answered, took, marker) = leave_timed(
+        "declared-past",
+        false,
+        idle_declaring((Some(1), Some(1))),
+        std::time::Duration::ZERO,
+        window + std::time::Duration::from_secs(1),
+    );
+    assert_eq!(answered, unloaded());
+    assert!(took >= window, "waited the whole window: {took:?}");
+    assert_eq!(
+        marker,
+        Some(save_points::Marker::Open { run: "r-1".into() })
+    );
+}
+
+/// **A forced unload escalates at the leave's bound**, whatever the run
+/// declared (`weaver-admin-Spec` section 3, the leave's bound): its window
+/// is the leave's alone. Perturbation: follow the declared bounds on a
+/// force, and the late `Left` concludes instead.
+#[test]
+fn a_forced_unload_escalates_at_150() {
+    let (answered, took, marker) = leave_timed(
+        "forced-at-bound",
+        true,
+        idle_declaring((Some(100), Some(100))),
+        std::time::Duration::ZERO,
+        TEST_UNLOAD_BOUNDS.leave + std::time::Duration::from_secs(2),
+    );
+    assert_eq!(answered, unloaded());
+    assert!(
+        took < TEST_UNLOAD_BOUNDS.leave + std::time::Duration::from_secs(2),
+        "escalated at the bound: {took:?}"
+    );
+    assert_eq!(
+        marker,
+        Some(save_points::Marker::Forced { run: "r-1".into() })
+    );
+}
+
+/// **A bound near `u64::MAX` never escalates early and never panics**
+/// (`weaver-admin-Spec` 3.0, the bounds; the plan's review focus 3): the sum
+/// saturates and reads as no deadline. Perturbation: add the bounds with
+/// `+`, and the verb panics.
+#[test]
+fn an_unload_under_a_bound_near_u64_max_never_escalates_early() {
+    let (answered, _took, marker) = leave_timed(
+        "near-max",
+        false,
+        idle_declaring((Some(u64::MAX), Some(u64::MAX - 1))),
+        std::time::Duration::ZERO,
+        TEST_UNLOAD_BOUNDS.leave + std::time::Duration::from_secs(1),
+    );
+    assert_eq!(answered, unloaded());
+    assert_eq!(
+        marker,
+        Some(save_points::Marker::Closed { run: "r-1".into() })
+    );
+}
+
 /// A scratch coordination root for one test, with the agent's run
 /// directory made inside it as this test's user.
 fn scratch_config(tag: &str) -> (ServiceConfig, crate::scratch::Scratch) {
@@ -2413,6 +2616,21 @@ fn recording_worker(
     config: &ServiceConfig,
     answers: Vec<weaver_types::Payload>,
 ) -> std::thread::JoinHandle<Vec<weaver_types::Payload>> {
+    timed_worker(
+        config,
+        answers
+            .into_iter()
+            .map(|payload| (std::time::Duration::ZERO, payload))
+            .collect(),
+    )
+}
+
+/// `recording_worker`, each answer sent its delay after the directive it
+/// answers was read, so a test can place an answer against admin's bounds.
+fn timed_worker(
+    config: &ServiceConfig,
+    answers: Vec<(std::time::Duration, weaver_types::Payload)>,
+) -> std::thread::JoinHandle<Vec<weaver_types::Payload>> {
     let listener = silent_worker(config);
     nix::fcntl::fcntl(
         &listener,
@@ -2421,7 +2639,7 @@ fn recording_worker(
     .unwrap();
     std::thread::spawn(move || {
         let mut directed = Vec::new();
-        for payload in answers {
+        for (delay, payload) in answers {
             // A dial that never comes ends the worker rather than hanging
             // the test that joins it.
             let Some(raw) = accept_within(&listener, std::time::Duration::from_secs(5)) else {
@@ -2431,6 +2649,7 @@ fn recording_worker(
             let peer = channel::Coordination::adopt(fd);
             let Ok(request) = peer.recv() else { break };
             directed.push(request.payload);
+            std::thread::sleep(delay);
             let _ = peer.send(&weaver_types::OrganEnvelope {
                 exchange: request.exchange,
                 position: weaver_types::Position::Close,
