@@ -1682,8 +1682,26 @@ fn roll_back(config: &ServiceConfig, standing: &mut Standing) -> String {
         Some(Err(LeaveFault::Refused(LifecycleRefusal::OutOfOrder))) => false,
         Some(_) => true,
     };
-    let marker = match (&standing.run_reference, load_on_trace) {
-        (Some(run), true) => Some(Some(save_points::Marker::Open { run: run.clone() })),
+    // The rollback's row of the outcome table (3.0, the conclusion's row 1):
+    // a rollback's `Leave` is forced and takes no save point, so its row is
+    // reached whatever the leave answered.
+    let row = conclusion::classify(conclusion::Seen {
+        rollback: Some(load_on_trace),
+        territory_judged: !config.territory_unjudged,
+        forced: true,
+        no_state: false,
+        reported: None,
+    })
+    .map(conclusion::conclude);
+    let write = match row {
+        Ok(conclusion::Conclusion::Settled(outcome)) => outcome.marker,
+        // Unreachable by the table: the conservative label, the run named.
+        Ok(conclusion::Conclusion::Publish { .. }) | Err(_) => conclusion::MarkerWrite::Open,
+    };
+    let marker = match (&standing.run_reference, write) {
+        (Some(run), conclusion::MarkerWrite::Open) => {
+            Some(Some(save_points::Marker::Open { run: run.clone() }))
+        }
         _ => standing.marker_before.take(),
     };
     if let Some(marker) = marker {
@@ -1966,7 +1984,13 @@ fn take_or_join(config: &ServiceConfig, bounds: UnloadBounds) -> Result<Taken, L
         };
         match verb_table::act(verb_table::Verb::ForceUnload, verb_table::class_of(seen)) {
             verb_table::VerbAction::Join => {
-                if let Some(answer) = join_within(config, bounds)? {
+                // **The run the force ends is the one the marker stands open
+                // on as it joins**, read holding nothing: the conclusion and
+                // the escalation's `Forced` close that run only, a load that
+                // takes the lock between the holder and the force having
+                // opened another (section 4, the marker-write rule (c)).
+                let run = open_run(config).unwrap_or(None);
+                if let Some(answer) = join_within(config, bounds, run.as_deref())? {
                     return Ok(Taken::Joined(answer));
                 }
             }
@@ -1985,6 +2009,7 @@ fn take_or_join(config: &ServiceConfig, bounds: UnloadBounds) -> Result<Taken, L
 fn join_within(
     config: &ServiceConfig,
     bounds: UnloadBounds,
+    run: Option<&str>,
 ) -> Result<Option<LifecycleAnswer>, LifecycleRefusal> {
     let run_directory = config.run_directory();
     loop {
@@ -1996,10 +2021,10 @@ fn join_within(
             match channel::dial(&config.coordination_socket()) {
                 Ok(coordination) => break coordination,
                 Err(channel::ChannelFault::NoListener) => {
-                    return wait_after_seal(config, bounds).map(Some);
+                    return wait_after_seal(config, bounds, run).map(Some);
                 }
                 Err(_) if std::time::Instant::now() < deadline => {}
-                Err(_) => return escalate_joined(config, bounds).map(Some),
+                Err(_) => return escalate_joined(config, bounds, run).map(Some),
             }
         };
         let ordinal = coordination.next_ordinal();
@@ -2012,14 +2037,23 @@ fn join_within(
             )
             .is_err()
         {
-            return escalate_joined(config, bounds).map(Some);
+            return escalate_joined(config, bounds, run).map(Some);
         }
         match coordination
             .recv_within(deadline.saturating_duration_since(std::time::Instant::now()))
         {
             Ok(answer) => match answer.payload {
-                weaver_types::Payload::Answer(LifecycleAnswer::Left { .. }) => {
-                    return wait_after_left(config, bounds).map(Some);
+                weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                    save_point,
+                    forced,
+                    no_state,
+                }) => {
+                    let left = Left {
+                        save_point,
+                        forced,
+                        no_state,
+                    };
+                    return wait_after_left(config, bounds, run, &left).map(Some);
                 }
                 weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder) => {
                     std::thread::sleep(JOIN_RETRY);
@@ -2032,7 +2066,7 @@ fn join_within(
                 weaver_types::Payload::Refusal(refusal) => return Err(refusal),
                 _ => return Err(LifecycleRefusal::Malformed),
             },
-            Err(_) => return escalate_joined(config, bounds).map(Some),
+            Err(_) => return escalate_joined(config, bounds, run).map(Some),
         }
     }
 }
@@ -2041,10 +2075,13 @@ fn join_within(
 /// (Spec section 3, the forced unload, joining, and the after-left wait):
 /// the run lock frees within the after-left wait or the run's processes are
 /// ended lock-free, and the force then takes the invocation lock behind the
-/// holder, which concludes first. Holding a `Left`, it writes no `Forced`.
+/// holder, which concludes first, and concludes by its own `Left`, finding
+/// the marker closed where the holder did and changing nothing.
 fn wait_after_left(
     config: &ServiceConfig,
     bounds: UnloadBounds,
+    run: Option<&str>,
+    left: &Left,
 ) -> Result<LifecycleAnswer, LifecycleRefusal> {
     let run_directory = config.run_directory();
     if !start::wait_free(&run_directory, bounds.after_left) {
@@ -2052,7 +2089,7 @@ fn wait_after_left(
     }
     let _behind =
         start::take_invocation_lock_waiting(&run_directory, verb_table::HolderVerb::ForceUnload)?;
-    Ok(unloaded_answer())
+    conclude_answered(config, run, left)
 }
 
 /// **The joined force waits for the unload's conclusion** (Spec section 3,
@@ -2064,10 +2101,11 @@ fn wait_after_left(
 fn wait_after_seal(
     config: &ServiceConfig,
     bounds: UnloadBounds,
+    run: Option<&str>,
 ) -> Result<LifecycleAnswer, LifecycleRefusal> {
     let run_directory = config.run_directory();
     if !start::wait_free(&run_directory, bounds.leave) {
-        return escalate_joined(config, bounds);
+        return escalate_joined(config, bounds, run);
     }
     let _behind =
         start::take_invocation_lock_waiting(&run_directory, verb_table::HolderVerb::ForceUnload)?;
@@ -2077,16 +2115,19 @@ fn wait_after_seal(
 /// **The joined force's escalation, in two phases** (Spec section 3, S11;
 /// I3): (a) the run's processes ended without the invocation lock, the kill
 /// never waiting on it; (b) the lock taken behind the concluding holder and
-/// the marker written `Forced`, no `Left` being held.
+/// the marker written `Forced` by the marker-write rule, no `Left` being
+/// held: a marker the holder closed for the run, or another run's, is left
+/// alone.
 fn escalate_joined(
     config: &ServiceConfig,
     bounds: UnloadBounds,
+    run: Option<&str>,
 ) -> Result<LifecycleAnswer, LifecycleRefusal> {
     let run_directory = config.run_directory();
     start::escalate_within(&run_directory, bounds.term, bounds.kill)?;
     let _behind =
         start::take_invocation_lock_waiting(&run_directory, verb_table::HolderVerb::ForceUnload)?;
-    close_marker(config, true)?;
+    write_by_rule(config, run, conclusion::MarkerWrite::Forced)?;
     Ok(unloaded_answer())
 }
 
@@ -2103,56 +2144,48 @@ fn leave_within(
 ) -> Result<LifecycleAnswer, LifecycleRefusal> {
     let run_directory = config.run_directory();
     match direct_leave_within(config, leave_deadline, LeaveDirected::of_unload(forced)) {
-        Ok(report) => {
+        Ok(left) => {
             // **A leave whose lock outlives the after-left wait keeps its
             // save point** (the #94 survey's S7): the escalation ends the
-            // holders, and the report is published as on a lock that
+            // holders, and the `Left` concludes by its row as on a lock that
             // freed, so `Unloaded` is never answered over a leave save
             // point left unpublished in the room.
             if !start::wait_free(&run_directory, bounds.after_left) {
                 start::escalate_within(&run_directory, bounds.term, bounds.kill)?;
             }
-            return conclude_left(config, report, forced);
+            let run = open_run(config)?;
+            return conclude_answered(config, run.as_deref(), &left);
         }
         Err(LeaveFault::Refused(LifecycleRefusal::OutOfOrder)) if escalate_out_of_order => {}
-        // A refusal on leave returns to the operator unchanged and
-        // answers nothing further: `ActivityNotAtRest` above all, and
-        // since A3.2 `SavePointNotTaken`, on which the unload does not
-        // complete, the run staying open with its lock, per Spec section
-        // 3 on A3.0 item 6, so the operator retries or forces.
-        Err(LeaveFault::Refused(refusal)) => {
-            // **A refusal after the run ended still closes the forced
-            // marker** (Codex on #94, round 6): a refusal the harness
-            // sends past `Left`, its organs going down behind it, ends
-            // the run all the same, so where the lock frees inside the
-            // after-left wait the marker closes as forced before the
-            // refusal returns.
-            // **Only a refusal that can follow `Left` is waited on** (the
-            // #99 area 1 review, K3): `ActivityNotAtRest` and
-            // `OutOfOrder` are answered with the run plainly standing or
-            // never entered, so waiting the after-left wait on them only
-            // holds the invocation lock and answers late.
-            let can_follow_left = !matches!(
-                refusal,
-                LifecycleRefusal::ActivityNotAtRest | LifecycleRefusal::OutOfOrder
-            );
-            if forced && can_follow_left && start::wait_free(&run_directory, bounds.after_left) {
-                close_marker(config, true)?;
+        // **A leave refused in S7 concludes as no answer** (3.0, the
+        // conclusion): `DescriptorsUnusable`, the worker leaving with its
+        // record unclosed, publishes nothing and leaves the marker open,
+        // forced or not, the run's processes ended by the escalation where
+        // they still stand, and the refusal returned.
+        Err(LeaveFault::Refused(LifecycleRefusal::DescriptorsUnusable)) => {
+            if !start::wait_free(&run_directory, bounds.after_left) {
+                start::escalate_within(&run_directory, bounds.term, bounds.kill)?;
             }
-            return Err(refusal);
+            return Err(LifecycleRefusal::DescriptorsUnusable);
         }
+        // Any other refusal on leave is answered with the run standing and
+        // returns to the operator unchanged: `ActivityNotAtRest`, and
+        // `SavePointNotTaken`, on which the unload does not complete, the
+        // run staying open with its lock (S9), so the operator retries or
+        // forces.
+        Err(LeaveFault::Refused(refusal)) => return Err(refusal),
         // The leave went unanswered inside its bound: a worker that
         // would not exit, so the escalation follows.
         Err(LeaveFault::Unanswered) => {}
     }
     start::escalate_within(&run_directory, bounds.term, bounds.kill)?;
-    // A run that had to be ended by force took no leave save point: the
-    // room's finished files are recovered at the next load. The marker
-    // stays open, which the next load reads as `NoCleanUnload`, unless the
-    // operator forced this unload, in which case it closes as forced so the
-    // record carries the operator's choice, as it does on a forced leave.
+    // **No `Left` is held**: the room's finished files are recovered at the
+    // next load, and the marker stays open, which the next load reads as
+    // `NoCleanUnload`, unless the operator forced this unload, in which case
+    // the escalation writes `Forced` by the marker-write rule (S11).
     if forced {
-        close_marker(config, true)?;
+        let run = open_run(config)?;
+        write_by_rule(config, run.as_deref(), conclusion::MarkerWrite::Forced)?;
     }
     Ok(unloaded_answer())
 }
@@ -2166,62 +2199,138 @@ fn unloaded_answer() -> LifecycleAnswer {
     }
 }
 
-/// **The member has stopped: publish, then close the marker**, per Spec
-/// sections 3 and 6: the leave's save point carries its event's position,
-/// anything else the room still held is recovered, and the marker closes on a
-/// clean unload or stays open under `ForcedUnload`. **The unload does not
-/// complete without its save point published** (Codex on #94, round 9), per
-/// Spec section 3 on A3.0 item 6: the leave's reported digest must be among
-/// the lines this publication appended, or the marker stays open, so the next
-/// load records `NoCleanUnload` and recovers the room's file or names it as
-/// unpublishable, and the verb refuses naming the publication rather than
-/// answering Unloaded over a stale restore. A forced unload reports no save
-/// point and is unchanged. **The marker closes clean only for this run's own
-/// save point** (the push review of 197e80b): the report's `event_run` must
-/// be the run the marker stands open on, the reference admin minted, or the
-/// marker stays open and the next load records the reset. The report's
-/// covered `run` is not compared, since a run restored and left with no turn
-/// covers the prior run's position.
-fn conclude_left(
-    config: &ServiceConfig,
-    report: Option<weaver_types::SavePointReport>,
+/// The `Left` a leave answered, whole: the save point it names, and the
+/// leave's state at its end (`forced`, `no_state`), which the conclusion
+/// reads.
+#[derive(Debug, Clone, PartialEq)]
+struct Left {
+    save_point: Option<weaver_types::SavePointReport>,
     forced: bool,
+    no_state: bool,
+}
+
+/// **Any caller answered `Left` concludes, by rule** (Spec 3.0, the
+/// conclusion and its outcome table; section 4, the marker-write rule; I1,
+/// I2, I4), the invocation lock held and the run lock free. `run` is the run
+/// the caller ended, the one the marker stood open on when it acted. **The
+/// marker is read first**: open on another run, or closed for this one,
+/// clean or forced, it is left alone and the caller answers `Unloaded`, so
+/// the conclusion is idempotent per run. Otherwise the `Left` is classified
+/// by the table's keys, the reported save point published where its row
+/// orders it, and the marker written as its row gives. The rollback's row
+/// is the load's (`roll_back`).
+fn conclude_answered(
+    config: &ServiceConfig,
+    run: Option<&str>,
+    left: &Left,
 ) -> Result<LifecycleAnswer, LifecycleRefusal> {
-    let reports: Vec<_> = report
-        .into_iter()
-        .map(|report| (report, save_points::Arrival::Leave))
-        .collect();
-    let published = publish_from_room(config, &AgentName(config.agent.clone()), &reports);
-    if let Some(digest) = unpublished_leave(&reports, &published) {
-        diag!(
-            "weaver-admin: the leave's save point {digest} did not publish; the marker stays open and the unload does not complete"
-        );
-        record(
-            config,
-            "unload",
-            "refused: the leave's save point did not publish",
-        );
-        return Err(LifecycleRefusal::SavePointNotTaken {
-            missed: weaver_types::SavePointLeg::Published,
-        });
+    let Some(run) = run else {
+        return Ok(unloaded_answer());
+    };
+    if !matches!(
+        read_marker_or_refuse(config)?,
+        Some(save_points::Marker::Open { run: ref open }) if open == run
+    ) {
+        return Ok(unloaded_answer());
     }
-    if let Some((report, _)) = reports.first() {
-        let open = open_run(config)?;
-        if open.as_deref() != Some(report.event_run.0.as_str()) {
+    let seen = conclusion::Seen {
+        rollback: None,
+        territory_judged: !config.territory_unjudged,
+        forced: left.forced,
+        no_state: left.no_state,
+        reported: left.save_point.as_ref().map(|report| conclusion::Reported {
+            this_run: report.event_run.0 == run,
+        }),
+    };
+    let Ok(kind) = conclusion::classify(seen) else {
+        // A `Left` the table lacks is a defect (section 10): nothing is
+        // written, the marker standing open for the next load's reset.
+        diag!("weaver-admin: the leave answered a Left the outcome table lacks: {left:?}");
+        record(config, "unload", "refused: a Left the outcome table lacks");
+        return Err(LifecycleRefusal::Malformed);
+    };
+    let outcome = match conclusion::conclude(kind) {
+        conclusion::Conclusion::Settled(outcome) => outcome,
+        conclusion::Conclusion::Publish { this_run } => {
+            let reports: Vec<_> = left
+                .save_point
+                .iter()
+                .cloned()
+                .map(|report| (report, save_points::Arrival::Leave))
+                .collect();
+            let published = publish_from_room(config, &AgentName(config.agent.clone()), &reports);
+            let landed = unpublished_leave(&reports, &published).is_none();
+            if !this_run {
+                diag!(
+                    "weaver-admin: the leave reported a save point of another run than the one the marker stands open on; the marker stays open"
+                );
+                record(
+                    config,
+                    "unload",
+                    "the leave's save point is not this run's; the marker stays open",
+                );
+            }
+            conclusion::after_publication(this_run, landed)
+        }
+    };
+    write_by_rule(config, Some(run), outcome.marker)?;
+    match outcome.printed {
+        conclusion::Printed::Unloaded => Ok(unloaded_answer()),
+        conclusion::Printed::SavePointNotTakenPublished => {
             diag!(
-                "weaver-admin: the leave reported a save point of run {}, not the run the marker stands open on; the marker stays open",
-                report.event_run.0
+                "weaver-admin: the leave's save point did not publish; the marker stays open and the unload does not complete"
             );
             record(
                 config,
                 "unload",
-                "the leave's save point is not this run's; the marker stays open",
+                "refused: the leave's save point did not publish",
             );
-            return Ok(unloaded_answer());
+            Err(LifecycleRefusal::SavePointNotTaken {
+                missed: weaver_types::SavePointLeg::Published,
+            })
         }
+        // The load's own row, never classified here.
+        conclusion::Printed::LoadsOwnRefusal => Err(LifecycleRefusal::Malformed),
     }
-    close_marker(config, forced)?;
-    Ok(unloaded_answer())
+}
+
+/// **Section 4's marker-write rule**, for the writes that close a run: under
+/// the invocation lock, the caller's; the marker read first; one naming
+/// another run, or already closed for `run`, left alone; otherwise written.
+/// `AsFound` and `LeaveOpen` write nothing, and `Open` is the rollback's, not
+/// a close.
+fn write_by_rule(
+    config: &ServiceConfig,
+    run: Option<&str>,
+    write: conclusion::MarkerWrite,
+) -> Result<(), LifecycleRefusal> {
+    let marker = |run: &str| match write {
+        conclusion::MarkerWrite::Closed => Some(save_points::Marker::Closed { run: run.into() }),
+        conclusion::MarkerWrite::Forced => Some(save_points::Marker::Forced { run: run.into() }),
+        conclusion::MarkerWrite::AsFound
+        | conclusion::MarkerWrite::LeaveOpen
+        | conclusion::MarkerWrite::Open => None,
+    };
+    let Some(run) = run else { return Ok(()) };
+    let Some(marker) = marker(run) else {
+        return Ok(());
+    };
+    match read_marker_or_refuse(config)? {
+        Some(save_points::Marker::Open { run: open }) if open == run => {}
+        _ => return Ok(()),
+    }
+    // **A marker that does not write refuses the verb**, at this end as at
+    // the load's: the run is gone either way, and the operator reads that
+    // the next load will record a reset the marker could not say, rather
+    // than an unload answered as recorded.
+    save_points::write_marker(&config.root, Some(&marker)).map_err(|e| {
+        diag!(
+            "weaver-admin: the clean-unload marker in {} does not write at the unload: {e}",
+            config.root.display()
+        );
+        record(config, "marker", &format!("not written: {e}"));
+        LifecycleRefusal::BoundaryUnverified
+    })
 }
 
 /// The run the clean-unload marker stands open on, or none where it stands
@@ -2438,32 +2547,6 @@ fn read_marker_or_refuse(
     })
 }
 
-/// Close the marker on a clean unload, or leave it open under `ForcedUnload`
-/// where the leave was forced, per Spec section 4.
-fn close_marker(config: &ServiceConfig, forced: bool) -> Result<(), LifecycleRefusal> {
-    let run = match read_marker_or_refuse(config)? {
-        Some(save_points::Marker::Open { run }) | Some(save_points::Marker::Forced { run }) => run,
-        Some(save_points::Marker::Closed { .. }) | None => return Ok(()),
-    };
-    let marker = if forced {
-        save_points::Marker::Forced { run }
-    } else {
-        save_points::Marker::Closed { run }
-    };
-    // **A marker that does not write refuses the verb**, at this end as at
-    // the load's: the run is gone either way, and the operator reads that
-    // the next load will record a reset the marker could not say, rather
-    // than an unload answered as recorded.
-    save_points::write_marker(&config.root, Some(&marker)).map_err(|e| {
-        diag!(
-            "weaver-admin: the clean-unload marker in {} does not write at the unload: {e}",
-            config.root.display()
-        );
-        record(config, "marker", &format!("not written: {e}"));
-        LifecycleRefusal::BoundaryUnverified
-    })
-}
-
 /// Why a directed leave did not answer `Left`.
 enum LeaveFault {
     Refused(LifecycleRefusal),
@@ -2497,7 +2580,7 @@ fn direct_leave_within(
     config: &ServiceConfig,
     deadline: std::time::Instant,
     leave: LeaveDirected,
-) -> Result<Option<weaver_types::SavePointReport>, LeaveFault> {
+) -> Result<Left, LeaveFault> {
     let (forced, rollback) = match leave {
         LeaveDirected::Graceful => (false, false),
         LeaveDirected::Forced => (true, false),
@@ -2519,9 +2602,15 @@ fn direct_leave_within(
         .map_err(|_| LeaveFault::Unanswered)?;
     match coordination.recv_within(deadline.saturating_duration_since(std::time::Instant::now())) {
         Ok(answer) => match answer.payload {
-            weaver_types::Payload::Answer(LifecycleAnswer::Left { save_point, .. }) => {
-                Ok(save_point)
-            }
+            weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                save_point,
+                forced,
+                no_state,
+            }) => Ok(Left {
+                save_point,
+                forced,
+                no_state,
+            }),
             weaver_types::Payload::Refusal(refusal) => Err(LeaveFault::Refused(refusal)),
             _ => Err(LeaveFault::Refused(LifecycleRefusal::Malformed)),
         },

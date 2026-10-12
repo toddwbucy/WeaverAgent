@@ -1736,18 +1736,33 @@ fn a_force_beside_any_other_holder_refuses_invocation_in_flight() {
 /// `JoinLeave`, and once answered `Left` answers `Unloaded` only after the
 /// run lock has freed and it has taken the invocation lock behind the
 /// concluding holder, so `Unloaded` always means the processes are gone and
-/// the holder concluded first. Perturbation: answer at `Left`, and the force
-/// answers before the holder lets go.
+/// the holder concluded first, the force then finding the marker closed and
+/// changing nothing. Perturbations: answer at `Left`, and the force answers
+/// before the holder lets go; conclude without reading the marker under the
+/// lock, and the clean marker reads `Forced`.
 #[test]
 fn a_force_beside_an_unload_joins_and_both_conclude_once() {
     let (config, _scratch) = scratch_config("force-joins");
+    save_points::write_marker(
+        &config.root,
+        Some(&save_points::Marker::Open { run: "r-1".into() }),
+    )
+    .unwrap();
     let run = stand_in_holder(&config);
     let holder = holding_as(&config, "unload");
     let worker = recording_worker(&config, vec![left_forced()]);
+    let root = config.root.clone();
     let ender = std::thread::spawn(move || {
         let directed = worker.join().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(300));
         end(run);
+        // The holder concludes first, holding its lock: the clean close of
+        // its leave's save point published.
+        save_points::write_marker(
+            &root,
+            Some(&save_points::Marker::Closed { run: "r-1".into() }),
+        )
+        .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(300));
         let freeing = std::time::Instant::now();
         end(holder);
@@ -1767,6 +1782,11 @@ fn a_force_beside_an_unload_joins_and_both_conclude_once() {
         "one JoinLeave: {directed:?}"
     );
     assert!(at >= freeing, "answered only once the holder let go");
+    assert_eq!(
+        save_points::read_marker(&config.root),
+        Some(save_points::Marker::Closed { run: "r-1".into() }),
+        "the force found the marker closed and changed nothing"
+    );
 }
 
 /// **A join refused `OutOfOrder` is retried every second while the
@@ -1917,6 +1937,297 @@ fn a_force_while_show_holds_the_lock_waits_and_proceeds() {
         took >= std::time::Duration::from_millis(300),
         "waited out the shared hold: {took:?}"
     );
+}
+
+/// One leave answered `left` to `unload` (or, `forced`, `force-unload`) over
+/// a run standing with the marker open on `r-1`; answers the verb's answer.
+fn concluded_by(
+    config: &ServiceConfig,
+    forced: bool,
+    left: LifecycleAnswer,
+) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    save_points::write_marker(
+        &config.root,
+        Some(&save_points::Marker::Open { run: "r-1".into() }),
+    )
+    .unwrap();
+    let holder = stand_in_holder(config);
+    let worker = recording_worker(
+        config,
+        vec![
+            weaver_types::Payload::Answer(LifecycleAnswer::State {
+                state: weaver_types::AgentState::Idle,
+                load: None,
+                constituents: Vec::new(),
+            }),
+            weaver_types::Payload::Answer(left),
+        ],
+    );
+    let answered = unload_within(config, TEST_UNLOAD_BOUNDS, forced);
+    end(holder);
+    let _ = worker.join();
+    answered
+}
+
+/// **Every `Left` concludes by its row** (`weaver-admin-Spec` 3.0, the
+/// conclusion's outcomes; section 4, the marker-write rule; I2, I4): one
+/// stand-in `Left` per reachable row a verb's caller meets, the rollback's
+/// being the load's (`the_rollback_before_and_after_load`); the marker, the
+/// manifest and the answer are the row's. Perturbations: close the marker
+/// by the leave's `forced` rather than the row, and the forced leave whose
+/// save point published reads `Forced`; publish the room on a `no_state`
+/// leave, and its manifest gains a line.
+#[test]
+fn every_left_concludes_by_its_row() {
+    let open = || Some(save_points::Marker::Open { run: "r-1".into() });
+    let closed = || Some(save_points::Marker::Closed { run: "r-1".into() });
+    let forced_marker = || Some(save_points::Marker::Forced { run: "r-1".into() });
+    let not_published = Err(LifecycleRefusal::SavePointNotTaken {
+        missed: weaver_types::SavePointLeg::Published,
+    });
+    struct Row {
+        case: &'static str,
+        forced: bool,
+        unjudged: bool,
+        no_state: bool,
+        reported: Option<(&'static str, bool)>,
+        answered: Result<LifecycleAnswer, LifecycleRefusal>,
+        marker: Option<save_points::Marker>,
+        lines: usize,
+    }
+    let rows = [
+        Row {
+            case: "row 2: an unjudged territory",
+            forced: true,
+            unjudged: true,
+            no_state: false,
+            reported: Some(("r-1", true)),
+            answered: unloaded(),
+            marker: forced_marker(),
+            lines: 0,
+        },
+        Row {
+            case: "row 3: no state to keep",
+            forced: false,
+            unjudged: false,
+            no_state: true,
+            reported: None,
+            answered: unloaded(),
+            marker: closed(),
+            lines: 0,
+        },
+        Row {
+            case: "row 4: forced, its save point not taken",
+            forced: true,
+            unjudged: false,
+            no_state: false,
+            reported: None,
+            answered: unloaded(),
+            marker: forced_marker(),
+            lines: 0,
+        },
+        Row {
+            case: "row 5: another run's save point",
+            forced: false,
+            unjudged: false,
+            no_state: false,
+            reported: Some(("r-0", true)),
+            answered: unloaded(),
+            marker: open(),
+            lines: 1,
+        },
+        Row {
+            case: "row 6: this run's, published",
+            forced: false,
+            unjudged: false,
+            no_state: false,
+            reported: Some(("r-1", true)),
+            answered: unloaded(),
+            marker: closed(),
+            lines: 1,
+        },
+        Row {
+            case: "row 6: this run's, forced, published",
+            forced: true,
+            unjudged: false,
+            no_state: false,
+            reported: Some(("r-1", true)),
+            answered: unloaded(),
+            marker: closed(),
+            lines: 1,
+        },
+        Row {
+            // The reported file is not in the room; the room's own file is
+            // recovered beside it.
+            case: "row 7: this run's, not published",
+            forced: false,
+            unjudged: false,
+            no_state: false,
+            reported: Some(("r-1", false)),
+            answered: not_published,
+            marker: open(),
+            lines: 1,
+        },
+    ];
+    for (n, row) in rows.into_iter().enumerate() {
+        let (mut config, report, base) = territory_with_one_room_file(&format!("row-{n}"));
+        config.territory_unjudged = row.unjudged;
+        let save_point = row.reported.map(|(event_run, in_room)| {
+            let mut report = report.clone();
+            report.event_run = weaver_types::RunId(event_run.into());
+            if !in_room {
+                report.save_point = "ff".into();
+                report.name = "ff.save-point".into();
+            }
+            report
+        });
+        let answered = concluded_by(
+            &config,
+            row.forced,
+            LifecycleAnswer::Left {
+                save_point,
+                forced: row.forced,
+                no_state: row.no_state,
+            },
+        );
+        assert_eq!(answered, row.answered, "{}", row.case);
+        assert_eq!(
+            save_points::read_marker(&config.root),
+            row.marker,
+            "{}",
+            row.case
+        );
+        assert_eq!(manifest_lines(&config).len(), row.lines, "{}", row.case);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+/// **A joined force concludes by its own `Left` where the holder did not**
+/// (`weaver-admin-Spec` 3.0, the conclusion: any caller answered `Left`
+/// concludes): the holder ended after `Left` without concluding, the force
+/// takes the lock behind it, finds the marker still open on the run, and
+/// writes its row, `Forced` for a forced leave with no save point.
+/// Perturbation: conclude nothing on the join, and the marker stays open.
+#[test]
+fn a_joined_force_concludes_where_the_holder_did_not() {
+    let (config, _scratch) = scratch_config("join-concludes");
+    save_points::write_marker(
+        &config.root,
+        Some(&save_points::Marker::Open { run: "r-1".into() }),
+    )
+    .unwrap();
+    let run = stand_in_holder(&config);
+    let holder = holding_as(&config, "unload");
+    let worker = recording_worker(&config, vec![left_forced()]);
+    let ender = std::thread::spawn(move || {
+        let _ = worker.join();
+        end(run);
+        end(holder);
+    });
+    let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+    ender.join().unwrap();
+    assert_eq!(answered, unloaded());
+    assert_eq!(
+        save_points::read_marker(&config.root),
+        Some(save_points::Marker::Forced { run: "r-1".into() })
+    );
+}
+
+/// **A leave refused `DescriptorsUnusable` concludes as no answer**
+/// (`weaver-admin-Spec` 3.0, the conclusion: a leave refused in S7): nothing
+/// published, the marker left `Open` though the verb was forced, the run's
+/// processes ended by the escalation where they still stand, and the
+/// refusal returned. Perturbation: conclude it as a forced `Left` with no
+/// save point, and the marker reads `Forced`.
+#[test]
+fn a_leave_refused_descriptors_unusable_concludes_as_no_answer() {
+    let (config, _report, base) = territory_with_one_room_file("descriptors-unusable");
+    save_points::write_marker(
+        &config.root,
+        Some(&save_points::Marker::Open { run: "r-1".into() }),
+    )
+    .unwrap();
+    let mut holder = stand_in_holder(&config);
+    let worker = recording_worker(
+        &config,
+        vec![
+            weaver_types::Payload::Answer(LifecycleAnswer::State {
+                state: weaver_types::AgentState::Idle,
+                load: None,
+                constituents: Vec::new(),
+            }),
+            weaver_types::Payload::Refusal(LifecycleRefusal::DescriptorsUnusable),
+        ],
+    );
+    let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+    let _ = worker.join();
+    let ended = holder.try_wait().unwrap();
+    end(holder);
+    assert_eq!(answered, Err(LifecycleRefusal::DescriptorsUnusable));
+    assert!(ended.is_some(), "the escalation ended the standing run");
+    assert_eq!(
+        save_points::read_marker(&config.root),
+        Some(save_points::Marker::Open { run: "r-1".into() })
+    );
+    assert!(manifest_lines(&config).is_empty(), "nothing published");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// **A marker closed for a run is never rewritten** (`weaver-admin-Spec`
+/// section 4, the marker-write rule (d); 3.0, the conclusion): a caller
+/// answered `Left` after the run's marker closed, clean or forced, changes
+/// nothing, whatever its own row would write. Perturbation: write by the
+/// row over a marker closed for the run, and the clean marker reads
+/// `Forced`.
+#[test]
+fn a_closed_marker_is_never_rewritten() {
+    let (config, _scratch) = scratch_config("never-rewritten");
+    for marker in [
+        save_points::Marker::Closed { run: "r-1".into() },
+        save_points::Marker::Forced { run: "r-1".into() },
+    ] {
+        save_points::write_marker(&config.root, Some(&marker)).unwrap();
+        for (forced, no_state) in [(true, false), (false, true)] {
+            let answered = conclude_answered(
+                &config,
+                Some("r-1"),
+                &Left {
+                    save_point: None,
+                    forced,
+                    no_state,
+                },
+            );
+            assert_eq!(answered, Ok(unloaded_answer()));
+            assert_eq!(
+                save_points::read_marker(&config.root),
+                Some(marker.clone()),
+                "{marker:?} under forced {forced}, no_state {no_state}"
+            );
+        }
+    }
+}
+
+/// **Another run's open marker is left alone** (`weaver-admin-Spec` section
+/// 4, the marker-write rule (c)): a conclusion for `r-1` that finds the
+/// marker open on `r-2`, that run having superseded it, writes nothing.
+/// Perturbation: close whatever run the marker is open on, and it reads
+/// `Forced` on `r-2`.
+#[test]
+fn another_runs_open_marker_is_left_alone() {
+    let (config, _scratch) = scratch_config("another-run");
+    let theirs = save_points::Marker::Open { run: "r-2".into() };
+    save_points::write_marker(&config.root, Some(&theirs)).unwrap();
+    let answered = conclude_answered(
+        &config,
+        Some("r-1"),
+        &Left {
+            save_point: None,
+            forced: true,
+            no_state: false,
+        },
+    );
+    assert_eq!(answered, Ok(unloaded_answer()));
+    assert_eq!(save_points::read_marker(&config.root), Some(theirs));
 }
 
 /// A scratch coordination root for one test, with the agent's run
@@ -2530,11 +2841,12 @@ fn a_force_ends_the_run_where_the_territory_does_not_judge() {
 /// lock free and an open marker standing, `unload` and `force-unload` both
 /// answer unloaded and leave it open as the unclean stop it is, a force on an
 /// agent already down having ended nothing (3.0, S0d x force-unload); and a
-/// forced leave refused by a harness that then goes down closes the marker
-/// as forced inside the after-left wait, the refusal still returned (Codex
-/// on #94, round 6). Perturbations: close the marker forced on the
-/// lock-free force and the second marker reads forced; return the refusal
-/// without the wait and the third stays open.
+/// forced leave refused `DescriptorsUnusable` by a harness that then goes
+/// down concludes as no answer, the marker left open and the refusal
+/// returned (3.0, the conclusion: a leave refused in S7). Perturbations:
+/// close the marker forced on the lock-free force and the second marker
+/// reads forced; close it on the refusal, as before 3.0, and the third
+/// does.
 #[test]
 fn the_marker_where_the_run_already_ended() {
     let (config, _scratch) = scratch_config("forced-ended");
@@ -2615,8 +2927,8 @@ fn the_marker_where_the_run_already_ended() {
     ));
     assert_eq!(
         save_points::read_marker(&config.root),
-        Some(save_points::Marker::Forced { run: "r-2".into() }),
-        "the refusal after the run ended still closed the marker as forced"
+        Some(open("r-2")),
+        "a leave refused in S7 leaves the marker open"
     );
 }
 
@@ -3049,12 +3361,14 @@ fn a_sink_outside_the_territory_refuses() {
     }
 }
 
-/// **The marker is restored by the rollback**, per Spec section 4 on
-/// A3.0 item 5: a load that wrote the marker open and then failed puts
-/// back what stood before, a closed marker or none. Perturbation: skip
-/// the marker in `roll_back` and the open marker survives the failure.
+/// **A rollback before `load` is on the trace leaves the marker as the load
+/// found it** (`weaver-admin-Spec` 3.0, the conclusion's row 1; section 4 on
+/// A3.0 item 5): a load that wrote the marker open and failed before its run
+/// could author `load` puts back what stood before, a closed marker or none.
+/// Perturbation: skip the marker in `roll_back` and the open marker
+/// survives the failure.
 #[test]
-fn the_rollback_restores_the_marker_it_found() {
+fn the_rollback_before_load_leaves_the_marker_as_found() {
     let (config, _scratch) = scratch_config("marker-rollback");
     let closed = save_points::Marker::Closed { run: "r-0".into() };
     save_points::write_marker(&config.root, Some(&closed)).unwrap();
@@ -3107,6 +3421,36 @@ fn the_rollback_restores_the_marker_it_found() {
     .unwrap();
     roll_back(&config, &mut standing);
     assert_eq!(save_points::read_marker(&config.root), Some(closed.clone()));
+    let _ = std::fs::remove_file(config.coordination_socket());
+    // A harness that never entered answers the forced leave
+    // `OutOfOrder`: no `load` is on the trace, so the marker found is
+    // put back. Perturbation: name the run whatever the leave answered
+    // and this reads open.
+    let _ = std::fs::remove_file(config.coordination_socket());
+    let mut standing = Standing {
+        entered: true,
+        run_reference: Some("r-3".into()),
+        marker_before: Some(Some(closed.clone())),
+        ..Standing::default()
+    };
+    let worker = recording_worker(
+        &config,
+        vec![weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder)],
+    );
+    roll_back(&config, &mut standing);
+    let _ = worker.join();
+    assert_eq!(save_points::read_marker(&config.root), Some(closed));
+}
+
+/// **A rollback after `load` is on the trace leaves the marker open on the
+/// run** (`weaver-admin-Spec` 3.0, the conclusion's row 1; section 4, K1):
+/// a rollback whose forced leave is refused or answered `Left` undoes a run
+/// that may have authored `load`, so the marker names it for the next
+/// load's reset.
+#[test]
+fn the_rollback_after_load_leaves_the_marker_open() {
+    let (config, _scratch) = scratch_config("marker-rollback-after");
+    let closed = save_points::Marker::Closed { run: "r-0".into() };
     // **The run being undone leaves forced, and one that does not leave
     // keeps the marker open on it** (the #94 survey's S10): the worker
     // refuses the leave, so the trace holds this run's `load` and no
@@ -3171,24 +3515,6 @@ fn the_rollback_restores_the_marker_it_found() {
         save_points::read_marker(&config.root),
         Some(save_points::Marker::Open { run: "r-2".into() })
     );
-    // A harness that never entered answers the forced leave
-    // `OutOfOrder`: no `load` is on the trace, so the marker found is
-    // put back. Perturbation: name the run whatever the leave answered
-    // and this reads open.
-    let _ = std::fs::remove_file(config.coordination_socket());
-    let mut standing = Standing {
-        entered: true,
-        run_reference: Some("r-3".into()),
-        marker_before: Some(Some(closed.clone())),
-        ..Standing::default()
-    };
-    let worker = recording_worker(
-        &config,
-        vec![weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder)],
-    );
-    roll_back(&config, &mut standing);
-    let _ = worker.join();
-    assert_eq!(save_points::read_marker(&config.root), Some(closed));
 }
 
 /// Short bounds for the unload path, the production values being fixed.

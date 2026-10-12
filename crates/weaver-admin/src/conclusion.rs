@@ -109,13 +109,6 @@ pub enum Conclusion {
 /// exactly one row: the rollback, the territory, `no_state`, a save point
 /// reported. Each unreachable combination is refused rather than fitted to a
 /// row.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into the conclusion by the lifecycle plumbing, PR B"
-    )
-)]
 pub fn classify(seen: Seen) -> Result<LeftKind, Unreachable> {
     if let Some(load_on_trace) = seen.rollback {
         return if seen.forced && seen.reported.is_none() {
@@ -147,13 +140,6 @@ pub fn classify(seen: Seen) -> Result<LeftKind, Unreachable> {
 
 /// **The outcome table before publication, one exhaustive match and no
 /// wildcard arm**: a new kind of `Left` does not compile until it has a row.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into the conclusion by the lifecycle plumbing, PR B"
-    )
-)]
 pub fn conclude(kind: LeftKind) -> Conclusion {
     let settled = |marker, printed| Conclusion::Settled(Outcome { marker, printed });
     match kind {
@@ -172,13 +158,6 @@ pub fn conclude(kind: LeftKind) -> Conclusion {
 
 /// **Rows 5 to 7 after the publication**: the marker closes clean only for
 /// this run's own save point, landed (section 6).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into the conclusion by the lifecycle plumbing, PR B"
-    )
-)]
 pub fn after_publication(this_run: bool, landed: bool) -> Outcome {
     let outcome = |marker, printed| Outcome { marker, printed };
     match (this_run, landed) {
@@ -195,7 +174,7 @@ pub fn after_publication(this_run: bool, landed: bool) -> Outcome {
     not(test),
     expect(
         dead_code,
-        reason = "wired into the conclusion by the lifecycle plumbing, PR B"
+        reason = "the reset column: the next load derives it from the marker itself"
     )
 )]
 pub fn reset_of(marker: MarkerWrite) -> NextReset {
