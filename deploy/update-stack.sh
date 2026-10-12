@@ -17,6 +17,9 @@
 #
 #   ./deploy/update-stack.sh            plan only; refreshes refs, tests and builds, no install
 #   ./deploy/update-stack.sh --install  plan, then install what changed
+#   --unload-timeout <s>                how long the install waits on each
+#                                       agent's graceful unload (default 300)
+#                                       before force-unload joins it
 #
 # Plan mode writes git refs and build artifacts. On main it also fast-forwards
 # HEAD and rewrites the working tree. It invokes no sudo.
@@ -34,7 +37,17 @@ set -euo pipefail
 
 ORIGINAL_ARGS=("$@")
 INSTALL=0
-[ "${1:-}" = "--install" ] && INSTALL=1
+UNLOAD_TIMEOUT=300
+while [ $# -gt 0 ]; do
+  case $1 in
+    --install) INSTALL=1; shift ;;
+    --unload-timeout)
+      [[ ${2:-} =~ ^[1-9][0-9]*$ ]] \
+        || { printf 'update-stack.sh: --unload-timeout takes whole seconds above zero\n' >&2; exit 2; }
+      UNLOAD_TIMEOUT=$2; shift 2 ;;
+    *) printf 'update-stack.sh: unknown argument: %s\n' "$1" >&2; exit 2 ;;
+  esac
+done
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ADMIN_BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
@@ -56,12 +69,40 @@ read_key() { cat "$STACK/$1" 2>/dev/null || true; }
 # **Admin's cause is kept** (#99 area 2 review, K9): every line before the
 # answer, its stderr among them, is relayed to stderr marked as admin's, as
 # `admin_answer` relays it, so a refused unload names why.
+# **The unload is bounded by the script, the force its fallback** (the
+# Planner's ruling of 2026-10-12 on #126): admin's graceful unload has no
+# deadline where the declaration sets no bounds (`weaver-admin-Spec` 3.0, the
+# bounds), and an install is the operator's choice, made in advance, to end
+# the run. The unload runs in the background for UNLOAD_TIMEOUT seconds
+# (default 300); past them `force-unload` joins it, the leave turning forced
+# with its save point still taken, and the force's answer is the one read.
+# Killing the unload instead would leave its leave pending and the force
+# unable to join it. Which of the two ended the run is printed.
 unload_verified() {
-  local said
-  said=$(sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" unload "$1" 2>&1) || true
+  local said dir runner waited=0 how=unload bound=${UNLOAD_TIMEOUT:-300}
+  dir=$(mktemp -d)
+  ( sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" unload "$1" >"$dir/said" 2>&1 || true
+    : >"$dir/done" ) &
+  runner=$!
+  while [ ! -e "$dir/done" ] && [ "$waited" -lt "$bound" ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  if [ -e "$dir/done" ]; then
+    wait "$runner" || true
+    said=$(cat "$dir/said")
+  else
+    printf '  %s: the unload passed %ss; force-unload joins it\n' "$1" "$bound" >&2
+    how=force-unload
+    said=$(sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" force-unload "$1" 2>&1) || true
+    wait "$runner" || true
+    [ ! -s "$dir/said" ] || sed 's/^/  admin (the joined unload): /' "$dir/said" >&2
+  fi
+  rm -rf -- "$dir"
   [ -z "$said" ] || printf '%s\n' "$said" | sed '$d' | sed 's/^/  admin: /' >&2
   said=$(printf '%s\n' "$said" | sed -n '$p')
   if answered_state "$said" unloaded; then
+    printf '  %s: unloaded by %s\n' "$1" "$how"
     return 0
   fi
   printf '  admin answered the unload of %s: %s\n' "$1" "${said:-nothing}" >&2

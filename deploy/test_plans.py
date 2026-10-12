@@ -1794,6 +1794,57 @@ esac
                 if answer:
                     self.assertIn("  admin: weaver-admin: the cause", ran.stderr)
 
+    def test_an_install_unload_past_its_bound_is_joined_by_a_force(self):
+        """**The install's unload is bounded, the force its fallback** (the
+        Planner's ruling of 2026-10-12 on #126): an unload that answers
+        inside UNLOAD_TIMEOUT is read as before and no force is sent; one
+        still running past it is joined by `force-unload`, whose answer is
+        read, and the script prints which ended the run. Perturbations: wait
+        the unload out with no bound, and the slow case is ended by the
+        unload; force at once, and the quick case is ended by the force."""
+        text = (DEPLOY / "update-stack.sh").read_text()
+        admin = self.root / "bin" / "weaver-admin"
+        admin.parent.mkdir(parents=True, exist_ok=True)
+        calls = self.root / "admin-calls"
+        program = ('sudo() { [ "$1" = -n ] && shift; shift; "$@"; }\n'
+                   + shell_function(text, "unload_verified") + shell_function(text, "answered_state")
+                   + 'unload_verified m1')
+        env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
+        env.update(BIN_DIR=str(admin.parent), ADMIN_BASE=str(self.config), UNLOAD_TIMEOUT="1")
+        for case, delay, ended_by in (("quick", 0, "unload"), ("slow", 4, "force-unload")):
+            with self.subTest(case=case):
+                calls.unlink(missing_ok=True)
+                admin.write_text(
+                    "#!/bin/sh\n"
+                    f"echo \"$1\" >> {calls}\n"
+                    f"[ \"$1\" = unload ] && sleep {delay}\n"
+                    "echo '{\"kind\":\"state\",\"state\":\"unloaded\"}'\n")
+                admin.chmod(0o755)
+                ran = subprocess.run(["bash", "-c", program], env=env, text=True,
+                                     capture_output=True, timeout=30)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                self.assertIn(f"  m1: unloaded by {ended_by}", ran.stdout)
+                verbs = calls.read_text().split()
+                if ended_by == "unload":
+                    self.assertEqual(verbs, ["unload"])
+                else:
+                    self.assertEqual(sorted(verbs), ["force-unload", "unload"])
+                    self.assertIn("m1: the unload passed 1s; force-unload joins it", ran.stderr)
+
+    def test_update_stack_reads_its_unload_timeout_and_refuses_what_it_does_not_know(self):
+        # --unload-timeout takes whole seconds above zero, and an argument the
+        # script does not know refuses rather than being ignored, so a
+        # misspelt bound never runs the default unseen. Perturbation: accept
+        # any value, and 0 passes.
+        for args in (["--unload-timeout", "0"], ["--unload-timeout", "x"],
+                     ["--unload-timeout"], ["--unload-timout", "60"]):
+            with self.subTest(args=args):
+                result = self.run_script("update-stack.sh", *args)
+                self.assertEqual(result.returncode, 2, result.stdout)
+                self.assertIn("update-stack.sh:", result.stderr)
+        text = (DEPLOY / "update-stack.sh").read_text()
+        self.assertIn("UNLOAD_TIMEOUT=300", text)
+
     def test_stack_refuses_an_unprovided_engine_and_names_the_recreation(self):
         # A pre-#85 declaration electing postgres refuses before the build,
         # as an engine this build does not provide, and is recreated rather
