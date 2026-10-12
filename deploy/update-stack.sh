@@ -81,7 +81,12 @@ read_key() { cat "$STACK/$1" 2>/dev/null || true; }
 # **The unload in flight is the script's, not the function's** (Codex on
 # #126, round 3): the exit trap concludes it before it restores anything
 # (`conclude_pending_unload`), so an INT, TERM or HUP never puts binaries or
-# rules back under an agent still leaving.
+# rules back under an agent still leaving. **The record and the unload stand
+# together** (Codex on #126, round 5): an INT, TERM or HUP arriving between
+# the fork and the runner's record is held, its trap restored and the signal
+# raised again once the record is set, so the trap never finds an unload
+# running unrecorded; and the record is cleared before its directory is
+# removed, so the trap never re-enters a wait whose `done` is gone.
 UNLOAD_AGENT=""
 UNLOAD_RUNNER=""
 UNLOAD_DIR=""
@@ -90,7 +95,11 @@ UNLOAD_BOUND=0
 UNLOAD_SAID=""
 UNLOAD_HOW=""
 unload_verified() {
-  local said bound=${UNLOAD_TIMEOUT:-300}
+  local said bound=${UNLOAD_TIMEOUT:-300} traps caught=""
+  traps=$(trap -p INT TERM HUP)
+  trap 'caught=HUP' HUP
+  trap 'caught=INT' INT
+  trap 'caught=TERM' TERM
   UNLOAD_AGENT=$1
   UNLOAD_DIR=$(mktemp -d)
   UNLOAD_BOUND=$bound
@@ -98,6 +107,9 @@ unload_verified() {
   ( sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" unload "$1" >"$UNLOAD_DIR/said" 2>&1 || true
     : >"$UNLOAD_DIR/done" ) &
   UNLOAD_RUNNER=$!
+  trap - INT TERM HUP
+  eval "$traps"
+  [ -z "$caught" ] || kill -s "$caught" "$$"
   await_unload
   said=$UNLOAD_SAID
   [ -z "$said" ] || printf '%s\n' "$said" | sed '$d' | sed 's/^/  admin: /' >&2
@@ -115,6 +127,7 @@ unload_verified() {
 # where it joined) and UNLOAD_HOW to which ended the run, and clears the
 # unload in flight.
 await_unload() {
+  local dir
   while [ ! -e "$UNLOAD_DIR/done" ] && [ "$SECONDS" -lt "$UNLOAD_UNTIL" ]; do
     sleep 1
   done
@@ -129,9 +142,10 @@ await_unload() {
     wait "$UNLOAD_RUNNER" 2>/dev/null || true
     [ ! -s "$UNLOAD_DIR/said" ] || sed 's/^/  admin (the joined unload): /' "$UNLOAD_DIR/said" >&2
   fi
-  rm -rf -- "$UNLOAD_DIR"
+  dir=$UNLOAD_DIR
   UNLOAD_RUNNER=""
   UNLOAD_DIR=""
+  rm -rf -- "$dir"
 }
 
 # **An exit while an unload runs concludes it first** (Codex on #126, round

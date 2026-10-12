@@ -1875,6 +1875,48 @@ esac
                 self.assertIn(last, order[:-1], order)
                 self.assertIn("m1: the run is ending with its unload in flight", ran.stderr)
 
+    def test_a_signal_at_either_edge_of_the_unload_in_flight_is_concluded_once(self):
+        """**The record and the unload stand together** (Codex on #126, round
+        5). A signal raised inside the window before the runner is recorded
+        (here, at the `mktemp`) is held and raised again once the record is
+        set, so the trap waits that unload out before it restores; and a
+        signal landing as the finished unload's directory is removed finds
+        the record already cleared, so no `force-unload` follows an unload
+        already answered. Perturbations: drop the held window, and the
+        restore runs with no unload concluded; clear the record after the
+        `rm` again, and the trap waits out the bound and forces."""
+        text = (DEPLOY / "update-stack.sh").read_text()
+        admin = self.root / "bin" / "weaver-admin"
+        admin.parent.mkdir(parents=True, exist_ok=True)
+        calls = self.root / "edge-calls"
+        admin.write_text(
+            "#!/bin/sh\n"
+            f"[ \"$1\" = unload ] && {{ sleep 1; echo 'unload done' >> {calls}; }}\n"
+            f"[ \"$1\" = force-unload ] && echo force-unload >> {calls}\n"
+            "echo '{\"kind\":\"state\",\"state\":\"unloaded\"}'\n")
+        admin.chmod(0o755)
+        env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
+        env.update(BIN_DIR=str(admin.parent), ADMIN_BASE=str(self.config), UNLOAD_TIMEOUT="3")
+        for edge, injected, expected in (
+                ("the fork", 'mktemp() { command mktemp "$@"; kill -INT $$; }\n', ["unload done", "restore"]),
+                ("the removal", 'rm() { command rm "$@"; kill -INT $$; }\n', ["unload done", "restore"])):
+            with self.subTest(edge=edge):
+                calls.unlink(missing_ok=True)
+                program = ('sudo() { [ "$1" = -n ] && shift; shift; "$@"; }\n'
+                           + shell_function(text, "unload_verified") + shell_function(text, "await_unload")
+                           + shell_function(text, "conclude_pending_unload")
+                           + shell_function(text, "answered_state") + shell_function(text, "on_exit")
+                           + f'restore() {{ echo restore >> {calls}; }}\n'
+                           + 'restore_rules() { :; }\n'
+                           + 'COMPLETED=0 INSTALL_DONE=1 HELD_RULES=()\n'
+                           + "trap on_exit EXIT\ntrap 'exit 130' INT\n"
+                           + injected
+                           + 'unload_verified m1\n')
+                ran = subprocess.run(["bash", "-c", program], env=env,
+                                     text=True, capture_output=True, timeout=30)
+                self.assertEqual(ran.returncode, 130, ran.stderr)
+                self.assertEqual(calls.read_text().splitlines(), expected, ran.stderr)
+
     def test_update_stack_reads_its_unload_timeout_and_refuses_what_it_does_not_know(self):
         # --unload-timeout takes whole seconds above zero, and an argument the
         # script does not know refuses rather than being ignored, so a
