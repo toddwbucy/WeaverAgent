@@ -463,7 +463,9 @@ fn the_run_directory_is_held_and_a_link_refused() {
 /// [`take_invocation_lock`], the production writer, or `raw` to take it bare
 /// and write `WEAVER_ADMIN_HOLDER_FIRST`, then after
 /// `WEAVER_ADMIN_HOLDER_DELAY_MS` write `WEAVER_ADMIN_HOLDER_SECOND`, each with
-/// `{pid}` read as this process's pid. It then holds until killed.
+/// `{pid}` read as this process's pid, or `shared:<ms>` to hold it shared,
+/// as `show` does, for that long and then let it go. It then holds until
+/// killed.
 #[test]
 fn holder_stand_in() {
     let (Ok(dir), Ok(mode)) = (
@@ -474,6 +476,19 @@ fn holder_stand_in() {
     };
     let dir = std::path::PathBuf::from(dir);
     let pid = std::process::id().to_string();
+    if let Some(ms) = mode.strip_prefix("shared:") {
+        let file = open_lock_file(&dir.join("admin.lock")).expect("the lock file");
+        let request = whole_file(nix::libc::F_RDLCK);
+        // SAFETY: fcntl on a descriptor this frame owns.
+        assert_eq!(
+            unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_SETLK, &request) },
+            0
+        );
+        std::thread::sleep(std::time::Duration::from_millis(ms.parse().expect("ms")));
+        drop(file);
+        std::thread::sleep(std::time::Duration::from_secs(20));
+        return;
+    }
     let _held = match mode.strip_prefix("take:") {
         Some(verb) => {
             let verb = crate::verb_table::HolderVerb::from_spelled(verb).expect("a verb");
@@ -508,9 +523,10 @@ fn holder_stand_in() {
 }
 
 /// Re-executes this test binary as [`holder_stand_in`] with `vars`, and
-/// waits until the stand-in holds the invocation lock. Answers the child,
-/// killed by the caller.
-fn holding_invocation(dir: &Path, vars: &[(&str, &str)]) -> std::process::Child {
+/// waits until the stand-in holds the invocation lock, exclusively or, in the
+/// mode `shared:<ms>`, shared for that long. Answers the child, killed by the
+/// caller.
+pub(crate) fn holding_invocation(dir: &Path, vars: &[(&str, &str)]) -> std::process::Child {
     let mut command = std::process::Command::new(std::env::current_exe().expect("the test binary"));
     command
         .args([
@@ -533,7 +549,7 @@ fn holding_invocation(dir: &Path, vars: &[(&str, &str)]) -> std::process::Child 
         let mut probe = whole_file(nix::libc::F_WRLCK);
         // SAFETY: fcntl on a descriptor this frame owns.
         unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_GETLK, &mut probe) };
-        if probe.l_type as i32 == nix::libc::F_WRLCK {
+        if probe.l_type as i32 != nix::libc::F_UNLCK {
             return child;
         }
         assert!(

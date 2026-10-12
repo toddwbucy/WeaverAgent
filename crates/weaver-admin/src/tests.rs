@@ -1649,6 +1649,276 @@ fn unload_meeting_a_pending_leave_refuses_out_of_order() {
     assert!(standing, "nothing was ended");
 }
 
+/// A stand-in invocation holding admin's lock as `verb`, another process
+/// taking it through the production writer, so its record names the verb.
+fn holding_as(config: &ServiceConfig, verb: &str) -> std::process::Child {
+    start::tests::holding_invocation(
+        &config.run_directory(),
+        &[("WEAVER_ADMIN_HOLDER_MODE", &format!("take:{verb}"))],
+    )
+}
+
+/// Ends a stand-in process and reaps it.
+fn end(mut child: std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// The `Left` a joined leave answers, forced, with no save point named.
+fn left_forced() -> weaver_types::Payload {
+    weaver_types::Payload::Answer(LifecycleAnswer::Left {
+        save_point: None,
+        forced: true,
+        no_state: false,
+    })
+}
+
+/// Ends the stand-in `holder` once the run lock has freed, as a concluding
+/// `unload` releases its lock after its run, within ten seconds; answers
+/// whether the run lock freed first.
+fn release_after_the_run(
+    config: &ServiceConfig,
+    holder: std::process::Child,
+) -> std::thread::JoinHandle<bool> {
+    let run_directory = config.run_directory();
+    std::thread::spawn(move || {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while start::run_lock_held(&run_directory).unwrap() && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let freed_first = !start::run_lock_held(&run_directory).unwrap();
+        end(holder);
+        freed_first
+    })
+}
+
+/// **A force beside any holder but an `unload` refuses
+/// `InvocationInFlight`** (`weaver-admin-Spec` 3.0, the forced unload,
+/// joining; I1): it reads the holder's verb, and beside a load, its rollback
+/// included, a `save-point`, a `restore`, a `stop`, a `validate` or another
+/// force it sends no `JoinLeave`, one command at a time being the caller's
+/// to keep. Perturbation: join beside any holder, and a dial reaches the
+/// worker.
+#[test]
+fn a_force_beside_any_other_holder_refuses_invocation_in_flight() {
+    for verb in [
+        "load",
+        "force-unload",
+        "save-point",
+        "restore",
+        "stop",
+        "validate",
+    ] {
+        let (config, _scratch) = scratch_config(&format!("force-beside-{verb}"));
+        let listener = silent_worker(&config);
+        nix::fcntl::fcntl(
+            &listener,
+            nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
+        )
+        .unwrap();
+        let holder = holding_as(&config, verb);
+        let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+        end(holder);
+        assert_eq!(
+            answered,
+            Err(LifecycleRefusal::InvocationInFlight),
+            "{verb}"
+        );
+        assert!(
+            accept_within(&listener, std::time::Duration::ZERO).is_none(),
+            "{verb}: no JoinLeave dialed"
+        );
+    }
+}
+
+/// **A force beside an `unload` joins lock-free** (`weaver-admin-Spec` 3.0,
+/// the forced unload, joining; I1, I3): it reads the holder's verb, sends
+/// `JoinLeave`, and once answered `Left` answers `Unloaded` only after the
+/// run lock has freed and it has taken the invocation lock behind the
+/// concluding holder, so `Unloaded` always means the processes are gone and
+/// the holder concluded first. Perturbation: answer at `Left`, and the force
+/// answers before the holder lets go.
+#[test]
+fn a_force_beside_an_unload_joins_and_both_conclude_once() {
+    let (config, _scratch) = scratch_config("force-joins");
+    let run = stand_in_holder(&config);
+    let holder = holding_as(&config, "unload");
+    let worker = recording_worker(&config, vec![left_forced()]);
+    let ender = std::thread::spawn(move || {
+        let directed = worker.join().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        end(run);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let freeing = std::time::Instant::now();
+        end(holder);
+        (directed, freeing)
+    });
+    let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+    let at = std::time::Instant::now();
+    let (directed, freeing) = ender.join().unwrap();
+    assert_eq!(answered, unloaded());
+    assert!(
+        matches!(
+            directed.as_slice(),
+            [weaver_types::Payload::Directive(
+                LifecycleDirective::JoinLeave { .. }
+            )]
+        ),
+        "one JoinLeave: {directed:?}"
+    );
+    assert!(at >= freeing, "answered only once the holder let go");
+}
+
+/// **A join refused `OutOfOrder` is retried every second while the
+/// holder's verb stays `unload`** (`weaver-admin-Spec` 3.0, the forced
+/// unload, joining): the refusal means only that the unload has not yet
+/// directed its leave. Perturbation: return the refusal, and the force
+/// answers `OutOfOrder`.
+#[test]
+fn a_join_refused_out_of_order_is_retried_while_the_holder_stays_unload() {
+    let (config, _scratch) = scratch_config("join-retried");
+    let run = stand_in_holder(&config);
+    let holder = holding_as(&config, "unload");
+    let worker = recording_worker(
+        &config,
+        vec![
+            weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder),
+            left_forced(),
+        ],
+    );
+    let ender = std::thread::spawn(move || {
+        let directed = worker.join().unwrap();
+        end(run);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        end(holder);
+        directed
+    });
+    let began = std::time::Instant::now();
+    let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+    let took = began.elapsed();
+    let directed = ender.join().unwrap();
+    assert_eq!(answered, unloaded());
+    assert_eq!(directed.len(), 2, "joined twice: {directed:?}");
+    assert!(directed.iter().all(|payload| matches!(
+        payload,
+        weaver_types::Payload::Directive(LifecycleDirective::JoinLeave { .. })
+    )));
+    assert!(
+        took >= std::time::Duration::from_secs(1),
+        "retried after a second: {took:?}"
+    );
+}
+
+/// **Past the seal, the run lock held, the join waits the leave's bound and
+/// then escalates** (`weaver-admin-Spec` 3.0, S8a x force-unload; S11): no
+/// socket answers, the worker or a member still holding the run lock; the
+/// force waits at most the leave's bound from finding no socket, ends the
+/// processes lock-free, then takes the lock behind the holder and writes
+/// `Forced`, no `Left` being held. Perturbation: escalate at once, and the
+/// force answers inside the bound.
+#[test]
+fn after_the_seal_a_join_waits_150_s_under_the_run_lock_then_escalates() {
+    let (config, _scratch) = scratch_config("seal-held");
+    let open = save_points::Marker::Open { run: "r-1".into() };
+    save_points::write_marker(&config.root, Some(&open)).unwrap();
+    let mut run = stand_in_holder(&config);
+    let holder = holding_as(&config, "unload");
+    let ender = release_after_the_run(&config, holder);
+    let began = std::time::Instant::now();
+    let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+    let took = began.elapsed();
+    assert!(ender.join().unwrap(), "the run ended with the lock held");
+    let status = run.wait().unwrap();
+    assert_eq!(answered, unloaded());
+    assert!(
+        took >= TEST_UNLOAD_BOUNDS.leave,
+        "waited the leave's bound: {took:?}"
+    );
+    assert!(
+        std::os::unix::process::ExitStatusExt::signal(&status).is_some(),
+        "the escalation ended the run"
+    );
+    assert_eq!(
+        save_points::read_marker(&config.root),
+        Some(save_points::Marker::Forced { run: "r-1".into() })
+    );
+}
+
+/// **Past the seal, the run lock free, the join waits for the invocation
+/// lock with no deadline** (`weaver-admin-Spec` 3.0, S8a x force-unload):
+/// the holder is publishing, a publication bounded by its size and not by
+/// time, so the force neither escalates nor writes the marker, and answers
+/// `Unloaded` once the holder lets go. Perturbation: bound the wait by the
+/// leave's, and the force answers before the holder lets go.
+#[test]
+fn after_the_seal_with_the_run_lock_free_the_join_waits_on_the_invocation_lock() {
+    let (config, _scratch) = scratch_config("seal-free");
+    let open = save_points::Marker::Open { run: "r-1".into() };
+    save_points::write_marker(&config.root, Some(&open)).unwrap();
+    let holder = holding_as(&config, "unload");
+    let hold = TEST_UNLOAD_BOUNDS.leave + std::time::Duration::from_secs(1);
+    let ender = std::thread::spawn(move || {
+        std::thread::sleep(hold);
+        end(holder);
+    });
+    let began = std::time::Instant::now();
+    let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+    let took = began.elapsed();
+    ender.join().unwrap();
+    assert_eq!(answered, unloaded());
+    assert!(took >= hold, "waited for the holder: {took:?}");
+    assert_eq!(save_points::read_marker(&config.root), Some(open));
+}
+
+/// **A silent harness is ended lock-free, then marked `Forced`**
+/// (`weaver-admin-Spec` 3.0, the forced unload, a silent harness; S11; I3):
+/// a join unanswered within the leave's bound ends the run's processes
+/// without the invocation lock (phase a), and only then takes the lock
+/// behind the holder and writes `Forced` (phase b). Perturbation: take the
+/// invocation lock before phase (a), and the run is still standing when
+/// the holder lets go.
+#[test]
+fn a_silent_harness_is_ended_lock_free_then_marked_forced() {
+    let (config, _scratch) = scratch_config("silent-join");
+    let open = save_points::Marker::Open { run: "r-1".into() };
+    save_points::write_marker(&config.root, Some(&open)).unwrap();
+    let mut run = stand_in_holder(&config);
+    let _listener = silent_worker(&config);
+    let holder = holding_as(&config, "unload");
+    let ender = release_after_the_run(&config, holder);
+    let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+    assert!(ender.join().unwrap(), "phase (a) took no lock");
+    let _ = run.wait();
+    assert_eq!(answered, unloaded());
+    assert_eq!(
+        save_points::read_marker(&config.root),
+        Some(save_points::Marker::Forced { run: "r-1".into() })
+    );
+}
+
+/// **A force while `show` holds the lock waits and proceeds** (`weaver-
+/// admin-Spec` section 3, the invocation lock): a shared hold is no
+/// transition, so the force retries within `show`'s bound and acts once it
+/// is gone. Perturbation: refuse a shared hold at once, and the force
+/// answers `InvocationInFlight`.
+#[test]
+fn a_force_while_show_holds_the_lock_waits_and_proceeds() {
+    let (config, _scratch) = scratch_config("force-behind-show");
+    let reader = start::tests::holding_invocation(
+        &config.run_directory(),
+        &[("WEAVER_ADMIN_HOLDER_MODE", "shared:400")],
+    );
+    let began = std::time::Instant::now();
+    let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+    let took = began.elapsed();
+    end(reader);
+    assert_eq!(answered, unloaded());
+    assert!(
+        took >= std::time::Duration::from_millis(300),
+        "waited out the shared hold: {took:?}"
+    );
+}
+
 /// A scratch coordination root for one test, with the agent's run
 /// directory made inside it as this test's user.
 fn scratch_config(tag: &str) -> (ServiceConfig, crate::scratch::Scratch) {

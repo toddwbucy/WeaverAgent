@@ -15,15 +15,6 @@
 //! names the holder. `show` itself takes the lock shared and sees a holder as
 //! an exclusive hold refused.
 
-// Uncalled until the plumbing wires it, the whole table at once.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into the verbs by the lifecycle plumbing, PR B"
-    )
-)]
-
 /// What admin saw, in the order it looks: the invocation lock first, then the
 /// run lock, then the worker's word where the run lock is held.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,6 +128,9 @@ pub enum Verb {
     Unload,
     ForceUnload,
     SavePoint,
+    // `restore` names the save point for the next load in every view it can
+    // meet, so it reads no view until the live restore, A5.
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by the live restore, A5"))]
     Restore,
     Show,
 }

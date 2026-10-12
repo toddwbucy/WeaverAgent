@@ -187,11 +187,7 @@ pub fn take_invocation_lock(
         let request = whole_file(nix::libc::F_WRLCK);
         // SAFETY: fcntl on a descriptor this frame owns, with a lock it built.
         if unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_SETLK, &request) } == 0 {
-            let record = format!("{} {}", verb.spelled(), std::process::id());
-            nix::unistd::ftruncate(&file, 0)
-                .and_then(|()| nix::sys::uio::pwrite(&file, record.as_bytes(), 0))
-                .map_err(|_| refuse_path("cannot record its holder's verb", &path))?;
-            return Ok(InvocationLock { _file: file });
+            return recorded(file, verb, &path);
         }
         contended(&run_directory.join("admin.lock"))?;
         let mut probe = whole_file(nix::libc::F_WRLCK);
@@ -211,6 +207,43 @@ pub fn take_invocation_lock(
             }
             // Released between the take and the read: try again at once.
             _ => {}
+        }
+    }
+}
+
+/// The lock just taken, its verb recorded as `<verb> <pid>`.
+fn recorded(
+    file: OwnedFd,
+    verb: crate::verb_table::HolderVerb,
+    path: &Path,
+) -> Result<InvocationLock, LifecycleRefusal> {
+    let record = format!("{} {}", verb.spelled(), std::process::id());
+    nix::unistd::ftruncate(&file, 0)
+        .and_then(|()| nix::sys::uio::pwrite(&file, record.as_bytes(), 0))
+        .map_err(|_| refuse_path("cannot record its holder's verb", path))?;
+    Ok(InvocationLock { _file: file })
+}
+
+/// **Takes the invocation lock exclusively, waiting with no deadline**
+/// (section 3, the forced unload, joining): the force that joined an
+/// `unload` takes the lock behind the concluding holder, after the run lock
+/// has freed or after its escalation's phase (a), a publication being
+/// bounded by its size and not by time. It records its verb as the
+/// non-waiting take does.
+pub fn take_invocation_lock_waiting(
+    run_directory: &Path,
+    verb: crate::verb_table::HolderVerb,
+) -> Result<InvocationLock, LifecycleRefusal> {
+    let path = run_directory.join("admin.lock");
+    let file = open_lock_file(&path)?;
+    let request = whole_file(nix::libc::F_WRLCK);
+    loop {
+        // SAFETY: fcntl on a descriptor this frame owns, with a lock it built.
+        if unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_SETLKW, &request) } == 0 {
+            return recorded(file, verb, &path);
+        }
+        if std::io::Error::last_os_error().raw_os_error() != Some(nix::libc::EINTR) {
+            return Err(refuse_path("cannot be locked", &path));
         }
     }
 }
@@ -245,7 +278,6 @@ const HOLDER_REREAD: std::time::Duration = std::time::Duration::from_millis(100)
 /// the last holder's, it is the window between the holder's lock and its
 /// write; a changed holder starts the read over. A record that cannot be
 /// read refuses `InvocationInFlight`.
-#[cfg_attr(not(test), expect(dead_code, reason = "read by the force, B3 Task 4"))]
 pub fn read_holder(run_directory: &Path) -> Result<LockHolder, LifecycleRefusal> {
     let file = open_lock_file(&run_directory.join("admin.lock"))?;
     read_holder_using(
@@ -941,4 +973,4 @@ pub fn open_log(path: &Path, owner: Option<(u32, u32)>) -> std::io::Result<std::
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

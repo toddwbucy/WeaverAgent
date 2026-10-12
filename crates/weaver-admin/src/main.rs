@@ -1144,11 +1144,18 @@ fn run_load(
     let prior_marker = read_marker_or_refuse(config)?;
     let Some(run_lock) = start::take_run_lock(&run_directory)? else {
         // **Any answer, a refusal among them, is a run that stands**: only
-        // silence is `Unanswered`, per Spec section 3.
-        return Err(match observe(config) {
-            Ok(Observation::Silent) => LifecycleRefusal::Unanswered,
-            _ => LifecycleRefusal::AgentRunning,
-        });
+        // silence is `Unanswered`, per Spec section 3 and 3.0's verb table.
+        let worker = match observe(config) {
+            Ok(observation) => worker_seen(observation).0,
+            Err(_) => verb_table::WorkerSeen::Active,
+        };
+        let seen = verb_table::Seen::RunLockHeld(worker);
+        return Err(
+            match verb_table::act(verb_table::Verb::Load, verb_table::class_of(seen)) {
+                verb_table::VerbAction::RefuseUnanswered => LifecycleRefusal::Unanswered,
+                _ => LifecycleRefusal::AgentRunning,
+            },
+        );
     };
     let mut inventory = take_inventory(config, agent)?;
     // **The publication opens the validate step, under the run lock**, per
@@ -1856,14 +1863,14 @@ fn unload_within(
     forced: bool,
 ) -> Result<LifecycleAnswer, LifecycleRefusal> {
     let run_directory = config.run_directory();
-    let _invocation = start::take_invocation_lock(
-        &run_directory,
-        if forced {
-            verb_table::HolderVerb::ForceUnload
-        } else {
-            verb_table::HolderVerb::Unload
-        },
-    )?;
+    let _invocation = if forced {
+        match take_or_join(config, bounds)? {
+            Taken::Sole(lock) => lock,
+            Taken::Joined(answer) => return Ok(answer),
+        }
+    } else {
+        start::take_invocation_lock(&run_directory, verb_table::HolderVerb::Unload)?
+    };
     // **The leave's budget runs from here**, per Spec section 3: the
     // observation and both dials spend it, so the verb holds the invocation
     // lock at most the leave's 150 seconds and the escalation's forty-five.
@@ -1923,6 +1930,164 @@ fn unload_within(
             Err(LifecycleRefusal::InvocationInFlight)
         }
     }
+}
+
+/// What the force found at the invocation lock: the lock its own, a sole
+/// force, or an `unload`'s leave joined and ended.
+enum Taken {
+    Sole(start::InvocationLock),
+    Joined(LifecycleAnswer),
+}
+
+/// How often a join refused `OutOfOrder` is sent again, per Spec section 3.
+const JOIN_RETRY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// **The force takes the lock, or reads its holder's verb and joins**
+/// (Spec section 3, the forced unload, sole and joining; 3.0's verb table;
+/// I1): the lock taken, it is a sole force; held by an `unload`, it joins
+/// lock-free; held by anything else, or by a holder whose record cannot be
+/// read, it refuses `InvocationInFlight`. A `show`'s shared hold is waited
+/// out by the take itself. A lock that frees between the take and the read,
+/// or a joined holder that gives way to another, is judged afresh.
+fn take_or_join(config: &ServiceConfig, bounds: UnloadBounds) -> Result<Taken, LifecycleRefusal> {
+    let run_directory = config.run_directory();
+    loop {
+        match start::take_invocation_lock(&run_directory, verb_table::HolderVerb::ForceUnload) {
+            Ok(lock) => return Ok(Taken::Sole(lock)),
+            Err(LifecycleRefusal::InvocationInFlight) => {}
+            Err(refusal) => return Err(refusal),
+        }
+        let seen = match start::read_holder(&run_directory)? {
+            start::LockHolder::Free => continue,
+            // The take waited out `show`'s bound before refusing: readers
+            // starved it, and it refuses as every verb does.
+            start::LockHolder::Shared => return Err(LifecycleRefusal::InvocationInFlight),
+            start::LockHolder::Exclusive(verb) => verb_table::Seen::Holder(verb),
+        };
+        match verb_table::act(verb_table::Verb::ForceUnload, verb_table::class_of(seen)) {
+            verb_table::VerbAction::Join => {
+                if let Some(answer) = join_within(config, bounds)? {
+                    return Ok(Taken::Joined(answer));
+                }
+            }
+            _ => return Err(LifecycleRefusal::InvocationInFlight),
+        }
+    }
+}
+
+/// **The join** (Spec section 3, the forced unload, joining): `JoinLeave`
+/// over the socket, lock-free. Answered `Left`, or finding no socket past the
+/// seal, the force waits for the unload's conclusion; refused `OutOfOrder`,
+/// the unload not yet having directed its leave, it is sent again every
+/// second while the holder's verb stays `unload`, and answers none where the
+/// holder gave way, for the caller to judge afresh; unanswered within the
+/// leave's bound, a silent harness, it escalates.
+fn join_within(
+    config: &ServiceConfig,
+    bounds: UnloadBounds,
+) -> Result<Option<LifecycleAnswer>, LifecycleRefusal> {
+    let run_directory = config.run_directory();
+    loop {
+        // **The join's bound runs from each join sent**: a backlog full
+        // behind the harness is a busy worker, not a silent one, and is
+        // dialed again inside it.
+        let deadline = std::time::Instant::now() + bounds.leave;
+        let mut coordination = loop {
+            match channel::dial(&config.coordination_socket()) {
+                Ok(coordination) => break coordination,
+                Err(channel::ChannelFault::NoListener) => {
+                    return wait_after_seal(config, bounds).map(Some);
+                }
+                Err(_) if std::time::Instant::now() < deadline => {}
+                Err(_) => return escalate_joined(config, bounds).map(Some),
+            }
+        };
+        let ordinal = coordination.next_ordinal();
+        if coordination
+            .send_directive(
+                ordinal,
+                LifecycleDirective::JoinLeave {
+                    cause: invocation_cause(),
+                },
+            )
+            .is_err()
+        {
+            return escalate_joined(config, bounds).map(Some);
+        }
+        match coordination
+            .recv_within(deadline.saturating_duration_since(std::time::Instant::now()))
+        {
+            Ok(answer) => match answer.payload {
+                weaver_types::Payload::Answer(LifecycleAnswer::Left { .. }) => {
+                    return wait_after_left(config, bounds).map(Some);
+                }
+                weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder) => {
+                    std::thread::sleep(JOIN_RETRY);
+                    if start::read_holder(&run_directory)?
+                        != start::LockHolder::Exclusive(verb_table::HolderVerb::Unload)
+                    {
+                        return Ok(None);
+                    }
+                }
+                weaver_types::Payload::Refusal(refusal) => return Err(refusal),
+                _ => return Err(LifecycleRefusal::Malformed),
+            },
+            Err(_) => return escalate_joined(config, bounds).map(Some),
+        }
+    }
+}
+
+/// **The joined force answered `Left` waits for the holder's conclusion**
+/// (Spec section 3, the forced unload, joining, and the after-left wait):
+/// the run lock frees within the after-left wait or the run's processes are
+/// ended lock-free, and the force then takes the invocation lock behind the
+/// holder, which concludes first. Holding a `Left`, it writes no `Forced`.
+fn wait_after_left(
+    config: &ServiceConfig,
+    bounds: UnloadBounds,
+) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    let run_directory = config.run_directory();
+    if !start::wait_free(&run_directory, bounds.after_left) {
+        start::escalate_within(&run_directory, bounds.term, bounds.kill)?;
+    }
+    let _behind =
+        start::take_invocation_lock_waiting(&run_directory, verb_table::HolderVerb::ForceUnload)?;
+    Ok(unloaded_answer())
+}
+
+/// **The joined force waits for the unload's conclusion** (Spec section 3,
+/// the forced unload, joining; 3.0, S8a x force-unload), in two waits split
+/// by the run lock: while it is held, at most the leave's bound from here,
+/// then the escalation; once it is free, the holder publishing, for the
+/// invocation lock with no deadline and no escalation. Its answer is the
+/// ladder's `Unloaded`.
+fn wait_after_seal(
+    config: &ServiceConfig,
+    bounds: UnloadBounds,
+) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    let run_directory = config.run_directory();
+    if !start::wait_free(&run_directory, bounds.leave) {
+        return escalate_joined(config, bounds);
+    }
+    let _behind =
+        start::take_invocation_lock_waiting(&run_directory, verb_table::HolderVerb::ForceUnload)?;
+    Ok(unloaded_answer())
+}
+
+/// **The joined force's escalation, in two phases** (Spec section 3, S11;
+/// I3): (a) the run's processes ended without the invocation lock, the kill
+/// never waiting on it; (b) the lock taken behind the concluding holder and
+/// the marker written `Forced`, no `Left` being held.
+fn escalate_joined(
+    config: &ServiceConfig,
+    bounds: UnloadBounds,
+) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    let run_directory = config.run_directory();
+    start::escalate_within(&run_directory, bounds.term, bounds.kill)?;
+    let _behind =
+        start::take_invocation_lock_waiting(&run_directory, verb_table::HolderVerb::ForceUnload)?;
+    close_marker(config, true)?;
+    Ok(unloaded_answer())
 }
 
 /// **The leave directed and concluded**, per Spec section 3: `forced` names
