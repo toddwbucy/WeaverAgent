@@ -4415,6 +4415,110 @@ mod tests {
     /// answer agrees with what the leave's sweeps answer at rest.
     /// Perturbation: admit the stop as before, and the generation is
     /// cancelled while the close reads clean.
+    /// One turn with a graceful leave held, against a generation that
+    /// answers after `directive` is heard on the turn's connection. Answers
+    /// whether the turn finished unaborted, and the dialer's answer.
+    fn a_directive_mid_turn_with_a_leave_held(
+        directive: weaver_types::LifecycleDirective,
+    ) -> (bool, weaver_types::Payload) {
+        let (listener, _dir) = test_listener();
+        let (near, far) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let decode = crate::channel::decode_from_owned(near);
+        // The generation answers after the directive is heard.
+        let peer = std::thread::spawn(move || {
+            let mut buf = vec![0; 65536];
+            let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).unwrap();
+            let _: TokenDirective = serde_json::from_slice(&buf[..n]).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let answer = weaver_types::TokenAnswer::Generated(Generation {
+                content: vec![],
+                emission: "done".into(),
+                finish: Finish::Completed,
+                resident: 64,
+                capacity: 4096,
+                request: serde_json::value::RawValue::from_string(r#"{"rendered":"r"}"#.into())
+                    .unwrap(),
+                measurement: serde_json::value::RawValue::from_string("{}".into()).unwrap(),
+            });
+            send(
+                far.as_raw_fd(),
+                &serde_json::to_vec(&answer).unwrap(),
+                MsgFlags::empty(),
+            )
+            .unwrap();
+            far
+        });
+        let (verb_end, dialer) = crate::channel::OrganChannel::pair().unwrap();
+        let dialer = dialer.into_channel();
+        dialer
+            .send(&weaver_types::OrganEnvelope {
+                exchange: weaver_types::ExchangeId {
+                    opener: weaver_types::Opener::Admin,
+                    ordinal: 1,
+                },
+                position: weaver_types::Position::Open,
+                payload: weaver_types::Payload::Directive(directive.clone()),
+            })
+            .unwrap();
+        let (connection, _admin) = crate::channel::OrganChannel::pair().unwrap();
+        let mut held = Some(PendingLeave {
+            connection,
+            exchange: weaver_types::ExchangeId {
+                opener: weaver_types::Opener::Admin,
+                ordinal: 4,
+            },
+            cause: weaver_types::Cause { uid: 7 },
+            rollback: false,
+            forced_by: None,
+            progress: crate::lifecycle_table::LeaveProgress {
+                directed: crate::lifecycle_table::Leave::Graceful,
+                leave: crate::lifecycle_table::Leave::Graceful,
+                step: crate::lifecycle_table::LeaveStep::Draining,
+            },
+            drain_deadline: None,
+            joins: Vec::new(),
+        });
+        let mut slot = Some(verb_end);
+        let (mut recorder, author) = loaded_recorder();
+        let (mut turn_ordinal, mut turn_in_flight) = (0, None);
+        let (mut fullness, mut pressure_reported) = (None, false);
+        let load_facts = test_load_facts();
+        let outcome = {
+            let mut ports = Ports::grant(
+                &decode,
+                &author,
+                &mut recorder,
+                &mut turn_ordinal,
+                &mut turn_in_flight,
+                &load_facts,
+                None,
+                &listener,
+                Some(&mut slot),
+                None,
+                None,
+                None,
+                &mut fullness,
+                &mut pressure_reported,
+            );
+            ports.hold_leave(&mut held, None);
+            ports.turn(vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: "a turn".into(),
+                }],
+            }])
+        };
+        let _far = peer.join().unwrap();
+        let finished = outcome.is_ok_and(|outcome| !outcome.aborted);
+        (finished, dialer.recv().expect("an answer").payload)
+    }
+
     #[test]
     fn a_directive_meeting_a_held_leave_mid_turn_is_out_of_order() {
         for directive in [
@@ -4430,110 +4534,30 @@ mod tests {
                 cause: weaver_types::Cause { uid: 9 },
             },
         ] {
-            let (listener, _dir) = test_listener();
-            let (near, far) = socketpair(
-                AddressFamily::Unix,
-                SockType::SeqPacket,
-                None,
-                SockFlag::SOCK_CLOEXEC,
-            )
-            .unwrap();
-            let decode = crate::channel::decode_from_owned(near);
-            // The generation answers after the directive is heard.
-            let peer = std::thread::spawn(move || {
-                let mut buf = vec![0; 65536];
-                let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).unwrap();
-                let _: TokenDirective = serde_json::from_slice(&buf[..n]).unwrap();
-                std::thread::sleep(std::time::Duration::from_millis(300));
-                let answer = weaver_types::TokenAnswer::Generated(Generation {
-                    content: vec![],
-                    emission: "done".into(),
-                    finish: Finish::Completed,
-                    resident: 64,
-                    capacity: 4096,
-                    request: serde_json::value::RawValue::from_string(r#"{"rendered":"r"}"#.into())
-                        .unwrap(),
-                    measurement: serde_json::value::RawValue::from_string("{}".into()).unwrap(),
-                });
-                send(
-                    far.as_raw_fd(),
-                    &serde_json::to_vec(&answer).unwrap(),
-                    MsgFlags::empty(),
-                )
-                .unwrap();
-                far
-            });
-            let (verb_end, dialer) = crate::channel::OrganChannel::pair().unwrap();
-            let dialer = dialer.into_channel();
-            dialer
-                .send(&weaver_types::OrganEnvelope {
-                    exchange: weaver_types::ExchangeId {
-                        opener: weaver_types::Opener::Admin,
-                        ordinal: 1,
-                    },
-                    position: weaver_types::Position::Open,
-                    payload: weaver_types::Payload::Directive(directive.clone()),
-                })
-                .unwrap();
-            let (connection, _admin) = crate::channel::OrganChannel::pair().unwrap();
-            let mut held = Some(PendingLeave {
-                connection,
-                exchange: weaver_types::ExchangeId {
-                    opener: weaver_types::Opener::Admin,
-                    ordinal: 4,
-                },
-                cause: weaver_types::Cause { uid: 7 },
-                rollback: false,
-                forced_by: None,
-                progress: crate::lifecycle_table::LeaveProgress {
-                    directed: crate::lifecycle_table::Leave::Graceful,
-                    leave: crate::lifecycle_table::Leave::Graceful,
-                    step: crate::lifecycle_table::LeaveStep::Draining,
-                },
-                drain_deadline: None,
-                joins: Vec::new(),
-            });
-            let mut slot = Some(verb_end);
-            let (mut recorder, author) = loaded_recorder();
-            let (mut turn_ordinal, mut turn_in_flight) = (0, None);
-            let (mut fullness, mut pressure_reported) = (None, false);
-            let load_facts = test_load_facts();
-            let outcome = {
-                let mut ports = Ports::grant(
-                    &decode,
-                    &author,
-                    &mut recorder,
-                    &mut turn_ordinal,
-                    &mut turn_in_flight,
-                    &load_facts,
-                    None,
-                    &listener,
-                    Some(&mut slot),
-                    None,
-                    None,
-                    None,
-                    &mut fullness,
-                    &mut pressure_reported,
-                );
-                ports.hold_leave(&mut held, None);
-                ports.turn(vec![Message {
-                    role: Role::User,
-                    content: vec![ContentBlock::Text {
-                        text: "a turn".into(),
-                    }],
-                }])
-            };
-            let _far = peer.join().unwrap();
-            assert!(
-                outcome.as_ref().is_ok_and(|outcome| !outcome.aborted),
-                "{directive:?}: {outcome:?}"
-            );
+            let (finished, answer) = a_directive_mid_turn_with_a_leave_held(directive.clone());
+            assert!(finished, "{directive:?}: the turn goes on");
             assert_eq!(
-                dialer.recv().expect("an answer").payload,
+                answer,
                 weaver_types::Payload::Refusal(weaver_types::LifecycleRefusal::OutOfOrder),
                 "{directive:?}"
             );
         }
+    }
+
+    /// **An observation mid-turn with a leave held answers `InTransition`**
+    /// (`weaver-types-Spec` section 3.1; `weaver-harness-Spec` section 8; the
+    /// Planner's grade of #119), never `Active`: the run is between states.
+    /// Perturbation: answer the held-leave observation as an idle turn's, and
+    /// it reads `State`.
+    #[test]
+    fn an_observation_mid_turn_with_a_leave_held_answers_in_transition() {
+        let (finished, answer) =
+            a_directive_mid_turn_with_a_leave_held(weaver_types::LifecycleDirective::Observe);
+        assert!(finished);
+        assert_eq!(
+            answer,
+            weaver_types::Payload::Answer(weaver_types::LifecycleAnswer::InTransition)
+        );
     }
 
     /// **A join heard during the wind-down cancels its generation and turns

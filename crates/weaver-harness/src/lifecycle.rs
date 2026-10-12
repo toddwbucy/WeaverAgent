@@ -1395,6 +1395,9 @@ impl Harness {
             return Ok(());
         };
         let cause = leave.cause;
+        // S5, only where the wind-down runs: a diagnostic binding, a leave
+        // retried from S9 and a run with no SPU never stand there.
+        leave.progress.step = crate::lifecycle_table::LeaveStep::WindingDown;
         // The drain is done: its deadline bounds nothing here.
         leave.drain_deadline = None;
         // **The wind-down hears the listener** beside its generation: a dial
@@ -1472,6 +1475,12 @@ impl Harness {
         use crate::lifecycle_table::{Leave, LeaveStep};
         let cause = leave.cause;
         let rollback = leave.rollback;
+        let mut leave = leave;
+        // **A rollback is forced** (3.0, S1 x `Leave`), whatever its wire
+        // `forced` says: no wind-down, `unload` and `Left` forced.
+        if rollback {
+            leave.progress.leave = Leave::Forced;
+        }
         let mut held = Some(leave);
         // **Ruling (A) where the leave is carried out**: a leave held from a
         // turn meets the run as the turn left it, its gate or SPU perhaps
@@ -1502,7 +1511,6 @@ impl Harness {
         {
             drain_gate(run, &self.coordination, held.as_mut().expect("the leave"));
             if !forced_now(&held) {
-                held.as_mut().expect("the leave").progress.step = LeaveStep::WindingDown;
                 self.wind_down(&mut held)?;
             }
         }
@@ -8051,6 +8059,112 @@ mod tests {
         assert_eq!(unload["payload"]["forced_by"]["uid"], 9, "{unload}");
     }
 
+    /// **A join heard during the save point's legs turns a missed leg forced**
+    /// (`weaver-admin-Spec` 3.0, S6 x force-unload and x a missed leg; the
+    /// Planner's grade of #119): a leave retried from S9 (its gate lowered,
+    /// no drain or wind-down) meets a member that takes the snapshot's ask and
+    /// dies half a second later; a force joins while the legs run. The leg
+    /// misses, and the leave comes down forced with no save point, `Left {
+    /// forced: true }` to both dialers and `unload` naming the join, rather
+    /// than stopping in S9. Root, watched below. Perturbation: drop the
+    /// sweep after the legs, and the leave stops in S9, refused
+    /// `SavePointNotTaken`.
+    #[test]
+    fn dialed_a_join_during_the_legs_turns_a_missed_leg_forced() {
+        use std::io::Read;
+        use std::os::fd::AsRawFd;
+        if !nix::unistd::getuid().is_root() {
+            eprintln!("SKIP dialed join in the legs: the harness accepts root alone");
+            return;
+        }
+        let (mut run, _spare, sink_path) = entered_run(None);
+        releasing_spu(&mut run);
+        run.gate_lowered = true;
+        let (near, far) = std::os::unix::net::UnixStream::pair().expect("pair");
+        run.state = Some(crate::state::StateSeam::new(near));
+        std::thread::spawn(move || {
+            let mut far = far;
+            let mut buf = [0u8; 4096];
+            let _ = far.read(&mut buf);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        });
+        let (mut harness, dir) = harness_entered(run);
+        let socket = dir.join("c.sock");
+        let joiner = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let fd = nix::sys::socket::socket(
+                nix::sys::socket::AddressFamily::Unix,
+                nix::sys::socket::SockType::SeqPacket,
+                nix::sys::socket::SockFlag::SOCK_CLOEXEC,
+                None,
+            )
+            .expect("socket");
+            let address = nix::sys::socket::UnixAddr::new(&socket).expect("address");
+            nix::sys::socket::connect(fd.as_raw_fd(), &address).expect("connect");
+            let join = OrganEnvelope {
+                exchange: ExchangeId {
+                    opener: Opener::Admin,
+                    ordinal: 1,
+                },
+                position: Position::Open,
+                payload: weaver_types::Payload::Directive(LifecycleDirective::JoinLeave {
+                    cause: weaver_types::Cause { uid: 9 },
+                }),
+            };
+            nix::sys::socket::send(
+                fd.as_raw_fd(),
+                &serde_json::to_vec(&join).unwrap(),
+                nix::sys::socket::MsgFlags::empty(),
+            )
+            .expect("the join sends");
+            let mut buf = vec![0u8; 65536];
+            let n = nix::sys::socket::recv(
+                fd.as_raw_fd(),
+                &mut buf,
+                nix::sys::socket::MsgFlags::empty(),
+            )
+            .expect("the join's answer");
+            serde_json::from_slice::<OrganEnvelope>(&buf[..n]).expect("an envelope")
+        });
+        let (verb_end, admin_end) = OrganChannel::pair().expect("admin pair");
+        let admin = admin_end.into_channel();
+        harness
+            .dispatch_on(
+                &verb_end,
+                ExchangeId {
+                    opener: Opener::Admin,
+                    ordinal: 3,
+                },
+                LifecycleDirective::Leave {
+                    cause: weaver_types::Cause { uid: 7 },
+                    forced: false,
+                    rollback: false,
+                },
+                None,
+                None,
+            )
+            .expect("the leave dispatches");
+        let left = admin.recv().expect("the leave's answer").payload;
+        let joined = joiner.join().expect("the joiner").payload;
+        for answer in [&left, &joined] {
+            assert!(
+                matches!(
+                    answer,
+                    weaver_types::Payload::Answer(LifecycleAnswer::Left {
+                        forced: true,
+                        save_point: None,
+                        ..
+                    })
+                ),
+                "{answer:?}"
+            );
+        }
+        let stream = std::fs::read_to_string(&sink_path).expect("the sink");
+        let unload: serde_json::Value =
+            serde_json::from_str(stream.lines().last().expect("a line")).expect("json");
+        assert_eq!(unload["payload"]["forced_by"]["uid"], 9, "{unload}");
+    }
+
     /// **The watch for the dialed tests** (#99 area 3's pattern): every
     /// `dialed_` test needs a root dialer and skips as any other uid, which
     /// is how every gate runs, so this re-executes them inside `unshare
@@ -8099,10 +8213,15 @@ mod tests {
             !said.contains("SKIP dialed"),
             "a dialed test skipped: {said}"
         );
-        assert!(
-            said.contains("dialed_a_join_during_the_drain_turns_the_leave_forced ... ok"),
-            "the dialed test ran: {said}"
-        );
+        for name in [
+            "dialed_a_join_during_the_drain_turns_the_leave_forced",
+            "dialed_a_join_during_the_legs_turns_a_missed_leg_forced",
+        ] {
+            assert!(
+                said.contains(&format!("{name} ... ok")),
+                "{name} ran: {said}"
+            );
+        }
     }
 
     /// **A frame held behind a turn that heard a leave is not served**
@@ -8579,6 +8698,228 @@ mod tests {
                 .iter()
                 .any(|e| e.to_string().contains("The agent is unloading now")),
             "no wind-down"
+        );
+    }
+
+    /// **A rollback's `unload` is written forced, whatever the wire says**
+    /// (`weaver-admin-Spec` 3.0, S1 x `Leave`: a rollback is forced; the
+    /// Planner's grade of #119): a rollback directed with `forced` false
+    /// still runs no wind-down and authors `unload` and `Left` forced.
+    /// Perturbation: take `forced` from the wire, and both read false.
+    #[test]
+    fn a_rollback_is_written_forced_whatever_the_wire_says() {
+        use crate::lifecycle_table::Leave;
+        let (mut run, _spare, sink_path) = entered_run(None);
+        releasing_spu(&mut run);
+        // A gate standing, so ruling (A) does not turn the leave forced.
+        let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+        run.gate = Some(GateChannel {
+            channel: gate_end,
+            pid: nix::unistd::Pid::from_raw(i32::MAX),
+            last_word: crate::spawn::LastWord::quiet(),
+        });
+        let gate_peer = gate_peer.into_channel();
+        std::thread::spawn(move || {
+            while let Ok(asked) = gate_peer.recv() {
+                let _ = gate_peer.send(&OrganEnvelope {
+                    exchange: asked.exchange,
+                    position: Position::Close,
+                    payload: weaver_types::Payload::Answer(LifecycleAnswer::GateStopped),
+                });
+            }
+        });
+        let (leave, admin) = pending_leave(Leave::Graceful, Leave::Graceful, true);
+        run.leave = Some(leave);
+        let (mut harness, _dir) = harness_entered(run);
+        harness.carry_out_held_leave().expect("the leave runs");
+        assert!(
+            matches!(
+                admin.recv().expect("the answer").payload,
+                weaver_types::Payload::Answer(LifecycleAnswer::Left { forced: true, .. })
+            ),
+            "Left says forced"
+        );
+        let stream = std::fs::read_to_string(&sink_path).expect("the sink");
+        let unload: serde_json::Value =
+            serde_json::from_str(stream.lines().last().expect("a line")).expect("json");
+        assert_eq!(unload["payload"]["forced"], true, "{unload}");
+        assert!(
+            !stream.contains("The agent is unloading now"),
+            "no wind-down"
+        );
+    }
+
+    /// **A diagnostic leave never stands in S5** (`weaver-admin-Spec` 3.0: a
+    /// diagnostic binding runs no wind-down, S4 to S6; the Planner's grade of
+    /// #119): the wind-down that does not run leaves the leave's step where
+    /// it was. Perturbation: step into `WindingDown` before the wind-down's
+    /// own checks, and the step reads S5.
+    #[test]
+    fn a_diagnostic_leave_never_steps_into_the_wind_down() {
+        use crate::lifecycle_table::{Leave, LeaveStep};
+        for (diagnostic, want) in [(true, LeaveStep::Draining), (false, LeaveStep::WindingDown)] {
+            let (mut run, _spare, _sink) = entered_run(None);
+            if diagnostic {
+                run.diagnostic = Some(DiagnosticSeat {
+                    reader_elected: false,
+                    artifact: String::new(),
+                    replayed: true,
+                });
+            }
+            let (leave, _admin) = pending_leave(Leave::Graceful, Leave::Graceful, false);
+            let (mut harness, _dir) = harness_entered(run);
+            let mut held = Some(leave);
+            harness.wind_down(&mut held).expect("the wind-down");
+            assert_eq!(
+                held.expect("the leave").progress.step,
+                want,
+                "diagnostic = {diagnostic}: the step is S5 only where the wind-down runs"
+            );
+        }
+    }
+
+    /// **A turn refused with the SPU alive and a leave held leaves the leave
+    /// graceful** (the Planner's grade of #119; (A) turns a leave forced for
+    /// a dead organ alone): the SPU refuses the turn's append after the leave
+    /// is held, the turn closes stopped with its dialer answered, and the
+    /// leave is carried out graceful, the wind-down run and `Left` saying
+    /// `forced` false. Perturbation: turn the held leave forced on any turn
+    /// error, and `Left` says true.
+    #[test]
+    fn a_turn_refused_with_the_spu_alive_and_a_leave_held_stays_graceful() {
+        use nix::sys::socket::{
+            AddressFamily, MsgFlags, SockFlag, SockType, recv as sock_recv, send as sock_send,
+            socketpair,
+        };
+        use std::os::fd::AsRawFd;
+        let (mut run, _spare, sink_path) = entered_run(None);
+        releasing_spu(&mut run);
+        let (near, far) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("socketpair");
+        run.spu.as_mut().expect("the arm").decode = crate::channel::decode_from_owned(near);
+        // The turn's append refused after the leave is heard; the wind-down's
+        // answered.
+        let decode_peer = std::thread::spawn(move || {
+            let mut buf = vec![0u8; 65536];
+            sock_recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("the turn's append");
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            sock_send(
+                far.as_raw_fd(),
+                &serde_json::to_vec(&weaver_types::TokenRefusal::NotOpen).unwrap(),
+                MsgFlags::empty(),
+            )
+            .expect("the refusal");
+            let n = sock_recv(far.as_raw_fd(), &mut buf, MsgFlags::empty())
+                .expect("the wind-down's append");
+            assert!(n > 0, "the wind-down ran");
+            let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+                content: vec![],
+                emission: "the summary".into(),
+                finish: weaver_types::Finish::Completed,
+                resident: 64,
+                capacity: 4096,
+                request: serde_json::value::RawValue::from_string(r#"{"rendered":"r"}"#.into())
+                    .unwrap(),
+                measurement: serde_json::value::RawValue::from_string("{}".into()).unwrap(),
+            });
+            sock_send(
+                far.as_raw_fd(),
+                &serde_json::to_vec(&answer).unwrap(),
+                MsgFlags::empty(),
+            )
+            .expect("the summary");
+            far
+        });
+        let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+        run.gate = Some(GateChannel {
+            channel: gate_end,
+            pid: nix::unistd::Pid::from_raw(i32::MAX),
+            last_word: crate::spawn::LastWord::quiet(),
+        });
+        let gate_peer = gate_peer.into_channel();
+        gate_peer
+            .send(&OrganEnvelope {
+                exchange: ExchangeId {
+                    opener: Opener::Gate,
+                    ordinal: 1,
+                },
+                position: Position::Open,
+                payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry(
+                    b"{\"text\":\"say a word\"}",
+                )),
+            })
+            .expect("the frame sends");
+        std::thread::spawn(move || {
+            while let Ok(asked) = gate_peer.recv() {
+                let answer = match asked.payload {
+                    weaver_types::Payload::Directive(LifecycleDirective::Quiesce) => {
+                        LifecycleAnswer::GateQuiesced
+                    }
+                    weaver_types::Payload::Directive(LifecycleDirective::Lower) => {
+                        LifecycleAnswer::GateStopped
+                    }
+                    _ => continue,
+                };
+                let _ = gate_peer.send(&OrganEnvelope {
+                    exchange: asked.exchange,
+                    position: Position::Close,
+                    payload: weaver_types::Payload::Answer(answer),
+                });
+            }
+        });
+        let (verb_end, admin_end) = OrganChannel::pair().expect("admin pair");
+        let admin = admin_end.into_channel();
+        admin
+            .send(&OrganEnvelope {
+                exchange: ExchangeId {
+                    opener: Opener::Admin,
+                    ordinal: 4,
+                },
+                position: Position::Open,
+                payload: weaver_types::Payload::Directive(LifecycleDirective::Leave {
+                    cause: weaver_types::Cause { uid: 7 },
+                    forced: false,
+                    rollback: false,
+                }),
+            })
+            .expect("the leave sends");
+        let (mut harness, _dir) = harness_entered(run);
+        let mut verb_slot = Some(verb_end);
+        harness
+            .serve_gate_wake(
+                "identity",
+                &[],
+                &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
+                    ports.turn(vec![weaver_traits::Message {
+                        role: weaver_traits::Role::User,
+                        content: vec![weaver_traits::ContentBlock::Text {
+                            text: text.to_string(),
+                        }],
+                    }])
+                },
+                &mut verb_slot,
+            )
+            .expect("the wake serves");
+        drop(harness);
+        drop(verb_slot);
+        let _far = decode_peer.join().expect("the decode peer");
+        let left = admin.recv().expect("the leave's answer").payload;
+        assert!(
+            matches!(
+                left,
+                weaver_types::Payload::Answer(LifecycleAnswer::Left { forced: false, .. })
+            ),
+            "{left:?}"
+        );
+        let stream = std::fs::read_to_string(&sink_path).expect("the sink");
+        assert!(
+            stream.contains("The agent is unloading now"),
+            "the wind-down ran"
         );
     }
 
