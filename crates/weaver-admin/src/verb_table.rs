@@ -101,12 +101,12 @@ pub enum AdminView {
     /// A worker answers at rest or with a turn: S2, S3, S9. **Admin directs
     /// and the harness tells the three apart**, each split pinned there:
     /// S3's `ActivityNotAtRest` to a save point by
-    /// `lifecycle::tests::a_save_point_or_a_leave_with_a_turn_in_flight_is_refused_not_at_rest`
-    /// and `engine::tests::a_save_point_or_a_leave_mid_turn_is_refused_not_at_rest`;
+    /// `lifecycle::tests::a_save_point_with_a_turn_in_flight_is_refused_not_at_rest`
+    /// and `engine::tests::a_save_point_mid_turn_is_refused_not_at_rest`;
     /// `show`'s word by `lifecycle::tests::observe_answers_from_any_position_and_authors_nothing`
     /// and `engine::tests::an_observation_dialed_mid_stream_answers_active_and_disturbs_nothing`;
     /// S9's lowered gate, never lowered twice, by
-    /// `lifecycle::tests::a_leave_without_its_save_point_stops_and_a_forced_leave_takes_none`.
+    /// `lifecycle::tests::a_leave_without_its_save_point_stops_and_a_forced_leave_takes_one`.
     Serving,
     /// A worker accepts and does not answer: S2, S3 or S9, wedged.
     Wedged,
