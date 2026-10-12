@@ -46,6 +46,14 @@ pub const DECODE_MESSAGE_BOUND: usize = 8 * 1024 * 1024;
 /// Defined here once, the floor, so the gate and the harness read one value.
 pub const LOWER_BOUND_MS: u64 = 10_000;
 
+/// **The leave bound**, per `weaver-admin-Spec` section 3 (I3): admin waits
+/// this long on a harness's `Left` from the moment a force can act, and the
+/// harness's legs from the lower on sum inside it, the trace's drain, the
+/// SPU's `Release` and the reaps sharing what the lower and the save point's
+/// legs leave (`weaver-harness-Spec` section 6, the shared deadline). Defined
+/// here once, the floor, so admin and the harness read one value.
+pub const LEAVE_BOUND_MS: u64 = 150_000;
+
 /// **The gate's settle margin**, per `weaver-gate-Spec` section 4: a draining
 /// gate answers `GateStopped` at most this far inside the lower bound, timed
 /// from hearing the `Lower`, so its answer reaches a harness still waiting the

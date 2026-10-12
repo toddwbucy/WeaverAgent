@@ -712,8 +712,9 @@ or `Unconfirmed`, its `Release` answered `Released` or not, per
 `weaver-harness-spu-contract` section 5, and an SPU that dies in its release is a
 `fault` authored before `unload`, its outcome `Unconfirmed`. The member's is
 `Closed` or `Unconfirmed`, absent where the run stands no member: the member has no
-release exchange, so this crate closes the state seam and the member retires on its own
-(`weaver-admin-Spec` section 6), and `Closed` says only that the close was made, never
+release exchange, so this crate closes its ask end of the state seam, the tee's end
+closing with the writer after `unload` crosses it, and the member retires on its own
+(`weaver-admin-Spec` section 6), and `Closed` says only that the ask end was closed, never
 that the member was seen to exit; `Unconfirmed` says the seam was already dead or the
 close failed. **`release` is optional
 at the read**, per section 3's rule for an added member: this crate always writes it,
@@ -1489,7 +1490,11 @@ impl Recorder {
     pub fn structure(&self) -> &WorkingStructure
     pub fn boundary(&self) -> Boundary
     pub fn drain(&mut self) -> Result<(), Failure>
+    pub fn drain_by(&mut self, deadline: Instant) -> Result<Drained, Failure>
+    pub fn abandon(&mut self)
 }
+
+pub enum Drained { Emptied, Expired { queued: usize } }
 ```
 
 **`Recorder` is the crate's principal type and owns both sinks.** The emit path
@@ -1704,7 +1709,21 @@ to: trace-receive-site-takes-no-flag
 answering left, so a left answer means everything admitted reached the sink, per the
 coordination contract's ordering. At process death nothing drains and the tail is
 forfeited, which this crate cannot report because the process reporting it is the
-one that died.
+one that died. **`drain_by` bounds the wait**: it answers as `drain` does where the
+queue empties by the deadline, and otherwise `Expired` naming how many records were
+still queued, the wait given up on them while the writer goes on; the harness's leave
+drains so under its shared deadline (`weaver-harness-Spec` section 6) and names the
+forfeit itself. **The queue's last slot is the run's `unload`'s** (`UNLOAD_RESERVE`, one): every
+other record's submit waits once the queue holds the depth less the reserve, so "the
+queue is full" means that depth for every record but `unload`, and the terminal event is
+admitted however the sink stalls. Only `unload` takes the reserve, and a run authors
+one. **`abandon` gives the writer up** after the caller's last bounded drain expired: the
+records still queued are forfeited, as at process death (`weaver-trace-PRD` section
+4.2), the writer begins no further record, and dropping the recorder detaches its thread
+rather than wait on a sink that stopped taking writes, so the process can exit; a record
+already in its write lands whole if the sink unblocks before the exit. The harness
+abandons after its leave's final drain expires (`weaver-harness-Spec` section 6, the
+shared deadline), answering no `Left`.
 
 ## 8. Instrumentation
 

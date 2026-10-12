@@ -411,7 +411,7 @@ section 3 states where that obligation lands now.
 | S1 | Loading | invocation (load), run | starting, then `BeforeEnter` | `BeforeRaise`, then `Raised` | as found, until the enter answers |
 | S2 | Serving, at rest | run | `Entered`, no turn | `Raised` | `Open{run}` |
 | S3 | Serving, turn in flight (a tool call out through the gate, and the seeding turn, included) | run | `Entered`, turn | `Raised` | `Open{run}` |
-| S4 | Graceful: draining | invocation (unload), run | leave pending; a turn may still run | `Raised` while an execution is open (`ToolInterrupt` sent), then `Draining` once `Quiesce` is read | `Open{run}` |
+| S4 | Graceful: draining | invocation (unload), run | leave pending; a turn may still run | `Raised` while the turn in flight runs (`ToolInterrupt` sent to an execution open in it), then `Draining` once `Quiesce` is read | `Open{run}` |
 | S5 | Graceful: winding down | invocation (unload), run | the wind-down turn | `Draining` | `Open{run}` |
 | S6 | Lowering and saving | invocation (unload), run | lower, then the save point's four legs | `Draining`, then `Lowered` | `Open{run}` |
 | S7 | Leaving (after the save point, taken or missed; the leave's outcome fixed) | invocation (unload), run | the SPU and the member released, an SPU fault met there and any recorder pressure authored, then `unload` authored, the terminal event | `Lowered` | `Open{run}` |
@@ -449,8 +449,8 @@ The live restore, a reload of state without a process restart, is A5's, with the
 |---|---|---|---|---|---|---|---|
 | S2 | admitted: S3 | - | - | - | - | S8b (the worker gone, no `Left`, the marker `Open`; S0d once the run lock frees); the trace ends unclosed | the run serves on with the state seam retired: the tee stops distilling and turns are served as before (`weaver-harness-state-contract` section 5, a dead peer costs the distillate and never the turn); every save point after it refuses `SavePointNotTaken` naming `MemberDead`, no save point being taken after the tee was lost (`weaver-harness-Spec` section 6); stays S2 |
 | S3 | queued behind the turn, and served after it | delivered to the turn | S2; `turn.closed` | - | - | S8b, as in S2: the turn in flight's `turn.started` is left with no `turn.closed`, the record that its request was not completed, and its caller and any queued behind it are dropped unanswered (I5, while the worker lives) | as in S2; stays S3 |
-| S4 | refused through the gate, its connection standing ("the agent is unloading"), and recorded as a refusal of the leave, `Unloading`; a seeding line is refused as any request is; while the gate is still `Raised` behind an open execution, a request it admits reaches the harness and is refused the same way, the refusal crossing the gate once the execution has ended; a dial still in the listener's backlog at the quiesce is closed, never admitted | blocked by the gate (`ToolInterrupt`, answered `Killed{by: unload}`): the call is recorded interrupted by the unload, re-runnable at the reload, and the turn closes without it; the first outcome wins, a result already sent when the interrupt reached the gate standing, delivered to the turn as in S3 and never re-runnable | the leave staying graceful: S5; `turn.closed`, `Clean` where the turn finished; a leave a join, a declared bound or a dead gate or SPU turned forced cancels the turn instead, `Stopped{reason: unload}` with the leave's cause, and goes to S6 with no wind-down | the leave turns forced from where it stands, no `forced_by`, the cause the graceful caller's: the turn cancelled, `Stopped{reason: unload}`, no wind-down, S6 | - | S8b, as in S3 | the leave goes on, the seam retired; its save point at S6 misses `MemberDead`, as S6's missed-leg cell |
-| S5 | refused as in S4 | the wind-down's own calls are never sent, and are recorded interrupted | S6 (the wind-down's request and summary on the record and in state) | the leave turns forced as in S4: the wind-down's generation cancelled, S6 | - | S8b, as in S2 | as in S4 |
+| S4 | refused through the gate, its connection standing ("the agent is unloading"), and recorded as a refusal of the leave, `Unloading`; a seeding line is refused as any request is; while the gate is still `Raised` behind the turn in flight, a request it admits reaches the harness and is refused the same way at the drain, once the turn has finished; a dial still in the listener's backlog at the quiesce is closed, never admitted | blocked by the gate (`ToolInterrupt`, answered `Killed{by: unload}`): the call is recorded interrupted by the unload, re-runnable at the reload, and the turn closes without it; the first outcome wins, a result already sent when the interrupt reached the gate standing, delivered to the turn as in S3 and never re-runnable | the leave staying graceful: S5; `turn.closed`, `Clean` where the turn finished; a leave a join, a declared bound or a dead gate or SPU turned forced cancels the turn instead, `Stopped{reason: unload}` with the leave's cause, and goes to S6 with no wind-down | the leave turns forced from where it stands, no `forced_by`, the cause the graceful caller's: the turn cancelled, `Stopped{reason: unload}`, no wind-down, S6 | - | S8b, as in S3 | the leave goes on, the seam retired; its save point at S6 misses `MemberDead`, as S6's missed-leg cell |
+| S5 | refused as in S4 | the wind-down's own calls are never sent, and are recorded interrupted | S6 (the wind-down's request and summary on the record and in state): `turn.closed` `Clean` where it finished, `Stopped{reason: unload}` with the leave's cause where its declared bound cut it | the leave turns forced as in S4: the wind-down's generation cancelled, S6 | - | S8b, as in S2 | as in S4 |
 | S6 | the gate already refuses; at the lower, a frame met is recorded refused and its connection closes | - | - | - (the legs from the lower on are bounded in this crate's 150 seconds) | a leave that stayed graceful: S9, `SavePointNotTaken` naming the leg, nothing more authored, the run entered at rest with the gate lowered; a leave a join, a declared bound or a dead gate or SPU turned forced: the miss recorded as a refusal of the leave naming the leg, S7, `Left{forced: true}` with no save point, the outcome table's forced row, marker `Forced` | S8b, as in S2 | the leg missed is `MemberDead`, as this row's missed-leg cell: a leave that stayed graceful to S9, `force-unload` the recourse; a forced one to the outcome table's forced row, marker `Forced` |
 | S7 | - | - | - | - | - | S8b as far as this crate can tell, as in S2, the trace possibly ending before `unload` | the seam found dead at the release: `release.member` reads `Unconfirmed`, no `fault` authored, a dead peer being no fault (`weaver-harness-state-contract` section 5), and the leave goes on; a member that dies after its seam closed is unseen, `Closed` saying only that the close was made |
 | S9 | the gate is lowered: the connection is refused | - | - | - | - | S8b, as in S2 | stays S9: a retried `unload` refuses `SavePointNotTaken` naming `MemberDead` again, and `force-unload` is the recourse, coming down `Forced` |
@@ -486,7 +486,7 @@ choice made in advance, for an operator who will not stand watch.
 **The graceful unload (`unload`): drain, finish, wind down, save, down.**
 
 1. This crate takes the invocation lock and **holds it until it concludes**, and directs `Leave{cause}` (S4).
-2. Where a tool call is out at the gate, the harness first sends `ToolInterrupt` on the open execution, the one frame the gate accepts during an execution besides its continuation and the cancel (the first outcome wins; S4 x tool return). Then it sends `Quiesce`: the gate closes its listener, closes connections owed nothing, stops reading, flushes every frame it admitted, then answers `GateQuiesced`. The harness refuses each flushed frame through the gate, recording it.
+2. Where a tool call is out at the gate, the harness first sends `ToolInterrupt` on the open execution, the one frame the gate accepts during an execution besides its continuation and the cancel (the first outcome wins; S4 x tool return). Then, once the turn in flight has finished (step 3), or at once where none runs, it sends `Quiesce` (`weaver-harness-Spec` section 6, item 1): the gate closes its listener, closes connections owed nothing, stops reading, flushes every frame it admitted, then answers `GateQuiesced`. The harness refuses each flushed frame through the gate, recording it.
 3. A turn in flight finishes what it can without further input, a call interrupted at step 2 recorded interrupted and the turn going on without its return, and the turn's answer goes to its caller (S4 to S5).
 4. The wind-down turn: the harness asks the model to summarize for resumption, one generation, its calls not sent; the request and the summary are on the record and in state (S5 to S6).
 5. `Lower`: the gate answers `GateStopped` after every owed response is written, then drops the relay.
@@ -512,7 +512,7 @@ choice made in advance, for an operator who will not stand watch.
 
 **Combinations the harness never answers, each unreachable and why:** a rollback that is not forced, or that reports a save point (a rollback's `Leave` carries `forced` and takes none); an unjudged territory with `forced` false (an unforced verb judges the territory before it directs a leave and refuses `BoundaryUnverified`, so no graceful `Left` arrives there); `no_state` true with a save point reported (a run with no state to keep takes none); and `no_state` false with no save point and `forced` false (a leave that stayed graceful and missed its save point answers `SavePointNotTaken`, not `Left`, below).
 
-A leave that stayed graceful whose save point is not taken answers no `Left` (a leave a join, a declared bound or a dead gate or SPU turned forced comes down as the forced rows above): it refuses `SavePointNotTaken` naming the leg and stops in S9, the marker `Open` and the run standing (S6 x member misses a save-point leg). A caller answered no `Left` concludes nothing (S8, S11).
+A leave that stayed graceful whose save point is not taken answers no `Left` (a leave a join, a declared bound or a dead gate or SPU turned forced comes down as the forced rows above): it refuses `SavePointNotTaken` naming the leg and stops in S9, the marker `Open` and the run standing (S6 x member misses a save-point leg). **A leave refused in S7** (`DescriptorsUnusable`: the record's writer failed, or its drain did not write `unload` to the stream by the shared deadline, `weaver-harness-Spec` section 6) answers no `Left` either, the worker leaving with its record unclosed: this crate concludes conservatively, as for no answer, publishing nothing, the marker left `Open` (the next load's reset `NoCleanUnload`, the room recovered then), and the run's processes ended by the escalation where they still stand (S8b, S11). A caller answered no `Left` concludes nothing (S8, S11).
 
 **The forced unload (`force-unload`): stop the work, keep the state.**
 
@@ -906,19 +906,25 @@ so the next load records the loss, and the force prints `Unloaded`: the outcome 
 row for an unjudged territory (3.0, the conclusion's outcomes). Force always works (I3). Its sole, joining and
 waiting forms, and its escalation of a silent harness, are the forced unload of 3.0.
 
-**The leave has a bound of its own, 150 seconds**, as 3.0's bounds state it: from the
-verb's start for a forced leave; for a graceful one, after its declared drain and
+**The leave has a bound of its own, 150 seconds** (`LEAVE_BOUND_MS`, defined once in
+`weaver-types`), as 3.0's bounds state it: **from the leave's direction**, the moment its
+dial sends `Leave`, for a forced leave; for a graceful one, after its declared drain and
 wind-down bounds where both are declared, and with either undeclared no deadline at all, a force joining being the recourse
-(I3). The 150 seconds run past the harness's 120 seconds for the save point's answer leg
+(I3). **The observation before it spends its own bound**, its dial's one second and its
+answer's five, never the leave's (the Planner's ruling of 2026-10-12, Codex on #119,
+round 2): the harness hears the leave only after that send and starts its shared deadline
+at its lower after that (`weaver-harness-Spec` section 6, the shared deadline), so this
+crate's window always ends at or after the harness's, and a `Left` seconds away is never
+escalated. The 150 seconds run past the harness's 120 seconds for the save point's answer leg
 and its two-second legs (the operator's ruling of 2026-10-08 on #1, `weaver-harness-Spec`
-section 6), so admin never abandons a save point the harness still awaits. The
-observation and both dials spend it, so a forced `unload` holds the invocation lock at
-most those 150 seconds and the escalation's forty-five, 195 in all, and a graceful one
-those 195 past its declared drain and wind-down bounds, or as long as the drain and the
+section 6), so admin never abandons a save point the harness still awaits. A forced
+`unload` holds the invocation lock at most the observation's six seconds, the leave's
+dial's one, those 150 seconds and the escalation's forty-five, 202 in all, and a graceful
+one those 202 past its declared drain and wind-down bounds, or as long as the drain and the
 wind-down take where either is undeclared, **before the publication that follows `Left`** (the #99 area 1 review): copying the leave's save point and any recovered
 file the room holds, at most section 6's 32 of up to a gibibyte each, is bounded by that
-cap and the copy's own speed and not by time, so a caller builds against 195 seconds plus
-the copy of what the room holds, never against 195 seconds alone, beside `show`'s short
+cap and the copy's own speed and not by time, so a caller builds against 202 seconds plus
+the copy of what the room holds, never against 202 seconds alone, beside `show`'s short
 wait for the lock. A worker
 that accepts leave and answers nothing inside a leave that has a bound (a forced one, or
 a graceful one with both bounds declared) is a worker that would not exit: the
@@ -3367,8 +3373,8 @@ perturbation-verified:
   never returns, and every later verb refuses `InvocationInFlight`.
 - **An undeclared graceful leave is never escalated**, watched by the same stand-in
   worker under a declaration with no `[lifecycle]` bounds: the graceful `unload` is still
-  waiting past 195 seconds, and a joining `force-unload` ends the run. The perturbation
-  imposes the 195 seconds on the graceful leave, and the test fails when the verb
+  waiting past 202 seconds, and a joining `force-unload` ends the run. The perturbation
+  imposes the 202 seconds on the graceful leave, and the test fails when the verb
   escalates.
 - **Outside the envelope, the conservative answer and no takeover** (3.0, outside the
   envelope; `weaver-agent-PRD` section 6.1), owed by the lifecycle act's code, one case

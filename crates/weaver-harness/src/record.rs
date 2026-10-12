@@ -104,6 +104,31 @@ impl Record {
         }
     }
 
+    /// [`Record::drain`] by a deadline, the leave's shared one
+    /// (`weaver-harness-Spec` section 6): `Expired` names what the writer had
+    /// not taken by it. The diagnostic arm drains vacuously.
+    pub fn drain_by(
+        &mut self,
+        deadline: std::time::Instant,
+    ) -> Result<weaver_trace::Drained, RecordFailure> {
+        match self {
+            Record::Serving(recorder) => {
+                recorder.drain_by(deadline).map_err(RecordFailure::Serving)
+            }
+            Record::Diagnostic(_) => Ok(weaver_trace::Drained::Emptied),
+        }
+    }
+
+    /// **Abandon the writer** (#117; `weaver-trace-Spec` section 7), after
+    /// the leave's last bounded drain expired: its queued records are
+    /// forfeited and the recorder's drop detaches the writer. The diagnostic
+    /// writer is synchronous and has nothing to abandon.
+    pub fn abandon(&mut self) {
+        if let Record::Serving(recorder) = self {
+            recorder.abandon();
+        }
+    }
+
     /// The serving recorder where that is the arm, for the tee attach and
     /// the tests that read the structure back.
     pub fn serving(&self) -> Option<&weaver_trace::Recorder> {

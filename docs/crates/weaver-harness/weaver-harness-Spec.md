@@ -2099,9 +2099,12 @@ listener is heard again, and it runs at the turn's close before any held request
 served.
 
 1. **Quiesce** (step 2; S4). Where a gate stands (a diagnostic binding has none, and skips
-   this item and item 4's lower), this crate sends `Quiesce` the moment the leave is heard,
-   after the interrupt of item 2 where a tool call is out at the gate, since a gate
-   executing a tool reads only that execution's continuation until it ends. It reads the
+   this item and item 4's lower), this crate sends `Quiesce` once the turn in flight has
+   finished (item 2), or at once where none runs: the drain's wait for `GateQuiesced` then
+   never shares the gate channel with the turn's own exchanges, a gate executing a tool
+   reading only that execution's continuation until it ends, and the interrupt of item 2
+   always precedes it. A frame the gate admits meanwhile waits on the channel and is
+   refused below, so no request opens a turn once the leave is heard (I5). It reads the
    gate channel until `GateQuiesced`, which the gate sends only after every frame it
    admitted, per `weaver-harness-gate-contract` section 2. Every frame met there, and
    every frame this crate held unserved behind the turn, a seeding line among them, is
@@ -2142,9 +2145,13 @@ served.
 6. **The release, then `unload`** (step 7; S7): the SPU and the member are released
    first: the SPU by its `Release`, answered `Released` (`Confirmed`) or not
    (`Unconfirmed`), an SPU that dies in it authored as a `fault` per
-   `weaver-harness-spu-contract` section 5; the member by closing the state seam, it
-   having no release exchange and retiring on its own (`Closed`, or `Unconfirmed` where
-   the seam was already dead or the close failed). The leave then reads the recorder's
+   `weaver-harness-spu-contract` section 5, the classify arm, where one stands, having
+   been released before either by closing its seam and reaping it; the member by closing
+   this crate's ask end of
+   the state seam, it having no release exchange and retiring on its own once the tee's
+   end closes with the writer, so `unload` still crosses the tee and state holds the run's
+   terminal record (`Closed`, or `Unconfirmed` where the seam was already dead or the
+   close failed). The leave then reads the recorder's
    queue depth and authors any pressure `fault` the crossing calls for, as the pressure
    rule of section 4 states; then `unload` is authored with `forced`, the leave's cause
    and the release outcome, the run's terminal event, nothing authored after it (I9); the
@@ -2231,7 +2238,10 @@ I3), through one helper: the wait for `GateQuiesced`, the drain, the wind-down, 
 lower, the save point's four legs and the grants read-back poll the listener beside what
 they wait on, and the dials that land while this crate waits on what cannot be polled
 beside it, the SPU's release, the trace's drain and the reaps, are swept from the
-listener's backlog before the leave's dialers are answered, by the from-S7 rule. **S7
+listener's backlog before the leave's dialers are answered, by the from-S7 rule. A dialer
+heard during a leave that sends no directive within the state seam's answer bound,
+`ANSWER_BOUND_MS` (2 seconds), is dropped unanswered, so a silent dial never holds the
+leave. **S7
 runs the seal's steps** (`weaver-admin-Spec` section 3, the seal: S7's own steps, the
 authority, not restated here): the pathname unlinked, the backlog drained into held
 connections, the release, `unload`, the writer's drain, and only then the `Left` to the
@@ -2251,8 +2261,8 @@ so the two agree by construction.
 Where the declaration sets one, a leg past its bound turns the leave forced from where it
 stands, as a join does, with no `forced_by` and the cause staying the graceful caller's,
 `unload` and `Left` then carrying `forced` true and a missed leg coming down as a forced
-leave's does; with both set, admin's bound is their sum and 150 seconds, per `weaver-admin-Spec`
-section 3. Every other leg is bounded in this crate: the save point's ask and `finished`
+leave's does; with both set, admin's bound is as `weaver-admin-Spec` section 3's leave
+bound states it, from the leave's direction, which precedes this crate's hearing of it. Every other leg is bounded in this crate: the save point's ask and `finished`
 legs and the grants read-back under `ANSWER_BOUND_MS`, its answer leg under
 `SNAPSHOT_ANSWER_BOUND_MS`, and `GateStopped` from a draining gate under the lower bound,
 10 seconds (`LOWER_BOUND_MS`, the operator's ruling of 2026-10-09 on #1, defined once in
@@ -2260,7 +2270,17 @@ legs and the grants read-back under `ANSWER_BOUND_MS`, its answer leg under
 per `weaver-gate-PRD` section 13.4; these, the trace's drain, the SPU's `Release` and the
 reaps sum inside admin's 150 seconds: the three two-second legs, the 120-second answer leg
 and the 10-second lower take 136 seconds, leaving 14 for the trace's drain, the release
-and the reaps. The wait
+and the reaps. **Those three share one deadline**, the lower's start plus the leave bound,
+150 seconds (`LEAVE_BOUND_MS`, defined once in `weaver-types` and read by this crate and
+admin), so they get whatever the lower and the legs left (the Planner's ruling of
+2026-10-09); past it the drain stops waiting and the records still queued are forfeited, a
+`fault` naming them authored before `unload` where the writer's queue has room below
+`unload`'s reserved slot (`weaver-trace-Spec` section 7), `release.spu` reads
+`Unconfirmed`, and an organ not yet reaped is killed (`SIGKILL`), then reaped. **`Left` is
+answered only where `unload` reached the stream** (I2, on the Planner's ruling of
+2026-10-10): `unload` always takes its reserved slot, and a drain that has not written it
+by the deadline refuses the leave `DescriptorsUnusable`, admin concluding as for no answer
+(`weaver-admin-Spec` section 3). The wait
 for `GateQuiesced` is the drain's, not one of these legs: a declared `drain-bound`
 covers it and the turn's finish together, and with none declared it is unbounded, a
 force being the recourse (Codex on #109, round 40). A force, sole or joining, skips the drain and the wind-down, so its

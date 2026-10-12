@@ -226,6 +226,11 @@ impl StateSeam {
         }
     }
 
+    /// Whether the seam has retired on a failure, the member found dead.
+    pub(crate) fn dead(&self) -> bool {
+        self.dead
+    }
+
     /// The shape ask: write the frame, await the answer inside the bound,
     /// parse. `None` is the contract's dead peer at the seat, whether the
     /// leg is down, the write refused, the bound expired, or the answer
@@ -249,10 +254,6 @@ impl StateSeam {
         self.await_answer(ANSWER_BOUND_MS, parse_shape_answer)
     }
 
-    /// The recall ask, per the contract: the conversation as custody holds
-    /// it, bounded to the most recent turns where a bound is given. The
-    /// same one-strike economics as the shape ask, for the same
-    /// mis-attribution reason.
     /// The boundary as the store states it, per the contract's `grants` ask
     /// of 2026-09-04: asked at the enter and the leave by the seat itself,
     /// never granted to a loop, and missing on the same three grounds as
@@ -299,6 +300,10 @@ impl StateSeam {
         self.await_answer(bound_ms, parse_identity_answer)
     }
 
+    /// The recall ask, per the contract: the conversation as custody holds
+    /// it, bounded to the most recent turns where a bound is given. The
+    /// same one-strike economics as the shape ask, for the same
+    /// mis-attribution reason.
     pub(crate) fn ask_recall(&mut self, last_turns: Option<u64>) -> Option<Vec<Recalled>> {
         self.ask_recall_within(last_turns, ANSWER_BOUND_MS)
     }
