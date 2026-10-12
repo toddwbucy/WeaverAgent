@@ -147,9 +147,9 @@ way, closes the exchange.
 operator on 2026-10-09 and recorded on #1, whose text is `weaver-admin-Spec` section 3;
 the two exchanges below implement its graceful and forced unloads and cite their rows.
 
-**Quiesce the hook.** Opened by the harness, the graceful leave's first step, at once
-when the leave is heard, at rest or mid-turn, after the interrupt of an execution where
-one is out (`weaver-admin-Spec` section 3, the graceful unload, step 2). The gate closes
+**Quiesce the hook.** Opened by the harness, the graceful leave's first step, at the
+moment `weaver-harness-Spec` section 6, item 1, and `weaver-admin-Spec` section 3, the
+graceful unload, step 2, name. The gate closes
 the listener, closes every connection owed nothing, stops reading the rest, and answers
 `GateQuiesced`. **Every turn frame the gate admitted precedes that answer on the
 channel**, the gate sending what waited on writability before it answers, so the
