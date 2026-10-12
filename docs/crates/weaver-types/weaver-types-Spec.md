@@ -1647,7 +1647,12 @@ prints it too where the leave's caller was killed, and `show` prints it where th
 lock is held and no worker answers, `Unloaded` meaning nothing resident and printed only
 once the run lock is free, per `weaver-admin-Spec` section 3. It claims no `AgentState`, apex section 6's
 four states being the harness's to know and the harness being busy with that very
-invocation, so the caller polls again.
+invocation, so the caller polls again. **It may name the run's constituents** (on the
+Planner's ruling of 2026-10-12, B3): `InTransition { constituents }`, the field optional
+and left off the wire where empty, so the empty answer is the unit answer's bytes. Admin
+fills it from the run lock's holders where `show` prints it on its rungs (i) and (iii), a
+run never entered or one ending (`weaver-admin-Spec` section 3, the ladder); the harness
+sends it empty, as does `show`'s rung (0), the holder there being another invocation.
 
 **Four more cases join it on the same ruling, each one fact.** `InvocationInFlight` says
 another invocation holds this agent's invocation lock, so this one touched nothing, per

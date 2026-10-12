@@ -167,7 +167,8 @@ containment at every load. They are absent where no run stands. **`Unloaded` mea
 nothing resident**, and `show` prints it only once the run lock is free: while any
 constituent still holds it and no worker answers, a run that never entered or one
 ending, `show` prints `InTransition` with the constituents named (`weaver-admin-Spec`
-section 5). Standard error carries
+section 5), in the answer's optional `constituents` field (`weaver-types-Spec` section
+3.1). Standard error carries
 human-readable diagnostics no caller parses. A
 `load` answers once the agent is up or refused, within admin's own bound of 900 seconds
 by default on the agent's start, which a caller's bound must exceed, after any
