@@ -372,8 +372,10 @@ any enter, `Unloaded` and no load. Entered, `Idle` where no turn is in flight an
 `Active` where one is, with the load's facts beside the state, the session, the run, the
 declaration's digest as admin read it at the enter, the artifact, the elections the load
 stands under, the store the member stands on and whether its end arrived, and the
-composing loop by binary and, where it is a file, path and digest, the same facts the
-`load` event carries and read from the run rather than the record. While a leave is
+composing loop by binary and, where it is a file, path and digest, and the declared drain
+and wind-down bounds the enter carried, each absent where the declaration was silent
+(admin's unload reads its deadline from them, `weaver-admin-Spec` 3.0, the bounds), the
+same facts the `load` event was authored from, read from the run rather than the record. While a leave is
 pending, `InTransition`; while the leave's invocation lives `show` answers `InTransition`
 without dialing, so an `Observe` reaches a pending leave only where that invocation has
 died, outside the envelope (`weaver-admin-Spec` section 3, the ladder). After a leave,

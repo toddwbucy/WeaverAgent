@@ -2258,8 +2258,9 @@ wind-down's one generation have no bound unless the declaration sets
 without them `force-unload` is the recourse, admin waiting for `Left` with no deadline.
 This crate reads the two from the enter, `EnterPayload.drain_bound` and
 `wind_down_bound`, its only source, since it holds no declaration; each absent means that
-phase is unbounded, and admin's own wait comes from the same parse it put on the enter,
-so the two agree by construction.
+phase is unbounded. It answers them back on `Observe`, on `LoadFacts` (`weaver-types-Spec`
+section 4.2), from which admin's unload reads its own wait, so the two agree by
+construction.
 Where the declaration sets one, a leg past its bound turns the leave forced from where it
 stands, as a join does, with no `forced_by` and the cause staying the graceful caller's,
 `unload` and `Left` then carrying `forced` true and a missed leg coming down as a forced
