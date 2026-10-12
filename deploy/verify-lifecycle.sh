@@ -652,7 +652,7 @@ step_1b() {
 
 RUN=""
 step_2() {
-  begin_step 2 "weaver-admin-Spec section 6; #99 K12" "validate, load, seed, one turn"
+  begin_step 2 "weaver-admin-Spec section 6, 3.0 S0 x load; #99 K12" "validate, load, seed, one turn"
   run_line "weaver-admin validate $A"
   run_line "deploy/verify-load.sh $A --keep   (as root)"
   run_line "deploy/turn.py $A --system"
@@ -725,7 +725,7 @@ print("seeded, then one turn" if ok else " ".join(ks))')
 
 SP_A_NAME=""; SP_A_DIG=""
 step_3() {
-  begin_step 3 "weaver-admin-Spec section 6" "an on-demand save point"
+  begin_step 3 "weaver-admin-Spec section 6, 3.0 S2 x save-point" "an on-demand save point"
   run_line "weaver-admin save-point $A"
   want "save_point_taken, its report naming the digest"
   want "the manifest holds one line: 1 demand <name> <digest>; the published file root:$AU-admin 640, the manifest root:root 644"
@@ -748,7 +748,7 @@ step_3() {
 }
 
 step_4() {
-  begin_step 4 "weaver-admin-Spec section 6; restore is a reload" "unload, then reload with state carried"
+  begin_step 4 "weaver-admin-Spec section 6, 3.0 S2 x unload and outcome row 6; restore is a reload" "unload, then reload with state carried"
   run_line "weaver-admin unload $A; weaver-admin show $A; weaver-admin load $A"
   run_line "deploy/turn.py $A \"In one sentence, what were you asked to be?\""
   want "unloaded; the marker closed; a second manifest line arrived leave (SP_B); the unload event not forced; a save_point event for SP_B"
@@ -777,7 +777,7 @@ step_4() {
 }
 
 step_5() {
-  begin_step 5 "weaver-admin-Spec section 4; #99 N6" "restore an older save point, then load"
+  begin_step 5 "weaver-admin-Spec section 4, 3.0 S0 x restore and outcome row 6; #99 N6" "restore an older save point, then load"
   run_line "weaver-admin unload $A"
   run_line "append [restore] save-point = \"<SP_A name>\" to $DECL (as sudoedit would; owner and mode kept)"
   run_line "weaver-admin restore $A; weaver-admin load $A"
@@ -825,27 +825,29 @@ step_5() {
 }
 
 step_6() {
-  begin_step 6 "weaver-admin-Spec section 3" "force-unload, then load"
+  begin_step 6 "weaver-admin-Spec section 3, 3.0 S2 x force-unload, sole, and outcome row 6" "force-unload, then load"
   run_line "weaver-admin force-unload $A; weaver-admin load $A"
-  want "unloaded; the marker forced; the unload event forced; no new manifest line"
-  want "load idle; its reset {prior_run: the forced run, reason: forced-unload}; its lineage the manifest's latest"
+  want "unloaded; the marker closed; the unload event forced; a manifest line arrived leave (SP_F), the last save_point event naming it"
+  want "load idle; no reset; its lineage SP_F"
   [ "$APPLY" -eq 1 ] || return 0
   local lines; lines=$(manifest_count)
   ask force-unload; expect_state force-unload unloaded
-  expect_marker "$RUN" forced
+  expect_marker "$RUN" closed
   expect_eq "the unload event is forced" true "$(json_at "$(last_event unload)" payload.forced)"
-  expect_eq "no manifest line was added" "$lines" "$(manifest_count)"
+  expect_eq "one manifest line was added" "$((lines + 1))" "$(manifest_count)"
+  expect_eq "the line arrived at the leave" leave "$(manifest_field last 2)"
+  local spf; spf=$(manifest_field last 4)
+  expect_eq "the last save_point event names SP_F" "$spf" "$(json_at "$(last_event save_point)" payload.save_point)"
   ask load; expect_state load idle
   local load; load=$(last_event load)
-  expect_eq "the reset names the forced run" "$RUN" "$(json_at "$load" payload.reset.prior_run)"
-  expect_eq "the reset reason" forced-unload "$(json_at "$load" payload.reset.reason)"
-  expect_eq "the lineage is the manifest's latest" "$(manifest_field last 4)" "$(json_at "$load" payload.lineage.save_point)"
+  expect_eq "the load carries no reset" absent "$(json_at "$load" payload.reset)"
+  expect_eq "the lineage is the new line" "$spf" "$(json_at "$load" payload.lineage.save_point)"
   RUN=$(json_at "$load" payload.run)
   end_step
 }
 
 step_6b() {
-  begin_step 6b "weaver-admin-Spec section 9; #99 K5" "force-unload on a territory that drifted while a run stands"
+  begin_step 6b "weaver-admin-Spec section 9, 3.0 outcome row 2; #99 K5" "force-unload on a territory that drifted while a run stands"
   run_line "with the run standing, the territory at 0711 (put back by the step and by the exit trap)"
   run_line "weaver-admin unload $A; weaver-admin force-unload $A; the territory put back"
   run_line "weaver-admin load $A"
@@ -875,7 +877,7 @@ step_6b() {
 }
 
 step_7() {
-  begin_step 7 "weaver-admin-Spec sections 3 and 4" "crash recovery"
+  begin_step 7 "weaver-admin-Spec sections 3 and 4, 3.0 S8b" "crash recovery"
   run_line "weaver-admin show $A; kill -9 the constituent whose comm is $WORKER_COMM and whose owner is $AU"
   run_line "weaver-admin show $A; where constituents remain: weaver-admin load $A, then unload $A"
   run_line "weaver-admin load $A"

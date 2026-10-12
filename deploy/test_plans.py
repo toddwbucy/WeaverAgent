@@ -2265,12 +2265,53 @@ esac
         self.assertEqual(result.returncode, 0, result.stderr)
         for label in ("step 0 (deploy/REDEPLOY.md section 0)",
                       "step 1b (weaver-admin-Spec section 9; #99 H3)",
-                      "step 2 (weaver-admin-Spec section 6; #99 K12)",
-                      "step 5 (weaver-admin-Spec section 4; #99 N6)",
-                      "step 6b (weaver-admin-Spec section 9; #99 K5)",
+                      "step 2 (weaver-admin-Spec section 6, 3.0 S0 x load; #99 K12)",
+                      "step 5 (weaver-admin-Spec section 4, 3.0 S0 x restore and outcome row 6; #99 N6)",
+                      "step 6b (weaver-admin-Spec section 9, 3.0 outcome row 2; #99 K5)",
                       "step 8 (#99 N1, N5)", "step 8b (#99 H5, measured)",
                       "step 9 (HowToDeployANewAgent.md section 7)"):
             self.assertIn(f"== {label}:", result.stdout)
+
+    def test_lifecycle_verb_steps_cite_their_3_0_row(self):
+        # Every step that drives a lifecycle verb names its row of
+        # weaver-admin-Spec 3.0 (the state, verb and outcome tables), so a
+        # PASS or FAIL line says which row it checked; the steps that drive
+        # none (the box, create, the near misses, the staged keys, the take
+        # down) keep their own citations. Perturbation: drop the row from
+        # step 6's label, and this fails.
+        result = self.lifecycle()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for step, row in (("2", "3.0 S0 x load"), ("3", "3.0 S2 x save-point"),
+                          ("4", "3.0 S2 x unload and outcome row 6"),
+                          ("5", "3.0 S0 x restore and outcome row 6"),
+                          ("6", "3.0 S2 x force-unload, sole, and outcome row 6"),
+                          ("6b", "3.0 outcome row 2"), ("7", "3.0 S8b")):
+            line = next((l for l in result.stdout.splitlines()
+                         if l.startswith(f"== step {step} (")), "")
+            self.assertIn(row, line, f"step {step}")
+
+    def test_lifecycle_the_sole_force_concludes_by_its_row(self):
+        # The healthy sole force (step 6) takes its leave save point, so by
+        # weaver-admin-Spec 3.0's outcome row 6 it publishes a line arrived
+        # at the leave, closes the marker Closed, and the next load records
+        # no reset, its lineage the new line; the unload event is forced
+        # (I2). Perturbation: put back step 6's "the marker forced; no new
+        # manifest line", and this fails.
+        result = self.lifecycle()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("unloaded; the marker closed; the unload event forced; "
+                      "a manifest line arrived leave (SP_F)", result.stdout)
+        self.assertIn("load idle; no reset; its lineage SP_F", result.stdout)
+        self.assertNotIn("the marker forced; the unload event forced; no new manifest line",
+                         result.stdout)
+        script = (self.repo / "deploy" / "verify-lifecycle.sh").read_text()
+        body = script[script.index("step_6() {"):script.index("step_6b() {")]
+        for check in ('expect_marker "$RUN" closed',
+                      'expect_eq "the line arrived at the leave" leave "$(manifest_field last 2)"',
+                      'expect_eq "the load carries no reset" absent',
+                      'expect_eq "the lineage is the new line" "$spf"'):
+            self.assertIn(check, body)
+        self.assertNotIn("forced-unload", body)
 
     def test_lifecycle_step_8_is_a_plan_only_near_miss_and_8b_always_runs(self):
         # Step 8 stages a declaration-directory key on the throwaway root and
