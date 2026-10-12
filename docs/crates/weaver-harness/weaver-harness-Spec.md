@@ -2099,9 +2099,12 @@ listener is heard again, and it runs at the turn's close before any held request
 served.
 
 1. **Quiesce** (step 2; S4). Where a gate stands (a diagnostic binding has none, and skips
-   this item and item 4's lower), this crate sends `Quiesce` the moment the leave is heard,
-   after the interrupt of item 2 where a tool call is out at the gate, since a gate
-   executing a tool reads only that execution's continuation until it ends. It reads the
+   this item and item 4's lower), this crate sends `Quiesce` once the turn in flight has
+   finished (item 2), or at once where none runs: the drain's wait for `GateQuiesced` then
+   never shares the gate channel with the turn's own exchanges, a gate executing a tool
+   reading only that execution's continuation until it ends, and the interrupt of item 2
+   always precedes it. A frame the gate admits meanwhile waits on the channel and is
+   refused below, so no request opens a turn once the leave is heard (I5). It reads the
    gate channel until `GateQuiesced`, which the gate sends only after every frame it
    admitted, per `weaver-harness-gate-contract` section 2. Every frame met there, and
    every frame this crate held unserved behind the turn, a seeding line among them, is
@@ -2142,7 +2145,9 @@ served.
 6. **The release, then `unload`** (step 7; S7): the SPU and the member are released
    first: the SPU by its `Release`, answered `Released` (`Confirmed`) or not
    (`Unconfirmed`), an SPU that dies in it authored as a `fault` per
-   `weaver-harness-spu-contract` section 5; the member by closing this crate's ask end of
+   `weaver-harness-spu-contract` section 5, the classify arm, where one stands, having
+   been released before either by closing its seam and reaping it; the member by closing
+   this crate's ask end of
    the state seam, it having no release exchange and retiring on its own once the tee's
    end closes with the writer, so `unload` still crosses the tee and state holds the run's
    terminal record (`Closed`, or `Unconfirmed` where the seam was already dead or the
@@ -2233,7 +2238,10 @@ I3), through one helper: the wait for `GateQuiesced`, the drain, the wind-down, 
 lower, the save point's four legs and the grants read-back poll the listener beside what
 they wait on, and the dials that land while this crate waits on what cannot be polled
 beside it, the SPU's release, the trace's drain and the reaps, are swept from the
-listener's backlog before the leave's dialers are answered, by the from-S7 rule. **S7
+listener's backlog before the leave's dialers are answered, by the from-S7 rule. A dialer
+heard during a leave that sends no directive within the state seam's answer bound,
+`ANSWER_BOUND_MS` (2 seconds), is dropped unanswered, so a silent dial never holds the
+leave. **S7
 runs the seal's steps** (`weaver-admin-Spec` section 3, the seal: S7's own steps, the
 authority, not restated here): the pathname unlinked, the backlog drained into held
 connections, the release, `unload`, the writer's drain, and only then the `Left` to the
