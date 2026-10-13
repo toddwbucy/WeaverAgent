@@ -3489,7 +3489,63 @@ class DecommissionTests(unittest.TestCase):
         # closed too: nothing under DEST is acted on as root.
         self.assertIn('as_op find "$DEST" -maxdepth 1 -type f -exec rm -f {}', self.script)
         self.assertNotIn('\n  find "$DEST"', self.script)
-        self.assertIn('as_op chmod 0700 "$DEST"', self.script)
+        self.assertIn('  close_dest "$DEST"\n  say "archive to $DEST"', self.script)
+
+    def test_a_default_acl_on_the_archive_directory_reaches_no_file(self):
+        """**No archive file inherits a reader** (#98, Codex on #142): a
+        default access-control list on DEST outranks the umask, so a file
+        created there takes its named entries and mask. `close_dest` strips
+        the directory's lists before anything is written, and `to_file` sets
+        each file 0600 once written, which masks any entry it did inherit.
+        Run as the script defines them under a stand-in sudo, on a scratch
+        directory given a default entry for another uid; skipped, naming why,
+        where the filesystem takes no access-control list. Perturbations: drop
+        the strip, and the written file carries the entry; drop the
+        `chmod 0600`, and a file written under the list stands 0640.
+        (`setfacl -b` alone removes a default list here; `-k` is kept for a
+        `setfacl` that does not.)""" 
+        if not (shutil.which("setfacl") and shutil.which("getfacl")):
+            self.skipTest("setfacl and getfacl are not installed here")
+        scratch = tempfile.TemporaryDirectory(prefix="weaver-dest-acl-")
+        self.addCleanup(scratch.cleanup)
+        root = Path(scratch.name)
+        sudo = root / "sudo"
+        sudo.write_text('#!/bin/sh\nwhile [ "$1" = -u ] || [ "$1" = -H ] || [ "$1" = op ]; do shift; done\nexec "$@"\n')
+        sudo.chmod(0o755)
+        stranger = os.getuid() + 1
+        env = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"]}
+        env.pop("BASH_ENV", None)
+
+        def dest_with_default():
+            dest = root / f"dest-{len(list(root.iterdir()))}"
+            dest.mkdir()
+            given = subprocess.run(["setfacl", "-d", "-m", f"u:{stranger}:r", str(dest)],
+                                   capture_output=True, text=True)
+            if given.returncode != 0:
+                self.skipTest(f"this filesystem takes no access-control list: {given.stderr.strip()}")
+            return dest
+
+        def run(program):
+            ran = subprocess.run(["bash", "-c", "die() { echo \"$*\" >&2; exit 1; }\nOPERATOR=op\n"
+                                  + self.one_line_function("as_op") + self.one_line_function("to_file")
+                                  + shell_function(self.script, "close_dest") + program],
+                                 env=env, text=True, capture_output=True, timeout=20)
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+
+        extended = lambda path: subprocess.run(["getfacl", "-cps", str(path)], capture_output=True,
+                                               text=True).stdout.strip()
+        # Closed first: the directory carries no list, and the file none.
+        dest = dest_with_default()
+        out = dest / "territory.tar.zst"
+        run(f"close_dest {shlex.quote(str(dest))}\nprintf held | to_file {shlex.quote(str(out))}\n")
+        self.assertEqual(extended(dest), "", "the directory's lists are stripped")
+        self.assertEqual(extended(out), "", "the file inherits no entry")
+        self.assertEqual(out.stat().st_mode & 0o777, 0o600)
+        # Written under a list the strip has not reached: the mode masks it.
+        dest = dest_with_default()
+        out = dest / "PURGE-LIST"
+        run(f"printf held | to_file {shlex.quote(str(out))}\n")
+        self.assertEqual(out.stat().st_mode & 0o777, 0o600, "the inherited mask is closed")
 
     def test_a_tmp_entry_another_principal_owns_is_left_alone(self):
         """**Only a weaver- account's /tmp entries are archived and purged**

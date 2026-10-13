@@ -453,7 +453,26 @@ as_op() { sudo -u "$OPERATOR" -H "$@"; }
 # (#98; the custody audit's G22): the archive holds the trace and the save
 # points, which the box keeps to their groups, so the invoker's umask does
 # not decide who else reads them where they land.
-to_file() { as_op sh -c 'umask 077 && cat > "$1"' _ "$1"; }
+#
+# **A default access-control list on DEST outranks the umask** (#98, Codex on
+# #142): a file created under one takes the list's entries and mask, the
+# umask ignored, so each file is set 0600 once written, which masks any
+# entry it inherited, and close_dest strips DEST's lists before anything is
+# written.
+to_file() { as_op sh -c 'umask 077 && cat > "$1" && chmod 0600 "$1"' _ "$1"; }
+# **close_dest DIR: the archive directory made the operator's alone**: 0700,
+# and its access and default access-control lists stripped, so nothing
+# written in it inherits a reader. A store with no lists on DIR has none to
+# strip; one carrying any, where they cannot be stripped, refuses.
+close_dest() {
+  as_op chmod 0700 "$1" || die "the operator cannot close $1 to 0700"
+  command -v getfacl >/dev/null && command -v setfacl >/dev/null \
+    || die "getfacl and setfacl are needed to judge $1's access-control lists"
+  if [ -n "$(as_op getfacl -cps -- "$1" 2>/dev/null)" ]; then
+    as_op setfacl -b -k -- "$1" || die "the operator cannot strip $1's access-control lists"
+    [ -z "$(as_op getfacl -cps -- "$1" 2>/dev/null)" ] || die "$1 still carries access-control lists"
+  fi
+}
 tarz() { # tarz OUT PATH... : preserve owners, modes, acls and xattrs
   local out=$1; shift
   tar --numeric-owner --acls --xattrs -I 'zstd -T0 -3' -cf - "$@" 2> >(grep -v 'Removing leading' >&2) | to_file "$out"
@@ -495,7 +514,7 @@ if [ "$MODE" = archive ]; then
   # Removed as the operator (#98): DEST is the operator's, and root acting
   # under a path another writer controls could be led elsewhere.
   as_op find "$DEST" -maxdepth 1 -type f -exec rm -f {} \; 2>/dev/null || true
-  as_op chmod 0700 "$DEST" || die "the operator cannot close $DEST to 0700"
+  close_dest "$DEST"
   say "archive to $DEST"
 
   NVCC=$(command -v nvcc || ls /opt/cuda/bin/nvcc 2>/dev/null || true)
@@ -588,7 +607,7 @@ if [ "$MODE" = archive ]; then
     true
   } | to_file "$DEST/PURGE-LIST"
 
-  as_op sh -c 'umask 077 && cd "$1" && find . -type f -not -name SHA256SUMS -printf "%P\n" | sort | xargs sha256sum > SHA256SUMS' _ "$DEST"
+  as_op sh -c 'umask 077 && cd "$1" && find . -type f -not -name SHA256SUMS -printf "%P\n" | sort | xargs sha256sum > SHA256SUMS && chmod 0600 SHA256SUMS' _ "$DEST"
   say "verify"
   as_op sh -c 'cd "$1" && sha256sum -c --quiet SHA256SUMS' _ "$DEST" || die "the archive does not verify"
   while IFS= read -r -d '' t; do
