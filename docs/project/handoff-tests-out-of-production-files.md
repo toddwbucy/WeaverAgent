@@ -80,6 +80,10 @@ repository root before and after each crate, its output kept for the body:
    counter, a statement inside a production function or a helper a production path
    calls under `cfg(test)` stays, with a one-line comment naming #118, and is listed
    in the body as an exception. An existing `#[path = ...]` include stays as it is.
+   A bin crate root under `src/bin/<bin>.rs` cannot take its child module as a file
+   beside it, because Cargo's automatic binary discovery would take `src/bin/tests.rs`
+   as another binary, so it keeps its tests in `src/bin/<bin>/tests.rs` through a
+   `#[path = "<bin>/tests.rs"]` include, stated in the body.
 5. After: the same test list, `after.txt`, and `diff before.txt after.txt` empty. A
    nested module (step 3) changes the path of its tests and is the one admitted
    difference, each renamed test listed in the body before and after. Then the gates of
