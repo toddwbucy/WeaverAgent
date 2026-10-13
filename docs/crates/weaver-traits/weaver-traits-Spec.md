@@ -316,7 +316,10 @@ which names a tool and dispatches. The family renders it back as written, the
 fragment's bytes unchanged, so a context rebuilt from the message kinds matches what
 the model emitted, per `weaver-spu-Spec` section 5. It grants nothing and dispatches
 nothing, the harness opening no execution exchange for it, per `weaver-harness-Spec`
-section 6.
+section 6. **The block set grows by addition, under `weaver-trace-PRD` section 6's
+rule**, as the kind set does: a reader that skips what it does not know reads a message
+holding the block, and one that keys on the closed set moves with this Spec, as the
+kind set's consumers do.
 
 **The tagging election follows one mechanical test, stated here and applied
 identically in `weaver-types-Spec` so the two floor Specs cannot drift.** A
