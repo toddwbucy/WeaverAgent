@@ -1097,25 +1097,101 @@ fn a_recoverable_call_comes_back_whole() {
 /// **An unclosed call reports `unclosed`, its fragment the span as written**,
 /// per Spec section 5 on the operator's ruling of 2026-10-13 (#31). The
 /// emission is #31's own shape: a second opening marker where the closing one
-/// belongs, then the end.
+/// belongs, then the end. The second opener ends the first call where it
+/// stands, so the record carries two attempts: the model's fragment and a bare
+/// opener, both `unclosed`, and nothing is lost.
 ///
 /// Perturbation: skip the kernel's closing-marker check, so the family is
-/// asked, and the reason reads `unparsed`.
+/// asked, and the first reason reads `unparsed`.
 #[test]
 fn an_unclosed_call_reports_unclosed_with_the_span_as_written() {
-    let fragment = format!("{}{{\"name\":\"a\"{}", qwen2::CALL_OPEN, qwen2::CALL_OPEN);
-    let emission = format!("ok {fragment}");
+    let first = format!("{}{{\"name\":\"a\"", qwen2::CALL_OPEN);
+    let emission = format!("ok {first}{}", qwen2::CALL_OPEN);
     let parsed = qwen2::Qwen2.parse(&emission);
-    assert_eq!(parsed.unrecovered.len(), 1);
-    assert_eq!(parsed.unrecovered[0].fragment, fragment);
-    assert_eq!(parsed.unrecovered[0].reason, Reason::Unclosed);
+    let entries: Vec<(&str, &Reason)> = parsed
+        .unrecovered
+        .iter()
+        .map(|u| (u.fragment.as_str(), &u.reason))
+        .collect();
     assert_eq!(
-        parsed.content.last(),
-        Some(&Content::Unrecovered {
-            fragment: fragment.clone()
-        })
+        entries,
+        vec![
+            (first.as_str(), &Reason::Unclosed),
+            (qwen2::CALL_OPEN, &Reason::Unclosed),
+        ]
+    );
+    assert_eq!(
+        parsed.content,
+        vec![
+            Content::Text("ok ".into()),
+            Content::Unrecovered {
+                fragment: first.clone()
+            },
+            Content::Unrecovered {
+                fragment: qwen2::CALL_OPEN.into()
+            },
+        ]
     );
     assert_eq!(parsed.text(), "ok ");
+}
+
+/// **A re-opened marker ends the open call, and a well-formed call after it
+/// still recovers**, per Spec section 5 on the operator's ruling of
+/// 2026-10-13: a second opening marker met before any closer ends the first
+/// call as `unclosed` there and scanning resumes at the second marker.
+///
+/// Perturbation: search the closer across the whole remainder, as the kernel
+/// did before the ruling, and the two calls read as one `unparsed` fragment
+/// with the well-formed call lost.
+#[test]
+fn a_re_opened_marker_ends_the_open_call_and_the_next_recovers() {
+    let broken = format!("{}{{\"name\":\"a\"", qwen2::CALL_OPEN);
+    let good = format!(
+        "{}{{\"name\":\"read_file\",\"arguments\":{{}}}}{}",
+        qwen2::CALL_OPEN,
+        qwen2::CALL_CLOSE
+    );
+    let parsed = qwen2::Qwen2.parse(&format!("{broken}{good}"));
+    assert_eq!(parsed.unrecovered.len(), 1, "{:?}", parsed.unrecovered);
+    assert_eq!(parsed.unrecovered[0].fragment, broken);
+    assert_eq!(parsed.unrecovered[0].reason, Reason::Unclosed);
+    assert!(
+        matches!(&parsed.content[..], [Content::Unrecovered { .. }, Content::Call { name, .. }] if name.0 == "read_file"),
+        "{:?}",
+        parsed.content
+    );
+}
+
+/// **Each family's grammar names a family the registry carries**, so the name
+/// written in `markers()` cannot drift from the registry's spelling. Read
+/// through the parse, the grammar being where the name reaches a reader, and
+/// against the registry rather than through `declaration()`, which panics for
+/// llama, whose architecture the registry marks contested (reported on #31's
+/// code act, not this test's to settle).
+///
+/// Perturbation: misspell a family's name in its `markers()` and this fails.
+#[test]
+fn each_familys_grammar_names_its_registry_row() {
+    let families: Vec<(Box<dyn Family>, &str)> = vec![
+        (Box::new(qwen2::Qwen2), qwen2::CALL_OPEN),
+        (Box::new(llama::Llama), llama::CALL_OPEN),
+        (Box::new(gemma4::Gemma4), gemma4::CALL_OPEN),
+        (Box::new(mistral3::Mistral3), mistral3::CALL_OPEN),
+        (Box::new(gpt_oss::GptOss), gpt_oss::CALL_OPEN),
+    ];
+    for (family, open) in families {
+        let parsed = family.parse(&format!("{open}garbage"));
+        let grammar = parsed
+            .unrecovered
+            .first()
+            .expect("an attempted call")
+            .grammar;
+        assert!(
+            REGISTRY.iter().any(|row| row.family == grammar.family),
+            "{grammar:?} names no registry row"
+        );
+        assert_eq!(grammar.open, open);
+    }
 }
 
 /// **An unparsed call carries the family's detail and the grammar that

@@ -480,8 +480,21 @@ pub fn scan(
         // `inner` is what the family reads; `written` is the span as the model
         // wrote it, markers included, which is what an unrecovered call keeps.
         let (inner, written, remainder, unclosed) = match markers.call_close {
-            Some(close) => match after_open.find(close) {
-                Some(at) => {
+            Some(close) => {
+                let closed_at = after_open.find(close);
+                // **A second opener before any closer ends the open call
+                // there, unclosed**, per Spec section 5: scanning resumes at
+                // the second opener, so a well-formed call after a broken one
+                // still recovers and each attempt is its own entry.
+                let reopened_at = match (closed_at, after_open.find(markers.call_open)) {
+                    (Some(at), Some(r)) => (r < at).then_some(r),
+                    (None, reopened) => reopened,
+                    (Some(_), None) => None,
+                };
+                if let Some(r) = reopened_at {
+                    let end = markers.call_open.len() + r;
+                    (&after_open[..r], &from_open[..end], &from_open[end..], true)
+                } else if let Some(at) = closed_at {
                     let end = markers.call_open.len() + at + close.len();
                     (
                         &after_open[..at],
@@ -489,12 +502,14 @@ pub fn scan(
                         &from_open[end..],
                         false,
                     )
+                } else {
+                    // The closer never came in the emission. Where it is one
+                    // of the family's stops it came as the stop and was not
+                    // retained, so the family reads the call; otherwise it
+                    // is unclosed.
+                    (after_open, from_open, "", !markers.stops.contains(&close))
                 }
-                // The closer never came in the emission. Where it is one of
-                // the family's stops it came as the stop and was not retained,
-                // so the family reads the call; otherwise it is unclosed.
-                None => (after_open, from_open, "", !markers.stops.contains(&close)),
-            },
+            }
             None => (after_open, from_open, "", false),
         };
 
