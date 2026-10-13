@@ -11,7 +11,7 @@ and neither document restates the other.
 **Document ID:** `weaver-harness-spu-decode-contract`
 **Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
-**Landing PR:** #136
+**Landing PR:** #141
 
 ---
 
@@ -239,7 +239,9 @@ section 5, and the harness authors it as the record's `model.unrecovered_call`. 
 data on the answer and never a fault or an emission**: an unrecovered call is a fact
 about what the model wrote, the generation answered whole, and before this ruling the
 report reached the SPU's standard error and no record. A re-feed's answer carries the
-parse and its report the same way. **What anyone does about an unrecovered call is not
+parse and its report the same way, its parse inferring no missing closer because it
+holds no terminator of the source's, per `weaver-spu-Spec` section 5, until the
+directive carries one (#144). **What anyone does about an unrecovered call is not
 this seam's**: the SPU reports it and decides nothing, and a loop's response is designed
 under state management (#1) on the same ruling, nothing on this seam retrying, per
 section 5.
