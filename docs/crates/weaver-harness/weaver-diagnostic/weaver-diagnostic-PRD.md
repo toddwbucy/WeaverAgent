@@ -8,7 +8,7 @@ terms under the per-charter rule of 2026-08-23, conforming to the pattern the
 **Document ID:** `weaver-diagnostic-PRD`
 **Parent:** `weaver-harness-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #53
+**Landing PR:** #136
 
 ---
 
@@ -398,8 +398,9 @@ structural instead.
 Open cells, each named rather than implied:
 
 - **This crate's Spec landed 2026-08-27** and both elections this cell held are
-  settled there. The writer's vocabulary is its own closed set of nineteen
-  kinds since the acts of 2026-09-26 added `recall` and `elision`, fifteen
+  settled there. The writer's vocabulary is its own closed set of twenty
+  kinds since the act of 2026-10-13 on #31 added `model.unrecovered_call`, the
+  acts of 2026-09-26 having added `recall` and `elision`, sixteen
   spelled as the serving vocabulary spells them and meaning there what they
   mean here, four of the record's own
   that no serving record carries, `residual.column` the fourth per section

@@ -7,7 +7,7 @@ floor. Code is written against it under the gates of Working Process section 6.
 **Document ID:** `weaver-harness-Spec`
 **Parent:** `weaver-harness-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #72
+**Landing PR:** #136
 
 ---
 
@@ -1540,10 +1540,9 @@ to: axiom-join-key-travels-with-the-work
 ```
 
 **The licensed combinations are enforced here, before submit.** A message is
-judged against the licensing rule of `weaver-traits-Spec` section 3, a `User`
-message carrying only `Text`, an `Assistant` message carrying `Text` and
-`ToolCall`, a `ToolResult` message carrying only `ToolResult` blocks, and an
-unlicensed message is refused by this crate and never submitted. The recorder
+judged against the licensing rule of `weaver-traits-Spec` section 3, which this
+document cites rather than restates, and an unlicensed message is refused by this
+crate and never submitted. The recorder
 cannot hold this rule, per that Spec, so the harness is the party the
 perturbation test of `weaver-traits-Spec` section 7 binds, and the test lands
 in this document's section 8 set. That Spec names this document as the declaring
@@ -1790,7 +1789,9 @@ exchange per recovered call, **serially and in the order the parse recovered
 them**, the next opening after the previous answered, and it authors the
 tool-result turns in that same order, so the conversation's ordering is the
 emission's and the channel's exchange identity is the only correlation the
-wire needs. A turn whose emission carries no call opens none.
+wire needs. A turn whose emission carries no call opens none, and an `UnrecoveredCall`
+block, a call the family parse could not recover, opens none either, per
+`weaver-traits-Spec` section 3: it names no tool and grants nothing.
 
 ```graph
 node: harness-tool-result-granted-not-minted
@@ -2578,7 +2579,8 @@ to: harness-serving-writes-no-column-ask
 **The turn is loop 0's machinery, granted, and loop 1 supplies the delta and
 receives the outcome.** The granted surface offers a turn call: loop 1 hands the
 turn's delta as canonical messages and receives back what the generation produced,
-the emission and its finish, and loop 1 authors nothing. Loop 0 drives the
+the emission and its finish and the parse's report of any call it could not recover,
+and loop 1 authors nothing. Loop 0 drives the
 append-and-generate exchange, consumes the token stream, reads the close, and
 authors the record, which is the sole-writer property held where the turn runs
 rather than only where the load event is written. This is the custody model of
@@ -2609,6 +2611,20 @@ accumulating a generation's worth would hold megabytes to write them at
 a close that has other work. It is shaped rather than spliced, per
 `weaver-trace-Spec` section 3, its members being plain values this crate
 holds typed on the way through.
+
+**An unrecovered call is authored at the same answer, as `model.unrecovered_call`**, on
+the operator's ruling of 2026-10-13 on #31: one event per entry of the answer's
+`unrecovered` member, `weaver-types-Spec` section 4.4, in its order, rendered into the
+event's spliced payload after `model.output` and before the turn's `message.assistant`,
+per `weaver-trace-Spec` section 3. The assistant message is the answer's `content` as
+it stands, so a fragment the parse could not recover reaches the conversation as its
+`UnrecoveredCall` block, marked and as written, and never as an empty turn or as prose.
+The turn call hands loop 1 the report beside the emission and its finish, so a loop
+sees what the parse refused without parsing. **What the loop does about it is a loop
+operation and never the SPU's**: a regeneration, a stop, or another remediation is
+designed under state management (#1), on the operator's ruling of 2026-10-13, and until
+that act the turn closes as it does today, with the kind and the marked message on the
+record, so nothing operates past an unrecovered call unmarked.
 
 **The load event carries the elections the enter declared**, each named individually,
 per `weaver-trace-PRD` section 3.1. The harness is the party that knows them, and they
@@ -3363,7 +3379,21 @@ for the organs whose side is unwritten.
   confirmed by watching the account degrade when the authoring point moves.
 - The licensed combinations: an `Assistant` message carrying a `ToolResult`
   block is refused before submit, confirmed by watching it reach the recorder
-  when the check is removed, per `weaver-traits-Spec` section 7.
+  when the check is removed, and an `Assistant` message carrying an
+  `UnrecoveredCall` block is admitted, confirmed by watching it refused when the
+  acceptance arm is removed, per `weaver-traits-Spec` section 7.
+- An unrecovered call is authored at the answer and handed to the loop, per section
+  6.1, owed by the code act that answers #31: an answer whose `unrecovered` report
+  holds two entries authors two `model.unrecovered_call` events in its order, after
+  `model.output` and before `message.assistant`, whose `UnrecoveredCall` blocks hold
+  the same fragments, and the turn call's outcome carries the report to loop 1.
+  Confirmed by watching the test fail when the authoring is removed, when it moves
+  after `message.assistant`, and when the report is dropped from the outcome. The
+  event's payload is `weaver-trace-Spec` section 10's watch.
+- An `UnrecoveredCall` block opens no execution exchange, per section 6: an emission
+  holding one recovered call and one unrecovered opens exactly one exchange,
+  confirmed by watching a second opened when the dispatch takes every block that is
+  not `Text`.
 - Deterministic assembly: one working structure assembles one prompt,
   byte-identical across runs, confirmed by watching the comparison fail when
   iteration order stops being sequence order.

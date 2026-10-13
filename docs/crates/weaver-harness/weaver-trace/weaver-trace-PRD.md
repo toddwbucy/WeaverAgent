@@ -13,7 +13,7 @@ conforms to.
 **Parent:** `weaver-harness-PRD`
 **Companion contract:** `weaver-harness-trace-contract`, written with this document
 **Editorial:** Per the Working Rules.
-**Landing PR:** #72
+**Landing PR:** #136
 
 ---
 
@@ -318,8 +318,9 @@ its closure.
 | `message.restored` | one message of a restored conversation, the message whole, as records written before 2026-10-02 carry it; no load authors it now |
 | `score` | a task's verdict on its run at the run's close, the predicate answered and whether it held, and the ratio over the task's denominator as its two terms where one exists |
 | `save_point` | a save point taken, by digest, with the trace position it covers, the name the member wrote it under and the cause that asked for it, authored after the holdings it names were taken |
+| `model.unrecovered_call` | a call the emission attempted that the family parse could not recover: the fragment as written, the parse's reason, and the family grammar that judged it, beside the verbatim `model.output` keeps |
 
-Twenty-five kinds. Adding one is an edit to this charter and to every contract whose
+Twenty-six kinds. Adding one is an edit to this charter and to every contract whose
 vocabulary clause names the set, because consumers key on the closure.
 **`model.field` is the nineteenth**, added 2026-08-21 on `weaver-spu-PRD`
 section 13.11's election. It is the first kind recorded per decode position
@@ -349,6 +350,15 @@ about that run, so the record carries it, and the same section argues the shape.
 fourth question and the save-point act of 2026-10-05 that landed its emitter: where
 state came from is a fact on the record, so a save point taken is recorded by digest
 with the position it covers, and the same section argues the shape.
+**`model.unrecovered_call` is the twenty-sixth**, on the operator's ruling of 2026-10-13
+on #31: an emission that opened a call the family parse could not recover reached the
+SPU's standard error and no record, so a reader could not tell a parse defect from a
+model defect, and the message kinds held an empty assistant turn where the model had
+written a call. Its emitter is the harness's turn call, named in `weaver-harness-Spec`
+section 6.1 in the same act and built by the code act that answers #31, the window
+between a merged Spec and the code answering it being gate H1's ordinary one, so the
+kind is named with its emitter rather than ahead of it. `weaver-trace-Spec` section 3
+argues the shape.
 
 **Every judgment the loop makes is a fact on the record**, on the operator's ruling of
 2026-10-02 on issue #1, and the kinds above are its precedents. The loop is state
@@ -356,9 +366,10 @@ management, per `weaver-agent-PRD` section 5.5, and state is rebuilt from this r
 alone, so a judgment the record did not hold would make state unrebuildable without
 asking a model again, and a model asked again need not answer the same. The classifier's
 verdict already crosses as `classify.request` and `classify.output`, a task's as
-`score`, a flush's and an elision's as their own kinds, and a recall's answer as
-`recall`. **A judgment with no kind yet, a ranking the loop makes over held facts the
-first of them, is recorded as its own kind when the loop act that makes it lands**, and
+`score`, a flush's and an elision's as their own kinds, a recall's answer as `recall`,
+and the parse's refusal of an attempted call as `model.unrecovered_call`. **A judgment
+with no kind yet, a ranking the loop makes over held facts the first of them, is
+recorded as its own kind when the loop act that makes it lands**, and
 that act names and shapes it in full and adds it here and to every contract whose
 vocabulary names the set. No kind is named ahead of its emitter, per apex section 9's
 rule against a reserved slot.
@@ -823,6 +834,21 @@ bridge between them, which is the outbound half of the same end-to-end
 requirement. A record that kept only the parse could not answer what the
 model said, and one that kept only the verbatim would make every consumer a
 parser of every family.
+
+**An attempted call the parse could not recover is its own fact, beside both layers**,
+on the operator's ruling of 2026-10-13 on #31. A malformed call happens for one of two
+reasons, the model emitted correctly and the parse was wrong, or the model emitted
+wrongly, and the remedies differ and cannot be told apart until it happens. So the
+record carries what tells them apart: the fragment as the model wrote it, the parse's
+reason for refusing it, and the family grammar that judged it, by family and by the
+markers it scanned with. The verbatim emission alone is not enough, a reader of it
+having to re-run a parser the record does not name to learn what was refused and why.
+**It is never operated past unmarked**: the canonical parse keeps the fragment as
+written, marked as an unrecovered call, so the message kinds and this kind agree on
+what the model said. What the loop does about it, a regeneration, a stop, or another
+remediation, is a loop operation and never the SPU's, designed under state management
+(#1) on the operator's ruling of 2026-10-13, per `weaver-harness-Spec` section 6.1.
+Systems working on the record, WeaverWeb and analysis among them, alert on it.
 
 **It carries the session's two counts beside them: `resident`, the count as
 this generation closed, and `capacity`, the ceiling the load resolved.** The

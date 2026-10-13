@@ -7,7 +7,7 @@ merged charter. Code is written against it under the gates of Working Process se
 **Document ID:** `weaver-traits-Spec`
 **Parent:** `weaver-traits-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #627
+**Landing PR:** #136
 
 ---
 
@@ -217,6 +217,7 @@ pub enum ContentBlock {
     Text { text: String },
     ToolCall(ToolCall),
     ToolResult(ToolResultBlock),
+    UnrecoveredCall { fragment: String },
 }
 ```
 
@@ -250,12 +251,13 @@ to: traits-role-kind-one-to-one
 **The licensed combinations are stated, because the shape cannot state them.** A
 `System` message carries `Text` blocks: the operator's or the loop's framing
 of the field, never a call and never a result. A
-`User` message carries `Text` blocks. An `Assistant` message carries `Text` and
-`ToolCall` blocks, in the order the model emitted them. A `ToolResult` message
-carries `ToolResult` blocks. Every other pairing is unlicensed: an `Assistant`
-message holding a `ToolResult` block, a `User` message holding a `ToolCall`, a
-`ToolResult` message holding prose. Where a system message may sit in a
-conversation is the loop's composition and no rule of this shape.
+`User` message carries `Text` blocks. An `Assistant` message carries `Text`,
+`ToolCall`, and `UnrecoveredCall` blocks, in the order the model emitted them. A
+`ToolResult` message carries `ToolResult` blocks. Every other pairing is
+unlicensed: an `Assistant` message holding a `ToolResult` block, a `User` message
+holding a `ToolCall` or an `UnrecoveredCall`, a `ToolResult` message holding prose.
+Where a system message may sit in a conversation is the loop's composition and no rule
+of this shape.
 
 **The harness refuses an unlicensed message and the recorder does not.** The
 harness is the sole author and the only party that reads a message as a message,
@@ -300,6 +302,25 @@ constructed at the gate exchange's completion alone. The record and the
 grant are two types on purpose, which is how the loop closes at the type
 level while the conversation still round-trips.
 
+**`UnrecoveredCall` is a call the model attempted and the family parse could not
+recover, kept as the model wrote it**, on the operator's ruling of 2026-10-13 on #31.
+Before it, such a fragment crossed as nothing, and an assistant turn whose only content
+was a malformed call reached the record and every reader of the message kinds as a
+turn that said nothing. Its `fragment` is the span as written, from the family's
+opening marker through its closing marker or to the end of the emission where none
+came, per `weaver-spu-Spec` section 5, so the message kinds hold what the model said
+whether or not it parsed and agree with the `model.unrecovered_call` event the record
+holds beside them. **It is its own variant and never `Text`**, because a fragment
+arriving as prose is a failed call the turn reads as success, and never a `ToolCall`,
+which names a tool and dispatches. The family renders it back as written, the
+fragment's bytes unchanged, so a context rebuilt from the message kinds matches what
+the model emitted, per `weaver-spu-Spec` section 5. It grants nothing and dispatches
+nothing, the harness opening no execution exchange for it, per `weaver-harness-Spec`
+section 6. **The block set grows by addition, under `weaver-trace-PRD` section 6's
+rule**, as the kind set does: a reader that skips what it does not know reads a message
+holding the block, and one that keys on the closed set moves with this Spec, as the
+kind set's consumers do.
+
 **The tagging election follows one mechanical test, stated here and applied
 identically in `weaver-types-Spec` so the two floor Specs cannot drift.** A
 fieldless enum serializes as a plain renamed string. An enum whose every variant
@@ -328,17 +349,18 @@ from: weaver-traits
 to: traits-role-plain-string
 ```
 
-`ContentBlock` passes the second case, `Text` being struct-shaped and the other
-two wrapping structs, so it takes `#[serde(tag = "type", rename_all =
-"snake_case")]` and a block reads as `{"type": "text", "text": "..."}` rather
-than as `{"Text": "..."}`. The election is about the reader: these payloads reach
+`ContentBlock` passes the second case, `Text` and `UnrecoveredCall` being
+struct-shaped and the other two wrapping structs, so it takes `#[serde(tag = "type",
+rename_all = "snake_case")]` and a block reads as `{"type": "text", "text": "..."}`
+rather than as `{"Text": "..."}`. The election is about the reader: these payloads reach
 the operator's tooling through the stream, where a non-Rust consumer keys on a
 stable member name, and serde's default external tagging makes the variant name a
 key, which is the shape that breaks silently when a variant is renamed.
 
 **`ContentBlock::Text` takes a struct variant rather than a newtype** for the
 mechanical reason the test states: internal tagging cannot represent a newtype
-variant wrapping a primitive. No variant of either enum wraps a bare primitive,
+variant wrapping a primitive, which is why `UnrecoveredCall` is struct-shaped too.
+No variant of either enum wraps a bare primitive,
 which is what keeps the second case available here.
 
 ```graph
@@ -693,11 +715,15 @@ restated here.
 
 - The licensed combinations of section 3: the harness refuses an `Assistant`
   message carrying a `ToolResult` block, confirmed by watching the message reach
-  the recorder when the check is removed. This test lives in the harness's suite,
-  because the harness is the party the rule binds, and it is named here because
-  the rule is stated here.
+  the recorder when the check is removed, and it accepts an `Assistant` message
+  carrying an `UnrecoveredCall` block and refuses a `User` message carrying one,
+  confirmed by watching the first refused when the acceptance arm is removed and the
+  second admitted when the refusal is, the licensing match carrying a wildcard that
+  compiles either way. This test lives in the harness's suite, because the harness
+  is the party the rule binds, and it is named here because the rule is stated here.
 - A message round-trips through serialization unchanged, block sequence and roles
-  intact, confirmed by watching the test fail when a block variant is dropped.
+  intact, an `UnrecoveredCall` block among them, confirmed by watching the test fail
+  when a block variant is dropped.
 - An unknown tag on deserialization refuses rather than defaulting, confirmed by
   feeding a role this crate does not define.
 - `Role` serializes as a plain renamed string, per section 3, confirmed by

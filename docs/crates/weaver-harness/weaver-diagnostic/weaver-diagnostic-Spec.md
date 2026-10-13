@@ -7,7 +7,7 @@ written against it under the gates of Working Process section 6.
 **Document ID:** `weaver-diagnostic-Spec`
 **Parent:** `weaver-diagnostic-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #53
+**Landing PR:** #136
 
 ---
 
@@ -155,7 +155,7 @@ to: diagnostic-session-is-the-replays-own
 
 ### 3.2 The kind set
 
-**Nineteen kinds, exhaustive, and the set is this crate's own.**
+**Twenty kinds, exhaustive, and the set is this crate's own.**
 
     replay.opened          the pass's bracket opens, and the record identifies itself
     replay.identity        the input identity the pass established
@@ -176,12 +176,20 @@ to: diagnostic-session-is-the-replays-own
     fault                  a death, named
     recall                 an answered state-seam ask, by the identities it returned
     elision                a span the loop removed, as the record carries one
+    model.unrecovered_call a call the re-fed path's parse could not recover
 
-**Fifteen spellings are the serving vocabulary's and mean there what they mean
+**Sixteen spellings are the serving vocabulary's and mean there what they mean
 here.** A kind that names the same fact carries the same spelling and the same
 payload shape, which is what makes reader compatibility a rule rather than a
 coincidence, per section 4. **Four are this record's own**, the `replay.` trio
 and `residual.column`, and no serving record carries any of them.
+
+**`model.unrecovered_call` is the twentieth**, on the operator's ruling of 2026-10-13 on
+#31: a re-feed's answer carries the parse's report as a generation's does, per
+`weaver-spu-Spec` section 5, so a recorded path whose parse refuses an attempted call is
+a fact this record holds as the serving record does, in the serving kind's spelling and
+shape, per `weaver-trace-Spec` section 3, and authored by the harness at the re-feed's
+answer in the same place the serving harness authors it at a generation's.
 
 **Every kind carries a turn rule, and a shared kind keeps its serving one**, as of
 2026-09-26. Keeping the serving meaning includes keeping when the kind belongs to a
@@ -196,7 +204,8 @@ refuses.
                     recall
     turn-required   turn.started, turn.closed, message.user, message.assistant,
                     message.tool_result, model.request, model.output,
-                    model.measurement, model.field, residual.column
+                    model.measurement, model.field, residual.column,
+                    model.unrecovered_call
     turn-optional   message.system, refusal, fault
 
 The replay trio belongs to the pass and not to a replayed turn, and `residual.column`
@@ -288,8 +297,8 @@ record's identity is its provenance and never a member, per section 4's discrimi
 the parent charter's 2026-08-24 correction, so nothing here reads the kind's presence as
 identifying anything. **The exhaustiveness grounds in apex section 5.3, and not on the
 serving record's reason.** `weaver-trace-Spec` section 3 argues from a set closed by
-ruling and matching its charter one to one, and this set is not that one: nineteen
-kinds, fifteen of them the serving vocabulary's and four this record's own, so closure
+ruling and matching its charter one to one, and this set is not that one: twenty
+kinds, sixteen of them the serving vocabulary's and four this record's own, so closure
 by charter does not carry across. What carries is the contract's. Section 7 of
 `weaver-harness-diagnostic-contract` makes a change to this kind set a change both
 parties merge in one act, which is a closure the seam states, and a consumer able to
@@ -312,8 +321,8 @@ to: axiom-contract-is-a-complete-interface
 
 ### 3.3 The payload shapes
 
-**The mapping is total: nineteen kinds, eighteen shapes named whole and the
-nineteenth named to its members.** Fifteen take the serving payload of the
+**The mapping is total: twenty kinds, nineteen shapes named whole and the
+twentieth named to its members.** Sixteen take the serving payload of the
 same name, spliced or shaped as `weaver-trace-Spec` section 3 shapes it, that
 document being authoritative and a divergence a defect against it. Three are
 declared here. `residual.column`'s identity members are fixed in section 3.2
@@ -743,6 +752,12 @@ under gate H2. No async runtime and no socket crate in the resolved tree.
   count places that draw at, watched to fail when the pass names the draw's index in
   the turn's identifiers instead, which sits below by the input's length and the
   prefix.
+- A re-fed path's unrecovered call reaches this record, per section 3.2: a re-feed
+  answer whose `unrecovered` report holds an entry is authored as this record's
+  `model.unrecovered_call`, turned and in the serving kind's shape, watched to fail
+  when the diagnostic authoring is removed. The serving record's test does not reach
+  it, this record's authoring path and its kind set being separate from the serving
+  ones.
 
 **Enforced by review, one claim.** That the readout rides the measurement where a
 serving record puts it is a claim about where a shape sits rather than a behavior a

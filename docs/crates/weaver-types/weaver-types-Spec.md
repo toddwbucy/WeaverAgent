@@ -8,7 +8,7 @@ one's Spec pass. Code is written against it under the gates of Working Process s
 **Document ID:** `weaver-types-Spec`
 **Parent:** `weaver-types-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #72
+**Landing PR:** #136
 
 ---
 
@@ -2169,10 +2169,31 @@ pub struct Generation {
     pub emission: String,
     pub finish: Finish,
     pub content: Vec<weaver_traits::ContentBlock>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unrecovered: Vec<UnrecoveredCall>,
     pub request: Box<serde_json::value::RawValue>,
     pub measurement: Box<serde_json::value::RawValue>,
     pub resident: u64,
     pub capacity: u64,
+}
+
+pub struct UnrecoveredCall {
+    pub fragment: String,
+    pub reason: UnrecoveredReason,
+    pub grammar: CallGrammar,
+}
+
+#[serde(tag = "case", rename_all = "snake_case")]
+pub enum UnrecoveredReason {
+    Unclosed,
+    Unparsed { detail: String },
+}
+
+pub struct CallGrammar {
+    pub family: String,
+    pub open: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub close: Option<String>,
 }
 
 pub struct Candidate {
@@ -2189,12 +2210,13 @@ pub enum Finish {
 
 **The split is between what the harness consumes and what it carries through, and
 `weaver-trace` states the rule it follows:** what is shaped in a crate is what no
-other crate defines. The emission, the content, and the finish are consumed
-here: the emission is the verbatim the record holds, the content is the
-canonical parse the working structure takes as the assistant's message and the
-harness dispatches from, and the finish closes the turn, so all three are
-shaped. The measurement and the rendered prompt are
-consumed by nothing on the way past and are two members rather than one: each
+other crate defines. The emission, the content, the unrecovered calls, and the
+finish are consumed here: the emission is the verbatim the record holds, the
+content is the canonical parse the working structure takes as the assistant's
+message and the harness dispatches from, the unrecovered calls are what the
+harness's turn call authors the record's event from and hands its loop, and the
+finish closes the turn, so all four are shaped. The measurement and the rendered prompt
+are consumed by nothing on the way past and are two members rather than one: each
 is forwarded whole into its own box, the measurement into the measurement
 event and the rendered prompt into the request event's `rendered`, because one
 spliced member per box is what keeps the splice a move and never a transform.
@@ -2217,9 +2239,42 @@ stays in that module, which is what lets the harness dispatch a call it never
 parsed for. **The element type is `weaver-traits`' `ContentBlock` and is drawn
 rather than restated**, on the rule the `Message` clause above states and
 against the one internal dependency this crate already links, so it is not a
-ninth satellite. A fragment that opened a call and could not be recovered is
-the SPU's report on its operator channel and is deliberately not a member
-here: a failed call arriving as prose would reach the model as content.
+ninth satellite. **A fragment that opened a call and could not be recovered
+crosses as an `UnrecoveredCall` block in `content`, in emission order, and never
+as `Text`**, on the operator's ruling of 2026-10-13 on #31, which retires the
+election that it was the SPU's report on its operator channel alone and no member
+here. A failed call arriving as prose would still be a failed call the turn reads
+as success, which is why the block is its own variant, per `weaver-traits-Spec`
+section 3, and a failed call arriving as nothing is the empty assistant turn #31
+measured, which is why it now arrives at all.
+
+**`unrecovered` is the parse's report on each such fragment, the content of the
+`model.unrecovered_call` event**, one entry per unrecovered block in `content` and
+in the same order, absent where the parse recovered every call it met, so a
+generation that attempted none and one that recovered all read alike and a reader
+never filters an empty list. The block is the conversation's view and the report is
+the record's: `fragment` is the same bytes in both, the span as written from the
+family's opening marker through its closing marker, or to the end of the emission
+where none came, per `weaver-spu-Spec` section 5, so the two never disagree about
+what the model wrote. `reason` is the scan kernel's closed set: `unclosed`, the
+opening marker met and the closing one never, and `unparsed`, the family's own
+recovery refusing the fragment, carrying the family's `detail`, the parser's error
+as it rendered it. **The set is closed because a reader alerting on it keys on it**,
+and the two cases are what tell a parse defect from a model defect: an `unclosed`
+fragment is the model's emission broken at its frame, and an `unparsed` one names
+what the family's grammar refused, which a reader checks against the fragment.
+`grammar` names the family that judged it and the markers it scanned with, `close`
+absent for a family whose calls run to the end of the emission, so the record holds
+which grammar refused the fragment without a reader re-deriving it from the
+artifact. `UnrecoveredReason` passes the shared test's second case, `Unclosed`
+fieldless and `Unparsed` struct-shaped, so it is internally tagged on `case`, as
+`TurnClose` is on `close`, and renders `{"case":"unclosed"}` and
+`{"case":"unparsed","detail":...}`. The harness consumes the list, handing it to
+its loop with the outcome, per `weaver-harness-Spec` section 6.1, and renders each
+entry into the event's spliced payload, the `refusal` event's
+precedent: this crate shapes it because the harness consumes it, and `weaver-trace`
+splices it because that crate links no floor type, per `weaver-trace-Spec`
+section 3.
 
 **`request` is the model.request content whole, not the rendered prompt alone.**
 The custody act of 2026-08-11 makes `model.request` a spliced payload the SPU
@@ -2607,6 +2662,13 @@ already discharged.
   short, both confirmed by watching a message split or silently shorten when the
   type is changed to `SOCK_STREAM`.
 - In the gate's crate: the accept-time refusal of section 3.
+- In this crate: `Generation`'s `unrecovered` member, per section 4.4, renders no
+  member where the report is empty and round-trips where it holds an entry, and an
+  answer written before the member existed parses with it empty, confirmed by
+  watching `"unrecovered":[]` appear when `skip_serializing_if` is removed and the
+  older answer refused when `default` is. `UnrecoveredReason` renders
+  `{"case":"unclosed"}` and `{"case":"unparsed","detail":...}`, confirmed by watching
+  the tag dropped and serde's external tagging render the first as a bare string.
 
 **The kebab-case bullet and the tagging bullet moved from `review` with this
 act**, per Document Format section 5's rule of v0.22 that `review` means an
@@ -2627,8 +2689,8 @@ the claim divides are both open and section 6 carries them together.
   #63.** Section 3.1 fixes the boundary file, the stream's framing and its control
   lines, and the cause. What stays the code act's is the heartbeat's interval.
 - **`Generation`'s shape settled at section 4.4 and this bullet retires with it.**
-  The emission, the canonical content, and the finish are shaped in the floor
-  because the harness consumes them, and the measurement splices because nothing
+  What the harness consumes is shaped in the floor, per that section, and the
+  measurement splices because nothing
   consumes it on the way to the trace's model events. The seven satellites stay
   `weaver-trace`'s, neither restated nor drawn, and the floor's dependency set is
   unchanged. **What does not retire is the block partition's own question**,

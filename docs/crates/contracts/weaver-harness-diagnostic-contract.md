@@ -5,7 +5,7 @@
 **Date filed:** 2026-08-27
 **Document ID:** `weaver-harness-diagnostic-contract`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #53
+**Landing PR:** #136
 
 ---
 
@@ -77,7 +77,9 @@ diagnostic event-kind vocabulary and its per-kind payload shapes, the
 `replay-outcome` the closing kind carries, and the failure vocabulary of
 section 5. These are the party's own definitions, named because they cross
 the seam and a reader of this document should not have to infer where they
-come from.
+come from. The vocabulary grew to twenty kinds on 2026-10-13, `model.unrecovered_call`
+joining it on the operator's ruling on #31, per `weaver-diagnostic-Spec` section 3.2,
+both parties merging the change in one act under section 7.
 
 **Nothing from any other crate.** This seam is a library boundary between two
 crates and touches no third.
@@ -260,7 +262,9 @@ which section 4 of this document names as the recorder's owing. The refusal
 path is exercised by submitting an event whose payload does not match its kind
 and confirming the sink is untouched. The death path is exercised by ending a
 pass without its closing event and confirming the record carries an unclosed
-bracket rather than a manufactured outcome.
+bracket rather than a manufactured outcome. The twentieth kind is exercised by a
+re-feed whose answer reports an unrecovered call, confirming the record carries
+`model.unrecovered_call` for it.
 
 **The null replay of `weaver-diagnostic-PRD` section 4 is what certifies the
 mechanism**, and it is owed behind this contract's own Spec rather than

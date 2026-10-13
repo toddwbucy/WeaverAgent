@@ -7,7 +7,7 @@ Code is written against it under the gates of Working Process section 6.
 **Document ID:** `weaver-spu-Spec`
 **Parent:** `weaver-spu-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #44
+**Landing PR:** #136
 
 ---
 
@@ -1811,6 +1811,44 @@ from: weaver-spu
 to: spu-parse-reports-unrecovered-call
 ```
 
+**The unrecovered call crosses the decode seam as data, with its reason and the grammar
+that judged it**, on the operator's ruling of 2026-10-13 on #31, which retires the
+report on this binary's standard error alone: that report reached no record, so a
+reader could not tell a parse defect from a model defect, and the harness could not
+act on what it was never told. The parse answers three things. **Its content**, in
+emission order, text as `Text`, every recovered call as a `ToolCall`, and every
+unrecovered one as an `UnrecoveredCall` block holding the fragment, per
+`weaver-traits-Spec` section 3, so an assistant turn whose only content was a malformed
+call is a turn holding that call rather than a turn holding nothing. **Its report**, one
+entry per unrecovered block and in the same order, the fragment beside the reason and
+the grammar, which crosses as `Generation`'s `unrecovered` member, per
+`weaver-types-Spec` section 4.4, and which the harness authors as the
+`model.unrecovered_call` event. **And nothing on the operator channel**, the report
+having one home, the record, under the decode contract's dataflow rule.
+
+**The fragment is the span as written**: from the family's opening marker through its
+closing marker, or to the end of the emission where the closing marker never came or
+the family closes nothing, markers included, so the block and the report carry the same
+bytes and rendering the block back is a copy. **The reason is the scan kernel's closed
+set and the family's recovery is a `Result`.** The kernel owns no marker and no grammar,
+as it owns neither now, and it produces one of two cases: `unclosed`, where it met the
+opening marker and the family's closing marker never came, which it judges before the
+family is asked, and `unparsed`, where the family's own recovery refused the fragment,
+carrying the family's `detail`, its parser's error as it rendered it. A family's
+recovery returns the recovered call or that detail, never a bare absence, so an
+`unparsed` case always says what the grammar refused. **The grammar is the family's
+name and the markers the kernel scanned with**, the closing marker absent for a family
+whose calls run to the end of the emission, read from the family's module and never
+from the artifact, since the module is what judged.
+
+**The family renders an `UnrecoveredCall` block back as written**, the fragment's bytes
+unchanged and no marker added or dropped, so a context the harness rebuilds from the
+message kinds, at a re-entry after a flush or a recall, gives the model what it emitted.
+A renderer that dropped the block would rebuild a turn the model never had, and one that
+rendered it as text would hand the model a call disguised as prose. **A re-feed's answer
+carries the parse as a generation's does**, its content and its report, the diagnostic
+loop replaying a recorded path and regenerating nothing.
+
 **Modules become member crates when a second operation type consumes them,
 and not before,** per charter section 14. A directory move is what that
 promotion costs, which is the reversibility test paying out.
@@ -3019,10 +3057,19 @@ than a code fact.
   that clause reads as two records.
 - The parse reports an unrecovered call: an emission opening a renderer's call marker
   and naming nothing the parser can recover answers with that fact rather than with a
-  clean turn's content, confirmed by watching the fragment arrive as ordinary assistant
-  text when the unrecovered case collapses into the text path. The fixture is a rendered
-  string against a family module, so the watch reads the parse's own answer and reaches
-  neither a model nor a device.
+  clean turn's content, an `UnrecoveredCall` block in its content and a report naming
+  the fragment, the reason, and the grammar, confirmed by watching the fragment arrive
+  as ordinary assistant text when the unrecovered case collapses into the text path, and
+  by watching an unclosed fixture report `unparsed` when the kernel's closing-marker
+  check is skipped. The fixture is a rendered string against a family module, so the
+  watch reads the parse's own answer and reaches neither a model nor a device.
+- The report crosses on the answer: a generation whose parse met an unrecovered call
+  answers with the entry in `Generation`'s `unrecovered`, confirmed by watching the
+  member arrive empty when the report is printed to the operator channel instead, as
+  it was before the ruling of 2026-10-13.
+- An `UnrecoveredCall` block renders back as written: a fixture fragment renders to the
+  same bytes the emission carried, confirmed by watching the render differ when the
+  renderer emits the block's fragment without its markers.
 - The registry substitutes nothing: an artifact whose header names an architecture this
   binary does not carry refuses at admit naming that architecture, confirmed by watching
   the admit proceed on a carried architecture's module when the table gains a

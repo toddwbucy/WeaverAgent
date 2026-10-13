@@ -8,7 +8,7 @@ separately.
 **Document ID:** `weaver-harness-trace-contract`
 **Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
-**Landing PR:** #58
+**Landing PR:** #136
 
 **This is a contract, not a Spec.** It states the protocol two parties agree to. It
 names no Rust type, no module, and no function, because how either party implements
@@ -232,6 +232,17 @@ the model said, and one that submitted only the verbatim would make every
 consumer a parser of every family. The recorder judges neither, per section
 6, so this is an obligation on the party that can meet it.
 
+**An unrecovered call, as its own kind.** On the operator's ruling of 2026-10-13 on
+#31: where the family parse could not recover a call the emission attempted, the
+harness submits `model.unrecovered_call`, one per call, carrying the fragment as
+written, the parse's reason, and the grammar that judged it, beside the verbatim
+`model.output` and the canonical parse, whose `message.assistant` keeps the fragment
+marked as an unrecovered call. A record that held only the verbatim would leave a
+reader re-running a parser it does not name to learn what was refused and why, and one
+that held only the parse held an empty assistant turn where the model had written a
+call. Adding the kind moves `weaver-trace-PRD` section 3.1 and this contract together,
+per section 7.
+
 **The rendered form and its template identity, with `model.request`.** The
 harness submits what the model was asked this turn, the turn's delta as
 rendered and the identity of the template that produced it, beside the
@@ -399,6 +410,9 @@ How each check is implemented is Spec work. What must be checkable is stated her
 - Every `turn.closed` states its close kind, clean or stopped with reason.
 - A decode reaches the record as both layers, the verbatim emission and the
   canonical parse, neither standing for the other.
+- A call the parse could not recover reaches the record as its own
+  `model.unrecovered_call`, beside both layers, its fragment the same bytes the
+  parse's `UnrecoveredCall` block holds.
 - A measurement's per-token vectors are positionally paired with its token
   identifiers, and an unproduced reading is absent rather than zero.
 - No stored span appears on the stream.

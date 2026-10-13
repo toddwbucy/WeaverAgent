@@ -6,7 +6,7 @@
 **Document ID:** `python-spu-Spec`
 **Parent:** `weaver-spu-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #45
+**Landing PR:** #136
 
 ---
 
@@ -210,8 +210,8 @@ the walk in the act that moves the pin to it.
 | `decoder::backend`: `TokenId`, `DecodeFault`, `FlushMechanism`, `for_container` | `session` for the faults and the flush mechanism, `artifact` for the container judgment |
 | `decoder::backend`: `Backend` | excluded as a trait: it is the engine's seam, and the engine is this implementation's own, per section 4. The `session` operation drives the Rust session over a scripted backend so the session's rules are compared without an engine |
 | `decoder::session`: `Session` and every method, `Stopped`, `Generated`, `StopCondition`, `CancelPoll`, `NeverCancels`, `SamplerBuild`, `PositionedSinks` | `session`: one script of opens, appends, generations, re-feeds, flushes, elisions and cancels run through both sessions over a scripted backend, the resident sequence and every answer compared |
-| `family`: the `Family` trait's rendering methods, `render_each`, `render_template`, `common_role_name`, `text_content`, `fold_system_into_first_user`, `RenderRefusal` | `render`: the identity prefix, each delta, and each refusal |
-| `family`: `Family::parse`, `scan`, `Markers`, `Parsed`, `Content`, `Unrecovered`, `has_unrecovered_call`, `text` | `parse`: an emission's canonical text and tool-call blocks over plain text, valid calls, and malformed and unrecovered call fragments. `Generation::content` carries what the parse chose, and a wire round trip proves only its encoding |
+| `family`: the `Family` trait's rendering methods, `render_each`, `render_template`, `common_role_name`, `text_content`, `fold_system_into_first_user`, `RenderRefusal` | `render`: the identity prefix, each delta, each refusal, and an `UnrecoveredCall` block rendered back as written, per `weaver-spu-Spec` section 5 |
+| `family`: `Family::parse`, `scan`, `Markers`, `Parsed`, `Content`, `Unrecovered`, `has_unrecovered_call`, `text` | `parse`: an emission's canonical text and tool-call blocks over plain text, valid calls, and malformed and unrecovered call fragments, each unrecovered fragment as its `UnrecoveredCall` block and its report beside it, the fragment as written, the closed reason, and the grammar, per `weaver-spu-Spec` section 5 on the operator's ruling of 2026-10-13 on #31, and nothing on standard error. `Generation::content` and `Generation::unrecovered` carry what the parse chose, and a wire round trip proves only their encoding. The render of an `UnrecoveredCall` block back as written is the `render` row's |
 | `family`: `Declaration`, `permits_truncation`, `shards_across`, `FamilyName`, `lookup`, `select`, `same_key`, `normalised_key`, `judge_width`, `FamilyRefusal` | `registry`: selection by architecture and marker set, the key's normalisation, the width judgment, each refusal. Where the Rust code selects a family this implementation does not serve, this implementation refuses at admit, and the operation asserts it refuses exactly there |
 | `family::qwen2`: `renderer`, `Qwen2` | `render` and `parse`, for the first version's one family |
 | `family::gemma4`, `gpt_oss`, `llama`, `mistral3`, `phi`: each renderer and its type | excluded: families the first version does not serve, refused at admit per the `registry` row. Each joins the `render` and `parse` rows when a version serves it |
