@@ -126,6 +126,12 @@ pub fn text_content(message: &Message) -> Result<String, RenderRefusal> {
     for block in &message.content {
         match block {
             ContentBlock::Text { text } => content.push_str(text),
+            // An unrecovered call renders back as written in the assistant's
+            // turn and nowhere else, per Spec section 5: the fragment's bytes
+            // unchanged, so a rebuilt context matches what the model emitted.
+            ContentBlock::UnrecoveredCall { fragment } if message.role == Role::Assistant => {
+                content.push_str(fragment)
+            }
             _ => return Err(RenderRefusal::MalformedForFamily),
         }
     }
@@ -258,6 +264,10 @@ pub enum Content {
     /// A call the parser recovered whole: the marker opened and the name came
     /// back.
     Call { name: ToolName, arguments: String },
+    /// A call the parser could not recover, kept as written in emission
+    /// order, per Spec section 5 on the operator's ruling of 2026-10-13
+    /// (#31): it crosses as an `UnrecoveredCall` block, never as text.
+    Unrecovered { fragment: String },
 }
 
 /// A call the emission attempted and the parser could not recover.
@@ -268,11 +278,38 @@ pub enum Content {
 /// this. The fragment travels with it so the record holds what was attempted,
 /// and it is deliberately not also emitted as [`Content::Text`]: a fragment
 /// that arrives as ordinary prose is a failed call the turn reads as success.
+/// It crosses the decode seam as data, its reason and grammar beside it, on
+/// the operator's ruling of 2026-10-13 (#31), and never on standard error.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Unrecovered {
-    /// What sat between the call marker and the end of the emission or its
-    /// closing marker.
+    /// The span as written: from the family's opening marker through its
+    /// closing marker, or to the end of the emission where none came or the
+    /// family closes nothing, markers included, so the block and the report
+    /// carry the same bytes and rendering the block back is a copy.
     pub fragment: String,
+    /// Why the parse refused it.
+    pub reason: Reason,
+    /// The grammar that judged it.
+    pub grammar: Grammar,
+}
+
+/// The scan kernel's closed reason set, per Spec section 5.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Reason {
+    /// The opening marker came and the family's closing marker never did,
+    /// judged by the kernel before the family is asked.
+    Unclosed,
+    /// The family's recovery refused the fragment, with its parser's detail.
+    Unparsed(String),
+}
+
+/// The family grammar that judged a fragment: the family's name and the
+/// markers the kernel scanned with, read from the family's module.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Grammar {
+    pub family: &'static str,
+    pub open: &'static str,
+    pub close: Option<&'static str>,
 }
 
 /// What a parse answers with.
@@ -300,7 +337,7 @@ impl Parsed {
             .iter()
             .filter_map(|piece| match piece {
                 Content::Text(text) => Some(text.as_str()),
-                Content::Call { .. } => None,
+                Content::Call { .. } | Content::Unrecovered { .. } => None,
             })
             .collect::<Vec<_>>()
             .join("")
@@ -314,6 +351,9 @@ impl Parsed {
 /// marker no family gave it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Markers {
+    /// The family's name, as the registry spells it, carried so the kernel
+    /// can name the grammar that judged an unrecovered fragment.
+    pub family: &'static str,
     /// What opens a call in this family's emissions.
     pub call_open: &'static str,
     /// What closes one, where the family closes them. `None` means the call
@@ -402,41 +442,74 @@ pub trait Family {
 /// orchestration the families drive rather than inherit.
 ///
 /// `recover` is the family's own name extraction, because how a name sits
-/// inside a call fragment is a family fact. Returning `None` is what produces
-/// an [`Unrecovered`], and the fragment does not also become text.
+/// inside a call fragment is a family fact. Returning the parser's detail is
+/// what produces an [`Unrecovered`] of [`Reason::Unparsed`], and the fragment
+/// does not also become text. **An unclosed call is the kernel's own judgement
+/// and the family is never asked**, per Spec section 5: the opening marker came
+/// and the family's closing marker never did, so the fragment is
+/// [`Reason::Unclosed`] whatever lies inside it.
 pub fn scan(
     emission: &str,
     markers: Markers,
-    recover: impl Fn(&str) -> Option<(ToolName, String)>,
+    recover: impl Fn(&str) -> Result<(ToolName, String), String>,
 ) -> Parsed {
+    let grammar = Grammar {
+        family: markers.family,
+        open: markers.call_open,
+        close: markers.call_close,
+    };
     let mut content = Vec::new();
     let mut unrecovered = Vec::new();
     let mut rest = emission;
 
     while let Some(open) = rest.find(markers.call_open) {
-        let (before, after_open) = rest.split_at(open);
+        let (before, from_open) = rest.split_at(open);
         if !before.is_empty() {
             content.push(Content::Text(before.to_string()));
         }
-        let after_open = &after_open[markers.call_open.len()..];
+        let after_open = &from_open[markers.call_open.len()..];
 
-        // Where the fragment ends: the family's closing marker, or the whole
-        // remainder where the family closes nothing.
-        let (fragment, remainder) = match markers.call_close {
+        // Where the call ends, and whether the kernel already judges it: the
+        // family's closing marker, the rest of the emission where that marker
+        // never came, or the whole remainder where the family closes nothing.
+        // `inner` is what the family reads; `written` is the span as the model
+        // wrote it, markers included, which is what an unrecovered call keeps.
+        let (inner, written, remainder, unclosed) = match markers.call_close {
             Some(close) => match after_open.find(close) {
-                Some(at) => (&after_open[..at], &after_open[at + close.len()..]),
-                // The marker opened and never closed. That is an attempted call
-                // whose extent is the rest of the emission.
-                None => (after_open, ""),
+                Some(at) => {
+                    let end = markers.call_open.len() + at + close.len();
+                    (
+                        &after_open[..at],
+                        &from_open[..end],
+                        &from_open[end..],
+                        false,
+                    )
+                }
+                None => (after_open, from_open, "", true),
             },
-            None => (after_open, ""),
+            None => (after_open, from_open, "", false),
         };
 
-        match recover(fragment) {
-            Some((name, arguments)) => content.push(Content::Call { name, arguments }),
-            None => unrecovered.push(Unrecovered {
-                fragment: fragment.to_string(),
-            }),
+        let refused = if unclosed {
+            Some(Reason::Unclosed)
+        } else {
+            match recover(inner) {
+                Ok((name, arguments)) => {
+                    content.push(Content::Call { name, arguments });
+                    None
+                }
+                Err(detail) => Some(Reason::Unparsed(detail)),
+            }
+        };
+        if let Some(reason) = refused {
+            content.push(Content::Unrecovered {
+                fragment: written.to_string(),
+            });
+            unrecovered.push(Unrecovered {
+                fragment: written.to_string(),
+                reason,
+                grammar,
+            });
         }
         rest = remainder;
     }

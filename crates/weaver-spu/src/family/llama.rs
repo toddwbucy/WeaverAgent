@@ -55,6 +55,7 @@ pub struct Llama;
 impl Llama {
     fn markers() -> Markers {
         Markers {
+            family: "llama",
             call_open: CALL_OPEN,
             call_close: Some(CALL_CLOSE),
         }
@@ -64,18 +65,23 @@ impl Llama {
     ///
     /// The family emits a JSON object carrying `name`. Anything else is an
     /// attempted call whose name did not come back.
-    fn recover(fragment: &str) -> Option<(ToolName, String)> {
-        let value: serde_json::Value = serde_json::from_str(fragment.trim()).ok()?;
-        let name = value.get("name")?.as_str()?;
+    fn recover(fragment: &str) -> Result<(ToolName, String), String> {
+        let value: serde_json::Value =
+            serde_json::from_str(fragment.trim()).map_err(|e| format!("not JSON: {e}"))?;
+        let name = value
+            .get("name")
+            .ok_or("no `name` member")?
+            .as_str()
+            .ok_or("`name` is not a string")?;
         if name.is_empty() {
-            return None;
+            return Err("`name` is empty".to_string());
         }
         let arguments = value
             .get("parameters")
             .or_else(|| value.get("arguments"))
             .map(|a| a.to_string())
             .unwrap_or_else(|| "{}".to_string());
-        Some((ToolName(name.to_string()), arguments))
+        Ok((ToolName(name.to_string()), arguments))
     }
 }
 

@@ -61,6 +61,7 @@ pub struct GptOss;
 impl GptOss {
     fn markers() -> Markers {
         Markers {
+            family: "gpt-oss",
             call_open: CALL_OPEN,
             call_close: Some(TURN_END),
         }
@@ -71,21 +72,24 @@ impl GptOss {
     /// The name arrives in the routing header as `to=functions.<name>`, with
     /// the arguments following the message marker. A fragment carrying no
     /// recipient is an attempted call whose name did not come back.
-    fn recover(fragment: &str) -> Option<(ToolName, String)> {
-        let at = fragment.find(RECIPIENT)? + RECIPIENT.len();
+    fn recover(fragment: &str) -> Result<(ToolName, String), String> {
+        let at = fragment
+            .find(RECIPIENT)
+            .ok_or_else(|| format!("no recipient `{RECIPIENT}`"))?
+            + RECIPIENT.len();
         let tail = &fragment[at..];
         let name: String = tail
             .chars()
             .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
             .collect();
         if name.is_empty() {
-            return None;
+            return Err("no name after the recipient".to_string());
         }
         let arguments = match tail.find(MESSAGE) {
             Some(at) => tail[at + MESSAGE.len()..].trim().to_string(),
             None => "{}".to_string(),
         };
-        Some((ToolName(name), arguments))
+        Ok((ToolName(name), arguments))
     }
 }
 

@@ -1093,3 +1093,116 @@ fn a_recoverable_call_comes_back_whole() {
         [Content::Call { name, .. }] if name.0 == "read_file"
     ));
 }
+
+/// **An unclosed call reports `unclosed`, its fragment the span as written**,
+/// per Spec section 5 on the operator's ruling of 2026-10-13 (#31). The
+/// emission is #31's own shape: a second opening marker where the closing one
+/// belongs, then the end.
+///
+/// Perturbation: skip the kernel's closing-marker check, so the family is
+/// asked, and the reason reads `unparsed`.
+#[test]
+fn an_unclosed_call_reports_unclosed_with_the_span_as_written() {
+    let fragment = format!("{}{{\"name\":\"a\"{}", qwen2::CALL_OPEN, qwen2::CALL_OPEN);
+    let emission = format!("ok {fragment}");
+    let parsed = qwen2::Qwen2.parse(&emission);
+    assert_eq!(parsed.unrecovered.len(), 1);
+    assert_eq!(parsed.unrecovered[0].fragment, fragment);
+    assert_eq!(parsed.unrecovered[0].reason, Reason::Unclosed);
+    assert_eq!(
+        parsed.content.last(),
+        Some(&Content::Unrecovered {
+            fragment: fragment.clone()
+        })
+    );
+    assert_eq!(parsed.text(), "ok ");
+}
+
+/// **An unparsed call carries the family's detail and the grammar that
+/// judged it**, per Spec section 5: the fragment with both markers, a
+/// non-empty detail, and the family's name and markers.
+///
+/// Perturbation: drop the family's error text from `recover` and the
+/// detail arrives empty.
+#[test]
+fn an_unparsed_call_carries_the_familys_detail_and_grammar() {
+    let emission = format!("{}not json{}", qwen2::CALL_OPEN, qwen2::CALL_CLOSE);
+    let parsed = qwen2::Qwen2.parse(&emission);
+    let entry = &parsed.unrecovered[0];
+    assert_eq!(entry.fragment, emission);
+    assert!(
+        matches!(&entry.reason, Reason::Unparsed(detail) if !detail.is_empty()),
+        "{:?}",
+        entry.reason
+    );
+    assert_eq!(entry.grammar.family, "qwen2");
+    assert_eq!(entry.grammar.open, qwen2::CALL_OPEN);
+    assert_eq!(entry.grammar.close, Some(qwen2::CALL_CLOSE));
+}
+
+/// **Two unrecovered calls report in emission order, block and entry alike.**
+#[test]
+fn two_unrecovered_calls_report_in_emission_order() {
+    let first = format!("{}x{}", qwen2::CALL_OPEN, qwen2::CALL_CLOSE);
+    let second = format!("{}y{}", qwen2::CALL_OPEN, qwen2::CALL_CLOSE);
+    let parsed = qwen2::Qwen2.parse(&format!("{first}mid{second}"));
+    let reported: Vec<&str> = parsed
+        .unrecovered
+        .iter()
+        .map(|u| u.fragment.as_str())
+        .collect();
+    assert_eq!(reported, vec![first.as_str(), second.as_str()]);
+    let blocks: Vec<&str> = parsed
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            Content::Unrecovered { fragment } => Some(fragment.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(blocks, reported);
+}
+
+/// **A family that closes nothing runs the fragment to the end of the
+/// emission and names no closing marker**, per Spec section 5.
+#[test]
+fn a_close_less_family_runs_the_fragment_to_the_end() {
+    let fragment = format!("{}not a call", mistral3::CALL_OPEN);
+    let parsed = mistral3::Mistral3.parse(&format!("before {fragment}"));
+    assert_eq!(parsed.unrecovered.len(), 1);
+    assert_eq!(parsed.unrecovered[0].fragment, fragment);
+    assert_eq!(parsed.unrecovered[0].grammar.family, "mistral3");
+    assert_eq!(parsed.unrecovered[0].grammar.close, None);
+    assert!(matches!(parsed.unrecovered[0].reason, Reason::Unparsed(_)));
+}
+
+/// **An `UnrecoveredCall` block renders back as written**, per Spec section
+/// 5, in qwen2's own renderer and through `text_content`, and a user message
+/// carrying one refuses.
+///
+/// Perturbation: render the fragment with its markers stripped and the
+/// rendered bytes no longer hold it.
+#[test]
+fn an_unrecovered_call_block_renders_back_as_written() {
+    let fragment = format!("{}{{\"name\":\"a\"{}", qwen2::CALL_OPEN, qwen2::CALL_OPEN);
+    let assistant = weaver_traits::Message {
+        role: Role::Assistant,
+        content: vec![
+            ContentBlock::Text { text: "ok ".into() },
+            ContentBlock::UnrecoveredCall {
+                fragment: fragment.clone(),
+            },
+        ],
+    };
+    let rendered = qwen2::Qwen2.render_delta(&assistant).expect("renders");
+    assert!(rendered.contains(&format!("ok {fragment}")), "{rendered}");
+    let user = weaver_traits::Message {
+        role: Role::User,
+        content: assistant.content.clone(),
+    };
+    assert!(qwen2::Qwen2.render_delta(&user).is_err());
+
+    let shared = text_content(&assistant).expect("the shared kernel renders it");
+    assert_eq!(shared, format!("ok {fragment}"));
+    assert!(text_content(&user).is_err());
+}

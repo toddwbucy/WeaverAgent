@@ -508,3 +508,50 @@ fn cancel_and_flush_are_in_order_at_rest() {
         None
     );
 }
+
+/// **The report crosses on the answer**, per Spec section 10 on the
+/// operator's ruling of 2026-10-13 (#31): a parse that met an unrecovered call
+/// yields the block in the content, in emission order, and the entry in the
+/// report, its reason and grammar carried onto the floor's types, at the one
+/// site both the generation and the re-feed build their answers from.
+///
+/// Perturbation: return an empty report, as the operator-channel print did,
+/// and the entry assertion fails.
+#[test]
+fn the_report_crosses_on_the_answer() {
+    let emission = format!(
+        "ok {}not json{}",
+        family::qwen2::CALL_OPEN,
+        family::qwen2::CALL_CLOSE
+    );
+    let parsed = family::Family::parse(&family::qwen2::Qwen2, &emission);
+    let (content, unrecovered) = answer_parts(parsed);
+    let fragment = format!(
+        "{}not json{}",
+        family::qwen2::CALL_OPEN,
+        family::qwen2::CALL_CLOSE
+    );
+    assert_eq!(
+        content,
+        vec![
+            weaver_traits::ContentBlock::Text { text: "ok ".into() },
+            weaver_traits::ContentBlock::UnrecoveredCall {
+                fragment: fragment.clone()
+            },
+        ]
+    );
+    assert_eq!(unrecovered.len(), 1);
+    assert_eq!(unrecovered[0].fragment, fragment);
+    assert!(matches!(
+        unrecovered[0].reason,
+        weaver_types::UnrecoveredReason::Unparsed { .. }
+    ));
+    assert_eq!(
+        unrecovered[0].grammar,
+        weaver_types::CallGrammar {
+            family: "qwen2".into(),
+            open: family::qwen2::CALL_OPEN.into(),
+            close: Some(family::qwen2::CALL_CLOSE.into()),
+        }
+    );
+}
