@@ -2907,6 +2907,57 @@ class LifecycleTeardownTests(unittest.TestCase):
         self.assertNotIn("GOES-ON", result.stdout)
 
 
+class LifecycleArchiveReadBackTests(unittest.TestCase):
+    """**The take-down's archives are read back whole** (the first live run,
+    2026-10-13): step 9's two read-back lines, lifted from the script as it
+    ships, run under `set -euo pipefail` against a real tar of 600 entries,
+    more than one write's worth of listing, through a stand-in sudo. A
+    listing piped into `grep -q .` closed the pipe at the first entry, tar
+    died on its next write and `pipefail` made the check "no" for a sound
+    archive. Perturbation: put the `| grep -q .` shape back at either line,
+    and it fails here; a missing archive still fails."""
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix="weaver-readback-")
+        self.addCleanup(self.scratch.cleanup)
+        root = Path(self.scratch.name)
+        self.bin_dir = root / "bin"
+        self.bin_dir.mkdir()
+        sudo = self.bin_dir / "sudo"
+        sudo.write_text('#!/bin/sh\n[ "$1" = "-n" ] && shift\nexec env "$@"\n')
+        sudo.chmod(0o755)
+        entries = root / "weaver-m1"
+        entries.mkdir()
+        for i in range(600):
+            (entries / f"entry-{i}").write_text("")
+        self.tar = root / "m1.tar"
+        subprocess.run(["tar", "-C", str(root), "-cf", str(self.tar), "weaver-m1"], check=True)
+        script = (DEPLOY / "verify-lifecycle.sh").read_text()
+        self.checks = [line.strip() for line in script.splitlines() if "archive reads back" in line
+                       and line.strip().startswith("expect_eq")]
+        self.assertEqual(len(self.checks), 2, self.checks)
+        self.functions = lifecycle_functions(script, "fail", "pass", "expect_eq", "archive_reads_back")
+
+    def run_checks(self, tar):
+        program = ("set -euo pipefail\n" + 'STEP_LABEL="step 9 (test)"\n'
+                   + f"TERRITORY_TAR={shlex.quote(str(tar))}; ROOT_TAR={shlex.quote(str(tar))}\n"
+                   + self.functions + "\n".join(self.checks) + "\necho READ-BACK\n")
+        env = {**os.environ, "PATH": str(self.bin_dir) + os.pathsep + os.environ["PATH"]}
+        env.pop("BASH_ENV", None)
+        return subprocess.run(["bash", "-c", program], env=env, text=True,
+                              capture_output=True, timeout=20)
+
+    def test_a_sound_archive_reads_back(self):
+        result = self.run_checks(self.tar)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("READ-BACK", result.stdout)
+
+    def test_a_missing_archive_does_not(self):
+        result = self.run_checks(self.tar.with_name("absent.tar"))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("archive reads back", result.stderr)
+
+
 class LifecycleNearMissTests(unittest.TestCase):
     """**verify-lifecycle.sh's near misses put back what they changed**, the
     exit trap included, whatever admin answers: a near miss is run alone on a

@@ -217,7 +217,10 @@ cargo test --release --locked \
 say "build"
 cargo build --release --locked --workspace --features "$FEATURES" 2>&1 | grep -E '^(error|warning: unused)' -A4 || true
 for b in $MEMBERS; do [ -x "$BUILT/$b" ] || die "$BUILT/$b was not built"; done
-SYS_OUT=$(ls -td "$BUILT"/build/llama-cpp-sys-2-*/out/lib 2>/dev/null | head -1)
+# `sed -n 1p` reads the whole listing, where `head -1` closed the pipe on
+# `ls` and `pipefail` with `set -e` ended the script; `|| true` lets no match
+# reach the `die` below rather than exit unexplained.
+SYS_OUT=$(ls -td "$BUILT"/build/llama-cpp-sys-2-*/out/lib 2>/dev/null | sed -n 1p || true)
 [ -n "$SYS_OUT" ] || die "no llama-cpp-sys output under $BUILT/build; the engine was not built"
 LIBS=()
 for g in $LIB_GLOBS; do for f in "$SYS_OUT"/$g; do [ -e "$f" ] && LIBS+=("$f"); done; done
@@ -253,7 +256,10 @@ printf '%s\n%s\n' "$PREFIX/lib" "$CUDA_LIB_DIR" | sudo tee "$LDSO_CONF" >/dev/nu
 sudo chmod 0644 "$LDSO_CONF"
 sudo ldconfig
 plan "wrote $LDSO_CONF ($PREFIX/lib, $CUDA_LIB_DIR) and ran ldconfig"
-if ldd "$PREFIX/bin/weaver-spu" 2>/dev/null | grep -q 'not found'; then
+# Read whole, then searched: `ldd | grep -q` under `pipefail` answered false
+# where grep's early exit killed ldd, passing an unresolved library.
+LDD_SAID=$(ldd "$PREFIX/bin/weaver-spu" 2>/dev/null || true)
+if grep -q 'not found' <<<"$LDD_SAID"; then
   ldd "$PREFIX/bin/weaver-spu" | grep 'not found' >&2
   die "weaver-spu has unresolved libraries after ldconfig"
 fi
