@@ -113,23 +113,7 @@ fn open_directory(path: &Path) -> Result<OwnedFd, LifecycleRefusal> {
         ));
     }
     // SAFETY: the number was just opened and is owned by nothing else.
-    let owned = unsafe { OwnedFd::from_raw_fd(fd) };
-    // **Judged and laid on the descriptor** (#98; the custody audit's G17):
-    // a regular file this crate's uid owns, then `0600` whatever the umask
-    // made or another act left, per Spec section 3.
-    let stat = nix::sys::stat::fstat(&owned)
-        .map_err(|_| refuse_path("cannot be judged as a lock file", path))?;
-    if nix::sys::stat::SFlag::from_bits_truncate(stat.st_mode) & nix::sys::stat::SFlag::S_IFMT
-        != nix::sys::stat::SFlag::S_IFREG
-    {
-        return Err(refuse_path("is not a regular file", path));
-    }
-    if stat.st_uid != nix::unistd::geteuid().as_raw() {
-        return Err(refuse_path("is not this crate's own", path));
-    }
-    nix::sys::stat::fchmod(&owned, nix::sys::stat::Mode::from_bits_truncate(0o600))
-        .map_err(|_| refuse_path("does not take mode 0600", path))?;
-    Ok(owned)
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
 fn refuse_path(what: &str, path: &Path) -> LifecycleRefusal {
