@@ -2319,7 +2319,10 @@ box. After the connect, this crate reads the listener's `SO_PEERCRED`, set when 
 listened, and requires its uid to be the agent's worker account, resolved by name as
 the start step resolves it. Any other uid refuses `WrongPeer` at once, with no retry.
 `show` then refuses `BoundaryUnverified`, a joining `force-unload` ends the run by the
-escalation, and every other verb refuses as for a dial that failed. The harness's
+escalation on the run lock's holders, a load's rollback ends what it stood the
+same way, and `unload`, `stop`, `save-point` and `load` refuse `BoundaryUnverified`.
+The peer is judged by uid, so it tells the worker's account from any other and not
+the worker from another process under the agent's uid. The harness's
 check at its accept, root or refused, is the other direction of the same channel.
 
 **The dial retries within a bound because the bind is the worker's first act

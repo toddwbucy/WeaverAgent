@@ -3485,6 +3485,11 @@ class DecommissionTests(unittest.TestCase):
         self.assertEqual(out.stat().st_mode & 0o777, 0o600)
         self.assertIn("as_op sh -c 'umask 077 && cd \"$1\" && find . -type f", self.script)
         self.assertIn("as_op sh -c 'umask 077 && mkdir -p \"$1\"' _ \"$DEST\"", self.script)
+        # The stale files go as the operator, and a DEST that stood before is
+        # closed too: nothing under DEST is acted on as root.
+        self.assertIn('as_op find "$DEST" -maxdepth 1 -type f -exec rm -f {}', self.script)
+        self.assertNotIn('\n  find "$DEST"', self.script)
+        self.assertIn('as_op chmod 0700 "$DEST"', self.script)
 
     def test_a_tmp_entry_another_principal_owns_is_left_alone(self):
         """**Only a weaver- account's /tmp entries are archived and purged**
@@ -3529,8 +3534,9 @@ class DecommissionTests(unittest.TestCase):
         each line read as the removal loops read it, and an empty derivation
         holds nothing. The list is read once into root's copy, hashed against
         the archive's sums, and every removal loop reads that copy.
-        Perturbation: drop the judgment, read the list from DEST again, or skip
-        a line that still stands, and the pins here fail."""
+        Perturbation: drop the judgment, read the list from DEST or the
+        unfiltered copy again, skip a line that still stands, or keep a line
+        the derivation does not hold, and the pins here fail."""
         scratch = tempfile.TemporaryDirectory(prefix="weaver-purge-list-")
         self.addCleanup(scratch.cleanup)
         root = Path(scratch.name)
@@ -3560,7 +3566,18 @@ class DecommissionTests(unittest.TestCase):
         self.assertLess(self.script.index('[ "$LISTED_SUM" = "$COPY_SUM" ] || die '), judged)
         self.assertLess(judged, self.script.index('say "the delegated door, shut"'))
         self.assertNotIn('done < "$DEST/PURGE-LIST"', self.script)
-        self.assertEqual(self.script.count('done < "$PURGE_LIST"'), 3)
+        self.assertNotIn('done < "$PURGE_LIST"', self.script)
+        self.assertEqual(self.script.count('done < "$PURGE_ACTED"'), 3)
+        self.assertLess(judged, self.script.index('purge_lines_within "$PURGE_LIST" > "$PURGE_ACTED"'))
+        # **A line passed over is never acted on**: only lines the
+        # derivation holds reach the removal loops, so a path that did not
+        # resolve at the judgment and does by the removal is not removed.
+        within = shell_function(self.script, "purge_lines_within")
+        listed.write_text(f"path {standing}\npath {root}/gone/../../etc\nuser weaver-a\n")
+        stub = "purge_candidates() { printf '%s\\n' " + " ".join(shlex.quote(c) for c in held) + "; }\n"
+        kept = subprocess.run(["bash", "-c", stub + within + 'purge_lines_within "$1"', "x", str(listed)],
+                              text=True, capture_output=True, timeout=20)
+        self.assertEqual(kept.stdout.splitlines(), [f"path {standing}", "user weaver-a"], kept.stderr)
 
     def test_nothing_under_the_operators_home_is_listed(self):
         """**The operator's home is never listed, archived or purged** (the

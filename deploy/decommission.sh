@@ -492,7 +492,10 @@ if [ "$MODE" = archive ]; then
   as_op test -w "$DEST" || die "$DEST is not writable by $OPERATOR"
   # A run that died part way leaves files here the operator may not own;
   # they are this script's and go before it writes again.
-  find "$DEST" -maxdepth 1 -type f -exec rm -f {} \; 2>/dev/null || true
+  # Removed as the operator (#98): DEST is the operator's, and root acting
+  # under a path another writer controls could be led elsewhere.
+  as_op find "$DEST" -maxdepth 1 -type f -exec rm -f {} \; 2>/dev/null || true
+  as_op chmod 0700 "$DEST" || die "the operator cannot close $DEST to 0700"
   say "archive to $DEST"
 
   NVCC=$(command -v nvcc || ls /opt/cuda/bin/nvcc 2>/dev/null || true)
@@ -629,13 +632,19 @@ purge_candidates() {
 # on. A line naming what no longer stands is passed over, there being nothing
 # to remove, so a purge stopped part way can be run again; any line of a
 # kind the purge does not know is named.
+#
+# **A line passed over is never acted on**: the removal loops read only the
+# lines purge_lines_within keeps, those the derivation holds. A line that did
+# not stand when judged could stand by the removal (`/tmp/gone/../../etc`
+# resolves once anyone makes `/tmp/gone`), so none is removed on the list's
+# word alone.
 purge_lines_outside() {
   local -A held=()
   local line kind name
   while IFS= read -r line; do
     [ -n "$line" ] && held["$line"]=1
   done < <(purge_candidates)
-  while IFS= read -r line || [ -n "$line" ]; do
+  while IFS= read -r line; do
     [ -n "$line" ] || continue
     [ -n "${held["$line"]:-}" ] && continue
     kind=${line%% *} name=${line#* }
@@ -647,6 +656,19 @@ purge_lines_outside() {
     printf '%s\n' "$line"
   done < "$1"
 }
+# **purge_lines_within LIST: each line of LIST the derivation holds**, the
+# only lines the removal loops act on.
+purge_lines_within() {
+  local -A held=()
+  local line
+  while IFS= read -r line; do
+    [ -n "$line" ] && held["$line"]=1
+  done < <(purge_candidates)
+  while IFS= read -r line; do
+    [ -n "$line" ] && [ -n "${held["$line"]:-}" ] && printf '%s\n' "$line"
+  done < "$1"
+  true
+}
 
 # **Everything under DEST is read as the operator** (#98): the archive is the
 # operator's alone, 0600 in a 0700 directory, and on an export where root's
@@ -657,15 +679,19 @@ as_op sh -c 'cd "$1" && sha256sum -c --quiet SHA256SUMS' _ "$DEST" || die "the a
 # The list is read once, into root's own copy, and judged there, so what is
 # judged is what the purge reads: nothing writes it between.
 PURGE_LIST=$(mktemp)
-trap 'rm -f -- "$PURGE_LIST"' EXIT
+PURGE_ACTED=$(mktemp)
+trap 'rm -f -- "$PURGE_LIST" "$PURGE_ACTED"' EXIT
 as_op cat -- "$DEST/PURGE-LIST" > "$PURGE_LIST"
-# The copy is the list the archive summed, or nothing is purged: the sums
-# were checked on DEST's file, and this is the copy acted on.
+# The copy agrees with the archive's sums, or nothing is purged. This
+# catches a list changed by accident since the archive, not a writer who can
+# rewrite the sums as well: against that writer the defence is the
+# derivation below, on which every removal rests.
 LISTED_SUM=$(as_op awk '$2 == "PURGE-LIST" { print $1 }' "$DEST/SHA256SUMS")
 COPY_SUM=$(sha256sum < "$PURGE_LIST" | cut -d' ' -f1)
 [ -n "$LISTED_SUM" ] && [ "$LISTED_SUM" = "$COPY_SUM" ] || die "the purge list read is not the one the archive summed; purge refused"
 OUTSIDE=$(purge_lines_outside "$PURGE_LIST")
 [ -z "$OUTSIDE" ] || die "PURGE-LIST names what this purge would not find, so nothing is purged: ${OUTSIDE//$'\n'/; }"
+purge_lines_within "$PURGE_LIST" > "$PURGE_ACTED"
 [ ${#ACTIVE_UNITS[@]} -eq 0 ] || die "units still active: ${ACTIVE_UNITS[*]}"
 [ ${#RUNNING[@]} -eq 0 ] || die "agents still run or cannot be read: ${RUNNING[*]}"
 plan "verified"
@@ -694,13 +720,13 @@ while IFS= read -r line; do
   case $kind in
     user)  userdel -r "$name" 2>/dev/null && plan "removed user $name (and home)" || { userdel "$name" 2>/dev/null && plan "removed user $name" || plan "user $name: not removed"; } ;;
   esac
-done < "$PURGE_LIST"
+done < "$PURGE_ACTED"
 while IFS= read -r line; do
   kind=${line%% *} name=${line#* }
   case $kind in
     group) getent group "$name" >/dev/null && { groupdel "$name" 2>/dev/null && plan "removed group $name" || plan "group $name: not removed"; } ;;
   esac
-done < "$PURGE_LIST"
+done < "$PURGE_ACTED"
 
 say "paths"
 while IFS= read -r line; do
@@ -710,7 +736,7 @@ while IFS= read -r line; do
       case "$name" in */models|*/models/*) plan "kept $name"; continue;; esac
       rm -rf -- "$name" && plan "removed $name" ;;
   esac
-done < "$PURGE_LIST"
+done < "$PURGE_ACTED"
 # A prefix left holding only models stays; one left empty goes.
 for p in "${!PREFIXES[@]}"; do
   [ -d "$p" ] && [ -z "$(ls -A "$p")" ] && rmdir "$p" && plan "removed empty $p"

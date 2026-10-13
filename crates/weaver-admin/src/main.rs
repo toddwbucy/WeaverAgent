@@ -1959,7 +1959,16 @@ fn unload_within(
     // **A refused observation is silence**, `unload`'s promise being to end
     // whatever holds the lock: it directs leave as for any silent run.
     let (seen, window) = if start::run_lock_held(&run_directory)? {
-        let (worker, load) = worker_seen(observe(config).unwrap_or(Observation::Silent));
+        let observed = match observe(config) {
+            // **A graceful unload refuses a listener that is not the
+            // worker** (#98), at its first look, the run left standing; a
+            // force reads it as silence and ends the run on its lock.
+            Err(LifecycleRefusal::BoundaryUnverified) if !forced => {
+                return Err(LifecycleRefusal::BoundaryUnverified);
+            }
+            observed => observed.unwrap_or(Observation::Silent),
+        };
+        let (worker, load) = worker_seen(observed);
         (
             verb_table::Seen::RunLockHeld(worker),
             leave_window(bounds, forced, worker, load.as_deref()),
