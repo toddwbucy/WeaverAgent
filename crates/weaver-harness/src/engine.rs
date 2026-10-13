@@ -318,6 +318,13 @@ pub struct TurnOutcome {
     /// conflation the finish vocabulary exists to end. The answered close
     /// surfaces it per the world contract.
     pub truncated: bool,
+    /// The parse's report on every call the turn's generations attempted and
+    /// could not recover, in the order they were drawn, per
+    /// `weaver-harness-Spec` section 6.1 on the operator's ruling of
+    /// 2026-10-13 (#31): handed to loop 1 beside the emission so a loop sees
+    /// what the parse refused without parsing. What a loop does about it is
+    /// state management's to design (#1).
+    pub unrecovered: Vec<weaver_types::UnrecoveredCall>,
 }
 
 impl<'a> Ports<'a> {
@@ -1192,8 +1199,10 @@ impl<'a> Ports<'a> {
         // model still wanted.
         let mut delta = delta;
         let mut rounds = 0usize;
+        let mut unrecovered = Vec::new();
         let generation = 'rounds: loop {
             let mut generation = self.generate_once(turn, delta, stop)?;
+            unrecovered.extend(generation.unrecovered.iter().cloned());
             let calls: Vec<weaver_traits::ToolCall> = generation
                 .content
                 .iter()
@@ -1243,7 +1252,28 @@ impl<'a> Ports<'a> {
             stopped: matches!(generation.finish, weaver_types::Finish::Stopped),
             aborted,
             truncated: matches!(generation.finish, weaver_types::Finish::Length),
+            unrecovered,
         })
+    }
+
+    /// **The parse's report, authored at the answer**, per
+    /// `weaver-harness-Spec` section 6.1 on the operator's ruling of
+    /// 2026-10-13 (#31): one `model.unrecovered_call` per entry, in its order,
+    /// after `model.measurement` and before the turn's `message.assistant`,
+    /// whose `UnrecoveredCall` blocks hold the same fragments. The one helper
+    /// both the generation's and the re-feed's authoring call, through the
+    /// one road a failed render latches on.
+    fn author_unrecovered(
+        &mut self,
+        turn: &TurnKey,
+        generation: &weaver_types::Generation,
+    ) -> Result<(), TurnError> {
+        for report in &generation.unrecovered {
+            self.author
+                .author_unrecovered_call(self.recorder, turn, report)
+                .map_err(|_| TurnError::ChannelLost)?;
+        }
+        Ok(())
     }
 
     /// **One execution through the gate**, per `weaver-harness-gate-contract`
@@ -1853,11 +1883,14 @@ impl<'a> Ports<'a> {
             )
             .map_err(|_| TurnError::ChannelLost)?;
 
+        self.author_unrecovered(turn, &generation)?;
+
         // The assistant's turn enters the record as a message event, the
         // canonical parse beside the verbatim the output holds: the family
         // module's own bridge crossed the seam in the generation, text as
-        // text and every recovered call as a `ToolCall` block, per the tool
-        // workflow's opening act.
+        // text, every recovered call as a `ToolCall` block, and every call
+        // it could not recover as a marked `UnrecoveredCall` block, per the
+        // tool workflow's opening act and #31.
         let assistant = Message {
             role: Role::Assistant,
             content: generation.content.clone(),
@@ -2118,6 +2151,7 @@ impl<'a> Ports<'a> {
                 Some(Payload::ModelMeasurement(generation.measurement.clone())),
             )
             .map_err(|_| TurnError::ChannelLost)?;
+        self.author_unrecovered(turn, &generation)?;
         let assistant = Message {
             role: Role::Assistant,
             content: generation.content.clone(),

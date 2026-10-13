@@ -825,3 +825,36 @@ fn the_identity_door_writes_system_only() {
         "the prefix belongs to no turn, a prefix preceding every turn there is"
     );
 }
+
+/// **An assistant message carrying an unrecovered call is licensed, and a
+/// user message carrying one is not**, per `weaver-traits-Spec` sections 3
+/// and 7 on the operator's ruling of 2026-10-13 (#31). The licensing match
+/// carries a wildcard that compiles either way, so the arm is watched rather
+/// than pinned.
+///
+/// Perturbations: remove the `(Assistant, UnrecoveredCall)` arm from
+/// `licensed` and the first assertion fails; add a `(User, UnrecoveredCall)`
+/// arm and the second does.
+#[test]
+fn an_unrecovered_call_is_licensed_in_the_assistant_turn_alone() {
+    let block = || ContentBlock::UnrecoveredCall {
+        fragment: "<tool_call>{".into(),
+    };
+    assert!(
+        licensed(&Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Text { text: "ok ".into() }, block()],
+        })
+        .is_ok(),
+        "the assistant's own attempted call is licensed"
+    );
+    let refused = licensed(&Message {
+        role: Role::User,
+        content: vec![block()],
+    })
+    .expect_err("a user message carrying one is unlicensed");
+    assert!(
+        format!("{refused:?}").contains("unrecovered_call"),
+        "the refusal names the block: {refused:?}"
+    );
+}

@@ -661,6 +661,7 @@ fn a_turn_authors_the_whole_bracket() {
         )
         .unwrap();
         send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::Text {
                 text: "one word".into(),
             }],
@@ -1017,6 +1018,7 @@ fn a_turn_executes_its_calls_and_the_grant_authors_the_result() {
             weaver_types::TokenDirective::AppendAndGenerate { .. }
         ));
         send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::ToolCall(
                 weaver_traits::ToolCall {
                     name: "calculator".into(),
@@ -1052,6 +1054,7 @@ fn a_turn_executes_its_calls_and_the_grant_authors_the_result() {
             delta[0].content
         );
         send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::Text {
                 text: "37 * 43 is 1591.".into(),
             }],
@@ -1267,6 +1270,7 @@ fn each_field_intermediate_authors_its_event() {
         )
         .unwrap();
         send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::Text { text: "hi".into() }],
             emission: "hi".into(),
             finish: Finish::Completed,
@@ -1570,6 +1574,7 @@ fn dial_mid_stream(
         )
         .unwrap();
         send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            unrecovered: vec![],
             content: vec![],
             emission: "par".into(),
             finish: Finish::Completed,
@@ -1775,6 +1780,7 @@ fn leave_during_turn(forced: bool, crossing: bool, before_call: bool) -> LeaveDu
     let (gate_near, gate_child) = crate::channel::OrganChannel::pair().unwrap();
     let generated = |content, finish| {
         weaver_types::TokenAnswer::Generated(Generation {
+            unrecovered: vec![],
             content,
             emission: "tool emission".into(),
             finish,
@@ -2032,6 +2038,7 @@ fn a_directive_mid_turn_with_a_leave_held(
         let _: TokenDirective = serde_json::from_slice(&buf[..n]).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(300));
         let answer = weaver_types::TokenAnswer::Generated(Generation {
+            unrecovered: vec![],
             content: vec![],
             emission: "done".into(),
             finish: Finish::Completed,
@@ -2189,6 +2196,7 @@ fn a_join_during_the_wind_down_cancels_it_and_turns_the_leave_forced() {
                 )
             });
         let answer = weaver_types::TokenAnswer::Generated(Generation {
+            unrecovered: vec![],
             content: vec![],
             emission: "summary".into(),
             finish: if cancelled {
@@ -2340,6 +2348,7 @@ fn a_leave_dialed_while_the_spu_streams_is_heard() {
             while send(far.as_raw_fd(), &token, MsgFlags::MSG_DONTWAIT).is_ok() {}
         };
         let answer = weaver_types::TokenAnswer::Generated(Generation {
+            unrecovered: vec![],
             content: vec![],
             emission: "streamed".into(),
             finish: if cancelled {
@@ -2474,6 +2483,7 @@ fn a_bound_passing_while_the_spu_streams_cancels_the_turn() {
             while send(far.as_raw_fd(), &token, MsgFlags::MSG_DONTWAIT).is_ok() {}
         };
         let answer = weaver_types::TokenAnswer::Generated(Generation {
+            unrecovered: vec![],
             content: vec![],
             emission: "streamed".into(),
             finish: if cancelled {
@@ -2589,6 +2599,7 @@ fn a_drain_bound_passing_mid_turn_cancels_the_turn_and_turns_the_leave_forced() 
                 )
             });
         let answer = weaver_types::TokenAnswer::Generated(Generation {
+            unrecovered: vec![],
             content: vec![],
             emission: "late".into(),
             finish: if cancelled {
@@ -2750,6 +2761,7 @@ fn a_call_asked_in_the_wind_down_is_never_sent() {
     )
     .expect("socketpair");
     let asked = weaver_types::TokenAnswer::Generated(Generation {
+        unrecovered: vec![],
         content: vec![ContentBlock::ToolCall(weaver_traits::ToolCall {
             name: "bash".into(),
             arguments: r#"{"command":"true"}"#.into(),
@@ -2879,6 +2891,7 @@ fn stopped_invocation(crossing: bool, call_count: usize) {
     let (gate_near, gate_child) = crate::channel::OrganChannel::pair().unwrap();
     let generated = |content, finish| {
         weaver_types::TokenAnswer::Generated(Generation {
+            unrecovered: vec![],
             content,
             emission: "tool emission".into(),
             finish,
@@ -3271,6 +3284,7 @@ fn stop_dialed_mid_stream(latched: bool) {
         )
         .unwrap();
         send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            unrecovered: vec![],
             content: vec![],
             emission: "par".into(),
             finish: Finish::Stopped,
@@ -3492,6 +3506,7 @@ fn a_stop_is_not_answered_after_a_close_over_a_latched_record() {
             &mut pressure_reported,
         );
         let generation = Generation {
+            unrecovered: vec![],
             content: vec![],
             emission: "par".into(),
             finish: Finish::Stopped,
@@ -4124,4 +4139,489 @@ fn tempfile() -> OwnedFd {
     let file = std::fs::File::create(&path).expect("sink");
     std::fs::remove_file(&path).ok();
     OwnedFd::from(file)
+}
+
+/// **An unrecovered call is authored at the answer and handed to the loop**,
+/// per `weaver-harness-Spec` sections 6.1 and 8 on the operator's ruling of
+/// 2026-10-13 (#31): one `model.unrecovered_call` per report entry, in order,
+/// after `model.measurement` and before `message.assistant`, each fragment
+/// the same bytes as its block, and the report carried on the outcome.
+///
+/// Perturbations: remove the authoring and the kinds fail; move it after
+/// `author_message` and the order fails; drop the report from the outcome
+/// and the length fails.
+#[test]
+fn an_unrecovered_call_is_authored_at_the_answer_and_handed_to_the_loop() {
+    let (near, far) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .expect("socketpair");
+    let decode = crate::channel::decode_from_owned(near);
+
+    // The scripted decode peer: read the append, stream two tokens, then
+    // answer with the generation whole, the request and measurement the
+    // SPU-rendered blobs the turn splices.
+    let peer = std::thread::spawn(move || {
+        let mut buf = vec![0u8; 65536];
+        let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("recv append");
+        let directive: weaver_types::TokenDirective =
+            serde_json::from_slice(&buf[..n]).expect("the append parses");
+        assert!(
+            matches!(
+                directive,
+                weaver_types::TokenDirective::AppendAndGenerate { .. }
+            ),
+            "the turn sends append-and-generate"
+        );
+        let send_answer = |answer: &weaver_types::TokenAnswer| {
+            let bytes = serde_json::to_vec(answer).expect("answer renders");
+            send(far.as_raw_fd(), &bytes, MsgFlags::empty()).expect("send answer");
+        };
+        send_answer(&weaver_types::TokenAnswer::Token {
+            token: 9707,
+            piece: "one".into(),
+        });
+        send_answer(&weaver_types::TokenAnswer::Token {
+            token: 1879,
+            piece: " word".into(),
+        });
+        let request = serde_json::value::RawValue::from_string(
+            r#"{"rendered":"<|im_start|>user\nsay a word<|im_end|>\n","template":"qwen2","sampling":{"temperature":0.7}}"#
+                .to_string(),
+        )
+        .unwrap();
+        let measurement = serde_json::value::RawValue::from_string(
+            r#"{"model":"qwen2.5","weights_hash":"sha256:abc","input_tokens":[1,2],"output_tokens":[9707,1879],"blocks":[{"label":"turn-delta","start":0,"end":10}],"timings":{"prefill_ns":"10","decode_ns":"20"}}"#
+                .to_string(),
+        )
+        .unwrap();
+        send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            content: vec![
+                weaver_traits::ContentBlock::Text {
+                    text: "one word".into(),
+                },
+                weaver_traits::ContentBlock::UnrecoveredCall {
+                    fragment: "<tool_call>x</tool_call>".into(),
+                },
+                weaver_traits::ContentBlock::UnrecoveredCall {
+                    fragment: "<tool_call>y".into(),
+                },
+            ],
+            unrecovered: vec![
+                unrecovered_entry("<tool_call>x</tool_call>", false),
+                unrecovered_entry("<tool_call>y", true),
+            ],
+            emission: "one word".into(),
+            finish: Finish::Completed,
+            // Deliberately unroundable: a site forwarding a zero, a
+            // default, or the other member would fail the assertion
+            // below, where 64 and 4096 could each be arrived at by
+            // accident.
+            resident: 1237,
+            capacity: 8191,
+            request,
+            measurement,
+        }));
+    });
+
+    let session = SessionId("s-1".into());
+    let sink = tempfile();
+    let mut recorder = crate::record::Record::from(
+        Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
+            .expect("recorder"),
+    );
+    let author = Author::new(&session, &weaver_types::RunId("r-1".into()));
+    author
+        .author(
+            &mut recorder,
+            Kind::Load,
+            Subsystem::Harness,
+            None,
+            Some(Payload::Elections(Box::new(weaver_trace::Elections {
+                residual_readout: false,
+                field: None,
+                surprisal: false,
+                tee: Some(weaver_trace::Election::default()),
+                state_member: false,
+                declaration: Default::default(),
+                lineage: None,
+                reset: None,
+                stack: Default::default(),
+                boundary: String::new(),
+                cause: weaver_trace::Cause { uid: 0 },
+                library_path: None,
+                state_store: Default::default(),
+                composer: weaver_trace::LoopIdentity::compiled("test"),
+            }))),
+        )
+        .expect("load");
+    let mut turn_ordinal = 0u64;
+    let mut turn_in_flight: Option<weaver_types::TurnKey> = None;
+
+    let (listener, _dir) = test_listener();
+    let outcome = {
+        let mut fullness = None;
+        let mut pressure_reported = false;
+        let load_facts = crate::engine::test_load_facts();
+        let mut ports = Ports::grant(
+            &decode,
+            &author,
+            &mut recorder,
+            &mut turn_ordinal,
+            &mut turn_in_flight,
+            &load_facts,
+            None,
+            &listener,
+            None,
+            None,
+            None,
+            None,
+            &mut fullness,
+            &mut pressure_reported,
+        );
+        let delta = vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text {
+                text: "say a word".into(),
+            }],
+        }];
+        ports.turn(delta).expect("the turn completes")
+    };
+    peer.join().expect("the decode peer finishes");
+
+    assert_eq!(outcome.emission, "one word", "loop 1 receives the emission");
+    assert!(!outcome.stopped, "a clean generation is not stopped");
+
+    // The bracket, in order: the turn's user message, the three model
+    // events, the assistant's turn, and the close.
+    let kinds: Vec<Kind> = recorder
+        .structure()
+        .expect("the serving record")
+        .iter()
+        .filter(|r| r.turn.is_some())
+        .map(|r| r.kind)
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            Kind::TurnStarted,
+            Kind::MessageUser,
+            Kind::ModelRequest,
+            Kind::ModelOutput,
+            Kind::ModelMeasurement,
+            Kind::ModelUnrecoveredCall,
+            Kind::ModelUnrecoveredCall,
+            Kind::MessageAssistant,
+            Kind::TurnClosed,
+        ],
+        "one event per entry, after the measurement and before the assistant"
+    );
+
+    // **Each event's fragment is its block's**, in the same order.
+    let fragments: Vec<String> = recorder
+        .structure()
+        .expect("the serving record")
+        .by_kind(Kind::ModelUnrecoveredCall)
+        .map(|r| {
+            let line: serde_json::Value = serde_json::from_str(&r.line).expect("one value");
+            assert_eq!(line["subsystem"], "spu_decoder", "{line}");
+            line["payload"]["fragment"]
+                .as_str()
+                .expect("a fragment")
+                .to_string()
+        })
+        .collect();
+    assert_eq!(
+        fragments,
+        vec![
+            "<tool_call>x</tool_call>".to_string(),
+            "<tool_call>y".to_string()
+        ]
+    );
+    let assistant: serde_json::Value = serde_json::from_str(
+        &recorder
+            .structure()
+            .expect("the serving record")
+            .by_kind(Kind::MessageAssistant)
+            .next()
+            .expect("the assistant authored")
+            .line,
+    )
+    .expect("one value");
+    assert_eq!(
+        assistant["payload"]["content"][1]["fragment"], "<tool_call>x</tool_call>",
+        "the marked message holds the same bytes: {assistant}"
+    );
+
+    // **Loop 1 receives the report with the outcome.**
+    assert_eq!(outcome.unrecovered.len(), 2, "the report reaches loop 1");
+    assert_eq!(
+        outcome.unrecovered[1].reason,
+        weaver_types::UnrecoveredReason::Unclosed
+    );
+}
+
+/// **An `UnrecoveredCall` block opens no execution exchange**, per
+/// `weaver-harness-Spec` sections 6 and 8: an emission holding one recovered
+/// call and one unrecovered opens exactly one exchange, the gate peer
+/// answering one and the record carrying one `tool.call.started`.
+///
+/// Perturbation: let the dispatch take the unrecovered block as a call too and
+/// a second exchange opens against a peer that answers one, so the turn fails.
+#[test]
+fn an_unrecovered_call_opens_no_execution_exchange() {
+    let (near, far) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .expect("socketpair");
+    let decode = crate::channel::decode_from_owned(near);
+
+    // The decode peer: two rounds. Round one answers a generation whose
+    // canonical content carries the call; round two reads the tool-result
+    // delta back and answers plain text.
+    let peer = std::thread::spawn(move || {
+        let mut buf = vec![0u8; 65536];
+        let raw = |text: &str| serde_json::value::RawValue::from_string(text.to_string()).unwrap();
+        let send_answer = |answer: &weaver_types::TokenAnswer| {
+            let bytes = serde_json::to_vec(answer).expect("answer renders");
+            send(far.as_raw_fd(), &bytes, MsgFlags::empty()).expect("send answer");
+        };
+
+        let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("recv append");
+        let directive: weaver_types::TokenDirective =
+            serde_json::from_slice(&buf[..n]).expect("the append parses");
+        assert!(matches!(
+            directive,
+            weaver_types::TokenDirective::AppendAndGenerate { .. }
+        ));
+        send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            content: vec![
+                weaver_traits::ContentBlock::ToolCall(weaver_traits::ToolCall {
+                    name: "calculator".into(),
+                    arguments: r#"{"expression":"37 * 43"}"#.into(),
+                }),
+                weaver_traits::ContentBlock::UnrecoveredCall {
+                    fragment: "<tool_call>z".into(),
+                },
+            ],
+            unrecovered: vec![unrecovered_entry("<tool_call>z", true)],
+            emission: r#"<tool_call>{"name":"calculator"}</tool_call>"#.into(),
+            finish: Finish::Completed,
+            resident: 64,
+            capacity: 4096,
+            request: raw(r#"{"rendered":"r1","template":"qwen2","sampling":{}}"#),
+            measurement: raw(
+                r#"{"model":"m","weights_hash":"h","input_tokens":[1],"output_tokens":[2],"blocks":[{"label":"turn-delta","start":0,"end":1}],"timings":{"prefill_ns":"1","decode_ns":"2"}}"#,
+            ),
+        }));
+
+        // Round two: the tool-result delta arrives, carrying the granted
+        // content and nothing the loop invented.
+        let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("recv round 2");
+        let directive: weaver_types::TokenDirective =
+            serde_json::from_slice(&buf[..n]).expect("round 2 parses");
+        let weaver_types::TokenDirective::AppendAndGenerate { delta, .. } = directive else {
+            panic!("round two is an append");
+        };
+        assert_eq!(delta.len(), 1, "one tool-result message crosses");
+        assert!(matches!(delta[0].role, Role::ToolResult));
+        assert!(
+            matches!(
+                &delta[0].content[0],
+                ContentBlock::ToolResult(block) if block.content == "1591"
+            ),
+            "the granted content is what crosses: {:?}",
+            delta[0].content
+        );
+        send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            content: vec![weaver_traits::ContentBlock::Text {
+                text: "37 * 43 is 1591.".into(),
+            }],
+            unrecovered: vec![],
+            emission: "37 * 43 is 1591.".into(),
+            finish: Finish::Completed,
+            resident: 64,
+            capacity: 4096,
+            request: raw(r#"{"rendered":"r2","template":"qwen2","sampling":{}}"#),
+            measurement: raw(
+                r#"{"model":"m","weights_hash":"h","input_tokens":[3],"output_tokens":[4],"blocks":[{"label":"turn-delta","start":0,"end":1}],"timings":{"prefill_ns":"1","decode_ns":"2"}}"#,
+            ),
+        }));
+    });
+
+    // The gate peer: one execution exchange, answered with the result,
+    // exactly as the gate's dispatch would.
+    let (gate_near, gate_child) = crate::channel::OrganChannel::pair().expect("gate pair");
+    let gate_peer = std::thread::spawn(move || {
+        let gate_far = gate_child.into_channel();
+        let envelope = gate_far.recv().expect("the execution opens");
+        assert_eq!(envelope.position, weaver_types::Position::Open);
+        let weaver_types::Payload::Tool(execution) = &envelope.payload else {
+            panic!("the exchange carries the call, got {:?}", envelope.payload);
+        };
+        assert_eq!(execution.name.0, "calculator");
+        let outcome = weaver_gate_execute_stub(execution);
+        gate_far
+            .send(&weaver_types::OrganEnvelope {
+                exchange: envelope.exchange.clone(),
+                position: weaver_types::Position::Close,
+                payload: weaver_types::Payload::ToolAnswer(outcome),
+            })
+            .expect("the answer closes");
+    });
+
+    let session = SessionId("s-t".into());
+    let sink = tempfile();
+    let mut recorder = crate::record::Record::from(
+        Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
+            .expect("recorder"),
+    );
+    let author = Author::new(&session, &weaver_types::RunId("r-1".into()));
+    author
+        .author(
+            &mut recorder,
+            Kind::Load,
+            Subsystem::Harness,
+            None,
+            Some(Payload::Elections(Box::new(weaver_trace::Elections {
+                residual_readout: false,
+                field: None,
+                surprisal: false,
+                tee: Some(weaver_trace::Election::default()),
+                state_member: false,
+                declaration: Default::default(),
+                lineage: None,
+                reset: None,
+                stack: Default::default(),
+                boundary: String::new(),
+                cause: weaver_trace::Cause { uid: 0 },
+                library_path: None,
+                state_store: Default::default(),
+                composer: weaver_trace::LoopIdentity::compiled("test"),
+            }))),
+        )
+        .expect("load");
+    let mut turn_ordinal = 0u64;
+    let mut turn_in_flight: Option<weaver_types::TurnKey> = None;
+    let mut gate_ordinal = 0u64;
+    let mut held = std::collections::VecDeque::new();
+
+    let (listener, _dir) = test_listener();
+    let outcome = {
+        let mut fullness = None;
+        let mut pressure_reported = false;
+        let load_facts = crate::engine::test_load_facts();
+        let mut ports = Ports::grant(
+            &decode,
+            &author,
+            &mut recorder,
+            &mut turn_ordinal,
+            &mut turn_in_flight,
+            &load_facts,
+            None,
+            &listener,
+            None,
+            Some(GatePort {
+                channel: &gate_near,
+                ordinal: &mut gate_ordinal,
+                held: &mut held,
+            }),
+            None,
+            None,
+            &mut fullness,
+            &mut pressure_reported,
+        );
+        let delta = vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text {
+                text: "what is 37 * 43?".into(),
+            }],
+        }];
+        ports.turn(delta).expect("the turn completes")
+    };
+    peer.join().expect("the decode peer finishes");
+    gate_peer.join().expect("the gate peer finishes");
+
+    assert_eq!(outcome.emission, "37 * 43 is 1591.");
+    assert!(held.is_empty(), "nothing crossed mid-execution to hold");
+
+    let kinds: Vec<Kind> = recorder
+        .structure()
+        .expect("the serving record")
+        .iter()
+        .filter(|r| r.turn.is_some())
+        .map(|r| r.kind)
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            Kind::TurnStarted,
+            Kind::MessageUser,
+            Kind::ModelRequest,
+            Kind::ModelOutput,
+            Kind::ModelMeasurement,
+            Kind::ModelUnrecoveredCall,
+            Kind::MessageAssistant,
+            Kind::ToolCallStarted,
+            Kind::ToolCallCompleted,
+            Kind::MessageToolResult,
+            Kind::ModelRequest,
+            Kind::ModelOutput,
+            Kind::ModelMeasurement,
+            Kind::MessageAssistant,
+            Kind::TurnClosed,
+        ],
+        "one exchange for the recovered call and none for the unrecovered one"
+    );
+
+    // The attribution: started is the harness's dispatch, completed is
+    // the gate's answer.
+    let line_of = |kind: Kind| {
+        recorder
+            .structure()
+            .expect("the serving record")
+            .by_kind(kind)
+            .next()
+            .expect("authored")
+            .line
+            .to_string()
+    };
+    assert!(line_of(Kind::ToolCallStarted).contains("\"subsystem\":\"harness\""));
+    assert!(line_of(Kind::ToolCallCompleted).contains("\"subsystem\":\"gate\""));
+    assert!(
+        line_of(Kind::MessageToolResult).contains("1591"),
+        "the granted content is the record's"
+    );
+}
+
+/// **Each field intermediate authors one `model.field` event**, per
+/// `weaver-harness-Spec` section 6. The intermediates close nothing, so
+/// the turn runs on and the close arrives as it always did: the record
+/// gains the field's events and loses none of the bracket.
+///
+/// Perturbation: discard the field arm the way the token arm is
+/// discarded and the kinds assertion fails, the events never authored.
+/// One report entry for a scripted generation, the grammar qwen2's.
+fn unrecovered_entry(fragment: &str, unclosed: bool) -> weaver_types::UnrecoveredCall {
+    weaver_types::UnrecoveredCall {
+        fragment: fragment.to_string(),
+        reason: if unclosed {
+            weaver_types::UnrecoveredReason::Unclosed
+        } else {
+            weaver_types::UnrecoveredReason::Unparsed {
+                detail: "not JSON".to_string(),
+            }
+        },
+        grammar: weaver_types::CallGrammar {
+            family: "qwen2".to_string(),
+            open: "<tool_call>".to_string(),
+            close: Some("</tool_call>".to_string()),
+        },
+    }
 }

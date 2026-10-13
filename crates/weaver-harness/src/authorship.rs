@@ -347,6 +347,39 @@ impl Author {
         self.author(recorder, Kind::Fault, subsystem, turn, Some(payload))
     }
 
+    /// **A `model.unrecovered_call` event of the parse's report**, rendered
+    /// here and latched on the record where it will not render (#116), the
+    /// one road both the generation's and the re-feed's authoring take, per
+    /// `weaver-harness-Spec` section 6.1 on the operator's ruling of
+    /// 2026-10-13 (#31). The report is the floor's shape the decode answer
+    /// carried, spliced whole on the `refusal` precedent, and the subsystem
+    /// is the decoder's, the parse that judged the fragment being its.
+    pub fn author_unrecovered_call(
+        &self,
+        recorder: &mut Record,
+        turn: &TurnKey,
+        report: &weaver_types::UnrecoveredCall,
+    ) -> Result<Sequence, RecordFailure> {
+        let Some(payload) = serde_json::to_string(report)
+            .ok()
+            .and_then(|rendered| raw_payload(&rendered))
+        else {
+            recorder.latch_unrendered();
+            return Err(RecordFailure::Serving(
+                weaver_trace::Failure::RefusedOnSubmit {
+                    reason: weaver_trace::SubmitRefusal::PayloadMalformed,
+                },
+            ));
+        };
+        self.author(
+            recorder,
+            Kind::ModelUnrecoveredCall,
+            Subsystem::SpuDecoder,
+            Some(turn),
+            Some(Payload::UnrecoveredCall(payload)),
+        )
+    }
+
     /// **A `refusal` event of the record's refusal shape**, rendered here and
     /// latched on the record where it will not render (#116), the one road
     /// every refusal site takes.
@@ -394,12 +427,10 @@ pub fn harness_report(case: weaver_types::FaultCase, account: &str) -> weaver_ty
     weaver_types::FaultReport { case, account }
 }
 
-/// The licensing rule of `weaver-traits-Spec` section 3: a `System` message
-/// carries `Text` blocks - the operator's or the loop's framing of the
-/// field, never a call and never a result - a `User` message carries `Text`
-/// blocks, an `Assistant` message carries `Text` and `ToolCall` blocks, a
-/// `ToolResult` message carries `ToolResult` blocks, and every other pairing
-/// is unlicensed.
+/// The licensing rule of `weaver-traits-Spec` section 3, which this function
+/// carries out and does not restate: an unlicensed pairing is refused here,
+/// before submit, because the recorder judges the envelope and never the
+/// interior.
 pub fn licensed(message: &Message) -> Result<(), UnlicensedMessage> {
     for block in &message.content {
         let ok = matches!(
@@ -408,6 +439,7 @@ pub fn licensed(message: &Message) -> Result<(), UnlicensedMessage> {
                 | (Role::User, ContentBlock::Text { .. })
                 | (Role::Assistant, ContentBlock::Text { .. })
                 | (Role::Assistant, ContentBlock::ToolCall(_))
+                | (Role::Assistant, ContentBlock::UnrecoveredCall { .. })
                 | (Role::ToolResult, ContentBlock::ToolResult(_))
         );
         if !ok {
@@ -435,6 +467,7 @@ fn block_name(block: &ContentBlock) -> &'static str {
         ContentBlock::Text { .. } => "text",
         ContentBlock::ToolCall(_) => "tool_call",
         ContentBlock::ToolResult(_) => "tool_result",
+        ContentBlock::UnrecoveredCall { .. } => "unrecovered_call",
         _ => "unknown",
     }
 }

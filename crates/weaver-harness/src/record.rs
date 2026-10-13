@@ -213,7 +213,7 @@ impl Record {
 }
 
 /// The serving-vocabulary event rendered into the diagnostic one, member
-/// for member. The fifteen shared kinds map by spelling, per
+/// for member. The sixteen shared kinds map by spelling, per
 /// `weaver-diagnostic-Spec` section 3.2, and the payload crosses as the
 /// bytes it would have carried, spliced whole.
 fn convert(event: Event) -> Result<weaver_diagnostic::Event, RecordFailure> {
@@ -233,6 +233,9 @@ fn convert(event: Event) -> Result<weaver_diagnostic::Event, RecordFailure> {
         Kind::Fault => weaver_diagnostic::Kind::Fault,
         Kind::Recall => weaver_diagnostic::Kind::Recall,
         Kind::Elision => weaver_diagnostic::Kind::Elision,
+        // A re-fed path's unrecovered call, the diagnostic record's twentieth
+        // kind, per `weaver-diagnostic-Spec` section 3.2 (#31).
+        Kind::ModelUnrecoveredCall => weaver_diagnostic::Kind::ModelUnrecoveredCall,
         // A restored message is seated by a serving enter, and a diagnostic
         // enter seats no prefix, per `weaver-diagnostic-Spec` section 3.2.
         Kind::Load
