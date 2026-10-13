@@ -119,6 +119,7 @@ impl Mistral3 {
             family: "mistral3",
             call_open: CALL_OPEN,
             call_close: None,
+            stops: STOP,
         }
     }
 

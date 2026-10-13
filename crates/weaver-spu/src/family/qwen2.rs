@@ -66,6 +66,7 @@ impl Qwen2 {
             family: "qwen2",
             call_open: CALL_OPEN,
             call_close: Some(CALL_CLOSE),
+            stops: STOP,
         }
     }
 

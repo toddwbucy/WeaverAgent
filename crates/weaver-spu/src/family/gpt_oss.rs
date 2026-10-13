@@ -64,6 +64,7 @@ impl GptOss {
             family: "gpt-oss",
             call_open: CALL_OPEN,
             call_close: Some(TURN_END),
+            stops: STOP,
         }
     }
 

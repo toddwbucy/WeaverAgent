@@ -359,6 +359,11 @@ pub struct Markers {
     /// What closes one, where the family closes them. `None` means the call
     /// runs to the end of the emission.
     pub call_close: Option<&'static str>,
+    /// The family's stop conditions. **A closing marker among them is met at
+    /// the end of the emission**, per Spec section 5: the stop token is drawn
+    /// but not retained, so a well-formed call in such a family reaches the
+    /// parse without its closer, the closer having come as the stop.
+    pub stops: &'static [&'static str],
 }
 
 /// The surface a family implements, small and named, per Spec section 5 and
@@ -485,7 +490,10 @@ pub fn scan(
                         false,
                     )
                 }
-                None => (after_open, from_open, "", true),
+                // The closer never came in the emission. Where it is one of
+                // the family's stops it came as the stop and was not retained,
+                // so the family reads the call; otherwise it is unclosed.
+                None => (after_open, from_open, "", !markers.stops.contains(&close)),
             },
             None => (after_open, from_open, "", false),
         };

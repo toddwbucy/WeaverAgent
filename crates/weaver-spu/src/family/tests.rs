@@ -219,10 +219,10 @@ fn a_width_outside_the_declared_set_refuses() {
 /// text. The second is the half a collapse into the text path would break
 /// while the first went on looking fine.
 ///
-/// Perturbation: in `scan`, replace the `None` arm's push to `unrecovered`
-/// with `content.push(Content::Text(fragment.to_string()))` and this test
-/// fails, because the fragment then arrives as ordinary assistant text and
-/// no fact is reported. Watched under exactly that collapse.
+/// Perturbation: in `scan`, replace the refused fragment's push of
+/// `Content::Unrecovered` with `Content::Text(written.to_string())` and this
+/// test fails, because the fragment then arrives as ordinary assistant text.
+/// Watched under exactly that collapse (#31).
 #[test]
 fn an_unrecoverable_call_is_reported_rather_than_read_as_prose() {
     let cases: Vec<(&str, Box<dyn Family>, String)> = vec![
@@ -1205,4 +1205,47 @@ fn an_unrecovered_call_block_renders_back_as_written() {
     let shared = text_content(&assistant).expect("the shared kernel renders it");
     assert_eq!(shared, format!("ok {fragment}"));
     assert!(text_content(&user).is_err());
+}
+
+/// **A closing marker that is also the family's stop is met at the end of
+/// the emission**, per Spec section 5: the stop token is drawn but not
+/// retained, so a well-formed llama or gpt-oss call reaches the parse without
+/// its closer, and the closer came all the same. Such a call recovers, as it
+/// did before #31, and is never judged `unclosed`. qwen2, whose closer is no
+/// stop, still reports a missing closer as `unclosed`.
+///
+/// Perturbation: drop the stop-condition check from the kernel's unclosed
+/// judgement and both live-shaped calls report `unclosed` instead of
+/// recovering.
+#[test]
+fn a_closer_that_is_a_stop_is_met_at_the_end_of_the_emission() {
+    let llama_live = format!(
+        "{}{{\"name\":\"calculator\",\"parameters\":{{\"expression\":\"1+1\"}}}}",
+        llama::CALL_OPEN
+    );
+    let parsed = llama::Llama.parse(&llama_live);
+    assert!(parsed.unrecovered.is_empty(), "{:?}", parsed.unrecovered);
+    assert!(
+        matches!(&parsed.content[..], [Content::Call { name, .. }] if name.0 == "calculator"),
+        "{:?}",
+        parsed.content
+    );
+
+    let gpt_live = format!(
+        "{}to=functions.calculator<|message|>{{\"expression\":\"1+1\"}}",
+        gpt_oss::CALL_OPEN
+    );
+    let parsed = gpt_oss::GptOss.parse(&gpt_live);
+    assert!(parsed.unrecovered.is_empty(), "{:?}", parsed.unrecovered);
+    assert!(
+        matches!(&parsed.content[..], [Content::Call { name, .. }] if name.0 == "calculator"),
+        "{:?}",
+        parsed.content
+    );
+
+    let qwen_open = format!("{}{{\"name\":\"a\"}}", qwen2::CALL_OPEN);
+    assert_eq!(
+        qwen2::Qwen2.parse(&qwen_open).unrecovered[0].reason,
+        Reason::Unclosed
+    );
 }
