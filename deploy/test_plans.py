@@ -3547,6 +3547,46 @@ class DecommissionTests(unittest.TestCase):
         run(f"printf held | to_file {shlex.quote(str(out))}\n")
         self.assertEqual(out.stat().st_mode & 0o777, 0o600, "the inherited mask is closed")
 
+    def test_a_failed_acl_inspection_refuses_before_anything_is_written(self):
+        """**A look at DEST's lists that fails refuses** (#98, Codex on #142,
+        round 2): getfacl's status is read apart from its output, so an
+        inspection that errs is never taken for a directory carrying no list.
+        `close_dest` over a stand-in getfacl that exits 1, at the first look
+        and, after a strip, at the re-check. Perturbation: read the status as
+        empty output, as `$(... 2>/dev/null)` did, and close_dest goes on."""
+        scratch = tempfile.TemporaryDirectory(prefix="weaver-acl-look-")
+        self.addCleanup(scratch.cleanup)
+        root = Path(scratch.name)
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        sudo = bin_dir / "sudo"
+        sudo.write_text('#!/bin/sh\nwhile [ "$1" = -u ] || [ "$1" = -H ] || [ "$1" = op ]; do shift; done\nexec "$@"\n')
+        sudo.chmod(0o755)
+        setfacl = bin_dir / "setfacl"
+        setfacl.write_text("#!/bin/sh\nexit 0\n")
+        setfacl.chmod(0o755)
+        dest = root / "dest"
+        dest.mkdir()
+        env = {**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]}
+        env.pop("BASH_ENV", None)
+        for case, look in (
+                ("the first look", '#!/bin/sh\necho "getfacl: refused" >&2\nexit 1\n'),
+                ("the re-check", '#!/bin/sh\nif [ -e "$0.seen" ]; then exit 1; fi\n'
+                                 ': > "$0.seen"\necho "user:9999:r--"\n')):
+            with self.subTest(case=case):
+                getfacl = bin_dir / "getfacl"
+                getfacl.write_text(look)
+                getfacl.chmod(0o755)
+                Path(str(getfacl) + ".seen").unlink(missing_ok=True)
+                ran = subprocess.run(["bash", "-c", "die() { echo \"$*\" >&2; exit 1; }\nOPERATOR=op\n"
+                                      + self.one_line_function("as_op")
+                                      + shell_function(self.script, "close_dest")
+                                      + f"close_dest {shlex.quote(str(dest))}\necho CLOSED\n"],
+                                     env=env, text=True, capture_output=True, timeout=20)
+                self.assertNotEqual(ran.returncode, 0, ran.stdout)
+                self.assertNotIn("CLOSED", ran.stdout)
+                self.assertIn("cannot be read", ran.stderr)
+
     def test_a_tmp_entry_another_principal_owns_is_left_alone(self):
         """**Only a weaver- account's /tmp entries are archived and purged**
         (#98; the custody audit's G22): /tmp is writable by every local user,

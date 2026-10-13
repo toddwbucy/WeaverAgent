@@ -464,13 +464,20 @@ to_file() { as_op sh -c 'umask 077 && cat > "$1" && chmod 0600 "$1"' _ "$1"; }
 # and its access and default access-control lists stripped, so nothing
 # written in it inherits a reader. A store with no lists on DIR has none to
 # strip; one carrying any, where they cannot be stripped, refuses.
+#
+# **A look that fails refuses** (Codex on #142, round 2): getfacl's status is
+# read apart from its output, so an inspection that errs is never taken for
+# a directory carrying no list.
 close_dest() {
+  local lists
   as_op chmod 0700 "$1" || die "the operator cannot close $1 to 0700"
   command -v getfacl >/dev/null && command -v setfacl >/dev/null \
     || die "getfacl and setfacl are needed to judge $1's access-control lists"
-  if [ -n "$(as_op getfacl -cps -- "$1" 2>/dev/null)" ]; then
+  lists=$(as_op getfacl -cps -- "$1") || die "$1's access-control lists cannot be read, so it cannot be vouched for"
+  if [ -n "$lists" ]; then
     as_op setfacl -b -k -- "$1" || die "the operator cannot strip $1's access-control lists"
-    [ -z "$(as_op getfacl -cps -- "$1" 2>/dev/null)" ] || die "$1 still carries access-control lists"
+    lists=$(as_op getfacl -cps -- "$1") || die "$1's access-control lists cannot be read after the strip"
+    [ -z "$lists" ] || die "$1 still carries access-control lists"
   fi
 }
 tarz() { # tarz OUT PATH... : preserve owners, modes, acls and xattrs
