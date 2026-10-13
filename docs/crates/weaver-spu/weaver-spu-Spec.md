@@ -1836,7 +1836,19 @@ opening marker and the family's closing marker never came, which it judges befor
 family is asked, and `unparsed`, where the family's own recovery refused the fragment,
 carrying the family's `detail`, its parser's error as it rendered it. A family's
 recovery returns the recovered call or that detail, never a bare absence, so an
-`unparsed` case always says what the grammar refused. **The grammar is the family's
+`unparsed` case always says what the grammar refused.
+**A closing marker that is one of the family's stops is met at the end of the
+emission**, on the Planner's ruling of 2026-10-13 under #31: a stop token is drawn as
+the stop and not retained, so its absence from the emission is the closer having come,
+and the kernel judges `unclosed` only where the missing closer is no stop of the family,
+as in llama, whose closer is a stop, and gpt-oss, whose calls close on one. **A second
+opening marker met before any closer ends the open call there as `unclosed`**, on the
+same ruling, and scanning resumes at the second marker, so a well-formed call that
+follows a broken one still recovers and the record carries each attempt as its own
+entry. The cost is accepted and stated: an opener written inside a call's own JSON
+string splits that call, the family's grammar being what a reader checks the fragment
+against.
+**The grammar is the family's
 name and the markers the kernel scanned with**, the closing marker absent for a family
 whose calls run to the end of the emission, read from the family's module and never
 from the artifact, since the module is what judged.
@@ -3070,6 +3082,15 @@ than a code fact.
 - An `UnrecoveredCall` block renders back as written: a fixture fragment renders to the
   same bytes the emission carried, confirmed by watching the render differ when the
   renderer emits the block's fragment without its markers.
+- A closer that is a stop is met at the end of the emission: a well-formed llama call
+  and a well-formed gpt-oss call, each without its closer as a live emission carries it,
+  recover rather than reading `unclosed`, confirmed by watching both read `unclosed`
+  when the kernel's stop-condition check is dropped, which is the shape it reported
+  before the ruling.
+- A re-opened marker ends the open call: a broken call followed by a well-formed one
+  reads the first `unclosed` and recovers the second, confirmed by watching the two read
+  as one `unparsed` fragment, the well-formed call lost, when the kernel searches for
+  the closer across the whole remainder.
 - The registry substitutes nothing: an artifact whose header names an architecture this
   binary does not carry refuses at admit naming that architecture, confirmed by watching
   the admit proceed on a carried architecture's module when the table gains a
