@@ -229,6 +229,21 @@ consumer that ignores every intermediate message reads the exchange
 exactly as the batch seam read. The answer closes the exchange and the
 turn's context returns with it.
 
+**The answer carries the family's parse of the emission beside it, and the parse's
+report of every call it could not recover**, the report added on the operator's ruling
+of 2026-10-13 on #31. The parse is the canonical form the harness authors as the
+message kinds, text, recovered calls, and each unrecovered call kept as written, per
+`weaver-traits-Spec` section 3. The report names, per unrecovered call, the fragment,
+the parse's reason, and the family grammar that judged it, per `weaver-spu-Spec`
+section 5, and the harness authors it as the record's `model.unrecovered_call`. **It is
+data on the answer and never a fault or an emission**: an unrecovered call is a fact
+about what the model wrote, the generation answered whole, and before this ruling the
+report reached the SPU's standard error and no record. A re-feed's answer carries the
+parse and its report the same way. **What anyone does about an unrecovered call is not
+this seam's**: the SPU reports it and decides nothing, and a loop's response is designed
+under state management (#1) on the same ruling, nothing on this seam retrying, per
+section 5.
+
 **Re-feed.** Opened by the harness, one per recorded generation, added
 2026-08-31 per `diagnostic-replay-loop` section 2's owed act and
 `weaver-spu-PRD` section 13.14, which carries the criterion and the
@@ -403,12 +418,14 @@ and crossing nowhere. That it never touches the
 cache, holds no handle to it, and derives nothing from the session but
 what answers carry. That what it receives it authors faithfully, the
 verbatim emission and the canonical parse both reaching the record, per
-the operator's end-to-end requirement.
+the operator's end-to-end requirement, and every unrecovered call the parse
+reported reaching it as its own event, per `weaver-trace-PRD` section 3.1.
 
 **The SPU supplies** the opened confirmation, the token stream as each is
 drawn, the field stream where its election stands, the column stream where
 the ask stood at open, one message per sampled position, each generation
-with its measurement and elected reductions, each re-feed's typed answer
+with its measurement and elected reductions and its parse with the report of
+every call the parse could not recover, each re-feed's typed answer
 with the recomputed draws in its measurement, the stopped partials, the
 flush confirmation, the elision confirmation with its resident counts
 either side, the typed refusals, and the fault reports.

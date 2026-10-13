@@ -1759,7 +1759,9 @@ exchange per recovered call, **serially and in the order the parse recovered
 them**, the next opening after the previous answered, and it authors the
 tool-result turns in that same order, so the conversation's ordering is the
 emission's and the channel's exchange identity is the only correlation the
-wire needs. A turn whose emission carries no call opens none.
+wire needs. A turn whose emission carries no call opens none, and an `UnrecoveredCall`
+block, a call the family parse could not recover, opens none either, per
+`weaver-traits-Spec` section 3: it names no tool and grants nothing.
 
 ```graph
 node: harness-tool-result-granted-not-minted
@@ -2546,7 +2548,8 @@ to: harness-serving-writes-no-column-ask
 **The turn is loop 0's machinery, granted, and loop 1 supplies the delta and
 receives the outcome.** The granted surface offers a turn call: loop 1 hands the
 turn's delta as canonical messages and receives back what the generation produced,
-the emission and its finish, and loop 1 authors nothing. Loop 0 drives the
+the emission and its finish and the parse's report of any call it could not recover,
+and loop 1 authors nothing. Loop 0 drives the
 append-and-generate exchange, consumes the token stream, reads the close, and
 authors the record, which is the sole-writer property held where the turn runs
 rather than only where the load event is written. This is the custody model of
@@ -2577,6 +2580,20 @@ accumulating a generation's worth would hold megabytes to write them at
 a close that has other work. It is shaped rather than spliced, per
 `weaver-trace-Spec` section 3, its members being plain values this crate
 holds typed on the way through.
+
+**An unrecovered call is authored at the same answer, as `model.unrecovered_call`**, on
+the operator's ruling of 2026-10-13 on #31: one event per entry of the answer's
+`unrecovered` member, `weaver-types-Spec` section 4.4, in its order, rendered into the
+event's spliced payload after `model.output` and before the turn's `message.assistant`,
+per `weaver-trace-Spec` section 3. The assistant message is the answer's `content` as
+it stands, so a fragment the parse could not recover reaches the conversation as its
+`UnrecoveredCall` block, marked and as written, and never as an empty turn or as prose.
+The turn call hands loop 1 the report beside the emission and its finish, so a loop
+sees what the parse refused without parsing. **What the loop does about it is a loop
+operation and never the SPU's**: a regeneration, a stop, or another remediation is
+designed under state management (#1), on the operator's ruling of 2026-10-13, and until
+that act the turn closes as it does today, with the kind and the marked message on the
+record, so nothing operates past an unrecovered call unmarked.
 
 **The load event carries the elections the enter declared**, each named individually,
 per `weaver-trace-PRD` section 3.1. The harness is the party that knows them, and they

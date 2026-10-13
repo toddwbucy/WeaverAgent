@@ -220,6 +220,7 @@ pub enum Kind {
     #[serde(rename = "message.restored")]     MessageRestored,
     #[serde(rename = "score")]                Score,
     #[serde(rename = "save_point")]           SavePoint,
+    #[serde(rename = "model.unrecovered_call")] ModelUnrecoveredCall,
 }
 
 #[serde(untagged)]
@@ -241,6 +242,7 @@ pub enum Payload {
     Recall(RecallAccount),
     Score(TaskScore),
     SavePoint(SavePointTaken),
+    UnrecoveredCall(Box<serde_json::value::RawValue>),
     Deferred(Box<serde_json::value::RawValue>),
 }
 
@@ -386,7 +388,7 @@ the derive default emits `"MessageUser"` and `rename_all = "snake_case"` emits
 it to a scheme would put a second spelling of every kind on the wire, which is the
 one-name-two-nodes defect the Document Format rules against for identifiers and
 which reads the same way for a consumer keying on a kind. The mapping is total:
-twenty-five variants, twenty-five renames, and the wire spelling is the charter's.
+twenty-six variants, twenty-six renames, and the wire spelling is the charter's.
 
 ```graph
 node: trace-kind-explicit-renames
@@ -452,8 +454,9 @@ that argument one level down, per the ruling gathered on issue #103**: the
 SPU's chartered domain is every semantic operation in the text modality, so as
 engines accumulate behind the one organ, an event stamped `spu` loses the fact
 a reader wants first, which engine produced it. The three model events carry
-it. **`Spu` stays beside it**, because residency, admit, and release belong to
-the organ rather than to any engine inside it, and a fault report is the
+it, and `model.unrecovered_call` with them, the parse that judged the fragment being
+the decoder's. **`Spu` stays beside it**, because residency, admit, and release belong
+to the organ rather than to any engine inside it, and a fault report is the
 organ's for the same reason. The rule an earlier wording keyed on crates is
 retired: **a case arrives per producing party at the granularity a reader
 needs, with its first emitter, as a floor edit in the same act.** The encoder's
@@ -471,7 +474,7 @@ from: weaver-trace
 to: trace-subsystem-case-set
 ```
 
-**Twenty-five kinds, exhaustive, matching charter section 3.1 exactly.** The enum is
+**Twenty-six kinds, exhaustive, matching charter section 3.1 exactly.** The enum is
 exhaustive rather than `#[non_exhaustive]` because the set is closed by ruling and
 adding one is an edit to the charter and to every contract naming the set: an
 attribute that let a consumer absorb a further kind into a wildcard would defeat
@@ -676,7 +679,7 @@ from: weaver-trace
 to: trace-turn-close-internally-tagged
 ```
 
-**The kind-to-payload mapping is total, twenty-five kinds and nineteen dispositions**,
+**The kind-to-payload mapping is total, twenty-six kinds and twenty dispositions**,
 the payload-free case counting as one of them. `refusal` carries `Refusal`, spliced, the
 organ's own account of what it turned away. `session.closed` and `turn.started` carry
 `None`, and `unload` carries `UnloadClose`, its grant surface present where a member
@@ -736,9 +739,10 @@ output at all** and reaches the record under `refusal`, so a refusal the exchang
 still the record's fact and never a fabricated answer, carried by the kind the class
 gives it rather than by the outcome's own variant. The tool bracket's two carry
 `Deferred`. `recall` carries `RecallAccount`. `score` carries `TaskScore`. `save_point`
-carries `SavePointTaken`. Three plus one plus five plus one plus one plus two plus four
-plus two plus two plus one plus one plus one plus one is twenty-five, which is the whole
-of charter section 3.1's set.
+carries `SavePointTaken`. `model.unrecovered_call` carries `UnrecoveredCall`,
+spliced. Three plus one plus five plus one plus one plus two plus four plus two plus
+two plus one plus one plus one plus one plus one is twenty-six, which is the whole of
+charter section 3.1's set.
 
 **The count is stated because it has twice been wrong, and the second time
 it was wrong silently.** An earlier draft assigned thirteen and left
@@ -751,7 +755,7 @@ like a mapping that is total**, which is why the recount lands as prose here
 and as a member list above rather than as a claim about totality alone.
 
 **The kind count stopped being prose alone on 2026-09-16**, `tests/kinds.rs` checking
-an array of twenty-five against an exhaustive match over the kind set, so an act that
+an array of twenty-six against an exhaustive match over the kind set, so an act that
 adds a kind and answers the crate's own matches stops at that test's match. **It does
 not reach an act that writes the new arm there too and leaves the array alone**, both
 of the test's assertions walking the array and so never reaching a kind the array does
@@ -783,7 +787,9 @@ to: trace-kind-payload-mapping-total
 draws the line.** The trace owns the boxes and the organ owns the contents, so
 a payload whose content an organ produced splices, and a payload this crate
 consumes and shapes is the exception. `Fault` splices, `fault-report` being the
-floor's shape the reporting organ renders. The classify pair shapes on the
+floor's shape the reporting organ renders. `UnrecoveredCall` splices on the `refusal`
+precedent, the parse's report being the floor's shape the harness renders from the
+decode answer. The classify pair shapes on the
 flush's precedent: plain small data the harness authors from typed wire
 answers, no organ-rendered box standing to splice. **`model.request` and
 `model.measurement` splice on the same rule, reversing an earlier reading of
@@ -1167,6 +1173,45 @@ forced unload rides the `unload` event's `forced` and, where a force joined, its
 `forced_by`, no kind being named ahead of its emitter; the live restore's own event is
 the loop act's (A5), and the reset rides the `load` event's `reset` member above.
 
+**`model.unrecovered_call` records a call the emission attempted and the family parse
+could not recover, the twenty-sixth kind**, on the operator's ruling of 2026-10-13 on
+#31. Until it the parse's report reached the SPU's standard error and no record, and
+the message kinds held an empty assistant turn where the model had written a call, so
+a reader could tell neither that a call was attempted nor whether the parse or the
+model was at fault. **The payload is `UnrecoveredCall`, spliced**: the harness renders
+it from the decode answer's `unrecovered` entry, `weaver-types-Spec` section 4.4's
+shape, which carries `fragment`, the span as written from the family's opening marker
+through its closing marker or to the end of the emission, `reason`, the scan kernel's
+closed set of `unclosed` and `unparsed` with the family's `detail` beside the second,
+and `grammar`, the family's name and the markers it scanned with, per `weaver-spu-Spec`
+section 5. It splices rather than shapes for the reason `refusal` does: the shape is
+the floor's and this crate links no floor type. **One event per unrecovered call**, in
+emission order, so a generation that attempted two and recovered neither carries two,
+each reading alone. **The kind carries a turn**, an emission belonging to the turn that
+drew it, and its subsystem is `spu_decoder`. **The harness authors it at the decode
+answer, after `model.output` and before the turn's `message.assistant`**, per
+`weaver-harness-Spec` section 6.1, so a reader meets the verbatim emission, then what
+the parse refused in it, then the conversation's view of the turn, whose
+`UnrecoveredCall` block holds the same fragment, per `weaver-traits-Spec` section 3.
+**It is a fact and never a fault**: what the loop does about it is a loop operation,
+designed under state management (#1) on the operator's ruling of 2026-10-13, and the
+record carries the fact whichever remediation a loop elects, a regenerated turn
+carrying each generation's events in turn. **It crosses the tee as every turned kind
+does**, its envelope under the default election and its payload's paths where a
+deployment's election names them, per section 11, no rule of its own standing there.
+The diagnostic record carries it where a re-feed's answer reports an unrecovered call,
+the parse running over the recorded path as over a drawn one.
+
+```graph
+node: trace-unrecovered-call-is-its-own-fact
+kind: assertion
+tag: perturbation
+
+edge: asserts
+from: weaver-trace
+to: trace-unrecovered-call-is-its-own-fact
+```
+
 **The run's record order is `weaver-admin-Spec` section 3, I9**, the lifecycle state
 table's, and this crate's kinds carry it without a kind of their own: within a run,
 `load` first; the seeding turn's `message.system`, where the agent is seeded in this
@@ -1323,7 +1368,7 @@ without a serde election of its own. The property the retired
 `trace-measurement-absent-not-zero` asserted is the SPU's now, a relocation the
 custody model forces rather than a property dropped.
 
-**Untagged with fifteen variants is a serialization device, and the deserializing
+**Untagged with many variants is a serialization device, and the deserializing
 consumer keys on `kind`.** Serde resolves an untagged enum by trying variants in
 order, which is unambiguous while writing and ambiguous while reading once more
 than one variant is struct-shaped. No payload is ever read back through
@@ -1923,7 +1968,7 @@ arm dropped, the arm widened to any kind, and the render re-encoded through a
 sort rather than an owing.** What it watches is one row of
 `trace-kind-payload-mapping-total` and one payload's reading of
 `trace-splice-or-shape`, both review-tagged claims made over the whole set of
-twenty-five kinds and of every spliced payload. A `perturbation` tag on either
+twenty-six kinds and of every spliced payload. A `perturbation` tag on either
 would claim an instrument for a claim the instrument does not reach, a tag
 naming the mechanism its own clause names rather than the nearest test that
 touches it, and a node declared for the single row would be a second authority
@@ -2152,8 +2197,13 @@ as of 2026-09-26 (#697): it is the conversation a branch's run opened under, and
 restore from that branch rebuilds it from what custody holds, so no election may thin
 it. **A `save_point` line never crosses**, whatever the election, per section 3 and
 the charter's section 3: `distill` refuses the kind before the election is consulted,
-`all_kinds` and an election naming it included. Two properties of the read carry
-assertions.
+`all_kinds` and an election naming it included. **A `model.unrecovered_call` line takes
+the election like every turned kind**, its envelope crossing under the default and its
+payload's paths where an election names them, no rule of its own standing here, per
+section 3, and the fragment reaches state in the conversation's view too, as the
+`UnrecoveredCall` block of the turn's `message.assistant`, wherever the election
+carries that kind's content. Two properties of the read
+carry assertions.
 
 **The envelope is not electable, and no election can produce an unattributable
 row.** Every distilled event carries session, run, turn, kind, and sequence as
