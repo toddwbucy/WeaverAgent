@@ -1200,7 +1200,8 @@ carrying each generation's events in turn. **It crosses the tee as every turned 
 does**, its envelope under the default election and its payload's paths where a
 deployment's election names them, per section 11, no rule of its own standing there.
 The diagnostic record carries it where a re-feed's answer reports an unrecovered call,
-the parse running over the recorded path as over a drawn one.
+the parse running over the recorded path as over a drawn one, as that record's
+twentieth kind, per `weaver-diagnostic-Spec` section 3.2.
 
 ```graph
 node: trace-unrecovered-call-is-its-own-fact
@@ -1900,12 +1901,12 @@ arguments are elsewhere, so a block here would sit apart from the prose that
 earns it. Three sit at the end of this section, being the claims argued only
 here.
 
-**Forty-nine records in all, and the split is where they are declared, which a
-reader can count.** Three in section 1, three in section 2, twenty in section
+**Fifty records in all, and the split is where they are declared, which a
+reader can count.** Three in section 1, three in section 2, twenty-one in section
 3, five in section 4, two in section 5, four in section 6, two in section 7, one
 in section 8, two in section 9, this section's three, and four in section 11. The
 instruments divide them four to the compiler, three to compile-fail, three to the
-manifest, sixteen to a perturbation-verified test, and twenty-three to review.
+manifest, seventeen to a perturbation-verified test, and twenty-three to review.
 **The split is stated as a count of declarations because that is a count the next
 act can take**, where a split by provenance is a reading and two readers of one
 section need not reach it alike. The rule that sorted a divided claim's two
@@ -1920,7 +1921,7 @@ its test lives. **The tagging test section 3 applies is declared by
 Specs share, and what this document records is the election that test yields for
 `TurnClose`. Those two are tests this Spec would otherwise owe, and
 `trace-tee-selects-never-computes` is not a third: section 11 declares it and it
-counts with the forty-nine. The threat walk closing this section
+counts with the fifty. The threat walk closing this section
 takes no node of its own, per Document Format section 5, and it names no test of
 its own either, its instrument being the compile-fail set already recorded.
 
@@ -1978,7 +1979,7 @@ The remaining mutation documentation is owed under issue #606, rather than
 supplied by the three rendering removals named in section 3.
 
 **Which invariant each claim serves, and why most serve none.** Five of the
-forty-nine carry a `grounds` edge, three to `axiom-join-key-travels-with-the-work`
+fifty carry a `grounds` edge, three to `axiom-join-key-travels-with-the-work`
 and two to `axiom-contract-is-a-complete-interface`. The other two axioms take
 nothing from this crate. `axiom-floor-is-vocabulary-behavior-is-socket` reaches
 none of it because this crate is not floor, so the vocabulary clause governs none
@@ -1996,9 +1997,9 @@ reason to report pressure rather than author it, and no reason to hold the
 envelope out of the tee's election, so those three ground in it.
 Remove it and the kind renames are still dotted, the subsystem set is still six
 cases, and the payload is still untagged, so those ground in nothing.
-**Forty-four claims grounding in no invariant is the expected result and not a
-gap**, per Document Format section 4: twenty of the forty-nine are section 3's
-event schema and eighteen of those twenty ground in nothing, a schema being
+**Forty-five claims grounding in no invariant is the expected result and not a
+gap**, per Document Format section 4: twenty-one of the fifty are section 3's
+event schema and nineteen of those twenty-one ground in nothing, a schema being
 representation and representation being what the invariants are not about.
 
 **Two calls are worth stating rather than leaving to be read.** The two contract

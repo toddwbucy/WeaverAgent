@@ -8,7 +8,7 @@ charters, and a graph block here would duplicate a record that already has a hom
 **Document ID:** `diagnostic-replay-loop`
 **Parent:** `weaver-harness-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #58
+**Landing PR:** #136
 
 ---
 
@@ -240,14 +240,16 @@ The capture artifact - identity, custody, dataset shape, quota - is
 loop writes no artifact until that act lands. The re-feed exchange is the decode seam's
 owed act, named in section 2. The driver's own shape is `weaver-analysis-Spec`,
 landed 2026-08-27.
-**The record's shape landed 2026-08-27** in `weaver-diagnostic-Spec`, which
-carries the nineteen kinds of the record since 2026-09-26, seventeen from 2026-08-31,
-the flush and the elision among them because section 1's grant names both and the loop
-reproduces a source's, the recall because the replay port authors one, the refusal
-because that grant and section 4's third failure both produce one, and the outcome the
-certification reaches. The seventeenth, `residual.column`, is the harness's authoring
-from the seam's column stream rather than an act of this loop, so this loop's own
-authored set is unchanged by it: the loop drives the replay and the columns ride the
-pass where the ask stood, per that Spec's section 3.2. This document is the workflow
-that binds them, and it moves when any of them lands, per the Working Rules on documents
-that cite owed acts, which is what this entry records.
+**The record's shape landed 2026-08-27** in `weaver-diagnostic-Spec`, which carries the
+twenty kinds of the record since 2026-10-13, nineteen from 2026-09-26 and seventeen from
+2026-08-31, the flush and the elision among them because section 1's grant names both
+and the loop reproduces a source's, the recall because the replay port authors one, the
+refusal because that grant and section 4's third failure both produce one, the
+unrecovered call because a re-feed's answer reports one where the recorded path's parse
+refuses a call, and the outcome the certification reaches. The seventeenth,
+`residual.column`, is the harness's authoring from the seam's column stream rather than
+an act of this loop, so this loop's own authored set is unchanged by it: the loop drives
+the replay and the columns ride the pass where the ask stood, per that Spec's section
+3.2. This document is the workflow that binds them, and it moves when any of them lands,
+per the Working Rules on documents that cite owed acts, which is what this entry
+records.
