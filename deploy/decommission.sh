@@ -411,14 +411,15 @@ done
 # account owns** (#98; the custody audit's G22): DIR is writable by every
 # local user, so an entry another principal made under a weaver- name is
 # neither read into the archive as root nor purged.
-# **Read NUL-delimited, and no name carrying a newline is taken**: a name in
-# a world-writable directory is anyone's to choose, and one carrying a
-# newline would otherwise split into a second entry, an owner and a path of
-# the planter's choosing, in this list and in the line-per-entry purge list.
+# **Read as two NUL-ended fields, and no name carrying a newline or a tab is
+# taken**: a name in a world-writable directory is anyone's to choose, and
+# one carrying a newline would split into an entry of the planter's choosing
+# in this list and in the line-per-entry purge list, and a field separator
+# a reader strips would make one entry pass for another.
 tmp_paths() {
-  find "$1" -mindepth 1 -maxdepth 1 \( -name 'weaver-*' -o -name 'torchinductor_weaver-*' \) -printf '%u\t%p\0' 2>/dev/null \
-    | while IFS=$'\t' read -r -d '' owner entry; do
-        case $entry in *$'\n'*) continue ;; esac
+  find "$1" -mindepth 1 -maxdepth 1 \( -name 'weaver-*' -o -name 'torchinductor_weaver-*' \) -printf '%p\0%u\0' 2>/dev/null \
+    | while IFS= read -r -d '' entry && IFS= read -r -d '' owner; do
+        case $entry in *$'\n'* | *$'\t'*) continue ;; esac
         [ "${entry%/*}" = "$1" ] || continue
         case $owner in weaver-*) printf '%s\n' "$entry" ;; esac
       done
@@ -435,7 +436,7 @@ mapfile -t TMP_PATHS < <(tmp_paths /tmp)
 # while both sources stay on the purge list (Codex on #79).
 free_name() {
   local name=$1 n=2
-  while [ -e "$DEST/$name.tar.zst" ]; do name="$1-$n"; n=$((n + 1)); done
+  while as_op test -e "$DEST/$name.tar.zst"; do name="$1-$n"; n=$((n + 1)); done
   printf '%s' "$name"
 }
 
@@ -462,7 +463,7 @@ sha_all() { find "$1" -maxdepth 1 -type f -exec sha256sum {} \; 2>/dev/null || t
 if [ "$MODE" = archive ]; then
   [ ${#ACTIVE_UNITS[@]} -eq 0 ] || die "units still active: ${ACTIVE_UNITS[*]}. Unload them (weaver-admin unload <agent>) or stop them, then rerun"
   [ ${#RUNNING[@]} -eq 0 ] || die "agents still run or cannot be read: ${RUNNING[*]}. Unload each (weaver-admin unload <agent>), then rerun"
-  [ -e "$DEST/SHA256SUMS" ] && die "$DEST already holds an archive; name another directory"
+  as_op test -e "$DEST/SHA256SUMS" && die "$DEST already holds an archive; name another directory"
   # **The delegated door shuts for the snapshot** (Codex on #79): each rule is
   # moved to a dot-name sudo never reads, so no connector can start a run
   # while tar copies, then every agent is asked again. A run found
@@ -546,7 +547,7 @@ if [ "$MODE" = archive ]; then
     tarz "$DEST/$name.tar.zst" "${present[@]}"
     # Apparent size, not blocks: on NFS the blocks are not yet accounted
     # when this line prints, and du answered 512 for a 3 G tarball.
-    plan "$name.tar.zst  $(stat -c %s "$DEST/$name.tar.zst" | numfmt --to=iec)  <- ${present[*]}"
+    plan "$name.tar.zst  $(as_op stat -c %s "$DEST/$name.tar.zst" | numfmt --to=iec)  <- ${present[*]}"
     PURGE+=("${present[@]}")
   }
 
@@ -587,8 +588,10 @@ if [ "$MODE" = archive ]; then
   as_op sh -c 'umask 077 && cd "$1" && find . -type f -not -name SHA256SUMS -printf "%P\n" | sort | xargs sha256sum > SHA256SUMS' _ "$DEST"
   say "verify"
   as_op sh -c 'cd "$1" && sha256sum -c --quiet SHA256SUMS' _ "$DEST" || die "the archive does not verify"
-  for t in "$DEST"/*.tar.zst; do tar -tf "$t" >/dev/null || die "$t does not read back"; done
-  plan "$(wc -l < "$DEST/SHA256SUMS") files sum and every tarball reads back"
+  while IFS= read -r -d '' t; do
+    as_op tar -tf "$t" >/dev/null || die "$t does not read back"
+  done < <(as_op find "$DEST" -maxdepth 1 -type f -name '*.tar.zst' -print0)
+  plan "$(as_op wc -l "$DEST/SHA256SUMS" | cut -d' ' -f1) files sum and every tarball reads back"
   say "archived. review $DEST/PURGE-LIST, then: sudo $0 --purge $DEST"
   exit 0
 fi
@@ -620,23 +623,48 @@ purge_candidates() {
   for g in "${WEAVER_GROUPS[@]}"; do echo "group $g"; done
   true
 }
-# **purge_lines_outside LIST CANDIDATES: each line of LIST that CANDIDATES
-# does not hold**, compared whole, an empty line included.
+# **purge_lines_outside LIST: each line of LIST naming something that still
+# stands and that purge_candidates does not hold.** Judged in bash, each line
+# read as the removal loops read it, so the string judged is the string acted
+# on. A line naming what no longer stands is passed over, there being nothing
+# to remove, so a purge stopped part way can be run again; any line of a
+# kind the purge does not know is named.
 purge_lines_outside() {
-  awk 'NR == FNR { held[$0] = 1; next } !($0 in held)' "$2" "$1"
+  local -A held=()
+  local line kind name
+  while IFS= read -r line; do
+    [ -n "$line" ] && held["$line"]=1
+  done < <(purge_candidates)
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -n "$line" ] || continue
+    [ -n "${held["$line"]:-}" ] && continue
+    kind=${line%% *} name=${line#* }
+    case $kind in
+      path) [ -e "$name" ] || [ -L "$name" ] || continue ;;
+      user) getent passwd "$name" >/dev/null || continue ;;
+      group) getent group "$name" >/dev/null || continue ;;
+    esac
+    printf '%s\n' "$line"
+  done < "$1"
 }
 
-[ -f "$DEST/SHA256SUMS" ] && [ -f "$DEST/PURGE-LIST" ] || die "$DEST holds no finished archive"
+# **Everything under DEST is read as the operator** (#98): the archive is the
+# operator's alone, 0600 in a 0700 directory, and on an export where root's
+# writes are squashed root could not read it either way.
+as_op test -f "$DEST/SHA256SUMS" && as_op test -f "$DEST/PURGE-LIST" || die "$DEST holds no finished archive"
 say "re-verify $DEST"
-( cd "$DEST" && sha256sum -c --quiet SHA256SUMS ) || die "the archive no longer verifies; purge refused"
+as_op sh -c 'cd "$1" && sha256sum -c --quiet SHA256SUMS' _ "$DEST" || die "the archive no longer verifies; purge refused"
 # The list is read once, into root's own copy, and judged there, so what is
 # judged is what the purge reads: nothing writes it between.
 PURGE_LIST=$(mktemp)
-CANDIDATES=$(mktemp)
-trap 'rm -f -- "$PURGE_LIST" "$CANDIDATES"' EXIT
-cat -- "$DEST/PURGE-LIST" > "$PURGE_LIST"
-purge_candidates > "$CANDIDATES"
-OUTSIDE=$(purge_lines_outside "$PURGE_LIST" "$CANDIDATES")
+trap 'rm -f -- "$PURGE_LIST"' EXIT
+as_op cat -- "$DEST/PURGE-LIST" > "$PURGE_LIST"
+# The copy is the list the archive summed, or nothing is purged: the sums
+# were checked on DEST's file, and this is the copy acted on.
+LISTED_SUM=$(as_op awk '$2 == "PURGE-LIST" { print $1 }' "$DEST/SHA256SUMS")
+COPY_SUM=$(sha256sum < "$PURGE_LIST" | cut -d' ' -f1)
+[ -n "$LISTED_SUM" ] && [ "$LISTED_SUM" = "$COPY_SUM" ] || die "the purge list read is not the one the archive summed; purge refused"
+OUTSIDE=$(purge_lines_outside "$PURGE_LIST")
 [ -z "$OUTSIDE" ] || die "PURGE-LIST names what this purge would not find, so nothing is purged: ${OUTSIDE//$'\n'/; }"
 [ ${#ACTIVE_UNITS[@]} -eq 0 ] || die "units still active: ${ACTIVE_UNITS[*]}"
 [ ${#RUNNING[@]} -eq 0 ] || die "agents still run or cannot be read: ${RUNNING[*]}"

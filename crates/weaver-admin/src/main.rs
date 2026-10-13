@@ -1025,19 +1025,29 @@ enum Observation {
     Silent,
 }
 
+// #118: a test-only hook, kept beside the production code it observes: the
+// worker uid a test's dial expects where no account resolves, set to a uid
+// the suite's stand-in listener is not, to stand a wrong peer.
+#[cfg(test)]
+thread_local! {
+    static TEST_WORKER_UID: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
 /// **The coordination socket dialed, its peer judged the agent's worker**
 /// (#98; Spec section 7): the expected uid is the worker account's, resolved
 /// by name as the start step resolves it. An account that does not resolve
 /// stands no worker, and the dial is refused as one nothing could answer.
 fn dial_worker(config: &ServiceConfig) -> Result<channel::Coordination, channel::ChannelFault> {
-    let identity = format!("weaver-{}", config.agent);
+    let identity = inventory::identity_for(&AgentName(config.agent.clone()));
     let worker_uid = match nix::unistd::User::from_name(&identity).ok().flatten() {
         Some(worker) => worker.uid.as_raw(),
         // #118: a test-only hook, kept beside the production code it observes:
         // the suite's stand-in workers listen under its own uid, no
         // `weaver-<agent>` account standing on a test box.
         #[cfg(test)]
-        None => nix::unistd::getuid().as_raw(),
+        None => TEST_WORKER_UID
+            .with(std::cell::Cell::get)
+            .unwrap_or_else(|| nix::unistd::getuid().as_raw()),
         #[cfg(not(test))]
         None => {
             diag!(
@@ -1298,6 +1308,11 @@ fn run_load(
 
     let mut coordination = match dial_worker(config) {
         Ok(coordination) => coordination,
+        // Not the worker this load started (#98): the load refuses, and its
+        // rollback ends what it stood.
+        Err(channel::ChannelFault::WrongPeer { .. }) => {
+            return Err(LifecycleRefusal::BoundaryUnverified);
+        }
         Err(_) => return Err(refusal_from_worker(&mut worker)),
     };
     let ordinal = coordination.next_ordinal();
@@ -1525,7 +1540,10 @@ fn save_point(
             return Err(LifecycleRefusal::OutOfOrder);
         }
     }
-    let mut coordination = dial_worker(config).map_err(|_| LifecycleRefusal::Unanswered)?;
+    let mut coordination = dial_worker(config).map_err(|fault| match fault {
+        channel::ChannelFault::WrongPeer { .. } => LifecycleRefusal::BoundaryUnverified,
+        _ => LifecycleRefusal::Unanswered,
+    })?;
     let ordinal = coordination.next_ordinal();
     coordination
         .send_directive(
@@ -2110,7 +2128,8 @@ fn join_within(
                     return wait_after_seal(config, bounds, run).map(Some);
                 }
                 // Not the worker: no join is directed through it, and the
-                // force ends the run by the escalation (#98).
+                // force ends the run by the escalation (#98), which acts on
+                // the run lock's holders, never on whoever answered.
                 Err(channel::ChannelFault::WrongPeer { .. }) => {
                     return escalate_joined(config, bounds, run).map(Some);
                 }
@@ -2325,9 +2344,16 @@ fn leave_within(
         // not complete, the run staying open with its lock (S9), so the
         // operator retries or forces.
         Err(LeaveFault::Refused(refusal)) => return Err(refusal),
+        // **A graceful unload refuses a listener that is not the worker**
+        // (#98), the run left standing; a force ends the run by the
+        // escalation below, which acts on the run lock's holders and never
+        // on whoever answered the socket.
+        Err(LeaveFault::WrongPeer) if !forced => {
+            return Err(LifecycleRefusal::BoundaryUnverified);
+        }
         // The leave went unanswered inside its bound: a worker that
         // would not exit, so the escalation follows.
-        Err(LeaveFault::Unanswered) => {}
+        Err(LeaveFault::Unanswered | LeaveFault::WrongPeer) => {}
     }
     start::escalate_within(&run_directory, bounds.term, bounds.kill)?;
     // **No `Left` is held, so the escalation writes `Forced`** (3.0, S11;
@@ -2758,6 +2784,9 @@ fn read_marker_or_refuse(
 enum LeaveFault {
     Refused(LifecycleRefusal),
     Unanswered,
+    /// The dial met a listener that is not the worker (#98): no leave was
+    /// directed through it.
+    WrongPeer,
 }
 
 /// **The three leaves admin directs**, each one wire shape: the graceful
@@ -2794,8 +2823,10 @@ fn direct_leave_within(
         LeaveDirected::Forced => (true, false),
         LeaveDirected::Rollback => (true, true),
     };
-    let Ok(mut coordination) = dial_worker(config) else {
-        return Err(LeaveFault::Unanswered);
+    let mut coordination = match dial_worker(config) {
+        Ok(coordination) => coordination,
+        Err(channel::ChannelFault::WrongPeer { .. }) => return Err(LeaveFault::WrongPeer),
+        Err(_) => return Err(LeaveFault::Unanswered),
     };
     let ordinal = coordination.next_ordinal();
     coordination
@@ -2824,7 +2855,10 @@ fn direct_leave_within(
 fn stop(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
     let _invocation =
         start::take_invocation_lock(&config.run_directory(), verb_table::HolderVerb::Stop)?;
-    let mut coordination = dial_worker(config).map_err(|_| LifecycleRefusal::NoResidency)?;
+    let mut coordination = dial_worker(config).map_err(|fault| match fault {
+        channel::ChannelFault::WrongPeer { .. } => LifecycleRefusal::BoundaryUnverified,
+        _ => LifecycleRefusal::NoResidency,
+    })?;
     let ordinal = coordination.next_ordinal();
     coordination
         .send_directive(

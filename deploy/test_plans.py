@@ -3501,11 +3501,11 @@ class DecommissionTests(unittest.TestCase):
         # Records as find writes them, NUL-ended: a weaver- account's entry,
         # a stranger's, a stranger's name carrying a newline that would split
         # into a weaver- owner and /etc, and an entry not directly under /tmp.
-        find.write_text("#!/bin/sh\nprintf 'weaver-a\\t/tmp/weaver-a\\0"
-                        "someone\\t/tmp/weaver-planted\\0"
-                        "someone\\t/tmp/weaver-x\\nweaver-y\\t/etc\\0"
-                        "weaver-a\\t/tmp/weaver-q\\nx\\0"
-                        "weaver-b\\t/var/weaver-b\\0'\n")
+        find.write_text("#!/bin/sh\nprintf '/tmp/weaver-a\\0weaver-a\\0"
+                        "/tmp/weaver-planted\\0someone\\0"
+                        "/tmp/weaver-q\\nx\\0weaver-a\\0"
+                        "/tmp/weaver-x\\t\\0weaver-a\\0"
+                        "/var/weaver-b\\0weaver-b\\0'\n")
         find.chmod(0o755)
         env = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"]}
         env.pop("BASH_ENV", None)
@@ -3522,21 +3522,42 @@ class DecommissionTests(unittest.TestCase):
     def test_a_purge_list_line_the_purge_would_not_find_refuses_the_purge(self):
         """**The purge acts only on lines it derives itself** (#98; the custody
         audit's G22): the purge list lives where the operator writes, so a line
-        naming anything the purge's own derivation does not find refuses the
-        whole purge, before the sudo rules are removed or an account deleted.
-        The list is read once into root's copy, which every removal loop reads.
-        Perturbation: drop the judgment, or read the list from DEST again, and
-        the pins here fail."""
+        naming anything that still stands and that the purge's own derivation
+        does not find refuses the whole purge, before the sudo rules are
+        removed or an account deleted. A line naming what no longer stands is
+        passed over, so a purge stopped part way runs again. Judged in bash,
+        each line read as the removal loops read it, and an empty derivation
+        holds nothing. The list is read once into root's copy, hashed against
+        the archive's sums, and every removal loop reads that copy.
+        Perturbation: drop the judgment, read the list from DEST again, or skip
+        a line that still stands, and the pins here fail."""
         scratch = tempfile.TemporaryDirectory(prefix="weaver-purge-list-")
         self.addCleanup(scratch.cleanup)
-        listed = Path(scratch.name) / "PURGE-LIST"
-        listed.write_text("path /var/lib/weaver\nuser weaver-a\npath /etc\n")
-        found = Path(scratch.name) / "candidates"
-        found.write_text("path /var/lib/weaver\nuser weaver-a\ngroup weaver-a\n")
-        self.assertEqual(self.run_fn("purge_lines_outside", str(listed), str(found)), "path /etc")
-        listed.write_text("path /var/lib/weaver\n")
-        self.assertEqual(self.run_fn("purge_lines_outside", str(listed), str(found)), "")
+        root = Path(scratch.name)
+        standing = root / "weaver-standing"
+        standing.mkdir()
+        listed = root / "PURGE-LIST"
+        judge = shell_function(self.script, "purge_lines_outside")
+
+        def outside(candidates, lines):
+            listed.write_text("".join(line + "\n" for line in lines))
+            stub = "purge_candidates() { printf '%s\\n' " + " ".join(shlex.quote(c) for c in candidates) + "; }\n"
+            if not candidates:
+                stub = "purge_candidates() { :; }\n"
+            run = subprocess.run(["bash", "-c", stub + judge + 'purge_lines_outside "$1"', "x", str(listed)],
+                                 text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            return run.stdout.splitlines()
+
+        held = [f"path {standing}", "user weaver-a"]
+        self.assertEqual(outside(held, [f"path {standing}", "user weaver-a"]), [])
+        self.assertEqual(outside(held, ["path /etc"]), ["path /etc"], "a foreign path that stands")
+        self.assertEqual(outside([], ["path /etc"]), ["path /etc"], "an empty derivation holds nothing")
+        self.assertEqual(outside(held, [f"path {root}/weaver-gone"]), [], "what no longer stands is passed over")
+        self.assertEqual(outside(held, [f"path {standing} "]), [], "a name's own blanks are kept: no such path")
+        self.assertEqual(outside(held, ["kill everything"]), ["kill everything"], "an unknown kind is named")
         judged = self.script.index('[ -z "$OUTSIDE" ] || die ')
+        self.assertLess(self.script.index('[ "$LISTED_SUM" = "$COPY_SUM" ] || die '), judged)
         self.assertLess(judged, self.script.index('say "the delegated door, shut"'))
         self.assertNotIn('done < "$DEST/PURGE-LIST"', self.script)
         self.assertEqual(self.script.count('done < "$PURGE_LIST"'), 3)
@@ -3709,7 +3730,8 @@ class RoundOneOf79Tests(unittest.TestCase):
         line = next(l.strip() for l in script.splitlines() if l.strip().startswith("archive_name() {"))
         dest = self.dir / "dest"
         dest.mkdir()
-        program = (line + "\n" + shell_function(script, "free_name")
+        # `free_name` looks as the operator (#98); here the test is the operator.
+        program = (line + "\nas_op() { \"$@\"; }\n" + shell_function(script, "free_name")
                    + 'for p in "$@"; do n=$(free_name "$(archive_name territories "$p")"); touch "$DEST/$n.tar.zst"; echo "$n"; done')
         run = subprocess.run(["bash", "-c", program, "x", "/var/lib/weaver-agent", "/var/lib/weaver/agent",
                               "/var/lib/weaver-agent"], env={**os.environ, "DEST": str(dest)},

@@ -4916,3 +4916,43 @@ fn the_access_control_look_fails_closed() {
         Err(nix::errno::Errno::EACCES)
     );
 }
+
+/// **A listener that is not the worker is refused, the run untouched**
+/// (#98; the custody audit's G3): with a run standing and a stranger at the
+/// coordination socket, `unload` refuses `BoundaryUnverified` at its
+/// observation, never escalating the run on a stranger's word, the marker
+/// still open and the run lock's holder alive; `show` and `stop` refuse the
+/// same, never reading the stranger as a silent run or telling the operator
+/// that nothing runs. Perturbation: read the wrong peer as a silent run in
+/// `observe`, and `show` answers by the ladder; map it to `NoResidency` in
+/// `stop`, and stop says nothing runs.
+#[test]
+fn a_listener_that_is_not_the_worker_is_refused_and_the_run_untouched() {
+    let (config, _scratch) = scratch_config("wrong-peer");
+    save_points::write_marker(
+        &config.root,
+        Some(&save_points::Marker::Open { run: "r-1".into() }),
+    )
+    .unwrap();
+    let mut holder = stand_in_holder(&config);
+    let _listener = silent_worker(&config);
+    TEST_WORKER_UID.with(|uid| uid.set(Some(nix::unistd::getuid().as_raw().wrapping_add(1))));
+    let shown = show(&config);
+    let unloaded = unload_within(&config, TEST_UNLOAD_BOUNDS, false);
+    let stopped = stop(&config);
+    TEST_WORKER_UID.with(|uid| uid.set(None));
+    let alive = holder
+        .try_wait()
+        .map(|status| status.is_none())
+        .unwrap_or(false);
+    end(holder);
+    assert_eq!(shown, Err(LifecycleRefusal::BoundaryUnverified));
+    assert_eq!(unloaded, Err(LifecycleRefusal::BoundaryUnverified));
+    assert_eq!(stopped, Err(LifecycleRefusal::BoundaryUnverified));
+    assert!(alive, "the run lock's holder is never escalated");
+    assert_eq!(
+        save_points::read_marker(&config.root),
+        Some(save_points::Marker::Open { run: "r-1".into() }),
+        "the marker stays open"
+    );
+}
