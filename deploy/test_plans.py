@@ -2975,6 +2975,23 @@ class LifecycleNearMissTests(unittest.TestCase):
         self.assertEqual(self.mode(), 0o710)
 
 
+class IndexModeTests(unittest.TestCase):
+    """What git records for the deploy scripts, read from the index."""
+
+    def test_every_deploy_script_is_executable_in_the_index(self):
+        # Every deploy/*.sh is recorded 100755, so `./deploy/<script>.sh`
+        # runs from any checkout. verify-lifecycle.sh was recorded 100644 and
+        # refused with "Permission denied". Perturbation: record it 100644
+        # again, and it is named. Outside a git checkout there is no index
+        # to read, and the test is skipped.
+        listed = subprocess.run(["git", "ls-files", "-s", "--", "*.sh"], cwd=DEPLOY,
+                                text=True, capture_output=True)
+        if listed.returncode != 0 or not listed.stdout.strip():
+            self.skipTest("no git index here")
+        modes = {line.split("\t", 1)[1]: line.split()[0] for line in listed.stdout.splitlines()}
+        self.assertEqual([path for path, mode in modes.items() if mode != "100755"], [])
+
+
 def shell_function(script, name):
     """One function exactly as a deploy script defines it, read out of the
     script's own text so a test runs the code that ships."""
