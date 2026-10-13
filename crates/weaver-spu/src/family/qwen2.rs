@@ -63,6 +63,7 @@ pub struct Qwen2;
 impl Qwen2 {
     fn markers() -> Markers {
         Markers {
+            family: "qwen2",
             call_open: CALL_OPEN,
             call_close: Some(CALL_CLOSE),
         }
@@ -73,17 +74,22 @@ impl Qwen2 {
     /// The family emits a JSON object carrying `name`. A fragment that is not
     /// that, or that is an object with no usable `name`, is unrecoverable, and
     /// the caller turns that into a reported fact rather than into text.
-    fn recover(fragment: &str) -> Option<(ToolName, String)> {
-        let value: serde_json::Value = serde_json::from_str(fragment.trim()).ok()?;
-        let name = value.get("name")?.as_str()?;
+    fn recover(fragment: &str) -> Result<(ToolName, String), String> {
+        let value: serde_json::Value =
+            serde_json::from_str(fragment.trim()).map_err(|e| format!("not JSON: {e}"))?;
+        let name = value
+            .get("name")
+            .ok_or("no `name` member")?
+            .as_str()
+            .ok_or("`name` is not a string")?;
         if name.is_empty() {
-            return None;
+            return Err("`name` is empty".to_string());
         }
         let arguments = value
             .get("arguments")
             .map(|a| a.to_string())
             .unwrap_or_else(|| "{}".to_string());
-        Some((ToolName(name.to_string()), arguments))
+        Ok((ToolName(name.to_string()), arguments))
     }
 }
 
@@ -147,6 +153,14 @@ impl Family for Qwen2 {
                     body.push('\n');
                     body.push_str(CALL_CLOSE);
                 }
+                // An unrecovered call renders back as written, per Spec
+                // section 5: the fragment's bytes unchanged, in the
+                // assistant's turn alone.
+                weaver_traits::ContentBlock::UnrecoveredCall { fragment }
+                    if message.role == super::Role::Assistant =>
+                {
+                    body.push_str(fragment)
+                }
                 // A tool result inside any other role, or a block this
                 // family has not learned, refuses rather than guesses.
                 _ => return Err(RenderRefusal::MalformedForFamily),
@@ -159,8 +173,8 @@ impl Family for Qwen2 {
         ))
     }
 
-    fn parse(&self, emission: &str) -> Parsed {
-        super::scan(emission, Self::markers(), Self::recover)
+    fn parse(&self, emission: &str, ended_by: Option<&str>) -> Parsed {
+        super::scan(emission, ended_by, Self::markers(), Self::recover)
     }
 
     fn stop_conditions(&self) -> &'static [&'static str] {

@@ -300,7 +300,7 @@ fn a_turnless_kind_refuses_a_turn() {
 
 /// **A kind that belongs to a turn refuses its absence, and is admitted
 /// with one**, per the same table: a replayed turn's bracket, its messages
-/// but the system one, the four model kinds, and a residual column.
+/// but the system one, the five model kinds, and a residual column.
 ///
 /// Perturbation: move any one of these out of the required arm and its
 /// turnless submission is admitted. Watched moving `ModelRequest` and
@@ -317,6 +317,7 @@ fn a_turned_kind_refuses_no_turn() {
         Kind::ModelOutput,
         Kind::ModelMeasurement,
         Kind::ModelField,
+        Kind::ModelUnrecoveredCall,
         Kind::ResidualColumn,
     ] {
         assert!(
@@ -372,6 +373,7 @@ fn every_kind_has_a_turn_watch() {
             | Kind::ModelOutput
             | Kind::ModelMeasurement
             | Kind::ModelField
+            | Kind::ModelUnrecoveredCall
             | Kind::ResidualColumn
             | Kind::MessageSystem
             | Kind::Refusal

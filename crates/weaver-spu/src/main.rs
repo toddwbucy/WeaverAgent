@@ -851,36 +851,20 @@ fn serve_decode(
                 };
                 // The canonical parse crosses beside the verbatim, per the
                 // tool workflow's opening act: the family's own parser is the
-                // bridge, text as text and every recovered call as a
-                // `ToolCall` block. An unrecovered fragment is reported on
-                // the operator channel rather than crossing as prose, the
-                // parse discipline's own rule.
-                let parsed = standing.renderer.parse(&emission);
-                if parsed.has_unrecovered_call() {
-                    eprintln!(
-                        "{}",
-                        serde_json::json!({
-                            "unrecovered_calls": parsed.unrecovered.len(),
-                        })
-                    );
-                }
-                let content: Vec<weaver_traits::ContentBlock> = parsed
-                    .content
-                    .into_iter()
-                    .map(|piece| match piece {
-                        family::Content::Text(text) => weaver_traits::ContentBlock::Text { text },
-                        family::Content::Call { name, arguments } => {
-                            weaver_traits::ContentBlock::ToolCall(weaver_traits::ToolCall {
-                                name: name.0,
-                                arguments,
-                            })
-                        }
-                    })
-                    .collect();
+                // bridge. An unrecovered fragment crosses as its block and
+                // its report, per Spec section 5 on the operator's ruling of
+                // 2026-10-13 (#31), and nothing reaches standard error.
+                // The stop that ended the generation, named as the family
+                // declared it, so the parse meets a closer that came as that
+                // stop and no other, per Spec section 5.
+                let ended_by = ended_by(&standing.stop, generated.drawn_stop);
+                let (content, unrecovered) =
+                    answer_parts(standing.renderer.parse(&emission, ended_by));
                 let answer = TokenAnswer::Generated(Generation {
                     emission,
                     finish,
                     content,
+                    unrecovered,
                     request,
                     measurement,
                     resident: standing.session.resident_len() as u64,
@@ -1142,28 +1126,11 @@ fn serve_decode(
                         return Err(());
                     }
                 };
-                let parsed = standing.renderer.parse(&emission);
-                if parsed.has_unrecovered_call() {
-                    eprintln!(
-                        "{}",
-                        serde_json::json!({
-                            "unrecovered_calls": parsed.unrecovered.len(),
-                        })
-                    );
-                }
-                let content: Vec<weaver_traits::ContentBlock> = parsed
-                    .content
-                    .into_iter()
-                    .map(|piece| match piece {
-                        family::Content::Text(text) => weaver_traits::ContentBlock::Text { text },
-                        family::Content::Call { name, arguments } => {
-                            weaver_traits::ContentBlock::ToolCall(weaver_traits::ToolCall {
-                                name: name.0,
-                                arguments,
-                            })
-                        }
-                    })
-                    .collect();
+                // A re-feed's answer carries the parse and its report as a
+                // generation's does, per Spec section 5.
+                // A re-feed holds no terminator of the source's, so it infers
+                // no closer, per Spec section 5 (#144).
+                let (content, unrecovered) = answer_parts(standing.renderer.parse(&emission, None));
                 // **The answer's own variant**, per `weaver-types-Spec`: a
                 // supplied path never wears a sampled path's clothes, so
                 // the collapse the diagnostic exists to catch is not
@@ -1172,6 +1139,7 @@ fn serve_decode(
                     emission,
                     finish,
                     content,
+                    unrecovered,
                     request,
                     measurement,
                     resident: standing.session.resident_len() as u64,
@@ -1470,6 +1438,68 @@ fn serve(inherited: Inherited, headroom: u64) -> ExitCode {
             }
         }
     }
+}
+
+/// **The parse's two crossings, built at the one site both the generation and
+/// the re-feed answer from**, per Spec section 5 on the operator's ruling of
+/// 2026-10-13 (#31): the content in emission order, text as `Text`, a
+/// recovered call as `ToolCall` and an unrecovered one as `UnrecoveredCall`,
+/// and the report, one entry per unrecovered block in the same order, its
+/// reason and grammar carried onto the floor's types. Nothing of it reaches
+/// standard error, the report's one home being the record.
+fn answer_parts(
+    parsed: family::Parsed,
+) -> (
+    Vec<weaver_traits::ContentBlock>,
+    Vec<weaver_types::UnrecoveredCall>,
+) {
+    let content = parsed
+        .content
+        .into_iter()
+        .map(|piece| match piece {
+            family::Content::Text(text) => weaver_traits::ContentBlock::Text { text },
+            family::Content::Call { name, arguments } => {
+                weaver_traits::ContentBlock::ToolCall(weaver_traits::ToolCall {
+                    name: name.0,
+                    arguments,
+                })
+            }
+            family::Content::Unrecovered { fragment } => {
+                weaver_traits::ContentBlock::UnrecoveredCall { fragment }
+            }
+        })
+        .collect();
+    let unrecovered = parsed
+        .unrecovered
+        .into_iter()
+        .map(|entry| weaver_types::UnrecoveredCall {
+            fragment: entry.fragment,
+            reason: match entry.reason {
+                family::Reason::Unclosed => weaver_types::UnrecoveredReason::Unclosed,
+                family::Reason::Unparsed(detail) => {
+                    weaver_types::UnrecoveredReason::Unparsed { detail }
+                }
+            },
+            grammar: weaver_types::CallGrammar {
+                family: entry.grammar.family.to_string(),
+                open: entry.grammar.open.to_string(),
+                close: entry.grammar.close.map(str::to_string),
+            },
+        })
+        .collect();
+    (content, unrecovered)
+}
+
+/// **The condition the drawn stop names**, as the family declared it, or
+/// none where no stop ended the generation or the token names no promoted
+/// condition, per Spec section 5: what the parse reads to meet a closer that
+/// came as the stop.
+fn ended_by(stop: &StopSet, drawn: Option<TokenId>) -> Option<&'static str> {
+    let drawn = drawn?;
+    stop.named
+        .iter()
+        .find(|(_, token)| *token == drawn)
+        .map(|(condition, _)| *condition)
 }
 
 fn fault_line(fault: &ChannelFault) -> String {

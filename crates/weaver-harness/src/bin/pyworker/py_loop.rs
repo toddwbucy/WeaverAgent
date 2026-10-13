@@ -23,7 +23,7 @@ use std::path::Path;
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyModule};
+use pyo3::types::{PyDict, PyList, PyModule};
 use weaver_harness::{Ports, TurnError, TurnOutcome};
 use weaver_traits::{ContentBlock, Message, Role};
 
@@ -234,6 +234,28 @@ impl Seat {
                 answered.set_item("emission", &outcome.emission)?;
                 answered.set_item("stopped", outcome.stopped)?;
                 answered.set_item("aborted", outcome.aborted)?;
+                // The parse's report on every call it could not recover, per
+                // `weaver-harness-Spec` section 6.1 (#31): one dict per
+                // entry, the reason's case and its detail, the grammar's
+                // three members, so a Python loop reads it without parsing.
+                let unrecovered = PyList::empty(py);
+                for entry in &outcome.unrecovered {
+                    let item = PyDict::new(py);
+                    item.set_item("fragment", &entry.fragment)?;
+                    let (reason, detail) = match &entry.reason {
+                        weaver_types::UnrecoveredReason::Unclosed => ("unclosed", None),
+                        weaver_types::UnrecoveredReason::Unparsed { detail } => {
+                            ("unparsed", Some(detail.as_str()))
+                        }
+                    };
+                    item.set_item("reason", reason)?;
+                    item.set_item("detail", detail)?;
+                    item.set_item("family", &entry.grammar.family)?;
+                    item.set_item("open", &entry.grammar.open)?;
+                    item.set_item("close", entry.grammar.close.as_deref())?;
+                    unrecovered.append(item)?;
+                }
+                answered.set_item("unrecovered", unrecovered)?;
                 self.last = Some(Ok(outcome));
                 Ok(answered.unbind())
             }

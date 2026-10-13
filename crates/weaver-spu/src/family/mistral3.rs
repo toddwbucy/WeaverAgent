@@ -116,6 +116,7 @@ pub struct Mistral3;
 impl Mistral3 {
     fn markers() -> Markers {
         Markers {
+            family: "mistral3",
             call_open: CALL_OPEN,
             call_close: None,
         }
@@ -132,14 +133,16 @@ impl Mistral3 {
     /// The call runs to the end of the emission because the family closes it
     /// with the turn rather than with a marker of its own, which is what
     /// [`Markers::call_close`] being `None` says.
-    fn recover(fragment: &str) -> Option<(ToolName, String)> {
-        let at = fragment.find(ARGS)?;
+    fn recover(fragment: &str) -> Result<(ToolName, String), String> {
+        let at = fragment
+            .find(ARGS)
+            .ok_or_else(|| format!("no `{ARGS}` after the name"))?;
         let name = fragment[..at].trim();
         if name.is_empty() {
-            return None;
+            return Err("no name before the arguments".to_string());
         }
         let arguments = fragment[at + ARGS.len()..].trim();
-        Some((
+        Ok((
             ToolName(name.to_string()),
             if arguments.is_empty() {
                 "{}".to_string()
@@ -221,8 +224,8 @@ impl Family for Mistral3 {
         })
     }
 
-    fn parse(&self, emission: &str) -> Parsed {
-        super::scan(emission, Self::markers(), Self::recover)
+    fn parse(&self, emission: &str, ended_by: Option<&str>) -> Parsed {
+        super::scan(emission, ended_by, Self::markers(), Self::recover)
     }
 
     fn stop_conditions(&self) -> &'static [&'static str] {

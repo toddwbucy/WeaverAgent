@@ -219,10 +219,10 @@ fn a_width_outside_the_declared_set_refuses() {
 /// text. The second is the half a collapse into the text path would break
 /// while the first went on looking fine.
 ///
-/// Perturbation: in `scan`, replace the `None` arm's push to `unrecovered`
-/// with `content.push(Content::Text(fragment.to_string()))` and this test
-/// fails, because the fragment then arrives as ordinary assistant text and
-/// no fact is reported. Watched under exactly that collapse.
+/// Perturbation: in `scan`, replace the refused fragment's push of
+/// `Content::Unrecovered` with `Content::Text(written.to_string())` and this
+/// test fails, because the fragment then arrives as ordinary assistant text.
+/// Watched under exactly that collapse (#31).
 #[test]
 fn an_unrecoverable_call_is_reported_rather_than_read_as_prose() {
     let cases: Vec<(&str, Box<dyn Family>, String)> = vec![
@@ -256,7 +256,7 @@ fn an_unrecoverable_call_is_reported_rather_than_read_as_prose() {
     ];
 
     for (name, family, emission) in cases {
-        let parsed = family.parse(&emission);
+        let parsed = family.parse(&emission, None);
 
         assert!(
             parsed.has_unrecovered_call(),
@@ -1086,10 +1086,269 @@ fn a_recoverable_call_comes_back_whole() {
         qwen2::CALL_OPEN,
         qwen2::CALL_CLOSE
     );
-    let parsed = qwen2::Qwen2.parse(&emission);
+    let parsed = qwen2::Qwen2.parse(&emission, None);
     assert!(!parsed.has_unrecovered_call(), "the name came back");
     assert!(matches!(
         parsed.content.as_slice(),
         [Content::Call { name, .. }] if name.0 == "read_file"
     ));
+}
+
+/// **An unclosed call reports `unclosed`, its fragment the span as written**,
+/// per Spec section 5 on the operator's ruling of 2026-10-13 (#31). The
+/// emission is #31's own shape: a second opening marker where the closing one
+/// belongs, then the end. The second opener ends the first call where it
+/// stands, so the record carries two attempts: the model's fragment and a bare
+/// opener, both `unclosed`, and nothing is lost.
+///
+/// Perturbation: skip the kernel's closing-marker check, so the family is
+/// asked, and the first reason reads `unparsed`.
+#[test]
+fn an_unclosed_call_reports_unclosed_with_the_span_as_written() {
+    let first = format!("{}{{\"name\":\"a\"", qwen2::CALL_OPEN);
+    let emission = format!("ok {first}{}", qwen2::CALL_OPEN);
+    let parsed = qwen2::Qwen2.parse(&emission, None);
+    let entries: Vec<(&str, &Reason)> = parsed
+        .unrecovered
+        .iter()
+        .map(|u| (u.fragment.as_str(), &u.reason))
+        .collect();
+    assert_eq!(
+        entries,
+        vec![
+            (first.as_str(), &Reason::Unclosed),
+            (qwen2::CALL_OPEN, &Reason::Unclosed),
+        ]
+    );
+    assert_eq!(
+        parsed.content,
+        vec![
+            Content::Text("ok ".into()),
+            Content::Unrecovered {
+                fragment: first.clone()
+            },
+            Content::Unrecovered {
+                fragment: qwen2::CALL_OPEN.into()
+            },
+        ]
+    );
+    assert_eq!(parsed.text(), "ok ");
+}
+
+/// **A re-opened marker ends the open call, and a well-formed call after it
+/// still recovers**, per Spec section 5 on the operator's ruling of
+/// 2026-10-13: a second opening marker met before any closer ends the first
+/// call as `unclosed` there and scanning resumes at the second marker.
+///
+/// Perturbation: search the closer across the whole remainder, as the kernel
+/// did before the ruling, and the two calls read as one `unparsed` fragment
+/// with the well-formed call lost.
+#[test]
+fn a_re_opened_marker_ends_the_open_call_and_the_next_recovers() {
+    let broken = format!("{}{{\"name\":\"a\"", qwen2::CALL_OPEN);
+    let good = format!(
+        "{}{{\"name\":\"read_file\",\"arguments\":{{}}}}{}",
+        qwen2::CALL_OPEN,
+        qwen2::CALL_CLOSE
+    );
+    let parsed = qwen2::Qwen2.parse(&format!("{broken}{good}"), None);
+    assert_eq!(parsed.unrecovered.len(), 1, "{:?}", parsed.unrecovered);
+    assert_eq!(parsed.unrecovered[0].fragment, broken);
+    assert_eq!(parsed.unrecovered[0].reason, Reason::Unclosed);
+    assert!(
+        matches!(&parsed.content[..], [Content::Unrecovered { .. }, Content::Call { name, .. }] if name.0 == "read_file"),
+        "{:?}",
+        parsed.content
+    );
+}
+
+/// **Each family's grammar names a family the registry carries**, so the name
+/// written in `markers()` cannot drift from the registry's spelling. Read
+/// through the parse, the grammar being where the name reaches a reader, and
+/// against the registry rather than through `declaration()`, which panics for
+/// llama, whose architecture the registry marks contested (reported on #31's
+/// code act, not this test's to settle).
+///
+/// Perturbation: misspell a family's name in its `markers()` and this fails.
+#[test]
+fn each_familys_grammar_names_its_registry_row() {
+    let families: Vec<(Box<dyn Family>, &str)> = vec![
+        (Box::new(qwen2::Qwen2), qwen2::CALL_OPEN),
+        (Box::new(llama::Llama), llama::CALL_OPEN),
+        (Box::new(gemma4::Gemma4), gemma4::CALL_OPEN),
+        (Box::new(mistral3::Mistral3), mistral3::CALL_OPEN),
+        (Box::new(gpt_oss::GptOss), gpt_oss::CALL_OPEN),
+    ];
+    for (family, open) in families {
+        let parsed = family.parse(&format!("{open}garbage"), None);
+        let grammar = parsed
+            .unrecovered
+            .first()
+            .expect("an attempted call")
+            .grammar;
+        assert!(
+            REGISTRY.iter().any(|row| row.family == grammar.family),
+            "{grammar:?} names no registry row"
+        );
+        assert_eq!(grammar.open, open);
+    }
+}
+
+/// **An unparsed call carries the family's detail and the grammar that
+/// judged it**, per Spec section 5: the fragment with both markers, a
+/// non-empty detail, and the family's name and markers.
+///
+/// Perturbation: drop the family's error text from `recover` and the
+/// detail arrives empty.
+#[test]
+fn an_unparsed_call_carries_the_familys_detail_and_grammar() {
+    let emission = format!("{}not json{}", qwen2::CALL_OPEN, qwen2::CALL_CLOSE);
+    let parsed = qwen2::Qwen2.parse(&emission, None);
+    let entry = &parsed.unrecovered[0];
+    assert_eq!(entry.fragment, emission);
+    assert!(
+        matches!(&entry.reason, Reason::Unparsed(detail) if !detail.is_empty()),
+        "{:?}",
+        entry.reason
+    );
+    assert_eq!(entry.grammar.family, "qwen2");
+    assert_eq!(entry.grammar.open, qwen2::CALL_OPEN);
+    assert_eq!(entry.grammar.close, Some(qwen2::CALL_CLOSE));
+}
+
+/// **Two unrecovered calls report in emission order, block and entry alike.**
+#[test]
+fn two_unrecovered_calls_report_in_emission_order() {
+    let first = format!("{}x{}", qwen2::CALL_OPEN, qwen2::CALL_CLOSE);
+    let second = format!("{}y{}", qwen2::CALL_OPEN, qwen2::CALL_CLOSE);
+    let parsed = qwen2::Qwen2.parse(&format!("{first}mid{second}"), None);
+    let reported: Vec<&str> = parsed
+        .unrecovered
+        .iter()
+        .map(|u| u.fragment.as_str())
+        .collect();
+    assert_eq!(reported, vec![first.as_str(), second.as_str()]);
+    let blocks: Vec<&str> = parsed
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            Content::Unrecovered { fragment } => Some(fragment.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(blocks, reported);
+}
+
+/// **A family that closes nothing runs the fragment to the end of the
+/// emission and names no closing marker**, per Spec section 5.
+#[test]
+fn a_close_less_family_runs_the_fragment_to_the_end() {
+    let fragment = format!("{}not a call", mistral3::CALL_OPEN);
+    let parsed = mistral3::Mistral3.parse(&format!("before {fragment}"), None);
+    assert_eq!(parsed.unrecovered.len(), 1);
+    assert_eq!(parsed.unrecovered[0].fragment, fragment);
+    assert_eq!(parsed.unrecovered[0].grammar.family, "mistral3");
+    assert_eq!(parsed.unrecovered[0].grammar.close, None);
+    assert!(matches!(parsed.unrecovered[0].reason, Reason::Unparsed(_)));
+}
+
+/// **An `UnrecoveredCall` block renders back as written**, per Spec section
+/// 5, in qwen2's own renderer and through `text_content`, and a user message
+/// carrying one refuses.
+///
+/// Perturbation: render the fragment with its markers stripped and the
+/// rendered bytes no longer hold it.
+#[test]
+fn an_unrecovered_call_block_renders_back_as_written() {
+    let fragment = format!("{}{{\"name\":\"a\"{}", qwen2::CALL_OPEN, qwen2::CALL_OPEN);
+    let assistant = weaver_traits::Message {
+        role: Role::Assistant,
+        content: vec![
+            ContentBlock::Text { text: "ok ".into() },
+            ContentBlock::UnrecoveredCall {
+                fragment: fragment.clone(),
+            },
+        ],
+    };
+    let rendered = qwen2::Qwen2.render_delta(&assistant).expect("renders");
+    assert!(rendered.contains(&format!("ok {fragment}")), "{rendered}");
+    let user = weaver_traits::Message {
+        role: Role::User,
+        content: assistant.content.clone(),
+    };
+    assert!(qwen2::Qwen2.render_delta(&user).is_err());
+
+    let shared = text_content(&assistant).expect("the shared kernel renders it");
+    assert_eq!(shared, format!("ok {fragment}"));
+    assert!(text_content(&user).is_err());
+}
+
+/// **A closing marker that is the stop that ended the generation is met at
+/// the end of the emission**, per Spec section 5: the stop token is drawn but
+/// not retained, so a well-formed llama or gpt-oss call ended by its closer
+/// reaches the parse without it, and the closer came all the same. Such a call recovers, as it
+/// did before #31, and is never judged `unclosed`. qwen2, whose closer is no
+/// stop, still reports a missing closer as `unclosed`.
+///
+/// Perturbation: drop the stop-condition check from the kernel's unclosed
+/// judgement and both live-shaped calls report `unclosed` instead of
+/// recovering.
+#[test]
+fn a_closer_that_is_a_stop_is_met_at_the_end_of_the_emission() {
+    let llama_live = format!(
+        "{}{{\"name\":\"calculator\",\"parameters\":{{\"expression\":\"1+1\"}}}}",
+        llama::CALL_OPEN
+    );
+    let parsed = llama::Llama.parse(&llama_live, Some(llama::CALL_CLOSE));
+    assert!(parsed.unrecovered.is_empty(), "{:?}", parsed.unrecovered);
+    assert!(
+        matches!(&parsed.content[..], [Content::Call { name, .. }] if name.0 == "calculator"),
+        "{:?}",
+        parsed.content
+    );
+
+    let gpt_live = format!(
+        "{}to=functions.calculator<|message|>{{\"expression\":\"1+1\"}}",
+        gpt_oss::CALL_OPEN
+    );
+    let parsed = gpt_oss::GptOss.parse(&gpt_live, Some(gpt_oss::TURN_END));
+    assert!(parsed.unrecovered.is_empty(), "{:?}", parsed.unrecovered);
+    assert!(
+        matches!(&parsed.content[..], [Content::Call { name, .. }] if name.0 == "calculator"),
+        "{:?}",
+        parsed.content
+    );
+
+    let qwen_open = format!("{}{{\"name\":\"a\"}}", qwen2::CALL_OPEN);
+    assert_eq!(
+        qwen2::Qwen2.parse(&qwen_open, None).unrecovered[0].reason,
+        Reason::Unclosed
+    );
+}
+
+/// **A closer that merely is one of the family's stops never came where
+/// something else ended the generation**, per Spec section 5 as narrowed on
+/// #141's review: a llama call cut by the length limit, and a gpt-oss call
+/// ended by `<|return|>` where `<|end|>` closes calls, read `unclosed` and are
+/// never dispatched.
+///
+/// Perturbation: ignore `ended_by` and infer the closer from the family's
+/// stops, and both read as recovered calls.
+#[test]
+fn a_closer_that_did_not_end_the_generation_never_came() {
+    let llama_cut = format!(
+        "{}{{\"name\":\"calculator\",\"parameters\":{{\"expression\":\"1+1\"}}}}",
+        llama::CALL_OPEN
+    );
+    let parsed = llama::Llama.parse(&llama_cut, None);
+    assert_eq!(parsed.unrecovered.len(), 1, "{:?}", parsed.content);
+    assert_eq!(parsed.unrecovered[0].reason, Reason::Unclosed);
+
+    let gpt_returned = format!(
+        "{}to=functions.calculator<|message|>{{\"expression\":\"1+1\"}}",
+        gpt_oss::CALL_OPEN
+    );
+    let parsed = gpt_oss::GptOss.parse(&gpt_returned, Some(gpt_oss::RETURN));
+    assert_eq!(parsed.unrecovered.len(), 1, "{:?}", parsed.content);
+    assert_eq!(parsed.unrecovered[0].reason, Reason::Unclosed);
 }

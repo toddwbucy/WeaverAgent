@@ -113,6 +113,7 @@ pub struct Gemma4;
 impl Gemma4 {
     fn markers() -> Markers {
         Markers {
+            family: "gemma4",
             call_open: CALL_OPEN,
             call_close: Some(CALL_CLOSE),
         }
@@ -125,22 +126,22 @@ impl Gemma4 {
     /// up to the brace. A fragment carrying no `call:` is an attempted call
     /// whose name did not come back, and the caller turns that into a reported
     /// fact rather than into text.
-    fn recover(fragment: &str) -> Option<(ToolName, String)> {
+    fn recover(fragment: &str) -> Result<(ToolName, String), String> {
         const CALL: &str = "call:";
-        let at = fragment.find(CALL)? + CALL.len();
+        let at = fragment.find(CALL).ok_or("no `call:` before the name")? + CALL.len();
         let tail = &fragment[at..];
         let name: String = tail
             .chars()
             .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
             .collect();
         if name.is_empty() {
-            return None;
+            return Err("no name after `call:`".to_string());
         }
         let arguments = match tail.find('{') {
             Some(at) => tail[at..].trim().to_string(),
             None => "{}".to_string(),
         };
-        Some((ToolName(name), arguments))
+        Ok((ToolName(name), arguments))
     }
 
     /// **This family's role map, which is why it does not call
@@ -224,8 +225,8 @@ impl Family for Gemma4 {
         ))
     }
 
-    fn parse(&self, emission: &str) -> Parsed {
-        super::scan(emission, Self::markers(), Self::recover)
+    fn parse(&self, emission: &str, ended_by: Option<&str>) -> Parsed {
+        super::scan(emission, ended_by, Self::markers(), Self::recover)
     }
 
     fn stop_conditions(&self) -> &'static [&'static str] {

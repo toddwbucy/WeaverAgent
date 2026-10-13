@@ -145,3 +145,46 @@ fn a_diagnostic_write_that_fails_is_latched_though_the_drain_is_vacuous() {
     assert!(record.drain().is_ok(), "the drain is vacuous");
     assert!(record.failed(), "the failure is latched");
 }
+
+/// **A re-fed path's unrecovered call reaches the diagnostic record**, per
+/// `weaver-diagnostic-Spec` sections 3.2 and 7 on the operator's ruling of
+/// 2026-10-13 (#31): the serving kind converts to the diagnostic record's
+/// twentieth, turned and spliced, through the one authoring road.
+///
+/// Perturbation: move the kind from its own arm in `convert` into the arm
+/// that answers `OutsideDiagnosticVocabulary`, and the authoring is refused.
+/// Removing the arm outright does not compile, the match being exhaustive.
+#[test]
+fn an_unrecovered_call_reaches_the_diagnostic_record() {
+    let author = author();
+    let mut record = Record::from(
+        weaver_diagnostic::Recorder::receive(
+            scratch_sink("unrecovered"),
+            weaver_diagnostic::RunRef("r-1".into()),
+            weaver_diagnostic::SessionRef("s-1".into()),
+        )
+        .expect("recorder"),
+    );
+    let turn = weaver_types::TurnKey("t-1".into());
+    author
+        .author(
+            &mut record,
+            Kind::TurnStarted,
+            Subsystem::Harness,
+            Some(&turn),
+            None,
+        )
+        .expect("the replayed turn opens");
+    let report = weaver_types::UnrecoveredCall {
+        fragment: "<tool_call>{".into(),
+        reason: weaver_types::UnrecoveredReason::Unclosed,
+        grammar: weaver_types::CallGrammar {
+            family: "qwen2".into(),
+            open: "<tool_call>".into(),
+            close: Some("</tool_call>".into()),
+        },
+    };
+    let landed = author.author_unrecovered_call(&mut record, &turn, &report);
+    assert!(landed.is_ok(), "{landed:?}");
+    assert!(!record.failed(), "nothing latched");
+}

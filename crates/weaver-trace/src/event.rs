@@ -114,12 +114,12 @@ pub enum Subsystem {
     Tool,
 }
 
-/// The twenty-five event kinds, exhaustive, matching the charter's section 3.1
+/// The twenty-six event kinds, exhaustive, matching the charter's section 3.1
 /// exactly. Every kind carries an explicit rename because no scheme produces
 /// the charter's dotted names, and the enum is exhaustive because the set is
 /// closed by ruling: an attribute that let a consumer absorb a further kind
 /// into a wildcard would defeat the closure the corpus keys on. **The count
-/// is pinned in `tests/kinds.rs`**, an array of twenty-five checked against an
+/// is pinned in `tests/kinds.rs`**, an array of twenty-six checked against an
 /// exhaustive match over this enum, so a kind added here and answered in the
 /// crate's own matches stops at that file's match. An act that writes the new
 /// arm there too and leaves the array alone still passes, which is issue
@@ -201,6 +201,14 @@ pub enum Kind {
     /// its own event.
     #[serde(rename = "save_point")]
     SavePoint,
+    /// A call the emission attempted and the family parse could not
+    /// recover, per charter section 3.1's twenty-sixth kind, on the
+    /// operator's ruling of 2026-10-13 on #31: the fragment as written, the
+    /// parse's reason, and the grammar that judged it, beside the verbatim
+    /// `model.output` keeps. Turned, an emission belonging to the turn that
+    /// drew it, and a fact rather than a fault.
+    #[serde(rename = "model.unrecovered_call")]
+    ModelUnrecoveredCall,
 }
 
 /// What an event carries beside its envelope. Untagged: the envelope's `kind`
@@ -213,7 +221,7 @@ pub enum Kind {
 /// back, the working structure holding rendered lines, and the asymmetry is a
 /// compile property pinned at the crate root.
 ///
-/// The kind-to-payload mapping is total, twenty-five kinds and nineteen
+/// The kind-to-payload mapping is total, twenty-six kinds and twenty
 /// dispositions, the payload-free case counting as one of them.
 /// **`pairing_licensed` in `writer.rs` enforces the mapping and is the
 /// authority on it**, this comment naming only which variant of this enum
@@ -310,6 +318,10 @@ pub enum Payload {
     /// the harness authors from the state seam's `snapshot` answer, per
     /// charter section 3.1's twenty-fifth kind.
     SavePoint(SavePointTaken),
+    /// An unrecovered call's report, spliced on the `refusal` precedent: the
+    /// floor's shape the harness renders from the decode answer, per charter
+    /// section 3.1's twenty-sixth kind.
+    UnrecoveredCall(Box<serde_json::value::RawValue>),
     /// The payloads whose shapes their own workflows settle, since the trace
     /// act of 2026-08-02 the tool bracket's two alone. Raw bytes in the
     /// interim rather than a placeholder struct, because a struct shaped

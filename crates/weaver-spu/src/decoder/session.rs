@@ -82,6 +82,12 @@ pub struct Generated {
     /// The decode span in nanoseconds: the sampling loop through the
     /// terminator's landing.
     pub decode_ns: u64,
+    /// The stop token that ended the generation, drawn and not retained:
+    /// present only where a stop ended it, absent for a length cut, a cancel,
+    /// a capacity stop, and a re-feed, which draws no stop of its own. The
+    /// parse reads it to tell a closing marker that came as the stop from one
+    /// that never came, per Spec section 5.
+    pub drawn_stop: Option<TokenId>,
     /// The residual reduction's figures where the residency was admitted
     /// with readout elected, per `weaver-spu-Spec` sections 6 and 7: one
     /// norm per layer per forward this generation ran, in order, drained
@@ -387,6 +393,7 @@ impl<'a> Session<'a> {
 
         let mut produced = Vec::new();
         let mut signals = measurement::Accumulator::new(self.surprisal_elected);
+        let mut drawn_stop = None;
         let stopped = loop {
             // **The cancel is checked between sampled tokens**, which bounds
             // the stop by one token's decode rather than by a kernel's
@@ -454,6 +461,7 @@ impl<'a> Session<'a> {
             // this answers with, and a measurement for a token the answer does
             // not carry shifts every reader's pairing by one.
             if stop.stop_tokens.contains(&token) {
+                drawn_stop = Some(token);
                 break Stopped::Complete;
             }
 
@@ -512,6 +520,7 @@ impl<'a> Session<'a> {
         Ok(Generated {
             tokens: produced,
             stopped,
+            drawn_stop,
             signals: signals.finish(),
             prefill_ns,
             decode_ns: decode_started.elapsed().as_nanos() as u64,
@@ -647,6 +656,7 @@ impl<'a> Session<'a> {
         Ok(Generated {
             tokens: recomputed,
             stopped,
+            drawn_stop: None,
             signals: signals.finish(),
             prefill_ns,
             decode_ns: decode_started.elapsed().as_nanos() as u64,

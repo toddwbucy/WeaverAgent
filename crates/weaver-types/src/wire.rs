@@ -1294,13 +1294,22 @@ pub struct Generation {
     pub finish: Finish,
     /// The canonical parse of the emission, the family module's bridge from
     /// the verbatim to the conversation's blocks, as of the tool workflow's
-    /// opening act: text as text and every recovered call as a `ToolCall`
-    /// block, in emission order. Family knowledge stays in the family module
-    /// and the canonical form is what crosses, so the harness dispatches
-    /// calls it never parsed for. A fragment that opened a call and could
-    /// not be recovered is reported by the SPU on its operator channel and
-    /// is deliberately not here: a failed call must not arrive as prose.
+    /// opening act: text as text, every recovered call as a `ToolCall`
+    /// block, and every call the parse could not recover as an
+    /// `UnrecoveredCall` block, in emission order, per `weaver-types-Spec`
+    /// section 4.4 on the operator's ruling of 2026-10-13 (#31). Family
+    /// knowledge stays in the family module and the canonical form is what
+    /// crosses, so the harness dispatches calls it never parsed for. A
+    /// failed call arrives neither as prose nor as nothing.
     pub content: Vec<weaver_traits::ContentBlock>,
+    /// The parse's report on each `UnrecoveredCall` block in `content`, one
+    /// entry per block and in the same order, absent where the parse
+    /// recovered every call it met: the content of the record's
+    /// `model.unrecovered_call` events, per `weaver-types-Spec` section 4.4.
+    /// Defaulted at the read, so an answer written before the member existed
+    /// parses with it empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unrecovered: Vec<UnrecoveredCall>,
     /// The model.request content the SPU rendered whole, the rendered prompt
     /// with its template and effective sampling, spliced into the request
     /// event's box, per `weaver-types-Spec` section 4.4 as of the custody act.
@@ -1317,10 +1326,44 @@ pub struct Generation {
     pub capacity: u64,
 }
 
+/// A call the emission attempted and the family parse could not recover,
+/// per `weaver-types-Spec` section 4.4: the fragment as written, from the
+/// family's opening marker through its closing marker or to the end of the
+/// emission, the scan kernel's reason, and the grammar that judged it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnrecoveredCall {
+    pub fragment: String,
+    pub reason: UnrecoveredReason,
+    pub grammar: CallGrammar,
+}
+
+/// The scan kernel's closed reason set, internally tagged on `case` as the
+/// shared tagging test's second case elects: `unclosed`, the opening marker
+/// met and the closing one never, and `unparsed`, the family's recovery
+/// refusing the fragment with its parser's detail.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "case", rename_all = "snake_case")]
+pub enum UnrecoveredReason {
+    Unclosed,
+    Unparsed { detail: String },
+}
+
+/// The family grammar that judged a fragment: the family's name and the
+/// markers the kernel scanned with, `close` absent for a family whose calls
+/// run to the end of the emission.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CallGrammar {
+    pub family: String,
+    pub open: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub close: Option<String>,
+}
+
 impl PartialEq for Generation {
     fn eq(&self, other: &Self) -> bool {
         self.emission == other.emission
             && self.content == other.content
+            && self.unrecovered == other.unrecovered
             && self.finish == other.finish
             && self.request.get() == other.request.get()
             && self.measurement.get() == other.measurement.get()
