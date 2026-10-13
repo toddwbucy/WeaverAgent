@@ -3009,11 +3009,15 @@ class LifecycleEnvelopeFieldTests(unittest.TestCase):
     the rest stand beside `payload`, never inside it. `json_at` answers
     `absent` for a missing path, so a read of `payload.run` handed the run
     marker's check the string `absent`. The envelope's fields are read from
-    the Spec's `Envelope` struct, every `json_at` line of the script is
-    checked for one of them under `payload.`, and the first load's read of
-    the run is lifted and run against an event of that shape. Perturbation:
-    put `payload.run` back at the six `RUN=` lines and the static pin names
-    them and the lifted read answers `absent`."""
+    the Spec's `Envelope` struct, and every `json_at` read of a load event
+    (`$load` or `$(last_event load)`) is checked for one of them under
+    `payload.`. The pin is scoped to the load event because another kind's
+    payload may carry a field of the same name as its own (a save point's
+    payload carries `run`, `sequence` and `turn`), which a check may read
+    rightly; the load's payload carries none of them. The first load's read
+    of the run is lifted and run against an event of that shape.
+    Perturbation: put `payload.run` back at the six `RUN=` lines and the
+    static pin names them and the lifted read answers `absent`."""
 
     def setUp(self):
         self.script = (DEPLOY / "verify-lifecycle.sh").read_text()
@@ -3024,11 +3028,15 @@ class LifecycleEnvelopeFieldTests(unittest.TestCase):
         self.assertIn("run", self.fields)
         self.assertIn("monotonic_ns", self.fields)
 
-    def test_no_json_at_reads_an_envelope_field_under_payload(self):
-        under = re.compile(r"\bpayload\.(" + "|".join(self.fields) + r")\b")
+    def test_no_read_of_a_load_event_takes_an_envelope_field_from_its_payload(self):
+        under = re.compile(r'json_at "(?:\$load|\$\(last_event load\))" "?payload\.('
+                           + "|".join(self.fields) + r")\b")
+        reads = [line for line in self.script.splitlines()
+                 if re.search(r'json_at "(?:\$load|\$\(last_event load\))"', line)]
+        self.assertGreaterEqual(len(reads), 6, "the load event's reads")
         found = [f"{n}: {line.strip()}" for n, line in enumerate(self.script.splitlines(), 1)
-                 if "json_at" in line and under.search(line)]
-        self.assertEqual(found, [], "an envelope field read under payload")
+                 if under.search(line)]
+        self.assertEqual(found, [], "an envelope field read under a load event's payload")
 
     def test_the_first_loads_run_is_read_from_the_envelope(self):
         lines = [line.strip() for line in self.script.splitlines()
