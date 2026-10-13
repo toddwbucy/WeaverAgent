@@ -1380,3 +1380,45 @@ fn the_sampler_is_rebuilt_per_generation_across_a_flush() {
         reseeds[0].1
     );
 }
+
+/// **The drawn stop is recorded where a stop ended the generation, and only
+/// there**, per Spec section 5: the parse reads it to meet a closer that came
+/// as the stop, so a generation the length limit cut records none.
+///
+/// Perturbation: record the stop set's first token on every path and the
+/// limit assertion fails; record nothing on the stop's break and the first
+/// fails.
+#[test]
+fn the_drawn_stop_is_recorded_where_a_stop_ended_the_generation() {
+    let run = |script: Vec<TokenId>, max_tokens: usize| {
+        let (mut session, _log) = opened(script, 128);
+        let mut cancel = NeverCancels;
+        session
+            .append_and_generate(
+                &[TokenId(3)],
+                &StopCondition {
+                    stop_tokens: vec![TokenId(99)],
+                    terminator: TokenId(50),
+                    max_tokens,
+                },
+                &mut cancel,
+                &mut |_| {},
+                PositionedSinks {
+                    field: None,
+                    on_column: &mut |_, _| {},
+                },
+                SamplerBuild {
+                    seed: 11,
+                    penalty_window: 64,
+                },
+            )
+            .expect("a turn")
+    };
+    let stopped = run(vec![TokenId(7), TokenId(99)], 64);
+    assert_eq!(stopped.stopped, Stopped::Complete);
+    assert_eq!(stopped.drawn_stop, Some(TokenId(99)));
+
+    let cut = run(vec![TokenId(7), TokenId(8), TokenId(9)], 1);
+    assert_eq!(cut.stopped, Stopped::LimitReached);
+    assert_eq!(cut.drawn_stop, None, "the limit drew no stop");
+}

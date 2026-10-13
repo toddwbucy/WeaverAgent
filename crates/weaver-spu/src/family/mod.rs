@@ -359,11 +359,6 @@ pub struct Markers {
     /// What closes one, where the family closes them. `None` means the call
     /// runs to the end of the emission.
     pub call_close: Option<&'static str>,
-    /// The family's stop conditions. **A closing marker among them is met at
-    /// the end of the emission**, per Spec section 5: the stop token is drawn
-    /// but not retained, so a well-formed call in such a family reaches the
-    /// parse without its closer, the closer having come as the stop.
-    pub stops: &'static [&'static str],
 }
 
 /// The surface a family implements, small and named, per Spec section 5 and
@@ -422,8 +417,12 @@ pub trait Family {
     }
 
     /// Parse an emission into canonical content, this family's markers
-    /// recognised.
-    fn parse(&self, emission: &str) -> Parsed;
+    /// recognised. `ended_by` is the stop condition that ended the generation,
+    /// as the family declared it, or `None` where no stop did (a length cut, a
+    /// cancel, or a re-feed, which holds no terminator of the source's): a
+    /// closing marker absent from the emission is met only where it is that
+    /// stop, per Spec section 5.
+    fn parse(&self, emission: &str, ended_by: Option<&str>) -> Parsed;
 
     /// The stop conditions this family declares.
     fn stop_conditions(&self) -> &'static [&'static str];
@@ -455,6 +454,7 @@ pub trait Family {
 /// [`Reason::Unclosed`] whatever lies inside it.
 pub fn scan(
     emission: &str,
+    ended_by: Option<&str>,
     markers: Markers,
     recover: impl Fn(&str) -> Result<(ToolName, String), String>,
 ) -> Parsed {
@@ -503,11 +503,12 @@ pub fn scan(
                         false,
                     )
                 } else {
-                    // The closer never came in the emission. Where it is one
-                    // of the family's stops it came as the stop and was not
-                    // retained, so the family reads the call; otherwise it
-                    // is unclosed.
-                    (after_open, from_open, "", !markers.stops.contains(&close))
+                    // The closer never came in the emission. **Where it is the
+                    // stop that ended the generation it came as that stop**,
+                    // drawn and not retained, so the family reads the call;
+                    // otherwise, a length cut, a cancel or another stop, it
+                    // never came and the call is unclosed, per Spec section 5.
+                    (after_open, from_open, "", ended_by != Some(close))
                 }
             }
             None => (after_open, from_open, "", false),

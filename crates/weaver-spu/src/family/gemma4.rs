@@ -116,7 +116,6 @@ impl Gemma4 {
             family: "gemma4",
             call_open: CALL_OPEN,
             call_close: Some(CALL_CLOSE),
-            stops: STOP,
         }
     }
 
@@ -226,8 +225,8 @@ impl Family for Gemma4 {
         ))
     }
 
-    fn parse(&self, emission: &str) -> Parsed {
-        super::scan(emission, Self::markers(), Self::recover)
+    fn parse(&self, emission: &str, ended_by: Option<&str>) -> Parsed {
+        super::scan(emission, ended_by, Self::markers(), Self::recover)
     }
 
     fn stop_conditions(&self) -> &'static [&'static str] {

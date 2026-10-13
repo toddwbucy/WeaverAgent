@@ -257,6 +257,10 @@ pub struct StopSet {
     /// token, named so a run reports them rather than carrying a stop that
     /// could never fire.
     pub unpromoted: Vec<&'static str>,
+    /// Each promoted condition beside its token, in declared order, so a
+    /// generation's drawn stop names the condition that ended it, which the
+    /// parse reads, per `weaver-spu-Spec` section 5.
+    pub named: Vec<(&'static str, TokenId)>,
 }
 
 /// Promote a family's declared stop conditions against one vocabulary.
@@ -271,6 +275,7 @@ pub fn promote_stop_conditions(
 ) -> Result<StopSet, DecodeFault> {
     let mut tokens = Vec::new();
     let mut unpromoted = Vec::new();
+    let mut named = Vec::new();
     let mut terminator = None;
 
     for (position, condition) in declared.iter().enumerate() {
@@ -280,6 +285,7 @@ pub fn promote_stop_conditions(
                     terminator = Some(*token);
                 }
                 tokens.push(*token);
+                named.push((*condition, *token));
             }
             _ => unpromoted.push(*condition),
         }
@@ -304,6 +310,7 @@ pub fn promote_stop_conditions(
         tokens,
         terminator,
         unpromoted,
+        named,
     })
 }
 

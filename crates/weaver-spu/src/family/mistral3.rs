@@ -119,7 +119,6 @@ impl Mistral3 {
             family: "mistral3",
             call_open: CALL_OPEN,
             call_close: None,
-            stops: STOP,
         }
     }
 
@@ -225,8 +224,8 @@ impl Family for Mistral3 {
         })
     }
 
-    fn parse(&self, emission: &str) -> Parsed {
-        super::scan(emission, Self::markers(), Self::recover)
+    fn parse(&self, emission: &str, ended_by: Option<&str>) -> Parsed {
+        super::scan(emission, ended_by, Self::markers(), Self::recover)
     }
 
     fn stop_conditions(&self) -> &'static [&'static str] {

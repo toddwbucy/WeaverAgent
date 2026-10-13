@@ -154,7 +154,7 @@ impl Family for PhiTag {
         ))
     }
 
-    fn parse(&self, emission: &str) -> Parsed {
+    fn parse(&self, emission: &str, _ended_by: Option<&str>) -> Parsed {
         parse_all_text(emission)
     }
 
@@ -184,7 +184,7 @@ impl Family for PhiSep {
         ))
     }
 
-    fn parse(&self, emission: &str) -> Parsed {
+    fn parse(&self, emission: &str, _ended_by: Option<&str>) -> Parsed {
         parse_all_text(emission)
     }
 

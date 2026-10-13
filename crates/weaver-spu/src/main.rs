@@ -854,7 +854,12 @@ fn serve_decode(
                 // bridge. An unrecovered fragment crosses as its block and
                 // its report, per Spec section 5 on the operator's ruling of
                 // 2026-10-13 (#31), and nothing reaches standard error.
-                let (content, unrecovered) = answer_parts(standing.renderer.parse(&emission));
+                // The stop that ended the generation, named as the family
+                // declared it, so the parse meets a closer that came as that
+                // stop and no other, per Spec section 5.
+                let ended_by = ended_by(&standing.stop, generated.drawn_stop);
+                let (content, unrecovered) =
+                    answer_parts(standing.renderer.parse(&emission, ended_by));
                 let answer = TokenAnswer::Generated(Generation {
                     emission,
                     finish,
@@ -1123,7 +1128,9 @@ fn serve_decode(
                 };
                 // A re-feed's answer carries the parse and its report as a
                 // generation's does, per Spec section 5.
-                let (content, unrecovered) = answer_parts(standing.renderer.parse(&emission));
+                // A re-feed holds no terminator of the source's, so it infers
+                // no closer, per Spec section 5 (#144).
+                let (content, unrecovered) = answer_parts(standing.renderer.parse(&emission, None));
                 // **The answer's own variant**, per `weaver-types-Spec`: a
                 // supplied path never wears a sampled path's clothes, so
                 // the collapse the diagnostic exists to catch is not
@@ -1481,6 +1488,18 @@ fn answer_parts(
         })
         .collect();
     (content, unrecovered)
+}
+
+/// **The condition the drawn stop names**, as the family declared it, or
+/// none where no stop ended the generation or the token names no promoted
+/// condition, per Spec section 5: what the parse reads to meet a closer that
+/// came as the stop.
+fn ended_by(stop: &StopSet, drawn: Option<TokenId>) -> Option<&'static str> {
+    let drawn = drawn?;
+    stop.named
+        .iter()
+        .find(|(_, token)| *token == drawn)
+        .map(|(condition, _)| *condition)
 }
 
 fn fault_line(fault: &ChannelFault) -> String {

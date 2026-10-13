@@ -524,7 +524,7 @@ fn the_report_crosses_on_the_answer() {
         family::qwen2::CALL_OPEN,
         family::qwen2::CALL_CLOSE
     );
-    let parsed = family::Family::parse(&family::qwen2::Qwen2, &emission);
+    let parsed = family::Family::parse(&family::qwen2::Qwen2, &emission, None);
     let (content, unrecovered) = answer_parts(parsed);
     let fragment = format!(
         "{}not json{}",
@@ -554,4 +554,24 @@ fn the_report_crosses_on_the_answer() {
             close: Some(family::qwen2::CALL_CLOSE.into()),
         }
     );
+}
+
+/// **The drawn stop names the condition that ended the generation**, per Spec
+/// section 5: the parse reads that name to meet a closer that came as the
+/// stop, and a generation no stop ended names none.
+///
+/// Perturbation: name the family's first condition whatever was drawn, and
+/// the second assertion fails.
+#[test]
+fn the_drawn_stop_names_its_condition() {
+    let stop = weaver_spu::residency::StopSet {
+        tokens: vec![TokenId(7), TokenId(9)],
+        terminator: TokenId(7),
+        unpromoted: vec![],
+        named: vec![("<|eot_id|>", TokenId(7)), ("<|eom_id|>", TokenId(9))],
+    };
+    assert_eq!(ended_by(&stop, Some(TokenId(7))), Some("<|eot_id|>"));
+    assert_eq!(ended_by(&stop, Some(TokenId(9))), Some("<|eom_id|>"));
+    assert_eq!(ended_by(&stop, Some(TokenId(3))), None, "an unnamed token");
+    assert_eq!(ended_by(&stop, None), None, "no stop ended it");
 }
