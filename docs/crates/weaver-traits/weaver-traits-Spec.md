@@ -7,7 +7,7 @@ merged charter. Code is written against it under the gates of Working Process se
 **Document ID:** `weaver-traits-Spec`
 **Parent:** `weaver-traits-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #627
+**Landing PR:** #136
 
 ---
 
