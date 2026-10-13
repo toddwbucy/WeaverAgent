@@ -48,10 +48,10 @@ pub struct Event {
     pub payload: Option<Payload>,
 }
 
-/// The nineteen kinds, exhaustive, per section 3.2. A kind added beyond
+/// The twenty kinds, exhaustive, per section 3.2. A kind added beyond
 /// this set breaks every consumer's match, which is the compile pin.
 ///
-/// Fifteen spellings are the serving vocabulary's and mean there what they
+/// Sixteen spellings are the serving vocabulary's and mean there what they
 /// mean here. Four are this record's own, the `replay.` trio and
 /// `residual.column`, and no serving record carries any of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -100,13 +100,19 @@ pub enum Kind {
     /// flush, so its record carries the act for the flush's reason.
     #[serde(rename = "elision")]
     Elision,
+    /// A call the re-fed path's parse could not recover, the serving
+    /// vocabulary's `model.unrecovered_call` and this record's twentieth
+    /// kind, per section 3.2 on the operator's ruling of 2026-10-13 (#31): a
+    /// re-feed's answer carries the parse's report as a generation's does.
+    #[serde(rename = "model.unrecovered_call")]
+    ModelUnrecoveredCall,
 }
 
 /// What an event carries beside its envelope. Untagged: the envelope's
 /// `kind` is the discriminant, and admission enforces the kind-to-payload
 /// pairing, per section 3.3's total mapping.
 ///
-/// **Fifteen kinds splice the serving payload of the same name**, arriving
+/// **Sixteen kinds splice the serving payload of the same name**, arriving
 /// pre-rendered from the harness and carried verbatim, which is what the
 /// `raw_value` dependency buys and why this crate re-encodes nothing. The
 /// residual readout rides the spliced `model.measurement` exactly where a

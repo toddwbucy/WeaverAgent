@@ -140,7 +140,8 @@ fn admit(event: &Event) -> Result<(), Failure> {
             | Kind::Refusal
             | Kind::Fault
             | Kind::Recall
-            | Kind::Elision,
+            | Kind::Elision
+            | Kind::ModelUnrecoveredCall,
             Some(Payload::Spliced(_)),
         ) => Ok(()),
         (_, None) => refuse(SubmitRefusal::RequiredFieldAbsent {
@@ -185,6 +186,7 @@ fn turn_rule(kind: Kind) -> TurnRule {
         | Kind::ModelOutput
         | Kind::ModelMeasurement
         | Kind::ModelField
+        | Kind::ModelUnrecoveredCall
         | Kind::ResidualColumn => TurnRule::Required,
         // The seated prefix precedes every turn and a message in one carries
         // it, and a refusal or a fault falls inside a turn or between them.
