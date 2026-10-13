@@ -2992,6 +2992,32 @@ class IndexModeTests(unittest.TestCase):
         self.assertEqual([path for path, mode in modes.items() if mode != "100755"], [])
 
 
+class ShellOwnedNameTests(unittest.TestCase):
+    """What the deploy scripts may name, read from their text."""
+
+    # Names bash writes on its own, so a value stored in one does not stay:
+    # LINES and COLUMNS are rewritten to the terminal's size after a
+    # foreground external command (checkwinsize), the rest by the shell's
+    # clock, counters and process state.
+    SHELL_OWNED = ("LINES", "COLUMNS", "SECONDS", "RANDOM", "SRANDOM", "LINENO", "BASHPID",
+                   "EPOCHSECONDS", "EPOCHREALTIME", "PPID", "UID", "EUID", "HISTCMD",
+                   "PIPESTATUS", "BASH_COMMAND", "PWD", "OLDPWD")
+
+    def test_no_deploy_script_assigns_a_name_bash_owns(self):
+        # update-stack.sh's verify step counted the sink into LINES, and from
+        # a terminal taller than the sink's count the load "wrote no events"
+        # and the install rolled back. Perturbation: on main at 17c0baf this
+        # names update-stack.sh at its `LINES=` lines.
+        assigns = re.compile(r"(?<![\w$-])(" + "|".join(self.SHELL_OWNED)
+                             + r")(\[[^]]*\])?\+?=")
+        found = []
+        for script in sorted(DEPLOY.glob("*.sh")):
+            for number, line in enumerate(script.read_text().splitlines(), 1):
+                if not line.lstrip().startswith("#") and assigns.search(line):
+                    found.append(f"{script.name}:{number}: {line.strip()}")
+        self.assertEqual(found, [])
+
+
 def shell_function(script, name):
     """One function exactly as a deploy script defines it, read out of the
     script's own text so a test runs the code that ships."""

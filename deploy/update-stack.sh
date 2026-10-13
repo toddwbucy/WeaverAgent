@@ -1210,9 +1210,14 @@ for AGENT in $AGENTS; do
   printf '  %s\n' "$AGENT"
   unload_verified "$AGENT" || rollback "$AGENT: the unload before the verify load did not answer unloaded, so its load would not be this install's"
   # Counted after the unload, so the unload's own events are never the load's.
-  LINES=0
+  # **A count never lives in LINES or COLUMNS**: with checkwinsize on (bash's
+  # default since 5.0) and a terminal, bash rewrites both to the terminal's
+  # size after every foreground external command, so the count read back at
+  # the subtraction was the terminal's row count and a load wrote "no events"
+  # wherever the sink held fewer lines than the terminal has rows.
+  SINK_BEFORE=0
   if [ "$SINK_KIND" = file ]; then
-    LINES=$(sink_lines "$SINK") || rollback "$AGENT: $SINK is not a regular file, and this step reads the load event back out of one"
+    SINK_BEFORE=$(sink_lines "$SINK") || rollback "$AGENT: $SINK is not a regular file, and this step reads the load event back out of one"
   fi
   # Claimed before the load rather than after it, so a load that comes up and
   # then dies on its read-back is still a load the restore knows to undo.
@@ -1235,8 +1240,8 @@ for AGENT in $AGENTS; do
     VERIFIED=$((VERIFIED + 1))
     continue
   fi
-  LATER=$(sink_lines "$SINK") || rollback "$AGENT: $SINK is not a regular file, and this step reads the load event back out of one"
-  NEW=$(( LATER - LINES ))
+  SINK_AFTER=$(sink_lines "$SINK") || rollback "$AGENT: $SINK is not a regular file, and this step reads the load event back out of one"
+  NEW=$(( SINK_AFTER - SINK_BEFORE ))
   # **A sink that gained nothing points at the sink, and the fault is rarely
   # there.** A member built without the elected engine answers
   # `descriptors_unusable` and writes no load event, so this refusal named the
