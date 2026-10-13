@@ -2958,6 +2958,50 @@ class LifecycleArchiveReadBackTests(unittest.TestCase):
         self.assertIn("archive reads back", result.stderr)
 
 
+class LifecycleOperatorShowTests(unittest.TestCase):
+    """**The take-down's operator check expects `unauthorized`** (the cleanup
+    run of 2026-10-13): admin run without root performs nothing and answers
+    `unauthorized` for every name, existing or not (weaver-admin-Spec,
+    "Authorization is the kernel's"), so step 9's check of `show` as the
+    operator, lifted from the script as it ships, passes a stand-in admin
+    answering `unauthorized` and fails one answering `no_such_agent`.
+    Perturbation: put back the expectation of `no_such_agent`, and both cases
+    fail here."""
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix="weaver-operator-show-")
+        self.addCleanup(self.scratch.cleanup)
+        self.admin = Path(self.scratch.name) / "weaver-admin"
+        script = (DEPLOY / "verify-lifecycle.sh").read_text()
+        lines = script.splitlines()
+        at = [i for i, line in enumerate(lines) if "show as the operator answers" in line]
+        self.assertEqual(len(at), 1, at)
+        self.assertTrue(lines[at[0] - 1].strip().startswith("said="), lines[at[0] - 1])
+        self.check = "\n".join(line.strip() for line in lines[at[0] - 1:at[0] + 1])
+        self.functions = lifecycle_functions(script, "fail", "pass", "expect_eq", "json_at")
+
+    def run_check(self, kind):
+        self.admin.write_text(f"#!/bin/sh\nprintf '%s\\n' '{{\"kind\":\"{kind}\"}}'\nexit 1\n")
+        self.admin.chmod(0o755)
+        program = ("set -euo pipefail\n" + 'STEP_LABEL="step 9 (test)"; A=m1; ADMIN_BASE=/nonexistent\n'
+                   + f"ADMIN={shlex.quote(str(self.admin))}\n"
+                   + self.functions + self.check + "\necho CHECKED\n")
+        env = {**os.environ}
+        env.pop("BASH_ENV", None)
+        return subprocess.run(["bash", "-c", program], env=env, text=True,
+                              capture_output=True, timeout=20)
+
+    def test_unauthorized_passes(self):
+        result = self.run_check("unauthorized")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("CHECKED", result.stdout)
+
+    def test_no_such_agent_fails(self):
+        result = self.run_check("no_such_agent")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("show as the operator answers", result.stderr)
+
+
 class LifecycleNearMissTests(unittest.TestCase):
     """**verify-lifecycle.sh's near misses put back what they changed**, the
     exit trap included, whatever admin answers: a near miss is run alone on a
