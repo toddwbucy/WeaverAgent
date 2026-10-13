@@ -3641,7 +3641,7 @@ class RoundOneOf79Tests(unittest.TestCase):
         again = archive.index("\n  query_runs\n")
         restore = archive.index('mv -T -- "${entry%%|*}" "${entry##*|}"')
         refusal = archive.index('die "agents run or cannot be read')
-        first_write = archive.index('as_op mkdir -p "$DEST"')
+        first_write = archive.index('as_op sh -c \'umask 077 && mkdir -p "$1"\' _ "$DEST"')
         self.assertLess(door, again)
         self.assertLess(again, restore)
         self.assertLess(restore, refusal)
