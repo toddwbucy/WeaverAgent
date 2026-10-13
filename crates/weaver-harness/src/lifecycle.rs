@@ -181,9 +181,9 @@ fn render_close_with_finish(
 /// declaration here would be one fact in two places, per
 /// `weaver-types-Spec` section 4's rule for the record.
 ///
-/// Best-effort. A refusal that could not be recorded is a defect in the
-/// author rather than in the ask, and the answer to admin is already
-/// travelling.
+/// A refusal that could not be recorded is latched on the record (#116), and
+/// the answer to admin that follows reads the latch and ends service rather
+/// than announcing over the missing refusal.
 fn author_lifecycle_refusal(run: &mut Run, refusal: &LifecycleRefusal) {
     author_refusal_on(run, weaver_types::LifecycleAsk::Enter, refusal);
 }
@@ -200,6 +200,8 @@ fn author_refusal_on(run: &mut Run, asked: weaver_types::LifecycleAsk, refusal: 
     let Some(payload) = weaver_trace::raw_payload(&rendered) else {
         return;
     };
+    // Latched on a failure (#116): an answer to admin reads the latch first, and the
+    // leave's seal refuses on it.
     let _ = run.author.author(
         &mut run.recorder,
         Kind::Refusal,
@@ -581,6 +583,12 @@ impl Harness {
         // one-exchange-in-flight rule now that no fleet map does.
         let mut pending: Option<OrganChannel> = None;
         loop {
+            // **No wait over a record that failed** (#116): a wake that
+            // authored and announced nothing is still not served past.
+            if let Err(fault) = self.record_holds() {
+                self.unwind_if_entered(weaver_types::FaultCase::StreamWriteFailed, &fault);
+                return Err(fault);
+            }
             match self.wait(pending.as_ref()) {
                 Ok(Wake::Listener) => match self.coordination.accept_root() {
                     Ok(connection) => pending = Some(connection),
@@ -890,11 +898,12 @@ impl Harness {
             // arrives.
             weaver_types::Payload::Fault(report) => {
                 if let ChannelState::Entered(run) = &mut self.state {
+                    // Latched on a failure (#116), and read just below.
                     let _ =
                         run.author
                             .author_fault(&mut run.recorder, Subsystem::Gate, None, &report);
                 }
-                Ok(())
+                self.record_holds()
             }
             // Nothing else is the gate's to open on this seam.
             _ => Err(ChannelFault::Undecodable),
@@ -967,6 +976,7 @@ impl Harness {
                         "{{\"organ\":\"harness\",\"undecodable-message-records\":{}}}",
                         prompt.undecodable
                     );
+                    // Latched on a failure (#116), read before the dialer is answered.
                     let _ = run.author.author_fault(
                         &mut run.recorder,
                         Subsystem::Harness,
@@ -1151,6 +1161,12 @@ impl Harness {
                 }
             }
         };
+        // **The latch is read before the dialer is answered** (#116): a turn
+        // whose record is missing an event, its close landed or not, is not
+        // announced, and service ends instead.
+        if run.recorder.failed() {
+            return Err(ChannelFault::Closed);
+        }
         let Some(gate) = run.gate.as_ref() else {
             return Ok(());
         };
@@ -1257,6 +1273,8 @@ impl Harness {
                         return Ok(());
                     };
                     let turn = run.turn_in_flight.clone();
+                    // Latched on a failure (#116), read before the next dialer is
+                    // answered and at the next wake.
                     let _ = run.author.author_fault(
                         &mut run.recorder,
                         Subsystem::Gate,
@@ -1658,6 +1676,8 @@ impl Harness {
                 account["last_word"] = serde_json::Value::Object(words);
             }
             let account = account.to_string();
+            // Best-effort: service is already ending here, so a failure has nothing left
+            // to end.
             let _ = run.author.author_fault(
                 &mut run.recorder,
                 Subsystem::Harness,
@@ -1666,6 +1686,7 @@ impl Harness {
             );
             // The worker unwinds itself, so no leave asked and the unload
             // carries no cause.
+            // No admin waits on an unwind, so its refusal has no one to reach.
             let _ = leave(&mut run, None, false);
         }
     }
@@ -1842,6 +1863,8 @@ impl Harness {
                 // TurnAborted.
                 let answer = match run.turn_in_flight.take() {
                     Some(turn) => {
+                        // Latched on a failure (#116): the answer below reads the latch
+                        // before `TurnAborted` is announced.
                         let _ = run.author.author(
                             &mut run.recorder,
                             Kind::TurnClosed,
@@ -2610,6 +2633,7 @@ impl Harness {
                         prompt.undecodable
                     );
                     let turn = run.turn_in_flight.clone();
+                    // Latched on a failure (#116), read at the serve loop's next wake.
                     let _ = run.author.author_fault(
                         &mut run.recorder,
                         Subsystem::Harness,
@@ -2655,12 +2679,27 @@ impl Harness {
     /// The answer goes to the connection the directive arrived on, not to a
     /// channel this crate holds: the listener is what it holds, and each verb
     /// brings its own connection.
+    /// **The record holds, or service ends** (#116; `weaver-harness-Spec`
+    /// section 4): the latch of a failed authoring on the standing run's
+    /// record, read before any answer is announced and at every wake, so the
+    /// run never answers or serves on over a record it is missing. It ends
+    /// service as an organ death the record cannot hold does (62aa181),
+    /// tearing nothing down here.
+    pub(crate) fn record_holds(&self) -> Result<(), ChannelFault> {
+        match &self.state {
+            ChannelState::Entered(run) if run.recorder.failed() => Err(ChannelFault::Closed),
+            _ => Ok(()),
+        }
+    }
+
+    /// An answer to admin, announced only over a record that holds.
     fn answer(
         &mut self,
         connection: &OrganChannel,
         exchange: &ExchangeId,
         answer: LifecycleAnswer,
     ) -> Result<(), ChannelFault> {
+        self.record_holds()?;
         deliver(
             connection,
             &OrganEnvelope {
@@ -2671,12 +2710,14 @@ impl Harness {
         )
     }
 
+    /// A refusal to admin, announced only over a record that holds.
     fn refuse(
         &mut self,
         connection: &OrganChannel,
         exchange: &ExchangeId,
         refusal: LifecycleRefusal,
     ) -> Result<(), ChannelFault> {
+        self.record_holds()?;
         deliver(
             connection,
             &OrganEnvelope {
@@ -2841,6 +2882,8 @@ fn lower_exchange(
                 );
             }
             weaver_types::Payload::Fault(report) => {
+                // Latched on a failure (#116), read at the leave's seal, which refuses
+                // `DescriptorsUnusable`.
                 let _ = run
                     .author
                     .author_fault(&mut run.recorder, Subsystem::Gate, None, &report);
@@ -2955,6 +2998,8 @@ fn leave_after(
             "at": "the leave's shared deadline",
         })
         .to_string();
+        // Latched on a failure (#116), read at the leave's seal, which refuses
+        // `DescriptorsUnusable`.
         let _ = run.author.author_fault(
             &mut run.recorder,
             Subsystem::Harness,
@@ -2973,6 +3018,8 @@ fn leave_after(
             forced_by: forced_by.map(crate::engine::trace_cause),
             release: Some(weaver_trace::Release { spu, member }),
         }));
+        // Latched on a failure (#116), read at the leave's seal, which refuses
+        // `DescriptorsUnusable`.
         let _ = run.author.author(
             &mut run.recorder,
             Kind::Unload,
@@ -3013,6 +3060,12 @@ fn leave_after(
     };
     if let Some(refusal) = first_refusal {
         return Err(refusal);
+    }
+    // **A record missing an event is not answered `Left` either** (#116): the
+    // drain sees a writer that failed, and the latch also sees a submission
+    // refused on its own, the writer sound.
+    if run.recorder.failed() {
+        return Err(LifecycleRefusal::DescriptorsUnusable);
     }
     // The stream did not close cleanly, which is a fault the operator learns
     // from the refusal rather than from a silence.
@@ -3067,6 +3120,8 @@ fn release_spu(
                     "death": "its channel was lost in the release",
                 })
                 .to_string();
+                // Latched on a failure (#116), read at the leave's seal, which refuses
+                // `DescriptorsUnusable`.
                 let _ = run.author.author_fault(
                     &mut run.recorder,
                     Subsystem::Harness,
@@ -3196,6 +3251,8 @@ fn drain_gate(
         match held.payload {
             weaver_types::Payload::Frame(_) => refuse(run, held.exchange),
             weaver_types::Payload::Fault(report) => {
+                // Latched on a failure (#116), read at the leave's seal, which refuses
+                // `DescriptorsUnusable`.
                 let _ = run
                     .author
                     .author_fault(&mut run.recorder, Subsystem::Gate, None, &report);
@@ -3266,6 +3323,8 @@ fn drain_gate(
         match envelope.payload {
             weaver_types::Payload::Frame(_) => refuse(run, envelope.exchange),
             weaver_types::Payload::Fault(report) => {
+                // Latched on a failure (#116), read at the leave's seal, which refuses
+                // `DescriptorsUnusable`.
                 let _ = run
                     .author
                     .author_fault(&mut run.recorder, Subsystem::Gate, None, &report);
@@ -3415,6 +3474,8 @@ fn author_gate_death(run: &mut Run, last_word: Option<String>, death: &str) {
         account["last_word"] =
             serde_json::from_str(&line).unwrap_or(serde_json::Value::String(line));
     }
+    // Latched on a failure (#116), read at the leave's seal, which refuses
+    // `DescriptorsUnusable`.
     let _ = run.author.author_fault(
         &mut run.recorder,
         Subsystem::Harness,
@@ -3896,6 +3957,7 @@ fn record_enter_ask(
             "miss": "recall-unrecorded",
             "failure": format!("{failure:?}"),
         });
+        // Latched on a failure (#116): the answer to admin reads the latch first.
         let _ = author.author_fault(
             recorder,
             Subsystem::Harness,

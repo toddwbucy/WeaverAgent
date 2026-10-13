@@ -205,6 +205,8 @@ pub(crate) fn drive(
                     // close's own rule: the record channel is the sink and may
                     // still hold what the decode channel lost.
                     Err(TurnError::ChannelLost) => {
+                        // Best-effort: service is ending on the loss below,
+                        // and a close that does not land changes nothing.
                         let _ = seat.replay_turn_stopped(&turn, weaver_trace::StopReason::Fault);
                         return Err(TurnError::ChannelLost);
                     }
@@ -218,7 +220,11 @@ pub(crate) fn drive(
                             TurnError::Refused { .. } => weaver_trace::StopReason::Refused,
                             _ => weaver_trace::StopReason::Fault,
                         };
-                        let _ = seat.replay_turn_stopped(&turn, reason);
+                        // **The close holds or service ends** (#116): the
+                        // run stands for the operator's leave only over a
+                        // record that took the close.
+                        seat.replay_turn_stopped(&turn, reason)
+                            .map_err(|_| TurnError::ChannelLost)?;
                         return Ok(());
                     }
                 };
