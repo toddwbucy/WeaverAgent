@@ -3181,6 +3181,32 @@ fn stopped_invocation(crossing: bool, call_count: usize) {
 /// for never arrives.
 #[test]
 fn a_stop_dialed_mid_stream_cancels_the_turn() {
+    stop_dialed_mid_stream(false, false);
+}
+
+/// **A stop's answer is not announced over a record missing an event**
+/// (#116): the record is latched by a submission refused on its own (an
+/// event bound to another session, `RefusedOnSubmit`), the writer sound,
+/// so the turn runs and its close lands, and the close path reads the
+/// latch before the stop is answered: no answer reaches the dialer.
+/// Perturbation: drop the latch read from `close_turn`'s announcement and
+/// `TurnAborted` is answered.
+#[test]
+fn a_stop_is_not_answered_over_a_latched_record() {
+    stop_dialed_mid_stream(true, false);
+}
+
+/// **The same on a turn that fails after the stop** (#116, the failed
+/// close's announcement): the seam refuses after the cancel, the turn's
+/// close lands stopped, and the latch is read before `AtRest` is answered.
+/// Perturbation: drop the latch read from the failed close's announcement
+/// in `bracketed`, and `AtRest` is answered.
+#[test]
+fn a_stop_on_a_failed_turn_is_not_answered_over_a_latched_record() {
+    stop_dialed_mid_stream(true, true);
+}
+
+fn stop_dialed_mid_stream(latched: bool, refuse: bool) {
     let (near, far) = socketpair(
         AddressFamily::Unix,
         SockType::SeqPacket,
@@ -3225,6 +3251,16 @@ fn a_stop_dialed_mid_stream_cancels_the_turn() {
             matches!(directive, weaver_types::TokenDirective::Cancel { .. }),
             "the stop cancels at the seam"
         );
+        if refuse {
+            let refusal = weaver_types::TokenRefusal::Overflow {
+                resident: 4091,
+                requested: 137,
+                capacity: 4096,
+            };
+            let bytes = serde_json::to_vec(&refusal).expect("the refusal renders");
+            send(far.as_raw_fd(), &bytes, MsgFlags::empty()).expect("send refusal");
+            return;
+        }
         let send_answer = |answer: &weaver_types::TokenAnswer| {
             let bytes = serde_json::to_vec(answer).expect("answer renders");
             send(far.as_raw_fd(), &bytes, MsgFlags::empty()).expect("send answer");
@@ -3284,6 +3320,28 @@ fn a_stop_dialed_mid_stream_cancels_the_turn() {
             }))),
         )
         .expect("load");
+    if latched {
+        let foreign = Author::new(
+            &SessionId("s-other".into()),
+            &weaver_types::RunId("r-1".into()),
+        );
+        let refused = foreign.author_fault(
+            &mut recorder,
+            Subsystem::Harness,
+            None,
+            &crate::authorship::harness_report(weaver_types::FaultCase::OrganDeathObserved, "{}"),
+        );
+        assert!(
+            matches!(
+                refused,
+                Err(crate::record::RecordFailure::Serving(
+                    weaver_trace::Failure::RefusedOnSubmit { .. }
+                ))
+            ),
+            "{refused:?}"
+        );
+        assert!(recorder.failed(), "the refusal is latched");
+    }
     let mut turn_ordinal = 0u64;
     let mut turn_in_flight: Option<weaver_types::TurnKey> = None;
     let mut slot = Some(verb_end);
@@ -3314,19 +3372,37 @@ fn a_stop_dialed_mid_stream_cancels_the_turn() {
                 text: "stop me".into(),
             }],
         }];
-        ports.turn(delta).expect("the aborted turn still returns")
+        ports.turn(delta)
     };
     peer.join().expect("the decode peer finishes");
 
-    assert!(outcome.aborted, "the directive aborted the turn");
-    assert_eq!(outcome.emission, "par", "the partial stands");
+    if refuse {
+        assert!(
+            matches!(outcome, Err(TurnError::Refused { .. })),
+            "the seam refused the turn: {outcome:?}"
+        );
+    } else {
+        let outcome = outcome.expect("the aborted turn still returns");
+        assert!(outcome.aborted, "the directive aborted the turn");
+        assert_eq!(outcome.emission, "par", "the partial stands");
+    }
 
-    // Announce after record: the answer carries the turn's fate.
-    match admin.recv().expect("the stop's answer").payload {
-        weaver_types::Payload::Answer(weaver_types::LifecycleAnswer::TurnAborted { turn }) => {
-            assert_eq!(turn.0, "t-1");
+    if latched {
+        use std::os::fd::AsFd;
+        let mut fds = [nix::poll::PollFd::new(
+            admin.as_fd(),
+            nix::poll::PollFlags::POLLIN,
+        )];
+        let ready = nix::poll::poll(&mut fds, nix::poll::PollTimeout::from(200u16)).expect("poll");
+        assert_eq!(ready, 0, "no answer is announced over a latched record");
+    } else {
+        // Announce after record: the answer carries the turn's fate.
+        match admin.recv().expect("the stop's answer").payload {
+            weaver_types::Payload::Answer(weaver_types::LifecycleAnswer::TurnAborted { turn }) => {
+                assert_eq!(turn.0, "t-1");
+            }
+            other => panic!("the stop answers the turn's fate, got {other:?}"),
         }
-        other => panic!("the stop answers the turn's fate, got {other:?}"),
     }
 
     // The close names the directive, the partial standing before it.
@@ -3338,10 +3414,17 @@ fn a_stop_dialed_mid_stream_cancels_the_turn() {
         .expect("the close authored")
         .line
         .to_string();
-    assert!(
-        close.contains(r#""close":"stopped""#) && close.contains(r#""reason":"directive""#),
-        "the close names the directive, not the fault: {close}"
-    );
+    if refuse {
+        assert!(
+            close.contains(r#""close":"stopped""#) && close.contains(r#""reason":"refused""#),
+            "the close names the refusal: {close}"
+        );
+    } else {
+        assert!(
+            close.contains(r#""close":"stopped""#) && close.contains(r#""reason":"directive""#),
+            "the close names the directive, not the fault: {close}"
+        );
+    }
 }
 
 /// **A column frame on the generate stream authors rather than kills.**
