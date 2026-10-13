@@ -692,7 +692,10 @@ step_2() {
   for k in declaration boundary cause; do
     expect_eq "the load event names its $k" present "$( [ "$(json_at "$load" "payload.$k")" != absent ] && echo present || echo absent)"
   done
-  RUN=$(json_at "$load" payload.run)
+  # The run is the envelope's, beside kind and sequence, never the payload's
+  # (weaver-trace-Spec section 3, the event: `Envelope` is flattened into the
+  # event's top level and `payload` holds only the kind's own fields).
+  RUN=$(json_at "$load" run)
   turn --system
   turn "Name three primary colours."
   local seq
@@ -775,7 +778,7 @@ step_4() {
   expect_eq "the load carries no reset" absent "$(json_at "$load" payload.reset)"
   expect_eq "the member answered the restore (a recall event)" yes \
     "$( [ -n "$(events_since "$start" recall)" ] && echo yes || echo no)"
-  RUN=$(json_at "$load" payload.run)
+  RUN=$(json_at "$load" run)
   turn "In one sentence, what were you asked to be?"
   end_step
 }
@@ -824,7 +827,7 @@ step_5() {
   load=$(last_event load)
   expect_eq "the lineage names the newest line" "$(manifest_field last 4)" "$(json_at "$load" payload.lineage.save_point)"
   expect_eq "the newest was not named at restore" false "$(json_at "$load" payload.lineage.named_at_restore)"
-  RUN=$(json_at "$load" payload.run)
+  RUN=$(json_at "$load" run)
   end_step
 }
 
@@ -846,7 +849,7 @@ step_6() {
   local load; load=$(last_event load)
   expect_eq "the load carries no reset" absent "$(json_at "$load" payload.reset)"
   expect_eq "the lineage is the new line" "$spf" "$(json_at "$load" payload.lineage.save_point)"
-  RUN=$(json_at "$load" payload.run)
+  RUN=$(json_at "$load" run)
   end_step
 }
 
@@ -876,7 +879,7 @@ step_6b() {
   expect_unloaded_alone
   expect_lay "$T" "root:$AU-state 710 directory"
   ask load; expect_state load idle
-  RUN=$(json_at "$(last_event load)" payload.run)
+  RUN=$(json_at "$(last_event load)" run)
   end_step
 }
 
@@ -934,7 +937,7 @@ step_7() {
   expect_eq "the lineage is the manifest's latest" "$(manifest_field last 4)" "$(json_at "$load" payload.lineage.save_point)"
   expect_eq "every new manifest line arrived recovered" "" \
     "$(manifest | tail -n +"$((lines + 1))" | awk '$2 != "recovered"')"
-  RUN=$(json_at "$load" payload.run)
+  RUN=$(json_at "$load" run)
   end_step
 }
 

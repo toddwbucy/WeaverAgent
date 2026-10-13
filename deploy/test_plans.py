@@ -3002,6 +3002,48 @@ class LifecycleOperatorShowTests(unittest.TestCase):
         self.assertIn("show as the operator answers", result.stderr)
 
 
+class LifecycleEnvelopeFieldTests(unittest.TestCase):
+    """**verify-lifecycle.sh reads an envelope field from the envelope** (the
+    full run of 2026-10-13, stopped in step 2): weaver-trace-Spec section 3
+    flattens `Envelope` into the event's top level, so `run`, `session` and
+    the rest stand beside `payload`, never inside it. `json_at` answers
+    `absent` for a missing path, so a read of `payload.run` handed the run
+    marker's check the string `absent`. The envelope's fields are read from
+    the Spec's `Envelope` struct, every `json_at` line of the script is
+    checked for one of them under `payload.`, and the first load's read of
+    the run is lifted and run against an event of that shape. Perturbation:
+    put `payload.run` back at the six `RUN=` lines and the static pin names
+    them and the lifted read answers `absent`."""
+
+    def setUp(self):
+        self.script = (DEPLOY / "verify-lifecycle.sh").read_text()
+        spec = (DEPLOY.parent / "docs/crates/weaver-harness/weaver-trace/weaver-trace-Spec.md").read_text()
+        body = re.search(r"pub struct Envelope \{(.*?)\n\}", spec, re.S)
+        self.assertIsNotNone(body, "the Spec's Envelope struct")
+        self.fields = re.findall(r"pub (\w+):", body.group(1))
+        self.assertIn("run", self.fields)
+        self.assertIn("monotonic_ns", self.fields)
+
+    def test_no_json_at_reads_an_envelope_field_under_payload(self):
+        under = re.compile(r"\bpayload\.(" + "|".join(self.fields) + r")\b")
+        found = [f"{n}: {line.strip()}" for n, line in enumerate(self.script.splitlines(), 1)
+                 if "json_at" in line and under.search(line)]
+        self.assertEqual(found, [], "an envelope field read under payload")
+
+    def test_the_first_loads_run_is_read_from_the_envelope(self):
+        lines = [line.strip() for line in self.script.splitlines()
+                 if line.strip().startswith('RUN=$(json_at "$load"')]
+        self.assertTrue(lines, "the RUN reads")
+        event = json.dumps({"kind": "load", "run": "r-envelope", "sequence": 0, "session": "s-1",
+                            "subsystem": "admin", "wall_ms": 1, "monotonic_ns": 1,
+                            "payload": {"boundary": "b", "cause": {"uid": 0}, "declaration": "d"}})
+        program = (lifecycle_functions(self.script, "json_at")
+                   + f"load={shlex.quote(event)}\n" + lines[0] + '\nprintf "%s\\n" "$RUN"\n')
+        result = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "r-envelope")
+
+
 class LifecycleNearMissTests(unittest.TestCase):
     """**verify-lifecycle.sh's near misses put back what they changed**, the
     exit trap included, whatever admin answers: a near miss is run alone on a
