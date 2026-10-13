@@ -564,21 +564,9 @@ impl<'a> Ports<'a> {
         turn: Option<&TurnKey>,
     ) {
         let record = weaver_types::RefusalRecord::Decode { asked, refusal };
-        let Some(payload) = serde_json::to_string(&record)
-            .ok()
-            .and_then(|rendered| weaver_trace::raw_payload(&rendered))
-        else {
-            self.recorder.latch_unrendered();
-            return;
-        };
-        // Latched on a failure (#116), read where the turn or the wake answers.
-        let _ = self.author.author(
-            self.recorder,
-            Kind::Refusal,
-            Subsystem::Harness,
-            turn,
-            Some(Payload::Refusal(payload)),
-        );
+        // Latched on a failure, a render's included (#116), read where the
+        // turn or the wake answers.
+        let _ = self.author.author_refusal(self.recorder, turn, &record);
     }
 
     /// The elision ask, per `weaver-harness-Spec` section 6 and
@@ -886,21 +874,11 @@ impl<'a> Ports<'a> {
             // the contract, and the record's fault event carries it by
             // the fault custody rule.
             Ok(crate::channel::ClassifyReply::Answer(weaver_types::LabelAnswer::Fault(report))) => {
-                let Some(payload) = serde_json::to_string(&report)
-                    .ok()
-                    .and_then(|rendered| weaver_trace::raw_payload(&rendered))
-                else {
-                    self.recorder.latch_unrendered();
-                    return None;
-                };
-                // Latched on a failure (#116), read before the dialer is answered.
-                let _ = self.author.author(
-                    self.recorder,
-                    Kind::Fault,
-                    Subsystem::Spu,
-                    None,
-                    Some(Payload::Fault(payload)),
-                );
+                // Latched on a failure, a render's included (#116), read before
+                // the dialer is answered.
+                let _ = self
+                    .author
+                    .author_fault(self.recorder, Subsystem::Spu, None, &report);
                 None
             }
             Ok(crate::channel::ClassifyReply::Refusal(refusal)) => {
@@ -932,21 +910,9 @@ impl<'a> Ports<'a> {
     /// never fabricated into an answer.
     fn author_classify_refusal(&mut self, refusal: weaver_types::LabelRefusal) {
         let record = weaver_types::RefusalRecord::Classify { refusal };
-        let Some(payload) = serde_json::to_string(&record)
-            .ok()
-            .and_then(|rendered| weaver_trace::raw_payload(&rendered))
-        else {
-            self.recorder.latch_unrendered();
-            return;
-        };
-        // Latched on a failure (#116), read before the dialer is answered.
-        let _ = self.author.author(
-            self.recorder,
-            Kind::Refusal,
-            Subsystem::Harness,
-            None,
-            Some(Payload::Refusal(payload)),
-        );
+        // Latched on a failure, a render's included (#116), read where the
+        // turn or the wake answers.
+        let _ = self.author.author_refusal(self.recorder, None, &record);
     }
 
     /// The label leg was lost mid-exchange, which is not a refusal.

@@ -3224,6 +3224,11 @@ fn stop_dialed_mid_stream(latched: bool) {
         })
         .expect("the stop sends");
 
+    // **The peer holds its end until the turn has returned**, so a turn
+    // that ends here ends on the latch and not on the decode channel's
+    // hang-up; released, or past two seconds, it answers as the unlatched
+    // run's peer does.
+    let (release, released) = std::sync::mpsc::channel::<()>();
     let peer = std::thread::spawn(move || {
         let mut buf = vec![0u8; 65536];
         let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("recv append");
@@ -3233,18 +3238,12 @@ fn stop_dialed_mid_stream(latched: bool) {
             directive,
             weaver_types::TokenDirective::AppendAndGenerate { .. }
         ));
-        if latched {
-            use std::os::fd::AsFd;
-            // The turn ends on the latch at the stop's wake, before any
-            // cancel: nothing more crosses, and the peer waits a while for
-            // a cancel the perturbation would send.
-            let mut fds = [nix::poll::PollFd::new(
-                far.as_fd(),
-                nix::poll::PollFlags::POLLIN,
-            )];
-            if nix::poll::poll(&mut fds, nix::poll::PollTimeout::from(500u16)).expect("poll") == 0 {
-                return;
-            }
+        if latched
+            && released
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .is_ok()
+        {
+            return;
         }
         // The cancel arrives because the wait heard the stop.
         let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("recv cancel");
@@ -3367,6 +3366,7 @@ fn stop_dialed_mid_stream(latched: bool) {
         }];
         ports.turn(delta)
     };
+    let _ = release.send(());
     peer.join().expect("the decode peer finishes");
 
     if latched {

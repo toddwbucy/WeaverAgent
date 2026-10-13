@@ -194,22 +194,9 @@ fn author_refusal_on(run: &mut Run, asked: weaver_types::LifecycleAsk, refusal: 
         asked,
         refusal: refusal.clone(),
     };
-    let Some(payload) = serde_json::to_string(&record)
-        .ok()
-        .and_then(|rendered| weaver_trace::raw_payload(&rendered))
-    else {
-        run.recorder.latch_unrendered();
-        return;
-    };
-    // Latched on a failure (#116): an answer to admin reads the latch first, and the
-    // leave's seal refuses on it.
-    let _ = run.author.author(
-        &mut run.recorder,
-        Kind::Refusal,
-        Subsystem::Harness,
-        None,
-        Some(weaver_trace::Payload::Refusal(payload)),
-    );
+    // Latched on a failure, a render's included (#116): an answer to admin
+    // reads the latch first, and the leave's seal refuses on it.
+    let _ = run.author.author_refusal(&mut run.recorder, None, &record);
 }
 
 /// **A reset's reason as the record writes it: the wire's own spelling**
@@ -1513,7 +1500,10 @@ impl Harness {
             && let ChannelState::Entered(run) = &mut self.state
         {
             drain_gate(run, &self.coordination, held.as_mut().expect("the leave"));
-            if !forced_now(&held) {
+            // **No wind-down over a latched record** (#116): its turn would
+            // run a generation past a record already missing an event; the
+            // leave goes on to its seal, which refuses.
+            if !forced_now(&held) && !run.recorder.failed() {
                 self.wind_down(&mut held)?;
             }
         }
@@ -2641,6 +2631,8 @@ impl Harness {
             // has not taken the interior back yet, so there is no standing
             // interior to hand across.
             ChannelState::Entered(run) if run.turn_in_flight.is_some() => None,
+            // **No seat over a latched record** (#116).
+            ChannelState::Entered(run) if run.recorder.failed() => None,
             ChannelState::Entered(run) => {
                 // **A diagnostic run grants no seat here.** Its record holds
                 // no working structure and no frame ever arrives to assemble
@@ -3585,9 +3577,8 @@ fn hear_dials(
 /// answers `InTransition`; any other directive is `OutOfOrder`, a `Leave`
 /// meeting a pending leave included (`weaver-harness-Spec` section 6).
 ///
-/// **Over a latched record (#116) nothing is answered**: a join still joins,
-/// to be refused with the leave's held callers, and any other dial is
-/// dropped unanswered, admin concluding as for no answer.
+/// **Over a latched record (#116) nothing is answered**: every dial, a join
+/// included, is dropped unanswered, admin concluding as for no answer.
 fn hear_dial(
     connection: OrganChannel,
     leave: &mut crate::engine::PendingLeave,
@@ -3605,6 +3596,10 @@ fn hear_dial(
     let Ok(envelope) = connection.recv() else {
         return;
     };
+    // Read before a join too, which `join` may refuse on its own.
+    if latched {
+        return;
+    }
     let answer = match envelope.payload {
         weaver_types::Payload::Directive(LifecycleDirective::JoinLeave { cause }) => {
             leave.join(connection, envelope.exchange, cause, fixed);
@@ -3620,9 +3615,6 @@ fn hear_dial(
         }
         _ => return,
     };
-    if latched {
-        return;
-    }
     let _ = deliver(
         &connection,
         &OrganEnvelope {

@@ -7960,3 +7960,68 @@ fn an_unwind_over_a_latched_record_names_stream_write_failed() {
         .expect("the unwind's fault");
     assert!(fault.contains("stream_write_failed"), "{fault}");
 }
+
+/// **A join heard in a leave is not answered over a latched record**
+/// (#116, `hear_dial`): `join` refuses a join into a forced leave on its
+/// own, so the latch is read before the join. Perturbation: read it after,
+/// and `OutOfOrder` is answered.
+#[test]
+fn a_join_heard_in_a_leave_is_not_answered_over_a_latched_record() {
+    use crate::lifecycle_table::Leave;
+    let (mut leave, _admin) = pending_leave(Leave::Forced, Leave::Forced, false);
+    let (join, far) = dialed(LifecycleDirective::JoinLeave {
+        cause: weaver_types::Cause { uid: 9 },
+    });
+    hear_dial(join, &mut leave, false, true);
+    assert!(!arrives(&far), "nothing is answered");
+}
+
+/// **A gate's report that will not render is latched, and ends service**
+/// (#116, `author_fault`): an account the gate sent with a newline inside
+/// it parses, and the record's canonical line refuses it. Perturbation:
+/// return the render's failure without latching it, and the run serves on
+/// without the report.
+#[test]
+fn a_gate_report_that_will_not_render_ends_service() {
+    let (mut run, _spare, _sink) = entered_run(None);
+    let (channel, gate_peer) = OrganChannel::pair().expect("pair");
+    run.gate = Some(GateChannel {
+        channel,
+        pid: nix::unistd::Pid::from_raw(i32::MAX),
+        last_word: crate::spawn::LastWord::quiet(),
+    });
+    let gate_peer = gate_peer.into_channel();
+    let report = weaver_types::FaultReport {
+        case: weaver_types::FaultCase::ClientConnectionFailedMidTurn,
+        account: serde_json::value::RawValue::from_string("{\"x\":\n1}".into())
+            .expect("an account that parses"),
+    };
+    gate_peer
+        .send(&OrganEnvelope {
+            exchange: ExchangeId {
+                opener: Opener::Gate,
+                ordinal: 1,
+            },
+            position: Position::Open,
+            payload: weaver_types::Payload::Fault(report),
+        })
+        .expect("the report sends");
+    let (mut harness, _dir) = harness_entered(run);
+    let served = harness.serve_gate_wake(
+        "identity",
+        &[],
+        &mut |_: &mut crate::engine::Ports<'_>, _: &str| unreachable!("no frame"),
+        &mut None,
+    );
+    assert!(served.is_err(), "service ends: {served:?}");
+}
+
+/// **No seat is granted over a latched record** (#116, `grant_seat`).
+/// Perturbation: drop the arm, and the seat is granted.
+#[test]
+fn no_seat_is_granted_over_a_latched_record() {
+    let (mut run, _spare, _sink) = entered_run(None);
+    latch_by_refusal(&mut run);
+    let (mut harness, _dir) = harness_entered(run);
+    assert!(harness.grant_seat("identity", &[]).is_none());
+}

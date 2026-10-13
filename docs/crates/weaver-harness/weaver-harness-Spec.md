@@ -1621,15 +1621,20 @@ The latch is read before anything is announced and wherever the run would serve 
 - before every answer and refusal to admin, at rest and at a directive's wake
   mid-turn (the turn then ends on the loss, its one close authored);
 - before a stop's answer after a turn's close;
-- before a frame's close is sent to its dialer, and before a held frame is served;
+- before a frame's close is sent to its dialer, before a held frame is served, and
+  before a seat is granted;
 - at the end of a gate fault's wake, and before the serve loop waits again;
-- in a leave, where a dial heard is dropped unanswered, the drain's refused closes
-  are sent only over a record that holds, and every held caller is refused
-  `DescriptorsUnusable` and answered no `Left`.
+- in a leave: a dial heard is dropped unanswered, a join included; the drain's
+  refused closes are sent only over a record that holds; no wind-down runs; and
+  at the seal every held caller is refused `DescriptorsUnusable`, answered no
+  `Left`.
 
-A latched record ends service as an organ death the record cannot hold does: the leave
-unwinds the run, and the unwind names `StreamWriteFailed`. A refusal on submit is this
-crate's authoring defect, and an outage naming a malformed payload is the rule working.
+**Two ways a latched record ends service.** Met at a reader outside a leave's seal, it
+ends service as an organ death the record cannot hold does. The run is unwound, the
+unwind's fault names `StreamWriteFailed`, and a leave held at that moment, with its
+joins, is dropped unanswered, admin concluding as for no answer. Met at the seal, the
+leave's own refusal ends the run. A refusal on submit is this crate's authoring
+defect, and an outage naming a malformed payload is the rule working.
 
 ## 5. Prompt assembly's deterministic floor
 
