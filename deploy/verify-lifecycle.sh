@@ -504,7 +504,11 @@ on_exit() {
     printf '\n   %s is left as it stands. Look, then take it down with:\n' "$A" >&2
     printf '   deploy/verify-lifecycle.sh --agent %s --cleanup --archive <dir> --apply\n' "$A" >&2
   fi
-  [ -z "$LOGDIR" ] || printf '   full outputs are under %s\n' "$LOGDIR" >&2
+  # An invocation that wrote no output (`--cleanup` runs step 9 alone, which
+  # writes none) leaves no empty directory and names none.
+  if [ -n "$LOGDIR" ] && ! rmdir -- "$LOGDIR" 2>/dev/null; then
+    printf '   full outputs are under %s\n' "$LOGDIR" >&2
+  fi
 }
 trap on_exit EXIT
 trap 'exit 130' INT TERM HUP
@@ -672,7 +676,7 @@ step_2() {
   sed 's/^/     /' "$out"
   expect_eq "verify-load.sh --keep exits 0" 0 "$rc"
   expect_eq "verify-load validates" yes "$(grep -qF 'validate    {"kind":"validated"}' "$out" && echo yes || echo no)"
-  local loaded; loaded=$(sed -n 's/^   load        //p' "$out" | head -n 1)
+  local loaded; loaded=$(sed -n '/^   load        /{s///p;q}' "$out")
   ANSWER=$loaded; expect_state "verify-load's load" idle
   local n; n=$(sed -n 's/^   events      \([0-9]*\) new lines$/\1/p' "$out")
   expect_eq "the load wrote events" yes "$( [ -n "$n" ] && [ "$n" -gt 0 ] && echo yes || echo no)"
@@ -1003,6 +1007,15 @@ step_8b() {
 ARCHIVE_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 TERRITORY_TAR="${ARCHIVE%/}/$AU-territory-$ARCHIVE_STAMP.tar"
 ROOT_TAR="${ARCHIVE%/}/$AU-root-$ARCHIVE_STAMP.tar"
+# **archive_reads_back TAR: the archive lists at least one entry**, its
+# whole listing read into a variable. A pipe into `grep -q .` stopped at the
+# first entry and closed the pipe, tar died on the next write, and
+# `pipefail` made that the pipeline's status, so every archive "did not read
+# back" (the first live run, 2026-10-13).
+archive_reads_back() {
+  local listed
+  listed=$(sudo -n tar -tf "$1" 2>/dev/null) && [ -n "$listed" ]
+}
 # **unload_for_teardown**: the run ended before the take-down, by `unload`,
 # else `force-unload`.
 unload_for_teardown() {
@@ -1049,13 +1062,13 @@ step_9() {
     # Under umask 077, so the archive of the custodied territory is root's
     # 0600 and readable by no one the territory was closed to.
     sudo -n sh -c 'umask 077 && exec tar --acls --xattrs -C "$1" -cpf "$2" "$3"' sh "$AGENT_DIR" "$TERRITORY_TAR" "$AU"
-    expect_eq "the territory's archive reads back" yes "$(sudo -n tar -tf "$TERRITORY_TAR" 2>/dev/null | grep -q . && echo yes || echo no)"
+    expect_eq "the territory's archive reads back" yes "$(archive_reads_back "$TERRITORY_TAR" && echo yes || echo no)"
   else
     measured "no territory at $T to archive"
   fi
   if sudo -n test -d "$R"; then
     sudo -n sh -c 'umask 077 && exec tar -C "$1" -cpf "$2" "$3"' sh "$ADMIN_BASE" "$ROOT_TAR" "$A"
-    expect_eq "the root's archive reads back" yes "$(sudo -n tar -tf "$ROOT_TAR" 2>/dev/null | grep -q . && echo yes || echo no)"
+    expect_eq "the root's archive reads back" yes "$(archive_reads_back "$ROOT_TAR" && echo yes || echo no)"
   else
     measured "no root at $R to archive"
   fi
