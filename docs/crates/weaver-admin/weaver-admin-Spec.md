@@ -1493,9 +1493,13 @@ to: admin-sink-file-append-only
 ```
 
 **`Pipe { path }`.** Created with `mkfifo` at mode 0640 when the creation
-flag is set. Opened write-only with `O_NONBLOCK` and `O_CLOEXEC`, because a
-blocking open of a reader-less FIFO hangs the load, and the nonblocking form
-fails loudly instead. Verified: the open returns `ENXIO` when nothing holds
+flag is set and nothing, not even a link, stands at the name, and set `0640`
+through its descriptor so the umask does not decide the mode. Opened write-only
+with `O_NONBLOCK`, `O_CLOEXEC` and `O_NOFOLLOW`, because a blocking open of a
+reader-less FIFO hangs the load, and the nonblocking form fails loudly instead.
+**A link at the name, or anything not a FIFO, refuses `BoundaryUnverified`**
+(#98): a regular file there would hand the worker a write handle at offset 0
+over whatever it holds, the trace included. Verified: the open returns `ENXIO` when nothing holds
 the read end, which maps to `DescriptorsUnusable` and refuses the load with
 the truth, that the operator's tooling is not listening. On success the
 nonblocking flag is cleared, verified clearable, so the worker's writer sees
@@ -2309,6 +2313,15 @@ harness binds it as its first act, per `weaver-admin-harness-contract` section
 configuration places, with the close-on-exec flag asked for in the socket call
 itself and the connection closed when the verb answers.
 
+**The dial judges its peer** (#98). The socket's directory is the agent's, so a name
+replaced there could aim the verb at another agent's worker, or at any listener on the
+box. After the connect, this crate reads the listener's `SO_PEERCRED`, set when it
+listened, and requires its uid to be the agent's worker account, resolved by name as
+the start step resolves it. Any other uid refuses `WrongPeer` at once, with no retry.
+`show` then refuses `BoundaryUnverified`, a joining `force-unload` ends the run by the
+escalation, and every other verb refuses as for a dial that failed. The harness's
+check at its accept, root or refused, is the other direction of the same channel.
+
 **The dial retries within a bound because the bind is the worker's first act
 and the load's dial may arrive first.** The load's start step starts the worker and then
 dials, so the race is real and structural rather than incidental: the elected
@@ -2531,7 +2544,11 @@ before a line is written, so a FIFO planted at
 the name neither holds the verb nor takes a line. `worker.log` is opened and owned the
 same way, and the member's `state.log` in its own room is opened without following a
 link and judged a regular file, and set to root and the member's group, `0640`, so the
-member reads what it wrote. **The worker's own output is not
+member reads what it wrote. **Every log is judged on its descriptor for one link and
+its owner** (#98): `O_NOFOLLOW` refuses a symbolic link and not a hard one, so a log
+with a second link, or owned by any uid but this crate's or the owner it is set to,
+is refused. The member's refused log leaves the member standing with no log, the
+refusal named. **The worker's own output is not
 this log**: the start step points the worker's standard output and error at `worker.log`
 beside it, per section 6, because the worker holds that descriptor and an agent holding
 a writable handle to the boundary's record could write into it. What this Spec adds is
@@ -2937,7 +2954,11 @@ binary run as a non-root uid refuses before touching any agent, watched to fail
 when the root check is removed. The walk lost two mechanisms with the recut,
 the operator socket's predicate and the coordination directory's 0700, and it
 is stronger for the exchange: both were fences in front of a check that could
-not tell the worker from a tool, and what stands now is a check that can.
+not tell the worker from a tool, and what stands now is a check that can. **The walk's reverse, the agent aiming a verb elsewhere, is refused at the dial**
+(#98, section 7): the socket's name stands in the agent's directory, so this crate
+judges the listener's uid before a byte is sent. The test is a listener under another
+uid, refused `WrongPeer` without the dial's retries, watched to fail when the
+comparison is removed.
 
 **The second walk: the agent reaches the sink by path.** The adversary is
 the same tool surface, the attack a path traversal to the sink the config
