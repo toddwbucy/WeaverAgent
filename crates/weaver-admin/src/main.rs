@@ -475,10 +475,16 @@ fn stand_state_member(
         .args(member_vector(&territory, &inventory.binding))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null());
-    if let Ok(log) = log {
-        member.stderr(log);
-    } else {
-        member.stderr(std::process::Stdio::null());
+    match log {
+        Ok(log) => {
+            member.stderr(log);
+        }
+        // The member stands with no log rather than with one this crate
+        // could not vouch for (#98), and the refusal is named.
+        Err(refused) => {
+            diag!("weaver-admin: the member's state.log is not opened: {refused}");
+            member.stderr(std::process::Stdio::null());
+        }
     }
     // The member's end arrives at the fixed number `weaver-state` adopts, and
     // the run lock's description at 9. **Both sources are copied above 100
@@ -1019,13 +1025,43 @@ enum Observation {
     Silent,
 }
 
+/// **The coordination socket dialed, its peer judged the agent's worker**
+/// (#98; Spec section 7): the expected uid is the worker account's, resolved
+/// by name as the start step resolves it. An account that does not resolve
+/// stands no worker, and the dial is refused as one nothing could answer.
+fn dial_worker(config: &ServiceConfig) -> Result<channel::Coordination, channel::ChannelFault> {
+    let identity = format!("weaver-{}", config.agent);
+    let worker_uid = match nix::unistd::User::from_name(&identity).ok().flatten() {
+        Some(worker) => worker.uid.as_raw(),
+        // #118: a test-only hook, kept beside the production code it observes:
+        // the suite's stand-in workers listen under its own uid, no
+        // `weaver-<agent>` account standing on a test box.
+        #[cfg(test)]
+        None => nix::unistd::getuid().as_raw(),
+        #[cfg(not(test))]
+        None => {
+            diag!(
+                "weaver-admin: the worker account {identity} does not resolve, so the coordination socket is not dialed"
+            );
+            return Err(channel::ChannelFault::NotDialable);
+        }
+    };
+    channel::dial(&config.coordination_socket(), worker_uid)
+}
+
 /// **Observes the run through the harness's own word**, per Spec section 3
 /// and `weaver-admin-harness-contract` section 3, within the dial's bound and
 /// the observation's.
 fn observe(config: &ServiceConfig) -> Result<Observation, LifecycleRefusal> {
-    let mut coordination = match channel::dial(&config.coordination_socket()) {
+    let mut coordination = match dial_worker(config) {
         Ok(coordination) => coordination,
         Err(channel::ChannelFault::NoListener) => return Ok(Observation::NoListener),
+        // **A listener that is not the worker is no observation** (#98): its
+        // word is not taken, and the verb refuses rather than reading the
+        // run as silent.
+        Err(channel::ChannelFault::WrongPeer { .. }) => {
+            return Err(LifecycleRefusal::BoundaryUnverified);
+        }
         Err(_) => return Ok(Observation::Silent),
     };
     let ordinal = coordination.next_ordinal();
@@ -1260,7 +1296,7 @@ fn run_load(
     drop(relay_write);
     standing.run_lock = Some(run_lock);
 
-    let mut coordination = match channel::dial(&socket_path) {
+    let mut coordination = match dial_worker(config) {
         Ok(coordination) => coordination,
         Err(_) => return Err(refusal_from_worker(&mut worker)),
     };
@@ -1489,8 +1525,7 @@ fn save_point(
             return Err(LifecycleRefusal::OutOfOrder);
         }
     }
-    let mut coordination =
-        channel::dial(&config.coordination_socket()).map_err(|_| LifecycleRefusal::Unanswered)?;
+    let mut coordination = dial_worker(config).map_err(|_| LifecycleRefusal::Unanswered)?;
     let ordinal = coordination.next_ordinal();
     coordination
         .send_directive(
@@ -2069,10 +2104,15 @@ fn join_within(
         // dialed again inside it.
         let deadline = std::time::Instant::now() + bounds.leave;
         let mut coordination = loop {
-            match channel::dial(&config.coordination_socket()) {
+            match dial_worker(config) {
                 Ok(coordination) => break coordination,
                 Err(channel::ChannelFault::NoListener) => {
                     return wait_after_seal(config, bounds, run).map(Some);
+                }
+                // Not the worker: no join is directed through it, and the
+                // force ends the run by the escalation (#98).
+                Err(channel::ChannelFault::WrongPeer { .. }) => {
+                    return escalate_joined(config, bounds, run).map(Some);
                 }
                 Err(_) if std::time::Instant::now() < deadline => {}
                 Err(_) => return escalate_joined(config, bounds, run).map(Some),
@@ -2754,7 +2794,7 @@ fn direct_leave_within(
         LeaveDirected::Forced => (true, false),
         LeaveDirected::Rollback => (true, true),
     };
-    let Ok(mut coordination) = channel::dial(&config.coordination_socket()) else {
+    let Ok(mut coordination) = dial_worker(config) else {
         return Err(LeaveFault::Unanswered);
     };
     let ordinal = coordination.next_ordinal();
@@ -2784,8 +2824,7 @@ fn direct_leave_within(
 fn stop(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
     let _invocation =
         start::take_invocation_lock(&config.run_directory(), verb_table::HolderVerb::Stop)?;
-    let mut coordination =
-        channel::dial(&config.coordination_socket()).map_err(|_| LifecycleRefusal::NoResidency)?;
+    let mut coordination = dial_worker(config).map_err(|_| LifecycleRefusal::NoResidency)?;
     let ordinal = coordination.next_ordinal();
     coordination
         .send_directive(

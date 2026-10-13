@@ -49,8 +49,8 @@ pub struct OperationsLog {
 /// or the member's `state.log`, per Spec sections 6 and 8: created `0640`
 /// where absent, **never through a link at its name**, opened non-blocking so
 /// a FIFO planted at the name cannot hold the verb, and refused unless it is a
-/// regular file, close-on-exec at creation like every descriptor this crate
-/// holds. Where `owner` is given the file is set to that uid and gid and
+/// regular file with one link, owned by this crate's uid or `owner`'s (#98),
+/// close-on-exec at creation like every descriptor this crate holds. Where `owner` is given the file is set to that uid and gid and
 /// `0640` through the open descriptor, the operator's logs being the
 /// operator's to read.
 pub fn open_append(path: &Path, owner: Option<(u32, u32)>) -> std::io::Result<std::fs::File> {
@@ -70,8 +70,25 @@ pub fn open_append(path: &Path, owner: Option<(u32, u32)>) -> std::io::Result<st
     }
     // SAFETY: the number was just opened and is owned by nothing else.
     let file = std::fs::File::from(unsafe { OwnedFd::from_raw_fd(fd) });
-    if !file.metadata()?.file_type().is_file() {
+    let opened = file.metadata()?;
+    if !opened.file_type().is_file() {
         return Err(std::io::Error::other("a log is a regular file"));
+    }
+    // **One link, and owned by this crate or the owner asked for** (#98;
+    // Spec section 8), judged on the descriptor before a line is written or
+    // the descriptor handed on: `O_NOFOLLOW` refuses a symbolic link and not
+    // a hard one, so a log name hard-linked to another file (where the
+    // kernel's protected hard links are off) is refused here, as is a file
+    // another principal made at the name.
+    {
+        use std::os::unix::fs::MetadataExt;
+        log_standing(
+            opened.nlink(),
+            opened.uid(),
+            nix::unistd::geteuid().as_raw(),
+            owner.map(|(uid, _)| uid),
+        )
+        .map_err(std::io::Error::other)?;
     }
     // **And carries no access entry beyond its mode** (#99 area 2, H5;
     // #107): an entry granting the member read survives the 0640 set below,
@@ -105,6 +122,24 @@ pub fn open_append(path: &Path, owner: Option<(u32, u32)>) -> std::io::Result<st
         }
     }
     Ok(file)
+}
+
+/// **The opened log's standing** (#98): one link, and owned by `creator`,
+/// this crate's euid, which a file this open made carries, or by the owner
+/// asked for. Answers the refusal's words otherwise.
+fn log_standing(
+    links: u64,
+    uid: u32,
+    creator: u32,
+    owner: Option<u32>,
+) -> Result<(), &'static str> {
+    if links != 1 {
+        return Err("a log has exactly one link");
+    }
+    if uid != creator && owner != Some(uid) {
+        return Err("a log is owned by this crate's uid or the owner asked for");
+    }
+    Ok(())
 }
 
 impl OperationsLog {

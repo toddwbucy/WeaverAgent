@@ -11,8 +11,11 @@
 //! **The channel is dialed and never bound.** Any socket connecting to the
 //! harness is an internal connection, so the harness binds inside the agent's
 //! sandbox and this crate connects, per `weaver-admin-harness-contract`
-//! section 2. What refuses a stranger is the credential the harness reads at
-//! its accept, not anything here.
+//! section 2. What refuses a stranger dialing in is the credential the
+//! harness reads at its accept. **What refuses a stranger dialed is the
+//! credential this crate reads after its connect** (#98): the socket stands
+//! in a directory the agent owns, so the peer's uid must be the agent's
+//! worker account, or the name was replaced and the dial is refused.
 //!
 //! **The dial retries within a bound.** The load starts the unit and then
 //! dials, and the bind is the worker's first act, so the race is structural.
@@ -46,6 +49,15 @@ pub enum ChannelFault {
     NoListener,
     /// An answer did not arrive within its exchange's bound, per section 3.
     Unanswered,
+    /// **The peer is not this agent's worker** (#98; `weaver-admin-Spec`
+    /// section 7): the listener's uid, read by `SO_PEERCRED` after the
+    /// connect, is not the worker account's. The socket's directory is the
+    /// agent's, so a name replaced there could aim this invocation at
+    /// another agent's worker, or at any listener on the box. Refused at
+    /// once and never retried, a wrong peer being no transient absence.
+    WrongPeer {
+        uid: u32,
+    },
 }
 
 /// The connected end this invocation holds for the life of one verb.
@@ -79,14 +91,15 @@ const DIAL_INTERVAL: Duration = Duration::from_millis(10);
 /// verb arriving while another is in flight meets exactly that. The flag is
 /// cleared once connected, because everything after the dial, the enter
 /// directive and the answer it waits for, is blocking work.
-pub fn dial(socket_path: &Path) -> Result<Coordination, ChannelFault> {
+pub fn dial(socket_path: &Path, worker_uid: u32) -> Result<Coordination, ChannelFault> {
     let deadline = Instant::now() + DIAL_CEILING;
     loop {
-        match dial_once(socket_path) {
+        match dial_once(socket_path, worker_uid) {
             Ok(connection) => return Ok(connection),
             // Not a transient absence: the name itself is unusable, so the
             // ceiling would spend a second reaching the same answer.
             Err(ChannelFault::Undecodable) => return Err(ChannelFault::Undecodable),
+            Err(fault @ ChannelFault::WrongPeer { .. }) => return Err(fault),
             Err(fault) => {
                 // **The wait never outlives the deadline.** Sleeping a fixed
                 // interval would overshoot the bound by up to one interval,
@@ -102,7 +115,7 @@ pub fn dial(socket_path: &Path) -> Result<Coordination, ChannelFault> {
     }
 }
 
-fn dial_once(socket_path: &Path) -> Result<Coordination, ChannelFault> {
+fn dial_once(socket_path: &Path, worker_uid: u32) -> Result<Coordination, ChannelFault> {
     let fd = socket(
         AddressFamily::Unix,
         SockType::SeqPacket,
@@ -124,6 +137,18 @@ fn dial_once(socket_path: &Path) -> Result<Coordination, ChannelFault> {
             return Err(ChannelFault::NoListener);
         }
         Err(_) => return Err(ChannelFault::NotDialable),
+    }
+    // **The peer is judged before a byte is sent** (#98): a Unix socket's
+    // peer credential is the listener's, set when it listened, so it reads
+    // at once, accepted or still in the backlog.
+    let peer = nix::sys::socket::getsockopt(&fd, nix::sys::socket::sockopt::PeerCredentials)
+        .map_err(|_| ChannelFault::NotDialable)?;
+    if peer.uid() != worker_uid {
+        diag!(
+            "weaver-admin: the coordination socket's listener is uid {}, not the agent's worker (uid {worker_uid}), so it is not dialed",
+            peer.uid()
+        );
+        return Err(ChannelFault::WrongPeer { uid: peer.uid() });
     }
     clear_nonblocking(&fd)?;
     Ok(Coordination { fd, ordinal: 0 })

@@ -389,3 +389,61 @@ fn the_trace_owner_check_is_watched_inside_a_user_namespace() {
         "the owner check failed inside the namespace\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
 }
+
+/// **A pipe sink at a name that is a regular file refuses, the file
+/// untouched** (#98; the custody audit's G6): the open would otherwise hand
+/// the worker a write handle at offset 0 over the trace or any file the
+/// territory holds. Perturbation: drop the FIFO check, and the file opens.
+#[test]
+fn a_pipe_sink_at_a_regular_file_refuses() {
+    let dir = scratch("pipe-file");
+    let path = dir.join("trace.ndjson");
+    std::fs::write(&path, "the record\n").expect("a regular file");
+    for create in [true, false] {
+        let refused = open(
+            &TraceSink::Pipe {
+                path: path.clone(),
+                create,
+            },
+            &custody(),
+        );
+        assert!(
+            matches!(refused, Err(LifecycleRefusal::BoundaryUnverified)),
+            "create {create}: {refused:?}"
+        );
+    }
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "the record\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **A link at the pipe's name is refused, never followed** (#98): even a
+/// link to a FIFO with a reader. Perturbation: drop `O_NOFOLLOW`, and the
+/// link is followed and the FIFO opens.
+#[test]
+fn a_link_at_the_pipe_sink_refuses() {
+    let dir = scratch("pipe-link");
+    let fifo = dir.join("real.fifo");
+    let c_fifo = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).expect("path");
+    // SAFETY: mkfifo with a NUL-terminated path this frame owns.
+    assert_eq!(unsafe { nix::libc::mkfifo(c_fifo.as_ptr(), 0o640) }, 0);
+    // SAFETY: open with a path this frame owns.
+    let reader =
+        unsafe { nix::libc::open(c_fifo.as_ptr(), nix::libc::O_RDONLY | nix::libc::O_NONBLOCK) };
+    assert!(reader >= 0, "read end held");
+    let link = dir.join("trace.fifo");
+    std::os::unix::fs::symlink(&fifo, &link).expect("link");
+    let refused = open(
+        &TraceSink::Pipe {
+            path: link,
+            create: false,
+        },
+        &custody(),
+    );
+    assert!(
+        matches!(refused, Err(LifecycleRefusal::BoundaryUnverified)),
+        "{refused:?}"
+    );
+    // SAFETY: closing the raw read end this test opened.
+    unsafe { nix::libc::close(reader) };
+    let _ = std::fs::remove_dir_all(&dir);
+}

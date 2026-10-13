@@ -81,3 +81,48 @@ fn a_log_is_set_to_its_owner_and_0640() {
     assert_eq!((meta.uid(), meta.gid()), (uid, gid));
     let _ = std::fs::remove_file(&path);
 }
+
+/// **A log name hard-linked to another file is refused** (#98; the custody
+/// audit's G4): `O_NOFOLLOW` refuses a symbolic link and not a hard one, so
+/// the open judges the link count on its descriptor. A file with one link
+/// opens; the same file with a second link refuses, and nothing is written
+/// to it. Perturbation: drop the link count from `log_standing`, and the
+/// linked file opens.
+#[test]
+fn a_hard_linked_log_is_refused() {
+    let dir = std::env::temp_dir().join(format!(
+        "weaver-admin-log-link-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("trace.ndjson");
+    std::fs::write(&target, "kept\n").unwrap();
+    let log = dir.join("state.log");
+    std::fs::write(&log, "").unwrap();
+    assert!(open_append(&log, None).is_ok(), "one link opens");
+    std::fs::remove_file(&log).unwrap();
+    std::fs::hard_link(&target, &log).unwrap();
+    assert!(open_append(&log, None).is_err(), "a second link refuses");
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "kept\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **A log owned by another principal is refused** (#98): one this open
+/// made is the creator's, and one standing is the creator's or the owner's
+/// asked for. Judged as a function, since the suite's uid cannot make a file
+/// another uid owns. Perturbation: drop the owner comparison, and the
+/// stranger's file stands.
+#[test]
+fn a_log_owned_by_a_stranger_is_refused() {
+    assert_eq!(log_standing(1, 0, 0, None), Ok(()));
+    assert_eq!(log_standing(1, 0, 0, Some(0)), Ok(()));
+    assert_eq!(log_standing(1, 1000, 0, Some(1000)), Ok(()));
+    assert!(log_standing(1, 1234, 0, None).is_err(), "a stranger's file");
+    assert!(
+        log_standing(1, 1234, 0, Some(0)).is_err(),
+        "not the owner asked for"
+    );
+    assert!(log_standing(2, 0, 0, None).is_err(), "two links");
+}
