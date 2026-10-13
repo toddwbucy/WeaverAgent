@@ -100,8 +100,8 @@ with the harness has two initiators, this pass chartering the direction the harn
 opens and the turn direction arriving with the token workflow, the same half-chartered
 shape the SPU carries. What the demotion kills is the acquired-parts argument, protocol
 termination and authentication and translation as future member crates, so the root
-holds one PRD and no subtree, which the Document Format's depth rule names as the
-ordinary state of a root whose members have not been discovered. Admin brackets the
+has no members, which the Document Format's membership rule names as the ordinary
+state of a root whose members have not been discovered. Admin brackets the
 run and this crate brackets the turn, the same mechanism pointed at two scopes, and
 neither is a member of the domain it borders.
 
