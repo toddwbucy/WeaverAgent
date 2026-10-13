@@ -2253,3 +2253,52 @@ fn the_publication_lands_in_the_judged_directory_whatever_the_path_does() {
             .is_none()
     );
 }
+
+/// **A FIFO at the manifest's name is refused, never blocking** (#98; the
+/// custody audit's G15, measured no gap): on Linux an `O_RDWR` open of a FIFO
+/// never blocks (fifo(7)), so the append's open answers at once, and the
+/// manifest's judgment refuses anything not a regular file before a byte is
+/// read. Perturbation: drop the regular-file check from `judge_manifest`, and
+/// the tail's read blocks on the FIFO past this test's bound.
+#[test]
+fn a_fifo_at_the_manifest_is_refused_without_blocking() {
+    let scratch = crate::scratch::Scratch(
+        std::env::temp_dir().join(format!("weaver-admin-manifest-fifo-{}", std::process::id())),
+    );
+    let dir = scratch.0.clone();
+    std::fs::create_dir_all(&dir).unwrap();
+    nix::unistd::mkfifo(
+        &dir.join(MANIFEST),
+        nix::sys::stat::Mode::from_bits_truncate(0o644),
+    )
+    .unwrap();
+    let mine = Owner {
+        uid: nix::unistd::getuid().as_raw(),
+        gid: nix::unistd::getgid().as_raw(),
+    };
+    let line = ManifestLine {
+        ordinal: 1,
+        digest: "ab".into(),
+        name: "ab.save-point".into(),
+        stamp: Stamp {
+            run: "r-1".into(),
+            sequence: 1,
+            turn: 0,
+            schema: String::new(),
+            wall_ns: 0,
+        },
+        position: None,
+        arrived: Arrival::Leave,
+    };
+    let (sent, answered) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let dir_fd = open_directory(&dir).unwrap();
+        let _ = sent.send(append_line(dir_fd.as_fd(), mine, &line));
+    });
+    assert_eq!(
+        answered.recv_timeout(std::time::Duration::from_secs(5)),
+        Ok(Err(LifecycleRefusal::BoundaryUnverified)),
+        "refused at once"
+    );
+    drop(scratch);
+}

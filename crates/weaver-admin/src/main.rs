@@ -3292,8 +3292,13 @@ fn judge_territory(
             "is not mode 0710, root's with passage for the state group alone",
         ));
     }
-    if carries_access_entries(directory) {
-        return Err(refuse("carries an access-control entry beyond its mode"));
+    // **On the descriptor, failing closed** (#98; the custody audit's G16):
+    // a look that errs for any reason but the absence of an entry or of
+    // support refuses, never reading as no entry.
+    match carries_access_entries_fd(opened.as_fd()) {
+        Ok(false) => {}
+        Ok(true) => return Err(refuse("carries an access-control entry beyond its mode")),
+        Err(_) => return Err(refuse("has access-control entries that cannot be read")),
     }
     // **Grouped to the state group by name, never taken as it stands**
     // (Codex on #94, and the operator's ruling of 2026-10-08 on #1): its
@@ -3390,32 +3395,24 @@ fn carries_access_entries_fd(directory: std::os::fd::BorrowedFd<'_>) -> nix::Res
                 0,
             )
         };
-        if size >= 0 {
+        if acl_entry_answer(size, nix::errno::Errno::last())? {
             return Ok(true);
-        }
-        match nix::errno::Errno::last() {
-            nix::errno::Errno::ENODATA | nix::errno::Errno::EOPNOTSUPP => {}
-            other => return Err(other),
         }
     }
     Ok(false)
 }
 
-/// Whether a path carries a POSIX access-control list, access or default,
-/// read without following a link.
-fn carries_access_entries(path: &std::path::Path) -> bool {
-    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()) else {
-        return true;
-    };
-    [c"system.posix_acl_access", c"system.posix_acl_default"]
-        .iter()
-        .any(|name| {
-            // SAFETY: a size query with no buffer, on NUL-terminated strings.
-            let size = unsafe {
-                nix::libc::lgetxattr(c_path.as_ptr(), name.as_ptr(), std::ptr::null_mut(), 0)
-            };
-            size >= 0
-        })
+/// **One extended-attribute look's answer** (#98, G16): a size is an entry;
+/// no such attribute, or no support for them, is none; any other error is
+/// the look failing, answered as an error, never as no entry.
+fn acl_entry_answer(size: isize, errno: nix::errno::Errno) -> nix::Result<bool> {
+    if size >= 0 {
+        return Ok(true);
+    }
+    match errno {
+        nix::errno::Errno::ENODATA | nix::errno::Errno::EOPNOTSUPP => Ok(false),
+        other => Err(other),
+    }
 }
 
 /// **`library-path` is judged as the root is**, per Spec section 6: a

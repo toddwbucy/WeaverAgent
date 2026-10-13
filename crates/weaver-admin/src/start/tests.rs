@@ -742,3 +742,28 @@ fn a_free_lock_reads_free_and_a_shared_one_reads_shared() {
         Ok(LockHolder::Shared)
     );
 }
+
+/// **A lock file is judged and laid on its descriptor** (#98; the custody
+/// audit's G17): one standing at another mode is set `0600`, and a FIFO at a
+/// lock's name refuses, an `O_RDWR` open of it never blocking. Perturbation:
+/// drop the `fchmod` and the mode stays; drop the type check and the FIFO is
+/// taken for a lock.
+#[test]
+fn a_lock_file_is_judged_and_laid_on_its_descriptor() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = scratch("lock-judged");
+    let path = dir.0.join("admin.lock");
+    std::fs::write(&path, "").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    drop(open_lock_file(&path).expect("a lock file opens"));
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o7777,
+        0o600
+    );
+    let fifo = dir.0.join("run.lock");
+    nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::from_bits_truncate(0o600)).unwrap();
+    assert_eq!(
+        open_lock_file(&fifo).err(),
+        Some(LifecycleRefusal::BoundaryUnverified)
+    );
+}

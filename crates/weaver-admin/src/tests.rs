@@ -4890,3 +4890,29 @@ fn the_member_spawn_is_watched_inside_a_user_namespace() {
         "the member spawn failed inside the namespace\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
 }
+
+/// **The access-control look fails closed** (#98; the custody audit's G16):
+/// an entry is one, no attribute or no support is none, and any other error
+/// is the look failing, never read as no entry. Perturbation: answer every
+/// error `Ok(false)`, as the path look this replaced did, and the I/O error
+/// passes.
+#[test]
+fn the_access_control_look_fails_closed() {
+    assert_eq!(
+        acl_entry_answer(12, nix::errno::Errno::UnknownErrno),
+        Ok(true)
+    );
+    assert_eq!(acl_entry_answer(-1, nix::errno::Errno::ENODATA), Ok(false));
+    assert_eq!(
+        acl_entry_answer(-1, nix::errno::Errno::EOPNOTSUPP),
+        Ok(false)
+    );
+    assert_eq!(
+        acl_entry_answer(-1, nix::errno::Errno::EIO),
+        Err(nix::errno::Errno::EIO)
+    );
+    assert_eq!(
+        acl_entry_answer(-1, nix::errno::Errno::EACCES),
+        Err(nix::errno::Errno::EACCES)
+    );
+}
