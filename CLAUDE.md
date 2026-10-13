@@ -133,9 +133,14 @@ Each crate's manifest test reads its own manifest to pin its part of that shape:
 
 ### Where the documents are
 
-`docs/crates/<crate>/` holds each crate's PRD (charter) and Spec, mirroring
-`crates/<crate>/`, except that `weaver-trace`, `weaver-diagnostic` and `weaver-state`
-sit under `docs/crates/weaver-harness/`. Every seam has a contract under
+`docs/crates/` has the shape of `crates/` (the operator's ruling of 2026-10-13): one
+folder per crate at the top level, `docs/crates/<crate>/`, holding that crate's PRD
+(charter) and Spec, so a document maps to the code it governs. No crate's documents sit
+under another crate's folder, and `DocsMirrorTests` in `deploy/test_plans.py` pins the
+shape. The exceptions are `contracts/`, the apex `weaver-agent-PRD.md`, and
+`weaver-analysis/`, which has no crate here; a crate's folder may also carry what its
+crate holds beside its two documents (`weaver-harness/Loops/`,
+`weaver-spu/python-spu-Spec.md`). Every seam has a contract under
 `docs/crates/contracts/`; four of them are cross-repository (`weaver-gate-world`,
 `weaver-admin-operator`, `weaver-analysis-state`, `weaver-analysis-web`) and are
 destined for the suite repository. `docs/crates/weaver-analysis/` and the two
