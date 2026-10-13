@@ -1377,8 +1377,10 @@ way, which is what `basic-inference-loop` section 7 already records.
 is `Unloaded` with no load. Entered, it is `Idle` where no turn key stands in flight and
 `Active` where one does, with `LoadFacts` beside it read from the run: the session and
 run, the declaration's digest the enter carried, the artifact, the elections, the store
-and whether the member's end arrived, and the composer `serve` was handed, the same
-facts the load event was authored from and held on the run for this exchange. **While a
+and whether the member's end arrived, the composer `serve` was handed, and the drain and
+wind-down bounds the enter carried, absent where it carried none, the same facts the load
+event was authored from and held on the run for this exchange (the bounds ride on
+`LoadFacts` for admin's deadline, `weaver-admin-Spec` 3.0, the bounds). **While a
 leave is pending the answer is `InTransition`**, whether a turn runs or not, so in S4 to
 S6 and S10 `show` answers the same whether the unload's invocation still holds the lock
 or has died (`weaver-admin-Spec` section 3, S4 to S7 and S10 x `show`; the operator's
@@ -2256,8 +2258,9 @@ wind-down's one generation have no bound unless the declaration sets
 without them `force-unload` is the recourse, admin waiting for `Left` with no deadline.
 This crate reads the two from the enter, `EnterPayload.drain_bound` and
 `wind_down_bound`, its only source, since it holds no declaration; each absent means that
-phase is unbounded, and admin's own wait comes from the same parse it put on the enter,
-so the two agree by construction.
+phase is unbounded. It answers them back on `Observe`, on `LoadFacts` (`weaver-types-Spec`
+section 4.2), from which admin's unload reads its own wait, so the two agree by
+construction.
 Where the declaration sets one, a leg past its bound turns the leave forced from where it
 stands, as a join does, with no `forced_by` and the cause staying the graceful caller's,
 `unload` and `Left` then carrying `forced` true and a missed leg coming down as a forced

@@ -419,8 +419,16 @@ pub enum LifecycleAnswer {
     /// **An answer, not a state**, per `weaver-types-Spec` section 3.1:
     /// `show` meets another invocation holding the agent's invocation lock,
     /// a load or an unload in flight, and claims no `AgentState`, the
-    /// harness being busy with that very invocation.
-    InTransition,
+    /// harness being busy with that very invocation. **It may name the
+    /// run's constituents** (on the Planner's ruling of 2026-10-12, B3):
+    /// `show` fills them from the run lock's holders on its rungs (i) and
+    /// (iii), a run never entered or one ending; the harness and `show`'s
+    /// rung (0) send it empty, which the wire leaves out, so the empty
+    /// answer is the unit answer's bytes.
+    InTransition {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        constituents: Vec<u32>,
+    },
     /// The agent's state and, where a run stands, the load's facts, per
     /// `weaver-types-Spec` section 4 as of 2026-09-04. `load` is present only
     /// where an observation of a standing run answered it: it is absent where
@@ -466,6 +474,17 @@ pub struct LoadFacts {
     pub state_store: crate::config::StateStore,
     pub state_member: bool,
     pub composer: Composer,
+    /// **The declared drain bound the run holds**, in seconds, as the enter
+    /// carried it (`EnterPayload.drain_bound`); absent where the declaration
+    /// is silent, so a run that declared none answers as before. Admin reads
+    /// it at the observation before every leave, so its deadline and the
+    /// harness's timing agree by construction (`weaver-admin-Spec` 3.0, the
+    /// bounds).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain_bound: Option<u64>,
+    /// The declared wind-down bound the run holds, as `drain_bound`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wind_down_bound: Option<u64>,
 }
 
 /// The composing loop, this crate's spelling: the record's own is

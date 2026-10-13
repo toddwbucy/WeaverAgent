@@ -2239,6 +2239,11 @@ impl Harness {
                         sha256: loop_identity.sha256,
                     }
                 },
+                // **The bounds the run holds ride on its facts**, from the
+                // enter alone (`weaver-harness-Spec` section 6), so admin's
+                // deadline reads what this run times its leave by.
+                drain_bound: payload.drain_bound,
+                wind_down_bound: payload.wind_down_bound,
             },
             fullness: None,
             pressure_reported: false,
@@ -3515,7 +3520,9 @@ fn hear_dial(connection: OrganChannel, leave: &mut crate::engine::PendingLeave, 
             return;
         }
         weaver_types::Payload::Directive(LifecycleDirective::Observe) => {
-            weaver_types::Payload::Answer(LifecycleAnswer::InTransition)
+            weaver_types::Payload::Answer(LifecycleAnswer::InTransition {
+                constituents: Vec::new(),
+            })
         }
         weaver_types::Payload::Directive(_) => {
             weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder)
@@ -4141,6 +4148,8 @@ mod tests {
                         file: None,
                         sha256: None,
                     },
+                    drain_bound: None,
+                    wind_down_bound: None,
                 },
                 fullness: None,
                 pressure_reported: false,
@@ -7924,7 +7933,9 @@ mod tests {
         hear_dial(observe, &mut leave, false);
         assert_eq!(
             far.recv().expect("an answer").payload,
-            weaver_types::Payload::Answer(LifecycleAnswer::InTransition)
+            weaver_types::Payload::Answer(LifecycleAnswer::InTransition {
+                constituents: Vec::new(),
+            })
         );
         let (second, far) = dialed(LifecycleDirective::Leave {
             cause: weaver_types::Cause { uid: 9 },

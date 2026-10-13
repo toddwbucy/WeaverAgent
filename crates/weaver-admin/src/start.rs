@@ -169,14 +169,25 @@ pub enum Shared {
 /// another transition and refuses `InvocationInFlight` at once, and a shared
 /// holder is a `show` and is retried within `show`'s bound, judged afresh on
 /// every attempt, the starved case refusing with readers named as the cause.
-pub fn take_invocation_lock(run_directory: &Path) -> Result<InvocationLock, LifecycleRefusal> {
-    let file = open_lock_file(&run_directory.join("admin.lock"))?;
+///
+/// **Taken, it records its verb** (section 3, the lock's verb, on the
+/// operator's ruling of 2026-10-09 on #1): `<verb> <pid>`, the file's whole
+/// content, written under the lock after truncating whatever the last holder
+/// left, so a force meeting the lock reads which verb holds it
+/// ([`read_holder`]). A record that cannot be written refuses, since a force
+/// would otherwise wait on it forever.
+pub fn take_invocation_lock(
+    run_directory: &Path,
+    verb: crate::verb_table::HolderVerb,
+) -> Result<InvocationLock, LifecycleRefusal> {
+    let path = run_directory.join("admin.lock");
+    let file = open_lock_file(&path)?;
     let deadline = Instant::now() + SHARED_HOLD_WAIT;
     loop {
         let request = whole_file(nix::libc::F_WRLCK);
         // SAFETY: fcntl on a descriptor this frame owns, with a lock it built.
         if unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_SETLK, &request) } == 0 {
-            return Ok(InvocationLock { _file: file });
+            return recorded(file, verb, &path);
         }
         contended(&run_directory.join("admin.lock"))?;
         let mut probe = whole_file(nix::libc::F_WRLCK);
@@ -197,6 +208,173 @@ pub fn take_invocation_lock(run_directory: &Path) -> Result<InvocationLock, Life
             // Released between the take and the read: try again at once.
             _ => {}
         }
+    }
+}
+
+/// The lock just taken, its verb recorded as `<verb> <pid>`.
+fn recorded(
+    file: OwnedFd,
+    verb: crate::verb_table::HolderVerb,
+    path: &Path,
+) -> Result<InvocationLock, LifecycleRefusal> {
+    recorded_with(file, verb, path, |file, record| {
+        nix::unistd::ftruncate(file, 0)
+            .and_then(|()| nix::sys::uio::pwrite(file, record, 0))
+            .map(|_| ())
+    })
+}
+
+/// [`recorded`] over a write, apart for its tests. **A record that does not
+/// write never refuses the take** (section 3, the lock's verb; I3, on the
+/// Planner's ruling of 2026-10-12 on #126): a full or failing run directory
+/// must not stop a force ending the run, so the taker holds the lock and goes
+/// on, naming the failure on standard error, and a reader that never sees
+/// the holder named refuses `InvocationInFlight` past its window
+/// ([`read_holder`]).
+pub(crate) fn recorded_with(
+    file: OwnedFd,
+    verb: crate::verb_table::HolderVerb,
+    path: &Path,
+    write: impl FnOnce(&OwnedFd, &[u8]) -> nix::Result<()>,
+) -> Result<InvocationLock, LifecycleRefusal> {
+    let record = format!("{} {}", verb.spelled(), std::process::id());
+    if let Err(e) = write(&file, record.as_bytes()) {
+        diag!(
+            "weaver-admin: {} cannot record its holder's verb ({e}); the {} goes on, and a force meeting it refuses",
+            path.display(),
+            verb.spelled()
+        );
+    }
+    Ok(InvocationLock { _file: file })
+}
+
+/// **Takes the invocation lock exclusively, waiting with no deadline**
+/// (section 3, the forced unload, joining): the force that joined an
+/// `unload` takes the lock behind the concluding holder, after the run lock
+/// has freed or after its escalation's phase (a), a publication being
+/// bounded by its size and not by time. It records its verb as the
+/// non-waiting take does.
+pub fn take_invocation_lock_waiting(
+    run_directory: &Path,
+    verb: crate::verb_table::HolderVerb,
+) -> Result<InvocationLock, LifecycleRefusal> {
+    let path = run_directory.join("admin.lock");
+    let file = open_lock_file(&path)?;
+    let request = whole_file(nix::libc::F_WRLCK);
+    loop {
+        // SAFETY: fcntl on a descriptor this frame owns, with a lock it built.
+        if unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_SETLKW, &request) } == 0 {
+            return recorded(file, verb, &path);
+        }
+        if std::io::Error::last_os_error().raw_os_error() != Some(nix::libc::EINTR) {
+            return Err(refuse_path("cannot be locked", &path));
+        }
+    }
+}
+
+/// Who holds the invocation lock, as a reader holding nothing sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockHolder {
+    Free,
+    /// A `show`, which takes the lock shared and records nothing.
+    Shared,
+    /// An exclusive holder, its record read once it names the holder.
+    Exclusive(crate::verb_table::HolderVerb),
+}
+
+/// What one `F_GETLK` probe found: the classic record lock names its
+/// exclusive holder's pid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeldBy {
+    Free,
+    Shared,
+    Exclusive(i32),
+}
+
+/// How often a reader reads a record that does not yet name its holder.
+const HOLDER_REREAD: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// How long a reader waits for one holder to name itself: a holder's write
+/// follows its lock by microseconds, so five seconds is a holder whose record
+/// did not write, never one still writing.
+const HOLDER_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// **Reads the invocation lock's holder, holding nothing** (section 3, the
+/// lock's verb): free, `show`'s shared hold, or an exclusive holder's verb,
+/// taken only where the record's pid is the holder `F_GETLK` reports.
+/// **A record that does not name the holder is read again** every 100 ms
+/// (Codex on #109, rounds 45 and 46): empty, partial, or the last holder's,
+/// it is the window between the holder's lock and its write; a changed
+/// holder starts the read over. **One holder unnamed past five seconds is a
+/// holder whose record did not write** (the Planner's ruling of 2026-10-12 on
+/// #126), read as a verb that is no `unload`: the reader refuses
+/// `InvocationInFlight`, the conservative outcome. A record that cannot be
+/// read refuses `InvocationInFlight`.
+pub fn read_holder(run_directory: &Path) -> Result<LockHolder, LifecycleRefusal> {
+    let file = open_lock_file(&run_directory.join("admin.lock"))?;
+    read_holder_using(
+        || {
+            let mut probe = whole_file(nix::libc::F_WRLCK);
+            // SAFETY: fcntl on a descriptor this frame owns.
+            if unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_GETLK, &mut probe) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(match probe.l_type as i32 {
+                nix::libc::F_WRLCK => HeldBy::Exclusive(probe.l_pid),
+                nix::libc::F_RDLCK => HeldBy::Shared,
+                _ => HeldBy::Free,
+            })
+        },
+        || {
+            let mut record = vec![0u8; 64];
+            let read = nix::sys::uio::pread(&file, &mut record, 0).map_err(std::io::Error::from)?;
+            record.truncate(read);
+            Ok(record)
+        },
+        HOLDER_WINDOW,
+    )
+}
+
+/// [`read_holder`]'s loop over a probe and a read, apart for its tests.
+pub(crate) fn read_holder_using(
+    mut probe: impl FnMut() -> std::io::Result<HeldBy>,
+    mut read: impl FnMut() -> std::io::Result<Vec<u8>>,
+    window: std::time::Duration,
+) -> Result<LockHolder, LifecycleRefusal> {
+    let mut unnamed: Option<(i32, std::time::Instant)> = None;
+    loop {
+        let pid = match probe().map_err(|_| LifecycleRefusal::InvocationInFlight)? {
+            HeldBy::Free => return Ok(LockHolder::Free),
+            HeldBy::Shared => return Ok(LockHolder::Shared),
+            HeldBy::Exclusive(pid) => pid,
+        };
+        let since = match unnamed {
+            Some((held, since)) if held == pid => since,
+            _ => {
+                let now = std::time::Instant::now();
+                unnamed = Some((pid, now));
+                now
+            }
+        };
+        let record = read().map_err(|_| LifecycleRefusal::InvocationInFlight)?;
+        // The record names this holder where its pid is the one `F_GETLK`
+        // reports; its verb is then read, and **a verb this admin does not
+        // know refuses** (an admin of another version holding the lock, on
+        // the Planner's ruling of 2026-10-12 on #126), the conservative
+        // outcome, rather than being read again for ever.
+        let named = std::str::from_utf8(&record).ok().and_then(|text| {
+            let (verb, recorded) = text.split_once(' ')?;
+            (recorded.parse::<i32>().ok()? == pid).then_some(verb)
+        });
+        if let Some(verb) = named {
+            return crate::verb_table::HolderVerb::from_spelled(verb)
+                .map(LockHolder::Exclusive)
+                .ok_or(LifecycleRefusal::InvocationInFlight);
+        }
+        if since.elapsed() >= window {
+            return Err(LifecycleRefusal::InvocationInFlight);
+        }
+        std::thread::sleep(HOLDER_REREAD);
     }
 }
 
@@ -522,6 +700,7 @@ pub(crate) fn seal_except(keep: &[RawFd]) -> std::io::Result<()> {
 /// test's run-lock description among them, so the child would hold that
 /// run's lock, and the escalation of that test, finding it among the
 /// holders, would end it. Async-signal-safe: raw `close_range` calls only.
+// #118: a test-only hook, kept beside the production code it observes.
 #[cfg(test)]
 pub(crate) fn close_inherited_except(keep: Option<RawFd>) {
     let close = |first: u32, last: u32| {
@@ -845,463 +1024,4 @@ pub fn open_log(path: &Path, owner: Option<(u32, u32)>) -> std::io::Result<std::
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn scratch(tag: &str) -> crate::scratch::Scratch {
-        let path =
-            std::env::temp_dir().join(format!("weaver-admin-start-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).unwrap();
-        crate::scratch::Scratch(path)
-    }
-
-    /// A child holding the run lock's description, as a constituent does:
-    /// `sleep` started with the description at the run lock's number.
-    fn holding_child(lock: &RunLock) -> std::process::Child {
-        use std::os::unix::process::CommandExt;
-        // A high copy, so the source is never the target number itself.
-        // SAFETY: F_DUPFD_CLOEXEC on a descriptor the lock owns.
-        let high = unsafe { nix::libc::fcntl(lock.raw(), nix::libc::F_DUPFD_CLOEXEC, 100) };
-        assert!(high >= 100);
-        let mut command = std::process::Command::new("/bin/sleep");
-        command.arg("30");
-        // SAFETY: dup2 is async-signal-safe and clears the flag at the target.
-        unsafe {
-            command.pre_exec(move || {
-                if nix::libc::dup2(high, RUN_LOCK_FD) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let child = command.spawn().expect("the stand-in constituent");
-        // SAFETY: closing the parent's high copy.
-        unsafe { nix::libc::close(high) };
-        child
-    }
-
-    /// **The run lock is held while any constituent holds the description,
-    /// and found by the scan**, per section 3: the invocation takes it,
-    /// forks a holder and lets its own copy go, and the lock still reads held,
-    /// a second take refuses, the scan names the holder, and the escalation
-    /// ends it and answers once the lock is free. Perturbation: take the lock
-    /// with `F_SETLK`, a classic lock, and the child never holds it, so the
-    /// lock reads free the moment the invocation's copy closes.
-    #[test]
-    fn the_run_lock_outlives_its_taker_and_the_escalation_ends_its_holder() {
-        let dir = scratch("run-lock");
-        let lock = take_run_lock(dir.0.as_path())
-            .unwrap()
-            .expect("a free lock is taken");
-        let mut child = holding_child(&lock);
-        drop(lock);
-        assert!(
-            run_lock_held(dir.0.as_path()).unwrap(),
-            "the child holds it"
-        );
-        assert!(
-            take_run_lock(dir.0.as_path()).unwrap().is_none(),
-            "a second take refuses while a constituent stands"
-        );
-        // The stand-in is found at the run lock's number; a concurrent test's
-        // child between fork and exec may appear for an instant beside it.
-        let found = holders(dir.0.as_path());
-        assert!(
-            found.contains(&Holder {
-                pid: child.id() as i32,
-                fd: RUN_LOCK_FD
-            }),
-            "{found:?}"
-        );
-        escalate_within(
-            dir.0.as_path(),
-            Duration::from_secs(5),
-            Duration::from_secs(5),
-        )
-        .expect("the escalation ends the holder");
-        assert!(!run_lock_held(dir.0.as_path()).unwrap());
-        let _ = child.wait();
-        assert!(
-            take_run_lock(dir.0.as_path()).unwrap().is_some(),
-            "and the lock is free"
-        );
-    }
-
-    /// **The escalation reaches `SIGKILL` for a holder that ignores
-    /// `SIGTERM`.** Perturbation: send `SIGTERM` in both rounds and the
-    /// holder survives, refusing `WorkerWouldNotExit`.
-    #[test]
-    fn the_escalation_kills_a_holder_that_ignores_term() {
-        use std::os::unix::process::CommandExt;
-        let dir = scratch("ignores-term");
-        let lock = take_run_lock(dir.0.as_path()).unwrap().unwrap();
-        // SAFETY: as in `holding_child`.
-        let high = unsafe { nix::libc::fcntl(lock.raw(), nix::libc::F_DUPFD_CLOEXEC, 100) };
-        let mut command = std::process::Command::new("/bin/sh");
-        command.args(["-c", "trap '' TERM; while :; do sleep 1; done"]);
-        // SAFETY: dup2 is async-signal-safe.
-        unsafe {
-            command.pre_exec(move || {
-                if nix::libc::dup2(high, RUN_LOCK_FD) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let mut child = command.spawn().unwrap();
-        // SAFETY: closing the parent's copies.
-        unsafe { nix::libc::close(high) };
-        drop(lock);
-        std::thread::sleep(Duration::from_millis(100));
-        escalate_within(
-            dir.0.as_path(),
-            Duration::from_millis(500),
-            Duration::from_secs(5),
-        )
-        .expect("SIGKILL ends it");
-        let _ = child.wait();
-    }
-
-    /// **The escalation ends every holder**, per Spec section 3: two
-    /// constituents holding the description, as a worker and a member do, are
-    /// both signalled and the lock reads free. Perturbation: signal only the
-    /// first holder the scan finds and the second keeps the lock, refusing
-    /// `WorkerWouldNotExit`.
-    #[test]
-    fn the_escalation_ends_every_holder() {
-        let dir = scratch("every-holder");
-        let lock = take_run_lock(dir.0.as_path()).unwrap().unwrap();
-        let mut first = holding_child(&lock);
-        let mut second = holding_child(&lock);
-        drop(lock);
-        // Both stand-ins are found. A concurrent test's child, between its
-        // fork and its exec, can hold this test's close-on-exec copy for an
-        // instant, which single-threaded admin never meets, so the scan is
-        // asked for both rather than for exactly two.
-        let found: Vec<i32> = holders(dir.0.as_path()).iter().map(|h| h.pid).collect();
-        assert!(found.contains(&(first.id() as i32)), "{found:?}");
-        assert!(found.contains(&(second.id() as i32)), "{found:?}");
-        escalate_within(
-            dir.0.as_path(),
-            Duration::from_secs(5),
-            Duration::from_secs(5),
-        )
-        .expect("both end");
-        let _ = first.wait();
-        let _ = second.wait();
-        assert!(!run_lock_held(dir.0.as_path()).unwrap());
-    }
-
-    /// **A pid is pinned only while it still holds the file**, per Spec
-    /// section 3: a holder named at a descriptor that no longer refers to the
-    /// lock file, a pid reused since the scan in effect, is never pinned and so
-    /// never signalled. Perturbation: drop the re-check after `pidfd_open` and
-    /// the stale holder is pinned.
-    #[test]
-    fn a_holder_no_longer_holding_the_file_is_never_pinned() {
-        let dir = scratch("pin");
-        let lock = take_run_lock(dir.0.as_path()).unwrap().unwrap();
-        let mut child = holding_child(&lock);
-        drop(lock);
-        let meta = std::fs::metadata(dir.0.join("run.lock")).unwrap();
-        let target = (meta.dev(), meta.ino());
-        let pid = child.id() as i32;
-        assert!(
-            pin(
-                Holder {
-                    pid,
-                    fd: RUN_LOCK_FD
-                },
-                target
-            )
-            .is_some()
-        );
-        // Its standard input is not the lock file: a stale scan entry.
-        assert!(pin(Holder { pid, fd: 0 }, target).is_none());
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-
-    /// **A process with the lock file merely open is no holder**, per Spec
-    /// section 3: beside a constituent holding the description, a process
-    /// holding a fresh descriptor of the same file, as a concurrent `show`
-    /// does while it reads the lock, is neither named by the scan nor pinned.
-    /// Perturbation: match on the device and inode alone and the opener is
-    /// named at its standard input.
-    #[test]
-    fn a_process_with_the_lock_file_merely_open_is_no_holder() {
-        let dir = scratch("merely-open");
-        let lock = take_run_lock(dir.0.as_path()).unwrap().unwrap();
-        let mut holder = holding_child(&lock);
-        drop(lock);
-        let mut opener = std::process::Command::new("/bin/sleep")
-            .arg("30")
-            .stdin(std::fs::File::open(dir.0.join("run.lock")).unwrap())
-            .spawn()
-            .unwrap();
-        let found: Vec<i32> = holders(dir.0.as_path()).iter().map(|h| h.pid).collect();
-        assert!(found.contains(&(holder.id() as i32)), "{found:?}");
-        assert!(
-            !found.contains(&(opener.id() as i32)),
-            "the opener is no holder: {found:?}"
-        );
-        let meta = std::fs::metadata(dir.0.join("run.lock")).unwrap();
-        let opened = Holder {
-            pid: opener.id() as i32,
-            fd: 0,
-        };
-        assert!(pin(opened, (meta.dev(), meta.ino())).is_none());
-        for child in [&mut holder, &mut opener] {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-
-    /// **A child takes its own session and comes back to the default
-    /// dispositions**, per Spec section 6: a child that inherited ignored
-    /// signals, as every child of this invocation does, runs with no signal
-    /// ignored and leads its own session. Perturbation: drop the reset from
-    /// `detach_and_reset` and `SigIgn` is not zero; drop the `setsid` and the
-    /// session is the test's.
-    #[test]
-    fn a_child_detaches_and_resets_its_signals() {
-        use std::os::unix::process::CommandExt;
-        let mut command = std::process::Command::new("/bin/sleep");
-        command.arg("30");
-        // SAFETY: signal, setsid and sigprocmask are async-signal-safe.
-        unsafe {
-            command.pre_exec(|| {
-                for &sig in IGNORED_SIGNALS {
-                    nix::libc::signal(sig, nix::libc::SIG_IGN);
-                }
-                detach_and_reset()
-            });
-        }
-        let mut child = command.spawn().unwrap();
-        let pid = child.id();
-        std::thread::sleep(Duration::from_millis(100));
-        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
-        let ignored = status
-            .lines()
-            .find_map(|line| line.strip_prefix("SigIgn:"))
-            .map(|mask| u64::from_str_radix(mask.trim(), 16).unwrap())
-            .unwrap();
-        assert_eq!(ignored, 0, "no signal stays ignored past the exec");
-        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
-        let session: u32 = stat
-            .rsplit(')')
-            .next()
-            .unwrap()
-            .split_whitespace()
-            .nth(3)
-            .unwrap()
-            .parse()
-            .unwrap();
-        assert_eq!(session, pid, "the child leads its own session");
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-
-    /// **A held exclusive invocation lock refuses every other take**, per
-    /// section 3: from another process, both an exclusive take and a shared
-    /// one are refused, the shared one being `show`'s `InTransition`. A child
-    /// process asks, since a classic lock does not conflict within one
-    /// process. The shared holder's side is the test below. Perturbation:
-    /// take the exclusive lock as `F_RDLCK` and the child's shared take
-    /// succeeds.
-    #[test]
-    fn an_exclusive_invocation_lock_refuses_every_other_take() {
-        let dir = scratch("invocation");
-        let path = dir.0.as_path().join("admin.lock");
-        let held = take_invocation_lock(dir.0.as_path()).expect("the first take");
-        // Built before the fork, so the child only calls what a fork of a
-        // threaded process may.
-        let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
-        // A forked child asks, a second process being what the lock orders.
-        // SAFETY: the child only calls async-signal-safe functions.
-        match unsafe { nix::unistd::fork() }.unwrap() {
-            nix::unistd::ForkResult::Child => {
-                close_inherited_except(None);
-                // SAFETY: open and fcntl are async-signal-safe.
-                let code = unsafe {
-                    let fd = nix::libc::open(c_path.as_ptr(), nix::libc::O_RDWR);
-                    let mut write = whole_file(nix::libc::F_WRLCK);
-                    let mut read = whole_file(nix::libc::F_RDLCK);
-                    let write_refused = nix::libc::fcntl(fd, nix::libc::F_SETLK, &mut write) != 0;
-                    let read_refused = nix::libc::fcntl(fd, nix::libc::F_SETLK, &mut read) != 0;
-                    if write_refused && read_refused { 0 } else { 1 }
-                };
-                // SAFETY: _exit is async-signal-safe.
-                unsafe { nix::libc::_exit(code) };
-            }
-            nix::unistd::ForkResult::Parent { child } => {
-                let status = nix::sys::wait::waitpid(child, None).unwrap();
-                assert_eq!(
-                    status,
-                    nix::sys::wait::WaitStatus::Exited(child, 0),
-                    "an exclusive holder refuses both takes from another process"
-                );
-            }
-        }
-        drop(held);
-    }
-
-    /// A forked child holding the invocation lock shared for `hold`, as a
-    /// `show` does for its observation, answering its pid once it holds it.
-    fn shared_holder(path: &Path, hold: Duration) -> nix::unistd::Pid {
-        let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
-        let (ready_read, ready_write) = nix::unistd::pipe().unwrap();
-        let pause = nix::libc::timespec {
-            tv_sec: hold.as_secs() as nix::libc::time_t,
-            tv_nsec: hold.subsec_nanos() as nix::libc::c_long,
-        };
-        // SAFETY: the child calls only async-signal-safe functions.
-        match unsafe { nix::unistd::fork() }.unwrap() {
-            nix::unistd::ForkResult::Child => {
-                close_inherited_except(Some(ready_write.as_raw_fd()));
-                // SAFETY: open, fcntl, write, nanosleep and _exit are
-                // async-signal-safe.
-                unsafe {
-                    let fd = nix::libc::open(c_path.as_ptr(), nix::libc::O_RDWR);
-                    let read = whole_file(nix::libc::F_RDLCK);
-                    nix::libc::fcntl(fd, nix::libc::F_SETLK, &read);
-                    nix::libc::write(ready_write.as_raw_fd(), [1u8].as_ptr().cast(), 1);
-                    nix::libc::nanosleep(&pause, std::ptr::null_mut());
-                    nix::libc::_exit(0);
-                }
-            }
-            nix::unistd::ForkResult::Parent { child } => {
-                drop(ready_write);
-                let mut byte = [0u8; 1];
-                nix::unistd::read(&ready_read, &mut byte).unwrap();
-                child
-            }
-        }
-    }
-
-    /// **An exclusive taker behind `show`'s shared hold waits within `show`'s
-    /// bound, and is starved past it with readers named**, per section 3: a
-    /// shared hold released inside the bound lets the take through on a
-    /// retry, and one held past it refuses `InvocationInFlight` at about the
-    /// bound. Perturbation: refuse on any holder without reading its kind and
-    /// the first case refuses; retry without the bound and the second never
-    /// returns.
-    #[test]
-    fn an_exclusive_take_waits_out_a_brief_reader_and_is_starved_by_a_long_one() {
-        let dir = scratch("readers");
-        let path = dir.0.join("admin.lock");
-        drop(open_lock_file(&path).unwrap());
-        let brief = shared_holder(&path, Duration::from_millis(300));
-        let taken = take_invocation_lock(dir.0.as_path());
-        assert!(taken.is_ok(), "a brief reader is waited out: {taken:?}");
-        drop(taken);
-        let _ = nix::sys::wait::waitpid(brief, None);
-        let long = shared_holder(&path, Duration::from_secs(5));
-        let started = Instant::now();
-        assert_eq!(
-            take_invocation_lock(dir.0.as_path()).err(),
-            Some(LifecycleRefusal::InvocationInFlight),
-            "a reader held past the bound starves the taker"
-        );
-        assert!(started.elapsed() < SHARED_HOLD_WAIT + Duration::from_secs(1));
-        // SAFETY: kill on the child this test forked.
-        unsafe { nix::libc::kill(long.as_raw(), nix::libc::SIGKILL) };
-        let _ = nix::sys::wait::waitpid(long, None);
-    }
-
-    /// **Only an absent lock file is an absent run**: a run directory that
-    /// cannot be looked into refuses rather than reporting the lock free.
-    /// Perturbation: read every lookup failure as absent and the unreadable
-    /// case answers `false`.
-    #[test]
-    fn a_lock_that_cannot_be_looked_at_is_never_free() {
-        let dir = scratch("unreadable-lock");
-        assert_eq!(run_lock_held(dir.0.as_path()), Ok(false), "no file, no run");
-        // A path through a regular file cannot be looked into (ENOTDIR).
-        let file = dir.0.join("plain");
-        std::fs::write(&file, "").unwrap();
-        assert_eq!(
-            run_lock_held(&file),
-            Err(LifecycleRefusal::BoundaryUnverified),
-            "a lookup that fails for another reason refuses"
-        );
-    }
-
-    /// **Only contention is a holder**: a lock take refused for another reason,
-    /// here a write lock asked on a descriptor open for reading, refuses rather
-    /// than reading as a run or a transition. Perturbation: read every failed
-    /// take as contention and the bad take answers `Ok`.
-    #[test]
-    fn a_lock_failure_that_is_not_contention_refuses() {
-        let dir = scratch("not-contention");
-        let path = dir.0.join("run.lock");
-        std::fs::write(&path, "").unwrap();
-        let read_only = std::fs::File::open(&path).unwrap();
-        let request = whole_file(nix::libc::F_WRLCK);
-        // SAFETY: fcntl on a descriptor this test owns; EBADF is the point.
-        let rc =
-            unsafe { nix::libc::fcntl(read_only.as_raw_fd(), nix::libc::F_OFD_SETLK, &request) };
-        assert_eq!(rc, -1);
-        assert_eq!(contended(&path), Err(LifecycleRefusal::BoundaryUnverified));
-        // Real contention reads as a holder.
-        let held = take_run_lock(dir.0.as_path()).unwrap().unwrap();
-        assert!(take_run_lock(dir.0.as_path()).unwrap().is_none());
-        drop(held);
-    }
-
-    /// **The relay serves the run's own file, read-only**, per section 6: the
-    /// reopen through `/proc/self/fd` answers a read-only descriptor of the
-    /// same device and inode, never the path's. Perturbation: reopen by the
-    /// path after renaming another file over it and the identity differs.
-    #[test]
-    fn the_sink_is_reopened_read_only_and_the_same_file() {
-        let dir = scratch("reopen");
-        let path = dir.0.join("trace.ndjson");
-        let write: OwnedFd = std::fs::File::create(&path).unwrap().into();
-        // Another file now stands at the declaration's path.
-        std::fs::rename(&path, dir.0.join("rotated")).unwrap();
-        std::fs::write(&path, "another").unwrap();
-        let read = reopen_read_only(&write).unwrap();
-        // SAFETY: F_GETFL on the descriptor just reopened.
-        let flags = unsafe { nix::libc::fcntl(read.as_raw_fd(), nix::libc::F_GETFL) };
-        assert_eq!(
-            flags & nix::libc::O_ACCMODE,
-            nix::libc::O_RDONLY,
-            "read-only"
-        );
-        let a = nix::sys::stat::fstat(&write).unwrap();
-        let b = nix::sys::stat::fstat(&read).unwrap();
-        assert_eq!(
-            (a.st_dev, a.st_ino),
-            (b.st_dev, b.st_ino),
-            "the run's own file"
-        );
-    }
-
-    /// **The run directory is made root's and `0755`, and a link at its name
-    /// is refused**, per section 3. Run as the invoking user, so the owner
-    /// set is that user's; the mode and the refusal are what is watched.
-    /// Perturbation: drop `O_NOFOLLOW` from the open and a link to a
-    /// directory is followed and repaired.
-    #[test]
-    fn the_run_directory_is_held_and_a_link_refused() {
-        let dir = scratch("run-dir");
-        let uid = nix::unistd::getuid().as_raw();
-        let gid = nix::unistd::getgid().as_raw();
-        let made = dir.0.as_path().join("made");
-        hold_directory(&made, uid, gid, 0o755).expect("made where absent");
-        let mode = std::fs::metadata(&made).unwrap().mode() & 0o7777;
-        assert_eq!(mode, 0o755);
-        std::fs::set_permissions(&made, std::os::unix::fs::PermissionsExt::from_mode(0o777))
-            .unwrap();
-        hold_directory(&made, uid, gid, 0o755).expect("repaired where it stands");
-        assert_eq!(std::fs::metadata(&made).unwrap().mode() & 0o7777, 0o755);
-        let link = dir.0.as_path().join("link");
-        std::os::unix::fs::symlink(&made, &link).unwrap();
-        assert_eq!(
-            hold_directory(&link, uid, gid, 0o755),
-            Err(LifecycleRefusal::BoundaryUnverified)
-        );
-    }
-}
+pub(crate) mod tests;

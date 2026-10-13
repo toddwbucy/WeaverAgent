@@ -11,7 +11,10 @@ archives, `bootstrap-stack.sh` builds and installs on a clean box, `create-agent
 makes one agent, `verify-load.sh` proves one agent loads and its constituents sit where
 they should. `update-stack.sh` is for every later install on a box this runbook has
 already stood up: it needs the stack record and at least one agent root to read and a
-git tree to name the build, and it refuses without them. A box on the box-wide layout
+git tree to name the build, and it refuses without them. Its `--install` unloads every
+agent before it replaces a binary, waiting on each graceful unload up to 300 seconds
+(`--unload-timeout <s>`) and then joining it with `force-unload`, which still takes the
+leave's save point, and prints which ended the run. A box on the box-wide layout
 of before 2026-10-01, which it refuses by name, is taken down and stood up again by
 sections 1 to 4; an agent of an older form is recreated after its take-down by
 `HowToDeployANewAgent.md` section 7.

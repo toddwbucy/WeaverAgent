@@ -1548,7 +1548,9 @@ impl<'a> Ports<'a> {
                                     exchange,
                                     position: weaver_types::Position::Close,
                                     payload: weaver_types::Payload::Answer(
-                                        weaver_types::LifecycleAnswer::InTransition,
+                                        weaver_types::LifecycleAnswer::InTransition {
+                                            constituents: Vec::new(),
+                                        },
                                     ),
                                 });
                             }
@@ -2418,6 +2420,8 @@ pub(crate) fn test_load_facts() -> weaver_types::LoadFacts {
             file: None,
             sha256: None,
         },
+        drain_bound: None,
+        wind_down_bound: None,
     }
 }
 
@@ -4586,7 +4590,9 @@ mod tests {
         assert!(finished);
         assert_eq!(
             answer,
-            weaver_types::Payload::Answer(weaver_types::LifecycleAnswer::InTransition)
+            weaver_types::Payload::Answer(weaver_types::LifecycleAnswer::InTransition {
+                constituents: Vec::new(),
+            })
         );
     }
 

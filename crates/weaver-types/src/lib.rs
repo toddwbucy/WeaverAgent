@@ -64,7 +64,7 @@
 //!         LifecycleAnswer::GateStopped => "gate_stopped",
 //!         LifecycleAnswer::GateQuiesced => "gate_quiesced",
 //!         LifecycleAnswer::Validated => "validated",
-//!         LifecycleAnswer::InTransition => "in_transition",
+//!         LifecycleAnswer::InTransition { .. } => "in_transition",
 //!         LifecycleAnswer::State { .. } => "state",
 //!     }
 //! }

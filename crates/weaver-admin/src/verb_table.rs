@@ -15,15 +15,6 @@
 //! names the holder. `show` itself takes the lock shared and sees a holder as
 //! an exclusive hold refused.
 
-// Uncalled until the plumbing wires it, the whole table at once.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into the verbs by the lifecycle plumbing, PR B"
-    )
-)]
-
 /// What admin saw, in the order it looks: the invocation lock first, then the
 /// run lock, then the worker's word where the run lock is held.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +39,40 @@ pub enum HolderVerb {
     Restore,
     Stop,
     Validate,
+}
+
+impl HolderVerb {
+    /// **The verb as `admin.lock` records it**, the operator's own spelling
+    /// of the verb (section 3, the lock's verb).
+    pub fn spelled(self) -> &'static str {
+        match self {
+            HolderVerb::Load => "load",
+            HolderVerb::Unload => "unload",
+            HolderVerb::ForceUnload => "force-unload",
+            HolderVerb::SavePoint => "save-point",
+            HolderVerb::Restore => "restore",
+            HolderVerb::Stop => "stop",
+            HolderVerb::Validate => "validate",
+        }
+    }
+
+    /// The verb a record spells, or none for any other text.
+    pub fn from_spelled(spelled: &str) -> Option<HolderVerb> {
+        // Each arm spelled through `spelled()`, so the two directions
+        // cannot drift; `every_exclusive_verb_records_its_name` reads every
+        // variant back.
+        let verb = match spelled {
+            "load" => HolderVerb::Load,
+            "unload" => HolderVerb::Unload,
+            "force-unload" => HolderVerb::ForceUnload,
+            "save-point" => HolderVerb::SavePoint,
+            "restore" => HolderVerb::Restore,
+            "stop" => HolderVerb::Stop,
+            "validate" => HolderVerb::Validate,
+            _ => return None,
+        };
+        (verb.spelled() == spelled).then_some(verb)
+    }
 }
 
 /// The worker's word to `Observe`, or what stood in for it.
@@ -79,12 +104,12 @@ pub enum AdminView {
     /// A worker answers at rest or with a turn: S2, S3, S9. **Admin directs
     /// and the harness tells the three apart**, each split pinned there:
     /// S3's `ActivityNotAtRest` to a save point by
-    /// `lifecycle::tests::a_save_point_or_a_leave_with_a_turn_in_flight_is_refused_not_at_rest`
-    /// and `engine::tests::a_save_point_or_a_leave_mid_turn_is_refused_not_at_rest`;
+    /// `lifecycle::tests::a_save_point_with_a_turn_in_flight_is_refused_not_at_rest`
+    /// and `engine::tests::a_save_point_mid_turn_is_refused_not_at_rest`;
     /// `show`'s word by `lifecycle::tests::observe_answers_from_any_position_and_authors_nothing`
     /// and `engine::tests::an_observation_dialed_mid_stream_answers_active_and_disturbs_nothing`;
     /// S9's lowered gate, never lowered twice, by
-    /// `lifecycle::tests::a_leave_without_its_save_point_stops_and_a_forced_leave_takes_none`.
+    /// `lifecycle::tests::a_leave_without_its_save_point_stops_and_a_forced_leave_takes_one`.
     Serving,
     /// A worker accepts and does not answer: S2, S3 or S9, wedged.
     Wedged,
@@ -106,6 +131,9 @@ pub enum Verb {
     Unload,
     ForceUnload,
     SavePoint,
+    // `restore` names the save point for the next load in every view it can
+    // meet, so it reads no view until the live restore, A5.
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by the live restore, A5"))]
     Restore,
     Show,
 }
@@ -228,404 +256,4 @@ pub fn act(verb: Verb, view: AdminView) -> VerbAction {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    macro_rules! class {
-        ($name:ident, $seen:expr, $view:expr) => {
-            #[test]
-            fn $name() {
-                assert_eq!(class_of($seen), $view);
-            }
-        };
-    }
-
-    macro_rules! cell {
-        ($name:ident, $verb:expr, $view:expr, $action:expr) => {
-            #[test]
-            fn $name() {
-                assert_eq!(act($verb, $view), $action);
-            }
-        };
-    }
-
-    use AdminView as V;
-    use HolderVerb as H;
-    use VerbAction as A;
-
-    // **The state-to-class mapping**: each state's presentation to admin.
-    class!(
-        s0_s0d_and_s8b_freed_present_down,
-        Seen::RunLockFree,
-        V::Down
-    );
-    class!(
-        s1_presents_held_by_other,
-        Seen::Holder(H::Load),
-        V::HeldByOther
-    );
-    class!(
-        s2_presents_serving,
-        Seen::RunLockHeld(WorkerSeen::Idle),
-        V::Serving
-    );
-    class!(
-        s3_presents_serving,
-        Seen::RunLockHeld(WorkerSeen::Active),
-        V::Serving
-    );
-    class!(
-        s4_to_s7_present_held_by_unload,
-        Seen::Holder(H::Unload),
-        V::HeldByUnload
-    );
-    class!(
-        s8a_under_a_force_presents_held_by_other,
-        Seen::Holder(H::ForceUnload),
-        V::HeldByOther
-    );
-    class!(
-        s8b_with_the_run_lock_held_presents_worker_gone,
-        Seen::RunLockHeld(WorkerSeen::NoSocket),
-        V::WorkerGone
-    );
-    class!(
-        s10_presents_held_by_other,
-        Seen::Holder(H::ForceUnload),
-        V::HeldByOther
-    );
-    class!(
-        a_brief_holder_presents_held_by_other_save_point,
-        Seen::Holder(H::SavePoint),
-        V::HeldByOther
-    );
-    class!(
-        a_brief_holder_presents_held_by_other_restore,
-        Seen::Holder(H::Restore),
-        V::HeldByOther
-    );
-    class!(
-        a_brief_holder_presents_held_by_other_stop,
-        Seen::Holder(H::Stop),
-        V::HeldByOther
-    );
-    class!(
-        a_brief_holder_presents_held_by_other_validate,
-        Seen::Holder(H::Validate),
-        V::HeldByOther
-    );
-    class!(
-        a_wedged_worker_presents_wedged,
-        Seen::RunLockHeld(WorkerSeen::Silent),
-        V::Wedged
-    );
-    class!(
-        a_killed_leave_holder_presents_leave_pending_unheld,
-        Seen::RunLockHeld(WorkerSeen::InTransition),
-        V::LeavePendingUnheld
-    );
-    class!(
-        a_killed_load_presents_never_entered,
-        Seen::RunLockHeld(WorkerSeen::Unloaded),
-        V::NeverEntered
-    );
-
-    // S0 and S0d, the room published where it holds anything.
-    cell!(s0_s0d_x_load_starts, Verb::Load, V::Down, A::Start);
-    cell!(
-        s0_s0d_x_unload_publishes_the_room_then_unloaded,
-        Verb::Unload,
-        V::Down,
-        A::PublishRoomThenUnloaded
-    );
-    cell!(
-        s0_s0d_x_force_unload_publishes_the_room_then_unloaded,
-        Verb::ForceUnload,
-        V::Down,
-        A::PublishRoomThenUnloaded
-    );
-    cell!(
-        s0_s0d_x_save_point_refuses_out_of_order,
-        Verb::SavePoint,
-        V::Down,
-        A::RefuseOutOfOrder
-    );
-    cell!(
-        s0_s0d_x_restore_names_for_the_next_load,
-        Verb::Restore,
-        V::Down,
-        A::NameForNextLoad
-    );
-    cell!(
-        s0_s0d_x_show_answers_unloaded,
-        Verb::Show,
-        V::Down,
-        A::ShowUnloaded
-    );
-
-    // S4, S5, S6, S7 and S8a under an `unload`.
-    cell!(
-        s4_s7_s8a_x_load_refuses_invocation_in_flight,
-        Verb::Load,
-        V::HeldByUnload,
-        A::RefuseInvocationInFlight
-    );
-    cell!(
-        s4_s7_s8a_x_unload_refuses_invocation_in_flight,
-        Verb::Unload,
-        V::HeldByUnload,
-        A::RefuseInvocationInFlight
-    );
-    cell!(
-        s4_s7_s8a_x_force_unload_joins,
-        Verb::ForceUnload,
-        V::HeldByUnload,
-        A::Join
-    );
-    cell!(
-        s4_s7_s8a_x_save_point_refuses_invocation_in_flight,
-        Verb::SavePoint,
-        V::HeldByUnload,
-        A::RefuseInvocationInFlight
-    );
-    cell!(
-        s4_s7_s8a_x_restore_refuses_invocation_in_flight,
-        Verb::Restore,
-        V::HeldByUnload,
-        A::RefuseInvocationInFlight
-    );
-    cell!(
-        s4_s7_s8a_x_show_answers_in_transition,
-        Verb::Show,
-        V::HeldByUnload,
-        A::ShowInTransition
-    );
-
-    // S1, S10, and S8a or S11 under a force.
-    cell!(
-        s1_s10_s11_x_load_refuses_invocation_in_flight,
-        Verb::Load,
-        V::HeldByOther,
-        A::RefuseInvocationInFlight
-    );
-    cell!(
-        s1_s10_s11_x_unload_refuses_invocation_in_flight,
-        Verb::Unload,
-        V::HeldByOther,
-        A::RefuseInvocationInFlight
-    );
-    cell!(
-        s1_s10_s11_x_force_unload_refuses_invocation_in_flight,
-        Verb::ForceUnload,
-        V::HeldByOther,
-        A::RefuseInvocationInFlight
-    );
-    cell!(
-        s1_s10_s11_x_save_point_refuses_invocation_in_flight,
-        Verb::SavePoint,
-        V::HeldByOther,
-        A::RefuseInvocationInFlight
-    );
-    cell!(
-        s1_s10_s11_x_restore_refuses_invocation_in_flight,
-        Verb::Restore,
-        V::HeldByOther,
-        A::RefuseInvocationInFlight
-    );
-    cell!(
-        s1_s10_s11_x_show_answers_in_transition,
-        Verb::Show,
-        V::HeldByOther,
-        A::ShowInTransition
-    );
-
-    // S2, S3, S9.
-    cell!(
-        s2_s3_s9_x_load_refuses_agent_running,
-        Verb::Load,
-        V::Serving,
-        A::RefuseAgentRunning
-    );
-    cell!(
-        s2_s3_s9_x_unload_directs_the_leave,
-        Verb::Unload,
-        V::Serving,
-        A::DirectLeave
-    );
-    cell!(
-        s2_s3_s9_x_force_unload_directs_the_sole_force,
-        Verb::ForceUnload,
-        V::Serving,
-        A::DirectForcedLeave
-    );
-    cell!(
-        s2_s3_s9_x_save_point_directs_it,
-        Verb::SavePoint,
-        V::Serving,
-        A::DirectSavePoint
-    );
-    cell!(
-        s2_s3_s9_x_restore_names_for_the_next_load,
-        Verb::Restore,
-        V::Serving,
-        A::NameForNextLoad
-    );
-    cell!(
-        s2_s3_s9_x_show_answers_the_workers_word,
-        Verb::Show,
-        V::Serving,
-        A::ShowWorkersWord
-    );
-
-    // S2, S3, S9 with the worker wedged.
-    cell!(
-        wedged_x_load_refuses_unanswered,
-        Verb::Load,
-        V::Wedged,
-        A::RefuseUnanswered
-    );
-    cell!(
-        wedged_x_unload_directs_the_leave,
-        Verb::Unload,
-        V::Wedged,
-        A::DirectLeave
-    );
-    cell!(
-        wedged_x_force_unload_directs_the_sole_force,
-        Verb::ForceUnload,
-        V::Wedged,
-        A::DirectForcedLeave
-    );
-    cell!(
-        wedged_x_save_point_directs_it,
-        Verb::SavePoint,
-        V::Wedged,
-        A::DirectSavePoint
-    );
-    cell!(
-        wedged_x_restore_names_for_the_next_load,
-        Verb::Restore,
-        V::Wedged,
-        A::NameForNextLoad
-    );
-    cell!(
-        wedged_x_show_answers_unanswered,
-        Verb::Show,
-        V::Wedged,
-        A::ShowUnanswered
-    );
-
-    // Outside the envelope: a leave pending, its holder killed.
-    cell!(
-        outside_leave_pending_x_load_refuses_agent_running,
-        Verb::Load,
-        V::LeavePendingUnheld,
-        A::RefuseAgentRunning
-    );
-    cell!(
-        outside_leave_pending_x_unload_refuses_out_of_order,
-        Verb::Unload,
-        V::LeavePendingUnheld,
-        A::RefuseOutOfOrder
-    );
-    cell!(
-        outside_leave_pending_x_force_unload_forces_else_escalates,
-        Verb::ForceUnload,
-        V::LeavePendingUnheld,
-        A::ForcedLeaveElseEscalateForced
-    );
-    cell!(
-        outside_leave_pending_x_save_point_refuses_out_of_order,
-        Verb::SavePoint,
-        V::LeavePendingUnheld,
-        A::RefuseOutOfOrder
-    );
-    cell!(
-        outside_leave_pending_x_restore_names_for_the_next_load,
-        Verb::Restore,
-        V::LeavePendingUnheld,
-        A::NameForNextLoad
-    );
-    cell!(
-        outside_leave_pending_x_show_answers_the_workers_word,
-        Verb::Show,
-        V::LeavePendingUnheld,
-        A::ShowWorkersWord
-    );
-
-    // Outside the envelope: a run never entered, its load killed.
-    cell!(
-        outside_never_entered_x_load_refuses_agent_running,
-        Verb::Load,
-        V::NeverEntered,
-        A::RefuseAgentRunning
-    );
-    cell!(
-        outside_never_entered_x_unload_ends_by_escalation,
-        Verb::Unload,
-        V::NeverEntered,
-        A::EndByEscalation
-    );
-    cell!(
-        outside_never_entered_x_force_unload_forces_else_escalates,
-        Verb::ForceUnload,
-        V::NeverEntered,
-        A::ForcedLeaveElseEscalateForced
-    );
-    cell!(
-        outside_never_entered_x_save_point_refuses_out_of_order,
-        Verb::SavePoint,
-        V::NeverEntered,
-        A::RefuseOutOfOrder
-    );
-    cell!(
-        outside_never_entered_x_restore_names_for_the_next_load,
-        Verb::Restore,
-        V::NeverEntered,
-        A::NameForNextLoad
-    );
-    cell!(
-        outside_never_entered_x_show_names_the_constituents,
-        Verb::Show,
-        V::NeverEntered,
-        A::ShowInTransitionConstituents
-    );
-
-    // S8b, the run lock held.
-    cell!(
-        s8b_x_load_refuses_agent_running,
-        Verb::Load,
-        V::WorkerGone,
-        A::RefuseAgentRunning
-    );
-    cell!(
-        s8b_x_unload_ends_by_escalation,
-        Verb::Unload,
-        V::WorkerGone,
-        A::EndByEscalation
-    );
-    cell!(
-        s8b_x_force_unload_ends_by_escalation,
-        Verb::ForceUnload,
-        V::WorkerGone,
-        A::EndByEscalation
-    );
-    cell!(
-        s8b_x_save_point_refuses_out_of_order,
-        Verb::SavePoint,
-        V::WorkerGone,
-        A::RefuseOutOfOrder
-    );
-    cell!(
-        s8b_x_restore_names_for_the_next_load,
-        Verb::Restore,
-        V::WorkerGone,
-        A::NameForNextLoad
-    );
-    cell!(
-        s8b_x_show_names_the_constituents,
-        Verb::Show,
-        V::WorkerGone,
-        A::ShowInTransitionConstituents
-    );
-}
+mod tests;
