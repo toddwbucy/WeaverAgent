@@ -733,16 +733,16 @@ plain integers. **`elision` carries `ElisionSpan` and not those counts**: an eli
 names the interior span it made absent, `from` and `to` beside the resident counts
 either side, and a flush that returned the context to its prefix names no span. The two
 were one shape in the first draft of the act that added elision and have not been since.
-The four model kinds carry their four own shapes, one each. The classify pair carries
+The five model kinds carry their five own shapes, one each, `model.unrecovered_call`'s
+`UnrecoveredCall` spliced. The classify pair carries
 its two own shapes, `ClassifyAsk` and `ClassifyScored`. **A refused classify authors no
 output at all** and reaches the record under `refusal`, so a refusal the exchange met is
 still the record's fact and never a fabricated answer, carried by the kind the class
 gives it rather than by the outcome's own variant. The tool bracket's two carry
 `Deferred`. `recall` carries `RecallAccount`. `score` carries `TaskScore`. `save_point`
-carries `SavePointTaken`. `model.unrecovered_call` carries `UnrecoveredCall`,
-spliced. Three plus one plus five plus one plus one plus two plus four plus two plus
-two plus one plus one plus one plus one plus one is twenty-six, which is the whole of
-charter section 3.1's set.
+carries `SavePointTaken`. Three plus one plus five plus one plus one plus two plus five
+plus two plus two plus one plus one plus one plus one is twenty-six, which is the whole
+of charter section 3.1's set.
 
 **The count is stated because it has twice been wrong, and the second time
 it was wrong silently.** An earlier draft assigned thirteen and left
@@ -2078,6 +2078,14 @@ the fact exists.
   when the kind leaves `turn_forbidden` or its pairing row, and the port records one per
   run and refuses a verdict inside a turn or with one term alone, watched to fail when
   each of those three checks is removed.
+- An unrecovered call is recorded as its own fact, per section 3, owed by the code act
+  that answers #31: the harness authors one `model.unrecovered_call` per entry of the
+  answer's `unrecovered` report, in emission order, after `model.output` and before the
+  turn's `message.assistant`, its payload carrying the fragment, the reason and the
+  grammar, and the recorder refuses one carrying no turn or another kind's payload.
+  Watched to fail when the event is omitted, when it is authored after
+  `message.assistant`, when the payload's fragment is dropped or differs from the
+  `UnrecoveredCall` block's, and when the kind leaves its pairing row.
 - Close-on-exec on the descriptors the worker receives, **owed to
   `weaver-harness-Spec`** rather than run here, the flag being supplied at the
   harness's receive site per `weaver-admin-harness-contract` section 5. The test
