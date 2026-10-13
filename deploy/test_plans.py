@@ -3491,18 +3491,33 @@ class DecommissionTests(unittest.TestCase):
         (#98; the custody audit's G22): /tmp is writable by every local user,
         so an entry another principal made under a weaver- name is neither
         read as root nor removed. `tmp_paths` over a stand-in `find` that
-        reports each entry's owner. Perturbation: drop the owner filter, and
-        the stranger's entry is listed."""
+        reports each entry's owner, NUL-ended. Perturbation: drop the owner
+        filter, the newline refusal or the directory check, and an entry
+        the planter chose is listed."""
         scratch = tempfile.TemporaryDirectory(prefix="weaver-tmp-paths-")
         self.addCleanup(scratch.cleanup)
         root = Path(scratch.name)
         find = root / "find"
-        find.write_text("#!/bin/sh\nprintf 'weaver-a\\t/tmp/weaver-a\\nsomeone\\t/tmp/weaver-planted\\n'\n")
+        # Records as find writes them, NUL-ended: a weaver- account's entry,
+        # a stranger's, a stranger's name carrying a newline that would split
+        # into a weaver- owner and /etc, and an entry not directly under /tmp.
+        find.write_text("#!/bin/sh\nprintf 'weaver-a\\t/tmp/weaver-a\\0"
+                        "someone\\t/tmp/weaver-planted\\0"
+                        "someone\\t/tmp/weaver-x\\nweaver-y\\t/etc\\0"
+                        "weaver-a\\t/tmp/weaver-q\\nx\\0"
+                        "weaver-b\\t/var/weaver-b\\0'\n")
         find.chmod(0o755)
         env = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"]}
         env.pop("BASH_ENV", None)
         self.assertEqual(self.run_fn("tmp_paths", "/tmp", env=env).splitlines(), ["/tmp/weaver-a"])
         self.assertIn("mapfile -t TMP_PATHS < <(tmp_paths /tmp)", self.script)
+        # The purge splits each line exactly as it was judged, so a name's
+        # surrounding blanks are kept and no other path is acted on.
+        self.assertNotIn("read -r kind name", self.script)
+        self.assertEqual(self.script.count("while IFS= read -r line; do\n  kind=${line%% *} name=${line#* }"), 3)
+        split = subprocess.run(["bash", "-c", 'line="$1"; kind=${line%% *} name=${line#* }; printf "%s|%s|" "$kind" "$name"',
+                                "x", "path /tmp/weaver-a "], text=True, capture_output=True, timeout=20)
+        self.assertEqual(split.stdout, "path|/tmp/weaver-a |")
 
     def test_a_purge_list_line_the_purge_would_not_find_refuses_the_purge(self):
         """**The purge acts only on lines it derives itself** (#98; the custody

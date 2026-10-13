@@ -411,9 +411,15 @@ done
 # account owns** (#98; the custody audit's G22): DIR is writable by every
 # local user, so an entry another principal made under a weaver- name is
 # neither read into the archive as root nor purged.
+# **Read NUL-delimited, and no name carrying a newline is taken**: a name in
+# a world-writable directory is anyone's to choose, and one carrying a
+# newline would otherwise split into a second entry, an owner and a path of
+# the planter's choosing, in this list and in the line-per-entry purge list.
 tmp_paths() {
-  find "$1" -mindepth 1 -maxdepth 1 \( -name 'weaver-*' -o -name 'torchinductor_weaver-*' \) -printf '%u\t%p\n' 2>/dev/null \
-    | while IFS=$'\t' read -r owner entry; do
+  find "$1" -mindepth 1 -maxdepth 1 \( -name 'weaver-*' -o -name 'torchinductor_weaver-*' \) -printf '%u\t%p\0' 2>/dev/null \
+    | while IFS=$'\t' read -r -d '' owner entry; do
+        case $entry in *$'\n'*) continue ;; esac
+        [ "${entry%/*}" = "$1" ] || continue
         case $owner in weaver-*) printf '%s\n' "$entry" ;; esac
       done
 }
@@ -653,19 +659,24 @@ systemctl stop "$SLICE" 2>/dev/null && plan "stopped $SLICE" || true
 
 
 say "accounts"
-while read -r kind name; do
+# Each line split as it was judged, whole: `read` with its default field
+# separators would strip a name's surrounding blanks and act on another path.
+while IFS= read -r line; do
+  kind=${line%% *} name=${line#* }
   case $kind in
     user)  userdel -r "$name" 2>/dev/null && plan "removed user $name (and home)" || { userdel "$name" 2>/dev/null && plan "removed user $name" || plan "user $name: not removed"; } ;;
   esac
 done < "$PURGE_LIST"
-while read -r kind name; do
+while IFS= read -r line; do
+  kind=${line%% *} name=${line#* }
   case $kind in
     group) getent group "$name" >/dev/null && { groupdel "$name" 2>/dev/null && plan "removed group $name" || plan "group $name: not removed"; } ;;
   esac
 done < "$PURGE_LIST"
 
 say "paths"
-while read -r kind name; do
+while IFS= read -r line; do
+  kind=${line%% *} name=${line#* }
   case $kind in
     path)
       case "$name" in */models|*/models/*) plan "kept $name"; continue;; esac
