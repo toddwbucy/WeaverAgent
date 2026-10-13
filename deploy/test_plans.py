@@ -3052,6 +3052,68 @@ class LifecycleEnvelopeFieldTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "r-envelope")
 
 
+class LifecycleForcedLogTests(unittest.TestCase):
+    """**Step 6b reads admin's own writes to admin.log, not the file's
+    growth** (the second full run, 2026-10-13): the force on the drifted
+    territory writes no line of admin's (3.0 outcome row 2), but it ends the
+    worker, and the trace relay, holding the descriptor admin handed it at
+    the judged load, writes its `ended` line (weaver-admin-Spec section 8).
+    The check, lifted from the script as it ships with its helper, runs
+    against a log whose appended tail is (a) the relay's `ended` line alone,
+    which passes, and (b) an admin verb line, which fails naming it.
+    Perturbation: put back the file-size comparison and (a) fails."""
+
+    RELAY = ('{"actor":"relay","agent":"m1","boundary":"b","detail":"the worker exited",'
+             '"event":"ended","wall_ms":2}')
+    ADMIN = ('{"agent":"m1","command":"weaver-admin force-unload m1","outcome":"unloaded",'
+             '"uid":1000,"verb":"force-unload","wall_ms":3}')
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix="weaver-forced-log-")
+        self.addCleanup(self.scratch.cleanup)
+        root = Path(self.scratch.name)
+        self.bin_dir = root / "bin"
+        self.bin_dir.mkdir()
+        sudo = self.bin_dir / "sudo"
+        sudo.write_text('#!/bin/sh\n[ "$1" = "-n" ] && shift\nexec env "$@"\n')
+        sudo.chmod(0o755)
+        self.territory = root / "weaver-m1"
+        self.territory.mkdir()
+        self.log = self.territory / "admin.log"
+        self.before = ('{"agent":"m1","command":"weaver-admin load m1","outcome":"idle",'
+                       '"uid":1000,"verb":"load","wall_ms":1}\n')
+        script = (DEPLOY / "verify-lifecycle.sh").read_text()
+        checks = [line.strip() for line in script.splitlines()
+                  if "admin.log line" in line and line.strip().startswith("expect_eq")]
+        self.assertEqual(len(checks), 1, checks)
+        self.check = checks[0]
+        self.functions = lifecycle_functions(script, "fail", "pass", "expect_eq", "file_size",
+                                             "not_relay_lines_since")
+
+    def run_check(self, appended):
+        self.log.write_text(self.before)
+        program = ("set -euo pipefail\n" + 'STEP_LABEL="step 6b (test)"\n'
+                   + f"T={shlex.quote(str(self.territory))}\n" + self.functions
+                   + 'size=$(file_size "$T/admin.log")\n'
+                   + f"printf '%s\\n' {shlex.quote(appended)} >>\"$T/admin.log\"\n"
+                   + self.check + "\necho CHECKED\n")
+        env = {**os.environ, "PATH": str(self.bin_dir) + os.pathsep + os.environ["PATH"]}
+        env.pop("BASH_ENV", None)
+        return subprocess.run(["bash", "-c", program], env=env, text=True,
+                              capture_output=True, timeout=20)
+
+    def test_the_relays_ended_line_alone_passes(self):
+        result = self.run_check(self.RELAY)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("CHECKED", result.stdout)
+
+    def test_an_admin_verb_line_fails_naming_it(self):
+        result = self.run_check(self.ADMIN)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("admin wrote no admin.log line", result.stderr)
+        self.assertIn('"verb":"force-unload"', result.stderr)
+
+
 class LifecycleNearMissTests(unittest.TestCase):
     """**verify-lifecycle.sh's near misses put back what they changed**, the
     exit trap included, whatever admin answers: a near miss is run alone on a

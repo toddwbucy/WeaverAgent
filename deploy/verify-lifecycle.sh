@@ -433,6 +433,27 @@ expect_marker() { # expect_marker RUN STATE
   expect_eq "the run marker reads $2" "$2" "$(json_at "$m" state)"
 }
 file_size() { sudo -n stat -c %s -- "$1" 2>/dev/null || printf 0; }
+# not_relay_lines_since FILE OFFSET: each line appended to admin.log past
+# OFFSET that is not the trace relay's own, or `none`. The relay writes its
+# events (connect, replaced, refused, disconnect, truncated, ended) through
+# the descriptor admin handed it at load (weaver-admin-Spec section 8), each
+# carrying "actor":"relay" and an "event"; admin's own lines carry a "verb"
+# and a "command". Anything else, admin's or unreadable, is named.
+not_relay_lines_since() {
+  sudo -n tail -c +"$(( $2 + 1 ))" -- "$1" 2>/dev/null | python3 -c 'import json, sys
+named = []
+for line in sys.stdin:
+    if not line.strip():
+        continue
+    try:
+        d = json.loads(line)
+    except ValueError:
+        d = None
+    if isinstance(d, dict) and d.get("actor") == "relay" and "event" in d and "verb" not in d:
+        continue
+    named.append(line.rstrip("\n"))
+print("\n".join(named) if named else "none")'
+}
 # expect_in_order CHECK FILE NEEDLE...: each needle in FILE, after the last.
 expect_in_order() {
   local check=$1 file=$2; shift 2
@@ -858,7 +879,7 @@ step_6b() {
   run_line "with the run standing, the territory at 0711 (put back by the step and by the exit trap)"
   run_line "weaver-admin unload $A; weaver-admin force-unload $A; the territory put back"
   run_line "weaver-admin load $A"
-  want "unload refuses boundary_unverified; force-unload answers unloaded; the marker forced; nothing published; no admin.log line written"
+  want "unload refuses boundary_unverified; force-unload answers unloaded; the marker forced; nothing published; admin writes no admin.log line (the relay's ended line, through the descriptor of the judged load, may land)"
   want "show unloaded with no constituent; the territory root:$AU-state 710 again; load idle"
   [ "$APPLY" -eq 1 ] || return 0
   local tmode lines size
@@ -875,7 +896,11 @@ step_6b() {
   ANSWER=$force_answer; expect_state "force-unload on the drifted territory" unloaded
   expect_marker "$RUN" forced
   expect_eq "nothing was published" "$lines" "$(manifest_count)"
-  expect_eq "no admin.log line was written" "$size" "$(file_size "$T/admin.log")"
+  # Admin's own writes, not the file's growth (3.0 outcome row 2): the force
+  # ends the worker, and the relay, holding the descriptor admin handed it at
+  # the judged load, writes its Spec'd `ended` line. That line is let through;
+  # any other line is admin's and fails the check.
+  expect_eq "admin wrote no admin.log line" none "$(not_relay_lines_since "$T/admin.log" "$size")"
   expect_unloaded_alone
   expect_lay "$T" "root:$AU-state 710 directory"
   ask load; expect_state load idle
