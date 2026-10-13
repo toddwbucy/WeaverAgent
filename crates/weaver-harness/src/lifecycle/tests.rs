@@ -130,7 +130,7 @@ fn entered_run(turn: Option<&str>) -> (Run, OrganChannel, crate::scratch::Scratc
     )));
     let sink = OwnedFd::from(File::create(&path).expect("sink"));
     let session = SessionId("s-1".to_string());
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -1701,7 +1701,7 @@ fn a_save_point_after_the_tee_was_lost_is_refused() {
     let mut seam = crate::state::StateSeam::new(state_end.try_clone().expect("clone"));
     seam.snapshot_answer_bound_ms = 50;
     run.state = Some(seam);
-    run.recorder.serving_mut().expect("serving").attach_tee(
+    run.recorder.attach_tee(
         weaver_trace::Tee::open(
             state_end,
             "s-1".into(),
@@ -3580,7 +3580,7 @@ fn a_leave_with_no_bound_passing_stays_graceful() {
 /// Answers the pipe's read end.
 fn stalled_writer(run: &mut Run, events: usize, octets: usize) -> std::io::PipeReader {
     let (reader, writer) = std::io::pipe().expect("pipe");
-    run.recorder = crate::record::Record::Serving(
+    run.recorder = crate::record::Record::from(
         Recorder::receive(
             OwnedFd::from(writer),
             RunRef("r-1".into()),
@@ -3892,13 +3892,13 @@ fn a_join_from_s4_s5_and_s6_turns_the_leave_forced_naming_forced_by() {
     let (first, _f) = dialed(LifecycleDirective::JoinLeave {
         cause: weaver_types::Cause { uid: 9 },
     });
-    hear_dial(first, &mut leave, false);
+    hear_dial(first, &mut leave, false, false);
     assert_eq!(leave.progress.leave, Leave::Forced);
     assert_eq!(leave.forced_by, Some(weaver_types::Cause { uid: 9 }));
     let (later, _l) = dialed(LifecycleDirective::JoinLeave {
         cause: weaver_types::Cause { uid: 10 },
     });
-    hear_dial(later, &mut leave, false);
+    hear_dial(later, &mut leave, false, false);
     assert_eq!(leave.forced_by, Some(weaver_types::Cause { uid: 9 }));
     assert_eq!(leave.joins.len(), 2, "both held for the same Left");
     // From S7 on, a graceful leave's outcome is fixed: the join is held
@@ -3907,7 +3907,7 @@ fn a_join_from_s4_s5_and_s6_turns_the_leave_forced_naming_forced_by() {
     let (join, _j) = dialed(LifecycleDirective::JoinLeave {
         cause: weaver_types::Cause { uid: 9 },
     });
-    hear_dial(join, &mut sealed, true);
+    hear_dial(join, &mut sealed, true, false);
     assert_eq!(sealed.progress.leave, Leave::Graceful);
     assert_eq!(sealed.forced_by, None);
     assert_eq!(sealed.joins.len(), 1);
@@ -3925,7 +3925,7 @@ fn a_join_after_a_bound_turned_the_leave_forced_names_no_forced_by() {
     let (join, _j) = dialed(LifecycleDirective::JoinLeave {
         cause: weaver_types::Cause { uid: 9 },
     });
-    hear_dial(join, &mut leave, false);
+    hear_dial(join, &mut leave, false, false);
     assert_eq!(leave.forced_by, None);
     assert_eq!(leave.joins.len(), 1);
 }
@@ -3945,7 +3945,7 @@ fn a_join_against_a_forces_leave_or_a_rollback_is_out_of_order() {
         let (join, far) = dialed(LifecycleDirective::JoinLeave {
             cause: weaver_types::Cause { uid: 9 },
         });
-        hear_dial(join, &mut leave, false);
+        hear_dial(join, &mut leave, false, false);
         assert!(leave.joins.is_empty(), "{case}");
         assert_eq!(
             far.recv().expect("an answer").payload,
@@ -3965,7 +3965,7 @@ fn observe_answers_in_transition_while_a_leave_is_pending() {
     use crate::lifecycle_table::Leave;
     let (mut leave, _admin) = pending_leave(Leave::Graceful, Leave::Graceful, false);
     let (observe, far) = dialed(LifecycleDirective::Observe);
-    hear_dial(observe, &mut leave, false);
+    hear_dial(observe, &mut leave, false, false);
     assert_eq!(
         far.recv().expect("an answer").payload,
         weaver_types::Payload::Answer(LifecycleAnswer::InTransition {
@@ -3977,7 +3977,7 @@ fn observe_answers_in_transition_while_a_leave_is_pending() {
         forced: true,
         rollback: false,
     });
-    hear_dial(second, &mut leave, false);
+    hear_dial(second, &mut leave, false, false);
     assert_eq!(
         far.recv().expect("an answer").payload,
         weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder)
@@ -4005,7 +4005,7 @@ fn a_join_held_at_the_seal_is_answered_left_after_the_writer_drains() {
     let (join, joiner) = dialed(LifecycleDirective::JoinLeave {
         cause: weaver_types::Cause { uid: 9 },
     });
-    hear_dial(join, &mut leave, false);
+    hear_dial(join, &mut leave, false, false);
     run.leave = Some(leave);
     let (mut harness, dir) = harness_entered(run);
     assert!(
@@ -5754,7 +5754,7 @@ fn a_diagnostic_run_grants_no_frame_seat() {
         std::thread::current().id()
     )));
     let sink = OwnedFd::from(File::create(&sink_path).expect("sink"));
-    run.recorder = crate::record::Record::Diagnostic(
+    run.recorder = crate::record::Record::from(
         weaver_diagnostic::Recorder::receive(
             sink,
             weaver_diagnostic::RunRef("r-1".into()),
@@ -6639,7 +6639,7 @@ fn an_organ_death_met_with_the_record_broken_ends_service() {
             .open("/dev/full")
             .expect("the full device"),
     );
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(full, RunRef("r-1".into()), SessionRef("s-1".into())).expect("recorder"),
     );
     let _ = run.author.author_fault(
@@ -6717,7 +6717,7 @@ fn a_gate_dying_at_rest_with_the_record_broken_ends_service() {
             .open("/dev/full")
             .expect("the full device"),
     );
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(full, RunRef("r-1".into()), SessionRef("s-1".into())).expect("recorder"),
     );
     let _ = run.author.author_fault(
@@ -7304,7 +7304,7 @@ fn the_operators_system_line_seats_the_prompt_and_turns() {
     // its lines to closure.
     let (state_end, member_end) =
         std::os::unix::net::UnixStream::pair().expect("the member's pair");
-    run.recorder.serving_mut().expect("serving").attach_tee(
+    run.recorder.attach_tee(
         weaver_trace::Tee::open(
             state_end,
             "s-1".into(),
@@ -7636,4 +7636,392 @@ fn the_turn_key_stands_while_a_turn_runs() {
             ("t-2".to_string(), Kind::TurnClosed),
         ]
     );
+}
+
+/// The run's record replaced by one whose writer has failed: one event
+/// written to a device that refuses every write, the drain's failure
+/// standing, as the B2 pins build it (62aa181).
+fn break_record(run: &mut Run) {
+    let full = OwnedFd::from(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/full")
+            .expect("the full device"),
+    );
+    let mut recorder = crate::record::Record::from(
+        Recorder::receive(full, RunRef("r-1".into()), SessionRef("s-1".into())).expect("recorder"),
+    );
+    let _ = run.author.author_fault(
+        &mut recorder,
+        Subsystem::Harness,
+        None,
+        &crate::authorship::harness_report(weaver_types::FaultCase::OrganDeathObserved, "{}"),
+    );
+    assert!(recorder.drain().is_err(), "the writer has failed");
+    run.recorder = recorder;
+}
+
+/// The run's record latched by a submission refused on its own, the writer
+/// sound (#116, Q5): an event bound to another session, `RefusedOnSubmit`,
+/// which no standing failure and no drain would see.
+fn latch_by_refusal(run: &mut Run) {
+    let foreign = crate::authorship::Author::new(
+        &weaver_types::SessionId("s-other".into()),
+        &weaver_types::RunId("r-1".into()),
+    );
+    let refused = foreign.author_fault(
+        &mut run.recorder,
+        Subsystem::Harness,
+        None,
+        &crate::authorship::harness_report(weaver_types::FaultCase::OrganDeathObserved, "{}"),
+    );
+    assert!(
+        matches!(
+            refused,
+            Err(crate::record::RecordFailure::Serving(
+                weaver_trace::Failure::RefusedOnSubmit { .. }
+            ))
+        ),
+        "{refused:?}"
+    );
+    assert!(run.recorder.failed(), "the refusal is latched");
+    assert!(run.recorder.drain().is_ok(), "the writer is sound");
+}
+
+/// Whether an answer arrives on `channel` within 200 ms; a hang-up, which
+/// wakes the poll as an answer does, is none.
+fn arrives(channel: &OrganChannel) -> bool {
+    use std::os::fd::AsFd;
+    let mut fds = [nix::poll::PollFd::new(
+        channel.as_fd(),
+        nix::poll::PollFlags::POLLIN,
+    )];
+    nix::poll::poll(&mut fds, nix::poll::PollTimeout::from(200u16)).expect("poll") > 0
+        && channel.recv().is_ok()
+}
+
+/// **A stop mid-turn whose close the record cannot take ends service
+/// unanswered** (#116, site `dispatch_on`'s stop): the close's authoring
+/// fails and is latched, and the answer reads the latch before
+/// `TurnAborted` is announced. Perturbation: drop the latch read from
+/// `Harness::answer`, and `TurnAborted` is answered over the missing close.
+#[test]
+fn a_stop_mid_turn_with_the_record_broken_ends_service_unanswered() {
+    let (mut run, _spare, _sink) = entered_run(Some("t-1"));
+    break_record(&mut run);
+    let (harness_end, peer_end) = OrganChannel::pair().expect("pair");
+    let (mut harness, _dir) = harness_entered(run);
+    let dispatched = harness.dispatch_on(
+        &harness_end,
+        test_exchange(),
+        LifecycleDirective::Stop {
+            cause: weaver_types::Cause { uid: 1000 },
+        },
+        None,
+        None,
+    );
+    assert!(dispatched.is_err(), "service ends: {dispatched:?}");
+    assert!(
+        !arrives(&peer_end.into_channel()),
+        "no answer is announced over the missing close"
+    );
+}
+
+/// **A refusal to admin is not announced over a latched record** (#116,
+/// `Harness::refuse`, the road `author_refusal_on`'s enter refusal and
+/// every other refusal take): with the record latched by a submission
+/// refused on its own, an out-of-order directive ends service rather than
+/// being refused. Perturbation: drop the latch read from `Harness::refuse`,
+/// and `OutOfOrder` is answered.
+#[test]
+fn a_refusal_is_not_announced_over_a_latched_record() {
+    let (mut run, _spare, _sink) = entered_run(None);
+    latch_by_refusal(&mut run);
+    let (harness_end, peer_end) = OrganChannel::pair().expect("pair");
+    let (mut harness, _dir) = harness_entered(run);
+    let dispatched = harness.dispatch_on(
+        &harness_end,
+        test_exchange(),
+        LifecycleDirective::JoinLeave {
+            cause: weaver_types::Cause { uid: 0 },
+        },
+        None,
+        None,
+    );
+    assert!(dispatched.is_err(), "service ends: {dispatched:?}");
+    assert!(!arrives(&peer_end.into_channel()), "nothing is announced");
+}
+
+/// **A gate's fault report at rest that the record cannot take ends
+/// service** (#116, `serve_gate_wake`'s fault arm): the authoring is
+/// latched and the wake reads it. Perturbation: answer the arm `Ok(())`
+/// as before, and the run serves on without the report.
+#[test]
+fn a_gate_fault_at_rest_with_the_record_broken_ends_service() {
+    let (mut run, _spare, _sink) = entered_run(None);
+    break_record(&mut run);
+    let (channel, gate_peer) = OrganChannel::pair().expect("pair");
+    run.gate = Some(GateChannel {
+        channel,
+        pid: nix::unistd::Pid::from_raw(i32::MAX),
+        last_word: crate::spawn::LastWord::quiet(),
+    });
+    let gate_peer = gate_peer.into_channel();
+    gate_peer
+        .send(&OrganEnvelope {
+            exchange: ExchangeId {
+                opener: Opener::Gate,
+                ordinal: 1,
+            },
+            position: Position::Open,
+            payload: weaver_types::Payload::Fault(crate::authorship::harness_report(
+                weaver_types::FaultCase::ClientConnectionFailedMidTurn,
+                "{}",
+            )),
+        })
+        .expect("the report sends");
+    let (mut harness, _dir) = harness_entered(run);
+    let served = harness.serve_gate_wake(
+        "identity",
+        &[],
+        &mut |_: &mut crate::engine::Ports<'_>, _: &str| unreachable!("no frame"),
+        &mut None,
+    );
+    assert!(served.is_err(), "service ends: {served:?}");
+}
+
+/// **A dialer is not answered over a latched record** (#116, the frame
+/// path's read before its close is sent; the Planner's addition: the turn's
+/// close path reads the latch before any answer is announced): with the
+/// record latched by a submission refused on its own, the writer sound, a
+/// frame's close is not sent and service ends. The read covers every
+/// authoring inside a frame: the ports' (flush, recall, score, classify,
+/// the decode refusals, the pressure report), the held-frames fault and the
+/// hole's fault. Perturbation: drop the read, and the refused close is sent.
+#[test]
+fn a_dialer_is_not_answered_over_a_latched_record() {
+    let (mut run, _spare, _sink) = entered_run(None);
+    latch_by_refusal(&mut run);
+    let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+    run.gate = Some(GateChannel {
+        channel: gate_end,
+        pid: nix::unistd::Pid::from_raw(i32::MAX),
+        last_word: crate::spawn::LastWord::quiet(),
+    });
+    let gate_peer = gate_peer.into_channel();
+    gate_peer
+        .send(&OrganEnvelope {
+            exchange: ExchangeId {
+                opener: Opener::Gate,
+                ordinal: 1,
+            },
+            position: Position::Open,
+            payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry(b"not a request")),
+        })
+        .expect("frame sends");
+    let (mut harness, _dir) = harness_entered(run);
+    let served = harness.serve_gate_wake(
+        "identity",
+        &[],
+        &mut |_: &mut crate::engine::Ports<'_>, _: &str| unreachable!("the parse refuses"),
+        &mut None,
+    );
+    assert!(served.is_err(), "service ends: {served:?}");
+    assert!(!arrives(&gate_peer), "the dialer is not answered");
+}
+
+/// **A leave over a latched record answers no `Left`** (#116, the leave's
+/// seal): the drain sees only a writer that failed, so a submission refused
+/// on its own, the writer sound, is read from the latch, and the leave
+/// refuses `DescriptorsUnusable`. Perturbation: drop the latch read from
+/// `leave_after`, and the leave completes.
+#[test]
+fn a_leave_over_a_latched_record_refuses_descriptors_unusable() {
+    let (mut run, _spare, _sink) = entered_run(None);
+    latch_by_refusal(&mut run);
+    assert_eq!(
+        leave(&mut run, None, true),
+        Err(LifecycleRefusal::DescriptorsUnusable)
+    );
+}
+
+/// **The serve loop does not wait over a latched record** (#116, the
+/// backstop before each wait): an authoring that announced nothing, such as
+/// `grant_seat`'s hole fault or a replay's, is still not served past.
+/// Perturbation: drop the read before the wait, and the loop waits on.
+#[test]
+fn the_serve_loop_does_not_wait_over_a_latched_record() {
+    let (mut run, _spare, _sink) = entered_run(None);
+    latch_by_refusal(&mut run);
+    let (harness, dir) = harness_entered(run);
+    let (sent, served) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _dir = dir;
+        let outcome = harness.serve(
+            "identity",
+            &[],
+            weaver_trace::LoopIdentity::compiled("test"),
+            |_, _| unreachable!("no frame arrives"),
+        );
+        let _ = sent.send(outcome.is_err());
+    });
+    assert_eq!(
+        served.recv_timeout(std::time::Duration::from_secs(5)),
+        Ok(true),
+        "service ends before the wait"
+    );
+}
+
+/// **A dial heard during a leave is not answered over a latched record**
+/// (#116, `hear_dial`): an observation is dropped unanswered, admin
+/// concluding as for no answer. Perturbation: drop the latch read, and
+/// `InTransition` is answered.
+#[test]
+fn a_dial_heard_in_a_leave_is_not_answered_over_a_latched_record() {
+    use crate::lifecycle_table::Leave;
+    let (mut leave, _admin) = pending_leave(Leave::Graceful, Leave::Graceful, false);
+    let (observe, far) = dialed(LifecycleDirective::Observe);
+    hear_dial(observe, &mut leave, false, true);
+    assert!(!arrives(&far), "nothing is answered");
+}
+
+/// **The leave's held callers are refused `DescriptorsUnusable` over a
+/// latched record** (#116, `answer_all`), whatever the leave would have
+/// answered: the seal's `Left` and S9's `SavePointNotTaken` alike.
+/// Perturbation: drop the override, and the leave's own answer is sent.
+#[test]
+fn the_leaves_callers_are_refused_over_a_latched_record() {
+    use crate::lifecycle_table::Leave;
+    let (leave, admin) = pending_leave(Leave::Graceful, Leave::Graceful, false);
+    answer_all(
+        &leave,
+        Err(LifecycleRefusal::SavePointNotTaken {
+            missed: weaver_types::SavePointLeg::MemberDead,
+        }),
+        true,
+    );
+    assert_eq!(
+        admin.recv().expect("an answer").payload,
+        weaver_types::Payload::Refusal(LifecycleRefusal::DescriptorsUnusable)
+    );
+}
+
+/// **No held frame is served over a latched record** (#116, the shelf): a
+/// frame queued behind the turn would run a turn, and the tools it asks in
+/// the world, past a record already missing an event. Perturbation: drop
+/// the read at the top of the shelf's loop, and the frame's turn is entered.
+#[test]
+fn a_held_frame_is_not_served_over_a_latched_record() {
+    let (mut run, _spare, _sink) = entered_run(None);
+    latch_by_refusal(&mut run);
+    let (gate_end, _gate_peer) = OrganChannel::pair().expect("gate pair");
+    run.gate = Some(GateChannel {
+        channel: gate_end,
+        pid: nix::unistd::Pid::from_raw(i32::MAX),
+        last_word: crate::spawn::LastWord::quiet(),
+    });
+    run.held_frames.push_back(OrganEnvelope {
+        exchange: ExchangeId {
+            opener: Opener::Gate,
+            ordinal: 2,
+        },
+        position: Position::Open,
+        payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry(
+            b"{\"text\":\"say a word\"}",
+        )),
+    });
+    let (mut harness, _dir) = harness_entered(run);
+    let served = harness.serve_shelf(
+        "identity",
+        &[],
+        &mut |_: &mut crate::engine::Ports<'_>, _: &str| panic!("the held frame's turn ran"),
+        &mut None,
+    );
+    assert!(served.is_err(), "service ends: {served:?}");
+}
+
+/// **An unwind over a latched record names `StreamWriteFailed`** (#116):
+/// whichever reader met the latch, the record's last event says the record
+/// failed, the writer here being sound enough to take it. Perturbation:
+/// drop the override, and the caller's case is named.
+#[test]
+fn an_unwind_over_a_latched_record_names_stream_write_failed() {
+    let (mut run, _spare, sink) = entered_run(None);
+    latch_by_refusal(&mut run);
+    let (mut harness, _dir) = harness_entered(run);
+    harness.unwind_if_entered(
+        weaver_types::FaultCase::OrganDeathObserved,
+        &ChannelFault::Closed,
+    );
+    let stream = std::fs::read_to_string(&sink.0).expect("the sink reads back");
+    let fault = stream
+        .lines()
+        .find(|line| line.contains("\"kind\":\"fault\"") && line.contains("service-ended"))
+        .expect("the unwind's fault");
+    assert!(fault.contains("stream_write_failed"), "{fault}");
+}
+
+/// **A join heard in a leave is not answered over a latched record**
+/// (#116, `hear_dial`): `join` refuses a join into a forced leave on its
+/// own, so the latch is read before the join. Perturbation: read it after,
+/// and `OutOfOrder` is answered.
+#[test]
+fn a_join_heard_in_a_leave_is_not_answered_over_a_latched_record() {
+    use crate::lifecycle_table::Leave;
+    let (mut leave, _admin) = pending_leave(Leave::Forced, Leave::Forced, false);
+    let (join, far) = dialed(LifecycleDirective::JoinLeave {
+        cause: weaver_types::Cause { uid: 9 },
+    });
+    hear_dial(join, &mut leave, false, true);
+    assert!(!arrives(&far), "nothing is answered");
+}
+
+/// **A gate's report that will not render is latched, and ends service**
+/// (#116, `author_fault`): an account the gate sent with a newline inside
+/// it parses, and the record's canonical line refuses it. Perturbation:
+/// return the render's failure without latching it, and the run serves on
+/// without the report.
+#[test]
+fn a_gate_report_that_will_not_render_ends_service() {
+    let (mut run, _spare, _sink) = entered_run(None);
+    let (channel, gate_peer) = OrganChannel::pair().expect("pair");
+    run.gate = Some(GateChannel {
+        channel,
+        pid: nix::unistd::Pid::from_raw(i32::MAX),
+        last_word: crate::spawn::LastWord::quiet(),
+    });
+    let gate_peer = gate_peer.into_channel();
+    let report = weaver_types::FaultReport {
+        case: weaver_types::FaultCase::ClientConnectionFailedMidTurn,
+        account: serde_json::value::RawValue::from_string("{\"x\":\n1}".into())
+            .expect("an account that parses"),
+    };
+    gate_peer
+        .send(&OrganEnvelope {
+            exchange: ExchangeId {
+                opener: Opener::Gate,
+                ordinal: 1,
+            },
+            position: Position::Open,
+            payload: weaver_types::Payload::Fault(report),
+        })
+        .expect("the report sends");
+    let (mut harness, _dir) = harness_entered(run);
+    let served = harness.serve_gate_wake(
+        "identity",
+        &[],
+        &mut |_: &mut crate::engine::Ports<'_>, _: &str| unreachable!("no frame"),
+        &mut None,
+    );
+    assert!(served.is_err(), "service ends: {served:?}");
+}
+
+/// **No seat is granted over a latched record** (#116, `grant_seat`).
+/// Perturbation: drop the arm, and the seat is granted.
+#[test]
+fn no_seat_is_granted_over_a_latched_record() {
+    let (mut run, _spare, _sink) = entered_run(None);
+    latch_by_refusal(&mut run);
+    let (mut harness, _dir) = harness_entered(run);
+    assert!(harness.grant_seat("identity", &[]).is_none());
 }

@@ -160,6 +160,8 @@ pub(crate) fn report_pressure(recorder: &mut Record, author: &Author, reported: 
         pressure.queued,
         weaver_trace::HIGH_WATER_MARK
     );
+    // Latched on a failure (#116): read before the turn's dialer is answered, and at the
+    // leave's seal.
     let _ = author.author_fault(
         recorder,
         Subsystem::Harness,
@@ -549,11 +551,12 @@ impl<'a> Ports<'a> {
     /// their own kinds before the exchange, so the ask is named and left
     /// alone.
     ///
-    /// **Best-effort and never the caller's failure.** A refusal that could
-    /// not be recorded is a defect in the author rather than in the ask, and
-    /// the port still answers what it was going to answer: refusing to
-    /// report a refusal twice over would leave the loop with neither the
-    /// answer nor the record.
+    /// **Never the caller's failure, and never unseen.** The port still
+    /// answers what it was going to answer, refusing to report a refusal
+    /// twice over leaving the loop with neither the answer nor the record,
+    /// and a refusal that could not be recorded is latched on the record
+    /// (#116), so the turn's dialer or the wake's answer is never announced
+    /// over it: service ends there instead.
     fn author_refusal(
         &mut self,
         asked: weaver_types::TokenAsk,
@@ -561,19 +564,9 @@ impl<'a> Ports<'a> {
         turn: Option<&TurnKey>,
     ) {
         let record = weaver_types::RefusalRecord::Decode { asked, refusal };
-        let Ok(rendered) = serde_json::to_string(&record) else {
-            return;
-        };
-        let Some(payload) = weaver_trace::raw_payload(&rendered) else {
-            return;
-        };
-        let _ = self.author.author(
-            self.recorder,
-            Kind::Refusal,
-            Subsystem::Harness,
-            turn,
-            Some(Payload::Refusal(payload)),
-        );
+        // Latched on a failure, a render's included (#116), read where the
+        // turn or the wake answers.
+        let _ = self.author.author_refusal(self.recorder, turn, &record);
     }
 
     /// The elision ask, per `weaver-harness-Spec` section 6 and
@@ -669,8 +662,9 @@ impl<'a> Ports<'a> {
         // of that date, so nothing admits it on one binding and refuses it
         // on the other. A standing failure refuses every later submission,
         // a fault naming this elision included, so the record's ending is
-        // the evidence and the recorder's failure travels by the paths that
-        // already carry it.
+        // the evidence. **The failure is latched on the record** (#116), so
+        // the counts are answered to the loop and service ends before the
+        // turn's dialer or the wake's answer is announced.
         let _ = authored;
         Some(counts)
     }
@@ -880,15 +874,11 @@ impl<'a> Ports<'a> {
             // the contract, and the record's fault event carries it by
             // the fault custody rule.
             Ok(crate::channel::ClassifyReply::Answer(weaver_types::LabelAnswer::Fault(report))) => {
-                let rendered = serde_json::to_string(&report).ok()?;
-                let payload = weaver_trace::raw_payload(&rendered)?;
-                let _ = self.author.author(
-                    self.recorder,
-                    Kind::Fault,
-                    Subsystem::Spu,
-                    None,
-                    Some(Payload::Fault(payload)),
-                );
+                // Latched on a failure, a render's included (#116), read before
+                // the dialer is answered.
+                let _ = self
+                    .author
+                    .author_fault(self.recorder, Subsystem::Spu, None, &report);
                 None
             }
             Ok(crate::channel::ClassifyReply::Refusal(refusal)) => {
@@ -920,19 +910,9 @@ impl<'a> Ports<'a> {
     /// never fabricated into an answer.
     fn author_classify_refusal(&mut self, refusal: weaver_types::LabelRefusal) {
         let record = weaver_types::RefusalRecord::Classify { refusal };
-        let Ok(rendered) = serde_json::to_string(&record) else {
-            return;
-        };
-        let Some(payload) = weaver_trace::raw_payload(&rendered) else {
-            return;
-        };
-        let _ = self.author.author(
-            self.recorder,
-            Kind::Refusal,
-            Subsystem::Harness,
-            None,
-            Some(Payload::Refusal(payload)),
-        );
+        // Latched on a failure, a render's included (#116), read where the
+        // turn or the wake answers.
+        let _ = self.author.author_refusal(self.recorder, None, &record);
     }
 
     /// The label leg was lost mid-exchange, which is not a refusal.
@@ -951,6 +931,7 @@ impl<'a> Ports<'a> {
     /// serves.
     fn author_classify_lost(&mut self) {
         let account = "{\"organ\":\"harness\",\"leg\":\"classify\"}";
+        // Latched on a failure (#116), read before the dialer is answered.
         let _ = self.author.author_fault(
             self.recorder,
             Subsystem::Harness,
@@ -1135,7 +1116,8 @@ impl<'a> Ports<'a> {
                         // purpose. Best-effort, because the fault may already
                         // be taking the service down, and closure then signals
                         // what the answer could not.
-                        if let Some((exchange, _)) = stop.take()
+                        if !self.recorder.failed()
+                            && let Some((exchange, _)) = stop.take()
                             && let Some(slot) = self.pending.as_deref_mut()
                             && let Some(connection) = slot.as_ref()
                         {
@@ -1365,6 +1347,7 @@ impl<'a> Ports<'a> {
                         .ok()
                         .and_then(|completed| weaver_trace::raw_payload(&completed))
                     {
+                        // Best-effort: the turn ends on the loss returned below.
                         let _ = self.author.author(
                             self.recorder,
                             Kind::ToolCallCompleted,
@@ -1403,6 +1386,7 @@ impl<'a> Ports<'a> {
                 // names.
                 let account =
                     format!("{{\"organ\":\"harness\",\"held-frames-bound\":{MAX_HELD_FRAMES}}}");
+                // Latched on a failure (#116), read before the dialer is answered.
                 let _ = self.author.author_fault(
                     self.recorder,
                     Subsystem::Harness,
@@ -1491,6 +1475,12 @@ impl<'a> Ports<'a> {
                 }
             }
             ExchangeWake::Directive => {
+                // **No answer to admin mid-turn over a latched record**
+                // (#116): the turn ends on the loss, its one close authored
+                // by the bracket, and the frame path ends service.
+                if self.recorder.failed() {
+                    return Err(TurnError::ChannelLost);
+                }
                 // Read before the slot is borrowed: whether a leave is
                 // pending, and whether one is held here to join.
                 let in_transition = self.leave_held();
@@ -2057,6 +2047,10 @@ impl<'a> Ports<'a> {
                     }
                 }
                 ExchangeWake::Directive => {
+                    // No answer to admin over a latched record (#116).
+                    if self.recorder.failed() {
+                        return Err(TurnError::ChannelLost);
+                    }
                     let Some(slot) = self.pending.as_deref_mut() else {
                         continue;
                     };
@@ -2277,8 +2271,12 @@ impl<'a> Ports<'a> {
 
         // **Announce after record**: the stop's answer follows the close it
         // reports, carrying the turn's fate, aborted or completed-at-rest,
-        // both truthful at the moment of answering.
-        if let Some((exchange, _)) = stop.take()
+        // both truthful at the moment of answering. **Not over a record
+        // missing an event** (#116): the latch is read first, and a latched
+        // record leaves the stop unanswered, the frame path ending service
+        // on the same read.
+        if !self.recorder.failed()
+            && let Some((exchange, _)) = stop.take()
             && let Some(slot) = self.pending.as_deref_mut()
             && let Some(connection) = slot.as_ref()
         {

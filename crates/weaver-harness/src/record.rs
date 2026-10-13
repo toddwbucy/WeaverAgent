@@ -9,10 +9,16 @@
 
 use weaver_trace::{Event, Kind, Pressure, Sequence, Subsystem, WorkingStructure};
 
-/// The record's arm. Constructed once at the enter from the binding's kind
-/// and never re-selected: a run's record is one mechanism for its whole
-/// residency.
-pub enum Record {
+/// The run's record: its arm, constructed once at the enter from the
+/// binding's kind and never re-selected, a run's record being one mechanism
+/// for its whole residency, and the latch of a failed authoring.
+pub struct Record {
+    arm: Arm,
+    failed: bool,
+}
+
+/// The record's arm.
+enum Arm {
     Serving(weaver_trace::Recorder),
     Diagnostic(weaver_diagnostic::Recorder),
 }
@@ -34,6 +40,26 @@ pub enum RecordFailure {
     OutsideDiagnosticVocabulary,
 }
 
+/// A serving run's record, through `weaver-trace`.
+impl From<weaver_trace::Recorder> for Record {
+    fn from(recorder: weaver_trace::Recorder) -> Self {
+        Record {
+            arm: Arm::Serving(recorder),
+            failed: false,
+        }
+    }
+}
+
+/// A diagnostic run's record, through `weaver-diagnostic`.
+impl From<weaver_diagnostic::Recorder> for Record {
+    fn from(recorder: weaver_diagnostic::Recorder) -> Self {
+        Record {
+            arm: Arm::Diagnostic(recorder),
+            failed: false,
+        }
+    }
+}
+
 impl Record {
     /// One event submitted through whichever mechanism the run holds. The
     /// event arrives in the serving vocabulary because the authorship path
@@ -42,16 +68,43 @@ impl Record {
     /// the payload as the rendered bytes it would have carried, spliced,
     /// which the mirror's field-for-field claim licenses.
     pub fn submit(&mut self, event: Event) -> Result<Sequence, RecordFailure> {
-        match self {
-            Record::Serving(recorder) => recorder.submit(event).map_err(RecordFailure::Serving),
-            Record::Diagnostic(recorder) => {
-                let converted = convert(event)?;
+        let submitted = match &mut self.arm {
+            Arm::Serving(recorder) => recorder.submit(event).map_err(RecordFailure::Serving),
+            Arm::Diagnostic(recorder) => convert(event).and_then(|converted| {
                 recorder
                     .submit(converted)
                     .map(|sequence| Sequence(sequence.0))
                     .map_err(RecordFailure::Diagnostic)
-            }
+            }),
+        };
+        self.latch(submitted)
+    }
+
+    /// **Whether an authoring has failed on this record** (#116; the
+    /// Planner's ruling of 2026-10-09, `weaver-harness-Spec` section 4): set
+    /// by any submission or drain that answered `Err` and never lowered. A
+    /// record the run cannot serve on without is authored or service ends, so
+    /// the serve loop reads this at every wake and at the enter, and a turn's
+    /// close reads it before its answer is announced. It covers what the
+    /// writer's own standing failure does not: a submission refused on its
+    /// own (`RefusedOnSubmit`, `OutsideDiagnosticVocabulary`), which leaves
+    /// the writer sound and the record missing that event, the diagnostic
+    /// arm, whose drain is vacuous, and an event whose payload would not
+    /// render ([`Record::latch_unrendered`]). A serving write that fails
+    /// behind the queue is met at the next submission or drain, nothing on a
+    /// turn path waiting on the sink. A refusal of that kind is this crate's
+    /// authoring defect, and the run ending on it, naming it, is the rule
+    /// working: the record's ending is the evidence.
+    pub fn failed(&self) -> bool {
+        self.failed
+    }
+
+    /// The latch set on a failed answer, which passes through unchanged.
+    fn latch<T>(&mut self, answer: Result<T, RecordFailure>) -> Result<T, RecordFailure> {
+        if answer.is_err() {
+            self.failed = true;
         }
+        answer
     }
 
     /// The working structure, the serving mechanism's alone: the diagnostic
@@ -60,18 +113,18 @@ impl Record {
     /// section 5. Callers on the frame path may expect it, no frame
     /// arriving under a diagnostic binding.
     pub fn structure(&self) -> Option<&WorkingStructure> {
-        match self {
-            Record::Serving(recorder) => Some(recorder.structure()),
-            Record::Diagnostic(_) => None,
+        match &self.arm {
+            Arm::Serving(recorder) => Some(recorder.structure()),
+            Arm::Diagnostic(_) => None,
         }
     }
 
     /// The commit queue's pressure. The diagnostic writer is synchronous
     /// and queues nothing, so its arm is never over the mark.
     pub fn pressure(&self) -> Pressure {
-        match self {
-            Record::Serving(recorder) => recorder.pressure(),
-            Record::Diagnostic(_) => Pressure {
+        match &self.arm {
+            Arm::Serving(recorder) => recorder.pressure(),
+            Arm::Diagnostic(_) => Pressure {
                 queued: 0,
                 over_mark: false,
             },
@@ -86,22 +139,22 @@ impl Record {
         &mut self,
         event: weaver_diagnostic::Event,
     ) -> Result<weaver_diagnostic::Sequence, RecordFailure> {
-        match self {
-            Record::Serving(_) => Err(RecordFailure::OutsideDiagnosticVocabulary),
-            Record::Diagnostic(recorder) => {
-                recorder.submit(event).map_err(RecordFailure::Diagnostic)
-            }
-        }
+        let submitted = match &mut self.arm {
+            Arm::Serving(_) => Err(RecordFailure::OutsideDiagnosticVocabulary),
+            Arm::Diagnostic(recorder) => recorder.submit(event).map_err(RecordFailure::Diagnostic),
+        };
+        self.latch(submitted)
     }
 
     /// The commit queue's drain at the leave. The diagnostic writer is
     /// synchronous, every admitted event on the stream at its submit's
     /// return, so its arm has nothing to wait on and drains vacuously.
     pub fn drain(&mut self) -> Result<(), RecordFailure> {
-        match self {
-            Record::Serving(recorder) => recorder.drain().map_err(RecordFailure::Serving),
-            Record::Diagnostic(_) => Ok(()),
-        }
+        let drained = match &mut self.arm {
+            Arm::Serving(recorder) => recorder.drain().map_err(RecordFailure::Serving),
+            Arm::Diagnostic(_) => Ok(()),
+        };
+        self.latch(drained)
     }
 
     /// [`Record::drain`] by a deadline, the leave's shared one
@@ -111,12 +164,11 @@ impl Record {
         &mut self,
         deadline: std::time::Instant,
     ) -> Result<weaver_trace::Drained, RecordFailure> {
-        match self {
-            Record::Serving(recorder) => {
-                recorder.drain_by(deadline).map_err(RecordFailure::Serving)
-            }
-            Record::Diagnostic(_) => Ok(weaver_trace::Drained::Emptied),
-        }
+        let drained = match &mut self.arm {
+            Arm::Serving(recorder) => recorder.drain_by(deadline).map_err(RecordFailure::Serving),
+            Arm::Diagnostic(_) => Ok(weaver_trace::Drained::Emptied),
+        };
+        self.latch(drained)
     }
 
     /// **Abandon the writer** (#117; `weaver-trace-Spec` section 7), after
@@ -124,35 +176,39 @@ impl Record {
     /// forfeited and the recorder's drop detaches the writer. The diagnostic
     /// writer is synchronous and has nothing to abandon.
     pub fn abandon(&mut self) {
-        if let Record::Serving(recorder) = self {
+        if let Arm::Serving(recorder) = &mut self.arm {
             recorder.abandon();
         }
     }
 
-    /// The serving recorder where that is the arm, for the tee attach and
-    /// the tests that read the structure back.
+    /// The serving recorder where that is the arm, read-only, for the tests
+    /// that read the structure back.
     pub fn serving(&self) -> Option<&weaver_trace::Recorder> {
-        match self {
-            Record::Serving(recorder) => Some(recorder),
-            Record::Diagnostic(_) => None,
+        match &self.arm {
+            Arm::Serving(recorder) => Some(recorder),
+            Arm::Diagnostic(_) => None,
         }
     }
 
-    pub fn serving_mut(&mut self) -> Option<&mut weaver_trace::Recorder> {
-        match self {
-            Record::Serving(recorder) => Some(recorder),
-            Record::Diagnostic(_) => None,
+    /// **The tee attached to the serving arm**, the one thing this crate does
+    /// to the recorder outside its submit road; answers whether it was
+    /// attached, the diagnostic arm holding no tee. No `&mut` recorder is
+    /// handed out (#116), so no submission or drain can pass the latch.
+    pub fn attach_tee(&mut self, tee: weaver_trace::Tee) -> bool {
+        match &mut self.arm {
+            Arm::Serving(recorder) => {
+                recorder.attach_tee(tee);
+                true
+            }
+            Arm::Diagnostic(_) => false,
         }
     }
 
-    /// The diagnostic recorder where that is the arm, for the replay's own
-    /// kinds, which exist in no serving vocabulary and convert from
-    /// nothing.
-    pub fn diagnostic_mut(&mut self) -> Option<&mut weaver_diagnostic::Recorder> {
-        match self {
-            Record::Serving(_) => None,
-            Record::Diagnostic(recorder) => Some(recorder),
-        }
+    /// **An event dropped before it reached the submit road is latched as
+    /// failed** (#116): an authoring whose payload would not render is a
+    /// record missing that event as surely as one the recorder refused.
+    pub fn latch_unrendered(&mut self) {
+        self.failed = true;
     }
 }
 
@@ -231,3 +287,6 @@ fn convert(event: Event) -> Result<weaver_diagnostic::Event, RecordFailure> {
         payload,
     })
 }
+
+#[cfg(test)]
+mod tests;

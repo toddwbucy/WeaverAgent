@@ -1605,6 +1605,37 @@ from: weaver-harness
 to: harness-nothing-waits-on-the-sink
 ```
 
+**The record holds, or service ends**, on the Planner's ruling of 2026-10-09 (#116).
+The trace is the deliverable, so a record the run cannot serve on without is authored
+or service ends; a record that is truly best-effort says why at its site; and the
+record's ending is the evidence. **A failed authoring is latched on the record**,
+whatever failed:
+- the writer's failure, met at the next submission or drain, since nothing on a turn
+  path waits on the sink;
+- a submission refused on its own (`RefusedOnSubmit`, or an event outside the
+  diagnostic vocabulary) with the writer sound;
+- a diagnostic write, whose drain is vacuous;
+- an event whose payload would not render.
+
+The latch is read before anything is announced and wherever the run would serve on:
+- before every answer and refusal to admin, at rest and at a directive's wake
+  mid-turn (the turn then ends on the loss, its one close authored);
+- before a stop's answer after a turn's close;
+- before a frame's close is sent to its dialer, before a held frame is served, and
+  before a seat is granted;
+- at the end of a gate fault's wake, and before the serve loop waits again;
+- in a leave: a dial heard is dropped unanswered, a join included; the drain's
+  refused closes are sent only over a record that holds; no wind-down runs; and
+  at the seal every held caller is refused `DescriptorsUnusable`, answered no
+  `Left`.
+
+**Two ways a latched record ends service.** Met at a reader outside a leave's seal, it
+ends service as an organ death the record cannot hold does. The run is unwound, the
+unwind's fault names `StreamWriteFailed`, and a leave held at that moment, with its
+joins, is dropped unanswered, admin concluding as for no answer. Met at the seal, the
+leave's own refusal ends the run. A refusal on submit is this crate's authoring
+defect, and an outage naming a malformed payload is the rule working.
+
 ## 5. Prompt assembly's deterministic floor
 
 **Assembly reads the message kinds and nothing else, and the discipline is a
@@ -1937,7 +1968,8 @@ breaks it harder: a flush leaves a suffix a reader could infer from the
 counts, and an elision leaves a sequence no count describes. **A refused authoring still
 answers the counts**, the removal having happened, and since 2026-09-26 the only refusal
 reachable there is the stream's own standing failure, under which nothing more can be
-recorded and the record's ending is the evidence. Perturbation-verified: the scripted
+recorded and the record's ending is the evidence: the failure is latched (section 4),
+so service ends before anything further is announced. Perturbation-verified: the scripted
 seam's answer carries counts deliberately unroundable and no span at all, the
 confirmation variant having none to carry, so a site reading the span from the answer
 has nothing to read and one defaulting it fails on the span the loop named.
@@ -3074,6 +3106,12 @@ none of their content appears, watched to fail when the filter widens.
   refusal case added later reaches this crate's matches loudly.
 - Descriptors are owned types end to end, so a handle that escapes its owner
   is a move the borrow checker sees, not an integer copied silently.
+
+**The record holds, or service ends, by the latch's readers** (section 4, #116).
+Each reader has a test that drives it with a record whose writer failed, or with one
+latched by a submission refused on its own while the writer is sound. Each test is
+watched to fail when its reader's read is removed. The latch is pinned the same way,
+and fails when it is never set.
 
 **The in-run event table is enforced by a decision function and its table**, on the
 operator's agreement of 2026-10-09 recorded on #1, owed by the lifecycle act's code.

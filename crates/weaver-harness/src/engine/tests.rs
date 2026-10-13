@@ -22,7 +22,7 @@ use weaver_types::{Finish, Generation, SessionId};
 fn a_refused_classify_authors_a_refusal_and_no_output() {
     let session = SessionId("s-1".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -96,7 +96,7 @@ fn a_refused_classify_authors_a_refusal_and_no_output() {
 fn pressure_reports_once_per_crossing() {
     let session = SessionId("s-1".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -261,7 +261,7 @@ fn a_refused_turn_closes_once_and_names_the_refusal() {
 
     let session = SessionId("s-1".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -395,7 +395,7 @@ fn a_refused_ask_reaches_the_record() {
 
     let session = SessionId("s-1".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -524,7 +524,7 @@ fn the_elision_event_carries_the_span_the_loop_named() {
 
     let session = SessionId("s-1".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -679,7 +679,7 @@ fn a_turn_authors_the_whole_bracket() {
 
     let session = SessionId("s-1".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -876,7 +876,7 @@ fn a_fault_emission_lands_inside_the_bracket_before_the_close() {
 
     let session = SessionId("s-1".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -1089,7 +1089,7 @@ fn a_turn_executes_its_calls_and_the_grant_authors_the_result() {
 
     let session = SessionId("s-t".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -1279,7 +1279,7 @@ fn each_field_intermediate_authors_its_event() {
 
     let session = SessionId("s-1".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -1394,7 +1394,7 @@ fn a_supplied_tool_result_refuses_at_the_door() {
     drop(far);
     let session = SessionId("s-f".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -1585,7 +1585,7 @@ fn dial_mid_stream(
 
     let session = SessionId("s-3".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -1912,7 +1912,7 @@ fn leave_during_turn(forced: bool, crossing: bool, before_call: bool) -> LeaveDu
         (interrupts, executions)
     });
     let session = SessionId("s-leave-during-turn".into());
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(
             tempfile(),
             RunRef("r-1".into()),
@@ -3032,7 +3032,7 @@ fn stopped_invocation(crossing: bool, call_count: usize) {
         (cancels, executions)
     });
     let session = SessionId("s-stop-invocation".into());
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(
             tempfile(),
             RunRef("r-1".into()),
@@ -3181,6 +3181,22 @@ fn stopped_invocation(crossing: bool, call_count: usize) {
 /// for never arrives.
 #[test]
 fn a_stop_dialed_mid_stream_cancels_the_turn() {
+    stop_dialed_mid_stream(false);
+}
+
+/// **A directive mid-turn is not answered over a latched record** (#116):
+/// the record is latched by a submission refused on its own (an event bound
+/// to another session, `RefusedOnSubmit`), the writer sound. The stop's
+/// wake reads the latch before anything is answered, the turn ends on the
+/// loss with its one close landed, and no answer reaches the dialer.
+/// Perturbation: drop the read from the directive wake, and the turn runs
+/// on to the stop's cancel and returns `Ok`.
+#[test]
+fn a_directive_mid_turn_is_not_answered_over_a_latched_record() {
+    stop_dialed_mid_stream(true);
+}
+
+fn stop_dialed_mid_stream(latched: bool) {
     let (near, far) = socketpair(
         AddressFamily::Unix,
         SockType::SeqPacket,
@@ -3208,6 +3224,11 @@ fn a_stop_dialed_mid_stream_cancels_the_turn() {
         })
         .expect("the stop sends");
 
+    // **The peer holds its end until the turn has returned**, so a turn
+    // that ends here ends on the latch and not on the decode channel's
+    // hang-up; released, or past two seconds, it answers as the unlatched
+    // run's peer does.
+    let (release, released) = std::sync::mpsc::channel::<()>();
     let peer = std::thread::spawn(move || {
         let mut buf = vec![0u8; 65536];
         let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("recv append");
@@ -3217,6 +3238,13 @@ fn a_stop_dialed_mid_stream_cancels_the_turn() {
             directive,
             weaver_types::TokenDirective::AppendAndGenerate { .. }
         ));
+        if latched
+            && released
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .is_ok()
+        {
+            return;
+        }
         // The cancel arrives because the wait heard the stop.
         let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("recv cancel");
         let directive: weaver_types::TokenDirective =
@@ -3255,7 +3283,7 @@ fn a_stop_dialed_mid_stream_cancels_the_turn() {
 
     let session = SessionId("s-2".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -3284,6 +3312,28 @@ fn a_stop_dialed_mid_stream_cancels_the_turn() {
             }))),
         )
         .expect("load");
+    if latched {
+        let foreign = Author::new(
+            &SessionId("s-other".into()),
+            &weaver_types::RunId("r-1".into()),
+        );
+        let refused = foreign.author_fault(
+            &mut recorder,
+            Subsystem::Harness,
+            None,
+            &crate::authorship::harness_report(weaver_types::FaultCase::OrganDeathObserved, "{}"),
+        );
+        assert!(
+            matches!(
+                refused,
+                Err(crate::record::RecordFailure::Serving(
+                    weaver_trace::Failure::RefusedOnSubmit { .. }
+                ))
+            ),
+            "{refused:?}"
+        );
+        assert!(recorder.failed(), "the refusal is latched");
+    }
     let mut turn_ordinal = 0u64;
     let mut turn_in_flight: Option<weaver_types::TurnKey> = None;
     let mut slot = Some(verb_end);
@@ -3314,19 +3364,38 @@ fn a_stop_dialed_mid_stream_cancels_the_turn() {
                 text: "stop me".into(),
             }],
         }];
-        ports.turn(delta).expect("the aborted turn still returns")
+        ports.turn(delta)
     };
+    let _ = release.send(());
     peer.join().expect("the decode peer finishes");
 
-    assert!(outcome.aborted, "the directive aborted the turn");
-    assert_eq!(outcome.emission, "par", "the partial stands");
+    if latched {
+        assert!(
+            matches!(outcome, Err(TurnError::ChannelLost)),
+            "the turn ends on the latch: {outcome:?}"
+        );
+    } else {
+        let outcome = outcome.expect("the aborted turn still returns");
+        assert!(outcome.aborted, "the directive aborted the turn");
+        assert_eq!(outcome.emission, "par", "the partial stands");
+    }
 
-    // Announce after record: the answer carries the turn's fate.
-    match admin.recv().expect("the stop's answer").payload {
-        weaver_types::Payload::Answer(weaver_types::LifecycleAnswer::TurnAborted { turn }) => {
-            assert_eq!(turn.0, "t-1");
+    if latched {
+        use std::os::fd::AsFd;
+        let mut fds = [nix::poll::PollFd::new(
+            admin.as_fd(),
+            nix::poll::PollFlags::POLLIN,
+        )];
+        let ready = nix::poll::poll(&mut fds, nix::poll::PollTimeout::from(200u16)).expect("poll");
+        assert_eq!(ready, 0, "no answer is announced over a latched record");
+    } else {
+        // Announce after record: the answer carries the turn's fate.
+        match admin.recv().expect("the stop's answer").payload {
+            weaver_types::Payload::Answer(weaver_types::LifecycleAnswer::TurnAborted { turn }) => {
+                assert_eq!(turn.0, "t-1");
+            }
+            other => panic!("the stop answers the turn's fate, got {other:?}"),
         }
-        other => panic!("the stop answers the turn's fate, got {other:?}"),
     }
 
     // The close names the directive, the partial standing before it.
@@ -3338,9 +3407,129 @@ fn a_stop_dialed_mid_stream_cancels_the_turn() {
         .expect("the close authored")
         .line
         .to_string();
+    if latched {
+        assert!(
+            close.contains(r#""close":"stopped""#) && close.contains(r#""reason":"fault""#),
+            "the one close names the loss: {close}"
+        );
+    } else {
+        assert!(
+            close.contains(r#""close":"stopped""#) && close.contains(r#""reason":"directive""#),
+            "the close names the directive, not the fault: {close}"
+        );
+    }
+}
+
+/// **A stop heard before the latch is set is not answered after the close**
+/// (#116, `close_turn`'s announcement): the close lands, the writer sound,
+/// and the latch is read before `TurnAborted` is sent. Driven at the close
+/// directly, since no fixture sets the latch between the stop's wake and
+/// the close. Perturbation: drop the read from `close_turn`, and the stop
+/// is answered.
+#[test]
+fn a_stop_is_not_answered_after_a_close_over_a_latched_record() {
+    let (decode_near, _decode_far) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .expect("socketpair");
+    let decode = crate::channel::decode_from_owned(decode_near);
+    let (listener, _dir) = test_listener();
+    let (verb_end, admin_end) = crate::channel::OrganChannel::pair().expect("pair");
+    let admin = admin_end.into_channel();
+    let session = SessionId("s-2".into());
+    let mut recorder = crate::record::Record::from(
+        Recorder::receive(
+            tempfile(),
+            RunRef("r-1".into()),
+            SessionRef(session.0.clone()),
+        )
+        .expect("recorder"),
+    );
+    let author = Author::new(&session, &weaver_types::RunId("r-1".into()));
+    let foreign = Author::new(
+        &SessionId("s-other".into()),
+        &weaver_types::RunId("r-1".into()),
+    );
     assert!(
-        close.contains(r#""close":"stopped""#) && close.contains(r#""reason":"directive""#),
-        "the close names the directive, not the fault: {close}"
+        foreign
+            .author_fault(
+                &mut recorder,
+                Subsystem::Harness,
+                None,
+                &crate::authorship::harness_report(
+                    weaver_types::FaultCase::OrganDeathObserved,
+                    "{}"
+                ),
+            )
+            .is_err()
+    );
+    assert!(recorder.failed(), "the refusal is latched");
+    let turn = weaver_types::TurnKey("t-1".into());
+    let mut turn_ordinal = 1u64;
+    let mut turn_in_flight = Some(turn.clone());
+    let mut slot = Some(verb_end);
+    {
+        let mut fullness = None;
+        let mut pressure_reported = false;
+        let load_facts = crate::engine::test_load_facts();
+        let mut ports = Ports::grant(
+            &decode,
+            &author,
+            &mut recorder,
+            &mut turn_ordinal,
+            &mut turn_in_flight,
+            &load_facts,
+            None,
+            &listener,
+            Some(&mut slot),
+            None,
+            None,
+            None,
+            &mut fullness,
+            &mut pressure_reported,
+        );
+        let generation = Generation {
+            content: vec![],
+            emission: "par".into(),
+            finish: Finish::Stopped,
+            resident: 64,
+            capacity: 4096,
+            request: serde_json::value::RawValue::from_string("{}".into()).unwrap(),
+            measurement: serde_json::value::RawValue::from_string("{}".into()).unwrap(),
+        };
+        let mut stop = Some((
+            weaver_types::ExchangeId {
+                opener: weaver_types::Opener::Admin,
+                ordinal: 9,
+            },
+            weaver_types::Cause { uid: 0 },
+        ));
+        let aborted = ports
+            .close_turn(&turn, &generation, &mut stop)
+            .expect("the close lands");
+        assert!(aborted, "the stop aborted the turn");
+    }
+    use std::os::fd::AsFd;
+    let mut fds = [nix::poll::PollFd::new(
+        admin.as_fd(),
+        nix::poll::PollFlags::POLLIN,
+    )];
+    assert_eq!(
+        nix::poll::poll(&mut fds, nix::poll::PollTimeout::from(200u16)).expect("poll"),
+        0,
+        "no answer is announced over a latched record"
+    );
+    assert!(
+        recorder
+            .structure()
+            .expect("the serving record")
+            .by_kind(Kind::TurnClosed)
+            .next()
+            .is_some(),
+        "the close landed"
     );
 }
 
@@ -3387,7 +3576,7 @@ fn a_column_on_the_generate_stream_authors_rather_than_kills() {
         std::thread::current().id()
     )));
     let sink = OwnedFd::from(std::fs::File::create(&sink_path).expect("sink"));
-    let mut recorder = crate::record::Record::Diagnostic(
+    let mut recorder = crate::record::Record::from(
         weaver_diagnostic::Recorder::receive(
             sink,
             weaver_diagnostic::RunRef("r-d".into()),
@@ -3575,7 +3764,7 @@ fn a_score_out_of_place_or_malformed_is_refused() {
 
 fn loaded_recorder() -> (crate::record::Record, Author) {
     let session = SessionId("s-1".into());
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(
             tempfile(),
             RunRef("r-1".into()),

@@ -334,11 +334,46 @@ impl Author {
                 reason: weaver_trace::SubmitRefusal::PayloadMalformed,
             })
         };
-        let octets = serde_json::to_string(report).map_err(|_| malformed())?;
-        let payload = raw_payload(&octets)
+        // **A report that will not render is latched** (#116): the record is
+        // missing it as surely as one the recorder refused.
+        let Some(payload) = serde_json::to_string(report)
+            .ok()
+            .and_then(|octets| raw_payload(&octets))
             .map(Payload::Fault)
-            .ok_or_else(malformed)?;
+        else {
+            recorder.latch_unrendered();
+            return Err(malformed());
+        };
         self.author(recorder, Kind::Fault, subsystem, turn, Some(payload))
+    }
+
+    /// **A `refusal` event of the record's refusal shape**, rendered here and
+    /// latched on the record where it will not render (#116), the one road
+    /// every refusal site takes.
+    pub fn author_refusal(
+        &self,
+        recorder: &mut Record,
+        turn: Option<&TurnKey>,
+        record: &weaver_types::RefusalRecord,
+    ) -> Result<Sequence, RecordFailure> {
+        let Some(payload) = serde_json::to_string(record)
+            .ok()
+            .and_then(|rendered| raw_payload(&rendered))
+        else {
+            recorder.latch_unrendered();
+            return Err(RecordFailure::Serving(
+                weaver_trace::Failure::RefusedOnSubmit {
+                    reason: weaver_trace::SubmitRefusal::PayloadMalformed,
+                },
+            ));
+        };
+        self.author(
+            recorder,
+            Kind::Refusal,
+            Subsystem::Harness,
+            turn,
+            Some(Payload::Refusal(payload)),
+        )
     }
 }
 
