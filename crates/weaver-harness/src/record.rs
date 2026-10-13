@@ -32,7 +32,7 @@ pub enum RecordFailure {
     Serving(weaver_trace::Failure),
     Diagnostic(weaver_diagnostic::Failure),
     /// The event's kind or subsystem has no diagnostic counterpart. The
-    /// diagnostic record holds nineteen kinds, per `weaver-diagnostic-Spec`
+    /// diagnostic record holds twenty kinds, per `weaver-diagnostic-Spec`
     /// section 3, and an authoring that reaches this arm with a kind outside
     /// them is a defect in the caller: the run brackets are the replay's
     /// own, tools do not execute, and nothing classifies under a replay. An
