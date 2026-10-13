@@ -113,12 +113,12 @@ pub use identity::{
     TraceRequest, authorized,
 };
 pub use wire::{
-    AgentName, AgentState, Branch, Candidate, Composer, DECODE_MESSAGE_BOUND, EnterBinding,
-    EnterPayload, ExchangeId, FaultCase, FaultReport, Finish, Generation, KillCause,
+    AgentName, AgentState, Branch, CallGrammar, Candidate, Composer, DECODE_MESSAGE_BOUND,
+    EnterBinding, EnterPayload, ExchangeId, FaultCase, FaultReport, Finish, Generation, KillCause,
     LEAVE_BOUND_MS, LOWER_BOUND_MS, LOWER_SETTLE_MARGIN_MS, LabelAnswer, LabelDirective,
     LabelRefusal, LifecycleAnswer, LifecycleAsk, LifecycleDirective, LifecycleRefusal, Lineage,
     LoadFacts, MAX_ENVELOPE_BYTES, Opener, OrganEnvelope, Payload, Position, RefusalRecord,
     RefusingOrgan, Reset, ResetReason, RunId, SavePointLeg, SavePointReport, ScoredLabel,
     SegmentPreamble, SessionId, TokenAnswer, TokenAsk, TokenDirective, TokenRefusal, ToolExecution,
-    ToolOutcome, TurnFrame, TurnKey, TurnRequest,
+    ToolOutcome, TurnFrame, TurnKey, TurnRequest, UnrecoveredCall, UnrecoveredReason,
 };

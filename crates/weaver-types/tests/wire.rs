@@ -148,6 +148,7 @@ fn the_measurement_splices_and_never_quotes() {
                 arguments: r#"{"expression":"1+1"}"#.to_string(),
             },
         )],
+        unrecovered: vec![],
         emission: "two words".to_string(),
         finish: weaver_types::Finish::Completed,
         request,
@@ -817,5 +818,77 @@ fn in_transition_carries_its_constituents_only_where_filled() {
     assert_eq!(
         serde_json::from_str::<LifecycleAnswer>(&wire).expect("reads"),
         named
+    );
+}
+
+/// A generation with the given unrecovered report and nothing else of note,
+/// for the report's own tests.
+fn generation_with(unrecovered: Vec<weaver_types::UnrecoveredCall>) -> weaver_types::Generation {
+    let raw = |s: &str| serde_json::value::RawValue::from_string(s.to_string()).expect("JSON");
+    weaver_types::Generation {
+        content: vec![],
+        unrecovered,
+        emission: "hi".to_string(),
+        finish: weaver_types::Finish::Completed,
+        request: raw("{}"),
+        measurement: raw("{}"),
+        resident: 1,
+        capacity: 2,
+    }
+}
+
+/// **The report is absent where empty and round-trips where present**, per
+/// `weaver-types-Spec` sections 4.4 and 5.
+///
+/// Perturbation: drop `skip_serializing_if` from `Generation.unrecovered` and
+/// `"unrecovered":[]` appears on the empty answer.
+#[test]
+fn generation_unrecovered_is_absent_when_empty_and_round_trips_when_present() {
+    let empty = generation_with(vec![]);
+    let line = serde_json::to_string(&empty).expect("serializes");
+    assert!(!line.contains("unrecovered"), "{line}");
+
+    let one = generation_with(vec![weaver_types::UnrecoveredCall {
+        fragment: "<tool_call>{\"nam".to_string(),
+        reason: weaver_types::UnrecoveredReason::Unclosed,
+        grammar: weaver_types::CallGrammar {
+            family: "qwen2".to_string(),
+            open: "<tool_call>".to_string(),
+            close: Some("</tool_call>".to_string()),
+        },
+    }]);
+    let line = serde_json::to_string(&one).expect("serializes");
+    let back: weaver_types::Generation = serde_json::from_str(&line).expect("parses");
+    assert_eq!(back, one, "{line}");
+}
+
+/// **An answer written before the member existed parses with it empty**, so
+/// a mixed-version pair does not fail the turn.
+///
+/// Perturbation: drop `default` from `Generation.unrecovered` and the older
+/// answer refuses.
+#[test]
+fn an_answer_written_before_the_member_parses_with_it_empty() {
+    let older = r#"{"emission":"hi","finish":"completed","content":[],"request":{},"measurement":{},"resident":1,"capacity":2}"#;
+    let parsed: weaver_types::Generation =
+        serde_json::from_str(older).expect("an older answer parses");
+    assert!(parsed.unrecovered.is_empty());
+}
+
+/// **The reason is internally tagged on `case`**, per section 4.4.
+///
+/// Perturbation: drop `tag = "case"` and `Unclosed` renders as a bare string.
+#[test]
+fn unrecovered_reason_is_internally_tagged_on_case() {
+    assert_eq!(
+        serde_json::to_string(&weaver_types::UnrecoveredReason::Unclosed).expect("renders"),
+        r#"{"case":"unclosed"}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&weaver_types::UnrecoveredReason::Unparsed {
+            detail: "eof".to_string()
+        })
+        .expect("renders"),
+        r#"{"case":"unparsed","detail":"eof"}"#
     );
 }
