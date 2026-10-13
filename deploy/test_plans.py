@@ -3456,6 +3456,228 @@ class DecommissionTests(unittest.TestCase):
         self.assertNotIn("bulk-store/dev-archive", self.script)
         self.assertIn("#   sudo deploy/decommission.sh --archive DIR ", self.script)
 
+    def one_line_function(self, name):
+        """A function the script defines on one line, read out of its text."""
+        line = next(line for line in self.script.splitlines() if line.startswith(f"{name}() {{"))
+        return line + "\n"
+
+    def test_an_archive_file_is_the_operators_alone(self):
+        """**Every file the archive writes is 0600** (#98; the custody audit's
+        G22): the archive holds the trace and the save points, which the box
+        keeps to their groups, so the invoker's umask does not decide who else
+        reads them. `to_file`, run as the script defines it under a stand-in
+        sudo and `umask 000`. Perturbation: drop the `umask 077`, and the file
+        lands 0666."""
+        scratch = tempfile.TemporaryDirectory(prefix="weaver-to-file-")
+        self.addCleanup(scratch.cleanup)
+        root = Path(scratch.name)
+        sudo = root / "sudo"
+        sudo.write_text('#!/bin/sh\nwhile [ "$1" != sh ]; do shift; done\nexec "$@"\n')
+        sudo.chmod(0o755)
+        out = root / "archive.tar.zst"
+        program = ("umask 000\nOPERATOR=op\n" + self.one_line_function("as_op")
+                   + self.one_line_function("to_file") + f"printf 'held' | to_file {shlex.quote(str(out))}\n")
+        env = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"]}
+        env.pop("BASH_ENV", None)
+        run = subprocess.run(["bash", "-c", program], env=env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(out.read_text(), "held")
+        self.assertEqual(out.stat().st_mode & 0o777, 0o600)
+        self.assertIn("as_op sh -c 'umask 077 && cd \"$1\" && find . -type f", self.script)
+        self.assertIn("as_op sh -c 'umask 077 && mkdir -p \"$1\"' _ \"$DEST\"", self.script)
+        # The stale files go as the operator, and a DEST that stood before is
+        # closed too: nothing under DEST is acted on as root.
+        self.assertIn('as_op find "$DEST" -maxdepth 1 -type f -exec rm -f {}', self.script)
+        self.assertNotIn('\n  find "$DEST"', self.script)
+        self.assertIn('  close_dest "$DEST"\n  say "archive to $DEST"', self.script)
+
+    def test_a_default_acl_on_the_archive_directory_reaches_no_file(self):
+        """**No archive file inherits a reader** (#98, Codex on #142): a
+        default access-control list on DEST outranks the umask, so a file
+        created there takes its named entries and mask. `close_dest` strips
+        the directory's lists before anything is written, and `to_file` sets
+        each file 0600 once written, which masks any entry it did inherit.
+        Run as the script defines them under a stand-in sudo, on a scratch
+        directory given a default entry for another uid; skipped, naming why,
+        where the filesystem takes no access-control list. Perturbations: drop
+        the strip, and the written file carries the entry; drop the
+        `chmod 0600`, and a file written under the list stands 0640.
+        (`setfacl -b` alone removes a default list here; `-k` is kept for a
+        `setfacl` that does not.)""" 
+        if not (shutil.which("setfacl") and shutil.which("getfacl")):
+            self.skipTest("setfacl and getfacl are not installed here")
+        scratch = tempfile.TemporaryDirectory(prefix="weaver-dest-acl-")
+        self.addCleanup(scratch.cleanup)
+        root = Path(scratch.name)
+        sudo = root / "sudo"
+        sudo.write_text('#!/bin/sh\nwhile [ "$1" = -u ] || [ "$1" = -H ] || [ "$1" = op ]; do shift; done\nexec "$@"\n')
+        sudo.chmod(0o755)
+        stranger = os.getuid() + 1
+        env = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"]}
+        env.pop("BASH_ENV", None)
+
+        def dest_with_default():
+            dest = root / f"dest-{len(list(root.iterdir()))}"
+            dest.mkdir()
+            given = subprocess.run(["setfacl", "-d", "-m", f"u:{stranger}:r", str(dest)],
+                                   capture_output=True, text=True)
+            if given.returncode != 0:
+                self.skipTest(f"this filesystem takes no access-control list: {given.stderr.strip()}")
+            return dest
+
+        def run(program):
+            ran = subprocess.run(["bash", "-c", "die() { echo \"$*\" >&2; exit 1; }\nOPERATOR=op\n"
+                                  + self.one_line_function("as_op") + self.one_line_function("to_file")
+                                  + shell_function(self.script, "close_dest") + program],
+                                 env=env, text=True, capture_output=True, timeout=20)
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+
+        extended = lambda path: subprocess.run(["getfacl", "-cps", str(path)], capture_output=True,
+                                               text=True).stdout.strip()
+        # Closed first: the directory carries no list, and the file none.
+        dest = dest_with_default()
+        out = dest / "territory.tar.zst"
+        run(f"close_dest {shlex.quote(str(dest))}\nprintf held | to_file {shlex.quote(str(out))}\n")
+        self.assertEqual(extended(dest), "", "the directory's lists are stripped")
+        self.assertEqual(extended(out), "", "the file inherits no entry")
+        self.assertEqual(out.stat().st_mode & 0o777, 0o600)
+        # Written under a list the strip has not reached: the mode masks it.
+        dest = dest_with_default()
+        out = dest / "PURGE-LIST"
+        run(f"printf held | to_file {shlex.quote(str(out))}\n")
+        self.assertEqual(out.stat().st_mode & 0o777, 0o600, "the inherited mask is closed")
+
+    def test_a_failed_acl_inspection_refuses_before_anything_is_written(self):
+        """**A look at DEST's lists that fails refuses** (#98, Codex on #142,
+        round 2): getfacl's status is read apart from its output, so an
+        inspection that errs is never taken for a directory carrying no list.
+        `close_dest` over a stand-in getfacl that exits 1, at the first look
+        and, after a strip, at the re-check. Perturbation: read the status as
+        empty output, as `$(... 2>/dev/null)` did, and close_dest goes on."""
+        scratch = tempfile.TemporaryDirectory(prefix="weaver-acl-look-")
+        self.addCleanup(scratch.cleanup)
+        root = Path(scratch.name)
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        sudo = bin_dir / "sudo"
+        sudo.write_text('#!/bin/sh\nwhile [ "$1" = -u ] || [ "$1" = -H ] || [ "$1" = op ]; do shift; done\nexec "$@"\n')
+        sudo.chmod(0o755)
+        setfacl = bin_dir / "setfacl"
+        setfacl.write_text("#!/bin/sh\nexit 0\n")
+        setfacl.chmod(0o755)
+        dest = root / "dest"
+        dest.mkdir()
+        env = {**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]}
+        env.pop("BASH_ENV", None)
+        for case, look in (
+                ("the first look", '#!/bin/sh\necho "getfacl: refused" >&2\nexit 1\n'),
+                ("the re-check", '#!/bin/sh\nif [ -e "$0.seen" ]; then exit 1; fi\n'
+                                 ': > "$0.seen"\necho "user:9999:r--"\n')):
+            with self.subTest(case=case):
+                getfacl = bin_dir / "getfacl"
+                getfacl.write_text(look)
+                getfacl.chmod(0o755)
+                Path(str(getfacl) + ".seen").unlink(missing_ok=True)
+                ran = subprocess.run(["bash", "-c", "die() { echo \"$*\" >&2; exit 1; }\nOPERATOR=op\n"
+                                      + self.one_line_function("as_op")
+                                      + shell_function(self.script, "close_dest")
+                                      + f"close_dest {shlex.quote(str(dest))}\necho CLOSED\n"],
+                                     env=env, text=True, capture_output=True, timeout=20)
+                self.assertNotEqual(ran.returncode, 0, ran.stdout)
+                self.assertNotIn("CLOSED", ran.stdout)
+                self.assertIn("cannot be read", ran.stderr)
+
+    def test_a_tmp_entry_another_principal_owns_is_left_alone(self):
+        """**Only a weaver- account's /tmp entries are archived and purged**
+        (#98; the custody audit's G22): /tmp is writable by every local user,
+        so an entry another principal made under a weaver- name is neither
+        read as root nor removed. `tmp_paths` over a stand-in `find` that
+        reports each entry's owner, NUL-ended. Perturbation: drop the owner
+        filter, the newline refusal or the directory check, and an entry
+        the planter chose is listed."""
+        scratch = tempfile.TemporaryDirectory(prefix="weaver-tmp-paths-")
+        self.addCleanup(scratch.cleanup)
+        root = Path(scratch.name)
+        find = root / "find"
+        # Records as find writes them, NUL-ended: a weaver- account's entry,
+        # a stranger's, a stranger's name carrying a newline that would split
+        # into a weaver- owner and /etc, and an entry not directly under /tmp.
+        find.write_text("#!/bin/sh\nprintf '/tmp/weaver-a\\0weaver-a\\0"
+                        "/tmp/weaver-planted\\0someone\\0"
+                        "/tmp/weaver-q\\nx\\0weaver-a\\0"
+                        "/tmp/weaver-x\\t\\0weaver-a\\0"
+                        "/var/weaver-b\\0weaver-b\\0'\n")
+        find.chmod(0o755)
+        env = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"]}
+        env.pop("BASH_ENV", None)
+        self.assertEqual(self.run_fn("tmp_paths", "/tmp", env=env).splitlines(), ["/tmp/weaver-a"])
+        self.assertIn("mapfile -t TMP_PATHS < <(tmp_paths /tmp)", self.script)
+        # The purge splits each line exactly as it was judged, so a name's
+        # surrounding blanks are kept and no other path is acted on.
+        self.assertNotIn("read -r kind name", self.script)
+        self.assertEqual(self.script.count("while IFS= read -r line; do\n  kind=${line%% *} name=${line#* }"), 3)
+        split = subprocess.run(["bash", "-c", 'line="$1"; kind=${line%% *} name=${line#* }; printf "%s|%s|" "$kind" "$name"',
+                                "x", "path /tmp/weaver-a "], text=True, capture_output=True, timeout=20)
+        self.assertEqual(split.stdout, "path|/tmp/weaver-a |")
+
+    def test_a_purge_list_line_the_purge_would_not_find_refuses_the_purge(self):
+        """**The purge acts only on lines it derives itself** (#98; the custody
+        audit's G22): the purge list lives where the operator writes, so a line
+        naming anything that still stands and that the purge's own derivation
+        does not find refuses the whole purge, before the sudo rules are
+        removed or an account deleted. A line naming what no longer stands is
+        passed over, so a purge stopped part way runs again. Judged in bash,
+        each line read as the removal loops read it, and an empty derivation
+        holds nothing. The list is read once into root's copy, hashed against
+        the archive's sums, and every removal loop reads that copy.
+        Perturbation: drop the judgment or its call, read the list from DEST or the
+        unfiltered copy again, skip a line that still stands, or keep a line
+        the derivation does not hold, and the pins here fail."""
+        scratch = tempfile.TemporaryDirectory(prefix="weaver-purge-list-")
+        self.addCleanup(scratch.cleanup)
+        root = Path(scratch.name)
+        standing = root / "weaver-standing"
+        standing.mkdir()
+        listed = root / "PURGE-LIST"
+        judge = shell_function(self.script, "purge_lines_outside")
+
+        def outside(candidates, lines):
+            listed.write_text("".join(line + "\n" for line in lines))
+            stub = "purge_candidates() { printf '%s\\n' " + " ".join(shlex.quote(c) for c in candidates) + "; }\n"
+            if not candidates:
+                stub = "purge_candidates() { :; }\n"
+            run = subprocess.run(["bash", "-c", stub + judge + 'purge_lines_outside "$1"', "x", str(listed)],
+                                 text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            return run.stdout.splitlines()
+
+        held = [f"path {standing}", "user weaver-a"]
+        self.assertEqual(outside(held, [f"path {standing}", "user weaver-a"]), [])
+        self.assertEqual(outside(held, ["path /etc"]), ["path /etc"], "a foreign path that stands")
+        self.assertEqual(outside([], ["path /etc"]), ["path /etc"], "an empty derivation holds nothing")
+        self.assertEqual(outside(held, [f"path {root}/weaver-gone"]), [], "what no longer stands is passed over")
+        self.assertEqual(outside(held, [f"path {standing} "]), [], "a name's own blanks are kept: no such path")
+        self.assertEqual(outside(held, ["kill everything"]), ["kill everything"], "an unknown kind is named")
+        judged = self.script.index('[ -z "$OUTSIDE" ] || die ')
+        # The die reads the judgment's own answer over root's copy.
+        self.assertEqual(self.script.count('OUTSIDE=$(purge_lines_outside "$PURGE_LIST")'), 1)
+        self.assertLess(self.script.index('OUTSIDE=$(purge_lines_outside "$PURGE_LIST")'), judged)
+        self.assertLess(self.script.index('[ "$LISTED_SUM" = "$COPY_SUM" ] || die '), judged)
+        self.assertLess(judged, self.script.index('say "the delegated door, shut"'))
+        self.assertNotIn('done < "$DEST/PURGE-LIST"', self.script)
+        self.assertNotIn('done < "$PURGE_LIST"', self.script)
+        self.assertEqual(self.script.count('done < "$PURGE_ACTED"'), 3)
+        self.assertLess(judged, self.script.index('purge_lines_within "$PURGE_LIST" > "$PURGE_ACTED"'))
+        # **A line passed over is never acted on**: only lines the
+        # derivation holds reach the removal loops, so a path that did not
+        # resolve at the judgment and does by the removal is not removed.
+        within = shell_function(self.script, "purge_lines_within")
+        listed.write_text(f"path {standing}\npath {root}/gone/../../etc\nuser weaver-a\n")
+        stub = "purge_candidates() { printf '%s\\n' " + " ".join(shlex.quote(c) for c in held) + "; }\n"
+        kept = subprocess.run(["bash", "-c", stub + within + 'purge_lines_within "$1"', "x", str(listed)],
+                              text=True, capture_output=True, timeout=20)
+        self.assertEqual(kept.stdout.splitlines(), [f"path {standing}", "user weaver-a"], kept.stderr)
+
     def test_nothing_under_the_operators_home_is_listed(self):
         """**The operator's home is never listed, archived or purged** (the
         operator's ruling of 2026-10-07 on #1): the box-wide layout's
@@ -3556,7 +3778,7 @@ class RoundOneOf79Tests(unittest.TestCase):
         again = archive.index("\n  query_runs\n")
         restore = archive.index('mv -T -- "${entry%%|*}" "${entry##*|}"')
         refusal = archive.index('die "agents run or cannot be read')
-        first_write = archive.index('as_op mkdir -p "$DEST"')
+        first_write = archive.index('as_op sh -c \'umask 077 && mkdir -p "$1"\' _ "$DEST"')
         self.assertLess(door, again)
         self.assertLess(again, restore)
         self.assertLess(restore, refusal)
@@ -3624,7 +3846,8 @@ class RoundOneOf79Tests(unittest.TestCase):
         line = next(l.strip() for l in script.splitlines() if l.strip().startswith("archive_name() {"))
         dest = self.dir / "dest"
         dest.mkdir()
-        program = (line + "\n" + shell_function(script, "free_name")
+        # `free_name` looks as the operator (#98); here the test is the operator.
+        program = (line + "\nas_op() { \"$@\"; }\n" + shell_function(script, "free_name")
                    + 'for p in "$@"; do n=$(free_name "$(archive_name territories "$p")"); touch "$DEST/$n.tar.zst"; echo "$n"; done')
         run = subprocess.run(["bash", "-c", program, "x", "/var/lib/weaver-agent", "/var/lib/weaver/agent",
                               "/var/lib/weaver-agent"], env={**os.environ, "DEST": str(dest)},

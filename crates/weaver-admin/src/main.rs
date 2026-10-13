@@ -475,10 +475,16 @@ fn stand_state_member(
         .args(member_vector(&territory, &inventory.binding))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null());
-    if let Ok(log) = log {
-        member.stderr(log);
-    } else {
-        member.stderr(std::process::Stdio::null());
+    match log {
+        Ok(log) => {
+            member.stderr(log);
+        }
+        // The member stands with no log rather than with one this crate
+        // could not vouch for (#98), and the refusal is named.
+        Err(refused) => {
+            diag!("weaver-admin: the member's state.log is not opened: {refused}");
+            member.stderr(std::process::Stdio::null());
+        }
     }
     // The member's end arrives at the fixed number `weaver-state` adopts, and
     // the run lock's description at 9. **Both sources are copied above 100
@@ -1019,13 +1025,53 @@ enum Observation {
     Silent,
 }
 
+// #118: a test-only hook, kept beside the production code it observes: the
+// worker uid a test's dial expects where no account resolves, set to a uid
+// the suite's stand-in listener is not, to stand a wrong peer.
+#[cfg(test)]
+thread_local! {
+    static TEST_WORKER_UID: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
+/// **The coordination socket dialed, its peer judged the agent's worker**
+/// (#98; Spec section 7): the expected uid is the worker account's, resolved
+/// by name as the start step resolves it. An account that does not resolve
+/// stands no worker, and the dial is refused as one nothing could answer.
+fn dial_worker(config: &ServiceConfig) -> Result<channel::Coordination, channel::ChannelFault> {
+    let identity = inventory::identity_for(&AgentName(config.agent.clone()));
+    let worker_uid = match nix::unistd::User::from_name(&identity).ok().flatten() {
+        Some(worker) => worker.uid.as_raw(),
+        // #118: a test-only hook, kept beside the production code it observes:
+        // the suite's stand-in workers listen under its own uid, no
+        // `weaver-<agent>` account standing on a test box.
+        #[cfg(test)]
+        None => TEST_WORKER_UID
+            .with(std::cell::Cell::get)
+            .unwrap_or_else(|| nix::unistd::getuid().as_raw()),
+        #[cfg(not(test))]
+        None => {
+            diag!(
+                "weaver-admin: the worker account {identity} does not resolve, so the coordination socket is not dialed"
+            );
+            return Err(channel::ChannelFault::NotDialable);
+        }
+    };
+    channel::dial(&config.coordination_socket(), worker_uid)
+}
+
 /// **Observes the run through the harness's own word**, per Spec section 3
 /// and `weaver-admin-harness-contract` section 3, within the dial's bound and
 /// the observation's.
 fn observe(config: &ServiceConfig) -> Result<Observation, LifecycleRefusal> {
-    let mut coordination = match channel::dial(&config.coordination_socket()) {
+    let mut coordination = match dial_worker(config) {
         Ok(coordination) => coordination,
         Err(channel::ChannelFault::NoListener) => return Ok(Observation::NoListener),
+        // **A listener that is not the worker is no observation** (#98): its
+        // word is not taken, and the verb refuses rather than reading the
+        // run as silent.
+        Err(channel::ChannelFault::WrongPeer { .. }) => {
+            return Err(LifecycleRefusal::BoundaryUnverified);
+        }
         Err(_) => return Ok(Observation::Silent),
     };
     let ordinal = coordination.next_ordinal();
@@ -1260,8 +1306,13 @@ fn run_load(
     drop(relay_write);
     standing.run_lock = Some(run_lock);
 
-    let mut coordination = match channel::dial(&socket_path) {
+    let mut coordination = match dial_worker(config) {
         Ok(coordination) => coordination,
+        // Not the worker this load started (#98): the load refuses, and its
+        // rollback ends what it stood.
+        Err(channel::ChannelFault::WrongPeer { .. }) => {
+            return Err(LifecycleRefusal::BoundaryUnverified);
+        }
         Err(_) => return Err(refusal_from_worker(&mut worker)),
     };
     let ordinal = coordination.next_ordinal();
@@ -1489,8 +1540,10 @@ fn save_point(
             return Err(LifecycleRefusal::OutOfOrder);
         }
     }
-    let mut coordination =
-        channel::dial(&config.coordination_socket()).map_err(|_| LifecycleRefusal::Unanswered)?;
+    let mut coordination = dial_worker(config).map_err(|fault| match fault {
+        channel::ChannelFault::WrongPeer { .. } => LifecycleRefusal::BoundaryUnverified,
+        _ => LifecycleRefusal::Unanswered,
+    })?;
     let ordinal = coordination.next_ordinal();
     coordination
         .send_directive(
@@ -1906,7 +1959,16 @@ fn unload_within(
     // **A refused observation is silence**, `unload`'s promise being to end
     // whatever holds the lock: it directs leave as for any silent run.
     let (seen, window) = if start::run_lock_held(&run_directory)? {
-        let (worker, load) = worker_seen(observe(config).unwrap_or(Observation::Silent));
+        let observed = match observe(config) {
+            // **A graceful unload refuses a listener that is not the
+            // worker** (#98), at its first look, the run left standing; a
+            // force reads it as silence and ends the run on its lock.
+            Err(LifecycleRefusal::BoundaryUnverified) if !forced => {
+                return Err(LifecycleRefusal::BoundaryUnverified);
+            }
+            observed => observed.unwrap_or(Observation::Silent),
+        };
+        let (worker, load) = worker_seen(observed);
         (
             verb_table::Seen::RunLockHeld(worker),
             leave_window(bounds, forced, worker, load.as_deref()),
@@ -2069,10 +2131,16 @@ fn join_within(
         // dialed again inside it.
         let deadline = std::time::Instant::now() + bounds.leave;
         let mut coordination = loop {
-            match channel::dial(&config.coordination_socket()) {
+            match dial_worker(config) {
                 Ok(coordination) => break coordination,
                 Err(channel::ChannelFault::NoListener) => {
                     return wait_after_seal(config, bounds, run).map(Some);
+                }
+                // Not the worker: no join is directed through it, and the
+                // force ends the run by the escalation (#98), which acts on
+                // the run lock's holders, never on whoever answered.
+                Err(channel::ChannelFault::WrongPeer { .. }) => {
+                    return escalate_joined(config, bounds, run).map(Some);
                 }
                 Err(_) if std::time::Instant::now() < deadline => {}
                 Err(_) => return escalate_joined(config, bounds, run).map(Some),
@@ -2285,9 +2353,16 @@ fn leave_within(
         // not complete, the run staying open with its lock (S9), so the
         // operator retries or forces.
         Err(LeaveFault::Refused(refusal)) => return Err(refusal),
+        // **A graceful unload refuses a listener that is not the worker**
+        // (#98), the run left standing; a force ends the run by the
+        // escalation below, which acts on the run lock's holders and never
+        // on whoever answered the socket.
+        Err(LeaveFault::WrongPeer) if !forced => {
+            return Err(LifecycleRefusal::BoundaryUnverified);
+        }
         // The leave went unanswered inside its bound: a worker that
         // would not exit, so the escalation follows.
-        Err(LeaveFault::Unanswered) => {}
+        Err(LeaveFault::Unanswered | LeaveFault::WrongPeer) => {}
     }
     start::escalate_within(&run_directory, bounds.term, bounds.kill)?;
     // **No `Left` is held, so the escalation writes `Forced`** (3.0, S11;
@@ -2718,6 +2793,9 @@ fn read_marker_or_refuse(
 enum LeaveFault {
     Refused(LifecycleRefusal),
     Unanswered,
+    /// The dial met a listener that is not the worker (#98): no leave was
+    /// directed through it.
+    WrongPeer,
 }
 
 /// **The three leaves admin directs**, each one wire shape: the graceful
@@ -2754,8 +2832,10 @@ fn direct_leave_within(
         LeaveDirected::Forced => (true, false),
         LeaveDirected::Rollback => (true, true),
     };
-    let Ok(mut coordination) = channel::dial(&config.coordination_socket()) else {
-        return Err(LeaveFault::Unanswered);
+    let mut coordination = match dial_worker(config) {
+        Ok(coordination) => coordination,
+        Err(channel::ChannelFault::WrongPeer { .. }) => return Err(LeaveFault::WrongPeer),
+        Err(_) => return Err(LeaveFault::Unanswered),
     };
     let ordinal = coordination.next_ordinal();
     coordination
@@ -2784,8 +2864,10 @@ fn direct_leave_within(
 fn stop(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
     let _invocation =
         start::take_invocation_lock(&config.run_directory(), verb_table::HolderVerb::Stop)?;
-    let mut coordination =
-        channel::dial(&config.coordination_socket()).map_err(|_| LifecycleRefusal::NoResidency)?;
+    let mut coordination = dial_worker(config).map_err(|fault| match fault {
+        channel::ChannelFault::WrongPeer { .. } => LifecycleRefusal::BoundaryUnverified,
+        _ => LifecycleRefusal::NoResidency,
+    })?;
     let ordinal = coordination.next_ordinal();
     coordination
         .send_directive(
@@ -3253,8 +3335,13 @@ fn judge_territory(
             "is not mode 0710, root's with passage for the state group alone",
         ));
     }
-    if carries_access_entries(directory) {
-        return Err(refuse("carries an access-control entry beyond its mode"));
+    // **On the descriptor, failing closed** (#98; the custody audit's G16):
+    // a look that errs for any reason but the absence of an entry or of
+    // support refuses, never reading as no entry.
+    match carries_access_entries_fd(opened.as_fd()) {
+        Ok(false) => {}
+        Ok(true) => return Err(refuse("carries an access-control entry beyond its mode")),
+        Err(_) => return Err(refuse("has access-control entries that cannot be read")),
     }
     // **Grouped to the state group by name, never taken as it stands**
     // (Codex on #94, and the operator's ruling of 2026-10-08 on #1): its
@@ -3351,32 +3438,24 @@ fn carries_access_entries_fd(directory: std::os::fd::BorrowedFd<'_>) -> nix::Res
                 0,
             )
         };
-        if size >= 0 {
+        if acl_entry_answer(size, nix::errno::Errno::last())? {
             return Ok(true);
-        }
-        match nix::errno::Errno::last() {
-            nix::errno::Errno::ENODATA | nix::errno::Errno::EOPNOTSUPP => {}
-            other => return Err(other),
         }
     }
     Ok(false)
 }
 
-/// Whether a path carries a POSIX access-control list, access or default,
-/// read without following a link.
-fn carries_access_entries(path: &std::path::Path) -> bool {
-    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()) else {
-        return true;
-    };
-    [c"system.posix_acl_access", c"system.posix_acl_default"]
-        .iter()
-        .any(|name| {
-            // SAFETY: a size query with no buffer, on NUL-terminated strings.
-            let size = unsafe {
-                nix::libc::lgetxattr(c_path.as_ptr(), name.as_ptr(), std::ptr::null_mut(), 0)
-            };
-            size >= 0
-        })
+/// **One extended-attribute look's answer** (#98, G16): a size is an entry;
+/// no such attribute, or no support for them, is none; any other error is
+/// the look failing, answered as an error, never as no entry.
+fn acl_entry_answer(size: isize, errno: nix::errno::Errno) -> nix::Result<bool> {
+    if size >= 0 {
+        return Ok(true);
+    }
+    match errno {
+        nix::errno::Errno::ENODATA | nix::errno::Errno::EOPNOTSUPP => Ok(false),
+        other => Err(other),
+    }
 }
 
 /// **`library-path` is judged as the root is**, per Spec section 6: a

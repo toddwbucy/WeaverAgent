@@ -214,23 +214,55 @@ fn judge_trace_directory(
 
 fn open_fifo(path: &Path, create: bool) -> Result<OwnedFd, LifecycleRefusal> {
     let c_path = c_string(path)?;
-    if create && !path.exists() {
+    // `symlink_metadata`, so a dangling link at the name is not taken for an
+    // absence and made through.
+    let created = create && std::fs::symlink_metadata(path).is_err();
+    if created {
         // SAFETY: mkfifo with a NUL-terminated path this frame owns.
         let rc = unsafe { nix::libc::mkfifo(c_path.as_ptr(), 0o640) };
         if rc == -1 {
             return Err(LifecycleRefusal::DescriptorsUnusable);
         }
     }
-    let flags = nix::libc::O_WRONLY | nix::libc::O_NONBLOCK | nix::libc::O_CLOEXEC;
+    // **Never through a link at the name** (#98; the custody audit's G6).
+    let flags =
+        nix::libc::O_WRONLY | nix::libc::O_NONBLOCK | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW;
     // SAFETY: as above.
     let fd = unsafe { nix::libc::open(c_path.as_ptr(), flags) };
     if fd == -1 {
+        let errno = std::io::Error::last_os_error().raw_os_error();
+        // A link at the name is refused as one, never followed.
+        if errno == Some(nix::libc::ELOOP) {
+            diag!(
+                "weaver-admin: the pipe sink {} is a link, not a FIFO",
+                path.display()
+            );
+            return Err(LifecycleRefusal::BoundaryUnverified);
+        }
         // ENXIO is the reader-less case, and it maps to the same refusal as
         // any other unusable descriptor: the load refuses rather than hangs.
         return Err(LifecycleRefusal::DescriptorsUnusable);
     }
     // SAFETY: the kernel just created this descriptor.
     let owned = unsafe { OwnedFd::from_raw_fd(fd) };
+    // **A FIFO, and nothing else** (#98): a regular file at the name would
+    // hand the worker a write handle at offset 0 over whatever it holds, the
+    // trace included. Judged on the descriptor, and a FIFO this load made is
+    // set `0640` through it, so the invoker's umask does not decide its mode.
+    let stat = nix::sys::stat::fstat(&owned).map_err(|_| LifecycleRefusal::DescriptorsUnusable)?;
+    if nix::sys::stat::SFlag::from_bits_truncate(stat.st_mode) & nix::sys::stat::SFlag::S_IFMT
+        != nix::sys::stat::SFlag::S_IFIFO
+    {
+        diag!(
+            "weaver-admin: the pipe sink {} is not a FIFO",
+            path.display()
+        );
+        return Err(LifecycleRefusal::BoundaryUnverified);
+    }
+    if created {
+        nix::sys::stat::fchmod(&owned, nix::sys::stat::Mode::from_bits_truncate(0o640))
+            .map_err(|_| LifecycleRefusal::DescriptorsUnusable)?;
+    }
     clear_nonblocking(&owned)?;
     Ok(owned)
 }

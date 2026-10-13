@@ -407,7 +407,24 @@ for u in "${WEAVER_USERS[@]}"; do
   h=$(getent passwd "$u" | cut -d: -f6)
   [ -d "$h" ] && case "$h" in /home/*) HOMES+=("$h"); plan "$h  (home of $u)";; esac
 done
-mapfile -t TMP_PATHS < <(find /tmp -maxdepth 1 \( -name 'weaver-*' -o -name 'torchinductor_weaver-*' \) 2>/dev/null)
+# **tmp_paths DIR: the weaver entries directly under DIR that a weaver-
+# account owns** (#98; the custody audit's G22): DIR is writable by every
+# local user, so an entry another principal made under a weaver- name is
+# neither read into the archive as root nor purged.
+# **Read as two NUL-ended fields, and no name carrying a newline or a tab is
+# taken**: a name in a world-writable directory is anyone's to choose, and
+# one carrying a newline would split into an entry of the planter's choosing
+# in this list and in the line-per-entry purge list, and a field separator
+# a reader strips would make one entry pass for another.
+tmp_paths() {
+  find "$1" -mindepth 1 -maxdepth 1 \( -name 'weaver-*' -o -name 'torchinductor_weaver-*' \) -printf '%p\0%u\0' 2>/dev/null \
+    | while IFS= read -r -d '' entry && IFS= read -r -d '' owner; do
+        case $entry in *$'\n'* | *$'\t'*) continue ;; esac
+        [ "${entry%/*}" = "$1" ] || continue
+        case $owner in weaver-*) printf '%s\n' "$entry" ;; esac
+      done
+}
+mapfile -t TMP_PATHS < <(tmp_paths /tmp)
 [ ${#TMP_PATHS[@]} -gt 0 ] && plan "/tmp: ${#TMP_PATHS[@]} weaver-* entries"
 
 
@@ -419,7 +436,7 @@ mapfile -t TMP_PATHS < <(find /tmp -maxdepth 1 \( -name 'weaver-*' -o -name 'tor
 # while both sources stay on the purge list (Codex on #79).
 free_name() {
   local name=$1 n=2
-  while [ -e "$DEST/$name.tar.zst" ]; do name="$1-$n"; n=$((n + 1)); done
+  while as_op test -e "$DEST/$name.tar.zst"; do name="$1-$n"; n=$((n + 1)); done
   printf '%s' "$name"
 }
 
@@ -432,7 +449,37 @@ free_name() {
 # shell writes the file. Measured 2026-09-30: mkdir as root failed on the
 # export, and a file root did write arrived owned by nobody.
 as_op() { sudo -u "$OPERATOR" -H "$@"; }
-to_file() { as_op sh -c 'cat > "$1"' _ "$1"; }   # stdin -> $1, owned by the operator
+# stdin -> $1, owned by the operator and **readable by the operator alone**
+# (#98; the custody audit's G22): the archive holds the trace and the save
+# points, which the box keeps to their groups, so the invoker's umask does
+# not decide who else reads them where they land.
+#
+# **A default access-control list on DEST outranks the umask** (#98, Codex on
+# #142): a file created under one takes the list's entries and mask, the
+# umask ignored, so each file is set 0600 once written, which masks any
+# entry it inherited, and close_dest strips DEST's lists before anything is
+# written.
+to_file() { as_op sh -c 'umask 077 && cat > "$1" && chmod 0600 "$1"' _ "$1"; }
+# **close_dest DIR: the archive directory made the operator's alone**: 0700,
+# and its access and default access-control lists stripped, so nothing
+# written in it inherits a reader. A store with no lists on DIR has none to
+# strip; one carrying any, where they cannot be stripped, refuses.
+#
+# **A look that fails refuses** (Codex on #142, round 2): getfacl's status is
+# read apart from its output, so an inspection that errs is never taken for
+# a directory carrying no list.
+close_dest() {
+  local lists
+  as_op chmod 0700 "$1" || die "the operator cannot close $1 to 0700"
+  command -v getfacl >/dev/null && command -v setfacl >/dev/null \
+    || die "getfacl and setfacl are needed to judge $1's access-control lists"
+  lists=$(as_op getfacl -cps -- "$1") || die "$1's access-control lists cannot be read, so it cannot be vouched for"
+  if [ -n "$lists" ]; then
+    as_op setfacl -b -k -- "$1" || die "the operator cannot strip $1's access-control lists"
+    lists=$(as_op getfacl -cps -- "$1") || die "$1's access-control lists cannot be read after the strip"
+    [ -z "$lists" ] || die "$1 still carries access-control lists"
+  fi
+}
 tarz() { # tarz OUT PATH... : preserve owners, modes, acls and xattrs
   local out=$1; shift
   tar --numeric-owner --acls --xattrs -I 'zstd -T0 -3' -cf - "$@" 2> >(grep -v 'Removing leading' >&2) | to_file "$out"
@@ -442,7 +489,7 @@ sha_all() { find "$1" -maxdepth 1 -type f -exec sha256sum {} \; 2>/dev/null || t
 if [ "$MODE" = archive ]; then
   [ ${#ACTIVE_UNITS[@]} -eq 0 ] || die "units still active: ${ACTIVE_UNITS[*]}. Unload them (weaver-admin unload <agent>) or stop them, then rerun"
   [ ${#RUNNING[@]} -eq 0 ] || die "agents still run or cannot be read: ${RUNNING[*]}. Unload each (weaver-admin unload <agent>), then rerun"
-  [ -e "$DEST/SHA256SUMS" ] && die "$DEST already holds an archive; name another directory"
+  as_op test -e "$DEST/SHA256SUMS" && die "$DEST already holds an archive; name another directory"
   # **The delegated door shuts for the snapshot** (Codex on #79): each rule is
   # moved to a dot-name sudo never reads, so no connector can start a run
   # while tar copies, then every agent is asked again. A run found
@@ -467,11 +514,14 @@ if [ "$MODE" = archive ]; then
     for entry in "${MOVED[@]}"; do mv -T -- "${entry%%|*}" "${entry##*|}" && plan "restored ${entry##*|}"; done
     die "agents run or cannot be read: ${RUNNING[*]}. The sudo rules are restored; unload each, then rerun"
   fi
-  as_op mkdir -p "$DEST" || die "the operator cannot create $DEST"
+  as_op sh -c 'umask 077 && mkdir -p "$1"' _ "$DEST" || die "the operator cannot create $DEST"
   as_op test -w "$DEST" || die "$DEST is not writable by $OPERATOR"
   # A run that died part way leaves files here the operator may not own;
   # they are this script's and go before it writes again.
-  find "$DEST" -maxdepth 1 -type f -exec rm -f {} \; 2>/dev/null || true
+  # Removed as the operator (#98): DEST is the operator's, and root acting
+  # under a path another writer controls could be led elsewhere.
+  as_op find "$DEST" -maxdepth 1 -type f -exec rm -f {} \; 2>/dev/null || true
+  close_dest "$DEST"
   say "archive to $DEST"
 
   NVCC=$(command -v nvcc || ls /opt/cuda/bin/nvcc 2>/dev/null || true)
@@ -526,7 +576,7 @@ if [ "$MODE" = archive ]; then
     tarz "$DEST/$name.tar.zst" "${present[@]}"
     # Apparent size, not blocks: on NFS the blocks are not yet accounted
     # when this line prints, and du answered 512 for a 3 G tarball.
-    plan "$name.tar.zst  $(stat -c %s "$DEST/$name.tar.zst" | numfmt --to=iec)  <- ${present[*]}"
+    plan "$name.tar.zst  $(as_op stat -c %s "$DEST/$name.tar.zst" | numfmt --to=iec)  <- ${present[*]}"
     PURGE+=("${present[@]}")
   }
 
@@ -564,19 +614,110 @@ if [ "$MODE" = archive ]; then
     true
   } | to_file "$DEST/PURGE-LIST"
 
-  as_op sh -c 'cd "$1" && find . -type f -not -name SHA256SUMS -printf "%P\n" | sort | xargs sha256sum > SHA256SUMS' _ "$DEST"
+  as_op sh -c 'umask 077 && cd "$1" && find . -type f -not -name SHA256SUMS -printf "%P\n" | sort | xargs sha256sum > SHA256SUMS && chmod 0600 SHA256SUMS' _ "$DEST"
   say "verify"
   as_op sh -c 'cd "$1" && sha256sum -c --quiet SHA256SUMS' _ "$DEST" || die "the archive does not verify"
-  for t in "$DEST"/*.tar.zst; do tar -tf "$t" >/dev/null || die "$t does not read back"; done
-  plan "$(wc -l < "$DEST/SHA256SUMS") files sum and every tarball reads back"
+  while IFS= read -r -d '' t; do
+    as_op tar -tf "$t" >/dev/null || die "$t does not read back"
+  done < <(as_op find "$DEST" -maxdepth 1 -type f -name '*.tar.zst' -print0)
+  plan "$(as_op wc -l "$DEST/SHA256SUMS" | cut -d' ' -f1) files sum and every tarball reads back"
   say "archived. review $DEST/PURGE-LIST, then: sudo $0 --purge $DEST"
   exit 0
 fi
 
 # ----------------------------------------------------------------- 3. purge
-[ -f "$DEST/SHA256SUMS" ] && [ -f "$DEST/PURGE-LIST" ] || die "$DEST holds no finished archive"
+# **purge_candidates: every line a purge list may hold**, derived from the box
+# as the archive derives what it lists (#98; the custody audit's G22). The
+# list lives in the archive directory, which the operator writes and, on an
+# export where root's writes are squashed, root cannot hold as its own, so
+# the purge does not take the list's word: it acts only on lines this
+# derivation also finds.
+purge_candidates() {
+  local p sub d c a u g
+  [ -d /etc/weaver ] && echo "path /etc/weaver"
+  for p in "${SUDO_RULES[@]}" "${LDSO_CONFS[@]}"; do echo "path $p"; done
+  for p in "${!PREFIXES[@]}"; do
+    for sub in bin lib python-spu; do [ -d "$p/$sub" ] && echo "path $p/$sub"; done
+    for sub in "$p"/backup-* "$p"/lib.backup-*; do [ -d "$sub" ] && echo "path $sub"; done
+  done
+  [ -e /var/lib/weaver ] && echo "path /var/lib/weaver"
+  for d in "${!TERRITORY_BASES[@]}" "${OWN_TERRITORIES[@]}" "${!LOG_PATHS[@]}" "${HOMES[@]}" "${TMP_PATHS[@]}"; do
+    echo "path $d"
+  done
+  for c in "${!COORD_ROOTS[@]}"; do
+    echo "path $c/weaver.run"
+    for a in "${!AGENTS[@]}"; do echo "path $c/weaver-$a"; done
+  done
+  for u in "${WEAVER_USERS[@]}"; do echo "user $u"; done
+  for g in "${WEAVER_GROUPS[@]}"; do echo "group $g"; done
+  true
+}
+# **purge_lines_outside LIST: each line of LIST naming something that still
+# stands and that purge_candidates does not hold.** Judged in bash, each line
+# read as the removal loops read it, so the string judged is the string acted
+# on. A line naming what no longer stands is passed over, there being nothing
+# to remove, so a purge stopped part way can be run again; any line of a
+# kind the purge does not know is named.
+#
+# **A line passed over is never acted on**: the removal loops read only the
+# lines purge_lines_within keeps, those the derivation holds. A line that did
+# not stand when judged could stand by the removal (`/tmp/gone/../../etc`
+# resolves once anyone makes `/tmp/gone`), so none is removed on the list's
+# word alone.
+purge_lines_outside() {
+  local -A held=()
+  local line kind name
+  while IFS= read -r line; do
+    [ -n "$line" ] && held["$line"]=1
+  done < <(purge_candidates)
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    [ -n "${held["$line"]:-}" ] && continue
+    kind=${line%% *} name=${line#* }
+    case $kind in
+      path) [ -e "$name" ] || [ -L "$name" ] || continue ;;
+      user) getent passwd "$name" >/dev/null || continue ;;
+      group) getent group "$name" >/dev/null || continue ;;
+    esac
+    printf '%s\n' "$line"
+  done < "$1"
+}
+# **purge_lines_within LIST: each line of LIST the derivation holds**, the
+# only lines the removal loops act on.
+purge_lines_within() {
+  local -A held=()
+  local line
+  while IFS= read -r line; do
+    [ -n "$line" ] && held["$line"]=1
+  done < <(purge_candidates)
+  while IFS= read -r line; do
+    [ -n "$line" ] && [ -n "${held["$line"]:-}" ] && printf '%s\n' "$line"
+  done < "$1"
+  true
+}
+
+# **Everything under DEST is read as the operator** (#98): the archive is the
+# operator's alone, 0600 in a 0700 directory, and on an export where root's
+# writes are squashed root could not read it either way.
+as_op test -f "$DEST/SHA256SUMS" && as_op test -f "$DEST/PURGE-LIST" || die "$DEST holds no finished archive"
 say "re-verify $DEST"
-( cd "$DEST" && sha256sum -c --quiet SHA256SUMS ) || die "the archive no longer verifies; purge refused"
+as_op sh -c 'cd "$1" && sha256sum -c --quiet SHA256SUMS' _ "$DEST" || die "the archive no longer verifies; purge refused"
+# The list is read once, into root's own copy, and judged there, so what is
+# judged is what the purge reads: nothing writes it between.
+PURGE_LIST=$(mktemp)
+PURGE_ACTED=$(mktemp)
+trap 'rm -f -- "$PURGE_LIST" "$PURGE_ACTED"' EXIT
+as_op cat -- "$DEST/PURGE-LIST" > "$PURGE_LIST"
+# The copy agrees with the archive's sums, or nothing is purged. This
+# catches a list changed by accident since the archive, not a writer who can
+# rewrite the sums as well: against that writer the defence is the
+# derivation below, on which every removal rests.
+LISTED_SUM=$(as_op awk '$2 == "PURGE-LIST" { print $1 }' "$DEST/SHA256SUMS")
+COPY_SUM=$(sha256sum < "$PURGE_LIST" | cut -d' ' -f1)
+[ -n "$LISTED_SUM" ] && [ "$LISTED_SUM" = "$COPY_SUM" ] || die "the purge list read is not the one the archive summed; purge refused"
+OUTSIDE=$(purge_lines_outside "$PURGE_LIST")
+[ -z "$OUTSIDE" ] || die "PURGE-LIST names what this purge would not find, so nothing is purged: ${OUTSIDE//$'\n'/; }"
+purge_lines_within "$PURGE_LIST" > "$PURGE_ACTED"
 [ ${#ACTIVE_UNITS[@]} -eq 0 ] || die "units still active: ${ACTIVE_UNITS[*]}"
 [ ${#RUNNING[@]} -eq 0 ] || die "agents still run or cannot be read: ${RUNNING[*]}"
 plan "verified"
@@ -598,25 +739,30 @@ systemctl stop "$SLICE" 2>/dev/null && plan "stopped $SLICE" || true
 
 
 say "accounts"
-while read -r kind name; do
+# Each line split as it was judged, whole: `read` with its default field
+# separators would strip a name's surrounding blanks and act on another path.
+while IFS= read -r line; do
+  kind=${line%% *} name=${line#* }
   case $kind in
     user)  userdel -r "$name" 2>/dev/null && plan "removed user $name (and home)" || { userdel "$name" 2>/dev/null && plan "removed user $name" || plan "user $name: not removed"; } ;;
   esac
-done < "$DEST/PURGE-LIST"
-while read -r kind name; do
+done < "$PURGE_ACTED"
+while IFS= read -r line; do
+  kind=${line%% *} name=${line#* }
   case $kind in
     group) getent group "$name" >/dev/null && { groupdel "$name" 2>/dev/null && plan "removed group $name" || plan "group $name: not removed"; } ;;
   esac
-done < "$DEST/PURGE-LIST"
+done < "$PURGE_ACTED"
 
 say "paths"
-while read -r kind name; do
+while IFS= read -r line; do
+  kind=${line%% *} name=${line#* }
   case $kind in
     path)
       case "$name" in */models|*/models/*) plan "kept $name"; continue;; esac
       rm -rf -- "$name" && plan "removed $name" ;;
   esac
-done < "$DEST/PURGE-LIST"
+done < "$PURGE_ACTED"
 # A prefix left holding only models stays; one left empty goes.
 for p in "${!PREFIXES[@]}"; do
   [ -d "$p" ] && [ -z "$(ls -A "$p")" ] && rmdir "$p" && plan "removed empty $p"

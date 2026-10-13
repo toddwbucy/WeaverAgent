@@ -70,7 +70,7 @@ fn the_dial_refuses_within_its_bound() {
     let dir = scratch("bound");
     let path = dir.join("nothing-listens-here.sock");
     let started = std::time::Instant::now();
-    let refused = dial(&path);
+    let refused = dial(&path, nix::unistd::getuid().as_raw());
     let elapsed = started.elapsed();
     assert!(
         matches!(refused, Err(ChannelFault::NoListener)),
@@ -106,13 +106,13 @@ fn a_full_backlog_refuses_within_the_bound() {
     // then the queue closes.
     let mut held = Vec::new();
     for _ in 0..8 {
-        match dial(&path) {
+        match dial(&path, nix::unistd::getuid().as_raw()) {
             Ok(c) => held.push(c),
             Err(_) => break,
         }
     }
     let started = std::time::Instant::now();
-    let refused = dial(&path);
+    let refused = dial(&path, nix::unistd::getuid().as_raw());
     let elapsed = started.elapsed();
     assert!(
         matches!(refused, Err(ChannelFault::NotDialable)),
@@ -138,7 +138,7 @@ fn the_dial_wins_the_race_when_the_bind_is_late() {
         std::thread::sleep(std::time::Duration::from_millis(120));
         harness_listener(&bind_dir)
     });
-    let connected = dial(&path);
+    let connected = dial(&path, nix::unistd::getuid().as_raw());
     let (listener, _) = late.join().expect("thread");
     assert!(
         connected.is_ok(),
@@ -159,7 +159,7 @@ fn the_dial_wins_the_race_when_the_bind_is_late() {
 fn one_write_is_one_read() {
     let dir = scratch("framing");
     let (listener, path) = harness_listener(&dir);
-    let admin = dial(&path).expect("dial");
+    let admin = dial(&path, nix::unistd::getuid().as_raw()).expect("dial");
     let worker = harness_accepts(&listener);
     let worker = Coordination::adopt(worker);
     worker.send(&directive(1, "alpha")).expect("first write");
@@ -181,7 +181,7 @@ fn one_write_is_one_read() {
 fn a_bound_past_the_clock_waits_and_reads() {
     let dir = scratch("unbounded");
     let (listener, path) = harness_listener(&dir);
-    let admin = dial(&path).expect("dial");
+    let admin = dial(&path, nix::unistd::getuid().as_raw()).expect("dial");
     let worker = Coordination::adopt(harness_accepts(&listener));
     worker.send(&directive(7, "alpha")).expect("write");
     let read = admin
@@ -203,7 +203,7 @@ fn a_bound_past_the_clock_waits_and_reads() {
 fn a_capped_poll_timeout_with_time_left_waits_again() {
     let dir = scratch("poll-cap");
     let (listener, path) = harness_listener(&dir);
-    let admin = dial(&path).expect("dial");
+    let admin = dial(&path, nix::unistd::getuid().as_raw()).expect("dial");
     let worker = Coordination::adopt(harness_accepts(&listener));
     let answering = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(150));
@@ -232,7 +232,7 @@ fn a_capped_poll_timeout_with_time_left_waits_again() {
 fn truncation_is_a_channel_fault() {
     let dir = scratch("truncate");
     let (listener, path) = harness_listener(&dir);
-    let admin = dial(&path).expect("dial");
+    let admin = dial(&path, nix::unistd::getuid().as_raw()).expect("dial");
     let worker = harness_accepts(&listener);
     let oversized = vec![b'x'; MAX_ENVELOPE_BYTES + 4096];
     // SAFETY: a raw send is how the test produces a message larger than
@@ -270,7 +270,7 @@ fn the_enter_carries_its_descriptor_in_one_message() {
     use std::os::fd::AsFd;
     let dir = scratch("ancillary");
     let (listener, path) = harness_listener(&dir);
-    let admin = dial(&path).expect("dial");
+    let admin = dial(&path, nix::unistd::getuid().as_raw()).expect("dial");
     let worker_fd = harness_accepts(&listener);
 
     let sink = std::fs::File::create(dir.join("sink")).expect("sink");
@@ -309,4 +309,32 @@ fn the_enter_carries_its_descriptor_in_one_message() {
     drop(worker_fd);
     drop(listener);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **The dial refuses a listener that is not the agent's worker, at once**
+/// (#98; the custody audit's G3): the socket's directory is the agent's, so
+/// a name replaced there could aim the verb at another agent's worker. The
+/// peer's uid is read after the connect, and a stranger's refuses
+/// `WrongPeer` without the ceiling's retries; the worker's own connects.
+/// Perturbation: drop the comparison, and the stranger is dialed.
+#[test]
+fn the_dial_refuses_a_listener_that_is_not_the_worker() {
+    let dir = scratch("peer");
+    let (listener, path) = harness_listener(&dir);
+    let me = nix::unistd::getuid().as_raw();
+    let started = std::time::Instant::now();
+    let refused = dial(&path, me.wrapping_add(1));
+    assert!(
+        matches!(refused, Err(ChannelFault::WrongPeer { uid }) if uid == me),
+        "{refused:?}"
+    );
+    assert!(
+        started.elapsed() < DIAL_CEILING,
+        "a wrong peer is not retried to the ceiling"
+    );
+    assert!(
+        dial(&path, me).is_ok(),
+        "the worker's own listener connects"
+    );
+    drop(listener);
 }
