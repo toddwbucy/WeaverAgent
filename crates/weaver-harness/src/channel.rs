@@ -288,6 +288,7 @@ impl Drop for CoordinationSerialized {
 /// **Exposed to this crate's tests because the resource is the process's.** A
 /// test reading the ambient umask, or electing a known one so a mode
 /// assertion is not vacuous, races the bind's own guard otherwise.
+// Test-only hook kept here (#118): beside the coordination guard it holds.
 #[cfg(test)]
 fn with_umask_held<T>(work: impl FnOnce() -> T) -> T {
     let _serialized = CoordinationSerialized::acquire();
@@ -923,6 +924,7 @@ impl AsFd for DecodeChannel {
 /// Wrap an already-owned descriptor as a decode end, for the suite that scripts
 /// a decode peer over a socketpair rather than forking a real SPU. Test-only
 /// and not an adoption path.
+// Test-only hook kept here (#118): other modules' suites reach it as `crate::channel`.
 #[cfg(test)]
 pub(crate) fn decode_from_owned(end: OwnedFd) -> DecodeChannel {
     DecodeChannel { end }
@@ -1093,251 +1095,16 @@ pub unsafe fn place_child_ends(ends: &[&ChildEnd]) -> Result<(), nix::Error> {
 const MAX_PLACED_ENDS: usize = 8;
 
 #[cfg(test)]
-mod series_tests {
-    use super::*;
-    use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
-
-    /// **A segmented answer arrives whole**, per the decode contract's
-    /// checkable: the far end sends the preamble and its counted slices,
-    /// and `recv_reply` hands up the one parsed frame with no layer above
-    /// the channel seeing a segment.
-    #[test]
-    fn a_segmented_answer_arrives_whole() {
-        let (near, far) = socketpair(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            None,
-            SockFlag::empty(),
-        )
-        .expect("pair");
-        let channel = DecodeChannel { end: near };
-        let answer = weaver_types::TokenAnswer::Token {
-            token: 7,
-            piece: "x".repeat(100_000),
-        };
-        let body = serde_json::to_vec(&answer).expect("renders");
-        assert!(
-            body.len() > weaver_types::MAX_ENVELOPE_BYTES,
-            "the fixture is oversized"
-        );
-        let preamble = format!(
-            "{{\"segments\":{},\"bytes\":{}}}",
-            body.len().div_ceil(weaver_types::MAX_ENVELOPE_BYTES),
-            body.len()
-        );
-        send_octets(far.as_fd(), preamble.as_bytes()).expect("preamble");
-        for slice in body.chunks(weaver_types::MAX_ENVELOPE_BYTES) {
-            send_octets(far.as_fd(), slice).expect("slice");
-        }
-        match channel.recv_reply().expect("reassembles") {
-            DecodeReply::Answer(weaver_types::TokenAnswer::Token { token, piece }) => {
-                assert_eq!(token, 7);
-                assert_eq!(piece.len(), 100_000, "byte-identical through the series");
-            }
-            other => panic!("the one frame, parsed: {other:?}"),
-        }
-    }
-
-    /// A kindless frame that is not the exact preamble refuses as
-    /// undecodable rather than being read around, the reserved shape's own
-    /// rule on this side of the seam.
-    #[test]
-    fn a_malformed_preamble_shape_refuses() {
-        assert!(matches!(
-            reassemble_if_series(b"{\"segments\":2,\"extra\":true}".to_vec(), || panic!()),
-            Err(ChannelFault::Undecodable)
-        ));
-        let through =
-            reassemble_if_series(b"{\"kind\":\"not_open\"}".to_vec(), || panic!()).expect("passes");
-        assert_eq!(through, b"{\"kind\":\"not_open\"}");
-    }
-}
+mod series_tests;
 
 #[cfg(test)]
-mod door_mode_tests {
-    use super::*;
-
-    /// **The coordination door denies every uid but its owner.**
-    ///
-    /// `bind` sets no mode, so this name would land at `0777 & ~umask` and
-    /// the door's permissions would be whatever umask the process inherited -
-    /// `0777` on one box and `0775` on another from one build, on
-    /// 2026-08-28. Only `uid() == 0` is admitted at `accept_root`, so no
-    /// group reaches this door and `0700` is the access it offers.
-    ///
-    /// Where the runner's own umask produces `0700` this run cannot tell an
-    /// elected mode from an inherited one, so it says so and skips rather
-    /// than asserting against a run that cannot show the property.
-    ///
-    /// Perturbation: drop the `CoordinationUmask::deny_all_but_owner()` guard
-    /// from `bind_coordination` and this reports the runner's own mode.
-    /// Watched under exactly that removal, and watched **here** - the form
-    /// this replaced skipped wherever the ambient umask already produced
-    /// `0700`, which `0077` does, so on a hardened image it ran nowhere while
-    /// its record said otherwise.
-    ///
-    /// conforms: harness-coordination-door-states-its-mode
-    #[test]
-    fn the_coordination_door_denies_every_uid_but_its_owner() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = crate::scratch::dir(format!(
-            "weaver-coordination-mode-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let path = dir.join("coordination.sock");
-
-        // **The umask is elected rather than read, so this runs everywhere.**
-        // An earlier form read the ambient value and skipped where it already
-        // produced `0700`, which `0077` does - a common hardened default, so
-        // the watch skipped on a hardened image and a later removal of the
-        // guard would have shipped green. `0o000` cannot produce `0700` by
-        // itself, so under it the mode on disk is the election or nothing.
-        //
-        // The lock is held across the window and is reentrant, so
-        // `bind_coordination` taking it again inside is a no-op.
-        let (listener, seen) = with_umask_held(|| {
-            let previous = nix::sys::stat::umask(nix::sys::stat::Mode::empty());
-            let bound = bind_coordination(&path);
-            let seen = std::fs::metadata(&path).map(|meta| meta.permissions().mode() & 0o777);
-            nix::sys::stat::umask(previous);
-            (bound, seen)
-        });
-        let listener = listener.expect("the name binds");
-        let mode = seen.expect("the socket is on disk");
-        assert_eq!(
-            mode, 0o700,
-            "the door states its mode rather than inheriting one, got {mode:04o}"
-        );
-        drop(listener);
-    }
-}
+mod door_mode_tests;
 
 #[cfg(test)]
-mod undecodable_tests {
-    use super::undecodable_detail;
-
-    /// **The operator line names the member the builds disagree about**, per
-    /// `weaver-harness-Spec` section 7 and issue #404: an hour of diagnosis
-    /// against `no_residency` and a bare `Undecodable`, where one line naming
-    /// `unknown field: column-permission` costs a second.
-    ///
-    /// Perturbation: return a constant from `undecodable_detail` and this
-    /// fails on the member name. Watched under exactly that removal,
-    /// 2026-09-02.
-    ///
-    /// conforms: harness-undecodable-names-its-detail
-    #[test]
-    fn the_undecodable_line_names_the_field() {
-        // The mixed-version shape itself: an instruction carrying a member
-        // this build never registered, refused by deny_unknown_fields.
-        let alien = r#"{"model-binding":{"artifact":"a","devices":[0]},
-            "residual-readout-election":false,"surprisal-election":false,
-            "tunable-values":{},
-            "a-member-from-a-newer-floor":{"x":1}}"#;
-        let error = serde_json::from_str::<weaver_types::DecoderInstruction>(alien)
-            .expect_err("the alien member refuses");
-        let line = undecodable_detail("organ", &error);
-        assert!(
-            line.contains("a-member-from-a-newer-floor"),
-            "the line names the member: {line}"
-        );
-        assert!(
-            line.contains("unknown field"),
-            "and the refusal's kind: {line}"
-        );
-        assert!(
-            line.contains("\"channel\":\"organ\""),
-            "and which channel refused: {line}"
-        );
-        // The line itself is typed, so the journal grep that finds it can
-        // also parse it.
-        serde_json::from_str::<serde_json::Value>(&line).expect("a typed line");
-    }
-}
+mod undecodable_tests;
 
 #[cfg(test)]
-mod classify_bound_tests {
-    use super::*;
-    use nix::sys::socket::{MsgFlags, send};
-
-    /// **A late readiness frame spends the answer's bound rather than
-    /// renewing it.** The peer sends readiness partway into the bound and
-    /// then nothing, holding its end open so the wait is the deadline's and
-    /// not a closed peer's. One deadline ends the ask at the bound. A
-    /// deadline renewed per receive would end it at the frame's arrival plus
-    /// a whole second bound.
-    ///
-    /// Perturbation: renew the deadline at each receive in `recv_answer_by`,
-    /// which is what the engine's loop did before, and the ask runs to about
-    /// 700 ms against this 400 ms bound and fails the assertion.
-    #[test]
-    fn a_late_readiness_spends_the_bound_rather_than_renewing_it() {
-        let (near, far) = ClassifyChannel::pair().expect("the pair");
-        let bound = 400u64;
-        let peer = std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            let ready =
-                serde_json::to_vec(&weaver_types::LabelAnswer::Ready).expect("ready renders");
-            send(far.end.as_raw_fd(), &ready, MsgFlags::empty()).expect("ready sent");
-            std::thread::sleep(std::time::Duration::from_millis(1500));
-            drop(far);
-        });
-        let began = std::time::Instant::now();
-        let reply = near.recv_answer_by(bound);
-        let took = began.elapsed();
-        assert!(
-            reply.is_err(),
-            "no answer came, so the ask expires: {reply:?}"
-        );
-        assert!(
-            took < std::time::Duration::from_millis(550),
-            "the ask ended at {took:?}, past its {bound} ms bound"
-        );
-        // The poll's timeout is whole milliseconds, so the last wait may end
-        // a fraction of one short of the deadline.
-        assert!(
-            took >= std::time::Duration::from_millis(bound - 2),
-            "the ask waited its bound, took {took:?}"
-        );
-        peer.join().expect("the peer");
-    }
-}
+mod classify_bound_tests;
 
 #[cfg(test)]
-mod start_step_descriptor_tests {
-    /// **An inherited number is marked close-on-exec and kept**, per
-    /// `weaver-harness-Spec` section 2.2, so no organ the worker forks
-    /// inherits the run lock or the relay's write end. The number is a fresh
-    /// one far above any the test harness uses. Perturbation: drop the
-    /// `F_SETFD` from `keep_close_on_exec` and the flag stays clear.
-    #[test]
-    fn an_inherited_number_is_kept_close_on_exec() {
-        let (read_end, write_end) = nix::unistd::pipe().expect("a pipe");
-        // SAFETY: F_DUPFD on a descriptor this test owns answers a fresh
-        // number without the flag, as an inherited one arrives.
-        let fd = unsafe {
-            nix::libc::fcntl(
-                std::os::fd::AsRawFd::as_raw_fd(&write_end),
-                nix::libc::F_DUPFD,
-                800,
-            )
-        };
-        assert!(fd >= 800);
-        assert!(
-            super::keep_close_on_exec(fd).unwrap(),
-            "a descriptor stood there"
-        );
-        // SAFETY: F_GETFD on the number, which must still be open.
-        let flags = unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFD) };
-        assert_ne!(flags, -1, "kept, never closed");
-        assert_ne!(flags & nix::libc::FD_CLOEXEC, 0, "marked close-on-exec");
-        // SAFETY: closing the test's own duplicate.
-        unsafe { nix::libc::close(fd) };
-        assert!(
-            !super::keep_close_on_exec(fd).unwrap(),
-            "an empty number is skipped"
-        );
-        drop((read_end, write_end));
-    }
-}
+mod start_step_descriptor_tests;
