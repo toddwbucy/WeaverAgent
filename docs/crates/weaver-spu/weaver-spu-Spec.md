@@ -3063,6 +3063,10 @@ than a code fact.
   by watching an unclosed fixture report `unparsed` when the kernel's closing-marker
   check is skipped. The fixture is a rendered string against a family module, so the
   watch reads the parse's own answer and reaches neither a model nor a device.
+- The report crosses on the answer: a generation whose parse met an unrecovered call
+  answers with the entry in `Generation`'s `unrecovered`, confirmed by watching the
+  member arrive empty when the report is printed to the operator channel instead, as
+  it was before the ruling of 2026-10-13.
 - An `UnrecoveredCall` block renders back as written: a fixture fragment renders to the
   same bytes the emission carried, confirmed by watching the render differ when the
   renderer emits the block's fragment without its markers.

@@ -650,6 +650,9 @@ How each check is implemented is Spec work. What must be checkable:
 - A re-feed's answer arrives under its own arm and never a generation's,
   so a reader of the seam can never mistake a supplied path for a sampled
   one.
+- Every call the parse could not recover crosses on the answer as its report,
+  the fragment, the reason and the grammar, on a generation's answer and a
+  re-feed's alike, and nothing of it reaches the SPU's standard error alone.
 - A re-feed against either arm of `weaver-spu-PRD` section 13.14's registry
   refuses typed before any device work - no admitted permission, or an
   empty recorded path - and the seam's session and ordering refusals cover

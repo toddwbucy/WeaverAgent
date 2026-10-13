@@ -715,11 +715,15 @@ restated here.
 
 - The licensed combinations of section 3: the harness refuses an `Assistant`
   message carrying a `ToolResult` block, confirmed by watching the message reach
-  the recorder when the check is removed. This test lives in the harness's suite,
-  because the harness is the party the rule binds, and it is named here because
-  the rule is stated here.
+  the recorder when the check is removed, and it accepts an `Assistant` message
+  carrying an `UnrecoveredCall` block and refuses a `User` message carrying one,
+  confirmed by watching the first refused when the acceptance arm is removed and the
+  second admitted when the refusal is, the licensing match carrying a wildcard that
+  compiles either way. This test lives in the harness's suite, because the harness
+  is the party the rule binds, and it is named here because the rule is stated here.
 - A message round-trips through serialization unchanged, block sequence and roles
-  intact, confirmed by watching the test fail when a block variant is dropped.
+  intact, an `UnrecoveredCall` block among them, confirmed by watching the test fail
+  when a block variant is dropped.
 - An unknown tag on deserialization refuses rather than defaulting, confirmed by
   feeding a role this crate does not define.
 - `Role` serializes as a plain renamed string, per section 3, confirmed by

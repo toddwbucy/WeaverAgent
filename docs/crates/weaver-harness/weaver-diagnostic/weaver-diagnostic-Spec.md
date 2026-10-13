@@ -752,6 +752,12 @@ under gate H2. No async runtime and no socket crate in the resolved tree.
   count places that draw at, watched to fail when the pass names the draw's index in
   the turn's identifiers instead, which sits below by the input's length and the
   prefix.
+- A re-fed path's unrecovered call reaches this record, per section 3.2: a re-feed
+  answer whose `unrecovered` report holds an entry is authored as this record's
+  `model.unrecovered_call`, turned and in the serving kind's shape, watched to fail
+  when the diagnostic authoring is removed. The serving record's test does not reach
+  it, this record's authoring path and its kind set being separate from the serving
+  ones.
 
 **Enforced by review, one claim.** That the readout rides the measurement where a
 serving record puts it is a claim about where a shape sits rather than a behavior a

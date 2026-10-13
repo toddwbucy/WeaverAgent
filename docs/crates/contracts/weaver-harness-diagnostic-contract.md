@@ -262,7 +262,9 @@ which section 4 of this document names as the recorder's owing. The refusal
 path is exercised by submitting an event whose payload does not match its kind
 and confirming the sink is untouched. The death path is exercised by ending a
 pass without its closing event and confirming the record carries an unclosed
-bracket rather than a manufactured outcome.
+bracket rather than a manufactured outcome. The twentieth kind is exercised by a
+re-feed whose answer reports an unrecovered call, confirming the record carries
+`model.unrecovered_call` for it.
 
 **The null replay of `weaver-diagnostic-PRD` section 4 is what certifies the
 mechanism**, and it is owed behind this contract's own Spec rather than

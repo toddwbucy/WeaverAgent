@@ -2662,6 +2662,13 @@ already discharged.
   short, both confirmed by watching a message split or silently shorten when the
   type is changed to `SOCK_STREAM`.
 - In the gate's crate: the accept-time refusal of section 3.
+- In this crate: `Generation`'s `unrecovered` member, per section 4.4, renders no
+  member where the report is empty and round-trips where it holds an entry, and an
+  answer written before the member existed parses with it empty, confirmed by
+  watching `"unrecovered":[]` appear when `skip_serializing_if` is removed and the
+  older answer refused when `default` is. `UnrecoveredReason` renders
+  `{"case":"unclosed"}` and `{"case":"unparsed","detail":...}`, confirmed by watching
+  the tag dropped and serde's external tagging render the first as a bare string.
 
 **The kebab-case bullet and the tagging bullet moved from `review` with this
 act**, per Document Format section 5's rule of v0.22 that `review` means an

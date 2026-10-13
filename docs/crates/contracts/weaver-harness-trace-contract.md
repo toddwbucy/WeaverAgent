@@ -410,6 +410,9 @@ How each check is implemented is Spec work. What must be checkable is stated her
 - Every `turn.closed` states its close kind, clean or stopped with reason.
 - A decode reaches the record as both layers, the verbatim emission and the
   canonical parse, neither standing for the other.
+- A call the parse could not recover reaches the record as its own
+  `model.unrecovered_call`, beside both layers, its fragment the same bytes the
+  parse's `UnrecoveredCall` block holds.
 - A measurement's per-token vectors are positionally paired with its token
   identifiers, and an unproduced reading is absent rather than zero.
 - No stored span appears on the stream.

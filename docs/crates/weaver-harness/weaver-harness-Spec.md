@@ -3341,7 +3341,21 @@ for the organs whose side is unwritten.
   confirmed by watching the account degrade when the authoring point moves.
 - The licensed combinations: an `Assistant` message carrying a `ToolResult`
   block is refused before submit, confirmed by watching it reach the recorder
-  when the check is removed, per `weaver-traits-Spec` section 7.
+  when the check is removed, and an `Assistant` message carrying an
+  `UnrecoveredCall` block is admitted, confirmed by watching it refused when the
+  acceptance arm is removed, per `weaver-traits-Spec` section 7.
+- An unrecovered call is authored at the answer and handed to the loop, per section
+  6.1, owed by the code act that answers #31: an answer whose `unrecovered` report
+  holds two entries authors two `model.unrecovered_call` events in its order, after
+  `model.output` and before `message.assistant`, whose `UnrecoveredCall` blocks hold
+  the same fragments, and the turn call's outcome carries the report to loop 1.
+  Confirmed by watching the test fail when the authoring is removed, when it moves
+  after `message.assistant`, and when the report is dropped from the outcome. The
+  event's payload is `weaver-trace-Spec` section 10's watch.
+- An `UnrecoveredCall` block opens no execution exchange, per section 6: an emission
+  holding one recovered call and one unrecovered opens exactly one exchange,
+  confirmed by watching a second opened when the dispatch takes every block that is
+  not `Text`.
 - Deterministic assembly: one working structure assembles one prompt,
   byte-identical across runs, confirmed by watching the comparison fail when
   iteration order stops being sequence order.
