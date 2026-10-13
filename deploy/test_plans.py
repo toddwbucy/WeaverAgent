@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
@@ -1922,9 +1923,11 @@ esac
         #126, round 6): after a first INT has entered `on_exit`, a second
         arriving while it waits the unload out prints one line and the
         conclusion goes on to the restore, the exit code the first signal's.
-        Here the first INT is raised at the `mktemp` and every `sleep` of the
-        wait raises another. Perturbation: drop the holding trap, and the
-        second INT leaves the trap with no restore."""
+        Here the first INT is raised at the `mktemp`, and every `sleep` of the
+        wait raises another and then ends as a Ctrl-C ends it, with 130,
+        under the script's own `set -euo pipefail`. Perturbations: drop the
+        holding trap, or the trap's `set +e`, and the trap ends with no
+        restore."""
         text = (DEPLOY / "update-stack.sh").read_text()
         admin = self.root / "bin" / "weaver-admin"
         admin.parent.mkdir(parents=True, exist_ok=True)
@@ -1935,7 +1938,8 @@ esac
             f"[ \"$1\" = force-unload ] && echo force-unload >> {calls}\n"
             "echo '{\"kind\":\"state\",\"state\":\"unloaded\"}'\n")
         admin.chmod(0o755)
-        program = ('sudo() { [ "$1" = -n ] && shift; shift; "$@"; }\n'
+        program = ('set -euo pipefail\n'
+                   + 'sudo() { [ "$1" = -n ] && shift; shift; "$@"; }\n'
                    + shell_function(text, "unload_verified") + shell_function(text, "await_unload")
                    + shell_function(text, "conclude_pending_unload")
                    + shell_function(text, "answered_state") + shell_function(text, "on_exit")
@@ -1944,7 +1948,7 @@ esac
                    + 'COMPLETED=0 INSTALL_DONE=1 HELD_RULES=()\n'
                    + "trap on_exit EXIT\ntrap 'exit 130' INT\n"
                    + 'mktemp() { command mktemp "$@"; kill -INT $$; }\n'
-                   + 'sleep() { kill -INT $$; command sleep "$@"; }\n'
+                   + 'sleep() { kill -INT $$; command sleep "$@"; return 130; }\n'
                    + 'unload_verified m1\n')
         env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
         env.update(BIN_DIR=str(admin.parent), ADMIN_BASE=str(self.config), UNLOAD_TIMEOUT="10")
@@ -1953,6 +1957,72 @@ esac
         self.assertEqual(ran.returncode, 130, ran.stderr)
         self.assertEqual(calls.read_text().splitlines(), ["unload done", "restore"], ran.stderr)
         self.assertIn("the run is concluding; a signal now is held until the restore is done", ran.stderr)
+
+    def unload_program(self, admin_text, prelude="", call="unload_verified m1"):
+        """`unload_verified` and `await_unload` as the script defines them,
+        with a stand-in `weaver-admin` and a `sudo` that records its
+        arguments, for the once-over's tests of the unload in flight."""
+        text = (DEPLOY / "update-stack.sh").read_text()
+        admin = self.root / "bin" / "weaver-admin"
+        admin.parent.mkdir(parents=True, exist_ok=True)
+        admin.write_text("#!/bin/sh\n" + admin_text
+                         + "echo '{\"kind\":\"state\",\"state\":\"unloaded\"}'\n")
+        admin.chmod(0o755)
+        sudo_calls = self.root / "sudo-calls"
+        sudo_calls.unlink(missing_ok=True)
+        program = ('set -euo pipefail\n'
+                   + f'sudo() {{ echo "$*" >> {sudo_calls}; [ "$1" = -n ] && shift; '
+                   + '[ "$1" = -v ] && return 0; shift; "$@"; }\n'
+                   + shell_function(text, "unload_verified") + shell_function(text, "await_unload")
+                   + shell_function(text, "answered_state")
+                   + prelude + call + '\n')
+        env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
+        env.update(BIN_DIR=str(admin.parent), ADMIN_BASE=str(self.config))
+        return program, env, sudo_calls
+
+    def test_an_unload_whose_runner_dies_unanswered_is_joined_at_once(self):
+        """**A runner gone without `done` is joined at once** (the once-over
+        of 2026-10-12): a TERM that kills the background unload before it
+        writes `done` has `force-unload` join at once, well inside the
+        bound. Perturbation: drop the `kill -0` from the wait, and the run
+        sits out the bound."""
+        calls = self.root / "dead-calls"
+        program, env, _ = self.unload_program(
+            f'[ "$1" = unload ] && {{ kill -TERM $PPID; sleep 1; exit 0; }}\n'
+            f'[ "$1" = force-unload ] && echo force-unload >> {calls}\n')
+        started = time.monotonic()
+        ran = subprocess.run(["bash", "-c", program], env={**env, "UNLOAD_TIMEOUT": "8"},
+                             text=True, capture_output=True, timeout=30)
+        elapsed = time.monotonic() - started
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertEqual(calls.read_text().splitlines(), ["force-unload"])
+        self.assertIn("m1: the unload ended without answering; force-unload joins it", ran.stderr)
+        self.assertLess(elapsed, 5, ran.stderr)
+
+    def test_the_unload_wait_refreshes_sudos_timestamp(self):
+        """**sudo's timestamp is refreshed through the wait** (the once-over
+        of 2026-10-12), so the joining force's `sudo -n` is not refused for a
+        password the bound outlived. Perturbation: drop the refresh, and no
+        `-n -v` is asked."""
+        program, env, sudo_calls = self.unload_program('[ "$1" = unload ] && sleep 3\n')
+        ran = subprocess.run(["bash", "-c", program], env={**env, "SUDO_REFRESH": "1"},
+                             text=True, capture_output=True, timeout=30)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("-n -v", sudo_calls.read_text().splitlines())
+
+    def test_an_unload_with_no_directory_is_never_asked_and_fails(self):
+        """**A failed `mktemp` fails the unload at once** (the once-over of
+        2026-10-12) rather than waiting out the bound and forcing an agent
+        whose graceful unload was never asked. Perturbation: drop the check,
+        and the force is asked."""
+        program, env, sudo_calls = self.unload_program(
+            "", prelude="mktemp() { return 1; }\n",
+            call="unload_verified m1 && echo answered || echo failed")
+        ran = subprocess.run(["bash", "-c", program], env={**env, "UNLOAD_TIMEOUT": "3"},
+                             text=True, capture_output=True, timeout=30)
+        self.assertEqual(ran.stdout.strip(), "failed", ran.stderr)
+        self.assertIn("m1: no directory for the unload could be made, so it was never asked", ran.stderr)
+        self.assertFalse(sudo_calls.exists(), "admin was asked")
 
     def test_update_stack_reads_its_unload_timeout_and_refuses_what_it_does_not_know(self):
         # --unload-timeout takes whole seconds above zero, and an argument the

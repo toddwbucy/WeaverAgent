@@ -38,6 +38,7 @@ set -euo pipefail
 ORIGINAL_ARGS=("$@")
 INSTALL=0
 UNLOAD_TIMEOUT=300
+SUDO_REFRESH=60
 while [ $# -gt 0 ]; do
   case $1 in
     --install) INSTALL=1; shift ;;
@@ -101,15 +102,23 @@ unload_verified() {
   trap 'caught=INT' INT
   trap 'caught=TERM' TERM
   UNLOAD_AGENT=$1
-  UNLOAD_DIR=$(mktemp -d)
-  UNLOAD_BOUND=$bound
-  UNLOAD_UNTIL=$((SECONDS + bound))
-  ( sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" unload "$1" >"$UNLOAD_DIR/said" 2>&1 || true
-    : >"$UNLOAD_DIR/done" ) &
-  UNLOAD_RUNNER=$!
-  trap - INT TERM HUP
+  UNLOAD_DIR=$(mktemp -d) || UNLOAD_DIR=""
+  if [ -n "$UNLOAD_DIR" ]; then
+    UNLOAD_BOUND=$bound
+    UNLOAD_UNTIL=$((SECONDS + bound))
+    ( sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" unload "$1" >"$UNLOAD_DIR/said" 2>&1 || true
+      : >"$UNLOAD_DIR/done" ) &
+    UNLOAD_RUNNER=$!
+  fi
+  # The script's three traps are armed before any call of this function,
+  # so the eval sets each one back over its noting trap, never through a
+  # default disposition.
   eval "$traps"
   [ -z "$caught" ] || kill -s "$caught" "$$"
+  if [ -z "$UNLOAD_DIR" ]; then
+    printf '  %s: no directory for the unload could be made, so it was never asked\n' "$1" >&2
+    return 1
+  fi
   await_unload
   said=$UNLOAD_SAID
   [ -z "$said" ] || printf '%s\n' "$said" | sed '$d' | sed 's/^/  admin: /' >&2
@@ -125,18 +134,33 @@ unload_verified() {
 # await_unload: waits on the unload in flight until its bound, then has
 # `force-unload` join it; sets UNLOAD_SAID to the answer read (the force's
 # where it joined) and UNLOAD_HOW to which ended the run, and clears the
-# unload in flight.
+# unload in flight. **A runner gone without `done` is joined at once** (the
+# once-over of 2026-10-12): a HUP or TERM to the process group kills the
+# background unload before it writes `done`, and the wait would otherwise sit
+# out the rest of the bound. **sudo's timestamp is refreshed every
+# SUDO_REFRESH seconds of the wait**, since the default bound equals sudo's
+# default timestamp timeout and the joining force's `sudo -n` would otherwise
+# be refused for a password, read as admin's answer.
 await_unload() {
-  local dir
-  while [ ! -e "$UNLOAD_DIR/done" ] && [ "$SECONDS" -lt "$UNLOAD_UNTIL" ]; do
+  local dir refreshed=$SECONDS
+  while [ ! -e "$UNLOAD_DIR/done" ] && [ "$SECONDS" -lt "$UNLOAD_UNTIL" ] \
+    && kill -0 "$UNLOAD_RUNNER" 2>/dev/null; do
     sleep 1
+    if [ $((SECONDS - refreshed)) -ge "${SUDO_REFRESH:-60}" ]; then
+      sudo -n -v 2>/dev/null || true
+      refreshed=$SECONDS
+    fi
   done
   if [ -e "$UNLOAD_DIR/done" ]; then
     UNLOAD_HOW=unload
     wait "$UNLOAD_RUNNER" 2>/dev/null || true
     UNLOAD_SAID=$(cat "$UNLOAD_DIR/said")
   else
-    printf '  %s: the unload passed %ss; force-unload joins it\n' "$UNLOAD_AGENT" "$UNLOAD_BOUND" >&2
+    if [ "$SECONDS" -lt "$UNLOAD_UNTIL" ]; then
+      printf '  %s: the unload ended without answering; force-unload joins it\n' "$UNLOAD_AGENT" >&2
+    else
+      printf '  %s: the unload passed %ss; force-unload joins it\n' "$UNLOAD_AGENT" "$UNLOAD_BOUND" >&2
+    fi
     UNLOAD_HOW=force-unload
     UNLOAD_SAID=$(sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" force-unload "$UNLOAD_AGENT" 2>&1) || true
     wait "$UNLOAD_RUNNER" 2>/dev/null || true
@@ -963,9 +987,14 @@ rollback() {
 # cut short. From its first line every later INT, TERM or HUP prints one line
 # and the conclusion goes on; the exit code stays the first one's. Caught,
 # not ignored, so the children it forks (the joined force, the installs, the
-# rules' moves) keep their default dispositions.
+# rules' moves) keep their default dispositions. **errexit is off inside
+# the trap** (the once-over of 2026-10-12): a Ctrl-C reaches the whole
+# process group, so the `sleep` the wait sits in dies with 130, and on a
+# hangup every write to stderr fails; either status would end the trap
+# under `set -e` with nothing concluded.
 on_exit() {
   local rc=$?
+  set +e
   trap 'printf "  the run is concluding; a signal now is held until the restore is done\n" >&2' INT TERM HUP
   conclude_pending_unload
   if [ "$COMPLETED" -eq 0 ] && [ "$INSTALL_DONE" -eq 1 ]; then
@@ -977,6 +1006,8 @@ on_exit() {
       || printf '  CONNECTOR RULES NOT ALL RESTORED: each named above is still held under its .updating name; put it back by hand\n' >&2
   fi
 }
+SUDOERS_D=/etc/sudoers.d
+HELD_RULES=()
 trap on_exit EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
@@ -989,8 +1020,6 @@ trap 'exit 143' TERM
 # connector can start a load while the binaries move. Each is registered in
 # HELD_RULES (`held|rule`) before it moves, so a run stopped between the two
 # finds it either still in place or held, and puts back the held one.
-SUDOERS_D=/etc/sudoers.d
-HELD_RULES=()
 # restore_rules: moves every registered rule that is held back to its name.
 # One whose name a rule stands at again is left held and named, never
 # written over. Answers 1 where any is left.
