@@ -1902,7 +1902,7 @@ impl Harness {
         // the seated prefix below are the serving arm's alone.
         let diagnostic = matches!(payload.binding, weaver_types::EnterBinding::Diagnostic);
         let mut recorder = if diagnostic {
-            crate::record::Record::Diagnostic(
+            crate::record::Record::from(
                 weaver_diagnostic::Recorder::receive(
                     sink,
                     weaver_diagnostic::RunRef(payload.run.0.clone()),
@@ -1911,7 +1911,7 @@ impl Harness {
                 .map_err(|_| EnterFailure::BeforeLoad(LifecycleRefusal::DescriptorsUnusable))?,
             )
         } else {
-            crate::record::Record::Serving(
+            crate::record::Record::from(
                 Recorder::receive(
                     sink,
                     RunRef(payload.run.0.clone()),

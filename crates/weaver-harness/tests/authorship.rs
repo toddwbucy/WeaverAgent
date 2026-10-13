@@ -26,7 +26,7 @@ fn recorder() -> Record {
     // recorder writes through its descriptor: no run leaves the file behind,
     // pass or fail (#690 item C2.9).
     let _ = std::fs::remove_file(&path);
-    Record::Serving(
+    Record::from(
         Recorder::receive(
             OwnedFd::from(file),
             RunRef("r-1".into()),

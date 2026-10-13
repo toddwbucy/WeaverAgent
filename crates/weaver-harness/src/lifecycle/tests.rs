@@ -130,7 +130,7 @@ fn entered_run(turn: Option<&str>) -> (Run, OrganChannel, crate::scratch::Scratc
     )));
     let sink = OwnedFd::from(File::create(&path).expect("sink"));
     let session = SessionId("s-1".to_string());
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -3580,7 +3580,7 @@ fn a_leave_with_no_bound_passing_stays_graceful() {
 /// Answers the pipe's read end.
 fn stalled_writer(run: &mut Run, events: usize, octets: usize) -> std::io::PipeReader {
     let (reader, writer) = std::io::pipe().expect("pipe");
-    run.recorder = crate::record::Record::Serving(
+    run.recorder = crate::record::Record::from(
         Recorder::receive(
             OwnedFd::from(writer),
             RunRef("r-1".into()),
@@ -5754,7 +5754,7 @@ fn a_diagnostic_run_grants_no_frame_seat() {
         std::thread::current().id()
     )));
     let sink = OwnedFd::from(File::create(&sink_path).expect("sink"));
-    run.recorder = crate::record::Record::Diagnostic(
+    run.recorder = crate::record::Record::from(
         weaver_diagnostic::Recorder::receive(
             sink,
             weaver_diagnostic::RunRef("r-1".into()),
@@ -6639,7 +6639,7 @@ fn an_organ_death_met_with_the_record_broken_ends_service() {
             .open("/dev/full")
             .expect("the full device"),
     );
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(full, RunRef("r-1".into()), SessionRef("s-1".into())).expect("recorder"),
     );
     let _ = run.author.author_fault(
@@ -6717,7 +6717,7 @@ fn a_gate_dying_at_rest_with_the_record_broken_ends_service() {
             .open("/dev/full")
             .expect("the full device"),
     );
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(full, RunRef("r-1".into()), SessionRef("s-1".into())).expect("recorder"),
     );
     let _ = run.author.author_fault(

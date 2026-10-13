@@ -26,7 +26,7 @@ fn sink() -> (OwnedFd, crate::scratch::Scratch) {
 }
 
 fn diagnostic_record(sink: OwnedFd, session: &str) -> Record {
-    Record::Diagnostic(
+    Record::from(
         weaver_diagnostic::Recorder::receive(
             sink,
             weaver_diagnostic::RunRef("r-d".into()),

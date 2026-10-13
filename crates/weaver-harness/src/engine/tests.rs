@@ -22,7 +22,7 @@ use weaver_types::{Finish, Generation, SessionId};
 fn a_refused_classify_authors_a_refusal_and_no_output() {
     let session = SessionId("s-1".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -96,7 +96,7 @@ fn a_refused_classify_authors_a_refusal_and_no_output() {
 fn pressure_reports_once_per_crossing() {
     let session = SessionId("s-1".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -261,7 +261,7 @@ fn a_refused_turn_closes_once_and_names_the_refusal() {
 
     let session = SessionId("s-1".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -395,7 +395,7 @@ fn a_refused_ask_reaches_the_record() {
 
     let session = SessionId("s-1".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -524,7 +524,7 @@ fn the_elision_event_carries_the_span_the_loop_named() {
 
     let session = SessionId("s-1".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -679,7 +679,7 @@ fn a_turn_authors_the_whole_bracket() {
 
     let session = SessionId("s-1".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -876,7 +876,7 @@ fn a_fault_emission_lands_inside_the_bracket_before_the_close() {
 
     let session = SessionId("s-1".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -1089,7 +1089,7 @@ fn a_turn_executes_its_calls_and_the_grant_authors_the_result() {
 
     let session = SessionId("s-t".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -1279,7 +1279,7 @@ fn each_field_intermediate_authors_its_event() {
 
     let session = SessionId("s-1".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -1394,7 +1394,7 @@ fn a_supplied_tool_result_refuses_at_the_door() {
     drop(far);
     let session = SessionId("s-f".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -1585,7 +1585,7 @@ fn dial_mid_stream(
 
     let session = SessionId("s-3".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -1912,7 +1912,7 @@ fn leave_during_turn(forced: bool, crossing: bool, before_call: bool) -> LeaveDu
         (interrupts, executions)
     });
     let session = SessionId("s-leave-during-turn".into());
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(
             tempfile(),
             RunRef("r-1".into()),
@@ -3032,7 +3032,7 @@ fn stopped_invocation(crossing: bool, call_count: usize) {
         (cancels, executions)
     });
     let session = SessionId("s-stop-invocation".into());
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(
             tempfile(),
             RunRef("r-1".into()),
@@ -3255,7 +3255,7 @@ fn a_stop_dialed_mid_stream_cancels_the_turn() {
 
     let session = SessionId("s-2".into());
     let sink = tempfile();
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
             .expect("recorder"),
     );
@@ -3387,7 +3387,7 @@ fn a_column_on_the_generate_stream_authors_rather_than_kills() {
         std::thread::current().id()
     )));
     let sink = OwnedFd::from(std::fs::File::create(&sink_path).expect("sink"));
-    let mut recorder = crate::record::Record::Diagnostic(
+    let mut recorder = crate::record::Record::from(
         weaver_diagnostic::Recorder::receive(
             sink,
             weaver_diagnostic::RunRef("r-d".into()),
@@ -3575,7 +3575,7 @@ fn a_score_out_of_place_or_malformed_is_refused() {
 
 fn loaded_recorder() -> (crate::record::Record, Author) {
     let session = SessionId("s-1".into());
-    let mut recorder = crate::record::Record::Serving(
+    let mut recorder = crate::record::Record::from(
         Recorder::receive(
             tempfile(),
             RunRef("r-1".into()),
