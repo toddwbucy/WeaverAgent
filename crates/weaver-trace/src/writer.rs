@@ -583,7 +583,10 @@ fn turn_required(kind: Kind) -> bool {
         | Kind::ModelMeasurement
         // The field is a decode position's, and every decode position
         // belongs to the turn that generated it.
-        | Kind::ModelField => true,
+        | Kind::ModelField
+        // An unrecovered call is in an emission, and every emission belongs
+        // to the turn that drew it.
+        | Kind::ModelUnrecoveredCall => true,
     }
 }
 
@@ -599,7 +602,7 @@ pub struct Pressure {
     pub over_mark: bool,
 }
 
-/// The total kind-to-payload mapping, twenty-five kinds and nineteen
+/// The total kind-to-payload mapping, twenty-six kinds and twenty
 /// dispositions, matching charter section 3.1 whole, enforced here because
 /// the untagged payload leaves serde unable to. **`load` stopped being
 /// payload-free 2026-08-21**: it carries the diagnostic elections of its
@@ -635,6 +638,10 @@ fn pairing_licensed(kind: Kind, payload: Option<&Payload>) -> bool {
             | (Kind::Recall, Some(Payload::Recall(_)))
             | (Kind::Score, Some(Payload::Score(_)))
             | (Kind::SavePoint, Some(Payload::SavePoint(_)))
+            | (
+                Kind::ModelUnrecoveredCall,
+                Some(Payload::UnrecoveredCall(_))
+            )
             | (
                 Kind::ToolCallStarted | Kind::ToolCallCompleted,
                 Some(Payload::Deferred(_))

@@ -1690,3 +1690,52 @@ fn a_stop_for_an_unload_renders_unload() {
         serde_json::json!("unload")
     );
 }
+
+/// **An unrecovered call is turned and carries its own payload**, per
+/// `weaver-trace-Spec` sections 3 and 10 on the operator's ruling of
+/// 2026-10-13 (#31): an emission belongs to the turn that drew it, so a
+/// turnless one is refused, and an absent or foreign payload is refused as
+/// for every licensed kind.
+///
+/// Perturbations: move `Kind::ModelUnrecoveredCall` to the turn-optional arm
+/// of `turn_required` and the turnless submission is admitted; let
+/// `pairing_licensed` admit any payload for it and the foreign one is.
+#[test]
+fn an_unrecovered_call_is_turned_and_carries_its_own_payload() {
+    let (mut r, _path) = recorder();
+    r.submit(event(Kind::Load, None, Some(elections())))
+        .unwrap();
+    r.submit(event(Kind::TurnStarted, Some("t-1"), None))
+        .unwrap();
+    let report = || {
+        Some(Payload::UnrecoveredCall(
+            serde_json::value::RawValue::from_string(
+                r#"{"fragment":"<tool_call>{","reason":{"case":"unclosed"},"grammar":{"family":"qwen2","open":"<tool_call>","close":"</tool_call>"}}"#
+                    .to_string(),
+            )
+            .unwrap(),
+        ))
+    };
+    r.submit(event(Kind::ModelUnrecoveredCall, Some("t-1"), report()))
+        .expect("a turned report is the ordinary case");
+    assert!(
+        r.submit(event(Kind::ModelUnrecoveredCall, None, report()))
+            .is_err(),
+        "an unrecovered call carrying no turn is refused"
+    );
+    assert!(
+        r.submit(event(Kind::ModelUnrecoveredCall, Some("t-1"), None))
+            .is_err(),
+        "an unrecovered call carrying nothing is refused"
+    );
+    let counts = Some(Payload::Flush(weaver_trace::FlushCounts {
+        resident_before: 27196,
+        resident_after: 712,
+    }));
+    assert!(
+        r.submit(event(Kind::ModelUnrecoveredCall, Some("t-1"), counts))
+            .is_err(),
+        "and one carrying another kind's payload is refused"
+    );
+    r.drain().unwrap();
+}

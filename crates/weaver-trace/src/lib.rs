@@ -59,6 +59,7 @@
 //!         Kind::MessageRestored => "message.restored",
 //!         Kind::Score => "score",
 //!         Kind::SavePoint => "save_point",
+//!         Kind::ModelUnrecoveredCall => "model.unrecovered_call",
 //!     }
 //! }
 //! ```
