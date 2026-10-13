@@ -407,7 +407,17 @@ for u in "${WEAVER_USERS[@]}"; do
   h=$(getent passwd "$u" | cut -d: -f6)
   [ -d "$h" ] && case "$h" in /home/*) HOMES+=("$h"); plan "$h  (home of $u)";; esac
 done
-mapfile -t TMP_PATHS < <(find /tmp -maxdepth 1 \( -name 'weaver-*' -o -name 'torchinductor_weaver-*' \) 2>/dev/null)
+# **tmp_paths DIR: the weaver entries directly under DIR that a weaver-
+# account owns** (#98; the custody audit's G22): DIR is writable by every
+# local user, so an entry another principal made under a weaver- name is
+# neither read into the archive as root nor purged.
+tmp_paths() {
+  find "$1" -mindepth 1 -maxdepth 1 \( -name 'weaver-*' -o -name 'torchinductor_weaver-*' \) -printf '%u\t%p\n' 2>/dev/null \
+    | while IFS=$'\t' read -r owner entry; do
+        case $owner in weaver-*) printf '%s\n' "$entry" ;; esac
+      done
+}
+mapfile -t TMP_PATHS < <(tmp_paths /tmp)
 [ ${#TMP_PATHS[@]} -gt 0 ] && plan "/tmp: ${#TMP_PATHS[@]} weaver-* entries"
 
 
@@ -432,7 +442,11 @@ free_name() {
 # shell writes the file. Measured 2026-09-30: mkdir as root failed on the
 # export, and a file root did write arrived owned by nobody.
 as_op() { sudo -u "$OPERATOR" -H "$@"; }
-to_file() { as_op sh -c 'cat > "$1"' _ "$1"; }   # stdin -> $1, owned by the operator
+# stdin -> $1, owned by the operator and **readable by the operator alone**
+# (#98; the custody audit's G22): the archive holds the trace and the save
+# points, which the box keeps to their groups, so the invoker's umask does
+# not decide who else reads them where they land.
+to_file() { as_op sh -c 'umask 077 && cat > "$1"' _ "$1"; }
 tarz() { # tarz OUT PATH... : preserve owners, modes, acls and xattrs
   local out=$1; shift
   tar --numeric-owner --acls --xattrs -I 'zstd -T0 -3' -cf - "$@" 2> >(grep -v 'Removing leading' >&2) | to_file "$out"
@@ -467,7 +481,7 @@ if [ "$MODE" = archive ]; then
     for entry in "${MOVED[@]}"; do mv -T -- "${entry%%|*}" "${entry##*|}" && plan "restored ${entry##*|}"; done
     die "agents run or cannot be read: ${RUNNING[*]}. The sudo rules are restored; unload each, then rerun"
   fi
-  as_op mkdir -p "$DEST" || die "the operator cannot create $DEST"
+  as_op sh -c 'umask 077 && mkdir -p "$1"' _ "$DEST" || die "the operator cannot create $DEST"
   as_op test -w "$DEST" || die "$DEST is not writable by $OPERATOR"
   # A run that died part way leaves files here the operator may not own;
   # they are this script's and go before it writes again.
@@ -564,7 +578,7 @@ if [ "$MODE" = archive ]; then
     true
   } | to_file "$DEST/PURGE-LIST"
 
-  as_op sh -c 'cd "$1" && find . -type f -not -name SHA256SUMS -printf "%P\n" | sort | xargs sha256sum > SHA256SUMS' _ "$DEST"
+  as_op sh -c 'umask 077 && cd "$1" && find . -type f -not -name SHA256SUMS -printf "%P\n" | sort | xargs sha256sum > SHA256SUMS' _ "$DEST"
   say "verify"
   as_op sh -c 'cd "$1" && sha256sum -c --quiet SHA256SUMS' _ "$DEST" || die "the archive does not verify"
   for t in "$DEST"/*.tar.zst; do tar -tf "$t" >/dev/null || die "$t does not read back"; done
@@ -574,9 +588,50 @@ if [ "$MODE" = archive ]; then
 fi
 
 # ----------------------------------------------------------------- 3. purge
+# **purge_candidates: every line a purge list may hold**, derived from the box
+# as the archive derives what it lists (#98; the custody audit's G22). The
+# list lives in the archive directory, which the operator writes and, on an
+# export where root's writes are squashed, root cannot hold as its own, so
+# the purge does not take the list's word: it acts only on lines this
+# derivation also finds.
+purge_candidates() {
+  local p sub d c a u g
+  [ -d /etc/weaver ] && echo "path /etc/weaver"
+  for p in "${SUDO_RULES[@]}" "${LDSO_CONFS[@]}"; do echo "path $p"; done
+  for p in "${!PREFIXES[@]}"; do
+    for sub in bin lib python-spu; do [ -d "$p/$sub" ] && echo "path $p/$sub"; done
+    for sub in "$p"/backup-* "$p"/lib.backup-*; do [ -d "$sub" ] && echo "path $sub"; done
+  done
+  [ -e /var/lib/weaver ] && echo "path /var/lib/weaver"
+  for d in "${!TERRITORY_BASES[@]}" "${OWN_TERRITORIES[@]}" "${!LOG_PATHS[@]}" "${HOMES[@]}" "${TMP_PATHS[@]}"; do
+    echo "path $d"
+  done
+  for c in "${!COORD_ROOTS[@]}"; do
+    echo "path $c/weaver.run"
+    for a in "${!AGENTS[@]}"; do echo "path $c/weaver-$a"; done
+  done
+  for u in "${WEAVER_USERS[@]}"; do echo "user $u"; done
+  for g in "${WEAVER_GROUPS[@]}"; do echo "group $g"; done
+  true
+}
+# **purge_lines_outside LIST CANDIDATES: each line of LIST that CANDIDATES
+# does not hold**, compared whole, an empty line included.
+purge_lines_outside() {
+  awk 'NR == FNR { held[$0] = 1; next } !($0 in held)' "$2" "$1"
+}
+
 [ -f "$DEST/SHA256SUMS" ] && [ -f "$DEST/PURGE-LIST" ] || die "$DEST holds no finished archive"
 say "re-verify $DEST"
 ( cd "$DEST" && sha256sum -c --quiet SHA256SUMS ) || die "the archive no longer verifies; purge refused"
+# The list is read once, into root's own copy, and judged there, so what is
+# judged is what the purge reads: nothing writes it between.
+PURGE_LIST=$(mktemp)
+CANDIDATES=$(mktemp)
+trap 'rm -f -- "$PURGE_LIST" "$CANDIDATES"' EXIT
+cat -- "$DEST/PURGE-LIST" > "$PURGE_LIST"
+purge_candidates > "$CANDIDATES"
+OUTSIDE=$(purge_lines_outside "$PURGE_LIST" "$CANDIDATES")
+[ -z "$OUTSIDE" ] || die "PURGE-LIST names what this purge would not find, so nothing is purged: ${OUTSIDE//$'\n'/; }"
 [ ${#ACTIVE_UNITS[@]} -eq 0 ] || die "units still active: ${ACTIVE_UNITS[*]}"
 [ ${#RUNNING[@]} -eq 0 ] || die "agents still run or cannot be read: ${RUNNING[*]}"
 plan "verified"
@@ -602,12 +657,12 @@ while read -r kind name; do
   case $kind in
     user)  userdel -r "$name" 2>/dev/null && plan "removed user $name (and home)" || { userdel "$name" 2>/dev/null && plan "removed user $name" || plan "user $name: not removed"; } ;;
   esac
-done < "$DEST/PURGE-LIST"
+done < "$PURGE_LIST"
 while read -r kind name; do
   case $kind in
     group) getent group "$name" >/dev/null && { groupdel "$name" 2>/dev/null && plan "removed group $name" || plan "group $name: not removed"; } ;;
   esac
-done < "$DEST/PURGE-LIST"
+done < "$PURGE_LIST"
 
 say "paths"
 while read -r kind name; do
@@ -616,7 +671,7 @@ while read -r kind name; do
       case "$name" in */models|*/models/*) plan "kept $name"; continue;; esac
       rm -rf -- "$name" && plan "removed $name" ;;
   esac
-done < "$DEST/PURGE-LIST"
+done < "$PURGE_LIST"
 # A prefix left holding only models stays; one left empty goes.
 for p in "${!PREFIXES[@]}"; do
   [ -d "$p" ] && [ -z "$(ls -A "$p")" ] && rmdir "$p" && plan "removed empty $p"

@@ -3456,6 +3456,76 @@ class DecommissionTests(unittest.TestCase):
         self.assertNotIn("bulk-store/dev-archive", self.script)
         self.assertIn("#   sudo deploy/decommission.sh --archive DIR ", self.script)
 
+    def one_line_function(self, name):
+        """A function the script defines on one line, read out of its text."""
+        line = next(line for line in self.script.splitlines() if line.startswith(f"{name}() {{"))
+        return line + "\n"
+
+    def test_an_archive_file_is_the_operators_alone(self):
+        """**Every file the archive writes is 0600** (#98; the custody audit's
+        G22): the archive holds the trace and the save points, which the box
+        keeps to their groups, so the invoker's umask does not decide who else
+        reads them. `to_file`, run as the script defines it under a stand-in
+        sudo and `umask 000`. Perturbation: drop the `umask 077`, and the file
+        lands 0666."""
+        scratch = tempfile.TemporaryDirectory(prefix="weaver-to-file-")
+        self.addCleanup(scratch.cleanup)
+        root = Path(scratch.name)
+        sudo = root / "sudo"
+        sudo.write_text('#!/bin/sh\nwhile [ "$1" != sh ]; do shift; done\nexec "$@"\n')
+        sudo.chmod(0o755)
+        out = root / "archive.tar.zst"
+        program = ("umask 000\nOPERATOR=op\n" + self.one_line_function("as_op")
+                   + self.one_line_function("to_file") + f"printf 'held' | to_file {shlex.quote(str(out))}\n")
+        env = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"]}
+        env.pop("BASH_ENV", None)
+        run = subprocess.run(["bash", "-c", program], env=env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(out.read_text(), "held")
+        self.assertEqual(out.stat().st_mode & 0o777, 0o600)
+        self.assertIn("as_op sh -c 'umask 077 && cd \"$1\" && find . -type f", self.script)
+        self.assertIn("as_op sh -c 'umask 077 && mkdir -p \"$1\"' _ \"$DEST\"", self.script)
+
+    def test_a_tmp_entry_another_principal_owns_is_left_alone(self):
+        """**Only a weaver- account's /tmp entries are archived and purged**
+        (#98; the custody audit's G22): /tmp is writable by every local user,
+        so an entry another principal made under a weaver- name is neither
+        read as root nor removed. `tmp_paths` over a stand-in `find` that
+        reports each entry's owner. Perturbation: drop the owner filter, and
+        the stranger's entry is listed."""
+        scratch = tempfile.TemporaryDirectory(prefix="weaver-tmp-paths-")
+        self.addCleanup(scratch.cleanup)
+        root = Path(scratch.name)
+        find = root / "find"
+        find.write_text("#!/bin/sh\nprintf 'weaver-a\\t/tmp/weaver-a\\nsomeone\\t/tmp/weaver-planted\\n'\n")
+        find.chmod(0o755)
+        env = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"]}
+        env.pop("BASH_ENV", None)
+        self.assertEqual(self.run_fn("tmp_paths", "/tmp", env=env).splitlines(), ["/tmp/weaver-a"])
+        self.assertIn("mapfile -t TMP_PATHS < <(tmp_paths /tmp)", self.script)
+
+    def test_a_purge_list_line_the_purge_would_not_find_refuses_the_purge(self):
+        """**The purge acts only on lines it derives itself** (#98; the custody
+        audit's G22): the purge list lives where the operator writes, so a line
+        naming anything the purge's own derivation does not find refuses the
+        whole purge, before the sudo rules are removed or an account deleted.
+        The list is read once into root's copy, which every removal loop reads.
+        Perturbation: drop the judgment, or read the list from DEST again, and
+        the pins here fail."""
+        scratch = tempfile.TemporaryDirectory(prefix="weaver-purge-list-")
+        self.addCleanup(scratch.cleanup)
+        listed = Path(scratch.name) / "PURGE-LIST"
+        listed.write_text("path /var/lib/weaver\nuser weaver-a\npath /etc\n")
+        found = Path(scratch.name) / "candidates"
+        found.write_text("path /var/lib/weaver\nuser weaver-a\ngroup weaver-a\n")
+        self.assertEqual(self.run_fn("purge_lines_outside", str(listed), str(found)), "path /etc")
+        listed.write_text("path /var/lib/weaver\n")
+        self.assertEqual(self.run_fn("purge_lines_outside", str(listed), str(found)), "")
+        judged = self.script.index('[ -z "$OUTSIDE" ] || die ')
+        self.assertLess(judged, self.script.index('say "the delegated door, shut"'))
+        self.assertNotIn('done < "$DEST/PURGE-LIST"', self.script)
+        self.assertEqual(self.script.count('done < "$PURGE_LIST"'), 3)
+
     def test_nothing_under_the_operators_home_is_listed(self):
         """**The operator's home is never listed, archived or purged** (the
         operator's ruling of 2026-10-07 on #1): the box-wide layout's
