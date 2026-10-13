@@ -194,10 +194,11 @@ fn author_refusal_on(run: &mut Run, asked: weaver_types::LifecycleAsk, refusal: 
         asked,
         refusal: refusal.clone(),
     };
-    let Ok(rendered) = serde_json::to_string(&record) else {
-        return;
-    };
-    let Some(payload) = weaver_trace::raw_payload(&rendered) else {
+    let Some(payload) = serde_json::to_string(&record)
+        .ok()
+        .and_then(|rendered| weaver_trace::raw_payload(&rendered))
+    else {
+        run.recorder.latch_unrendered();
         return;
     };
     // Latched on a failure (#116): an answer to admin reads the latch first, and the
@@ -1245,6 +1246,10 @@ impl Harness {
         ) -> Result<crate::engine::TurnOutcome, crate::engine::TurnError>,
     {
         loop {
+            // **No held frame is served over a latched record** (#116): a
+            // turn, and the tools it runs in the world, never start past a
+            // record already missing an event.
+            self.record_holds()?;
             let held = {
                 let ChannelState::Entered(run) = &mut self.state else {
                     return Ok(());
@@ -1273,8 +1278,8 @@ impl Harness {
                         return Ok(());
                     };
                     let turn = run.turn_in_flight.clone();
-                    // Latched on a failure (#116), read before the next dialer is
-                    // answered and at the next wake.
+                    // Latched on a failure (#116), read at the top of the loop
+                    // before the next held frame is served.
                     let _ = run.author.author_fault(
                         &mut run.recorder,
                         Subsystem::Gate,
@@ -1432,7 +1437,7 @@ impl Harness {
         let leave = held.as_mut().expect("the leave lent back");
         // A dial the turn accepted and did not take is heard now.
         if let Some(connection) = dialed {
-            hear_dial(connection, leave, false);
+            hear_dial(connection, leave, false, run.recorder.failed());
         }
         match ran {
             Err(crate::engine::TurnError::ChannelLost) if !organ_hung_up(run) => {
@@ -1516,6 +1521,7 @@ impl Harness {
             answer_all(
                 held.as_ref().expect("the leave"),
                 Err(LifecycleRefusal::OutOfOrder),
+                false,
             );
             return Ok(None);
         };
@@ -1547,7 +1553,13 @@ impl Harness {
         if died {
             held.as_mut().expect("the leave").progress.leave = Leave::Forced;
         }
-        hear_dials(&self.coordination, held.as_mut().expect("the leave"), false);
+        let latched = run.recorder.failed();
+        hear_dials(
+            &self.coordination,
+            held.as_mut().expect("the leave"),
+            false,
+            latched,
+        );
         // **The leave's save point first, and the leave does not
         // complete without it**, per Spec section 6 on the operator's
         // ruling of 2026-10-06 on #1 (A3.0 item 6). **Every leave takes its
@@ -1563,7 +1575,13 @@ impl Harness {
         } else {
             held.as_mut().expect("the leave").progress.step = LeaveStep::Saving;
             let taken = take_save_point(run, Some(cause));
-            hear_dials(&self.coordination, held.as_mut().expect("the leave"), false);
+            let latched = run.recorder.failed();
+            hear_dials(
+                &self.coordination,
+                held.as_mut().expect("the leave"),
+                false,
+                latched,
+            );
             match taken {
                 Ok(report) => report,
                 Err(missed) => {
@@ -1577,7 +1595,8 @@ impl Harness {
                         }
                         // `StopInS9`, the one other answer to a missed leg.
                         _ => {
-                            answer_all(held.as_ref().expect("the leave"), Err(refusal));
+                            let latched = run.recorder.failed();
+                            answer_all(held.as_ref().expect("the leave"), Err(refusal), latched);
                             return Ok(None);
                         }
                     }
@@ -1591,7 +1610,8 @@ impl Harness {
         self.coordination.unlink();
         let mut leave = held.take().expect("the leave");
         leave.progress.step = LeaveStep::Releasing;
-        hear_dials(&self.coordination, &mut leave, true);
+        let latched = run.recorder.failed();
+        hear_dials(&self.coordination, &mut leave, true, latched);
         let forced = leave.progress.leave == Leave::Forced;
         // **No state to keep**: a diagnostic binding, or a serving run
         // with no member seam (`weaver-types-Spec` section 4.2,
@@ -1621,7 +1641,7 @@ impl Harness {
         });
         // Everything admitted did not reach the stream where the release
         // refused, so the answer says so rather than claiming a clean close.
-        answer_all(&leave, left);
+        answer_all(&leave, left, run.recorder.failed());
         Ok(Some(Outcome::Left))
     }
 
@@ -1648,6 +1668,15 @@ impl Harness {
     fn unwind_if_entered(&mut self, case: weaver_types::FaultCase, fault: &ChannelFault) {
         if let ChannelState::Entered(run) = std::mem::replace(&mut self.state, ChannelState::Left) {
             let mut run = *run;
+            // **A latched record names itself** (#116): service ending on a
+            // record missing an event is `StreamWriteFailed`, whichever
+            // reader met it, the account carrying the fault the reader
+            // returned.
+            let case = if run.recorder.failed() {
+                weaver_types::FaultCase::StreamWriteFailed
+            } else {
+                case
+            };
             let turn = run.turn_in_flight.clone();
             let mut account = serde_json::json!({
                 "organ": "harness",
@@ -1982,8 +2011,8 @@ impl Harness {
         // the load unrefused.
         if let Some(end) = state_end {
             let channel = std::os::unix::net::UnixStream::from(end);
-            match recorder.serving_mut() {
-                Some(serving) => {
+            match recorder.serving() {
+                Some(_) => {
                     let ask_end = channel.try_clone();
                     // The session rides the opener beside the election, both
                     // being facts this enter declared, per the contract's
@@ -1991,7 +2020,7 @@ impl Harness {
                     // so a store holding an earlier session answers within
                     // the running one.
                     if let Ok(tee) = weaver_trace::Tee::open(channel, session.0.clone(), election) {
-                        serving.attach_tee(tee);
+                        recorder.attach_tee(tee);
                         state_seam = ask_end.ok().map(crate::state::StateSeam::new);
                     }
                 }
@@ -3229,8 +3258,18 @@ fn drain_gate(
     use std::os::fd::AsFd;
     let deadline = leave.drain_deadline;
     let refused = render_close("refused", "reason", "the agent is unloading", None);
+    // **Recorded, then announced** (#116): the refusal is authored first and
+    // the dialer's refused close is sent only over a record that holds; a
+    // dialer left unanswered loses its connection at the lower.
     let refuse = |run: &mut Run, exchange: ExchangeId| {
-        if let Some(gate) = run.gate.as_ref() {
+        author_refusal_on(
+            run,
+            weaver_types::LifecycleAsk::Leave,
+            &LifecycleRefusal::Unloading,
+        );
+        if !run.recorder.failed()
+            && let Some(gate) = run.gate.as_ref()
+        {
             let _ = gate.channel.send(&OrganEnvelope {
                 exchange,
                 position: Position::Close,
@@ -3239,11 +3278,6 @@ fn drain_gate(
                 )),
             });
         }
-        author_refusal_on(
-            run,
-            weaver_types::LifecycleAsk::Leave,
-            &LifecycleRefusal::Unloading,
-        );
     };
     // A frame held behind the turn is refused; a fault report the gate
     // sent meanwhile is authored, as the shelf authors one.
@@ -3305,7 +3339,7 @@ fn drain_gate(
                 return;
             }
             Some(0) => {
-                hear_dials(listener, leave, false);
+                hear_dials(listener, leave, false, run.recorder.failed());
                 if leave.progress.leave == Leave::Forced {
                     return;
                 }
@@ -3493,7 +3527,16 @@ fn author_gate_death(run: &mut Run, last_word: Option<String>, death: &str) {
 fn answer_all(
     leave: &crate::engine::PendingLeave,
     answer: Result<LifecycleAnswer, LifecycleRefusal>,
+    latched: bool,
 ) {
+    // **Over a latched record every held caller is refused
+    // `DescriptorsUnusable`** (#116), as the seal refuses: nothing the leave
+    // would answer is announced over a record missing an event.
+    let answer = if latched {
+        Err(LifecycleRefusal::DescriptorsUnusable)
+    } else {
+        answer
+    };
     let payload = match answer {
         Ok(answer) => weaver_types::Payload::Answer(answer),
         Err(refusal) => weaver_types::Payload::Refusal(refusal),
@@ -3524,10 +3567,11 @@ fn hear_dials(
     listener: &crate::channel::CoordinationListener,
     leave: &mut crate::engine::PendingLeave,
     fixed: bool,
+    latched: bool,
 ) {
     loop {
         match listener.try_accept_root() {
-            Ok(Some(connection)) => hear_dial(connection, leave, fixed),
+            Ok(Some(connection)) => hear_dial(connection, leave, fixed, latched),
             Err(ChannelFault::WrongPeer { .. }) => continue,
             Ok(None) | Err(_) => return,
         }
@@ -3540,7 +3584,16 @@ fn hear_dials(
 /// ([`crate::engine::PendingLeave::join`]), `fixed` from S7 on; an `Observe`
 /// answers `InTransition`; any other directive is `OutOfOrder`, a `Leave`
 /// meeting a pending leave included (`weaver-harness-Spec` section 6).
-fn hear_dial(connection: OrganChannel, leave: &mut crate::engine::PendingLeave, fixed: bool) {
+///
+/// **Over a latched record (#116) nothing is answered**: a join still joins,
+/// to be refused with the leave's held callers, and any other dial is
+/// dropped unanswered, admin concluding as for no answer.
+fn hear_dial(
+    connection: OrganChannel,
+    leave: &mut crate::engine::PendingLeave,
+    fixed: bool,
+    latched: bool,
+) {
     let Some(deadline) = std::time::Instant::now().checked_add(std::time::Duration::from_millis(
         crate::state::ANSWER_BOUND_MS,
     )) else {
@@ -3567,6 +3620,9 @@ fn hear_dial(connection: OrganChannel, leave: &mut crate::engine::PendingLeave, 
         }
         _ => return,
     };
+    if latched {
+        return;
+    }
     let _ = deliver(
         &connection,
         &OrganEnvelope {

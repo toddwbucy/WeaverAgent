@@ -1609,20 +1609,27 @@ to: harness-nothing-waits-on-the-sink
 The trace is the deliverable, so a record the run cannot serve on without is authored
 or service ends; a record that is truly best-effort says why at its site; and the
 record's ending is the evidence. **A failed authoring is latched on the record**,
-whatever failed: the writer's standing failure, a submission refused on its own
-(`RefusedOnSubmit`, or an event outside the diagnostic vocabulary) with the writer
-sound, or a diagnostic write, whose drain is vacuous. The latch is read before
-anything is announced and wherever the run would serve on:
-- before every answer and refusal to admin;
-- before a frame's close is sent to its dialer;
-- before a stop's answer after a turn's close, clean or failed;
-- at the end of a gate fault's wake;
-- before the serve loop waits again;
-- at the leave's seal, which refuses `DescriptorsUnusable` and answers no `Left`.
+whatever failed:
+- the writer's failure, met at the next submission or drain, since nothing on a turn
+  path waits on the sink;
+- a submission refused on its own (`RefusedOnSubmit`, or an event outside the
+  diagnostic vocabulary) with the writer sound;
+- a diagnostic write, whose drain is vacuous;
+- an event whose payload would not render.
 
-A latched record ends service as an organ death the record cannot hold does, the leave
-unwinding the run. A refusal on submit is this crate's authoring defect, and an outage
-naming a malformed payload is the rule working.
+The latch is read before anything is announced and wherever the run would serve on:
+- before every answer and refusal to admin, at rest and at a directive's wake
+  mid-turn (the turn then ends on the loss, its one close authored);
+- before a stop's answer after a turn's close;
+- before a frame's close is sent to its dialer, and before a held frame is served;
+- at the end of a gate fault's wake, and before the serve loop waits again;
+- in a leave, where a dial heard is dropped unanswered, the drain's refused closes
+  are sent only over a record that holds, and every held caller is refused
+  `DescriptorsUnusable` and answered no `Left`.
+
+A latched record ends service as an organ death the record cannot hold does: the leave
+unwinds the run, and the unwind names `StreamWriteFailed`. A refusal on submit is this
+crate's authoring defect, and an outage naming a malformed payload is the rule working.
 
 ## 5. Prompt assembly's deterministic floor
 

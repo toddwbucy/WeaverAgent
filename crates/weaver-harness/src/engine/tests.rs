@@ -3181,32 +3181,22 @@ fn stopped_invocation(crossing: bool, call_count: usize) {
 /// for never arrives.
 #[test]
 fn a_stop_dialed_mid_stream_cancels_the_turn() {
-    stop_dialed_mid_stream(false, false);
+    stop_dialed_mid_stream(false);
 }
 
-/// **A stop's answer is not announced over a record missing an event**
-/// (#116): the record is latched by a submission refused on its own (an
-/// event bound to another session, `RefusedOnSubmit`), the writer sound,
-/// so the turn runs and its close lands, and the close path reads the
-/// latch before the stop is answered: no answer reaches the dialer.
-/// Perturbation: drop the latch read from `close_turn`'s announcement and
-/// `TurnAborted` is answered.
+/// **A directive mid-turn is not answered over a latched record** (#116):
+/// the record is latched by a submission refused on its own (an event bound
+/// to another session, `RefusedOnSubmit`), the writer sound. The stop's
+/// wake reads the latch before anything is answered, the turn ends on the
+/// loss with its one close landed, and no answer reaches the dialer.
+/// Perturbation: drop the read from the directive wake, and the turn runs
+/// on to the stop's cancel and returns `Ok`.
 #[test]
-fn a_stop_is_not_answered_over_a_latched_record() {
-    stop_dialed_mid_stream(true, false);
+fn a_directive_mid_turn_is_not_answered_over_a_latched_record() {
+    stop_dialed_mid_stream(true);
 }
 
-/// **The same on a turn that fails after the stop** (#116, the failed
-/// close's announcement): the seam refuses after the cancel, the turn's
-/// close lands stopped, and the latch is read before `AtRest` is answered.
-/// Perturbation: drop the latch read from the failed close's announcement
-/// in `bracketed`, and `AtRest` is answered.
-#[test]
-fn a_stop_on_a_failed_turn_is_not_answered_over_a_latched_record() {
-    stop_dialed_mid_stream(true, true);
-}
-
-fn stop_dialed_mid_stream(latched: bool, refuse: bool) {
+fn stop_dialed_mid_stream(latched: bool) {
     let (near, far) = socketpair(
         AddressFamily::Unix,
         SockType::SeqPacket,
@@ -3243,6 +3233,19 @@ fn stop_dialed_mid_stream(latched: bool, refuse: bool) {
             directive,
             weaver_types::TokenDirective::AppendAndGenerate { .. }
         ));
+        if latched {
+            use std::os::fd::AsFd;
+            // The turn ends on the latch at the stop's wake, before any
+            // cancel: nothing more crosses, and the peer waits a while for
+            // a cancel the perturbation would send.
+            let mut fds = [nix::poll::PollFd::new(
+                far.as_fd(),
+                nix::poll::PollFlags::POLLIN,
+            )];
+            if nix::poll::poll(&mut fds, nix::poll::PollTimeout::from(500u16)).expect("poll") == 0 {
+                return;
+            }
+        }
         // The cancel arrives because the wait heard the stop.
         let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("recv cancel");
         let directive: weaver_types::TokenDirective =
@@ -3251,16 +3254,6 @@ fn stop_dialed_mid_stream(latched: bool, refuse: bool) {
             matches!(directive, weaver_types::TokenDirective::Cancel { .. }),
             "the stop cancels at the seam"
         );
-        if refuse {
-            let refusal = weaver_types::TokenRefusal::Overflow {
-                resident: 4091,
-                requested: 137,
-                capacity: 4096,
-            };
-            let bytes = serde_json::to_vec(&refusal).expect("the refusal renders");
-            send(far.as_raw_fd(), &bytes, MsgFlags::empty()).expect("send refusal");
-            return;
-        }
         let send_answer = |answer: &weaver_types::TokenAnswer| {
             let bytes = serde_json::to_vec(answer).expect("answer renders");
             send(far.as_raw_fd(), &bytes, MsgFlags::empty()).expect("send answer");
@@ -3376,10 +3369,10 @@ fn stop_dialed_mid_stream(latched: bool, refuse: bool) {
     };
     peer.join().expect("the decode peer finishes");
 
-    if refuse {
+    if latched {
         assert!(
-            matches!(outcome, Err(TurnError::Refused { .. })),
-            "the seam refused the turn: {outcome:?}"
+            matches!(outcome, Err(TurnError::ChannelLost)),
+            "the turn ends on the latch: {outcome:?}"
         );
     } else {
         let outcome = outcome.expect("the aborted turn still returns");
@@ -3414,10 +3407,10 @@ fn stop_dialed_mid_stream(latched: bool, refuse: bool) {
         .expect("the close authored")
         .line
         .to_string();
-    if refuse {
+    if latched {
         assert!(
-            close.contains(r#""close":"stopped""#) && close.contains(r#""reason":"refused""#),
-            "the close names the refusal: {close}"
+            close.contains(r#""close":"stopped""#) && close.contains(r#""reason":"fault""#),
+            "the one close names the loss: {close}"
         );
     } else {
         assert!(
@@ -3425,6 +3418,119 @@ fn stop_dialed_mid_stream(latched: bool, refuse: bool) {
             "the close names the directive, not the fault: {close}"
         );
     }
+}
+
+/// **A stop heard before the latch is set is not answered after the close**
+/// (#116, `close_turn`'s announcement): the close lands, the writer sound,
+/// and the latch is read before `TurnAborted` is sent. Driven at the close
+/// directly, since no fixture sets the latch between the stop's wake and
+/// the close. Perturbation: drop the read from `close_turn`, and the stop
+/// is answered.
+#[test]
+fn a_stop_is_not_answered_after_a_close_over_a_latched_record() {
+    let (decode_near, _decode_far) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .expect("socketpair");
+    let decode = crate::channel::decode_from_owned(decode_near);
+    let (listener, _dir) = test_listener();
+    let (verb_end, admin_end) = crate::channel::OrganChannel::pair().expect("pair");
+    let admin = admin_end.into_channel();
+    let session = SessionId("s-2".into());
+    let mut recorder = crate::record::Record::from(
+        Recorder::receive(
+            tempfile(),
+            RunRef("r-1".into()),
+            SessionRef(session.0.clone()),
+        )
+        .expect("recorder"),
+    );
+    let author = Author::new(&session, &weaver_types::RunId("r-1".into()));
+    let foreign = Author::new(
+        &SessionId("s-other".into()),
+        &weaver_types::RunId("r-1".into()),
+    );
+    assert!(
+        foreign
+            .author_fault(
+                &mut recorder,
+                Subsystem::Harness,
+                None,
+                &crate::authorship::harness_report(
+                    weaver_types::FaultCase::OrganDeathObserved,
+                    "{}"
+                ),
+            )
+            .is_err()
+    );
+    assert!(recorder.failed(), "the refusal is latched");
+    let turn = weaver_types::TurnKey("t-1".into());
+    let mut turn_ordinal = 1u64;
+    let mut turn_in_flight = Some(turn.clone());
+    let mut slot = Some(verb_end);
+    {
+        let mut fullness = None;
+        let mut pressure_reported = false;
+        let load_facts = crate::engine::test_load_facts();
+        let mut ports = Ports::grant(
+            &decode,
+            &author,
+            &mut recorder,
+            &mut turn_ordinal,
+            &mut turn_in_flight,
+            &load_facts,
+            None,
+            &listener,
+            Some(&mut slot),
+            None,
+            None,
+            None,
+            &mut fullness,
+            &mut pressure_reported,
+        );
+        let generation = Generation {
+            content: vec![],
+            emission: "par".into(),
+            finish: Finish::Stopped,
+            resident: 64,
+            capacity: 4096,
+            request: serde_json::value::RawValue::from_string("{}".into()).unwrap(),
+            measurement: serde_json::value::RawValue::from_string("{}".into()).unwrap(),
+        };
+        let mut stop = Some((
+            weaver_types::ExchangeId {
+                opener: weaver_types::Opener::Admin,
+                ordinal: 9,
+            },
+            weaver_types::Cause { uid: 0 },
+        ));
+        let aborted = ports
+            .close_turn(&turn, &generation, &mut stop)
+            .expect("the close lands");
+        assert!(aborted, "the stop aborted the turn");
+    }
+    use std::os::fd::AsFd;
+    let mut fds = [nix::poll::PollFd::new(
+        admin.as_fd(),
+        nix::poll::PollFlags::POLLIN,
+    )];
+    assert_eq!(
+        nix::poll::poll(&mut fds, nix::poll::PollTimeout::from(200u16)).expect("poll"),
+        0,
+        "no answer is announced over a latched record"
+    );
+    assert!(
+        recorder
+            .structure()
+            .expect("the serving record")
+            .by_kind(Kind::TurnClosed)
+            .next()
+            .is_some(),
+        "the close landed"
+    );
 }
 
 /// **A column frame on the generate stream authors rather than kills.**

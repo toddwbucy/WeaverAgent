@@ -1701,7 +1701,7 @@ fn a_save_point_after_the_tee_was_lost_is_refused() {
     let mut seam = crate::state::StateSeam::new(state_end.try_clone().expect("clone"));
     seam.snapshot_answer_bound_ms = 50;
     run.state = Some(seam);
-    run.recorder.serving_mut().expect("serving").attach_tee(
+    run.recorder.attach_tee(
         weaver_trace::Tee::open(
             state_end,
             "s-1".into(),
@@ -3892,13 +3892,13 @@ fn a_join_from_s4_s5_and_s6_turns_the_leave_forced_naming_forced_by() {
     let (first, _f) = dialed(LifecycleDirective::JoinLeave {
         cause: weaver_types::Cause { uid: 9 },
     });
-    hear_dial(first, &mut leave, false);
+    hear_dial(first, &mut leave, false, false);
     assert_eq!(leave.progress.leave, Leave::Forced);
     assert_eq!(leave.forced_by, Some(weaver_types::Cause { uid: 9 }));
     let (later, _l) = dialed(LifecycleDirective::JoinLeave {
         cause: weaver_types::Cause { uid: 10 },
     });
-    hear_dial(later, &mut leave, false);
+    hear_dial(later, &mut leave, false, false);
     assert_eq!(leave.forced_by, Some(weaver_types::Cause { uid: 9 }));
     assert_eq!(leave.joins.len(), 2, "both held for the same Left");
     // From S7 on, a graceful leave's outcome is fixed: the join is held
@@ -3907,7 +3907,7 @@ fn a_join_from_s4_s5_and_s6_turns_the_leave_forced_naming_forced_by() {
     let (join, _j) = dialed(LifecycleDirective::JoinLeave {
         cause: weaver_types::Cause { uid: 9 },
     });
-    hear_dial(join, &mut sealed, true);
+    hear_dial(join, &mut sealed, true, false);
     assert_eq!(sealed.progress.leave, Leave::Graceful);
     assert_eq!(sealed.forced_by, None);
     assert_eq!(sealed.joins.len(), 1);
@@ -3925,7 +3925,7 @@ fn a_join_after_a_bound_turned_the_leave_forced_names_no_forced_by() {
     let (join, _j) = dialed(LifecycleDirective::JoinLeave {
         cause: weaver_types::Cause { uid: 9 },
     });
-    hear_dial(join, &mut leave, false);
+    hear_dial(join, &mut leave, false, false);
     assert_eq!(leave.forced_by, None);
     assert_eq!(leave.joins.len(), 1);
 }
@@ -3945,7 +3945,7 @@ fn a_join_against_a_forces_leave_or_a_rollback_is_out_of_order() {
         let (join, far) = dialed(LifecycleDirective::JoinLeave {
             cause: weaver_types::Cause { uid: 9 },
         });
-        hear_dial(join, &mut leave, false);
+        hear_dial(join, &mut leave, false, false);
         assert!(leave.joins.is_empty(), "{case}");
         assert_eq!(
             far.recv().expect("an answer").payload,
@@ -3965,7 +3965,7 @@ fn observe_answers_in_transition_while_a_leave_is_pending() {
     use crate::lifecycle_table::Leave;
     let (mut leave, _admin) = pending_leave(Leave::Graceful, Leave::Graceful, false);
     let (observe, far) = dialed(LifecycleDirective::Observe);
-    hear_dial(observe, &mut leave, false);
+    hear_dial(observe, &mut leave, false, false);
     assert_eq!(
         far.recv().expect("an answer").payload,
         weaver_types::Payload::Answer(LifecycleAnswer::InTransition {
@@ -3977,7 +3977,7 @@ fn observe_answers_in_transition_while_a_leave_is_pending() {
         forced: true,
         rollback: false,
     });
-    hear_dial(second, &mut leave, false);
+    hear_dial(second, &mut leave, false, false);
     assert_eq!(
         far.recv().expect("an answer").payload,
         weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder)
@@ -4005,7 +4005,7 @@ fn a_join_held_at_the_seal_is_answered_left_after_the_writer_drains() {
     let (join, joiner) = dialed(LifecycleDirective::JoinLeave {
         cause: weaver_types::Cause { uid: 9 },
     });
-    hear_dial(join, &mut leave, false);
+    hear_dial(join, &mut leave, false, false);
     run.leave = Some(leave);
     let (mut harness, dir) = harness_entered(run);
     assert!(
@@ -7304,7 +7304,7 @@ fn the_operators_system_line_seats_the_prompt_and_turns() {
     // its lines to closure.
     let (state_end, member_end) =
         std::os::unix::net::UnixStream::pair().expect("the member's pair");
-    run.recorder.serving_mut().expect("serving").attach_tee(
+    run.recorder.attach_tee(
         weaver_trace::Tee::open(
             state_end,
             "s-1".into(),
@@ -7688,7 +7688,8 @@ fn latch_by_refusal(run: &mut Run) {
     assert!(run.recorder.drain().is_ok(), "the writer is sound");
 }
 
-/// Whether anything arrives on `channel` within 200 ms.
+/// Whether an answer arrives on `channel` within 200 ms; a hang-up, which
+/// wakes the poll as an answer does, is none.
 fn arrives(channel: &OrganChannel) -> bool {
     use std::os::fd::AsFd;
     let mut fds = [nix::poll::PollFd::new(
@@ -7696,6 +7697,7 @@ fn arrives(channel: &OrganChannel) -> bool {
         nix::poll::PollFlags::POLLIN,
     )];
     nix::poll::poll(&mut fds, nix::poll::PollTimeout::from(200u16)).expect("poll") > 0
+        && channel.recv().is_ok()
 }
 
 /// **A stop mid-turn whose close the record cannot take ends service
@@ -7868,4 +7870,93 @@ fn the_serve_loop_does_not_wait_over_a_latched_record() {
         Ok(true),
         "service ends before the wait"
     );
+}
+
+/// **A dial heard during a leave is not answered over a latched record**
+/// (#116, `hear_dial`): an observation is dropped unanswered, admin
+/// concluding as for no answer. Perturbation: drop the latch read, and
+/// `InTransition` is answered.
+#[test]
+fn a_dial_heard_in_a_leave_is_not_answered_over_a_latched_record() {
+    use crate::lifecycle_table::Leave;
+    let (mut leave, _admin) = pending_leave(Leave::Graceful, Leave::Graceful, false);
+    let (observe, far) = dialed(LifecycleDirective::Observe);
+    hear_dial(observe, &mut leave, false, true);
+    assert!(!arrives(&far), "nothing is answered");
+}
+
+/// **The leave's held callers are refused `DescriptorsUnusable` over a
+/// latched record** (#116, `answer_all`), whatever the leave would have
+/// answered: the seal's `Left` and S9's `SavePointNotTaken` alike.
+/// Perturbation: drop the override, and the leave's own answer is sent.
+#[test]
+fn the_leaves_callers_are_refused_over_a_latched_record() {
+    use crate::lifecycle_table::Leave;
+    let (leave, admin) = pending_leave(Leave::Graceful, Leave::Graceful, false);
+    answer_all(
+        &leave,
+        Err(LifecycleRefusal::SavePointNotTaken {
+            missed: weaver_types::SavePointLeg::MemberDead,
+        }),
+        true,
+    );
+    assert_eq!(
+        admin.recv().expect("an answer").payload,
+        weaver_types::Payload::Refusal(LifecycleRefusal::DescriptorsUnusable)
+    );
+}
+
+/// **No held frame is served over a latched record** (#116, the shelf): a
+/// frame queued behind the turn would run a turn, and the tools it asks in
+/// the world, past a record already missing an event. Perturbation: drop
+/// the read at the top of the shelf's loop, and the frame's turn is entered.
+#[test]
+fn a_held_frame_is_not_served_over_a_latched_record() {
+    let (mut run, _spare, _sink) = entered_run(None);
+    latch_by_refusal(&mut run);
+    let (gate_end, _gate_peer) = OrganChannel::pair().expect("gate pair");
+    run.gate = Some(GateChannel {
+        channel: gate_end,
+        pid: nix::unistd::Pid::from_raw(i32::MAX),
+        last_word: crate::spawn::LastWord::quiet(),
+    });
+    run.held_frames.push_back(OrganEnvelope {
+        exchange: ExchangeId {
+            opener: Opener::Gate,
+            ordinal: 2,
+        },
+        position: Position::Open,
+        payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry(
+            b"{\"text\":\"say a word\"}",
+        )),
+    });
+    let (mut harness, _dir) = harness_entered(run);
+    let served = harness.serve_shelf(
+        "identity",
+        &[],
+        &mut |_: &mut crate::engine::Ports<'_>, _: &str| panic!("the held frame's turn ran"),
+        &mut None,
+    );
+    assert!(served.is_err(), "service ends: {served:?}");
+}
+
+/// **An unwind over a latched record names `StreamWriteFailed`** (#116):
+/// whichever reader met the latch, the record's last event says the record
+/// failed, the writer here being sound enough to take it. Perturbation:
+/// drop the override, and the caller's case is named.
+#[test]
+fn an_unwind_over_a_latched_record_names_stream_write_failed() {
+    let (mut run, _spare, sink) = entered_run(None);
+    latch_by_refusal(&mut run);
+    let (mut harness, _dir) = harness_entered(run);
+    harness.unwind_if_entered(
+        weaver_types::FaultCase::OrganDeathObserved,
+        &ChannelFault::Closed,
+    );
+    let stream = std::fs::read_to_string(&sink.0).expect("the sink reads back");
+    let fault = stream
+        .lines()
+        .find(|line| line.contains("\"kind\":\"fault\"") && line.contains("service-ended"))
+        .expect("the unwind's fault");
+    assert!(fault.contains("stream_write_failed"), "{fault}");
 }

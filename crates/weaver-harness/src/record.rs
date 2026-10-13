@@ -88,8 +88,11 @@ impl Record {
     /// close reads it before its answer is announced. It covers what the
     /// writer's own standing failure does not: a submission refused on its
     /// own (`RefusedOnSubmit`, `OutsideDiagnosticVocabulary`), which leaves
-    /// the writer sound and the record missing that event, and the diagnostic
-    /// arm, whose drain is vacuous. A refusal of that kind is this crate's
+    /// the writer sound and the record missing that event, the diagnostic
+    /// arm, whose drain is vacuous, and an event whose payload would not
+    /// render ([`Record::latch_unrendered`]). A serving write that fails
+    /// behind the queue is met at the next submission or drain, nothing on a
+    /// turn path waiting on the sink. A refusal of that kind is this crate's
     /// authoring defect, and the run ending on it, naming it, is the rule
     /// working: the record's ending is the evidence.
     pub fn failed(&self) -> bool {
@@ -178,8 +181,8 @@ impl Record {
         }
     }
 
-    /// The serving recorder where that is the arm, for the tee attach and
-    /// the tests that read the structure back.
+    /// The serving recorder where that is the arm, read-only, for the tests
+    /// that read the structure back.
     pub fn serving(&self) -> Option<&weaver_trace::Recorder> {
         match &self.arm {
             Arm::Serving(recorder) => Some(recorder),
@@ -187,21 +190,25 @@ impl Record {
         }
     }
 
-    pub fn serving_mut(&mut self) -> Option<&mut weaver_trace::Recorder> {
+    /// **The tee attached to the serving arm**, the one thing this crate does
+    /// to the recorder outside its submit road; answers whether it was
+    /// attached, the diagnostic arm holding no tee. No `&mut` recorder is
+    /// handed out (#116), so no submission or drain can pass the latch.
+    pub fn attach_tee(&mut self, tee: weaver_trace::Tee) -> bool {
         match &mut self.arm {
-            Arm::Serving(recorder) => Some(recorder),
-            Arm::Diagnostic(_) => None,
+            Arm::Serving(recorder) => {
+                recorder.attach_tee(tee);
+                true
+            }
+            Arm::Diagnostic(_) => false,
         }
     }
 
-    /// The diagnostic recorder where that is the arm, for the replay's own
-    /// kinds, which exist in no serving vocabulary and convert from
-    /// nothing.
-    pub fn diagnostic_mut(&mut self) -> Option<&mut weaver_diagnostic::Recorder> {
-        match &mut self.arm {
-            Arm::Serving(_) => None,
-            Arm::Diagnostic(recorder) => Some(recorder),
-        }
+    /// **An event dropped before it reached the submit road is latched as
+    /// failed** (#116): an authoring whose payload would not render is a
+    /// record missing that event as surely as one the recorder refused.
+    pub fn latch_unrendered(&mut self) {
+        self.failed = true;
     }
 }
 

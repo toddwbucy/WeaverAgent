@@ -77,13 +77,18 @@ fn a_writer_that_fails_is_latched_at_the_next_authoring() {
     );
     let first = fault(&author, &mut again);
     assert!(first.is_ok(), "the first submission is queued: {first:?}");
-    let _ = again.serving_mut().expect("serving").drain();
-    assert!(
-        !again.failed(),
-        "a drain past the record's own road is unseen"
-    );
-    assert!(fault(&author, &mut again).is_err(), "the failure stands");
-    assert!(again.failed(), "and the next authoring latches it");
+    // The write fails behind the queue, and nothing waits on the sink, so
+    // the failure is met at a later submission, which latches it.
+    let mut met = false;
+    for _ in 0..400 {
+        if fault(&author, &mut again).is_err() {
+            met = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(met, "the writer's failure stands");
+    assert!(again.failed(), "and the authoring that met it latches it");
 }
 
 /// **A submission refused on its own is latched, the writer sound** (#116,
