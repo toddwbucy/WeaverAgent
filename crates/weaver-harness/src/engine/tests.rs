@@ -4625,3 +4625,169 @@ fn unrecovered_entry(fragment: &str, unclosed: bool) -> weaver_types::Unrecovere
         },
     }
 }
+
+/// **A re-fed answer's unrecovered call is authored at the answer**, per
+/// `weaver-diagnostic-Spec` section 7 on the operator's ruling of 2026-10-13
+/// (#31): the re-feed's authoring site calls the same helper the generation's
+/// does, and a record under a diagnostic binding converts the kind, which
+/// `record::tests::an_unrecovered_call_reaches_the_diagnostic_record` watches.
+///
+/// Perturbation: remove the helper call from `refeed` and the kinds fail.
+#[test]
+fn a_re_fed_unrecovered_call_is_authored_at_the_answer() {
+    let (near, far) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .expect("socketpair");
+    let decode = crate::channel::decode_from_owned(near);
+
+    // The scripted decode peer: read the append, stream two tokens, then
+    // answer with the generation whole, the request and measurement the
+    // SPU-rendered blobs the turn splices.
+    let peer = std::thread::spawn(move || {
+        let mut buf = vec![0u8; 65536];
+        let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("recv append");
+        let directive: weaver_types::TokenDirective =
+            serde_json::from_slice(&buf[..n]).expect("the append parses");
+        assert!(
+            matches!(directive, weaver_types::TokenDirective::ReFeed { .. }),
+            "the replay sends the re-feed"
+        );
+        let send_answer = |answer: &weaver_types::TokenAnswer| {
+            let bytes = serde_json::to_vec(answer).expect("answer renders");
+            send(far.as_raw_fd(), &bytes, MsgFlags::empty()).expect("send answer");
+        };
+        // A re-feed streams no token of its own, per the decode contract.
+        let request = serde_json::value::RawValue::from_string(
+            r#"{"rendered":"<|im_start|>user\nsay a word<|im_end|>\n","template":"qwen2","sampling":{"temperature":0.7}}"#
+                .to_string(),
+        )
+        .unwrap();
+        let measurement = serde_json::value::RawValue::from_string(
+            r#"{"model":"qwen2.5","weights_hash":"sha256:abc","input_tokens":[1,2],"output_tokens":[9707,1879],"blocks":[{"label":"turn-delta","start":0,"end":10}],"timings":{"prefill_ns":"10","decode_ns":"20"}}"#
+                .to_string(),
+        )
+        .unwrap();
+        send_answer(&weaver_types::TokenAnswer::ReFed(Generation {
+            content: vec![
+                weaver_traits::ContentBlock::Text {
+                    text: "one word".into(),
+                },
+                weaver_traits::ContentBlock::UnrecoveredCall {
+                    fragment: "<tool_call>x</tool_call>".into(),
+                },
+                weaver_traits::ContentBlock::UnrecoveredCall {
+                    fragment: "<tool_call>y".into(),
+                },
+            ],
+            unrecovered: vec![
+                unrecovered_entry("<tool_call>x</tool_call>", false),
+                unrecovered_entry("<tool_call>y", true),
+            ],
+            emission: "one word".into(),
+            finish: Finish::Completed,
+            // Deliberately unroundable: a site forwarding a zero, a
+            // default, or the other member would fail the assertion
+            // below, where 64 and 4096 could each be arrived at by
+            // accident.
+            resident: 1237,
+            capacity: 8191,
+            request,
+            measurement,
+        }));
+    });
+
+    let session = SessionId("s-1".into());
+    let sink = tempfile();
+    let mut recorder = crate::record::Record::from(
+        Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
+            .expect("recorder"),
+    );
+    let author = Author::new(&session, &weaver_types::RunId("r-1".into()));
+    author
+        .author(
+            &mut recorder,
+            Kind::Load,
+            Subsystem::Harness,
+            None,
+            Some(Payload::Elections(Box::new(weaver_trace::Elections {
+                residual_readout: false,
+                field: None,
+                surprisal: false,
+                tee: Some(weaver_trace::Election::default()),
+                state_member: false,
+                declaration: Default::default(),
+                lineage: None,
+                reset: None,
+                stack: Default::default(),
+                boundary: String::new(),
+                cause: weaver_trace::Cause { uid: 0 },
+                library_path: None,
+                state_store: Default::default(),
+                composer: weaver_trace::LoopIdentity::compiled("test"),
+            }))),
+        )
+        .expect("load");
+    let mut turn_ordinal = 0u64;
+    let mut turn_in_flight: Option<weaver_types::TurnKey> = None;
+
+    let (listener, _dir) = test_listener();
+    let outcome = {
+        let mut fullness = None;
+        let mut pressure_reported = false;
+        let load_facts = crate::engine::test_load_facts();
+        let mut ports = Ports::grant(
+            &decode,
+            &author,
+            &mut recorder,
+            &mut turn_ordinal,
+            &mut turn_in_flight,
+            &load_facts,
+            None,
+            &listener,
+            None,
+            None,
+            None,
+            None,
+            &mut fullness,
+            &mut pressure_reported,
+        );
+        let turn = weaver_types::TurnKey("t-1".into());
+        ports
+            .refeed(&turn, "rendered".into(), vec![9707, 1879])
+            .expect("the re-feed answers")
+    };
+    peer.join().expect("the decode peer finishes");
+
+    assert_eq!(
+        outcome.unrecovered.len(),
+        2,
+        "the answer carried both entries"
+    );
+
+    // **The re-feed's authoring is the generation's**, per
+    // `weaver-diagnostic-Spec` section 7: the report lands between the
+    // measurement and the assistant, one event per entry.
+    let kinds: Vec<Kind> = recorder
+        .structure()
+        .expect("the serving record")
+        .iter()
+        .filter(|r| r.turn.is_some())
+        .map(|r| r.kind)
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            Kind::ModelRequest,
+            Kind::ModelOutput,
+            Kind::ModelMeasurement,
+            Kind::ModelUnrecoveredCall,
+            Kind::ModelUnrecoveredCall,
+            Kind::MessageAssistant,
+        ],
+        "the re-feed authors the report at its answer"
+    );
+}
