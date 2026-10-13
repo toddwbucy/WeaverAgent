@@ -27,6 +27,9 @@ fn message_round_trips_unchanged() {
                 name: "calculator".into(),
                 arguments: "{}".into(),
             }),
+            ContentBlock::UnrecoveredCall {
+                fragment: "<tool_call>{\"name\":".into(),
+            },
         ],
     };
     let json = serde_json::to_string(&msg).expect("serializes");
@@ -95,4 +98,23 @@ fn unknown_tag_refuses() {
 fn the_system_role_round_trips() {
     let role: Role = serde_json::from_str("\"system\"").expect("real since its act");
     assert_eq!(serde_json::to_string(&role).unwrap(), "\"system\"");
+}
+
+/// **An unrecovered call is its own block, tagged `unrecovered_call`**, per
+/// `weaver-traits-Spec` section 3 on the operator's ruling of 2026-10-13
+/// (#31): the fragment as written, never `Text` and never `ToolCall`.
+///
+/// Perturbation: rename the variant's wire spelling and the literal fails.
+#[test]
+fn an_unrecovered_call_block_is_tagged_and_round_trips() {
+    let block = ContentBlock::UnrecoveredCall {
+        fragment: "<tool_call>{".into(),
+    };
+    let line = serde_json::to_string(&block).expect("serializes");
+    assert_eq!(
+        line,
+        r#"{"type":"unrecovered_call","fragment":"<tool_call>{"}"#
+    );
+    let back: ContentBlock = serde_json::from_str(&line).expect("deserializes");
+    assert_eq!(back, block);
 }

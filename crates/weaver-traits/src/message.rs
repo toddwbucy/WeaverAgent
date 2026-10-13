@@ -57,9 +57,21 @@ pub enum Role {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
-    Text { text: String },
+    Text {
+        text: String,
+    },
     ToolCall(ToolCall),
     ToolResult(ToolResultBlock),
+    /// A call the model attempted and the family parse could not recover,
+    /// kept as the model wrote it, per `weaver-traits-Spec` section 3 on the
+    /// operator's ruling of 2026-10-13 (#31): the fragment from the family's
+    /// opening marker through its closing marker or to the end of the
+    /// emission. Never `Text`, a failed call the turn would read as success,
+    /// and never `ToolCall`, which names a tool and dispatches. Licensed in
+    /// `Assistant` messages only, and it grants and dispatches nothing.
+    UnrecoveredCall {
+        fragment: String,
+    },
 }
 
 /// The conversation's view of a tool invocation, shaped with the tool
