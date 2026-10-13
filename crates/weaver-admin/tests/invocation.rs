@@ -190,3 +190,54 @@ fn a_broken_standard_error_never_ends_the_verb() {
         "the verb completes on a broken standard error"
     );
 }
+
+/// **A name with no root answers `NoSuchAgent`, its groups never asked
+/// after**, per `weaver-admin-Spec` section 9, "the root existing is the
+/// admission": run as root inside a user namespace against an empty base, a
+/// well-formed name whose root, accounts and groups were never made (or were
+/// all taken down) answers `no_such_agent` at `show` and at `force-unload`
+/// alike. Perturbation: resolve the access and state groups before
+/// `admit_root` in `load_service_config`, as before 2026-10-13, and `show`
+/// answers `boundary_unverified` with "not provisioned" on standard error. A
+/// box with no user namespace prints SKIP.
+#[test]
+fn a_name_with_no_root_answers_no_such_agent_before_its_groups() {
+    let base = std::env::temp_dir().join(format!("weaver-admin-noroot-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let name = format!("noroot{}", std::process::id());
+    let answers: Vec<_> = ["show", "force-unload"]
+        .into_iter()
+        .map(|verb| {
+            Command::new("unshare")
+                .args(["--map-auto", "--map-root-user"])
+                .arg(env!("CARGO_BIN_EXE_weaver-admin"))
+                .arg(verb)
+                .arg(&name)
+                .env("WEAVER_ADMIN_CONFIG", &base)
+                .env_remove("SUDO_UID")
+                .output()
+        })
+        .collect();
+    let _ = std::fs::remove_dir_all(&base);
+    for (verb, out) in ["show", "force-unload"].into_iter().zip(answers) {
+        let Ok(out) = out.as_ref().map_err(|_| ()).and_then(|out| {
+            if out.status.code() == Some(1) && !out.stdout.is_empty() {
+                Ok(out)
+            } else {
+                Err(())
+            }
+        }) else {
+            eprintln!(
+                "SKIP a_name_with_no_root_answers_no_such_agent_before_its_groups: no user namespace here"
+            );
+            return;
+        };
+        let body = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            body.contains("\"kind\":\"no_such_agent\""),
+            "{verb} on a name with no root answers no_such_agent, got {body} with {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}

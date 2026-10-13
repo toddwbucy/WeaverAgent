@@ -1043,7 +1043,8 @@ step_9() {
   run_line "groupdel $GROUPS_MADE (each that stands)"
   run_line "rm -rf $T"
   run_line "rm -f $MARKER"
-  want "show unloaded with no constituent before; afterwards show answers no_such_agent, as the operator and under sudo"
+  run_line "weaver-admin show $A, as the operator and under sudo"
+  want "show unloaded with no constituent before; afterwards show answers unauthorized as the operator and no_such_agent under sudo"
   want "the accounts, the groups, $R, $RULE and $T are absent; each archive reads back"
   want "never decommission.sh, which takes every agent off the box; no other agent is touched"
   [ "$APPLY" -eq 1 ] || return 0
@@ -1082,9 +1083,14 @@ step_9() {
     if lookup group "$g"; then sudo -n groupdel "$g"; fi
   done
   if sudo -n test -d "$T" && ! sudo -n test -L "$T"; then sudo -n rm -rf -- "$T"; fi
+  # The operator is answered unauthorized, not no_such_agent: an invocation
+  # that is not root performs nothing and is refused before any verb looks at
+  # a name (weaver-admin-Spec, "Authorization is the kernel's"), so admin
+  # leaks neither an agent's existence nor its absence to a caller the kernel
+  # did not admit.
   local said
   said=$(WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$ADMIN" show "$A" 2>&1 | tail -n 1 || true)
-  expect_eq "show as the operator answers no_such_agent" no_such_agent "$(json_at "$said" kind)"
+  expect_eq "show as the operator answers unauthorized" unauthorized "$(json_at "$said" kind)"
   ask show; expect_kind "show under sudo" no_such_agent
   for u in $ACCOUNTS; do expect_eq "the account $u is gone" no "$(lookup passwd "$u" && echo yes || echo no)"; done
   for g in $GROUPS_MADE; do expect_eq "the group $g is gone" no "$(lookup group "$g" && echo yes || echo no)"; done

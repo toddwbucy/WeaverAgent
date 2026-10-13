@@ -2853,6 +2853,11 @@ fn load_service_config(agent: &AgentName, forced: bool) -> Result<ServiceConfig,
     let base = std::env::var_os("WEAVER_ADMIN_CONFIG")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_BASE));
+    // **The root existing is the admission, before anything is resolved**
+    // (Spec section 9): a name with no root is no agent, and answers
+    // `NoSuchAgent` at every verb, a force's included, rather than the
+    // `BoundaryUnverified` its absent groups would answer below.
+    admit_root(&base.join(&agent.0))?;
     // **The access group and the state group are resolved by name** (Codex
     // on #94, and the operator's ruling of 2026-10-08 on #1), as the trace
     // door and the reader's judgment resolve them: the territory's group is
@@ -3157,9 +3162,8 @@ fn judge_ancestors(
 
 /// **The agent's root is the admission**: no root, or one that is not a
 /// directory, is no agent, and the look does not follow a link at the root
-/// itself. A root is root's and writable by no group or other.
-fn judge_root(root: &std::path::Path, owner: u32) -> Result<(), LifecycleRefusal> {
-    use std::os::unix::fs::MetadataExt;
+/// itself.
+fn admit_root(root: &std::path::Path) -> Result<std::fs::Metadata, LifecycleRefusal> {
     let metadata = match std::fs::symlink_metadata(root) {
         Ok(metadata) => metadata,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -3170,6 +3174,13 @@ fn judge_root(root: &std::path::Path, owner: u32) -> Result<(), LifecycleRefusal
     if !metadata.is_dir() {
         return Err(LifecycleRefusal::NoSuchAgent);
     }
+    Ok(metadata)
+}
+
+/// **The admitted root is root's and writable by no group or other.**
+fn judge_root(root: &std::path::Path, owner: u32) -> Result<(), LifecycleRefusal> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = admit_root(root)?;
     if metadata.uid() != owner || metadata.mode() & 0o022 != 0 {
         return Err(LifecycleRefusal::BoundaryUnverified);
     }
