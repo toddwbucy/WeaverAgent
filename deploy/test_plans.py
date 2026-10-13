@@ -3534,7 +3534,7 @@ class DecommissionTests(unittest.TestCase):
         each line read as the removal loops read it, and an empty derivation
         holds nothing. The list is read once into root's copy, hashed against
         the archive's sums, and every removal loop reads that copy.
-        Perturbation: drop the judgment, read the list from DEST or the
+        Perturbation: drop the judgment or its call, read the list from DEST or the
         unfiltered copy again, skip a line that still stands, or keep a line
         the derivation does not hold, and the pins here fail."""
         scratch = tempfile.TemporaryDirectory(prefix="weaver-purge-list-")
@@ -3563,6 +3563,9 @@ class DecommissionTests(unittest.TestCase):
         self.assertEqual(outside(held, [f"path {standing} "]), [], "a name's own blanks are kept: no such path")
         self.assertEqual(outside(held, ["kill everything"]), ["kill everything"], "an unknown kind is named")
         judged = self.script.index('[ -z "$OUTSIDE" ] || die ')
+        # The die reads the judgment's own answer over root's copy.
+        self.assertEqual(self.script.count('OUTSIDE=$(purge_lines_outside "$PURGE_LIST")'), 1)
+        self.assertLess(self.script.index('OUTSIDE=$(purge_lines_outside "$PURGE_LIST")'), judged)
         self.assertLess(self.script.index('[ "$LISTED_SUM" = "$COPY_SUM" ] || die '), judged)
         self.assertLess(judged, self.script.index('say "the delegated door, shut"'))
         self.assertNotIn('done < "$DEST/PURGE-LIST"', self.script)
