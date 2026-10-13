@@ -2682,8 +2682,8 @@ the claim divides are both open and section 6 carries them together.
   #63.** Section 3.1 fixes the boundary file, the stream's framing and its control
   lines, and the cause. What stays the code act's is the heartbeat's interval.
 - **`Generation`'s shape settled at section 4.4 and this bullet retires with it.**
-  The emission, the canonical content, and the finish are shaped in the floor
-  because the harness consumes them, and the measurement splices because nothing
+  What the harness consumes is shaped in the floor, per that section, and the
+  measurement splices because nothing
   consumes it on the way to the trace's model events. The seven satellites stay
   `weaver-trace`'s, neither restated nor drawn, and the floor's dependency set is
   unchanged. **What does not retire is the block partition's own question**,

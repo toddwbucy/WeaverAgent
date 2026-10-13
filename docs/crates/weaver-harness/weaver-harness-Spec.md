@@ -1540,10 +1540,9 @@ to: axiom-join-key-travels-with-the-work
 ```
 
 **The licensed combinations are enforced here, before submit.** A message is
-judged against the licensing rule of `weaver-traits-Spec` section 3, a `User`
-message carrying only `Text`, an `Assistant` message carrying `Text` and
-`ToolCall`, a `ToolResult` message carrying only `ToolResult` blocks, and an
-unlicensed message is refused by this crate and never submitted. The recorder
+judged against the licensing rule of `weaver-traits-Spec` section 3, which this
+document cites rather than restates, and an unlicensed message is refused by this
+crate and never submitted. The recorder
 cannot hold this rule, per that Spec, so the harness is the party the
 perturbation test of `weaver-traits-Spec` section 7 binds, and the test lands
 in this document's section 8 set. That Spec names this document as the declaring

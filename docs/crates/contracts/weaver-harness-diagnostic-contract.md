@@ -5,7 +5,7 @@
 **Date filed:** 2026-08-27
 **Document ID:** `weaver-harness-diagnostic-contract`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #53
+**Landing PR:** #136
 
 ---
 
@@ -77,7 +77,9 @@ diagnostic event-kind vocabulary and its per-kind payload shapes, the
 `replay-outcome` the closing kind carries, and the failure vocabulary of
 section 5. These are the party's own definitions, named because they cross
 the seam and a reader of this document should not have to infer where they
-come from.
+come from. The vocabulary grew to twenty kinds on 2026-10-13, `model.unrecovered_call`
+joining it on the operator's ruling on #31, per `weaver-diagnostic-Spec` section 3.2,
+both parties merging the change in one act under section 7.
 
 **Nothing from any other crate.** This seam is a library boundary between two
 crates and touches no third.
