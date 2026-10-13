@@ -151,8 +151,9 @@ fn a_diagnostic_write_that_fails_is_latched_though_the_drain_is_vacuous() {
 /// 2026-10-13 (#31): the serving kind converts to the diagnostic record's
 /// twentieth, turned and spliced, through the one authoring road.
 ///
-/// Perturbation: remove the kind's arm from `convert`, so it falls outside
-/// the diagnostic vocabulary, and the authoring is refused.
+/// Perturbation: move the kind from its own arm in `convert` into the arm
+/// that answers `OutsideDiagnosticVocabulary`, and the authoring is refused.
+/// Removing the arm outright does not compile, the match being exhaustive.
 #[test]
 fn an_unrecovered_call_reaches_the_diagnostic_record() {
     let author = author();

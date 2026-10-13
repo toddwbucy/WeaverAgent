@@ -4351,9 +4351,16 @@ fn an_unrecovered_call_is_authored_at_the_answer_and_handed_to_the_loop() {
             .line,
     )
     .expect("one value");
+    let blocks: Vec<String> = assistant["payload"]["content"]
+        .as_array()
+        .expect("the content")
+        .iter()
+        .filter(|block| block["type"] == "unrecovered_call")
+        .map(|block| block["fragment"].as_str().expect("a fragment").to_string())
+        .collect();
     assert_eq!(
-        assistant["payload"]["content"][1]["fragment"], "<tool_call>x</tool_call>",
-        "the marked message holds the same bytes: {assistant}"
+        blocks, fragments,
+        "each event's fragment is its block's, in order: {assistant}"
     );
 
     // **Loop 1 receives the report with the outcome.**
@@ -4600,13 +4607,6 @@ fn an_unrecovered_call_opens_no_execution_exchange() {
     );
 }
 
-/// **Each field intermediate authors one `model.field` event**, per
-/// `weaver-harness-Spec` section 6. The intermediates close nothing, so
-/// the turn runs on and the close arrives as it always did: the record
-/// gains the field's events and loses none of the bracket.
-///
-/// Perturbation: discard the field arm the way the token arm is
-/// discarded and the kinds assertion fails, the events never authored.
 /// One report entry for a scripted generation, the grammar qwen2's.
 fn unrecovered_entry(fragment: &str, unclosed: bool) -> weaver_types::UnrecoveredCall {
     weaver_types::UnrecoveredCall {
