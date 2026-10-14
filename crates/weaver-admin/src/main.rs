@@ -2076,21 +2076,42 @@ const JOIN_RETRY: std::time::Duration = std::time::Duration::from_secs(1);
 /// I1): the lock taken, it is a sole force; held by an `unload`, it joins
 /// lock-free; held by anything else, or by a holder whose record cannot be
 /// read, it refuses `InvocationInFlight`. A `show`'s shared hold is waited
-/// out by the take itself. A lock that frees between the take and the read,
-/// or a joined holder that gives way to another, is judged afresh.
+/// out by the take itself, and a take that readers starved refuses as every
+/// verb's does. A lock that frees between the take and the read, a `show`
+/// that takes it there, or a joined holder that gives way to another, is
+/// judged afresh.
 fn take_or_join(config: &ServiceConfig, bounds: UnloadBounds) -> Result<Taken, LifecycleRefusal> {
+    take_or_join_reading(config, bounds, start::read_holder)
+}
+
+/// [`take_or_join`] over a holder read, so a test can stand a `show` in the
+/// gap between the refused take and the read (#125).
+fn take_or_join_reading(
+    config: &ServiceConfig,
+    bounds: UnloadBounds,
+    mut read_holder: impl FnMut(&std::path::Path) -> Result<start::LockHolder, LifecycleRefusal>,
+) -> Result<Taken, LifecycleRefusal> {
     let run_directory = config.run_directory();
     loop {
-        match start::take_invocation_lock(&run_directory, verb_table::HolderVerb::ForceUnload) {
+        match start::take_invocation_lock_judged(
+            &run_directory,
+            verb_table::HolderVerb::ForceUnload,
+        ) {
             Ok(lock) => return Ok(Taken::Sole(lock)),
-            Err(LifecycleRefusal::InvocationInFlight) => {}
-            Err(refusal) => return Err(refusal),
-        }
-        let seen = match start::read_holder(&run_directory)? {
-            start::LockHolder::Free => continue,
             // The take waited out `show`'s bound before refusing: readers
             // starved it, and it refuses as every verb does.
-            start::LockHolder::Shared => return Err(LifecycleRefusal::InvocationInFlight),
+            Err(start::TakeRefused::Starved) => {
+                return Err(LifecycleRefusal::InvocationInFlight);
+            }
+            Err(start::TakeRefused::Other(LifecycleRefusal::InvocationInFlight)) => {}
+            Err(start::TakeRefused::Other(refusal)) => return Err(refusal),
+        }
+        let seen = match read_holder(&run_directory)? {
+            start::LockHolder::Free => continue,
+            // **A `show` took the lock after the exclusive holder the take
+            // met let go** (#125): the take refused at once and waited for no
+            // reader, so it takes again, its wait for readers one bound.
+            start::LockHolder::Shared => continue,
             start::LockHolder::Exclusive(verb) => verb_table::Seen::Holder(verb),
         };
         match verb_table::act(verb_table::Verb::ForceUnload, verb_table::class_of(seen)) {

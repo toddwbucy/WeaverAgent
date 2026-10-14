@@ -302,6 +302,9 @@ fn an_exclusive_invocation_lock_refuses_every_other_take() {
 
 /// A forked child holding the invocation lock shared for `hold`, as a
 /// `show` does for its observation, answering its pid once it holds it.
+/// **The ready byte says whether it holds** (#87): a child whose open or lock
+/// failed, as under a parallel run short of descriptors, fails the test here
+/// naming that, rather than letting the taker find the lock free.
 fn shared_holder(path: &Path, hold: Duration) -> nix::unistd::Pid {
     let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
     let (ready_read, ready_write) = nix::unistd::pipe().unwrap();
@@ -318,8 +321,8 @@ fn shared_holder(path: &Path, hold: Duration) -> nix::unistd::Pid {
             unsafe {
                 let fd = nix::libc::open(c_path.as_ptr(), nix::libc::O_RDWR);
                 let read = whole_file(nix::libc::F_RDLCK);
-                nix::libc::fcntl(fd, nix::libc::F_SETLK, &read);
-                nix::libc::write(ready_write.as_raw_fd(), [1u8].as_ptr().cast(), 1);
+                let held = fd >= 0 && nix::libc::fcntl(fd, nix::libc::F_SETLK, &read) == 0;
+                nix::libc::write(ready_write.as_raw_fd(), [u8::from(held)].as_ptr().cast(), 1);
                 nix::libc::nanosleep(&pause, std::ptr::null_mut());
                 nix::libc::_exit(0);
             }
@@ -328,6 +331,10 @@ fn shared_holder(path: &Path, hold: Duration) -> nix::unistd::Pid {
             drop(ready_write);
             let mut byte = [0u8; 1];
             nix::unistd::read(&ready_read, &mut byte).unwrap();
+            assert_eq!(
+                byte[0], 1,
+                "the shared holder did not take its lock, so a take after it measures nothing"
+            );
             child
         }
     }

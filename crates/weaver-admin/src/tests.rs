@@ -2073,6 +2073,66 @@ fn a_force_while_show_holds_the_lock_waits_and_proceeds() {
     );
 }
 
+/// **A force that meets an exclusive holder, then a `show` taking the lock in
+/// the gap before its holder read, takes again** (#125; `weaver-admin-Spec`
+/// section 3, the invocation lock): its take refused at once and waited for
+/// no reader, so the shared hold is judged afresh and waited out within the
+/// one bound. Perturbation: refuse on the shared read, as before, and the
+/// force answers `InvocationInFlight`.
+#[test]
+fn a_force_that_meets_a_show_in_the_gap_after_an_exclusive_holder_takes_again() {
+    let (config, _scratch) = scratch_config("force-show-gap");
+    let mut holder = Some(holding_as(&config, "load"));
+    let mut reader = None;
+    let taken = take_or_join_reading(&config, TEST_UNLOAD_BOUNDS, |dir| {
+        // The gap: the exclusive holder lets go and a `show` takes the lock
+        // before the force reads who holds it.
+        if let Some(holder) = holder.take() {
+            end(holder);
+            reader = Some(start::tests::holding_invocation(
+                dir,
+                &[("WEAVER_ADMIN_HOLDER_MODE", "shared:300")],
+            ));
+        }
+        start::read_holder(dir)
+    });
+    if let Some(reader) = reader {
+        end(reader);
+    }
+    assert!(
+        matches!(taken, Ok(Taken::Sole(_))),
+        "the force takes once the show is gone: {:?}",
+        taken.err()
+    );
+}
+
+/// **A force that readers starve refuses at about the one bound** (#125;
+/// `weaver-admin-Spec` section 3): its own take waited out `show`'s bound,
+/// so it refuses `InvocationInFlight` with readers named and never takes
+/// again behind them. Perturbation: take again after a starved take, as
+/// after one an exclusive holder refused, and the force waits out the
+/// reader and takes.
+#[test]
+fn a_force_that_readers_starve_refuses_at_the_one_bound() {
+    let (config, _scratch) = scratch_config("force-starved");
+    let reader = start::tests::holding_invocation(
+        &config.run_directory(),
+        &[("WEAVER_ADMIN_HOLDER_MODE", "shared:4000")],
+    );
+    let began = std::time::Instant::now();
+    let taken = take_or_join(&config, TEST_UNLOAD_BOUNDS);
+    let took = began.elapsed();
+    end(reader);
+    assert!(
+        matches!(taken, Err(LifecycleRefusal::InvocationInFlight)),
+        "starved, the force refuses"
+    );
+    assert!(
+        took < std::time::Duration::from_secs(3),
+        "at about the one bound, not twice it: {took:?}"
+    );
+}
+
 /// One leave answered `left` to `unload` (or, `forced`, `force-unload`) over
 /// a run standing with the marker open on `r-1`; answers the verb's answer.
 fn concluded_by(
