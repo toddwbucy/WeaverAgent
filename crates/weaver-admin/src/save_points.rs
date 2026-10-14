@@ -1112,6 +1112,8 @@ pub fn publish_counting(
         room_bound: ROOM_SCAN_BOUND,
         finished: None,
         before_read_back: &mut |_, _| {},
+        removal_sync: &mut sync_directory,
+        removal: None,
     };
     let published = publish_with(
         room, member_uid, directory, file_owner, owner, reports, &mut hooks,
@@ -1141,12 +1143,18 @@ fn available_bytes(directory: BorrowedFd<'_>) -> std::io::Result<u64> {
 
 /// What a test may vary in a publication: a hook run between the room's scan
 /// and the first copy, the free-space look, the per-verb cap and the scan's
-/// bound, and a hook run on each published name between its directory's sync
-/// and its read-back (#157); and what the scan saw, the room's finished-name
-/// count.
+/// bound, a hook run on each published name between its directory's sync
+/// and its read-back, and the sync after a copy that did not read back is
+/// removed (#157); and what the scan saw, the room's finished-name count,
+/// and what that removal left.
 struct PublishHooks<'a> {
     after_scan: &'a mut dyn FnMut(),
     before_read_back: &'a mut dyn FnMut(BorrowedFd<'_>, &str),
+    /// The directory's sync after a copy that did not read back is
+    /// removed, a parameter so a test can fail it.
+    removal_sync: &'a mut dyn FnMut(BorrowedFd<'_>) -> std::io::Result<()>,
+    /// What that removal left, for a test to read.
+    removal: Option<Removal>,
     available: &'a mut dyn FnMut(BorrowedFd<'_>) -> std::io::Result<u64>,
     cap: usize,
     room_bound: usize,
@@ -1455,23 +1463,12 @@ fn publish_with(
                 Err(fault) => Err(fault.why),
             };
             if let Err(why) = read_back {
-                let removed = nix::unistd::unlinkat(
-                    directory,
-                    name.as_str(),
-                    nix::unistd::UnlinkatFlags::NoRemoveDir,
-                )
-                .map_err(std::io::Error::from)
-                .and_then(|()| sync_directory(directory));
-                match removed {
-                    Ok(()) => diag!(
-                        "weaver-admin: the published {name} does not read back to its digest ({why}); it is removed, and the room's {} and every later save point are left for the next verb",
-                        entry.name
-                    ),
-                    Err(e) => diag!(
-                        "weaver-admin: the published {name} does not read back to its digest ({why}) and was not removed ({e}); the operator removes it, and until then the room's {} and every later save point stay for the next verb, which refuses on it",
-                        entry.name
-                    ),
-                }
+                let removal = remove_published(directory, &name, hooks.removal_sync);
+                diag!(
+                    "weaver-admin: the published {name} does not read back to its digest ({why}); {}",
+                    removal.says(&entry.name)
+                );
+                hooks.removal = Some(removal);
                 deferred = true;
                 break;
             }
@@ -1498,6 +1495,56 @@ fn publish_with(
         remove_from_room(&entry.name);
     }
     Ok((appended, deferred))
+}
+
+/// **What removing a copy that did not read back left** (#157, Codex on
+/// #158), per Spec section 6, each stated apart because each leaves a
+/// different state and a different recovery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Removal {
+    /// The name is gone, by this unlink or before it (`ENOENT`), and the
+    /// directory synced: the next verb publishes afresh.
+    Synced,
+    /// The name is gone and the directory did not sync: the next verb
+    /// publishes afresh, unless a power loss first brings the name back.
+    Unsynced(String),
+    /// The unlink failed and the copy stands under the published name.
+    Standing(String),
+}
+
+impl Removal {
+    /// The rest of `admin.log`'s line: what stands, and what the next verb
+    /// does.
+    fn says(&self, room_name: &str) -> String {
+        match self {
+            Removal::Synced => format!(
+                "it is removed and the directory synced, so the next verb publishes the room's {room_name} afresh; it and every later save point are left for that verb"
+            ),
+            Removal::Unsynced(e) => format!(
+                "it is removed but the directory did not sync ({e}): the next verb publishes the room's {room_name} afresh, unless a power loss first brings the name back, which that verb then refuses as an entry of other bytes until the operator removes it; it and every later save point are left for the next verb"
+            ),
+            Removal::Standing(e) => format!(
+                "it was not removed ({e}) and stands under its published name: every later verb refuses on it until the operator removes it, the room's {room_name} and every later save point waiting until then"
+            ),
+        }
+    }
+}
+
+/// Remove a published copy that did not read back, through the directory's
+/// descriptor, and sync the directory: a name already gone (`ENOENT`) is
+/// removed, and its absence is synced all the same.
+fn remove_published(
+    directory: BorrowedFd<'_>,
+    name: &str,
+    sync: &mut dyn FnMut(BorrowedFd<'_>) -> std::io::Result<()>,
+) -> Removal {
+    match nix::unistd::unlinkat(directory, name, nix::unistd::UnlinkatFlags::NoRemoveDir) {
+        Ok(()) | Err(nix::errno::Errno::ENOENT) => match sync(directory) {
+            Ok(()) => Removal::Synced,
+            Err(e) => Removal::Unsynced(e.to_string()),
+        },
+        Err(e) => Removal::Standing(e.to_string()),
+    }
 }
 
 // -------------------------------------------------------------- selection

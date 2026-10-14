@@ -786,6 +786,8 @@ fn a_fifo_in_the_room_does_not_wedge_the_publication() {
                 room_bound: ROOM_SCAN_BOUND,
                 finished: None,
                 before_read_back: &mut |_, _| {},
+                removal_sync: &mut sync_directory,
+                removal: None,
             },
         )
         .map(|(lines, deferred)| (lines.len(), deferred));
@@ -918,6 +920,8 @@ fn a_verb_publishes_at_most_its_cap_oldest_first() {
                 room_bound: ROOM_SCAN_BOUND,
                 finished: None,
                 before_read_back: &mut |_, _| {},
+                removal_sync: &mut sync_directory,
+                removal: None,
             },
         )
         .unwrap()
@@ -1000,6 +1004,8 @@ fn a_copy_is_made_only_where_the_space_stands_free() {
             room_bound: ROOM_SCAN_BOUND,
             finished: None,
             before_read_back: &mut |_, _| {},
+            removal_sync: &mut sync_directory,
+            removal: None,
         },
     )
     .unwrap();
@@ -1384,6 +1390,8 @@ fn the_room_is_copied_from_bytes_judged_in_the_same_read() {
             room_bound: ROOM_SCAN_BOUND,
             finished: None,
             before_read_back: &mut |_, _| {},
+            removal_sync: &mut sync_directory,
+            removal: None,
         },
     )
     .unwrap();
@@ -2334,6 +2342,8 @@ fn the_rooms_scan_refuses_past_its_bound_and_counts_what_it_saw() {
             room_bound: 3,
             finished: None,
             before_read_back: &mut |_, _| {},
+            removal_sync: &mut sync_directory,
+            removal: None,
         };
         let published = publish_with(
             open_directory(room).unwrap().as_fd(),
@@ -2419,6 +2429,8 @@ fn a_published_copy_that_does_not_read_back_gets_no_line() {
                 std::fs::write(&path, &published).unwrap();
                 corrupted = Some(name.to_string());
             },
+            removal_sync: &mut sync_directory,
+            removal: None,
         },
     )
     .unwrap();
@@ -2488,6 +2500,8 @@ fn a_recreated_target_that_does_not_read_back_is_removed() {
                 room_bound: ROOM_SCAN_BOUND,
                 finished: None,
                 before_read_back,
+                removal_sync: &mut sync_directory,
+                removal: None,
             },
         )
         .unwrap()
@@ -2510,4 +2524,135 @@ fn a_recreated_target_that_does_not_read_back_is_removed() {
     assert!(!published.exists(), "the corrupted recreation is removed");
     assert!(room.join(&room_name).exists(), "the room's copy stays");
     assert_eq!(read_manifest(dir_fd.as_fd(), mine).unwrap().len(), 1);
+}
+
+/// **Each removal of a copy that does not read back says what it left**
+/// (#157, Codex on #158 at 99d1184): a name the read-back found already
+/// gone (`ENOENT`) is removed and synced; an unlink that took before a sync
+/// that failed is removed and unsynced; an unlink that failed (the name a
+/// directory) leaves the copy standing for the operator. The first two let
+/// the next verb republish the room's copy; the third refuses until the
+/// operator removes it. Perturbation: read `ENOENT` as a failed unlink and
+/// the first reads `Standing`; fold the sync's failure into the unlink's
+/// and the second reads `Standing`.
+#[test]
+fn each_removal_of_a_copy_that_does_not_read_back_says_what_it_left() {
+    type Damage = fn(&std::path::Path);
+    // The tag, the damage done before the read-back, whether the removal's
+    // sync succeeds, the removal expected and what its line says.
+    type Case = (
+        &'static str,
+        Damage,
+        bool,
+        fn(&Removal) -> bool,
+        &'static str,
+    );
+    let gone: Damage = |path| std::fs::remove_file(path).unwrap();
+    let flipped: Damage = |path| {
+        let mut bytes = std::fs::read(path).unwrap();
+        *bytes.last_mut().unwrap() ^= 0xff;
+        std::fs::write(path, &bytes).unwrap();
+    };
+    let a_directory: Damage = |path| {
+        std::fs::remove_file(path).unwrap();
+        std::fs::create_dir(path).unwrap();
+    };
+    let cases: [Case; 3] = [
+        (
+            "gone",
+            gone,
+            true,
+            |r| *r == Removal::Synced,
+            "the directory synced",
+        ),
+        (
+            "unsynced",
+            flipped,
+            false,
+            |r| matches!(r, Removal::Unsynced(_)),
+            "did not sync",
+        ),
+        (
+            "standing",
+            a_directory,
+            true,
+            |r| matches!(r, Removal::Standing(_)),
+            "was not removed",
+        ),
+    ];
+    for (tag, damage, syncs, expected, says) in cases {
+        let (_scratch, room, dir, mine, names) =
+            room_of_save_points(&format!("read-back-removal-{tag}"), 1);
+        let room_name = names[0].0.clone();
+        let dir_fd = open_directory(&dir).unwrap();
+        let mut published = None;
+        let mut hooks = PublishHooks {
+            after_scan: &mut || {},
+            available: &mut available_bytes,
+            cap: PUBLISH_CAP,
+            room_bound: ROOM_SCAN_BOUND,
+            finished: None,
+            before_read_back: &mut |_, name| {
+                damage(&dir.join(name));
+                published = Some(dir.join(name));
+            },
+            removal_sync: &mut |directory| {
+                if syncs {
+                    sync_directory(directory)
+                } else {
+                    Err(std::io::Error::other("the injected sync failure"))
+                }
+            },
+            removal: None,
+        };
+        let (lines, deferred) = publish_with(
+            open_directory(&room).unwrap().as_fd(),
+            mine.uid,
+            dir_fd.as_fd(),
+            (mine.uid, mine.gid),
+            mine,
+            &[],
+            &mut hooks,
+        )
+        .unwrap();
+        let removal = hooks.removal.clone().expect("a removal");
+        let published = published.expect("the read-back hook ran");
+        assert!(lines.is_empty() && deferred, "{tag}: no line, deferred");
+        assert!(expected(&removal), "{tag}: {removal:?}");
+        assert!(
+            removal.says(&room_name).contains(says),
+            "{tag}: the log line says what stands: {}",
+            removal.says(&room_name)
+        );
+        assert!(
+            room.join(&room_name).exists(),
+            "{tag}: the room's copy stays"
+        );
+
+        let republish = || {
+            publish_noting_deferral(
+                open_directory(&room).unwrap().as_fd(),
+                mine.uid,
+                dir_fd.as_fd(),
+                (mine.uid, mine.gid),
+                mine,
+                &[],
+            )
+            .unwrap()
+        };
+        if matches!(removal, Removal::Standing(_)) {
+            assert!(published.is_dir(), "the copy stands under its name");
+            let (lines, deferred) = republish();
+            assert!(
+                lines.is_empty() && deferred,
+                "the next verb refuses on it until the operator removes it"
+            );
+            std::fs::remove_dir(&published).unwrap();
+        } else {
+            assert!(!published.exists(), "{tag}: the name is gone");
+        }
+        let (lines, deferred) = republish();
+        assert!(!deferred, "{tag}: the next verb republishes");
+        assert_eq!(lines.len(), 1, "{tag}: under its line");
+    }
 }
