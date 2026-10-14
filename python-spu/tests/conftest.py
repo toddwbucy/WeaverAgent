@@ -3,14 +3,15 @@ import os
 import subprocess
 from pathlib import Path
 import pytest
+import oracle_location
 ROOT=Path(__file__).resolve().parents[1]
 # The child processes the tests spawn import python_spu from this tree: the locked
 # environment holds the third-party packages alone, python-spu shipping as its zipapp.
 os.environ['PYTHONPATH']=os.pathsep.join(filter(None,[str(ROOT/'src'),os.environ.get('PYTHONPATH')]))
 @pytest.fixture(scope='session')
 def oracle():
-    executable=ROOT/'oracle/target/debug/python-spu-oracle'
-    if not executable.exists(): pytest.fail('build the Rust oracle before running tests')
+    executable=oracle_location.executable()
+    if not executable.exists(): pytest.fail(f'build the Rust oracle before running tests: {executable} is missing')
     process=subprocess.Popen([str(executable)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
     def call(**request):
         process.stdin.write(json.dumps(request)+'\n'); process.stdin.flush()
