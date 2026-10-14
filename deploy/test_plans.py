@@ -2553,7 +2553,7 @@ esac
         for check in ('expect_marker "$RUN" closed',
                       'expect_eq "the line arrived at the leave" leave "$(manifest_field last 2)"',
                       'expect_eq "the load carries no reset" absent',
-                      'expect_eq "the lineage is the new line" "$spf"'):
+                      'expect_at "the lineage is the new line" "$spf"'):
             self.assertIn(check, body)
         self.assertNotIn("forced-unload", body)
 
@@ -3029,7 +3029,8 @@ class LifecycleEnvelopeFieldTests(unittest.TestCase):
         self.assertIn("monotonic_ns", self.fields)
 
     def test_no_read_of_a_load_event_takes_an_envelope_field_from_its_payload(self):
-        reader = r'json_(?:at|req \w+) "(?:\$load|\$\(last_event load\))" '
+        reader = (r'(?:json_(?:at|req \w+)|expect_at "[^"]*" "[^"]*")'
+                  r' "(?:\$load|\$\(last_event load\))" ')
         under = re.compile(reader + r'"?payload\.(' + "|".join(self.fields) + r")\b")
         reads = [line for line in self.script.splitlines() if re.search(reader, line)]
         self.assertGreaterEqual(len(reads), 6, "the load event's reads")
@@ -3073,10 +3074,10 @@ class LifecycleRequiredReadTests(unittest.TestCase):
     def setUp(self):
         self.script = (DEPLOY / "verify-lifecycle.sh").read_text()
 
-    def read(self, text, path):
+    def read(self, text, path, check=""):
         program = (lifecycle_functions(self.script, "fail", "json_at", "json_req")
                    + 'STEP_LABEL="step 4 (fixture)"\n'
-                   + f"json_req value {shlex.quote(text)} {shlex.quote(path)}\n"
+                   + f"json_req value {shlex.quote(text)} {shlex.quote(path)} {shlex.quote(check) if check else ''}\n"
                    + 'printf "%s\\n" "$value"\n')
         return subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
 
@@ -3086,8 +3087,11 @@ class LifecycleRequiredReadTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "r-1")
 
     def test_a_missing_path_or_unparsed_text_fails_the_step_naming_the_path(self):
+        null = json.dumps({"kind": "load", "run": None, "payload": {"lineage": {"save_point": ""}}})
         for text, path, found in ((self.EVENT, "payload.reset.prior_run", "absent"),
-                                  ("absent", "run", "unparsed")):
+                                  ("absent", "run", "unparsed"),
+                                  (null, "run", "null"),
+                                  (null, "payload.lineage.save_point", "empty")):
             with self.subTest(path=path):
                 result = self.read(text, path)
                 self.assertEqual(result.returncode, 1)
@@ -3095,6 +3099,11 @@ class LifecycleRequiredReadTests(unittest.TestCase):
                                  "nothing is answered past the failure")
                 self.assertIn(f"a value at {path}", result.stderr)
                 self.assertIn(f"found:    {found}", result.stderr)
+
+    def test_a_failed_read_names_the_check_it_serves(self):
+        result = self.read(self.EVENT, "payload.reset.prior_run", "the reset names the crashed run")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("check:    the reset names the crashed run", result.stderr)
 
     def test_no_run_or_compared_value_is_read_through_json_at(self):
         found = []
@@ -3105,6 +3114,10 @@ class LifecycleRequiredReadTests(unittest.TestCase):
             # A check whose expected side is a variable or the manifest's
             # field compares two reads, so its found side is required too.
             if re.match(r'expect_eq "[^"]*" "\$(?:\w+|\(manifest_field [^)]*\))" "\$\(json_at', text):
+                found.append(f"{number}: {text}")
+            # A test comparing a json_at read against a variable is the same
+            # comparison written another way.
+            if re.search(r'\[ "\$\(json_at [^]]*\)" !?= "\$', text) or re.search(r'\[ "\$\w+" !?= "\$\(json_at', text):
                 found.append(f"{number}: {text}")
         self.assertEqual(found, [], "a compared value read through json_at")
 
@@ -3197,7 +3210,7 @@ class LifecycleNearMissTests(unittest.TestCase):
                         + 'STEP_LABEL="step 1b (test)"; RESTORE=(); CREATED=0; LOGDIR=""; A=m1\n'
                         + f'ADMIN_BASE=/nonexistent; ADMIN={shlex.quote(str(self.admin))}\n'
                         + "export MAIN_PID=$$\n"
-                        + lifecycle_functions(script, "fail", "pass", "expect_eq", "json_at", "json_req", "ask",
+                        + lifecycle_functions(script, "fail", "pass", "expect_eq", "json_at", "json_req", "expect_at", "ask",
                                               "expect_kind", "restore_mode", "restore_now",
                                               "near_miss", "on_exit")
                         + "\n".join(traps) + "\n"
@@ -4281,6 +4294,7 @@ class CargoStepTests(unittest.TestCase):
     goes on."""
 
     STAND_IN = """#!/bin/sh
+[ -z "$CARGO_SEEN" ] || printf '%s\\n' "${NVCC_CCBIN-unset}" > "$CARGO_SEEN"
 printf '%s' "$CARGO_STDOUT"
 printf '%s' "$CARGO_STDERR" >&2
 exit "${CARGO_EXIT:-0}"
@@ -4296,6 +4310,7 @@ exit "${CARGO_EXIT:-0}"
         cargo.chmod(0o755)
         self.tmp = Path(self.scratch.name) / "tmp"
         self.tmp.mkdir()
+        self.seen = Path(self.scratch.name) / "seen"
 
     def step(self, script, name, stdout="", stderr="", status=0):
         # Each step starts from an empty directory, so one subtest's kept
@@ -4316,7 +4331,8 @@ exit "${CARGO_EXIT:-0}"
                    MEMBER_FEATURES="weaver-harness/pyworker",
                    FEATURES="weaver-spu/cuda",
                    CARGO_STDOUT=stdout, CARGO_STDERR=stderr,
-                   CARGO_EXIT=str(status))
+                   CARGO_EXIT=str(status), CARGO_SEEN=str(self.seen))
+        env.pop("NVCC_CCBIN", None)
         return subprocess.run(["bash", "-c", body], env=env,
                               capture_output=True, text=True, timeout=30)
 
@@ -4331,7 +4347,7 @@ exit "${CARGO_EXIT:-0}"
                 self.assertNotEqual(ran.returncode, 0)
                 self.assertIn("error[E0425]", ran.stderr)
                 self.assertIn("cargo exited 101", ran.stderr)
-                logs = [log for log in self.kept_logs() if log.name == "weaver-deploy-tests.log"]
+                logs = [log for log in self.kept_logs() if log.name.startswith("weaver-deploy-tests-")]
                 self.assertEqual(len(logs), 1, logs)
                 self.assertIn(str(logs[0]), ran.stderr, "the refusal names the kept log")
                 self.assertIn("could not compile", logs[0].read_text())
@@ -4354,6 +4370,28 @@ exit "${CARGO_EXIT:-0}"
                 self.assertIn("7 passed, 0 failed", ran.stdout)
                 self.assertEqual(self.kept_logs(), [], "a clean run keeps no log")
 
+    def test_the_cause_is_printed_where_the_tail_would_lose_it(self):
+        captured = "".join(f"captured line {n}\n" for n in range(100))
+        stdout = ("running 1 test\ntest lifecycle::tests::x ... FAILED\n\nfailures:\n\n"
+                  "---- lifecycle::tests::x stdout ----\n\n"
+                  "thread 'lifecycle::tests::x' (1) panicked at crates/weaver-harness/src/lifecycle/tests.rs:9:5:\n"
+                  "the cause\n" + captured
+                  + "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s\n")
+        for script in ("update-stack.sh", "bootstrap-stack.sh"):
+            with self.subTest(script=script):
+                ran = self.step(script, "run_tests", stdout=stdout, status=101)
+                self.assertNotEqual(ran.returncode, 0)
+                self.assertIn("panicked at", ran.stderr)
+                self.assertIn("the cause", ran.stderr)
+                self.assertIn("output: ", ran.stdout, "the log is named as the step begins")
+
+    def test_the_build_takes_the_cuda_host_compiler_update_stack_takes(self):
+        ran = self.step("bootstrap-stack.sh", "run_build")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        update = (DEPLOY / "update-stack.sh").read_text()
+        default = re.search(r"NVCC_CCBIN=\$\{NVCC_CCBIN:-([^}]+)\}", update).group(1)
+        self.assertEqual(self.seen.read_text().strip(), default)
+
     def test_a_run_of_no_tests_refuses(self):
         for script in ("update-stack.sh", "bootstrap-stack.sh"):
             with self.subTest(script=script):
@@ -4375,15 +4413,18 @@ exit "${CARGO_EXIT:-0}"
         ran = self.step("bootstrap-stack.sh", "run_build",
                         stdout="warning: unused variable: `x`\n")
         self.assertEqual(ran.returncode, 0, ran.stderr)
-        self.assertEqual([log for log in self.kept_logs() if log.name == "weaver-deploy-build.log"], [],
+        self.assertEqual([log for log in self.kept_logs() if log.name.startswith("weaver-deploy-build-")], [],
                          "a clean build keeps no log")
 
     def test_no_cargo_step_pipes_cargo_into_a_filter(self):
         for script in ("update-stack.sh", "bootstrap-stack.sh"):
             with self.subTest(script=script):
-                for number, line in enumerate((DEPLOY / script).read_text().splitlines(), 1):
+                # A command continued with a backslash is read whole, as the
+                # old pipe sat on the step's last continued line.
+                text = re.sub(r"\\\n", " ", (DEPLOY / script).read_text())
+                for line in text.splitlines():
                     if re.match(r"\s*(NVCC_CCBIN=\S+\s+)?cargo (test|build)\b", line):
-                        self.assertNotRegex(line, r"\|\s*(grep|awk)", f"{script}:{number}")
+                        self.assertNotRegex(line, r"\|\s*(grep|awk|tee|head|tail)", line)
 
 
 if __name__ == "__main__":

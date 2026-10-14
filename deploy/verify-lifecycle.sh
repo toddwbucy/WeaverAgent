@@ -341,20 +341,29 @@ for p in [x for x in sys.argv[2].split(".") if x]:
 print(v if isinstance(v, str) else json.dumps(v, separators=(",", ":"), sort_keys=True))' "$1" "$2"
 }
 
-# **json_req VAR JSON PATH: a value the check requires** (#139): the value
-# `json_at` answers, set into VAR, or the step fails naming the path where it
-# answers `absent` or `unparsed`. Two missing reads compare equal, so a value
-# a check compares is read here and never through `json_at`, which is kept for
-# reads where absence is the answer expected. It sets VAR by name rather than
-# answering on stdout, so the failure ends the step in this shell and not in a
-# command substitution's.
+# **json_req VAR JSON PATH [CHECK]: a value the check requires** (#139): the
+# value `json_at` answers, set into VAR, or the step fails, under CHECK where
+# one is named, where it answers `absent` or `unparsed`, or a JSON null or an
+# empty value. Two missing reads compare equal, so a value a check compares
+# is read here and never through `json_at`, which is kept for reads where
+# absence is the answer expected. It sets VAR by name rather than answering
+# on stdout, so the failure ends the step in this shell and not in a command
+# substitution's.
 json_req() {
   local _jr_value
   _jr_value=$(json_at "$2" "$3")
   case "$_jr_value" in
-    absent|unparsed) fail "the answer holds $3" "a value at $3" "$_jr_value" ;;
+    absent|unparsed|null|"") fail "${4:-$3 is read}" "a value at $3" "${_jr_value:-empty}" ;;
   esac
   printf -v "$1" '%s' "$_jr_value"
+}
+
+# expect_at CHECK EXPECTED JSON PATH: the check that the value at PATH, which
+# must be there, is EXPECTED.
+expect_at() {
+  local _ea_found
+  json_req _ea_found "$3" "$4" "$1"
+  expect_eq "$1" "$2" "$_ea_found"
 }
 
 # **answered_state ANSWER STATE: admin's answer is the state named**, read as
@@ -387,8 +396,7 @@ expect_state() { # expect_state VERB STATE
   else fail "$1 answers the $2 state" "{\"kind\":\"state\",\"state\":\"$2\",...}" "${ANSWER:-nothing}"; fi
 }
 expect_kind() { # expect_kind VERB KIND
-  local read_kind; json_req read_kind "$ANSWER" kind
-  expect_eq "$1 answers $2" "$2" "$read_kind"
+  expect_at "$1 answers $2" "$2" "$ANSWER" kind
 }
 expect_unloaded_alone() { # show reads unloaded with no constituent
   ask show
@@ -445,11 +453,9 @@ manifest_field() { # manifest_field LINE FIELD(1-4): LINE counted from 1, or "la
 }
 marker() { sudo -n cat -- "$R/run.marker" 2>/dev/null || printf 'absent'; }
 expect_marker() { # expect_marker RUN STATE
-  local m marker_run marker_state; m=$(marker)
-  json_req marker_run "$m" run
-  json_req marker_state "$m" state
-  expect_eq "the run marker names run $1" "$1" "$marker_run"
-  expect_eq "the run marker reads $2" "$2" "$marker_state"
+  local m; m=$(marker)
+  expect_at "the run marker names run $1" "$1" "$m" run
+  expect_at "the run marker reads $2" "$2" "$m" state
 }
 file_size() { sudo -n stat -c %s -- "$1" 2>/dev/null || printf 0; }
 # not_relay_lines_since FILE OFFSET: each line appended to admin.log past
@@ -735,7 +741,7 @@ step_2() {
   # The run is the envelope's, beside kind and sequence, never the payload's
   # (weaver-trace-Spec section 3, the event: `Envelope` is flattened into the
   # event's top level and `payload` holds only the kind's own fields).
-  json_req RUN "$load" run
+  json_req RUN "$load" run "the load event names its run"
   turn --system
   turn "Name three primary colours."
   local seq
@@ -779,7 +785,7 @@ step_3() {
   want "the last save_point event names the digest and the operator's uid as its cause"
   [ "$APPLY" -eq 1 ] || return 0
   ask save-point; expect_kind save-point save_point_taken
-  local dig; json_req dig "$ANSWER" report.save_point
+  local dig; json_req dig "$ANSWER" report.save_point "the answer's report names its digest"
   expect_eq "the manifest holds one line" 1 "$(manifest_count)"
   expect_eq "line 1 is ordinal 1" 1 "$(manifest_field 1 1)"
   expect_eq "line 1 arrived on demand" demand "$(manifest_field 1 2)"
@@ -789,10 +795,8 @@ step_3() {
   expect_lay "$SAVE_POINTS/$SP_A_NAME" "root:$AU-admin 640 regular file"
   expect_lay "$MANIFEST" "root:root 644 regular file"
   local sp; sp=$(last_event save_point)
-  local read_payload_save_point; json_req read_payload_save_point "$sp" payload.save_point
-  expect_eq "the save_point event names the digest" "$dig" "$read_payload_save_point"
-  local read_payload_cause_uid; json_req read_payload_cause_uid "$sp" payload.cause.uid
-  expect_eq "the save_point event's cause is the operator" "$OPERATOR_UID" "$read_payload_cause_uid"
+  expect_at "the save_point event names the digest" "$dig" "$sp" payload.save_point
+  expect_at "the save_point event's cause is the operator" "$OPERATOR_UID" "$sp" payload.cause.uid
   end_step
 }
 
@@ -809,21 +813,18 @@ step_4() {
   expect_eq "line 2 arrived at the leave" leave "$(manifest_field 2 2)"
   local spb; spb=$(manifest_field 2 4)
   expect_eq "the unload was not forced" false "$(json_at "$(last_event unload)" payload.forced)"
-  local read_payload_save_point; json_req read_payload_save_point "$(last_event save_point)" payload.save_point
-  expect_eq "the last save_point event names SP_B" "$spb" "$read_payload_save_point"
+  expect_at "the last save_point event names SP_B" "$spb" "$(last_event save_point)" payload.save_point
   expect_unloaded_alone
   local start; start=$(trace_lines)
   ask load; expect_state load idle
   local load; load=$(last_event load)
-  local read_payload_lineage_save_point; json_req read_payload_lineage_save_point "$load" payload.lineage.save_point
-  expect_eq "the lineage names SP_B" "$spb" "$read_payload_lineage_save_point"
-  local lineage_run; json_req lineage_run "$load" payload.lineage.run
-  expect_eq "the lineage names the previous run" "$RUN" "$lineage_run"
+  expect_at "the lineage names SP_B" "$spb" "$load" payload.lineage.save_point
+  expect_at "the lineage names the previous run" "$RUN" "$load" payload.lineage.run
   expect_eq "SP_B was not named at restore" false "$(json_at "$load" payload.lineage.named_at_restore)"
   expect_eq "the load carries no reset" absent "$(json_at "$load" payload.reset)"
   expect_eq "the member answered the restore (a recall event)" yes \
     "$( [ -n "$(events_since "$start" recall)" ] && echo yes || echo no)"
-  json_req RUN "$load" run
+  json_req RUN "$load" run "the load event names its run"
   turn "In one sentence, what were you asked to be?"
   end_step
 }
@@ -848,18 +849,15 @@ step_5() {
   { printf '%s' "$orig" | base64 -d; printf '\n[restore]\nsave-point = "%s"\n' "$SP_A_NAME"; } | sudo -n tee -- "$DECL" >/dev/null
   expect_lay "$DECL" "root:$AU-admin 640 regular file"
   ask restore; expect_kind restore restore_named
-  local restored_digest; json_req restored_digest "$ANSWER" save_point
-  expect_eq "restore names SP_A's digest" "$SP_A_DIG" "$restored_digest"
-  local read_name; json_req read_name "$ANSWER" name
-  expect_eq "restore names SP_A's name" "$SP_A_NAME" "$read_name"
+  expect_at "restore names SP_A's digest" "$SP_A_DIG" "$ANSWER" save_point
+  expect_at "restore names SP_A's name" "$SP_A_NAME" "$ANSWER" name
   expect_eq "the manifest holds four lines" 4 "$(manifest_count)"
   expect_eq "line 4 is ordinal 4" 4 "$(manifest_field 4 1)"
   expect_eq "line 4 arrived at the restore (N6)" restore "$(manifest_field 4 2)"
   expect_eq "line 4 names SP_A" "$SP_A_DIG" "$(manifest_field 4 4)"
   ask load; expect_state load idle
   local load; load=$(last_event load)
-  local lineage_digest; json_req lineage_digest "$load" payload.lineage.save_point
-  expect_eq "the lineage names SP_A" "$SP_A_DIG" "$lineage_digest"
+  expect_at "the lineage names SP_A" "$SP_A_DIG" "$load" payload.lineage.save_point
   expect_eq "SP_A was named at restore" true "$(json_at "$load" payload.lineage.named_at_restore)"
   ask unload; expect_state unload unloaded
   expect_eq "the manifest holds five lines" 5 "$(manifest_count)"
@@ -873,10 +871,9 @@ step_5() {
   expect_lay "$DECL" "root:$AU-admin 640 regular file"
   ask load; expect_state load idle
   load=$(last_event load)
-  local read_payload_lineage_save_point; json_req read_payload_lineage_save_point "$load" payload.lineage.save_point
-  expect_eq "the lineage names the newest line" "$(manifest_field last 4)" "$read_payload_lineage_save_point"
+  expect_at "the lineage names the newest line" "$(manifest_field last 4)" "$load" payload.lineage.save_point
   expect_eq "the newest was not named at restore" false "$(json_at "$load" payload.lineage.named_at_restore)"
-  json_req RUN "$load" run
+  json_req RUN "$load" run "the load event names its run"
   end_step
 }
 
@@ -893,14 +890,12 @@ step_6() {
   expect_eq "one manifest line was added" "$((lines + 1))" "$(manifest_count)"
   expect_eq "the line arrived at the leave" leave "$(manifest_field last 2)"
   local spf; spf=$(manifest_field last 4)
-  local read_payload_save_point; json_req read_payload_save_point "$(last_event save_point)" payload.save_point
-  expect_eq "the last save_point event names SP_F" "$spf" "$read_payload_save_point"
+  expect_at "the last save_point event names SP_F" "$spf" "$(last_event save_point)" payload.save_point
   ask load; expect_state load idle
   local load; load=$(last_event load)
   expect_eq "the load carries no reset" absent "$(json_at "$load" payload.reset)"
-  local read_payload_lineage_save_point; json_req read_payload_lineage_save_point "$load" payload.lineage.save_point
-  expect_eq "the lineage is the new line" "$spf" "$read_payload_lineage_save_point"
-  json_req RUN "$load" run
+  expect_at "the lineage is the new line" "$spf" "$load" payload.lineage.save_point
+  json_req RUN "$load" run "the load event names its run"
   end_step
 }
 
@@ -934,7 +929,7 @@ step_6b() {
   expect_unloaded_alone
   expect_lay "$T" "root:$AU-state 710 directory"
   ask load; expect_state load idle
-  json_req RUN "$(last_event load)" run
+  json_req RUN "$(last_event load)" run "the load event names its run"
   end_step
 }
 
@@ -987,14 +982,12 @@ step_7() {
   expect_marker "$RUN" open
   ask load; expect_state load idle
   local load; load=$(last_event load)
-  local prior_run; json_req prior_run "$load" payload.reset.prior_run
-  expect_eq "the reset names the crashed run" "$RUN" "$prior_run"
+  expect_at "the reset names the crashed run" "$RUN" "$load" payload.reset.prior_run
   expect_eq "the reset reason" no-clean-unload "$(json_at "$load" payload.reset.reason)"
-  local read_payload_lineage_save_point; json_req read_payload_lineage_save_point "$load" payload.lineage.save_point
-  expect_eq "the lineage is the manifest's latest" "$(manifest_field last 4)" "$read_payload_lineage_save_point"
+  expect_at "the lineage is the manifest's latest" "$(manifest_field last 4)" "$load" payload.lineage.save_point
   expect_eq "every new manifest line arrived recovered" "" \
     "$(manifest | tail -n +"$((lines + 1))" | awk '$2 != "recovered"')"
-  json_req RUN "$load" run
+  json_req RUN "$load" run "the load event names its run"
   end_step
 }
 
