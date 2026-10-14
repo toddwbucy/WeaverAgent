@@ -648,9 +648,10 @@ as it kills at the clock.** The harness sends the cancel inside the open
 execution exchange when the operator's stop reaches it mid-invocation, and
 this crate kills the agent's `tools/` cgroup at once, descendants included
 (`weaver-admin-Spec` section 6.1), and answers the exchange with a kill that names the cancel as its
-cause. The contract's one-clock rule stands: the caller's number still bounds
-the exchange, a cancel never lengthens a wait, and a cancel this crate never
-reads leaves the clock to do the same work later.
+cause. The contract's one-clock rule stands: the kill fires at the caller's number at
+the latest, the exchange completing within the contract's completion rule
+(`weaver-harness-gate-contract` section 2), a cancel never lengthens a wait, and a
+cancel this crate never reads leaves the clock to do the same work later.
 
 **Every execution still completes with one answer, or, where this crate cannot contain
 it, with this crate's exit and the harness's own close** (`weaver-admin-Spec` section

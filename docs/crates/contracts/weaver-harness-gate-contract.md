@@ -248,9 +248,11 @@ kind: the operator's stop reached the harness while the tool ran, and the
 harness wants the exchange closed now rather than at the clock. The gate on
 receipt ends every process still in the invocation's containment exactly as the clock would, descendants included, and the exchange completes with its one answer
 as every execution does, or, where the gate cannot contain the execution, the gate exits and the harness closes the execution `Killed { by: fault }` (section 5). The cancel is the caller's clock brought forward on
-the caller's word, so it adds no second clock: the number that crossed at
-the open still bounds the exchange whether or not the cancel is heard, and a
-gate that never reads the cancel still answers by the clock. **A cancel that
+the caller's word, so it adds no second clock: the kill fires by the number that
+crossed at the open whether or not the cancel is heard, and the exchange completes
+within the completion rule above (section 2, one clock), the caller's number plus the
+containment bound or twice it. A gate that never reads the cancel still kills by the
+clock. **A cancel that
 crosses the answer in flight is dropped by the gate**, neither refused nor
 queued, because the exchange it names is already closed from the gate's side
 and the harness learns what became of the invocation from the answer it is

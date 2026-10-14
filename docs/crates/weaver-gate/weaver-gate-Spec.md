@@ -1394,9 +1394,10 @@ the interrupt and closure, executions being serial and the harness blocked in
 its wait, so an envelope there is one of the two or it is the closure the
 charter already requires this crate to exit on, and closure breaks the same loop, which
 kills `tools/` before the exit as every ending does. The cancel adds no
-clock: the caller's number still bounds the wait, and a supervisor that
-never reads the cancel still answers by it, or exits unanswered where it
-cannot contain the execution.
+clock: the kill still fires by the caller's number, the exchange completing within
+the contract's completion rule (`weaver-harness-gate-contract` section 2,
+`weaver-admin-Spec` section 6.1), and a supervisor that never reads the cancel still
+kills by it, then answers or exits unanswered where it cannot contain the execution.
 
 **A cancel or an interrupt that arrives past the answer is dropped, never refused.** The
 exchange it names closed from this side when the answer was sent, and the
