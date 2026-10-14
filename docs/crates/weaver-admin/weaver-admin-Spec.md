@@ -498,7 +498,7 @@ choice made in advance, for an operator who will not stand watch.
 
 **The conclusion's outcomes, exhaustive.** Every `Left` the harness can answer (`weaver-admin-harness-contract` section 3, the leave) has one row; a `Left` the table lacks is a defect (section 10). **The printed column holds for the leave's own caller and a force that joined it**: each waits for the run lock before it prints, so `Unloaded` is true, and a failed publication refuses whichever met it. The rollback's `Left` reaches the load invocation alone, which prints its own refusal.
 
-**The keys, tested in this order, so every `Left` matches exactly one row** (Codex on #109, rounds 35 and 36): (1) the leave is the load's own rollback, which only the load invocation that directed it is answered; (2) the territory judges; (3) `Left.no_state`; (4) a save point reported; (5) its `event_run` the run the marker stands open on; (6) its publication landed; and `Left.forced` where a row splits on it. A key a row leaves blank is not tested there.
+**The keys, tested in this order, so every `Left` matches exactly one row** (Codex on #109, rounds 35 and 36): (1) the leave is the load's own rollback, which only the load invocation that directed it is answered; (2) the territory judges; (3) `Left.no_state`; (4) a save point reported; (5) its `event_run` the run the marker stands open on; (6) its publication landed, a manifest line appended for it after its published copy read back to its digest (section 6, #157); and `Left.forced` where a row splits on it. A key a row leaves blank is not tested there.
 
 | Rollback | Territory judges | `no_state` | Save point | `event_run` this run | Published | `forced` | Publication | Marker | The next load's reset | Printed |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -510,7 +510,7 @@ choice made in advance, for an operator who will not stand watch.
 | no | yes | false | reported | yes | yes | either | the reported save point | `Closed` | none | `Unloaded` |
 | no | yes | false | reported | yes | no | either | none lands; the file stays in the room | left `Open` | `NoCleanUnload`, the room's file recovered or named unpublishable | refuses `SavePointNotTaken` naming `published` |
 
-**The `save-point` verb's publication** (S17, the operator's ruling of 2026-10-14 on #140) has rows of its own, keyed by whether the reported `event_run` is the run the marker stands open on, read by section 4's marker reading under the verb's invocation lock (a marker that reads other than `Open` is no match; one that does not read refuses `BoundaryUnverified` before anything is published, the file left in the room for the next verb), then by whether the report's file published. The verb writes no marker.
+**The `save-point` verb's publication** (S17, the operator's ruling of 2026-10-14 on #140) has rows of its own, keyed by whether the reported `event_run` is the run the marker stands open on, read by section 4's marker reading under the verb's invocation lock (a marker that reads other than `Open` is no match; one that does not read refuses `BoundaryUnverified` before anything is published, the file left in the room for the next verb), then by whether the report's file published, its line appended after its published copy read back to its digest (section 6, #157). The verb writes no marker.
 
 | `event_run` the marker's run | Published | Publication | Answer |
 |---|---|---|---|
@@ -2038,7 +2038,29 @@ temporary name, root's, grouped to the access group and mode `0640`, the mode se
 through the descriptor so the invoking shell's umask narrows nothing, so the operator
 and the connector read it and nothing writes it but this crate, its owner and mode
 verified through the open file, then renamed to its published name, overwriting
-nothing, every step against `save-points/` as opened at section 9's judgment. **The published name is computable from the file's own bytes**:
+nothing, every step against `save-points/` as opened at section 9's judgment. **The
+published copy is read back before its line is written** (#157, on the operator's
+ruling of 2026-10-14 for WeaverWeb): after the rename and the directory's sync, the
+published name is opened again through `save-points/`'s descriptor and judged as a load
+judges it (section 4), which holds its bytes to the digest its name carries, the room's
+digest the line will carry. An entry adopted from under the name is judged that same way
+by its adoption, which is its read-back. A copy that does not read back is unlinked
+through the same descriptor, the directory synced, and the verb stops as a deferral, no
+line written and the room's copy standing for the next verb. `admin.log` names which of
+three states the removal left (Codex on #158): the name gone, this unlink's or already
+(`ENOENT`), and the directory synced, so the next verb publishes afresh; the name gone
+and the directory not synced, so the next verb publishes afresh unless a power loss
+first brings the name back, which that verb refuses as an entry of other bytes until
+the operator removes it; or the unlink failed and the copy stands under its name, and
+every later verb refuses on it, as on any entry of other bytes under a published name,
+until the operator removes it.
+At a load the deferral refuses `BoundaryUnverified`, as any deferral does; a reported
+save point so stopped refuses `SavePointNotTaken` naming `published` at the `save-point`
+verb and at the unload alike, in the rows 3.0 already gives a publication that did not
+land. **What the read-back proves: that the published file's bytes, as the kernel
+serves them at its published name, digest to its manifest line; its durability on the
+device rests on the syncs below, since a read right after a write is served from the
+page cache.** **The published name is computable from the file's own bytes**:
 `<YYYYMMDDTHHMMSSZ>-<digest>.save-point`, the time the stamp line's `taken.wall_ns`
 rendered in UTC to the second and the digest the file's, which extends the room's name
 rule of `weaver-state-Spec` section 3 to the published form, so a renamed file reads as
