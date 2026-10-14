@@ -658,7 +658,8 @@ words. Nothing here opens an exchange, retains anything past the answer, or
 reads content, per section 3.
 
 **A cancel reaches exactly what the clock reaches**, and since the operator's
-ruling of 2026-10-14 on #111 that is every process of the execution: a
+ruling of 2026-10-14 on #111 that is every process still in the execution's
+containment: a
 descendant that detached itself from its process group or its session before
 the kill is ended all the same, where the group kill of issue #642 let it run
 on (`weaver-admin-Spec` section 6.1 states the mechanism). **The one exception

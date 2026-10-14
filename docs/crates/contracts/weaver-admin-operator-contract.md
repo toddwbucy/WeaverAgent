@@ -99,8 +99,8 @@ would silently break the lifetime binding of section 3. A requirement on the bou
 declared and checked: the invoker verifies after a load that every constituent `show`
 names sits in its own containment, which since #111 means inside the invoker's own, in
 the agent's containment admin makes there (`weaver-admin-Spec` section 6.1). **The
-invoker's containment must admit a child containment that root makes, and must not be
-the whole host's**, or the load refuses `BoundaryUnverified`. No prompt, turn, task, or run
+invoker's containment must admit a child containment that root makes**, or the load
+refuses `BoundaryUnverified`. No prompt, turn, task, or run
 crosses, per apex section 6.
 
 **At the trace door, one request line**: a byte offset on a record boundary and the

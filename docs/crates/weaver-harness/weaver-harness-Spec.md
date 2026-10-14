@@ -588,7 +588,10 @@ every organ inherits it, and the gate runs each shell in the `tools/` beside it.
 worker kills `tools/` whole when it reads the gate's death**, writing `tools/cgroup.kill`
 and waiting for it to empty within the kill's bound before it closes an open execution
 `Killed { by: fault }`, and **again at its unwind, before it answers `Left`**, so nothing
-of an execution outlives the gate or the leave. Its own cgroup it cannot kill, being inside
+still in an execution's cgroup outlives the gate or the leave. **A `tools/` that will not
+empty within the kill's bound ends service**, as an organ death the record cannot hold
+ends it (section 4, a latched record): the worker unwinds and never serves on with it
+populated. Its own cgroup it cannot kill, being inside
 it, and admin's run end does.
 **An empty number is skipped and said**: a worker started by hand, or by a stack from
 before the start step, holds nothing at 9 and serves, and it names the absence on its

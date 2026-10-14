@@ -2365,19 +2365,27 @@ invoker's** (section 6, the lifetime, and the operator's ruling of 2026-10-03 on
   fork. Every later verb finds the cgroup through that record, never through its own
   `/proc/self/cgroup`. A record that does not read, or that names anything but a
   `weaver-<agent>` directory on the `cgroup2` mount, refuses `BoundaryUnverified`.
-- **The invoker's requirement:** its containment must let root make a child cgroup, as a
-  systemd unit does with `Delegate=yes`, and must not be the hierarchy's root.
-  `weaver-admin-operator-contract` section 3 carries this.
+- **The invoker's requirement:** its containment must admit a child cgroup that root
+  makes, as a systemd unit does with `Delegate=yes`. `weaver-admin-operator-contract`
+  section 3 carries this.
+- **No guard against the host's root cgroup.** Inside a cgroup namespace,
+  `/proc/self/cgroup` reads `/` for a delegated cgroup that is not the host's root, so a
+  path read cannot tell the two apart, and the start step does not try. An invoker at
+  the host's own root has no containment that ever stops, so an agent loaded from there
+  is bound to the host's life. Only a process outside every service and session sits
+  there.
 
 **The floor: cgroup v2's unified hierarchy at `/sys/fs/cgroup`, and `cgroup.kill`
-(Linux 5.14).** The start step checks the floor before it makes anything:
-- a `cgroup2` filesystem at the mount, read by `statfs`,
-- an invoker's cgroup that is not the hierarchy's root,
-- and a `cgroup.kill` file in that invoker's cgroup, which every non-root cgroup carries on a
-  kernel that has it.
+(Linux 5.14), checked by making the agent's cgroup** (Codex on #161). The start step:
+- reads a `cgroup2` filesystem at the mount, by `statfs`,
+- makes `weaver-<agent>/` beneath the invoker's cgroup, which answers whether the
+  invoker's containment admits a child that root makes,
+- and requires a `cgroup.kill` file in what it made.
 
-**Where any is missing the load refuses `BoundaryUnverified`, naming what is missing,
-and makes nothing**, failing closed, as the dial does on a kernel without its pidfd
+No path is read for the answer, since a cgroup namespace makes a delegated cgroup read
+as `/`. **Where the mount is not `cgroup2`, the `mkdir` fails, or what it made carries no
+`cgroup.kill`, the load refuses `BoundaryUnverified`, naming which, removes what it made,
+and stands nothing**, failing closed, as the dial does on a kernel without its pidfd
 (section 7). An agent with no containment would be an agent whose tools outlive their
 calls.
 
@@ -2471,8 +2479,10 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
   The harness then reads a gate's death as it reads any other
   (`weaver-harness-gate-contract` section 5), and the worker's kill and the run end hold
   what remains.
-- **At the worker:** past the bound, the worker serves on, and the run end holds what
-  remains.
+- **At the worker: past the bound, the worker ends service** (the operator's ruling of
+  2026-10-14, on #161), as an organ death the record cannot hold ends it
+  (`weaver-harness-Spec` section 4, a latched record). It unwinds and never serves on
+  with `tools/` populated, and the run end's kill and its own bound hold what remains.
 - **At admin:** past the bound, admin refuses `WorkerWouldNotExit`, naming the pids, and
   answers no state, the cgroup and its record left for the next `unload`. An agent
   reported unloaded while any process of it still runs is the report this crate never
@@ -2494,7 +2504,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 
 | Actor and event | From | To | What it does |
 |---|---|---|---|
-| admin's start step, the floor missing | any | unchanged | refuses `BoundaryUnverified`, making nothing |
+| admin's start step, the floor missing (no `cgroup2`, the `mkdir` refused, no `cgroup.kill` in what it made) | any | unchanged | refuses `BoundaryUnverified`, removing what it made |
 | admin's start step | A0 | A1, then A2 | makes the cgroups and the record, sets the three files' owner, places the member, the relay and the worker |
 | admin's start step | A1 | A0, then as above | removes it and its record and makes it afresh |
 | admin's start step | A3 | A3 | refuses `AgentRunning`, naming the processes, and kills nothing (I8) |
@@ -2503,6 +2513,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | the gate, the execution's end (exit, clock, cancel, interrupt, closure) | T1 | T2, then T0 | `tools/cgroup.kill`, the wait, then the answer |
 | the gate, `tools/` not empty within the bound, or its kill's write failing | T2 | T2 | the gate exits: the gate's death below |
 | the gate dies | T0, T1 or T2 | T2, then T0 | the worker kills `tools/`, waits, closes an open execution `Killed { by: fault }` |
+| the worker, `tools/` not empty within the bound | T2 | T2 | the worker ends service and unwinds, never serving on: the run end holds what remains |
 | the worker's unwind (the leave, graceful or forced) | T0 or T1 | T0 | the worker kills `tools/` and waits, before `Left` |
 | the worker dies | A2 | A2, then A3 or A1 once the member and the relay end | the organs die by their death signal (`weaver-harness-Spec` section 2.2), and `tools/` keeps what it held, contained |
 | the member or the relay dies | A2 | A2 | nothing of the cgroup changes |
@@ -2517,8 +2528,8 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 
 | # | Invariant | Held by |
 |---|---|---|
-| C1 | **No tool process outlives its execution's end.** A shell is born in `tools/`, and before the gate answers, `tools/` is empty: a command that left its process group or its session is in `tools/` all the same. A gate's death empties `tools/` by the worker's kill. **The one exception is stated:** a command running as the agent's account can move itself out of `tools/` into `worker/` by writing `worker/cgroup.procs`, since the file that lets the gate move its shell lets the shell move itself. That process escapes C1 and is held by C2. A later election of a controller on `worker/` would meet it there and must place it first. | the gate, and the worker on the gate's death |
-| C2 | **No process of the agent outlives its run's end.** `Unloaded` is answered only where no process of the agent stands: the run lock free and the agent's cgroup absent or empty. The run end answers it only after killing and removing the cgroup. A load stands a run only in a cgroup it made. **The window is stated:** after a crash that ends the run with no admin verb (the worker dying, then the member and the relay), leftovers run on until the next `unload` or `force-unload`. A load refuses on them and kills nothing, and `show` names them. They are contained in A3: leaving the agent's cgroup needs a write to a file of root's. | admin's run end, the start step's refusal on A3, and `show`'s ladder |
+| C1 | **No tool process outlives its execution's end.** A shell is born in `tools/`, and before the gate answers, `tools/` is empty: a command that left its process group or its session is in `tools/` all the same. A gate's death empties `tools/` by the worker's kill, and a `tools/` that will not empty within the bound ends service (the gate exits, then the worker unwinds), so no run serves on past an execution it could not end. **The one exception is stated:** a command running as the agent's account can move itself out of `tools/` into `worker/` by writing `worker/cgroup.procs`, since the file that lets the gate move its shell lets the shell move itself. That process escapes C1 and is held by C2. A later election of a controller on `worker/` would meet it there and must place it first. | the gate, and the worker on the gate's death |
+| C2 | **No process of the agent outlives its run's end.** `Unloaded` is answered only where no process of the agent stands: the run lock free and the agent's cgroup absent or empty. The run end answers it only after killing and removing the cgroup, and past the kill's bound it refuses `WorkerWouldNotExit`, never `Unloaded`. A load stands a run only in a cgroup it made. **The window is stated:** after a crash that ends the run with no admin verb (the worker dying, then the member and the relay), leftovers run on until the next `unload` or `force-unload`. A load refuses on them and kills nothing, and `show` names them. They are contained in A3: leaving the agent's cgroup needs a write to a file of root's. | admin's run end, the start step's refusal on A3, and `show`'s ladder |
 | C3 | **The agent's account reaches only three files.** Through them it can move a process within `worker/` and kill `tools/`, and nothing else: no member, no relay, no cgroup made or removed, no interface file of root's changed. | the layout's ownership |
 | C4 | **Every process of the agent starts inside.** Each constituent is placed by its own child before its exec, each shell is born in `tools/`, and every fork after inherits. | the start step's placement and the gate's `clone3` |
 
@@ -2557,8 +2568,9 @@ The instruments:
 - **C3:** the agent's account cannot write `constituents/cgroup.procs` or
   `run/cgroup.procs`, nor make or remove a cgroup. Watched to fail when a directory is
   given to the agent's account.
-- **The floor:** a start step that finds no `cgroup2` mount, an invoker at the root, or no
-  `cgroup.kill`, refuses `BoundaryUnverified` and makes nothing.
+- **The floor:** a start step that finds no `cgroup2` mount, a cgroup it cannot make, or
+  no `cgroup.kill` in what it made, refuses `BoundaryUnverified` and leaves nothing it
+  made.
 
 ## 7. The coordination channel
 
