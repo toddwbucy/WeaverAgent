@@ -812,6 +812,65 @@ held_is() {
   now=$(path_identity "$1") || return 1
   [ -n "${HELD["$1"]:-}" ] && [ "${HELD["$1"]}" = "$now" ]
 }
+# **load_held: the identities root's record holds, by name** (#140): a line's
+# name is everything after its identity, blanks and all. Paths and roots are
+# held by their identity, a judged directory's direct entries by theirs, the
+# accounts and groups by their numbers, and the legacy units by name.
+load_held() {
+  declare -gA HELD=() HELD_UID=() HELD_GID=() HELD_ENTRY=() HELD_UNIT=()
+  local line rest
+  while IFS= read -r line; do
+    case $line in
+      "held "*) rest=${line#held }; HELD["${rest#* }"]=${rest%% *} ;;
+      "entry "*) rest=${line#entry }; HELD_ENTRY["${rest#* }"]=${rest%% *} ;;
+      "uid "*) rest=${line#uid }; HELD_UID["${rest#* }"]=${rest%% *} ;;
+      "gid "*) rest=${line#gid }; HELD_GID["${rest#* }"]=${rest%% *} ;;
+      "unit "*) HELD_UNIT["${line#unit }"]=1 ;;
+    esac
+  done < "$PURGE_ACTED"
+}
+# **rerun_unchanged: whether everything a rerun would act on is what the first
+# run judged** (Codex on #159, round 3, and its second reader): every unit,
+# every root and every account still standing recorded and unchanged, and every
+# listed path still standing unchanged with the same direct entries, none new
+# and none replaced. Checked whole before a rerun's first act, so a rerun never
+# removes, stops or changes what the first run did not judge. Names the first
+# that is not, and answers 1.
+rerun_unchanged() {
+  local u r line p entry now scan
+  for u in "${UNITS[@]}"; do
+    [ -n "${HELD_UNIT["$u"]:-}" ] || { printf 'the unit %s, which this purge did not judge\n' "$u"; return 1; }
+  done
+  for r in "${AGENT_ROOTS[@]}"; do
+    held_is "$r" || { printf 'the root %s, which is not one this purge judged\n' "$r"; return 1; }
+  done
+  scan=$(mktemp)
+  while IFS= read -r line; do
+    case $line in
+      "path "*)
+        p=${line#path }
+        [ -e "$p" ] || [ -L "$p" ] || continue
+        case "$p" in */models|*/models/*) continue ;; esac
+        held_is "$p" || { rm -f -- "$scan"; printf '%s, which is not the object this purge judged\n' "$p"; return 1; }
+        [ -d "$p" ] && [ ! -L "$p" ] || continue
+        find "$p" -mindepth 1 -maxdepth 1 -print0 > "$scan" || { rm -f -- "$scan"; printf '%s, whose entries cannot be read\n' "$p"; return 1; }
+        while IFS= read -r -d '' entry; do
+          now=$(path_identity "$entry" || true)
+          [ -n "${HELD_ENTRY["$entry"]:-}" ] && [ "${HELD_ENTRY["$entry"]}" = "$now" ] \
+            || { rm -f -- "$scan"; printf '%s in %s, which is not what this purge judged there\n' "$entry" "$p"; return 1; }
+        done < "$scan" ;;
+      "user "*)
+        now=$(getent passwd "${line#user }" | cut -d: -f3 || true)
+        [ -z "$now" ] || [ "$now" = "${HELD_UID["${line#user }"]:-}" ] \
+          || { rm -f -- "$scan"; printf 'the user %s, which is not the account this purge judged\n' "${line#user }"; return 1; } ;;
+      "group "*)
+        now=$(getent group "${line#group }" | cut -d: -f3 || true)
+        [ -z "$now" ] || [ "$now" = "${HELD_GID["${line#group }"]:-}" ] \
+          || { rm -f -- "$scan"; printf 'the group %s, which is not the group this purge judged\n' "${line#group }"; return 1; } ;;
+    esac
+  done < "$PURGE_ACTED"
+  rm -f -- "$scan"
+}
 # **purge_began LIST: whether a purge has already acted on this box**: the
 # list names /etc/weaver and it no longer stands. A purge withdraws the roots
 # and removes /etc/weaver as its first removals, and nothing else removes it, so
@@ -832,7 +891,7 @@ record_lines_outside() {
     [ -n "$line" ] && listed["$line"]=1
   done < "$2"
   while IFS= read -r line; do
-    case $line in "" | "prefix "* | "held "* | "uid "* | "gid "*) continue ;; esac
+    case $line in "" | "prefix "* | "held "* | "entry "* | "uid "* | "gid "* | "unit "*) continue ;; esac
     [ -n "${listed["$line"]:-}" ] || printf '%s\n' "$line"
   done < "$1"
   true
@@ -880,28 +939,14 @@ else
   [ -z "$OUTSIDE" ] || die "PURGE-LIST names what this purge would not find, so nothing is purged: ${OUTSIDE//$'\n'/; }"
   purge_lines_within "$PURGE_LIST" > "$PURGE_ACTED"
   for p in "${!PREFIXES[@]}"; do printf 'prefix %s\n' "$p"; done >> "$PURGE_ACTED"
-  # **What each removal acts on, as judged** (#140): every listed path's and
-  # every root's identity, and every listed account's number, so a rerun
-  # removes only the object this run judged: a /tmp name another principal
-  # takes after a reboot, a /etc/weaver or a root made again, or an account
-  # made again under the same name, refuses the rerun rather than go as root.
-  {
-    while IFS= read -r line; do
-      case $line in
-        "path "*) held=$(path_identity "${line#path }") && printf 'held %s %s\n' "$held" "${line#path }" ;;
-        "user "*) held=$(getent passwd "${line#user }" | cut -d: -f3) && [ -n "$held" ] && printf 'uid %s %s\n' "$held" "${line#user }" ;;
-        "group "*) held=$(getent group "${line#group }" | cut -d: -f3) && [ -n "$held" ] && printf 'gid %s %s\n' "$held" "${line#group }" ;;
-      esac
-    done < <(grep -E '^(path|user|group) ' -- "$PURGE_ACTED")
-    for root in "${AGENT_ROOTS[@]}"; do
-      held=$(path_identity "$root") && printf 'held %s %s\n' "$held" "$root"
-    done
-    true
-  } >> "$PURGE_ACTED"
 fi
 [ ${#ACTIVE_UNITS[@]} -eq 0 ] || die "units still active: ${ACTIVE_UNITS[*]}"
 [ ${#RUNNING[@]} -eq 0 ] || die "agents still run or cannot be read: ${RUNNING[*]}"
 plan "verified"
+load_held
+if [ "$RERUN" = 1 ]; then
+  CHANGED=$(rerun_unchanged) || die "this rerun would act on $CHANGED, so nothing is purged: a rerun never removes what the first run did not judge. Look at it, then rerun the purge, or abandon this purge's record (deploy/REDEPLOY.md section 2)"
+fi
 
 say "the delegated door, shut"
 # **No connector can start a run from here on**: the sudo rules, archived
@@ -911,6 +956,15 @@ say "the delegated door, shut"
 # archive holds them to put back.
 # A rule that cannot be removed leaves the door open, so it refuses: a failure
 # on the left of `&&` is exempt from `set -e` (Codex on #159, round 2).
+# **Only a rule this purge judged goes** (Codex on #159, round 3): a first run
+# removes a rule its PURGE-LIST names, and a rerun none, every rule judged having
+# gone before the record was written. A rule restored, replaced or made for a new
+# agent since is never removed unarchived: it refuses.
+# Every rule is judged before any goes, so a refusal leaves the door as it stood.
+for f in "${SUDO_RULES[@]}"; do
+  [ "$RERUN" = 0 ] || die "the sudo rule $f stands, and every rule this purge judged went before its record was written: it was put back or made since, so nothing is purged. Look at it, then rerun the purge"
+  grep -qxF "path $f" -- "$PURGE_ACTED" || die "the sudo rule $f is not on this archive's PURGE-LIST, so it is not removed and nothing is purged: archive again to take it"
+done
 for f in "${SUDO_RULES[@]}"; do
   rm -f -- "$f" || die "the sudo rule $f cannot be removed, so the delegated door is not shut and nothing is purged"
   plan "removed $f"
@@ -919,30 +973,50 @@ say "runs, asked again"
 query_runs
 [ ${#RUNNING[@]} -eq 0 ] || die "agents run again or cannot be read: ${RUNNING[*]}. The sudo rules are removed and archived in $DEST (sudoers-weaver.tar.zst); unload each, then rerun the purge"
 # **The record is written here, before the first removal of an agent's own**:
-# the sudo rules above are derived again by a rerun from their directory, so a
-# stop before this line leaves nothing a rerun cannot find, and a run found
-# just above leaves no record to be reused when the box serves again.
+# a stop before this line leaves a box whose next purge is a first run again,
+# and a run found just above leaves no record to be reused when the box serves
+# again.
 if [ "$RERUN" = 0 ]; then
+  # **What each removal acts on, as judged** (#140; Codex on #159, rounds 1
+  # and 3): every listed path's and every root's identity, the direct entries
+  # of every listed directory, every prefix's, every listed account's number
+  # and every legacy unit's name, read once the door is shut and no run stands,
+  # so a rerun acts on nothing the first run did not judge.
+  {
+    while IFS= read -r line; do
+      case $line in
+        "path "*)
+          p=${line#path }
+          held=$(path_identity "$p") || continue
+          printf 'held %s %s\n' "$held" "$p"
+          case "$p" in */models|*/models/*) continue ;; esac
+          [ -d "$p" ] && [ ! -L "$p" ] || continue
+          while IFS= read -r -d '' entry; do
+            case $entry in *$'\n'*) continue ;; esac
+            held=$(path_identity "$entry") && printf 'entry %s %s\n' "$held" "$entry"
+          done < <(find "$p" -mindepth 1 -maxdepth 1 -print0) ;;
+        "user "*) held=$(getent passwd "${line#user }" | cut -d: -f3) && [ -n "$held" ] && printf 'uid %s %s\n' "$held" "${line#user }" ;;
+        "group "*) held=$(getent group "${line#group }" | cut -d: -f3) && [ -n "$held" ] && printf 'gid %s %s\n' "$held" "${line#group }" ;;
+        "prefix "*) held=$(path_identity "${line#prefix }") && printf 'held %s %s\n' "$held" "${line#prefix }" ;;
+      esac
+    done < <(grep -E '^(path|user|group|prefix) ' -- "$PURGE_ACTED")
+    for root in "${AGENT_ROOTS[@]}"; do
+      held=$(path_identity "$root") && printf 'held %s %s\n' "$held" "$root"
+    done
+    for u in "${UNITS[@]}"; do printf 'unit %s\n' "$u"; done
+    true
+  } >> "$PURGE_ACTED"
+  load_held
   purge_record write "$COPY_SUM" < "$PURGE_ACTED" || die "root's record of this purge cannot be written at $RECORD_PARENT/$RECORD_DIR_NAME; nothing more is purged"
   plan "root's record written: $RECORD_PARENT/$RECORD_DIR_NAME/$COPY_SUM"
 fi
 PURGE_FAILED=0
 
 say "units"
-for u in "${UNITS[@]}"; do systemctl stop "$u" 2>/dev/null || true; systemctl reset-failed "$u" 2>/dev/null || true; plan "stopped $u"; done
-systemctl stop "$SLICE" 2>/dev/null && plan "stopped $SLICE" || true
+# The legacy units (a box from before #50) this purge recorded, and no other.
+for u in "${!HELD_UNIT[@]}"; do systemctl stop "$u" 2>/dev/null || true; systemctl reset-failed "$u" 2>/dev/null || true; plan "stopped $u"; done
+if [ ${#HELD_UNIT[@]} -gt 0 ]; then systemctl stop "$SLICE" 2>/dev/null && plan "stopped $SLICE" || true; fi
 
-
-# The identities root's record holds, by name: a line's name is everything
-# after its identity, blanks and all.
-declare -A HELD=() HELD_UID=() HELD_GID=()
-while IFS= read -r line; do
-  case $line in
-    "held "*) rest=${line#held }; HELD["${rest#* }"]=${rest%% *} ;;
-    "uid "*) rest=${line#uid }; HELD_UID["${rest#* }"]=${rest%% *} ;;
-    "gid "*) rest=${line#gid }; HELD_GID["${rest#* }"]=${rest%% *} ;;
-  esac
-done < "$PURGE_ACTED"
 
 say "the config roots"
 # **The roots go first** (deploy/REDEPLOY.md section 2, #140): each is withdrawn
@@ -995,7 +1069,9 @@ while IFS= read -r line; do
       if [ -z "$now" ]; then plan "user $name: already gone"
       elif [ "$now" != "${HELD_UID["$name"]:-}" ]; then
         die "user $name is not the account this purge judged (uid ${HELD_UID["$name"]:-none}, now $now), so it is not removed and nothing more is. Look at it, then rerun the purge"
-      elif userdel -r "$name" 2>/dev/null; then plan "removed user $name (and home)"
+      # Without -r (Codex on #159, round 3, second reader): a home this purge
+      # judged went as a path in step 2, and -r would remove one it did not,
+      # a home outside /home or one made again, and the mail spool.
       elif userdel "$name" 2>/dev/null; then plan "removed user $name"
       else plan "user $name: not removed"; PURGE_FAILED=1
       fi ;;
@@ -1027,6 +1103,7 @@ mapfile -t PURGED_PREFIXES < <(sed -n 's/^prefix //p' "$PURGE_ACTED")
 # kept and the purge refuses below, naming it.
 for p in "${PURGED_PREFIXES[@]}"; do
   [ -d "$p" ] && [ -z "$(ls -A "$p")" ] || continue
+  held_is "$p" || { plan "kept $p: not the directory this purge judged"; continue; }
   if rmdir -- "$p"; then plan "removed empty $p"
   else plan "empty $p: not removed"; PURGE_FAILED=1
   fi
