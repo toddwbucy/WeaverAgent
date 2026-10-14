@@ -22,8 +22,9 @@ cargo build --manifest-path oracle/Cargo.toml --locked
 pytest -q
 ```
 
-The suite looks for the oracle at `oracle/target/debug/`, so build it with
-`CARGO_TARGET_DIR` unset where the environment sets one.
+The suite asks cargo where it built the oracle (`cargo metadata`'s target directory), so
+it finds the binary under `CARGO_TARGET_DIR` where the environment sets one and under
+`oracle/target/` where it does not, so build and test under the same environment.
 
 The suite runs in the locked test environment, `requirements-test.lock` installed with
 `--require-hashes --no-deps --only-binary=:all:` into a fresh venv of the pinned

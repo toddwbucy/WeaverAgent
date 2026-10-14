@@ -244,8 +244,13 @@ fn a_split_artifact_larger_than_any_card_admits_across_the_pair() {
     );
 }
 
+/// **A pair binding admitted and served, the model split by layer across two
+/// cards** (#23): what this measures, named for it. The default artifact,
+/// 35 GiB, fits one 48 GiB card, as `weaver-spu-Spec` section 7 records of
+/// the same artifact run on one card, so a model larger than any single card
+/// is its neighbour's claim, `a_split_artifact_larger_than_any_card_admits_across_the_pair`.
 #[test]
-fn a_model_larger_than_one_card_admits_across_a_pair() {
+fn a_pair_binding_admits_split_by_layer_and_serves() {
     let Some(path) = artifact() else {
         eprintln!("SKIP: no two-card artifact");
         return;
@@ -275,7 +280,7 @@ fn a_model_larger_than_one_card_admits_across_a_pair() {
         Err(refusal) => panic!("the pair admit: {refusal:?}"),
     };
     // **Both cards hold a substantial share, asserted with thresholds well
-    // under an even split**: the artifact is 34.4 GiB and a layer split is
+    // under an even split**: the artifact is about 35 GiB and a layer split is
     // not exactly even, so each card owing 8 GiB catches a one-card load
     // masquerading as a pair without flaking on allocator granularity.
     let floor = 8u64 * 1024 * 1024 * 1024;

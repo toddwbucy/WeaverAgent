@@ -6,7 +6,7 @@
 
 use weaver_types::ToolName;
 
-use super::{Declaration, Family, FamilyName, Markers, Message, Parsed, RenderRefusal, lookup};
+use super::{Declaration, Family, Markers, Message, Parsed, RenderRefusal};
 
 /// The header markers. Written here and nowhere else in the crate.
 pub const TEXT_BEGIN: &str = "<|begin_of_text|>";
@@ -116,7 +116,16 @@ impl Family for Llama {
         STOP
     }
 
+    /// **The row carrying llama's own template**, by template rather than by
+    /// name (#143): `llama` is contested, the registry carrying llama's row
+    /// beside the qwen2 and mistral3 templates for llama-architecture
+    /// artifacts, so `lookup` refuses it by design, and what this module can
+    /// truthfully answer for is the row it renders, as phi's formats answer
+    /// for the rows selecting on their markers.
     fn declaration(&self) -> &'static Declaration {
-        lookup(&FamilyName("llama".into())).expect("the registry carries llama")
+        super::REGISTRY
+            .iter()
+            .find(|declaration| declaration.family == "llama" && declaration.template == TEMPLATE)
+            .expect("the registry carries llama's own row")
     }
 }

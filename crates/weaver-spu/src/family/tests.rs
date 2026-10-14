@@ -1352,3 +1352,27 @@ fn a_closer_that_did_not_end_the_generation_never_came() {
     assert_eq!(parsed.unrecovered.len(), 1, "{:?}", parsed.content);
     assert_eq!(parsed.unrecovered[0].reason, Reason::Unclosed);
 }
+
+/// **Every family's `declaration()` answers with its own row**, the contested
+/// llama key included (#143): the registry carries three `llama` rows, llama's
+/// own beside the qwen2 and mistral3 templates for llama-architecture
+/// artifacts, so a plain `lookup` refuses it, and the module answers for the
+/// row carrying its own template, as phi's two formats answer for the rows
+/// selecting on their markers.
+///
+/// Perturbation: put llama's `declaration()` back on `lookup` and it panics on
+/// the contested key.
+#[test]
+fn every_familys_declaration_answers_its_own_row() {
+    let families: Vec<(Box<dyn Family>, &str)> = vec![
+        (Box::new(qwen2::Qwen2), qwen2::TEMPLATE),
+        (Box::new(llama::Llama), llama::TEMPLATE),
+        (Box::new(gemma4::Gemma4), gemma4::TEMPLATE),
+        (Box::new(mistral3::Mistral3), mistral3::TEMPLATE),
+        (Box::new(gpt_oss::GptOss), gpt_oss::TEMPLATE),
+    ];
+    for (family, template) in families {
+        assert_eq!(family.declaration().template, template);
+    }
+    assert_eq!(llama::Llama.declaration().family, "llama");
+}
