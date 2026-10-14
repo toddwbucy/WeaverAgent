@@ -20,6 +20,12 @@ EMISSIONS = [
     f'{OPEN}x{CLOSE}mid{OPEN}y{CLOSE}',
     f'{OPEN}{{"arguments":{{}}}}{CLOSE}',
     f'{OPEN}{{"name":"calc"}}',
+    # Non-finite arguments, which serde refuses and CPython's json reads (Codex on
+    # #152, round 1): each is `unparsed` on both sides, never a fault.
+    f'{OPEN}{{"name":"calc","arguments":NaN}}{CLOSE}',
+    f'{OPEN}{{"name":"calc","arguments":{{"x":Infinity}}}}{CLOSE}',
+    f'{OPEN}{{"name":"calc","arguments":[-Infinity]}}{CLOSE}',
+    f'{OPEN}{{"name":"calc","arguments":1e400}}{CLOSE}',
 ]
 
 
@@ -58,6 +64,18 @@ def test_an_unrecovered_call_renders_back_as_written(oracle):
     assert fragment in render(messages)
 
 
+@pytest.mark.parametrize('arguments', ['NaN', '{"x":Infinity}', '[-Infinity]', '1e400'])
+def test_non_finite_arguments_render_as_the_rust_renders_them(oracle, arguments):
+    """A tool call whose arguments text holds a value serde refuses renders them as a
+    string, as the Rust's fallback does (Codex on #152, round 1). Perturbation: load the
+    arguments with CPython's json as it stands, and the render raises."""
+    messages = [{'role': 'assistant', 'content': [
+        {'type': 'tool_call', 'name': 'calc', 'arguments': arguments}]}]
+    expected = oracle(op='render', body=messages)
+    assert 'ok' in expected, expected
+    assert render(messages) == expected['ok']
+
+
 def test_a_user_message_carrying_an_unrecovered_call_refuses():
     from python_spu.family import MalformedDelta
     with pytest.raises(MalformedDelta):
@@ -85,3 +103,21 @@ def test_the_answer_carries_the_report_as_the_rust_reads_it(oracle, report):
     expected = oracle(op='round', type='TokenAnswer', body=answer)
     assert 'ok' in expected, expected
     assert dump(ADAPTERS['TokenAnswer'].validate_python(answer)) == expected['ok']
+
+
+def test_the_opaque_payloads_keep_their_members_whole(oracle):
+    """The omissions reach `CallGrammar.close` and `Generation.unrecovered` alone, by type,
+    never a member of the same name inside the opaque `request` and `measurement`, which
+    the Rust forwards whole (Codex on #152, round 1). Perturbation: omit by key name, and
+    the measurement's `close`, `unrecovered`, `classify` and `field-election` vanish."""
+    import json
+    from python_spu.wire import ADAPTERS, dump
+    opaque = {'close': None, 'unrecovered': [], 'classify': None, 'field-election': None}
+    body = dict(GENERATED, request=dict(opaque), measurement={'inner': dict(opaque), **opaque})
+    answer = {'kind': 'generated', 'body': body}
+    expected = oracle(op='round', type='TokenAnswer', body=answer)
+    assert 'ok' in expected, expected
+    dumped = dump(ADAPTERS['TokenAnswer'].validate_python(answer))
+    def text(value): return json.dumps(value, separators=(',', ':'), sort_keys=True)
+    assert text(dumped) == text(expected['ok'])
+    assert dumped['body']['measurement']['inner'] == opaque

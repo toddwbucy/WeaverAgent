@@ -38,7 +38,11 @@ def render(messages):
                 # weaver-spu-Spec section 5 (#137): a rebuilt context matches the emission.
                 body+=block['fragment']
             elif block['type']=='tool_call' and role=='assistant':
-                try: args=json.loads(block['arguments'])
+                # serde's read, not CPython's: arguments holding a value serde refuses
+                # (`NaN`, an overflowing number) render as a string, as the Rust's
+                # fallback does (Codex on #152, round 1).
+                from .engine import strict_json
+                try: args=strict_json(block['arguments'])
                 except ValueError: args=block['arguments']
                 if body: body+='\n'
                 body+='<tool_call>\n'+compact({'name':block['name'],'arguments':args})+'\n</tool_call>'
@@ -52,7 +56,11 @@ GRAMMAR={'family':'qwen2','open':OPEN,'close':CLOSE}
 def recover(inner):
     """The family's recovery of one call, weaver-spu qwen2.rs `recover`: the call block,
     or the parser's detail where it refuses, never a bare absence."""
-    try: value=json.loads(inner)
+    # serde's read, its whole refusal set: a value CPython's json takes and serde refuses
+    # (`NaN`, `Infinity`, an overflowing number) is `unparsed`, never a fault at the
+    # compaction below (Codex on #152, round 1).
+    from .engine import strict_json
+    try: value=strict_json(inner)
     except ValueError as e: return None,f'not JSON: {e}'
     if not isinstance(value,dict) or 'name' not in value: return None,'no `name` member'
     if not isinstance(value['name'],str): return None,'`name` is not a string'

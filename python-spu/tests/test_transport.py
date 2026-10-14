@@ -55,3 +55,13 @@ def test_send_bound_and_nonblocking():
         assert b.receive(nonblocking=True) is None
         with pytest.raises(ChannelFault): a.send_bytes(b'x'*(MESSAGE+1))
     finally: a.sock.close(); b.sock.close()
+
+@pytest.mark.parametrize('body',[b'{"x":NaN}',b'{"x":Infinity}',b'{"x":-Infinity}',b'{"x":1e400}',
+                                 b'[-1e400]'])
+def test_a_non_finite_wire_value_is_undecodable(body):
+    """serde refuses each of these on the wire, so the channel does too (Codex on #152,
+    round 1). Perturbation: decode with CPython's json and `parse_constant` alone, and
+    the overflowing literal reads as infinity."""
+    from python_spu.transport import decode
+    with pytest.raises(ChannelFault):
+        decode(body)

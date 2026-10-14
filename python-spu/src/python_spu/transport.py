@@ -13,8 +13,10 @@ class Closed(ChannelFault): pass
 def encode(value):
     return json.dumps(value,ensure_ascii=False,separators=(',',':'),allow_nan=False).encode()
 def decode(body):
-    def invalid(value): raise ValueError(f'nonfinite JSON: {value}')
-    try: return json.loads(body,parse_constant=invalid)
+    # serde's read, its whole refusal set, an overflowing number such as `1e400`
+    # included, which CPython reads as infinity (Codex on #152, round 1).
+    from .engine import strict_json
+    try: return strict_json(body)
     except (ValueError,UnicodeError) as e: raise ChannelFault('undecodable') from e
 
 class Channel:
