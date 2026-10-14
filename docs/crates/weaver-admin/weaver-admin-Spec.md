@@ -2366,7 +2366,13 @@ invoker's** (section 6, the lifetime, and the operator's ruling of 2026-10-03 on
   fork. **It is written atomically** (Codex on #161): to a temporary in the run directory,
   synced, renamed over `cgroup`, and the run directory synced, so a crash leaves the old
   record, the new one, or none, never a partial one. A load that meets a temporary left
-  behind removes it. Every later verb finds the cgroup through that record, never through its own
+  behind removes it. **The record holds the cgroup directory's identity beside its
+  path** (Codex on #161): the device and inode the loader's `fstat` read on the directory
+  it made. A later verb reads the path in its own cgroup-namespace view, opens it and
+  compares the identity. Where they differ, or the path does not open, it refuses
+  `BoundaryUnverified`, naming both, and acts on nothing, never on another cgroup. So a
+  verb from another containment works wherever its view reaches the same cgroup, and
+  fails closed where it does not. Every later verb finds the cgroup through that record, never through its own
   `/proc/self/cgroup`. A record that does not read, or that names anything but a
   `weaver-<agent>` directory on the `cgroup2` mount, refuses `BoundaryUnverified`.
   **The start step never needs the record to find its own cgroup** (Codex on #161): the
@@ -2457,9 +2463,18 @@ weaver-<agent>/      root's; the agent's cgroup
     section 2), it writes `tools/cgroup.kill` and waits for it to empty before it closes
     an open execution `Killed { by: fault }` (`weaver-harness-Spec` section 2.2). Past the
     bound it closes the execution all the same, closes the turn in flight
-    `Stopped { reason: fault }`, and ends service. **"Closed" here means the kill was
-    delivered and the execution can do no further work, not that every process of it
-    has exited** (Codex on #161): once `cgroup.kill` has delivered `SIGKILL`, a process
+    `Stopped { reason: fault }`, and ends service.
+  - **Where its write of `tools/cgroup.kill` fails**, no kill was delivered, so the
+    worker falls back to `kill(2)` with `SIGKILL` on each pid it reads from
+    `tools/cgroup.procs`, every one under its own account, and repeats within the bound
+    until `tools/` empties (Codex on #161). **Where the write and the fallback both
+    fail**, it closes the execution `Killed { by: fault }` and ends service, its `fault`
+    (the existing `OrganDeathObserved` case, the gate's death) carrying in its account
+    that the execution's containment failed and the kill was not delivered. The record
+    then says what happened, and admin's run end, as root, holds the rest. No new fault
+    case is added.
+  - **"Closed" past the bound means the kill was delivered and the execution can do no
+    further work, not that every process of it has exited** (Codex on #161): once `cgroup.kill` has delivered `SIGKILL`, a process
     executes no further instruction of its own and ends when its system call returns.
     So `Killed { by: fault }`, its outcome indeterminate, is the truthful record, and no
     turn follows it, service having ended. The run end's kill and its own bound hold
@@ -2538,6 +2553,8 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | the gate, `tools/` not empty within the bound, or its kill's write failing | T2 | T2 | the gate exits with the execution unanswered: the gate's death below |
 | the gate dies | T0, T1 or T2 | T2, then T0 | the worker kills `tools/`, waits, closes an open execution `Killed { by: fault }` |
 | the worker, `tools/` not empty within the bound | T2 | T2 | the worker ends service and unwinds, never serving on: the run end holds what remains |
+| the worker, its write of `tools/cgroup.kill` failing | T1 or T2 | T2, then T0 | the worker sends `SIGKILL` by `kill(2)` to each pid in `tools/cgroup.procs`, repeating within the bound |
+| the worker, the write and the fallback both failing | T1 or T2 | T1 or T2 | the worker closes the execution `Killed { by: fault }`, its `fault`'s account naming that containment failed and the kill was not delivered, and ends service: the run end holds what remains |
 | the worker's unwind (the leave, graceful or forced) | T0 or T1 | T0 | the worker kills `tools/` and waits, before `Left` |
 | the worker dies | A2 | A2, then A3 or A1 once the member and the relay end | the organs die by their death signal (`weaver-harness-Spec` section 2.2), and `tools/` keeps what it held, contained |
 | the member or the relay dies | A2 | A2 | nothing of the cgroup changes |
@@ -2547,6 +2564,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | admin dies inside a run end | A4, or A1 partly removed | as left | the next `unload` or `force-unload` writes the kill again, which is idempotent, and finishes the removal |
 | admin dies inside the start step | A1 or A2 | as left | A1 is removed by the next load. A2 holds the run lock and is the S8b of section 3, ended by `unload` |
 | admin dies between the `mkdir` and the record's write | A1, no record | A1, no record | the next load's `mkdir` meets `EEXIST` at the deterministic path, finds it root's and empty, removes it and makes it afresh |
+| a later verb, the recorded path in its view not the recorded identity | any | unchanged | refuses `BoundaryUnverified`, naming the path and both identities, and acts on nothing |
 | admin dies while writing the record | A1, a temporary record and no record (or the previous record) | as left | the next load removes the temporary, then judges the cgroup at the deterministic path as above, the rename never having exposed a partial record |
 | admin's start step, `EEXIST` on a populated cgroup | A3 | A3 | refuses `AgentRunning`, naming the processes, and kills nothing (I8) |
 | a tool command writes its own pid to `worker/cgroup.procs` (the agent's account can) | T1 | T0 or T1, the process in `worker/` | out of reach of its execution's end and of the gate's death, never out of the agent's cgroup: held by the run end |
@@ -2555,7 +2573,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 
 | # | Invariant | Held by |
 |---|---|---|
-| C1 | **No tool process outlives its execution's end.** A shell is born in `tools/`, and before the gate answers, `tools/` is empty, a gate that cannot empty it never answering: a command that left its process group or its session is in `tools/` all the same. A gate's death empties `tools/` by the worker's kill, and a `tools/` that will not empty within the bound ends service (the gate exits, then the worker unwinds), so no run serves on past an execution it could not end. **The one exception is stated:** a command running as the agent's account can move itself out of `tools/` into `worker/` by writing `worker/cgroup.procs`, since the file that lets the gate move its shell lets the shell move itself. That process escapes C1 and is held by C2. A later election of a controller on `worker/` would meet it there and must place it first. | the gate, and the worker on the gate's death |
+| C1 | **No tool process outlives its execution's end.** A shell is born in `tools/`, and before the gate answers, `tools/` is empty, a gate that cannot empty it never answering: a command that left its process group or its session is in `tools/` all the same. A gate's death empties `tools/` by the worker's kill, by `kill(2)` of each pid where the kill's write fails, and where both fail the execution is closed `Killed { by: fault }` with its `fault` naming the failed containment, service ending and the run end holding the rest. A `tools/` that will not empty within the bound ends service (the gate exits, then the worker unwinds), so no run serves on past an execution it could not end. **The one exception is stated:** a command running as the agent's account can move itself out of `tools/` into `worker/` by writing `worker/cgroup.procs`, since the file that lets the gate move its shell lets the shell move itself. That process escapes C1 and is held by C2. A later election of a controller on `worker/` would meet it there and must place it first. | the gate, and the worker on the gate's death |
 | C2 | **No process of the agent outlives its run's end.** `Unloaded` is answered only where no process of the agent stands: the run lock free and the agent's cgroup absent or empty. The run end answers it only after killing and removing the cgroup, and past the kill's bound it refuses `WorkerWouldNotExit`, never `Unloaded`. A load stands a run only in a cgroup it made. **The window is stated:** after a crash that ends the run with no admin verb (the worker dying, then the member and the relay), leftovers run on until the next `unload` or `force-unload`. A load refuses on them and kills nothing, and `show` names them. They are contained in A3: leaving the agent's cgroup needs a write to a file of root's. | admin's run end, the start step's refusal on A3, and `show`'s ladder |
 | C3 | **The agent's account reaches only three files.** Through them it can move a process within `worker/` and kill `tools/`, and nothing else: no member, no relay, no cgroup made or removed, no interface file of root's changed. | the layout's ownership |
 | C4 | **Every process of the agent starts inside.** Each constituent is placed by its own child before its exec, each shell is born in `tools/`, and every fork after inherits. | the start step's placement and the gate's `clone3` |

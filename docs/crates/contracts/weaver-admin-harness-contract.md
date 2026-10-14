@@ -115,7 +115,8 @@ stays rejected, by refusal at accept rather than by an absent name.
 
 **Admin judges the other direction at its dial** (#98, #140; `weaver-admin-Spec`
 section 7): the listener must run under the worker's account and be the process
-holding the run lock's description, read through a pidfd on the listener. So the
+holding the run lock, judged so that a pid reused since the listener ended is never
+taken for it (that section states how). So the
 worker binds and listens on this channel in its own process, the one the start step
 handed the run lock, and never through a child it forks and execs, whose listener
 admin refuses.

@@ -393,9 +393,10 @@ rests on the syncs `weaver-admin-Spec` section 6 makes before it. **A member's r
 names refuses `BoundaryUnverified`** at every verb that publishes (a `load`, an `unload`,
 a `save-point`), until the operator clears it (`weaver-admin-Spec` section 6; #140,
 S16). **Containment refuses three ways** (`weaver-admin-Spec` section 6.1, #111). A
-`load` on a box below the containment's floor (cgroup v2 with its whole-group kill,
-Linux 5.14), or from an invoker whose containment admits no child, refuses
-`BoundaryUnverified`, naming what is missing. A `load` meeting processes of an ended run
+`load` on a box without a containment that admits a child made by root and ends all of
+its processes at once (the floor is `weaver-admin-Spec` section 6.1's), or from an
+invoker whose containment admits no child, refuses `BoundaryUnverified`, naming what is
+missing. A `load` meeting processes of an ended run
 still standing refuses `AgentRunning`, naming them, for `unload` to end. An `unload` or
 `force-unload` whose agent's processes do not all end within the Spec's bound refuses
 `WorkerWouldNotExit`, naming them, and answers no state. `force-unload` takes the leave save point as
