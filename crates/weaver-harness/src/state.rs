@@ -192,6 +192,19 @@ pub struct StateSeam {
     /// the retry's. A frame landing after the drain is dropped by the wait:
     /// by its number at a snapshot ask, by its kind at every other.
     unsettled: bool,
+    /// **The drain ended inside a line** (#140): the rest of that late frame
+    /// is still owed to no ask, so the next line read is discarded where it
+    /// is that rest, and the retry's answer is never read behind a suffix
+    /// that would miss it. A line that parses whole is no rest: every frame
+    /// is one JSON object on one line, and a proper suffix of an object's
+    /// text either ends inside a string (it began inside one, and the quotes
+    /// after it are odd in number) or ends on a closer it never opened, so
+    /// the part drained was never finished and the line is the next answer.
+    /// Were a line to parse here anyway, it is judged as any line: a
+    /// snapshot-protocol frame of another ask is dropped by its number or
+    /// kind, and anything else misses the ask it lands in, never passing as
+    /// an answer the member did not send.
+    discarding: bool,
     /// **The next snapshot ask's ordinal**, per residency from 1 (Codex on
     /// #94, round 10): the ask carries it, the member echoes it on the answer
     /// and the finished answer, and an answer carrying another number is a
@@ -220,6 +233,7 @@ impl StateSeam {
             channel,
             dead: false,
             unsettled: false,
+            discarding: false,
             snapshot_ordinal: 1,
             residual: Vec::new(),
             snapshot_answer_bound_ms: SNAPSHOT_ANSWER_BOUND_MS,
@@ -479,6 +493,8 @@ impl StateSeam {
         if !discarded.is_empty() {
             let lines = discarded.iter().filter(|&&b| b == b'\n').count();
             let partial = usize::from(discarded.last().is_some_and(|&b| b != b'\n'));
+            // A part of a line drained leaves its remainder owed to no ask.
+            self.discarding = partial == 1;
             eprintln!(
                 "weaver-harness: the state seam drained {} bytes the member sent late after a missed save-point leg, {lines} whole lines and {partial} partial, owed to no ask",
                 discarded.len()
@@ -564,6 +580,16 @@ impl StateSeam {
         let mut buffer: Vec<u8> = std::mem::take(&mut self.residual);
         loop {
             if let Some(position) = buffer.iter().position(|&b| b == b'\n') {
+                if std::mem::take(&mut self.discarding)
+                    && serde_json::from_slice::<serde_json::Value>(&buffer[..position]).is_err()
+                {
+                    // The remainder of a late frame the drain cut (#140).
+                    eprintln!(
+                        "weaver-harness: the state seam discarded the {position} bytes ending a line the member sent late after a missed save-point leg, owed to no ask"
+                    );
+                    buffer.drain(..=position);
+                    continue;
+                }
                 let line = String::from_utf8_lossy(&buffer[..position]).into_owned();
                 self.residual = buffer[position + 1..].to_vec();
                 return Some(line);
@@ -573,6 +599,10 @@ impl StateSeam {
             }
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
+                // **What arrived of a line is kept** (#140): a part of a late
+                // frame read inside a missed wait reaches the drain, which
+                // then knows the rest is owed to no ask.
+                self.residual = buffer;
                 return None;
             }
             let wait = Self::poll_slice(remaining);

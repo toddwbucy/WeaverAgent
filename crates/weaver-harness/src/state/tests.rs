@@ -596,6 +596,73 @@ fn a_late_answer_is_dropped_by_its_number_and_the_retrys_is_read() {
     );
 }
 
+/// **A late frame the drain cuts is discarded through its end** (#140;
+/// `weaver-harness-Spec` section 6): the member's late answer to ask 1
+/// arrives split, its first part before the retry's drain (after the
+/// missed wait, or inside it) and the rest after the retry's ask, followed
+/// by the retry's own answer. The harness discards the rest through its
+/// newline and reads ask 2's answer. Perturbations: drop the discarding
+/// state and the first case misses the retry's answer leg on the suffix;
+/// drop the kept residual at the missed wait and the second case does.
+#[test]
+fn a_late_frame_split_across_the_drain_is_discarded_through_its_end() {
+    for prefix_inside_the_wait in [false, true] {
+        use std::io::BufRead;
+        let (ours, theirs) = UnixStream::pair().expect("pair");
+        ours.set_nonblocking(true).expect("nonblocking");
+        let mut seam = StateSeam::new(ours);
+        seam.snapshot_answer_bound_ms = 300;
+        let late = r#"{"answer":{"snapshot":{"ask":1,"save-point":"late.save-point","run":"r-1","sequence":1,"turn":1,"digest":"late"}}}"#;
+        let (prefix, suffix) = late.split_at(40);
+        let (missed_tx, missed_rx) = std::sync::mpsc::channel::<()>();
+        let (written_tx, written_rx) = std::sync::mpsc::channel::<()>();
+        let peer = std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(theirs.try_clone().expect("clone"));
+            let mut writer = theirs;
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("the first ask");
+            if prefix_inside_the_wait {
+                writer.write_all(prefix.as_bytes()).expect("the first part");
+            }
+            missed_rx.recv().expect("the first ask missed");
+            if !prefix_inside_the_wait {
+                writer.write_all(prefix.as_bytes()).expect("the first part");
+            }
+            written_tx.send(()).expect("written");
+            line.clear();
+            reader.read_line(&mut line).expect("the retry");
+            writer
+                .write_all(
+                    format!(
+                        "{suffix}\n{}\n",
+                        r#"{"answer":{"snapshot":{"ask":2,"save-point":"fresh.save-point","run":"r-1","sequence":1,"turn":1,"digest":"fresh"}}}"#
+                    )
+                    .as_bytes(),
+                )
+                .expect("the rest, then the retry's answer");
+            line.clear();
+            reader.read_line(&mut line).expect("the acknowledgement");
+            writer
+                .write_all(
+                    b"{\"answer\":{\"finished\":{\"ask\":2,\"save-point\":\"fresh.save-point\"}}}\n",
+                )
+                .expect("finishes the retry's");
+        });
+        assert!(matches!(
+            seam.ask_snapshot(),
+            Err(weaver_types::SavePointLeg::Answer)
+        ));
+        missed_tx.send(()).expect("the miss is said");
+        // The first part stands in the channel before the retry drains.
+        written_rx.recv().expect("the first part is written");
+        let taken = seam.ask_snapshot().unwrap_or_else(|leg| {
+            panic!("the retry reads its own answer past the cut frame ({prefix_inside_the_wait}): {leg:?}")
+        });
+        assert_eq!(taken.stamp.digest, "fresh");
+        peer.join().unwrap();
+    }
+}
+
 /// **A late `finished` frame of the ask before is dropped by its number
 /// while the retry's answer is awaited**, per `weaver-harness-Spec`
 /// section 6 (Codex on #94, round 11): the member finishes ask 1 only

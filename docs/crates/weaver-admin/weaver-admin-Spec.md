@@ -1463,10 +1463,12 @@ than narrowed: a diagnostic sink is a sink.
 **`File { path, create }`.** Judged before it is opened and after, on #62: a trace the
 member could replace, or a link root would follow, would hand the worker a file other
 than the record, and since #80 the relay would read that file back out to the trace
-reader. **The trace's directory is judged first**: resolved once, owned by root or the
-admin principal and writable by no group or other, the territory's 0710 passage
-being no write, and every directory above it held by section 9's
-rule. **The open goes through that directory** write-only with `O_APPEND`, `O_CLOEXEC`,
+reader. **The trace's directory is the territory** (section 9), opened at the judgment
+with no link followed, held as a descriptor with every directory above it judged, and
+judged again on that descriptor here: owned by root or the admin principal and writable
+by no group or other, the territory's 0710 passage being no write. **The open goes
+beneath that descriptor**, never through the path again (#140, the custody audit's
+G18), write-only with `O_APPEND`, `O_CLOEXEC`,
 `O_NOFOLLOW` and `O_NONBLOCK`, so a link at the trace's name refuses and a FIFO there
 never blocks, and the descriptor must be a regular file. **An existing trace stands as
 the territory lays it out** (#56): owned by root or the admin principal, grouped to
@@ -1474,7 +1476,11 @@ the territory lays it out** (#56): owned by root or the admin principal, grouped
 any other is a trace replaced or never provisioned, which refuses rather than being
 appended to. Where the flag is set and no
 trace stands, admin creates it exclusively (`O_CREAT|O_EXCL`) and gives it that layout,
-so the next load finds it as provisioning would have. Every refusal here is
+so the next load finds it as provisioning would have. **Every open it accepts, of a
+created trace or an existing one, syncs the territory before the descriptor goes to the
+worker** (#140), a sync interrupted by a signal retried, so a trace this crate created
+is durable in its directory, and one left standing by a load whose sync failed never
+passes a later load unsynced; a territory that does not sync refuses. Every refusal here is
 `BoundaryUnverified`, naming the path on stderr. An absent trace without the flag is
 refused earlier, by section 4's inventory, as `BoundaryUnverified` before the open is
 reached, and only a trace that vanishes between the inventory and the open reads
@@ -1496,7 +1502,8 @@ from: weaver-admin
 to: admin-sink-file-append-only
 ```
 
-**`Pipe { path }`.** Created with `mkfifo` at mode 0640 when the creation
+**`Pipe { path }`.** Made and opened beneath the territory's descriptor, as the file
+is (#140). Created with `mkfifoat` at mode 0640 when the creation
 flag is set and nothing, not even a link, stands at the name, and set `0640`
 through its descriptor so the umask does not decide the mode. Opened write-only
 with `O_NONBLOCK`, `O_CLOEXEC` and `O_NOFOLLOW`, because a blocking open of a
