@@ -932,7 +932,16 @@ election is a manifest property and the record is this crate's,**
 `weaver-admin-Spec` section 1, `weaver-gate-Spec` section 1, and
 `weaver-spu-Spec` section 1 each inheriting these grounds rather than re-arguing
 them: the manifest carries one OS crate and no `libc` or `rustix` line of this
-crate's own. The ownership the election buys is the other claim in this
+crate's own. **The containment of #111 adds** `openat` beneath a directory descriptor,
+`fstat`, and `read` and `write` on the agent's `tools/` cgroup files, all `nix`'s
+(`weaver-admin-Spec` section 6.1), and **one stated exception to "no raw `libc`"**: the
+worker's pinned fallback makes `pidfd_open` and `pidfd_send_signal` as raw system calls
+by number (`SYS_pidfd_open`, `SYS_pidfd_send_signal`) through `nix`'s re-exported
+`libc`, because `nix` 0.31 exposes no pidfd signalling. It adds no dependency, the
+re-export being `nix`'s own, and it is the precedent `weaver-admin`'s escalation already
+set for the same two calls (`weaver-admin-Spec` section 1). The pidfd each call opens
+is wrapped at once as an owned descriptor, so the custody this election buys holds
+beyond those two numbers. The ownership the election buys is the other claim in this
 paragraph and it is a type property, so it takes the compiler under section 8's
 first sorting rather than the manifest read.
 

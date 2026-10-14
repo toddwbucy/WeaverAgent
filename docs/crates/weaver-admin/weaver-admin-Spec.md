@@ -114,7 +114,15 @@ surface, on the grounds `weaver-harness-Spec` section 2.4 argued and this crate 
 rather than re-argues: descriptor custody is central, the io-safe owned types make it a
 compile property, and the needed calls, `socket`, `bind`, `listen`, `accept`,
 `getsockopt` for the peer credential and the peer's pidfd, `sendmsg` with control messages, `open`, `mkfifo`,
-and `stat`, are all covered. That crate asserts the election where it argues it, so this
+and `stat`, are all covered, as are the calls section 6.1's containment adds (`statfs`,
+`mkdirat`, `openat`, `fchmod`, `fchown`, `unlinkat`, `renameat`, `fsync`, and `read`
+and `write` on cgroup files). **Three calls are the stated exception to "no raw
+`libc`"**, each made as a raw call through `nix`'s re-exported `libc`, adding no
+dependency: `pidfd_open` and `pidfd_send_signal` by system call number, for the
+escalation's pinned signal (section 3) and the run end's fallback (section 6.1), and
+`fgetxattr`, for the delegate mark section 6.1 reads, `nix` 0.31 exposing neither pidfd
+signalling nor extended attributes. Each descriptor a raw call opens is wrapped at once
+as an owned one. That crate asserts the election where it argues it, so this
 one cites it and adds no second record for one decision. `sha2` joins on 2026-09-04 for
 one purpose, the digests of the declaration file and, since 2026-10-02, of the prompt
 file it names, which this crate reads at the inventory and supplies on the enter, per

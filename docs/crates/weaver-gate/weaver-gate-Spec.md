@@ -1337,8 +1337,9 @@ exec**: it is spawned as before (the standard library's `Command`, its own proce
 group, its environment cleared), and in its `pre_exec`, before the exec, it sets its
 parent-death signal to `SIGKILL` and checks its parent still stands, then opens
 `cgroup.procs` by `openat` beneath the handle on `tools/` at descriptor 4 (received beside
-its channel end, `weaver-harness-Spec` section 2.2) and writes `0`. Both are raw calls
-through `nix`'s `libc`, async-signal-safe and allocating nothing. So the child runs only
+its channel end, `weaver-harness-Spec` section 2.2) and writes `0`. These are `nix`'s
+calls, the path built as a `CStr` before the fork, so each is async-signal-safe and
+allocates nothing, and none needs raw `libc`. So the child runs only
 this crate's own code until the move succeeds, and the command and everything it forks
 start in `tools/`, a new session or a double fork included. **No instant leaves a
 command outside while the gate may already have killed `tools/`**: the spawn returns
