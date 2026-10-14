@@ -131,11 +131,47 @@ sudo deploy/decommission.sh --purge <dir>        # the directory --archive wrote
 ```
 
 Removes the sudo rules first, so no connector can start a run, then asks every agent
-again and refuses if any runs. Stops any unit of a box from before #50, removes the
-`weaver-*` users with their homes and their groups, removes every path on the list (the
-sudo rules and the run directories among them), removes a prefix left empty, and prints
-what remains. After it, `getent passwd | grep weaver-` and `ls /opt/weaver` should show
-nothing but `models`.
+again and refuses if any runs. Stops any unit of a box from before #50, then removes what
+the list names in the order below, removes a prefix left empty, and prints what remains.
+After it, `getent passwd | grep weaver-` and `ls /opt/weaver` should show nothing but
+`models`.
+
+**The order** (#140):
+
+1. The config roots. Each root is withdrawn whole by one rename to a name no discovery
+   takes, and then `/etc/weaver` goes. A stop leaves a root standing whole or not at all,
+   never one half removed for its `weaver-admin show` to refuse, and it ends admission.
+2. Every other path on the list: the territories, the logs, the homes, the `/tmp`
+   entries, the run directories, `/var/lib/weaver`, the sudo rules, the `ld.so` confs and
+   each prefix's `bin`, `lib`, `python-spu` and backups. The accounts still resolve, so
+   every owner and group still reads by name.
+3. The `weaver-*` users, then their groups. A group `userdel` already removed with its
+   user, as it removes a private group, is done.
+
+**Root's record, and the rerun** (#140). Before its first removal, the purge writes root's
+record: the lines it judged against its own derivation while the box stood whole, and
+the prefixes that derivation found. The record is
+`/var/lib/decommission-weaver/<the PURGE-LIST's sha256>`, the directory root's `0700` and
+the file root's `0600`, written beneath held directory descriptors with no link
+followed, synced, and carrying the sum of what it holds. `/var/lib` is where a root
+tool keeps its state. The name begins with no `weaver`, so no discovery glob of the
+deploy scripts reaches it, and the purge never removes it until the end. The record is
+the script's own, written by root after a whole judgment, so a rerun trusting it trusts
+nothing the operator-writable archive directory holds.
+
+- A purge stopped at any point runs again against the same archive to completion: it
+  acts on root's record instead of deriving again from a box it has half removed, and a
+  path or group already gone is done.
+- **A rerun's run check** is the same `show` of every root still standing, and once the
+  roots are gone, the process check under the `weaver-*` accounts, which go last. With no
+  root there is no admin to ask, and no load without one.
+- A record that does not read back whole refuses the purge, naming the record. That is a
+  record not root's `0600` file, not the record of this PURGE-LIST, or not holding what
+  it summed. So does a record naming a line this archive's PURGE-LIST does not hold.
+- No record on a box where a purge has already acted refuses the purge, rather than
+  deriving again from what that purge left: a listed account, group or `/etc/weaver` is
+  gone. Finish such a box by hand from the archive's PURGE-LIST.
+- The record is removed last, after what remains is printed.
 
 Not touched, because they are the operator's and not the stack's: the operator's home,
 the operator's membership of `video` and `render` (the agents' memberships

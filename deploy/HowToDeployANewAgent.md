@@ -458,8 +458,9 @@ also clears them). Archive the territory and remove it: it holds the declaration
 prompt draft, the two logs and the published save points beside the state room and the
 trace, the one record of what was done to the agent, and create-agent refuses a
 territory that stands, so the archive comes first. Remove the agent's `/tmp` entries
-too, while its accounts still resolve (#140): once they are gone, an entry's owner reads
-only as a number. They are the entries directly under `/tmp` named `weaver-*` or
+too, while its accounts still resolve, the paths going before the accounts as in the
+purge's order (`deploy/REDEPLOY.md` section 2): once they are gone, an entry's owner
+reads only as a number. They are the entries directly under `/tmp` named `weaver-*` or
 `torchinductor_weaver-*` and owned by one of the agent's accounts, never chosen by name
 alone, since `/tmp` is anyone's to write and another agent's name can begin with this
 one's:
