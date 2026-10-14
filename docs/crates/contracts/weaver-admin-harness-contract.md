@@ -126,8 +126,9 @@ admin refuses.
 inside the agent's containment, and every process the worker makes stays inside it.
 Nothing on this channel names the containment. Each party's obligation:
 - **The harness** ends every process still in an open tool execution's containment when
-  the gate dies, and again at its unwind, before `Left`, and ends service where they will
-  not end within the Spec's bound. A process of the agent's account that moved itself out
+  the gate dies, and again at its unwind, before `Left`, or, where it cannot, ends
+  service with that failure recorded and leaves the rest to admin's run end. It ends
+  service too where they will not end within the Spec's bound. A process of the agent's account that moved itself out
   of the execution's containment is admin's to end, at the run's end
   (`weaver-admin-Spec` section 6.1, C1's exception).
 - **Admin** ends every process of the agent at the run's end, in its conclusion under

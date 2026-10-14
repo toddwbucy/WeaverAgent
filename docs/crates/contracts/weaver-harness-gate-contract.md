@@ -463,12 +463,15 @@ agent's reachability, observed through closure and authored to the stream as the
 keying on it there. A tool execution open when the gate dies has no answer coming: the
 harness closes it `Killed { by: fault }`, **its outcome indeterminate and never re-run
 automatically**. The harness first ends every process still in the execution's
-containment (#111, `weaver-admin-Spec` section 6.1 stating the mechanism, with its one
-exception), so nothing of the command left in it runs on, but the command may have
-completed before that end reached it (`weaver-admin-Spec`
-section 3, the organ-death table, and Codex on #109, round 43). **The gate ends every
-process still in each execution's containment at every end of it**, a command that left
-its process group or its session included (`weaver-gate-Spec` section 8).
+containment, or, where it cannot, ends service with that failure recorded and leaves
+the rest to admin's run end (#111, `weaver-admin-Spec` section 6.1 stating the
+mechanism, with its one exception). So nothing of the command left in its containment
+runs on past either ending, though the command may have completed before the end
+reached it (`weaver-admin-Spec` section 3, the organ-death table, and Codex on #109,
+round 43). **The gate ends every process still in each execution's containment at
+every end of it**, a command that left its process group or its session included, or,
+where it cannot, exits with the execution unanswered (section 2, `weaver-gate-Spec`
+section 8).
 
 **Nothing on this seam retries.** A refused directive returns to the harness, which
 unwinds, and a re-sent directive would put two attempts behind one operator intent.
