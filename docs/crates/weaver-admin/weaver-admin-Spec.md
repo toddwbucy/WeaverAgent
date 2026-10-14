@@ -2494,6 +2494,11 @@ weaver-<agent>/      root's; the agent's cgroup
     Its kill is idempotent, and a kill the gate delivered only makes the wait shorter. Past the
     bound it closes the execution all the same, closes the turn in flight
     `Stopped { reason: fault }`, and ends service.
+  - **Where the gate's death is a forced leave's reap** past the lower's bound (the
+    kill's bound, below, a forced leave not waiting it out), the worker writes its kill (or its pinned fallback, below) and
+    does not wait: it closes the interrupted call `Killed { by: fault }` at once, the
+    forced leave never waiting out the containment bound, and the run end's kill and its
+    own bound hold the rest (Codex on #161).
   - **Where its write of `tools/cgroup.kill` fails**, no kill was delivered, so the
     worker falls back to signalling each pid it reads from `tools/cgroup.procs`, every
     one under its own account, and repeats within the bound until `tools/` empties
@@ -2560,6 +2565,7 @@ during its own wait** (`weaver-harness-gate-contract` section 2):
 | the gate's write failed, no kill delivered | the worker, the bound whole from its own first kill | the caller's number plus the bound: the gate exits at once, the worker's write or its pidfd-pinned fallback delivers the first kill |
 | the gate crashed mid-execution, no kill delivered | the worker, the bound whole from its own first kill | at most the caller's number plus the bound, the crash coming before the clock |
 | the gate's kill delivered, then the gate crashed during its wait | the gate, part of the bound, then the worker, a bound whole from its own kill | at most the caller's number plus twice the bound: the worker cannot tell this from a crash before any kill, and its own kill and wait hold the rest |
+| a forced leave's reap past the lower's bound | the gate until the reap, then no one: the worker kills and does not wait | the forced leave's own bounds (section 3), never the containment bound: the call is closed `Killed { by: fault }` at the reap, the run end's kill and bound holding what remains |
  **A forced leave does
 not wait it out**: the lower's bound (section 3, `LOWER_BOUND_MS`) runs from the
 interrupt and does not wait on the interrupted execution's end, and past it the gate is
@@ -2611,6 +2617,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | the gate, its write of `tools/cgroup.kill` failing | T1 | T1 | no kill was delivered: the gate exits with the execution unanswered, the gate's death below, and the worker's fallback ends it |
 | the gate, `tools/` not empty within the bound after a delivered kill | T2 | T2 | the gate exits with the execution unanswered: the gate's death below |
 | the gate dies | T0, T1 or T2 | T2, then T0 | the worker kills `tools/`, waits a full bound from its own kill, and closes an open execution `Killed { by: fault }` |
+| the gate reaped by a forced leave past the lower's bound | T1 or T2 | T2 | the worker writes its kill (or its pinned fallback) and does not wait: it closes the interrupted call `Killed { by: fault }`, and the run end's kill and bound hold the rest |
 | the worker, `tools/` not empty within the bound | T2 | T2 | the worker ends service and unwinds, never serving on: the run end holds what remains |
 | the worker, its write of `tools/cgroup.kill` failing | T1 | T1, then T2 by the fallback's kills, then T0 | no kill was delivered by the write, so the worker pins each pid in `tools/cgroup.procs` by a pidfd, confirms it still stands in `tools/`, and sends `SIGKILL` through the pidfd, repeating within the bound |
 | the worker, the write and the fallback both failing | T1 | T1 | the worker closes the execution `Killed { by: fault }`, its `fault`'s account naming that containment failed and the kill was not delivered, and ends service: the run end holds what remains |
