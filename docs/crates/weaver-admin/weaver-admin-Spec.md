@@ -698,9 +698,11 @@ record, and `InTransition` while a leave is pending (3.0, `show` in S4 to S7 and
 shape**, per `weaver-types-Spec` section 4.2: it carries the session, run and artifact
 the event carries in its envelope or not at all, and lacks the event's stack, lineage,
 reset and prompt digest, so a consumer that stores both stores two shapes. Where the run
-lock is free there is no worker and no exchange to open, and this crate reports
-`Unloaded` from that absence without dialing, which is the one place the lock is read
-and it is read as the absence of a worker and not as a state. **Where the lock is
+lock is free there is no worker and no exchange to open, and this crate answers from
+that absence without dialing, by the ladder's rung (iv): `Unloaded` where the agent's
+cgroup holds nothing, `InTransition` naming what it holds otherwise (section 6.1). That
+is the one place the lock is read, and it is read as the absence of a worker and not as
+a state. **Where the lock is
 held, `show` names the run's constituents beside the harness's word**, on
 toddwbucy/WeaverWeb#15: the pid of every process holding the run lock's description, the
 worker, the member and the relay, from the holder scan the escalation runs, sorted and
@@ -855,7 +857,8 @@ leave and await the aggregate, then await the run's exit, the worker's after it 
 left and the member's and the relay's with it, read as the run lock's release,
 publishing the member's finished save points per section 6 once the member has stopped,
 the leave's own among them, which the harness's `Left` answer names, and answer
-provisioned-and-unloaded **only once the lock is free**. The publication adds no step to
+provisioned-and-unloaded **only once the lock is free and the run end has passed**
+(section 6.1). The publication adds no step to
 the three, being the second step's tail. The leave is the graceful unload of 3.0: a turn
 in flight, or a frame the gate admitted, no longer refuses it, the leave draining both
 (S3 x `unload`; I5), and the invocation lock is held from the first step to the
@@ -952,7 +955,8 @@ wait for the lock. A worker
 that accepts leave and answers nothing inside a leave that has a bound (a forced one, or
 a graceful one with both bounds declared) is a worker that would not exit: the
 verb goes to the escalation below without the aggregate, answers
-provisioned-and-unloaded once the lock is free, the run having ended with no leave
+provisioned-and-unloaded once the lock is free and the run end has passed (section
+6.1), the run having ended with no leave
 answered, which `admin.log` records and the next load's reset reads, and refuses
 `WorkerWouldNotExit` where the lock still stands after it. Without the bound a wedged
 worker would hold a forced verb, and with it the invocation lock, for ever, and since the
@@ -2628,7 +2632,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 
 | State | Meaning |
 |---|---|
-| A0 | absent at the deterministic path, no record |
+| A0 | absent at the deterministic path, whatever the record: a stale record is a sub-case, which the next verb removes |
 | A1 | standing, empty, no run: the start step's own before its first fork, a crash's after nothing of it ran on, or an invocation's that died inside its removal |
 | A2 | populated, the run lock held: a run stands |
 | A3 | populated, the run lock free: a run's leftovers after a crash |
@@ -2665,7 +2669,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | admin's run end, a removal failing other than with `ENOENT` | A1 partly removed | as left | refuses `BoundaryUnverified`, naming the cgroup, the record kept for the next `unload`, nothing published |
 | admin's run end, the record's removal failing | A0, a stale record | A0, a stale record | said in `admin.log`, refusing nothing: the next verb reads the absent path as A0 and removes the record |
 | a wait's read of `cgroup.events` failing (the gate's, the worker's or the run end's) | T2 or A4 | as the bound passing | read as not yet empty, so the wait runs to the bound and ends as a populated cgroup's does |
-| admin dies inside a run end | A4, A1 partly removed, or A0 with its record standing | as left | the next `unload` or `force-unload` writes the kill again, which is idempotent, and finishes the removal, the record last. Where the cgroup is already gone and only its record stands, that verb reads the absent path as A0 and removes the record (the row for a recorded path absent) |
+| admin dies inside a run end | A4, A1 partly removed, or A0, a stale record | as left | the next `unload` or `force-unload` writes the kill again, which is idempotent, and finishes the removal, the record last. Where the cgroup is already gone and only its record stands, that verb reads the absent path as A0 and removes the record (the row for a recorded path absent) |
 | admin dies inside the start step | A1 or A2 | as left | A1 is removed by the next load. A2 holds the run lock and is the S8b of section 3, ended by `unload` |
 | admin dies between the `mkdir` and the record's write | A1, no record | A1, no record | the next load's `mkdir` meets `EEXIST` at the deterministic path, finds it root's and empty, removes it and makes it afresh |
 | a later verb, a cgroup present at the recorded path with another device and inode | any | unchanged | refuses `BoundaryUnverified`, naming the path and both identities, and acts on nothing |

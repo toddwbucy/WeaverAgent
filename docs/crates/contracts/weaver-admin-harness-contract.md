@@ -414,7 +414,8 @@ trustworthy at every moment a dial is accepted, the one bound being the single t
 whose decode is in progress. Where no worker answers the dial at all, admin has no
 exchange to open and answers by `weaver-admin-Spec` section 3's ladder for `show`:
 `InTransition` with the constituents named while the run lock is held, and `Unloaded`
-only once it is free, the one place residency is read.
+only once it is free and no process of the agent stands, `InTransition` naming those
+that do, the one place residency is read.
 
 **There is no alert exchange, per the fault-carrier ruling of 2026-08-01.** A fault
 the worker survives is a `fault` event, authored by the harness into the stream
