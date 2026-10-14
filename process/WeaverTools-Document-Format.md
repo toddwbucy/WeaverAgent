@@ -116,10 +116,11 @@ The directory structure supplies the container of every document node and no doc
 declares its own container.
 
     process/                            the project documents
-    docs/project/                       the apex, and documents outside the set
-    docs/crates/weaver-<n>/             the PRD and the Spec for one crate
-    docs/crates/weaver-<n>/weaver-<m>/  a member crate of that domain root
+    docs/project/                       documents outside the set
+    docs/crates/weaver-agent-PRD.md     the apex, which has no crate
+    docs/crates/weaver-<n>/             the PRD and the Spec for one crate, every crate
     docs/crates/contracts/              contracts, and the material they draw
+    docs/crates/weaver-analysis/        copies of a crate that lives in its own repository
     docs/crates/weaver-<n>/Loops/       workflow documents of that domain root
     experiments/<e>/README.md           the charter of one experiment, its hypothesis
     experiments/<e>/<arm>/              one variable of that hypothesis
@@ -132,9 +133,10 @@ the first, per the filing ruling its section 5 records. The suffix reading is th
 same exclusion-by-naming device this document uses twice already, the absent
 `weaver-` prefix and the `.stub` suffix. A document under a `weaver-<n>/` directory
 is a PRD or a Spec by its own filename suffix. This is what makes the mirror check
-mechanical: every `docs/crates/weaver-*` has a matching `crates/weaver-*` at the
-same depth, and `contracts/` excludes itself by the absent prefix rather than by a
-written exception.
+mechanical: every `docs/crates/weaver-*` has a matching `crates/weaver-*`, both at
+the top of their trees, and `contracts/` excludes itself by the absent prefix rather
+than by a written exception. `weaver-analysis/` is the one written exception: its
+crate lives in its own repository, and the copies here carry its documents.
 
 A document under a `Loops/` directory is a workflow document, the container typing the
 kind directly because that directory splits into no further kinds, where `contracts/`
@@ -191,32 +193,32 @@ section 2 puts them outside the document set and outside the mapping, so a mappe
 walks `docs/` never reaches them and needs no rule to skip them. Placing them under
 `docs/project/` would have required one.
 
-**The mirror is recursive, and the nesting carries domain rather than dependency.** A
-**domain root** is a crate that other crates are members of, and a member crate nests
-inside its root at both trees. The word is not *composition root*, which this program
-already uses for the wiring site inside one binary where the concrete transport is
-constructed and injected. That is one place, made of code. This is several, made of
-crates. Section 5 forbids two spellings of one name, and one spelling of two things
-is the same defect with the halves swapped. `weaver-trace` sits under `weaver-harness`
-because the harness is its only caller, not because nothing else may link it. Nesting
-is not a visibility rule, a Cargo boundary, or a claim about who may depend on what.
-Those are settled by the seam and floor-link records, which do not read the
-directory. Nesting says which crate holds the domain, and its purpose is that
-someone who knows where a crate lives can find its documentation without a search.
+**The mirror is flat, and domain membership is not a directory.** On the operator's
+ruling of 2026-10-13, `docs/crates/` has the shape of `crates/`: one folder per crate
+at the top level, so a document maps to the code it governs, and no crate's documents
+sit under another crate's folder. `DocsMirrorTests` in `deploy/test_plans.py` pins the
+shape. A **domain root** is a crate that other crates are members of. The word is not
+*composition root*, which this program already uses for the wiring site inside one
+binary where the concrete transport is constructed and injected. That is one place,
+made of code. This is several, made of crates. Section 5 forbids two spellings of one
+name, and one spelling of two things is the same defect with the halves swapped.
+`weaver-trace` is a member of `weaver-harness` because the harness is its only
+caller, not because nothing else may link it. Membership is not a visibility rule, a
+Cargo boundary, or a claim about who may depend on what. Those are settled by the seam
+and floor-link records. Membership says which crate holds the domain, and the parent
+edge and the `Parent:` header carry it (section 3).
 
-**The floor does not nest.** Which crates are floor is `weaver-agent-PRD` section 5.1's
-to say and not this document's, per section 8. What belongs here is where they sit:
-a floor crate is placed at the top of the crate tree rather than under a domain root.
-Filing one under a root would make every other root reach through that root's subtree
-to draw floor vocabulary, which reads as the floor belonging to one domain when the
-invariant has it belonging to none. The rule is a directory rule and takes its
-classification from the apex, so a change to what the floor consists of changes no
-line here.
+**The floor belongs to no domain.** Which crates are floor is `weaver-agent-PRD`
+section 5.1's to say and not this document's, per section 8. What belongs here is
+their membership: a floor crate is a member of no domain root. Making one a member of
+a root would read as the floor belonging to one domain when the invariant has it
+belonging to none. The rule takes its classification from the apex, so a change to
+what the floor consists of changes no line here.
 
-**Depth is discovered, not designed.** A root gains a subtree when it gains a member,
-and a root with no members yet is a directory holding one PRD. Drawing a subtree for
-a crate that has not been chartered would guess at its membership, which is the
-reserved-slot move applied to directories.
+**Membership is discovered, not designed.** A root gains a member when a crate is
+chartered with that root as its parent, and a root with no members yet is a crate with
+none. Naming a member for a crate that has not been chartered would guess at its
+membership, which is the reserved-slot move applied to the domain.
 
 ## 3. Node kinds
 
@@ -225,10 +227,11 @@ requires each crate to have exactly one parent and the domain roots have no crat
 above them.
 
 **A parent edge names the domain parent.** A member crate parents to its domain root and
-a domain root parents to `WeaverTools`, so the parent edges reproduce the directory tree
-exactly and the graph answers the question the filesystem answers. This matters because
-domain membership is an architectural fact, and a fact that lived only in a directory
-listing would be hiding in the one place section 1 says facts are not allowed to hide.
+a domain root parents to `WeaverTools`, so the parent edges carry domain membership; the
+directory tree is flat, one folder per crate (section 2). This matters because domain
+membership is an architectural fact, and the edge and the `Parent:` header are where it
+is recorded, never a directory listing, which section 1 says is not a place a fact may
+hide.
 Every crate still has exactly one parent and the crate graph is still a tree, so the
 shape G3 checks is unchanged. What changed is what the edge means, and G3's wording is
 updated in the same act rather than left to be read against a rule it predates.

@@ -86,8 +86,8 @@ classifier or a small activation network the harness calls for effect is a third
 semantic processing under the same root. What organizes them is that they share
 residency accounting, device arbitration, and lifecycle confirmation, and the harness
 routes to them while holding none of them. Which of them become member crates is
-discovered when they are chartered, per the Document Format's rule that depth is
-discovered rather than designed, and this charter draws no subtree.
+discovered when they are chartered, per the Document Format's rule that membership
+is discovered rather than designed, and this charter names no member.
 
 **It is mortal in the same way the harness is.** `weaver-harness-PRD` section 1 has
 one harness, one agent, one process, one uid, and this crate inherits that shape by

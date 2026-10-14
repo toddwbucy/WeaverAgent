@@ -219,8 +219,8 @@ point a load restores. No tail
 replays on top of a save point by default. A tail landing on a stamped position is a
 door the contract does not yet say, and section 5 names that contract as owed.
 
-The nesting under `weaver-harness` carries domain membership and nothing else,
-per apex section 5.4: nesting is never process topology, and this member
+Membership of `weaver-harness`'s domain carries nothing else, per apex
+section 5.4: membership is never process topology, and this member
 crossing a process line while the trace links in-process is two right answers
 to two different questions. The trace must be unreachable by the agent and is
 written by exactly one party, so it lives inside that party. State serves reads
@@ -462,10 +462,10 @@ today.
   **H2's "No dependency on a sibling" stands unanswered against this pair, and this
   charter does not answer it.** That crate is this crate's sibling, both declaring a
   `parent` edge to `weaver-harness`. Two readings were put and neither settles it.
-  One is that the bar is the directory, which Document Format section 3 refuses:
-  nesting "is not a visibility rule, a Cargo boundary, or a claim about who may
-  depend on what", and the records settle it instead. **That disposes of the
-  directory and supplies no licence**, H2's sentence not being about the directory.
+  One is that the bar is domain membership, which Document Format section 2 refuses:
+  membership "is not a visibility rule, a Cargo boundary, or a claim about who may
+  depend on what", and the records settle it instead. **That disposes of
+  membership and supplies no licence**, H2's sentence not being about membership.
   The other is that declaring an edge cures it, on `weaver-types-PRD` section 1,
   where two floor crates under one root carry a dependency that "is a floor link and
   not a lateral edge". **That instance does not reach this pair**: H2's own first

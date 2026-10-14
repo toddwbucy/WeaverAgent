@@ -3021,7 +3021,7 @@ class LifecycleEnvelopeFieldTests(unittest.TestCase):
 
     def setUp(self):
         self.script = (DEPLOY / "verify-lifecycle.sh").read_text()
-        spec = (DEPLOY.parent / "docs/crates/weaver-harness/weaver-trace/weaver-trace-Spec.md").read_text()
+        spec = (DEPLOY.parent / "docs/crates/weaver-trace/weaver-trace-Spec.md").read_text()
         body = re.search(r"pub struct Envelope \{(.*?)\n\}", spec, re.S)
         self.assertIsNotNone(body, "the Spec's Envelope struct")
         self.fields = re.findall(r"pub (\w+):", body.group(1))
@@ -4140,6 +4140,66 @@ class ShStandInTests(unittest.TestCase):
         for line, text in stand_ins:
             for form in self.BASH_ONLY:
                 self.assertNotIn(form, text, f"the sh stand-in at line {line} carries {form!r}")
+
+
+def docs_mirror_faults(root):
+    """Where docs/crates/ departs from the shape of crates/ (the layout ruling
+    of 2026-10-13): one folder per crate at the top level, holding that
+    crate's PRD and Spec, and no crate's documents under another's folder.
+    The exceptions are contracts/, the apex weaver-agent-PRD.md and
+    weaver-analysis/, the duplicated copies of a crate that lives in its own
+    repository."""
+    crates = sorted(p.name for p in (root / "crates").iterdir()
+                    if (p / "Cargo.toml").is_file())
+    docs = root / "docs" / "crates"
+    faults = []
+    for name in crates:
+        for kind in ("PRD", "Spec"):
+            if not (docs / name / f"{name}-{kind}.md").is_file():
+                faults.append(f"docs/crates/{name}/{name}-{kind}.md is missing")
+    for folder in sorted(p for p in docs.iterdir() if p.is_dir()):
+        if folder.name not in crates + ["contracts", "weaver-analysis"]:
+            faults.append(f"docs/crates/{folder.name}/ names no crate")
+    for document in sorted(docs.rglob("weaver-*.md")):
+        owner = re.fullmatch(r"(weaver-.+)-(?:PRD|Spec)\.md", document.name)
+        if owner and document.parent != docs / owner.group(1) \
+                and document.relative_to(docs).as_posix() != "weaver-agent-PRD.md":
+            faults.append(f"{document.relative_to(root).as_posix()} sits outside "
+                          f"docs/crates/{owner.group(1)}/")
+    return faults
+
+
+class DocsMirrorTests(unittest.TestCase):
+    """docs/crates/ has the shape of crates/, so a document maps to the code
+    it governs (the layout ruling of 2026-10-13).
+    Perturbation: nest a crate's folder under another's, as
+    weaver-harness/weaver-trace/ once was, and both its missing top-level
+    documents and the nested ones are named."""
+
+    def test_every_crate_has_its_documents_at_the_top_level(self):
+        self.assertEqual(docs_mirror_faults(DEPLOY.parent), [])
+
+    def test_a_nested_crate_folder_is_named(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            for name in ("weaver-harness", "weaver-trace"):
+                (root / "crates" / name).mkdir(parents=True)
+                (root / "crates" / name / "Cargo.toml").write_text("")
+            harness = root / "docs" / "crates" / "weaver-harness"
+            (harness / "weaver-trace").mkdir(parents=True)
+            (root / "docs" / "crates" / "contracts").mkdir()
+            (root / "docs" / "crates" / "weaver-agent-PRD.md").write_text("")
+            for kind in ("PRD", "Spec"):
+                (harness / f"weaver-harness-{kind}.md").write_text("")
+                (harness / "weaver-trace" / f"weaver-trace-{kind}.md").write_text("")
+            self.assertEqual(docs_mirror_faults(root), [
+                "docs/crates/weaver-trace/weaver-trace-PRD.md is missing",
+                "docs/crates/weaver-trace/weaver-trace-Spec.md is missing",
+                "docs/crates/weaver-harness/weaver-trace/weaver-trace-PRD.md "
+                "sits outside docs/crates/weaver-trace/",
+                "docs/crates/weaver-harness/weaver-trace/weaver-trace-Spec.md "
+                "sits outside docs/crates/weaver-trace/",
+            ])
 
 
 if __name__ == "__main__":

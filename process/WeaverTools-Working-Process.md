@@ -536,7 +536,7 @@ same rule, and a contract change reaches every party to it in the same act.
 in the graph. Every Cargo edge is a declared `floor-link` or a `seam` tagged `link`,
 since the Document Format rules that a pair governed by a contract is a seam and never
 also a floor link. No dependency on a sibling. The parent edge is domain membership and
-appears in no Cargo file, since nesting carries domain rather than dependency. Checked
+appears in no Cargo file, since domain membership is not dependency. Checked
 against the charters' records by review while the graph is deferred to release. **A
 dev-dependency is outside this edge set**, on the operator's ruling of 2026-09-22 that
 closed the `weaver-state` to `weaver-trace` cell of #586 and #590: it is test

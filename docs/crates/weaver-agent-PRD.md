@@ -85,10 +85,9 @@ node.
 Inserting one needs a decision this document cannot take alone. Document Format
 section 3 declares exactly one `system` node, gives `crate` to "every crate,
 whether a domain root or a member of one," and carries no kind for a level between
-them. It also holds that the parent edges "reproduce the directory tree exactly,"
-and `crates/` has no `weaver-agent/` directory to reproduce. **So the level lands
-either as a Format act adding a kind, or with the crate tree gaining the
-directory,** and until one of those happens the graph answers the older shape while
+them. This document has no crate, and sits at the root of `docs/crates/` by the
+Format's section 2. **So the level lands as a Format act adding a kind,** and until
+it does the graph answers the older shape while
 this document answers the newer one. A reader meeting both should trust the graph
 about edges and this document about scope.
 
