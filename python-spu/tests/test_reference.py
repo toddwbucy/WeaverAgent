@@ -6,7 +6,7 @@ from python_spu.sampling import derived_seed,distribution
 from python_spu.family import render,MalformedDelta
 
 DIRECTIVES=[
- {'kind':'open','session':'s','messages':[]},
+ {'kind':'open','session':'s','messages':[],'column_ask':False},
  {'kind':'append_and_generate','turn':'t','delta':[{'role':'user','content':[{'type':'text','text':'hello'}]}]},
  {'kind':'cancel','turn':'t'}, {'kind':'flush','keep':2**64-1},
  {'kind':'elide','from':4,'to':7}, {'kind':'re_feed','turn':'t','rendered':'x','path':[0,2**32-1]}]

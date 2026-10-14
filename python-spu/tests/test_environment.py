@@ -70,14 +70,14 @@ def serve_once(tmp_path, tiny_model, extra_environment=None):
     identity = [{"role": "system", "content": [{"type": "text", "text": "be precise"}]}]
     instruction = {"decoder": {
         "model-binding": {"artifact": str(tiny_model), "devices": [0]},
-        "residual-readout-election": False, "surprisal-election": True, "identity": identity,
+        "residual-readout-election": False, "surprisal-election": True,
         "tunable-values": {"seed": 11, "context-capacity": 256, "max-tokens-per-turn": 4}}}
     generated = False
     try:
         answer = process.ask({"kind": "admit", "instruction": instruction})
         assert answer["payload"] == {"kind": "answer", "body": {"kind": "admitted"}}
         decode = process.channels[1]
-        decode.send({"kind": "open", "session": "import-set", "messages": identity})
+        decode.send({"kind": "open", "session": "import-set", "messages": identity, "column_ask": False})
         assert decode.receive() == {"kind": "opened"}
         decode.send({"kind": "append_and_generate", "turn": "import-set-turn", "delta": [
             {"role": "user", "content": [{"type": "text", "text": "hello world"}]}]})
@@ -542,7 +542,7 @@ def test_the_spu_is_one_process_after_admission_and_after_generation(tmp_path, t
         assert admitted["payload"] == {"kind": "answer", "body": {"kind": "admitted"}}
         assert children_of(process.pid) == []
         decode = process.channels[1]
-        decode.send({"kind": "open", "session": "s",
+        decode.send({"kind": "open", "session": "s", "column_ask": False,
                      "messages": [{"role": "system", "content": [{"type": "text", "text": "be precise"}]}]})
         assert decode.receive() == {"kind": "opened"}
         decode.send({"kind": "append_and_generate", "turn": "t", "delta": [
@@ -576,7 +576,7 @@ from python_spu.wire import SpuInstruction
 engine = HFEngine(sys.argv[1], [0], cpu=True)
 instruction = SpuInstruction.model_validate({"decoder": {
     "model-binding": {"artifact": "fixture", "devices": [0]},
-    "residual-readout-election": False, "surprisal-election": True, "identity": [],
+    "residual-readout-election": False, "surprisal-election": True,
     "tunable-values": {"seed": 11, "context-capacity": 256, "max-tokens-per-turn": 4}}})
 session = Session(engine, instruction.decoder, 256, 4, 11)
 session.open([{"role": "system", "content": [{"type": "text", "text": "be precise"}]}])
