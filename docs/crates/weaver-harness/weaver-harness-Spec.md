@@ -505,7 +505,8 @@ end, at 4**: a handle on the agent's `tools/` cgroup (`weaver-admin-Spec` sectio
 #111), which the worker opens `O_DIRECTORY` once at the enter, judges once, and never
 resolves by path again, the territory's descriptor route (`weaver-admin-Spec` section
 9). It crosses the gate's exec as the ends do, its flag cleared by the same placement,
-and the gate's `clone3` starts each shell in `tools/` through it. **A worker that cannot
+and beneath it the gate opens `tools/`'s files, each shell's child moving itself into
+`tools/` through it before its exec (`weaver-gate-Spec` section 8). **A worker that cannot
 open or judge it stands no gate**: the gate's arm of the enter refuses
 `BoundaryUnverified`, wrapped `OrganRefused` in the aggregate (section 3, the enter),
 and the load rolls back. Until the decoder cut of 2026-08-02 an organ held

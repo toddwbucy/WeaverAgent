@@ -2466,18 +2466,21 @@ weaver-<agent>/      root's; the agent's cgroup
   after the fork and before the privilege drop and the exec. So no constituent runs an
   instruction of its own outside the agent's cgroup, and every fork after inherits its
   parent's cgroup.
-- **The gate starts each shell directly in `tools/`**, by `clone3` with
-  `CLONE_INTO_CGROUP` (Linux 5.7, beneath the floor) on a descriptor of `tools/` the
-  worker opens once at the enter and hands the gate at its fork, at descriptor 4
+- **Each shell's child moves itself into `tools/` before its exec** (`weaver-gate-Spec`
+  section 8): in its `pre_exec`, with its parent-death signal set, it writes `0` to
+  `tools/cgroup.procs`, opened by `openat` beneath a descriptor of `tools/` the worker
+  opens once at the enter and hands the gate at its fork, at descriptor 4
   (`weaver-harness-Spec` section 2.2), never re-resolved by path. A worker that cannot
-  open it stands no gate, and the load refuses. So no
-  instant exists in which a shell stands outside `tools/` while the gate or the worker
-  may already have killed it and read it empty.
+  open it stands no gate, and the load refuses. The child runs only the gate's own code
+  until the move, and the gate's spawn returns only once the child has exec'd, so no
+  instant exists in which a tool's instruction runs outside `tools/`, or in which the
+  gate or the worker could kill `tools/` and read it empty with the child still outside.
+  A gate that dies first takes the child with it, by the parent-death signal.
 
 **Who does what, and when.**
 
 - **The gate**, at each execution (`weaver-gate-Spec` section 8):
-  - The shell is born in `tools/`.
+  - The shell's child moves itself into `tools/` before its exec.
   - At every end the gate writes `tools/cgroup.kill`, then waits for
     `tools/cgroup.events` to read `populated 0` before it answers. Every end means the
     shell's exit, the clock, a cancel, an interrupt and the channel's closure.
@@ -2579,8 +2582,10 @@ weaver-<agent>/      root's; the agent's cgroup
     cgroup, and the load refuses and rolls back as for any constituent that does not
     stand (section 6). A worker that cannot open or judge `tools/` stands no gate, as
     the gate's bullet says.
-- **The gate's `clone3` that fails** is the machinery's: no shell ran and nothing is in
-  `tools/`, so the gate answers `Errored` (`weaver-harness-gate-contract` section 2).
+- **A shell's spawn that fails, its child's move into `tools/` included,** is the
+  machinery's: the child ends before its exec, no shell ran and nothing is in `tools/`,
+  so the gate answers `Errored` (`weaver-harness-gate-contract` section 2), never a
+  containment failure.
 
 **The containment bound: 30 seconds for `populated 0` after a `cgroup.kill`**, this
 Spec's election, provisional and measured like section 6's, and stated here once. **A
@@ -2649,7 +2654,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | admin's start step | A1 | A0, then as above | removes it and its record and makes it afresh |
 | admin's start step | A3 | A3 | refuses `AgentRunning`, naming the processes, and kills nothing (I8) |
 | admin's start step | A2 or A4 | unchanged | refuses `AgentRunning` at the run lock, before the cgroup is looked at (section 3). A4 with the lock free refuses `AgentRunning` as A3 does |
-| the gate, an execution opened | T0 | T1 | the shell is born in `tools/` |
+| the gate, an execution opened | T0 | T1 | the shell's child moves itself into `tools/` before its exec, and the spawn returns once it has exec'd |
 | the gate, the execution's end (exit, clock, cancel, interrupt, closure) | T1 | T2, then T0 | `tools/cgroup.kill`, the wait, then the answer |
 | the gate, its write of `tools/cgroup.kill` failing | T1 | T1 | no kill was delivered: the gate exits with the execution unanswered, the gate's death below, and the worker's kill, or its fallback, ends it |
 | the gate, `tools/` not empty within the bound after a delivered kill | T2 | T2 | the gate exits with the execution unanswered: the gate's death below |
@@ -2682,7 +2687,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | admin's start step, a `fchmod`, the three files' owner or the record's write failing | A1 | A0 | refuses `BoundaryUnverified`, naming the step, removes what it made and stands nothing |
 | admin's start step, a constituent's placement of itself failing | A1 or A2 | as the rollback leaves it | the child ends before its exec, and the load refuses and rolls back as for any constituent that does not stand (section 6) |
 | the worker, `tools/` not opened or judged at the enter | A2 | A2, then the rollback's | no gate is stood: the enter's gate arm refuses `BoundaryUnverified`, and the load rolls back |
-| the gate's `clone3` failing | T0 | T0 | no shell ran: the gate answers `Errored` |
+| the gate, a shell's spawn failing, its child's move into `tools/` included | T0 | T0 | the child ends before its exec, no shell ran: the gate answers `Errored` |
 | a crash between a `mkdir` and its record under one containment, the next load from another | A1 under the first containment, no record | unchanged | the orphan holds no process, and the next load from the first containment removes it |
 | a tool command writes its own pid to `worker/cgroup.procs` (the agent's account can) | T1 | T0 or T1, the process in `worker/` | out of reach of its execution's end and of the gate's death, never out of the agent's cgroup: held by the run end |
 
@@ -2690,10 +2695,10 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 
 | # | Invariant | Held by |
 |---|---|---|
-| C1 | **No tool process outlives its execution's end.** A shell is born in `tools/`, and before the gate answers, `tools/` is empty, a gate that cannot empty it never answering: a command that left its process group or its session is in `tools/` all the same. A gate's death empties `tools/` by the worker's kill, by a pidfd-pinned `SIGKILL` of each pid still in `tools/` where the kill's write fails, and where both fail the execution is closed `Killed { by: fault }` with its `fault` naming the failed containment, service ending and the run end holding the rest. A `tools/` that will not empty within the bound ends service (the gate exits, then the worker unwinds), so no run serves on past an execution it could not end. **Two exceptions are stated.** The first: a command running as the agent's account can move itself out of `tools/` into `worker/` by writing `worker/cgroup.procs`, since the file that lets the gate move its shell lets the shell move itself. That process escapes C1 and is held by C2. **The second is a containment that could not be delivered**: where the worker's write and its fallback both fail, the execution is closed `Killed { by: fault }` with its processes unsignalled, its `fault` naming the failed containment, and they too are held by C2. So C1 holds of every process to which a kill was delivered. A later election of a controller on `worker/` would meet it there and must place it first. | the gate, and the worker on the gate's death |
+| C1 | **No tool process outlives its execution's end.** A shell's child moves itself into `tools/` before its exec, and before the gate answers, `tools/` is empty, a gate that cannot empty it never answering: a command that left its process group or its session is in `tools/` all the same. A gate's death empties `tools/` by the worker's kill, by a pidfd-pinned `SIGKILL` of each pid still in `tools/` where the kill's write fails, and where both fail the execution is closed `Killed { by: fault }` with its `fault` naming the failed containment, service ending and the run end holding the rest. A `tools/` that will not empty within the bound ends service (the gate exits, then the worker unwinds), so no run serves on past an execution it could not end. **Two exceptions are stated.** The first: a command running as the agent's account can move itself out of `tools/` into `worker/` by writing `worker/cgroup.procs`, since the file that lets the gate move its shell lets the shell move itself. That process escapes C1 and is held by C2. **The second is a containment that could not be delivered**: where the worker's write and its fallback both fail, the execution is closed `Killed { by: fault }` with its processes unsignalled, its `fault` naming the failed containment, and they too are held by C2. So C1 holds of every process to which a kill was delivered. A later election of a controller on `worker/` would meet it there and must place it first. | the gate, and the worker on the gate's death |
 | C2 | **No process of the agent outlives its run's end.** `Unloaded` is answered only where no process of the agent stands: the run lock free and the agent's cgroup absent or empty. The run end answers it only after killing and removing the cgroup, and past the containment bound it refuses `WorkerWouldNotExit`, never `Unloaded`. A load stands a run only in a cgroup it made. **The window is stated:** after a run ends with no admin verb (the worker dying, then the member and the relay, or the worker ending service with `tools/` still populated), leftovers run on until the next `unload` or `force-unload`. A load refuses on them and kills nothing, and `show` names them. They are contained in A3: leaving the agent's cgroup needs a write to a file of root's. | admin's run end, the start step's refusal on A3, and `show`'s ladder |
 | C3 | **The agent's account reaches only three files.** Through them it can move a process within `worker/` and kill `tools/`, and nothing else: no member, no relay, no cgroup made or removed, no interface file of root's changed. | the layout's ownership |
-| C4 | **Every process of the agent starts inside.** Each constituent is placed by its own child before its exec, each shell is born in `tools/`, and every fork after inherits. | the start step's placement and the gate's `clone3` |
+| C4 | **Every process of the agent starts inside.** Each constituent is placed by its own child before its exec, each shell's child moves itself into `tools/` before its exec, running only the gate's own code until then, and every fork after inherits. | the start step's placement and the shell child's move |
 
 **What the trace records: nothing new.**
 - A tool execution the gate's kill ended at the clock, a cancel or an interrupt is the

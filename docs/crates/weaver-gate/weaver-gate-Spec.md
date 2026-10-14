@@ -183,10 +183,12 @@ loop of section 4, `umask` around the bind for the mode election of section
 3, `getsockopt` for the peer credential with `getuid` for the predicate it
 feeds, `User::from_uid` for the home the shell starts in, which comes from
 the account database because there the uid's home is a fact rather than a
-variable the agent's environment may or may not carry, and, for section 8, `waitid` for the reap, `clone3` with `CLONE_INTO_CGROUP`
-that starts the shell in `tools/`, the write of `tools/cgroup.kill` that ends an
-execution, and a read of `tools/cgroup.events` for the wait on its emptying
-(`weaver-admin-Spec` section 6.1).
+variable the agent's environment may or may not carry, and, for section 8, `waitid` for the reap, `prctl` and `openat` with `write` in the
+shell's child before its exec (the parent-death signal, and the move into `tools/`), the
+write of `tools/cgroup.kill` that ends an execution, and a read of `tools/cgroup.events`
+for the wait on its emptying (`weaver-admin-Spec` section 6.1). **Every one of
+`tools/cgroup.procs`, `tools/cgroup.kill` and `tools/cgroup.events` is opened by
+`openat` beneath the handle at descriptor 4, never by path.**
 **The bind, the listen and the accept are not among them.**
 `UnixListener::bind` is the standard library's and creates and binds and
 listens in one call, per section 3, which is the shape the one bind site
@@ -232,9 +234,10 @@ re-decided.** `weaver-harness-Spec` section 2.2 elects the number and owes it
 to this document, and this document takes it: the exec'd binary finds its
 channel end at 3, the first after the standard streams, and wraps it as an
 owned handle at entry. **Beside it, at 4, is its one further descriptor, the
-handle on the agent's `tools/` cgroup** that section 8's `clone3` uses
+handle on the agent's `tools/` cgroup** beneath which section 8 opens `tools/`'s files
 (`weaver-admin-Spec` section 6.1, #111), wrapped the same way and marked
-close-on-exec at entry as 3 is, so no shell inherits it. These two are the only
+close-on-exec at entry as 3 is, so no shell inherits it: it stays open across the shell's fork, for the child's move,
+and closes at its exec. These two are the only
 descriptors this process begins with beyond the standard streams, per the fork
 discipline of
 `weaver-harness-gate-contract` section 1, which makes a build in which this
@@ -1327,12 +1330,24 @@ nearest match.
 
 **The invocation forks the shell into the agent's `tools/` cgroup and
 supervises it to the caller's clock** (#111, `weaver-admin-Spec` section 6.1
-stating the mechanism). The shell is born in `tools/`, forked by `clone3`
-with `CLONE_INTO_CGROUP` through the handle on `tools/` this crate receives at
-descriptor 4 beside its channel end (`weaver-harness-Spec` section 2.2), never
-through a path, so the command and everything it forks start there,
-a new session or a double fork included, and no instant exists in which it
-stands outside while the gate may already have killed `tools/`. The caller's timeout crossed the exchange,
+stating the mechanism). **The shell's child moves itself into `tools/` before its
+exec**: it is spawned as before (the standard library's `Command`, its own process
+group, its environment cleared), and in its `pre_exec`, before the exec, it sets its
+parent-death signal to `SIGKILL` and checks its parent still stands, then opens
+`cgroup.procs` by `openat` beneath the handle on `tools/` at descriptor 4 (received beside
+its channel end, `weaver-harness-Spec` section 2.2) and writes `0`. Both are raw calls
+through `nix`'s `libc`, async-signal-safe and allocating nothing. So the child runs only
+this crate's own code until the move succeeds, and the command and everything it forks
+start in `tools/`, a new session or a double fork included. **No instant leaves a
+command outside while the gate may already have killed `tools/`**: the spawn returns
+only once the child has exec'd, the standard library reporting an exec or `pre_exec`
+failure through its own close-on-exec pipe, so the gate's supervision, and every kill
+it makes, begins after the move. A gate that dies before then takes the child with it,
+by the parent-death signal. **A child whose move fails ends before its exec**, the spawn
+answering that failure, and the gate answers `Errored` with nothing run, never a
+containment failure: nothing reached `tools/`. The move needs write on
+`tools/cgroup.procs` and on the common ancestor's, `worker/cgroup.procs`, both among the
+three files the agent's account holds (`weaver-admin-Spec` section 6.1). The caller's timeout crossed the exchange,
 already validated against the declared maximum at the refusal layer, and it is
 the one kill clock. **Every end of an execution kills `tools/` whole**: the
 shell's exit, the clock, a cancel, an interrupt and the channel's closure each
