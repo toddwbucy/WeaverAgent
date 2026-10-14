@@ -113,7 +113,7 @@ answers and encodes and decodes the coordination channel's envelopes. `nix` is t
 surface, on the grounds `weaver-harness-Spec` section 2.4 argued and this crate inherits
 rather than re-argues: descriptor custody is central, the io-safe owned types make it a
 compile property, and the needed calls, `socket`, `bind`, `listen`, `accept`,
-`getsockopt` for the peer credential, `sendmsg` with control messages, `open`, `mkfifo`,
+`getsockopt` for the peer credential and the peer's pidfd, `sendmsg` with control messages, `open`, `mkfifo`,
 and `stat`, are all covered. That crate asserts the election where it argues it, so this
 one cites it and adds no second record for one decision. `sha2` joins on 2026-09-04 for
 one purpose, the digests of the declaration file and, since 2026-10-02, of the prompt
@@ -2347,17 +2347,51 @@ harness binds it as its first act, per `weaver-admin-harness-contract` section
 configuration places, with the close-on-exec flag asked for in the socket call
 itself and the connection closed when the verb answers.
 
-**The dial judges its peer** (#98). The socket's directory is the agent's, so a name
-replaced there could aim the verb at another agent's worker, or at any listener on the
-box. After the connect, this crate reads the listener's `SO_PEERCRED`, set when it
-listened, and requires its uid to be the agent's worker account, resolved by name as
-the start step resolves it. Any other uid refuses `WrongPeer` at once, with no retry.
-`show` then refuses `BoundaryUnverified`, a joining `force-unload` ends the run by the
-escalation on the run lock's holders, a load's rollback ends what it stood the
-same way, and `unload`, `stop`, `save-point` and `load` refuse `BoundaryUnverified`.
-The peer is judged by uid, so it tells the worker's account from any other and not
-the worker from another process under the agent's uid. The harness's
-check at its accept, root or refused, is the other direction of the same channel.
+**The dial judges its peer** (#98, #140). The socket's directory is the agent's, so a
+name replaced there could aim the verb at another agent's worker, at any listener on
+the box, or at a process of the worker's own uid: the gate, the SPU and every tool
+process the worker forks run under that uid, and any of them could unlink the name,
+bind its own and answer a `Leave` with a `Left` the conclusion publishes on. So the
+dial judges the process, not only the account. After the connect, this crate reads the
+listener's `SO_PEERCRED`, set when it listened, and requires:
+
+- its uid to be the agent's worker account, resolved by name as the start step
+  resolves it;
+- **the listening process to hold the run lock's description** (section 3, the run
+  lock). The worker is the one process of that uid that does: the start step hands it
+  the description at descriptor 9, every constituent marks it close-on-exec as its
+  first act, and an organ or tool the worker forks executes before it can bind
+  anything, so none of them carries it. A child the worker forks without an exec
+  carries it, and runs the worker's own code, so it is the worker for this judgment.
+  The member and the relay hold it too, under
+  their own accounts, which the uid has already refused. This is read the way the
+  escalation reads its holders: the descriptors in `/proc/<pid>/fd` referring to
+  `run.lock`'s device and inode, one of them carrying the description lock
+  (`OFDLCK`) in `/proc/<pid>/fdinfo/<n>`. No record of the forked pid is kept: admin
+  is not resident, and a pid written at the start step would be a second account of
+  what the run lock's holder already is.
+
+**The pid is read through a pidfd, which closes the reuse race.** `SO_PEERCRED`'s pid
+is a number fixed at `listen`, and it outlives its process: measured on 2026-10-14, a
+listener that handed its socket to a child and was reaped still read as its old pid,
+which the kernel may hand to any later process, the next run's worker among them. A
+socket renamed into place by an impostor would then be judged by a process that never
+listened. So the dial also reads `SO_PEERPIDFD`, a pidfd on the listener itself, and
+takes the pid from its `/proc/self/fdinfo/<n>` `Pid:` line, which reads `-1` once the
+listener is gone (measured the same day). The judgment is: that pid is
+`SO_PEERCRED`'s, it holds the run lock, and the pidfd still reads the same pid after
+the holder scan. A process cannot give up its pid while it lives, so a pid read
+through a live pidfd on both sides of the scan named the listener throughout. A
+listener that is gone, a pid that holds no run lock, or a pidfd that cannot be read
+refuses `WrongPeer` naming the listener's uid and pid. **`SO_PEERPIDFD` needs Linux 6.5
+or later**; where the kernel lacks it the dial refuses the same way, a peer that
+cannot be judged being no worker, so no verb that dials runs on an older kernel.
+
+Any refusal of the peer is `WrongPeer`, at once and with no retry. `show` then refuses
+`BoundaryUnverified`, a joining `force-unload` ends the run by the escalation on the
+run lock's holders, a load's rollback ends what it stood the same way, and `unload`,
+`stop`, `save-point` and `load` refuse `BoundaryUnverified`. The harness's check at its
+accept, root or refused, is the other direction of the same channel.
 
 **The dial retries within a bound because the bind is the worker's first act
 and the load's dial may arrive first.** The load's start step starts the worker and then
@@ -2992,10 +3026,13 @@ when the root check is removed. The walk lost two mechanisms with the recut,
 the operator socket's predicate and the coordination directory's 0700, and it
 is stronger for the exchange: both were fences in front of a check that could
 not tell the worker from a tool, and what stands now is a check that can. **The walk's reverse, the agent aiming a verb elsewhere, is refused at the dial**
-(#98, section 7): the socket's name stands in the agent's directory, so this crate
-judges the listener's uid before a byte is sent. The test is a listener under another
-uid, refused `WrongPeer` without the dial's retries, watched to fail when the
-comparison is removed.
+(#98, #140, section 7): the socket's name stands in the agent's directory, so this
+crate judges the listener before a byte is sent, its uid and its process. The tests:
+a listener under another uid, refused `WrongPeer` without the dial's retries, watched
+to fail when the comparison is removed; and two forked children of the suite's own
+uid listening at the name, the one holding a run lock's description accepted and the
+one holding none refused `WrongPeer` naming its pid, watched to fail when the holder
+check is removed and when the holder scan is broken.
 
 **The second walk: the agent reaches the sink by path.** The adversary is
 the same tool surface, the attack a path traversal to the sink the config
