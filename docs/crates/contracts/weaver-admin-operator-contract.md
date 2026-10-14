@@ -375,10 +375,11 @@ the one the marker stands open on: its file is published as recovered, never as 
 run's save point, so no save point of this run was published (`weaver-admin-Spec` 3.0,
 the `save-point` verb's publication; #140, S17). **`SavePointTaken` is the
 hash-confirmed write** (#157): the verb answers it only once the save point's published
-copy has been read back through the territory's `save-points/` and digests to the
-manifest line written for it, the digest the answer's report carries, and a copy that
-does not read back refuses `SavePointNotTaken` naming `published`, as does an `unload`
-whose leave save point fails the same read-back. The read-back proves the published
+copy has been read back through the territory's `save-points/` and digests to its
+manifest line, the digest the answer's report carries, and a copy that does not read
+back refuses `SavePointNotTaken` naming `published`, as does an `unload` whose leave save
+point fails the same read-back; a `load` whose publication meets one refuses
+`BoundaryUnverified`, as on any save point left in the room. The read-back proves the published
 file's bytes, as the kernel serves them, digest to the line; durability on the device
 rests on the syncs `weaver-admin-Spec` section 6 makes before it. **A member's room past 4096 finished
 names refuses `BoundaryUnverified`** at every verb that publishes (a `load`, an `unload`,

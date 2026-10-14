@@ -1339,7 +1339,9 @@ fn publish_with(
             );
         };
         remove_temporary();
-        let written = (|| -> std::io::Result<()> {
+        // Answers whether the entry under the published name was adopted
+        // rather than renamed into place by this verb.
+        let written = (|| -> std::io::Result<bool> {
             let fd = nix::fcntl::openat(
                 directory,
                 temporary.as_str(),
@@ -1393,7 +1395,7 @@ fn publish_with(
                 // **The directory is synced before the line names the entry**,
                 // so a manifest line never outlives its target across a power
                 // loss, and the room's copy goes only after both are durable.
-                Ok(()) => sync_directory(directory),
+                Ok(()) => sync_directory(directory).map(|()| false),
                 // **An entry already under the published name is adopted
                 // where it is this save point**: a publication interrupted
                 // between the rename and the manifest line left it, the
@@ -1403,7 +1405,7 @@ fn publish_with(
                 Err(nix::errno::Errno::EEXIST) => {
                     remove_temporary();
                     match adopt_durably(directory, &name, file_owner, &mut sync_directory) {
-                        Ok(Some((_, standing))) if standing.digest == entry.digest => Ok(()),
+                        Ok(Some((_, standing))) if standing.digest == entry.digest => Ok(true),
                         Ok(Some(_)) => Err(std::io::Error::other(
                             "an entry of other bytes stands under the published name",
                         )),
@@ -1418,44 +1420,61 @@ fn publish_with(
                 Err(e) => Err(std::io::Error::from(e)),
             }
         })();
-        if let Err(e) = written {
-            diag!(
-                "weaver-admin: the room's {} did not publish ({e}); it and every later save point are left for the next verb",
-                entry.name
-            );
-            remove_temporary();
-            deferred = true;
-            break;
-        }
+        let adopted = match written {
+            Ok(adopted) => adopted,
+            Err(e) => {
+                diag!(
+                    "weaver-admin: the room's {} did not publish ({e}); it and every later save point are left for the next verb",
+                    entry.name
+                );
+                remove_temporary();
+                deferred = true;
+                break;
+            }
+        };
+        // The copy's bytes are done with, so the read-back below never holds
+        // two whole save points at once.
+        drop(bytes);
         // **The published copy is read back before its line is written**
         // (#157), per Spec section 6: opened again through the directory's
-        // descriptor and judged as a load judges it, its bytes must digest
-        // to the room's digest, so the line, and a `SavePointTaken` or an
+        // descriptor and judged as a load judges it, which refuses a file
+        // whose bytes do not compute its name, and the name carries the
+        // room's digest; so the line, and a `SavePointTaken` or an
         // `Unloaded` built on it, names bytes the kernel serves at that
         // name. It proves nothing of the device, a read right after a write
         // being served from the page cache; durability rests on the syncs
-        // above. A copy that does not read back is unlinked, the directory
-        // synced, and the verb stops as a deferral, the room's copy kept.
-        (hooks.before_read_back)(directory, &name);
-        let read_back = match open_judged(directory, &name, file_owner) {
-            Ok(Some((_, judged))) if judged.digest == entry.digest => Ok(()),
-            Ok(Some((_, judged))) => Err(format!("its bytes digest to {}", judged.digest)),
-            Ok(None) => Err("it is gone".to_string()),
-            Err(fault) => Err(fault.why),
-        };
-        if let Err(why) = read_back {
-            diag!(
-                "weaver-admin: the published {name} does not read back to its digest ({why}); it is removed, and the room's {} and every later save point are left for the next verb",
-                entry.name
-            );
-            let _ = nix::unistd::unlinkat(
-                directory,
-                name.as_str(),
-                nix::unistd::UnlinkatFlags::NoRemoveDir,
-            );
-            let _ = sync_directory(directory);
-            deferred = true;
-            break;
+        // above. An adopted entry was just judged the same way by
+        // `adopt_durably`, which is its read-back. A copy that does not read
+        // back is unlinked, the directory synced, and the verb stops as a
+        // deferral, the room's copy kept.
+        if !adopted {
+            (hooks.before_read_back)(directory, &name);
+            let read_back = match open_judged(directory, &name, file_owner) {
+                Ok(Some(_)) => Ok(()),
+                Ok(None) => Err("it is gone".to_string()),
+                Err(fault) => Err(fault.why),
+            };
+            if let Err(why) = read_back {
+                let removed = nix::unistd::unlinkat(
+                    directory,
+                    name.as_str(),
+                    nix::unistd::UnlinkatFlags::NoRemoveDir,
+                )
+                .map_err(std::io::Error::from)
+                .and_then(|()| sync_directory(directory));
+                match removed {
+                    Ok(()) => diag!(
+                        "weaver-admin: the published {name} does not read back to its digest ({why}); it is removed, and the room's {} and every later save point are left for the next verb",
+                        entry.name
+                    ),
+                    Err(e) => diag!(
+                        "weaver-admin: the published {name} does not read back to its digest ({why}) and was not removed ({e}); the operator removes it, and until then the room's {} and every later save point stay for the next verb, which refuses on it",
+                        entry.name
+                    ),
+                }
+                deferred = true;
+                break;
+            }
         }
         if standing.is_some() {
             // The target stands again under its line; nothing to append.

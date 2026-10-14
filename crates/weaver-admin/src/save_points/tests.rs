@@ -2459,3 +2459,55 @@ fn a_published_copy_that_does_not_read_back_gets_no_line() {
     assert_eq!(std::fs::read(dir.join(&lines[0].name)).unwrap(), bytes);
     assert!(!room.join(&room_name).exists(), "and the room's copy goes");
 }
+
+/// **A target recreated beneath its standing line is read back too** (#157):
+/// a line stands, its target is gone and the room's copy is left, so the
+/// publication recreates the target under the line; corrupted before its
+/// read-back, the recreated copy is removed, the verb defers, the room's
+/// copy stays and the manifest still holds its one line, so the next verb
+/// recreates it again. Perturbation: drop the read-back and the corrupted
+/// copy stands under the line.
+#[test]
+fn a_recreated_target_that_does_not_read_back_is_removed() {
+    let (_scratch, room, dir, mine, names) = room_of_save_points("read-back-recreate", 1);
+    let room_name = names[0].0.clone();
+    let room_bytes = std::fs::read(room.join(&room_name)).unwrap();
+    let dir_fd = open_directory(&dir).unwrap();
+    let publish_now = |before_read_back: &mut dyn FnMut(BorrowedFd<'_>, &str)| {
+        publish_with(
+            open_directory(&room).unwrap().as_fd(),
+            mine.uid,
+            dir_fd.as_fd(),
+            (mine.uid, mine.gid),
+            mine,
+            &[],
+            &mut PublishHooks {
+                after_scan: &mut || {},
+                available: &mut available_bytes,
+                cap: PUBLISH_CAP,
+                room_bound: ROOM_SCAN_BOUND,
+                finished: None,
+                before_read_back,
+            },
+        )
+        .unwrap()
+    };
+    let (lines, _) = publish_now(&mut |_, _| {});
+    assert_eq!(lines.len(), 1);
+    let published = dir.join(&lines[0].name);
+    // A crash left the room's copy, and the target is gone since.
+    std::fs::write(room.join(&room_name), &room_bytes).unwrap();
+    std::fs::remove_file(&published).unwrap();
+
+    let (appended, deferred) = publish_now(&mut |_, name| {
+        let path = dir.join(name);
+        let mut bytes = std::fs::read(&path).unwrap();
+        *bytes.last_mut().unwrap() ^= 0xff;
+        std::fs::write(&path, &bytes).unwrap();
+    });
+    assert!(appended.is_empty(), "no second line");
+    assert!(deferred, "the verb defers");
+    assert!(!published.exists(), "the corrupted recreation is removed");
+    assert!(room.join(&room_name).exists(), "the room's copy stays");
+    assert_eq!(read_manifest(dir_fd.as_fd(), mine).unwrap().len(), 1);
+}

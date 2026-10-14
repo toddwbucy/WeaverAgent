@@ -2040,12 +2040,16 @@ and the connector read it and nothing writes it but this crate, its owner and mo
 verified through the open file, then renamed to its published name, overwriting
 nothing, every step against `save-points/` as opened at section 9's judgment. **The
 published copy is read back before its line is written** (#157, on the operator's
-ruling of 2026-10-14 for WeaverWeb): after the rename, or the adoption of an entry
-already under the name, and the directory's sync, the published name is opened again
-through `save-points/`'s descriptor and judged as a load judges it (section 4), and its
-bytes must digest to the room's digest the line will carry. A copy that does not is
-unlinked through the same descriptor, the directory synced, and the verb stops as a
-deferral, no line written and the room's copy standing for the next verb, so a reported
+ruling of 2026-10-14 for WeaverWeb): after the rename and the directory's sync, the
+published name is opened again through `save-points/`'s descriptor and judged as a load
+judges it (section 4), which holds its bytes to the digest its name carries, the room's
+digest the line will carry. An entry adopted from under the name is judged that same way
+by its adoption, which is its read-back. A copy that does not read back is unlinked
+through the same descriptor, the directory synced, and the verb stops as a deferral, no
+line written and the room's copy standing for the next verb; where the unlink or the
+sync fails, `admin.log` says so and the copy stays, and every later verb refuses on it,
+as on any entry of other bytes under a published name, until the operator removes it.
+At a load the deferral refuses `BoundaryUnverified`, as any deferral does; a reported
 save point so stopped refuses `SavePointNotTaken` naming `published` at the `save-point`
 verb and at the unload alike, in the rows 3.0 already gives a publication that did not
 land. **What the read-back proves: that the published file's bytes, as the kernel
