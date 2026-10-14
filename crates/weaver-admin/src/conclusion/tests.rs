@@ -8,14 +8,24 @@ fn settled(kind: LeftKind) -> (MarkerWrite, NextReset, Printed) {
     }
 }
 
-/// A row after its publication, with its reset through `reset_of`.
-fn published(this_run: bool, landed: bool) -> (MarkerWrite, NextReset, Printed) {
-    assert_eq!(
-        conclude(LeftKind::Reported { this_run }),
-        Conclusion::Publish { this_run }
-    );
+/// A row after its publication, with its reset through `reset_of`, and the
+/// publication's form the row names.
+fn published(this_run: bool, landed: bool) -> (Publication, MarkerWrite, NextReset, Printed) {
+    let Conclusion::Publish {
+        this_run: carried,
+        publication,
+    } = conclude(LeftKind::Reported { this_run })
+    else {
+        panic!("a reported save point publishes");
+    };
+    assert_eq!(carried, this_run);
     let outcome = after_publication(this_run, landed);
-    (outcome.marker, reset_of(outcome.marker), outcome.printed)
+    (
+        publication,
+        outcome.marker,
+        reset_of(outcome.marker),
+        outcome.printed,
+    )
 }
 
 /// Row 1, a load's rollback before its `load` event is on the trace: the
@@ -87,14 +97,17 @@ fn row4_forced_not_taken_closes_forced() {
 }
 
 /// Row 5, a save point reported whose `event_run` is not the run the marker
-/// stands open on: published, the marker left open, whatever the
-/// publication's outcome (the key is blank in the Spec).
+/// stands open on: the room published, the reported file as recovered (S17,
+/// the operator's ruling of 2026-10-14 on #140), the marker left open,
+/// whatever the publication's outcome (the key is blank in the Spec).
+/// Perturbation: publish it as reported, as before S17, and this fails.
 #[test]
-fn row5_another_runs_save_point_publishes_and_leaves_open() {
+fn row5_another_runs_save_point_publishes_as_recovered_and_leaves_open() {
     for landed in [true, false] {
         assert_eq!(
             published(false, landed),
             (
+                Publication::Recovered,
                 MarkerWrite::LeaveOpen,
                 NextReset::NoCleanUnload,
                 Printed::Unloaded
@@ -104,27 +117,74 @@ fn row5_another_runs_save_point_publishes_and_leaves_open() {
     }
 }
 
-/// Row 6, this run's save point published: the marker `Closed`.
+/// Row 6, this run's save point published: as reported, the marker `Closed`.
 #[test]
 fn row6_published_closes_clean() {
     assert_eq!(
         published(true, true),
-        (MarkerWrite::Closed, NextReset::None, Printed::Unloaded)
+        (
+            Publication::Reported,
+            MarkerWrite::Closed,
+            NextReset::None,
+            Printed::Unloaded
+        )
     );
 }
 
-/// Row 7, this run's save point attempted and not landed: the marker left
-/// open, the caller refused `SavePointNotTaken` naming the publication.
+/// Row 7, this run's save point attempted as reported and not landed: the
+/// marker left open, the caller refused `SavePointNotTaken` naming the
+/// publication.
 #[test]
 fn row7_unpublished_leaves_open_and_refuses() {
     assert_eq!(
         published(true, false),
         (
+            Publication::Reported,
             MarkerWrite::LeaveOpen,
             NextReset::NoCleanUnload,
             Printed::SavePointNotTakenPublished
         )
     );
+}
+
+/// **The `save-point` verb's table** (3.0, the `save-point` verb's
+/// publication; S17), row for row: this run's report published as on
+/// demand answers `SavePointTaken`; this run's not landed refuses naming
+/// `published`; another run's, its file published as recovered, refuses
+/// naming `published` whether or not it landed. Perturbation: answer
+/// another run's landed file `SavePointTaken`, or publish it as reported,
+/// and this fails.
+#[test]
+fn the_save_point_verbs_rows() {
+    // (event_run the marker's run, landed, publication, answer)
+    for (this_run, landed, publication, answer) in [
+        (true, true, Publication::Reported, SavePointAnswer::Taken),
+        (
+            true,
+            false,
+            Publication::Reported,
+            SavePointAnswer::NotTakenPublished,
+        ),
+        (
+            false,
+            true,
+            Publication::Recovered,
+            SavePointAnswer::NotTakenPublished,
+        ),
+        (
+            false,
+            false,
+            Publication::Recovered,
+            SavePointAnswer::NotTakenPublished,
+        ),
+    ] {
+        assert_eq!(publication_of(this_run), publication, "{this_run} {landed}");
+        assert_eq!(
+            save_point_answer(this_run, landed),
+            answer,
+            "{this_run} {landed}"
+        );
+    }
 }
 
 /// **No row before the reported ones publishes**: rows 1 to 4 settle from

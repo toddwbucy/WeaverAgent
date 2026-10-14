@@ -3122,6 +3122,76 @@ class LifecycleRequiredReadTests(unittest.TestCase):
         self.assertEqual(found, [], "a compared value read through json_at")
 
 
+class LifecycleRoomCountTests(unittest.TestCase):
+    """**The run prints the largest room count admin.log records** (S16, the
+    operator's ruling of 2026-10-14 on #140): `room_count_report`, lifted
+    with its helpers as the script ships them, reads admin.log through a
+    stand-in `sudo` and prints one MEASURED line, never a check. The lines
+    are in admin.log's own shape (admin's `publish` lines, a load's, and the
+    relay's `ended` line, which carries no `verb`). Perturbation: keep the
+    first count rather than the largest and the line names 1; drop the
+    past-the-bound reading and that case reads as a count."""
+
+    def line(self, verb, outcome):
+        return json.dumps({"agent": "m1", "command": f"weaver-admin {verb} m1", "outcome": outcome,
+                           "uid": 1000, "verb": verb, "wall_ms": 1}, separators=(",", ":"))
+
+    RELAY = ('{"actor":"relay","agent":"m1","boundary":"b","detail":"the worker exited",'
+             '"event":"ended","wall_ms":2}')
+
+    def report(self, lines):
+        scratch = tempfile.TemporaryDirectory(prefix="weaver-room-count-")
+        self.addCleanup(scratch.cleanup)
+        root = Path(scratch.name)
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        sudo = bin_dir / "sudo"
+        sudo.write_text('#!/bin/sh\n[ "$1" = "-n" ] && shift\nexec env "$@"\n')
+        sudo.chmod(0o755)
+        territory = root / "weaver-m1"
+        territory.mkdir()
+        (territory / "admin.log").write_text("".join(l + "\n" for l in lines))
+        script = (DEPLOY / "verify-lifecycle.sh").read_text()
+        program = ("set -euo pipefail\nAPPLY=1\n"
+                   + f"T={shlex.quote(str(territory))}\n"
+                   + "plan() { printf '   %s\\n' \"$*\"; }\n"
+                   + lifecycle_functions(script, "fail", "measured", "json_at", "json_req",
+                                         "room_count_report")
+                   + "room_count_report\n")
+        env = {**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]}
+        env.pop("BASH_ENV", None)
+        return subprocess.run(["bash", "-c", program], env=env, text=True,
+                              capture_output=True, timeout=20)
+
+    def test_the_largest_count_is_printed(self):
+        result = self.report([
+            self.line("load", "idle"),
+            self.line("publish", "the room holds 1 finished names"),
+            self.RELAY,
+            self.line("publish", "the room holds 3 finished names"),
+            self.line("publish", "<name> ordinal 2 at the leave"),
+            self.line("publish", "the room holds 2 finished names"),
+        ])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("MEASURED the room's count: the largest room count over 3 scans: 3 finished names",
+                      result.stdout)
+        self.assertNotIn("FAIL", result.stdout)
+
+    def test_a_scan_past_the_bound_and_a_log_with_none(self):
+        result = self.report([self.line("publish", "the room holds more than 4096 finished names")])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("more than 4096 finished names, past the bound", result.stdout)
+        result = self.report([self.line("load", "idle"), self.RELAY])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("admin.log records no room scan", result.stdout)
+
+    def test_the_report_runs_before_the_take_down_on_both_paths(self):
+        script = (DEPLOY / "verify-lifecycle.sh").read_text()
+        tail = script[script.index('if [ "$KEEP" -eq 1 ]; then\n  STEP_LABEL='):]
+        self.assertEqual(tail.count("room_count_report\n"), 2)
+        self.assertLess(tail.rindex("room_count_report\n"), tail.rindex("\nstep_9\n"))
+
+
 class LifecycleForcedLogTests(unittest.TestCase):
     """**Step 6b reads admin's own writes to admin.log, not the file's
     growth** (the second full run, 2026-10-13): the force on the drifted

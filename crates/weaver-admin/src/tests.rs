@@ -3163,9 +3163,17 @@ fn the_save_point_verb_answers_the_report_and_is_out_of_order_without_a_run() {
     ));
     let _ = holder.kill();
     let _ = holder.wait();
-    // The reported file stands in the territory's room: it publishes,
-    // and the verb answers the report.
+    // The reported file stands in the territory's room and the report is
+    // the open marker's run's: it publishes as on demand, and the verb
+    // answers the report.
     let (config, report, base) = territory_with_one_room_file("save-point-verb-published");
+    save_points::write_marker(
+        &config.root,
+        Some(&save_points::Marker::Open {
+            run: report.event_run.0.clone(),
+        }),
+    )
+    .unwrap();
     let mut holder = stand_in_holder(&config);
     let worker = recording_worker(
         &config,
@@ -3202,6 +3210,76 @@ fn the_save_point_verb_answers_the_report_and_is_out_of_order_without_a_run() {
             report.save_point.as_str(),
             save_points::Arrival::Demand,
             Some((report.event_run.0.clone(), report.position))
+        )
+    );
+    // **The scan's count is in `admin.log`** (S16): a `publish` line naming
+    // the room's one finished name. Perturbation: record no count and it is
+    // missing.
+    let log = std::fs::read_to_string(config.territory.join("admin.log")).unwrap();
+    assert!(
+        log.lines().any(|line| {
+            let line: serde_json::Value = serde_json::from_str(line).unwrap();
+            line["verb"] == "publish" && line["outcome"] == "the room holds 1 finished names"
+        }),
+        "{log}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// **A save point reported for another run publishes as recovered and the
+/// verb answers none** (S17, the operator's ruling of 2026-10-14 on #140;
+/// 3.0, the `save-point` verb's publication): the marker stands open on
+/// `r-2`, the worker reports a save point of `r-1`, and the file publishes
+/// with no position and arrived recovered, the verb refusing
+/// `SavePointNotTaken` naming `published`. Perturbation: accept the report
+/// whatever its run, and the line arrives on demand with the report's
+/// position and the verb answers it.
+#[test]
+fn a_save_point_reported_for_another_run_publishes_as_recovered() {
+    let agent = AgentName("alpha".into());
+    let (config, report, base) = territory_with_one_room_file("save-point-verb-foreign");
+    save_points::write_marker(
+        &config.root,
+        Some(&save_points::Marker::Open { run: "r-2".into() }),
+    )
+    .unwrap();
+    assert_ne!(report.event_run.0, "r-2");
+    let mut holder = stand_in_holder(&config);
+    let worker = recording_worker(
+        &config,
+        vec![
+            weaver_types::Payload::Answer(LifecycleAnswer::State {
+                state: weaver_types::AgentState::Idle,
+                load: None,
+                constituents: Vec::new(),
+            }),
+            weaver_types::Payload::Answer(LifecycleAnswer::SavePointTaken {
+                report: report.clone(),
+            }),
+        ],
+    );
+    let answered = save_point(&config, &agent);
+    let _ = worker.join();
+    let _ = holder.kill();
+    let _ = holder.wait();
+    assert_eq!(
+        answered,
+        Err(LifecycleRefusal::SavePointNotTaken {
+            missed: weaver_types::SavePointLeg::Published,
+        })
+    );
+    let lines = manifest_lines(&config);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        (
+            lines[0].digest.as_str(),
+            lines[0].arrived,
+            lines[0].position.clone()
+        ),
+        (
+            report.save_point.as_str(),
+            save_points::Arrival::Recovered,
+            None
         )
     );
     let _ = std::fs::remove_dir_all(&base);
@@ -3747,14 +3825,16 @@ fn a_recovered_file_of_an_older_run_leaves_the_marker_open() {
 
 /// **A leave's save point of another run makes no run clean** (the push
 /// review of 197e80b): the worker reports a save point whose event run
-/// is not the run the marker stands open on; it publishes, the verb
-/// answers unloaded, and the marker stays open for the next load's
-/// reset. The run compared is the event's, never the covered run: a run
-/// restored and left with no turn covers the prior run's position, so a
-/// report covering `r-0` whose event is `r-1`, with the marker open on
-/// `r-1`, closes it clean. Perturbations: close the marker whatever the
-/// report's run and the first reads closed; compare the covered run and
-/// the second stays open.
+/// is not the run the marker stands open on; its file publishes as
+/// recovered, with no position (S17, the operator's ruling of 2026-10-14 on
+/// #140; 3.0, row 5), the verb answers unloaded, and the marker stays open
+/// for the next load's reset. The run compared is the event's, never the
+/// covered run: a run restored and left with no turn covers the prior run's
+/// position, so a report covering `r-0` whose event is `r-1`, with the
+/// marker open on `r-1`, closes it clean, published at the leave.
+/// Perturbations: close the marker whatever the report's run and the first
+/// reads closed; publish another run's report as reported and its line
+/// arrives at the leave; compare the covered run and the second stays open.
 #[test]
 fn a_leave_reporting_another_runs_save_point_leaves_the_marker_open() {
     let leave =
@@ -3794,7 +3874,16 @@ fn a_leave_reporting_another_runs_save_point_leaves_the_marker_open() {
         };
     let (config, report, base) = territory_with_one_room_file("other-run-leave");
     assert_eq!(leave(&config, &report, "r-2"), Ok(unloaded_answer()));
-    assert_eq!(manifest_digests(&config), [report.save_point]);
+    assert_eq!(
+        manifest_digests(&config),
+        std::slice::from_ref(&report.save_point)
+    );
+    let lines = manifest_lines(&config);
+    assert_eq!(
+        (lines[0].arrived, lines[0].position.clone()),
+        (save_points::Arrival::Recovered, None),
+        "another run's report publishes as recovered"
+    );
     assert_eq!(
         save_points::read_marker(&config.root),
         Some(save_points::Marker::Open { run: "r-2".into() })
@@ -3808,7 +3897,15 @@ fn a_leave_reporting_another_runs_save_point_leaves_the_marker_open() {
         ..report
     };
     assert_eq!(leave(&config, &report, "r-1"), Ok(unloaded_answer()));
-    assert_eq!(manifest_digests(&config), [report.save_point]);
+    assert_eq!(
+        manifest_digests(&config),
+        std::slice::from_ref(&report.save_point)
+    );
+    assert_eq!(
+        manifest_lines(&config)[0].arrived,
+        save_points::Arrival::Leave,
+        "this run's report publishes as reported"
+    );
     assert_eq!(
         save_points::read_marker(&config.root),
         Some(save_points::Marker::Closed { run: "r-1".into() }),

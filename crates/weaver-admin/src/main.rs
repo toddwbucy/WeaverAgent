@@ -1565,28 +1565,53 @@ fn save_point(
         },
         Err(_) => return Err(LifecycleRefusal::Unanswered),
     };
-    // **The verb answers only a published save point**: the harness's
-    // report is answered once its file stands in the territory's save-points
-    // under a manifest line, and a publication that refuses, or does not
-    // reach this save point, refuses the verb `SavePointNotTaken` naming
-    // `published`, as the unload names it (the #94 survey's S12), the file
-    // standing in the room for the next verb and said so in the log.
-    let published = publish_from_room(
-        config,
-        agent,
-        &[(report.clone(), save_points::Arrival::Demand)],
-    );
-    if !matches!(&published, Ok(lines) if lines.iter().any(|line| line.digest == report.save_point))
-    {
-        diag!(
-            "weaver-admin: the save point {} was taken and not published; it stands in the member's room for the next verb",
-            report.save_point
-        );
-        return Err(LifecycleRefusal::SavePointNotTaken {
-            missed: weaver_types::SavePointLeg::Published,
-        });
+    // **A report is accepted only for the open marker's run** (S17, the
+    // operator's ruling of 2026-10-14 on #140; 3.0, the `save-point` verb's
+    // publication): the worker runs as the agent's uid, so a report naming
+    // another run is not this run's save point, and its file publishes as
+    // recovered. A marker that does not read, or reads other than `Open`, is
+    // no match.
+    let this_run = open_run(config).ok().flatten().as_deref() == Some(report.event_run.0.as_str());
+    let reports = match conclusion::publication_of(this_run) {
+        conclusion::Publication::Reported => {
+            vec![(report.clone(), save_points::Arrival::Demand)]
+        }
+        conclusion::Publication::Recovered => {
+            diag!(
+                "weaver-admin: the save point {} reports run {}, not the run the marker stands open on; its file publishes as recovered",
+                report.save_point,
+                report.event_run.0
+            );
+            record(
+                config,
+                "save-point",
+                "the report is not this run's; its file publishes as recovered",
+            );
+            Vec::new()
+        }
+    };
+    // **The verb answers only a published save point of this run**: the
+    // harness's report is answered once its file stands in the territory's
+    // save-points under a manifest line, and a publication that refuses, or
+    // does not reach this save point, refuses the verb `SavePointNotTaken`
+    // naming `published`, as the unload names it (the #94 survey's S12), the
+    // file standing in the room for the next verb and said so in the log.
+    let published = publish_from_room(config, agent, &reports);
+    let landed = matches!(&published, Ok(lines) if lines.iter().any(|line| line.digest == report.save_point));
+    match conclusion::save_point_answer(this_run, landed) {
+        conclusion::SavePointAnswer::Taken => Ok(LifecycleAnswer::SavePointTaken { report }),
+        conclusion::SavePointAnswer::NotTakenPublished => {
+            if this_run {
+                diag!(
+                    "weaver-admin: the save point {} was taken and not published; it stands in the member's room for the next verb",
+                    report.save_point
+                );
+            }
+            Err(LifecycleRefusal::SavePointNotTaken {
+                missed: weaver_types::SavePointLeg::Published,
+            })
+        }
     }
-    Ok(LifecycleAnswer::SavePointTaken { report })
 }
 
 /// **Name the save point the next load restores**, the `restore` verb, per
@@ -2518,23 +2543,32 @@ fn conclude_answered(
     };
     let outcome = match conclusion::conclude(kind) {
         conclusion::Conclusion::Settled(outcome) => outcome,
-        conclusion::Conclusion::Publish { this_run } => {
-            let reports: Vec<_> = left
-                .save_point
-                .iter()
-                .cloned()
-                .map(|report| (report, save_points::Arrival::Leave))
-                .collect();
+        conclusion::Conclusion::Publish {
+            this_run,
+            publication,
+        } => {
+            // **A report of another run publishes as recovered** (S17, row
+            // 5): the room is published with no report, so the file takes no
+            // position and no leave arrival.
+            let reports: Vec<_> = match publication {
+                conclusion::Publication::Reported => left
+                    .save_point
+                    .iter()
+                    .cloned()
+                    .map(|report| (report, save_points::Arrival::Leave))
+                    .collect(),
+                conclusion::Publication::Recovered => Vec::new(),
+            };
             let published = publish_from_room(config, &AgentName(config.agent.clone()), &reports);
             let landed = unpublished_leave(&reports, &published).is_none();
             if !this_run {
                 diag!(
-                    "weaver-admin: the leave reported a save point of another run than the one the marker stands open on; the marker stays open"
+                    "weaver-admin: the leave reported a save point of another run than the one the marker stands open on; its file publishes as recovered and the marker stays open"
                 );
                 record(
                     config,
                     "unload",
-                    "the leave's save point is not this run's; the marker stays open",
+                    "the leave's save point is not this run's; its file publishes as recovered and the marker stays open",
                 );
             }
             conclusion::after_publication(this_run, landed)
@@ -2755,14 +2789,23 @@ fn publish_room_as(
             return Err(refusal);
         }
     };
-    match save_points::publish_noting_deferral(
+    let mut finished = None;
+    let published = save_points::publish_counting(
         std::os::fd::AsFd::as_fd(&room),
         member,
         directory,
         config.file_owner(),
         owner,
         reports,
-    ) {
+        &mut finished,
+    );
+    // **Every scan records the room's count** (S16, the operator's ruling of
+    // 2026-10-14 on #140; Spec section 6), so the provisional bound can be
+    // judged from what rooms hold.
+    if let Some(count) = finished {
+        record(config, "publish", &room_count_outcome(count));
+    }
+    match published {
         Ok((lines, deferred)) => {
             for line in &lines {
                 record(
@@ -2786,6 +2829,20 @@ fn publish_room_as(
             );
             Err(refusal)
         }
+    }
+}
+
+/// The `publish` line's outcome naming the room's finished-name count, in the
+/// one form the lifecycle verification reads: `the room holds <n> finished
+/// names`, or `more than <bound>` where the scan refused past it.
+fn room_count_outcome(count: usize) -> String {
+    if count > save_points::ROOM_SCAN_BOUND {
+        format!(
+            "the room holds more than {} finished names",
+            save_points::ROOM_SCAN_BOUND
+        )
+    } else {
+        format!("the room holds {count} finished names")
     }
 }
 

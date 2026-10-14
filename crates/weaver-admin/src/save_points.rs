@@ -104,6 +104,39 @@ fn list_directory(directory: BorrowedFd<'_>) -> nix::Result<Vec<String>> {
     Ok(names)
 }
 
+/// **The room's finished names, read through its descriptor, at most
+/// `bound + 1`**: any other name is passed over unkept, and the listing stops
+/// once it has seen one past the bound, `finished` counting what it kept.
+/// A listing that fails is never an empty room, as `list_directory` holds.
+fn list_finished(
+    directory: BorrowedFd<'_>,
+    bound: usize,
+    finished: &mut usize,
+) -> nix::Result<Vec<String>> {
+    let duplicate = nix::unistd::dup(directory)?;
+    let mut dir = nix::dir::Dir::from_fd(duplicate)?;
+    let mut names = Vec::new();
+    *finished = 0;
+    for entry in dir.iter() {
+        let entry = entry?;
+        if let Ok(name) = entry.file_name().to_str()
+            && is_finished_name(name)
+        {
+            *finished += 1;
+            if *finished > bound {
+                break;
+            }
+            names.push(name.to_string());
+        }
+    }
+    Ok(names)
+}
+
+/// **The scan's bound on the room's finished names** (S16, the operator's
+/// ruling of 2026-10-14 on #140): provisional, as the trace queue's is, and
+/// measured, every scan recording its count in `admin.log`.
+pub const ROOM_SCAN_BOUND: usize = 4096;
+
 /// Whether an entry of the name stands in the directory, a link included.
 fn entry_stands(directory: BorrowedFd<'_>, name: &str) -> bool {
     nix::sys::stat::fstatat(directory, name, nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW).is_ok()
@@ -750,20 +783,38 @@ struct RoomEntry {
 /// descriptor without following links, a regular file owned by the member's
 /// uid under a finished name, its bytes judged; anything else is left in
 /// place and named.
-fn read_room(room: BorrowedFd<'_>, member_uid: u32) -> Result<Vec<RoomEntry>, LifecycleRefusal> {
+///
+/// **At most `bound` finished names** (S16, the operator's ruling of
+/// 2026-10-14 on #140; Spec section 6): the listing keeps finished names
+/// alone and stops past the bound, refusing `BoundaryUnverified` naming the
+/// room before any is scanned, so the member cannot make a verb's scan, and
+/// the invocation lock with it, as long as its file count. `finished` is set
+/// to the count seen once the listing reads, `bound + 1` where it stopped,
+/// for the caller to record; a listing that fails sets nothing.
+fn read_room(
+    room: BorrowedFd<'_>,
+    member_uid: u32,
+    bound: usize,
+    finished: &mut Option<usize>,
+) -> Result<Vec<RoomEntry>, LifecycleRefusal> {
+    let mut count = 0;
     // **Listed through the room's own descriptor** (the custody audit's
     // G12), the descriptor `open_room` opened without following a link, so
     // the listing and every open and removal below resolve the one
     // directory judged and never the path again.
-    let names = list_directory(room).map_err(|e| {
+    let names = list_finished(room, bound, &mut count).map_err(|e| {
         diag!("weaver-admin: the room does not list ({e}); nothing is published");
         LifecycleRefusal::BoundaryUnverified
     })?;
+    *finished = Some(count);
+    if count > bound {
+        diag!(
+            "weaver-admin: the room holds more than {bound} finished save points, past the scan's bound; nothing is published until it is cleared"
+        );
+        return Err(LifecycleRefusal::BoundaryUnverified);
+    }
     let mut found = Vec::new();
     for name in names {
-        if !is_finished_name(&name) {
-            continue;
-        }
         // **Only the stamp line is read at the scan** (Codex on #94, at
         // ab8acef, and the custody review): enough for the order and the
         // name, a few KiB at the most, so a room of many files costs the
@@ -1030,6 +1081,9 @@ pub fn publish(
 /// a later verb, past the cap or the free space (Codex on #94, at ab8acef),
 /// or at a judgment or copy that failed (the #94 survey's S3):
 /// a load must not select while a newer save point waits in the room.
+/// Production calls [`publish_counting`], which also answers the room's count.
+// #118: a test-only hook, kept beside the production code it observes.
+#[cfg(test)]
 pub fn publish_noting_deferral(
     room: BorrowedFd<'_>,
     member_uid: u32,
@@ -1038,19 +1092,35 @@ pub fn publish_noting_deferral(
     owner: Owner,
     reports: &[(SavePointReport, Arrival)],
 ) -> Result<(Vec<ManifestLine>, bool), LifecycleRefusal> {
-    publish_with(
-        room,
-        member_uid,
-        directory,
-        file_owner,
-        owner,
-        reports,
-        &mut PublishHooks {
-            after_scan: &mut || {},
-            available: &mut available_bytes,
-            cap: PUBLISH_CAP,
-        },
+    publish_counting(
+        room, member_uid, directory, file_owner, owner, reports, &mut None,
     )
+}
+
+/// `publish_noting_deferral`, setting `finished` to the room's finished-name
+/// count the scan saw, `ROOM_SCAN_BOUND + 1` where it refused past the bound,
+/// and nothing where the room did not list, for the caller to record (S16).
+pub fn publish_counting(
+    room: BorrowedFd<'_>,
+    member_uid: u32,
+    directory: BorrowedFd<'_>,
+    file_owner: (u32, u32),
+    owner: Owner,
+    reports: &[(SavePointReport, Arrival)],
+    finished: &mut Option<usize>,
+) -> Result<(Vec<ManifestLine>, bool), LifecycleRefusal> {
+    let mut hooks = PublishHooks {
+        after_scan: &mut || {},
+        available: &mut available_bytes,
+        cap: PUBLISH_CAP,
+        room_bound: ROOM_SCAN_BOUND,
+        finished: None,
+    };
+    let published = publish_with(
+        room, member_uid, directory, file_owner, owner, reports, &mut hooks,
+    );
+    *finished = hooks.finished;
+    published
 }
 
 /// **At most this many room files are published by one verb** (the custody
@@ -1073,11 +1143,14 @@ fn available_bytes(directory: BorrowedFd<'_>) -> std::io::Result<u64> {
 }
 
 /// What a test may vary in a publication: a hook run between the room's scan
-/// and the first copy, the free-space look, and the per-verb cap.
+/// and the first copy, the free-space look, the per-verb cap and the scan's
+/// bound; and what the scan saw, the room's finished-name count.
 struct PublishHooks<'a> {
     after_scan: &'a mut dyn FnMut(),
     available: &'a mut dyn FnMut(BorrowedFd<'_>) -> std::io::Result<u64>,
     cap: usize,
+    room_bound: usize,
+    finished: Option<usize>,
 }
 
 /// `publish` with its hooks a parameter, so a test can change the room
@@ -1094,7 +1167,7 @@ fn publish_with(
 ) -> Result<(Vec<ManifestLine>, bool), LifecycleRefusal> {
     let mut lines = read_manifest(directory, owner)?;
     let mut appended = Vec::new();
-    let mut entries = read_room(room, member_uid)?;
+    let mut entries = read_room(room, member_uid, hooks.room_bound, &mut hooks.finished)?;
     (hooks.after_scan)();
     // **Several entries publish recovered first, then reported, the member
     // process's own count ordering within a kind** (Codex on #94, rounds 5
