@@ -150,8 +150,9 @@ After it, `getent passwd | grep weaver-` and `ls /opt/weaver` should show nothin
 
 **Root's record, and the rerun** (#140). Once the runs are asked again and none answers,
 before step 1, the purge writes root's record: the lines it judged against its own
-derivation while the box stood whole, the prefixes that derivation found, and each
-listed path's identity (device and inode) as judged. The sudo rules removed just before
+derivation while the box stood whole, the prefixes that derivation found, and what
+each removal acts on as judged: every listed path's and every root's identity, and
+every listed account's and group's number. The sudo rules removed just before
 it are derived again by a rerun from their directory, so a stop before the record leaves
 nothing a rerun cannot find. The record is
 `/var/lib/decommission-weaver/<the PURGE-LIST's sha256>`, the directory root's `0700` and
@@ -164,10 +165,19 @@ nothing the operator-writable archive directory holds.
 
 - A purge stopped at any point runs again against the same archive to completion: it
   acts on root's record instead of deriving again from a box it has half removed, and a
-  path, user or group already gone is done. A rerun removes a path only while it is
-  still the object judged, its identity unchanged, so a `/tmp` name another principal
-  takes after a reboot is never removed by name alone: a path that changed refuses the
-  purge, naming it.
+  path, user or group already gone is done.
+- **A rerun removes only the object judged.** `/etc/weaver` is checked before any root
+  is withdrawn, then each root, each listed path, and each account and group by its
+  number, and anything that changed refuses the purge, naming it. So a `/tmp` name
+  another principal takes after a reboot, a `/etc/weaver` or a root put back or made
+  again, and an account made again under its name are never removed as root by name
+  alone. A path's identity is its device, inode, owner uid and birth time, read without
+  following a final link. Device and inode alone are reused once a path is gone, and
+  the owner and the birth time tell a replacement from the original. The birth time is
+  in whole seconds and reads 0 on a filesystem that keeps none. What the identity
+  cannot rule out is a replacement on the reused device and inode with the same owner,
+  made in the same second, or at any time on a filesystem without a birth time. Only
+  that owner, or root, can make one.
 - A root that cannot be withdrawn refuses the purge there, before step 2, since a root
   left standing with its territory gone would refuse every rerun.
 - **A rerun's run check** is the same `show` of every root still standing, and once the
