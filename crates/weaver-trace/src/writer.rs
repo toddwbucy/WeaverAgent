@@ -90,6 +90,10 @@ struct WriterState {
     /// Under the mutex the writer cannot decrement until the waiter has
     /// released it by sleeping, so the notify always finds the sleeper.
     queued: usize,
+    /// **The run's peak depth** (#120; `weaver-trace-Spec` section 6): the
+    /// highest `queued` has reached, raised at every enqueue and never
+    /// lowered, reported at the leave as the evidence for [`QUEUE_DEPTH`].
+    peak: usize,
 }
 
 /// The stream writer: one thread, one descriptor, whole events only. A short
@@ -113,6 +117,7 @@ impl Writer {
                 last_error: None,
                 failed: None,
                 queued: 0,
+                peak: 0,
             }),
             drained: Condvar::new(),
             abandoned: std::sync::atomic::AtomicBool::new(false),
@@ -175,6 +180,7 @@ impl Writer {
             state = self.shared.drained.wait(state).expect("writer state");
         }
         state.queued += 1;
+        state.peak = state.peak.max(state.queued);
         drop(state);
         // A full queue blocks here until the writer frees space: the
         // deployment's loss bound expressed as backpressure rather than loss,
@@ -200,8 +206,10 @@ impl Writer {
         }
     }
 
-    fn queued(&self) -> usize {
-        self.shared.state.lock().expect("writer state").queued
+    /// The depth now and the run's peak, read together.
+    fn depths(&self) -> (usize, usize) {
+        let state = self.shared.state.lock().expect("writer state");
+        (state.queued, state.peak)
     }
 
     /// The failure a later submission surfaces: the first failed write, named
@@ -420,10 +428,11 @@ impl Recorder {
     /// recorder that emitted its own pressure event would have ended that
     /// rule in the act of reporting on it.
     pub fn pressure(&self) -> Pressure {
-        let queued = self.writer.queued();
+        let (queued, peak) = self.writer.depths();
         Pressure {
             queued,
             over_mark: queued > HIGH_WATER_MARK,
+            peak,
         }
     }
 
@@ -600,6 +609,9 @@ fn turn_required(kind: Kind) -> bool {
 pub struct Pressure {
     pub queued: usize,
     pub over_mark: bool,
+    /// **The run's peak depth** (#120): the highest `queued` reached, never
+    /// lowered, which the harness reports at the leave outside the record.
+    pub peak: usize,
 }
 
 /// The total kind-to-payload mapping, twenty-six kinds and twenty

@@ -127,6 +127,7 @@ impl Record {
             Arm::Diagnostic(_) => Pressure {
                 queued: 0,
                 over_mark: false,
+                peak: 0,
             },
         }
     }

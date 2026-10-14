@@ -737,6 +737,53 @@ fn high_water_reports_on_recorded_events() {
     );
 }
 
+/// **The pressure reading keeps the run's peak depth** (#120;
+/// `weaver-trace-Spec` section 6): a sink that takes nothing lets records
+/// queue, and once it reads again and the queue empties, the reading's peak is
+/// still the highest depth reached, never lowered by the drain. Perturbations:
+/// never raise the peak, and it reads zero; carry the current depth as the
+/// peak, and the drained queue reads zero.
+#[test]
+fn the_pressure_reading_keeps_the_runs_peak_depth() {
+    let (reader, pipe_writer) = std::io::pipe().expect("pipe");
+    let mut r = Recorder::receive(
+        OwnedFd::from(pipe_writer),
+        RunRef("r-1".into()),
+        SessionRef("s-1".into()),
+    )
+    .expect("receives");
+    r.submit(event(Kind::Load, None, Some(elections())))
+        .unwrap();
+    assert!(r.pressure().peak <= 1, "one record has been queued");
+    let account = format!("{{\"kind\":\"{}\"}}", "x".repeat(8_192));
+    let mut seen = 0;
+    for _ in 0..32 {
+        r.submit(event(
+            Kind::Fault,
+            None,
+            Some(Payload::Fault(raw_payload(&account).unwrap())),
+        ))
+        .unwrap();
+        seen = seen.max(r.pressure().queued);
+    }
+    assert!(seen > 0, "records queued behind the stopped sink");
+    let drainer = std::thread::spawn(move || {
+        let mut reader = reader;
+        let mut sink = Vec::new();
+        let _ = reader.read_to_end(&mut sink);
+    });
+    r.drain().expect("the sink reads again");
+    let pressure = r.pressure();
+    assert_eq!(pressure.queued, 0, "the queue emptied");
+    assert!(
+        pressure.peak >= seen && pressure.peak <= 33,
+        "the peak is the highest depth reached: {} against {seen} seen",
+        pressure.peak
+    );
+    drop(r);
+    drainer.join().expect("the reader");
+}
+
 /// **A drain bounded by a deadline returns at it, naming what it forfeits**
 /// (`weaver-trace-Spec` section 7): a sink that takes nothing leaves records
 /// queued, and `drain_by` answers `Expired` with their count at the deadline
