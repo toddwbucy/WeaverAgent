@@ -3693,6 +3693,58 @@ fn record_then_drop(run: Run, reader: std::io::PipeReader) -> Vec<serde_json::Va
     events
 }
 
+/// **The leave writes the trace queue's peak to standard error** (#120;
+/// `weaver-harness-Spec` section 4): after its last drain, one line naming
+/// the run's peak depth, the depth and the high-water mark, which admin's
+/// start step points at worker.log. The leave runs in a child of this test
+/// binary, whose standard error is read here. Perturbation: drop the leave's
+/// line, and no such line is found.
+#[test]
+fn the_leave_writes_the_queue_peak_line() {
+    if std::env::var_os(PEAK_CHILD).is_some() {
+        let (mut run, _spare, _sink) = entered_run(None);
+        releasing_spu(&mut run);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let _ = leave_after(
+            &mut run,
+            Some(weaver_types::Cause { uid: 7 }),
+            false,
+            None,
+            None,
+            Some(deadline),
+        );
+        return;
+    }
+    let child = std::process::Command::new(std::env::current_exe().expect("this binary"))
+        .args([
+            "lifecycle::tests::the_leave_writes_the_queue_peak_line",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(PEAK_CHILD, "1")
+        .output()
+        .expect("the child runs");
+    assert!(child.status.success(), "{child:?}");
+    let stderr = String::from_utf8_lossy(&child.stderr);
+    let line = stderr
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|value| value["queue"] == "trace")
+        .unwrap_or_else(|| panic!("a queue-peak line on standard error: {stderr}"));
+    assert_eq!(line["organ"], "harness", "{line}");
+    assert!(
+        line["peak"].as_u64().is_some_and(|peak| peak >= 1),
+        "{line}"
+    );
+    assert_eq!(line["depth"], weaver_trace::QUEUE_DEPTH, "{line}");
+    assert_eq!(line["mark"], weaver_trace::HIGH_WATER_MARK, "{line}");
+}
+
+/// The variable that runs [`the_leave_writes_the_queue_peak_line`] as the
+/// child whose standard error it reads.
+const PEAK_CHILD: &str = "WEAVER_HARNESS_TEST_PEAK_CHILD";
+
 /// An SPU lifecycle stand-in answering every directive `Released`.
 fn releasing_spu(run: &mut Run) {
     let (spu_lifecycle, spu_far) = OrganChannel::pair().expect("pair");

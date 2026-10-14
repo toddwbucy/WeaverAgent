@@ -452,6 +452,9 @@ manifest_field() { # manifest_field LINE FIELD(1-4): LINE counted from 1, or "la
   else manifest | sed -n "$1p" | cut -d' ' -f"$2"; fi
 }
 marker() { sudo -n cat -- "$R/run.marker" 2>/dev/null || printf 'absent'; }
+# queue_peak: the last trace-queue line the worker wrote to worker.log at a leave
+# (#120), or nothing. A reading for the operator, never a check.
+queue_peak() { sudo -n grep -F '"queue":"trace"' -- "$T/worker.log" 2>/dev/null | tail -n 1 || true; }
 expect_marker() { # expect_marker RUN STATE
   local m; m=$(marker)
   expect_at "the run marker names run $1" "$1" "$m" run
@@ -806,8 +809,15 @@ step_4() {
   run_line "deploy/turn.py $A \"In one sentence, what were you asked to be?\""
   want "unloaded; the marker closed; a second manifest line arrived leave (SP_B); the unload event not forced; a save_point event for SP_B"
   want "show unloaded with no constituent; load idle; its lineage names SP_B and the previous run, named_at_restore false, no reset; a recall event after it"
+  want "reported, not checked: the trace queue's peak depth at the unload, from worker.log (#120)"
   [ "$APPLY" -eq 1 ] || return 0
   ask unload; expect_state unload unloaded
+  local peak; peak=$(queue_peak)
+  if [ -n "$peak" ]; then
+    measured "the trace queue's peak depth at the unload: $(json_at "$peak" peak) of $(json_at "$peak" depth), the mark at $(json_at "$peak" mark)"
+  else
+    measured "no trace-queue line in worker.log, so no peak to report"
+  fi
   expect_marker "$RUN" closed
   expect_eq "the manifest holds two lines" 2 "$(manifest_count)"
   expect_eq "line 2 arrived at the leave" leave "$(manifest_field 2 2)"

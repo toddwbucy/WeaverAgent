@@ -3090,6 +3090,13 @@ fn leave_after(
             .drain()
             .map_err(|_| LifecycleRefusal::DescriptorsUnusable),
     };
+    // **The queue's peak, outside the record** (#120; `weaver-harness-Spec`
+    // section 4): after the last drain, one line on standard error, which
+    // admin's start step points at worker.log. A diagnostic record queues
+    // nothing and says nothing.
+    if serving {
+        eprintln!("{}", queue_peak_notice(run.recorder.pressure()));
+    }
     if let Some(refusal) = first_refusal {
         return Err(refusal);
     }
@@ -3853,6 +3860,21 @@ fn column_ask_for(diagnostic: bool, readout_elected: bool) -> bool {
 /// The typed line that names what a diagnostic enter waits on, per
 /// `weaver-harness-Spec` section 6.1 as of 2026-09-06: the door stands under
 /// a diagnostic binding alone, so a serving load names no wait.
+/// **The trace queue's peak at the leave** (#120): the run's peak depth, the
+/// depth and the high-water mark, one JSON line in the harness's diagnostic
+/// form, the evidence for [`weaver_trace::QUEUE_DEPTH`] that the pressure
+/// fault, silent below the mark, does not give.
+fn queue_peak_notice(pressure: weaver_trace::Pressure) -> String {
+    serde_json::json!({
+        "organ": "harness",
+        "queue": "trace",
+        "peak": pressure.peak,
+        "depth": weaver_trace::QUEUE_DEPTH,
+        "mark": weaver_trace::HIGH_WATER_MARK,
+    })
+    .to_string()
+}
+
 fn parked_ask_notice(bound_ms: u64) -> String {
     serde_json::json!({
         "organ": "harness",
