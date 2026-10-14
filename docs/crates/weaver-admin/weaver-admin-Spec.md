@@ -2638,7 +2638,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | State | Meaning |
 |---|---|
 | A0 | absent at the deterministic path, whatever the record: a stale record is a sub-case, which the next verb removes |
-| A1 | standing, empty, no run: the start step's own before its first fork, a crash's after nothing of it ran on, or an invocation's that died inside its removal |
+| A1 | standing, empty, no run: the start step's own before its first fork, a run's after its last process ended and before its run end, a crash's after nothing of it ran on, or an invocation's that died inside its removal |
 | A2 | populated, the run lock held: a run stands |
 | A3 | populated, the run lock free: a run's leftovers after a crash |
 | A4 | killed, not yet empty: inside a run end's bound |
@@ -2667,7 +2667,8 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | the worker's unwind (the leave, graceful or forced) | T0, T1 or T2 | T0, or as left | the worker writes its kill on `tools/`, or makes its fallback's one pass, and does not wait, before `Left`. The run end holds what remains |
 | the worker dies | A2 | A2, then A3 or A1 once the member and the relay end | the organs die by their death signal (`weaver-harness-Spec` section 2.2), and `tools/` keeps what it held, contained |
 | the member or the relay dies | A2 | A2 | nothing of the cgroup changes |
-| admin's run end (a conclusion under the invocation lock) | A3 or A1, once the run lock frees | A4 (where populated), then A0 | `cgroup.kill` on the agent's cgroup, the wait, the removal and the record's, then publication, the marker and the answer |
+| the run's constituents all end, after a leave or a death | A2 | A1 where nothing of the agent is left, else A3 | the run lock frees. The organs end by their death signal, and `tools/` is left as the worker left it |
+| admin's run end (a conclusion under the invocation lock) | A3, A1, or A4 left by an earlier run end, once the run lock frees | A4 (where populated), then A0 | `cgroup.kill` on the agent's cgroup, re-issued where A4 was left (it is idempotent), the wait, the removal finished and the record's, then publication, the marker and the answer |
 | admin's run end, the marker another run's | any | unchanged | nothing: the cgroup is that run's |
 | admin's run end, not empty within the bound | A4 | A4 | refuses `WorkerWouldNotExit`, naming the pids, nothing published and no marker written |
 | admin's run end, its write of `cgroup.kill` failing | A3 | A4, or A3 | the pinned fallback over the agent's cgroup and its descendants, repeated within the bound. Both failing refuses `WorkerWouldNotExit` |
@@ -2689,6 +2690,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | the worker, `tools/` not opened or judged at the enter | A2 | A2, then the rollback's | no gate is stood: the enter's gate arm refuses `BoundaryUnverified`, and the load rolls back |
 | the gate, a shell's spawn failing, its child's move into `tools/` included | T0 | T0 | the child ends before its exec, no shell ran: the gate answers `Errored` |
 | a crash between a `mkdir` and its record under one containment, the next load from another | A1 under the first containment, no record | unchanged | the orphan holds no process, and the next load from the first containment removes it |
+| T1 or T2 left by an ended service (the worker's rows above) | T1 or T2 | T0 with the agent's cgroup | ended by the run end's kill of the agent's cgroup, `tools/` being inside it |
 | a tool command writes its own pid to `worker/cgroup.procs` (the agent's account can) | T1 | T0 or T1, the process in `worker/` | out of reach of its execution's end and of the gate's death, never out of the agent's cgroup: held by the run end |
 
 **The invariants**, each held where the table says:
