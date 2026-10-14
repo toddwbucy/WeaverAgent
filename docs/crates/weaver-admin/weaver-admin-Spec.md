@@ -2495,9 +2495,15 @@ weaver-<agent>/      root's; the agent's cgroup
     bound it closes the execution all the same, closes the turn in flight
     `Stopped { reason: fault }`, and ends service.
   - **Where its write of `tools/cgroup.kill` fails**, no kill was delivered, so the
-    worker falls back to `kill(2)` with `SIGKILL` on each pid it reads from
-    `tools/cgroup.procs`, every one under its own account, and repeats within the bound
-    until `tools/` empties (Codex on #161). **Where the write and the fallback both
+    worker falls back to signalling each pid it reads from `tools/cgroup.procs`, every
+    one under its own account, and repeats within the bound until `tools/` empties
+    (Codex on #161). **Each pid is pinned before it is signalled**, as section 3 pins the
+    run lock's holders: `pidfd_open` on it, then a read of `/proc/<pid>/cgroup` after
+    that open confirming the process still stands in `tools/`, then `SIGKILL` by
+    `pidfd_send_signal` through the pidfd. A pid reused since the read is then never
+    signalled, a reused pid standing outside `tools/`. A pid that fails any step is
+    skipped, and the next rescan finds what remains. `pidfd_open` (Linux 5.3) and
+    `pidfd_send_signal` (5.1) sit beneath the floor. **Where the write and the fallback both
     fail**, it closes the execution `Killed { by: fault }` and ends service, its `fault`
     (the existing `OrganDeathObserved` case, the gate's death) carrying in its account
     that the execution's containment failed and the kill was not delivered. The record
@@ -2551,7 +2557,7 @@ during its own wait** (`weaver-harness-gate-contract` section 2):
 |---|---|---|
 | the gate's kill delivered, `tools/` empties | the gate | the caller's number plus at most the bound, answered by the gate |
 | the gate's kill delivered, `tools/` not empty within the bound | the gate, the bound whole, then the worker, a bound whole from its own kill | the caller's number plus twice the bound: the gate exits unanswered at its bound, then the worker kills again, waits, closes the execution `Killed { by: fault }`, and ends service where `tools/` is still populated |
-| the gate's write failed, no kill delivered | the worker, the bound whole from its own first kill | the caller's number plus the bound: the gate exits at once, the worker's write or `kill(2)` fallback delivers the first kill |
+| the gate's write failed, no kill delivered | the worker, the bound whole from its own first kill | the caller's number plus the bound: the gate exits at once, the worker's write or its pidfd-pinned fallback delivers the first kill |
 | the gate crashed mid-execution, no kill delivered | the worker, the bound whole from its own first kill | at most the caller's number plus the bound, the crash coming before the clock |
 | the gate's kill delivered, then the gate crashed during its wait | the gate, part of the bound, then the worker, a bound whole from its own kill | at most the caller's number plus twice the bound: the worker cannot tell this from a crash before any kill, and its own kill and wait hold the rest |
  **A forced leave does
@@ -2606,7 +2612,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | the gate, `tools/` not empty within the bound after a delivered kill | T2 | T2 | the gate exits with the execution unanswered: the gate's death below |
 | the gate dies | T0, T1 or T2 | T2, then T0 | the worker kills `tools/`, waits a full bound from its own kill, and closes an open execution `Killed { by: fault }` |
 | the worker, `tools/` not empty within the bound | T2 | T2 | the worker ends service and unwinds, never serving on: the run end holds what remains |
-| the worker, its write of `tools/cgroup.kill` failing | T1 | T1, then T2 by the fallback's kills, then T0 | no kill was delivered by the write, so the worker sends `SIGKILL` by `kill(2)` to each pid in `tools/cgroup.procs`, repeating within the bound |
+| the worker, its write of `tools/cgroup.kill` failing | T1 | T1, then T2 by the fallback's kills, then T0 | no kill was delivered by the write, so the worker pins each pid in `tools/cgroup.procs` by a pidfd, confirms it still stands in `tools/`, and sends `SIGKILL` through the pidfd, repeating within the bound |
 | the worker, the write and the fallback both failing | T1 | T1 | the worker closes the execution `Killed { by: fault }`, its `fault`'s account naming that containment failed and the kill was not delivered, and ends service: the run end holds what remains |
 | the worker's unwind (the leave, graceful or forced) | T0 or T1 | T0 | the worker kills `tools/` and waits, before `Left` |
 | the worker dies | A2 | A2, then A3 or A1 once the member and the relay end | the organs die by their death signal (`weaver-harness-Spec` section 2.2), and `tools/` keeps what it held, contained |
@@ -2628,7 +2634,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 
 | # | Invariant | Held by |
 |---|---|---|
-| C1 | **No tool process outlives its execution's end.** A shell is born in `tools/`, and before the gate answers, `tools/` is empty, a gate that cannot empty it never answering: a command that left its process group or its session is in `tools/` all the same. A gate's death empties `tools/` by the worker's kill, by `kill(2)` of each pid where the kill's write fails, and where both fail the execution is closed `Killed { by: fault }` with its `fault` naming the failed containment, service ending and the run end holding the rest. A `tools/` that will not empty within the bound ends service (the gate exits, then the worker unwinds), so no run serves on past an execution it could not end. **The one exception is stated:** a command running as the agent's account can move itself out of `tools/` into `worker/` by writing `worker/cgroup.procs`, since the file that lets the gate move its shell lets the shell move itself. That process escapes C1 and is held by C2. A later election of a controller on `worker/` would meet it there and must place it first. | the gate, and the worker on the gate's death |
+| C1 | **No tool process outlives its execution's end.** A shell is born in `tools/`, and before the gate answers, `tools/` is empty, a gate that cannot empty it never answering: a command that left its process group or its session is in `tools/` all the same. A gate's death empties `tools/` by the worker's kill, by a pidfd-pinned `SIGKILL` of each pid still in `tools/` where the kill's write fails, and where both fail the execution is closed `Killed { by: fault }` with its `fault` naming the failed containment, service ending and the run end holding the rest. A `tools/` that will not empty within the bound ends service (the gate exits, then the worker unwinds), so no run serves on past an execution it could not end. **The one exception is stated:** a command running as the agent's account can move itself out of `tools/` into `worker/` by writing `worker/cgroup.procs`, since the file that lets the gate move its shell lets the shell move itself. That process escapes C1 and is held by C2. A later election of a controller on `worker/` would meet it there and must place it first. | the gate, and the worker on the gate's death |
 | C2 | **No process of the agent outlives its run's end.** `Unloaded` is answered only where no process of the agent stands: the run lock free and the agent's cgroup absent or empty. The run end answers it only after killing and removing the cgroup, and past the kill's bound it refuses `WorkerWouldNotExit`, never `Unloaded`. A load stands a run only in a cgroup it made. **The window is stated:** after a crash that ends the run with no admin verb (the worker dying, then the member and the relay), leftovers run on until the next `unload` or `force-unload`. A load refuses on them and kills nothing, and `show` names them. They are contained in A3: leaving the agent's cgroup needs a write to a file of root's. | admin's run end, the start step's refusal on A3, and `show`'s ladder |
 | C3 | **The agent's account reaches only three files.** Through them it can move a process within `worker/` and kill `tools/`, and nothing else: no member, no relay, no cgroup made or removed, no interface file of root's changed. | the layout's ownership |
 | C4 | **Every process of the agent starts inside.** Each constituent is placed by its own child before its exec, each shell is born in `tools/`, and every fork after inherits. | the start step's placement and the gate's `clone3` |
