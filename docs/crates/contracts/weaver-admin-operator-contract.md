@@ -399,10 +399,10 @@ invoker whose containment is not delegated or admits no child, refuses
 `BoundaryUnverified`, naming what is missing. A `load` meeting processes of an ended run
 still standing refuses `AgentRunning`, naming them, for `unload` to end. An `unload` or
 `force-unload` whose agent's processes do not all end within the Spec's bound refuses
-`WorkerWouldNotExit`, naming them, and answers no state. Any verb after a load whose
-record of the agent's containment no longer names the containment that load made, the
-recorded one gone or another standing in its place, refuses `BoundaryUnverified`,
-naming both, and acts on nothing. `force-unload` takes the leave save point as
+`WorkerWouldNotExit`, naming them, and answers no state. Any verb after a load that
+finds, in the recorded place, a containment other than the one that load made refuses
+`BoundaryUnverified`, naming both, and acts on nothing. A recorded containment found
+gone was already removed, so the verb clears the stale record and goes on. `force-unload` takes the leave save point as
 `unload` does and ends the run whether or not it can be taken, refusing
 `SavePointNotTaken` naming `published` where it was taken and did not publish, per
 section 4.1. A `stop`

@@ -2236,7 +2236,10 @@ unwind names it as its first refusal at the seal, as a leave that never stopped 
 **The forced leave stops work and keeps state** (`weaver-admin-Spec` section 3, the
 forced unload (sole); S2, S3 and S9 x force-unload). A `Leave` with `forced` true and `rollback` false, set by
 admin's `force-unload`, has this crate interrupt a tool call out as item 2 does, then
-lower the gate at once from its raised position (**a gate step this crate skips where
+lower the gate at once from its raised position, **the lower's bound running from the
+interrupt and never waiting on the interrupted execution's end**, past which the gate is
+reaped as at its death and the call closed `Killed { by: fault }` (`weaver-admin-Spec`
+section 6.1) (**a gate step this crate skips where
 the gate is already lowered, S9, or absent, a diagnostic binding: it sends no
 `ToolInterrupt`, `Quiesce` or `Lower` there, `Lower` being once only, and from S9, no
 turn running, the forced leave goes straight to the save point**; Codex on #109, round 47), with no quiesce and no drain, reading
