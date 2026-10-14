@@ -3142,7 +3142,16 @@ fn the_save_point_verb_answers_the_report_and_is_out_of_order_without_a_run() {
     // report of a save point that stands in the room alone (Codex on
     // #94, round 1); the directive reached the worker all the same.
     // A save point taken and not published is named so (the #94
-    // survey's S12), as the unload names it.
+    // survey's S12), as the unload names it. The marker stands open on the
+    // report's run, so the refusal is this run's row (yes, not landed), not
+    // another run's (S17).
+    save_points::write_marker(
+        &config.root,
+        Some(&save_points::Marker::Open {
+            run: report().event_run.0,
+        }),
+    )
+    .unwrap();
     let answered = save_point(&config, &agent);
     assert_eq!(
         answered,
@@ -3282,6 +3291,40 @@ fn a_save_point_reported_for_another_run_publishes_as_recovered() {
             None
         )
     );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// **A marker that does not read refuses the verb before anything is
+/// published** (S17; 3.0, the `save-point` verb's publication): the report
+/// cannot be judged this run's or another's, so the file stays in the room
+/// for the next verb, never minted recovered on a read that failed.
+/// Perturbation: read a failed marker as no match, and the file publishes
+/// as recovered.
+#[test]
+fn a_save_point_over_a_marker_that_does_not_read_refuses_and_publishes_nothing() {
+    let agent = AgentName("alpha".into());
+    let (config, report, base) = territory_with_one_room_file("save-point-verb-unread-marker");
+    std::fs::write(config.root.join(save_points::MARKER), b"not a marker").unwrap();
+    let mut holder = stand_in_holder(&config);
+    let worker = recording_worker(
+        &config,
+        vec![
+            weaver_types::Payload::Answer(LifecycleAnswer::State {
+                state: weaver_types::AgentState::Idle,
+                load: None,
+                constituents: Vec::new(),
+            }),
+            weaver_types::Payload::Answer(LifecycleAnswer::SavePointTaken {
+                report: report.clone(),
+            }),
+        ],
+    );
+    let answered = save_point(&config, &agent);
+    let _ = worker.join();
+    let _ = holder.kill();
+    let _ = holder.wait();
+    assert_eq!(answered, Err(LifecycleRefusal::BoundaryUnverified));
+    assert!(manifest_lines(&config).is_empty(), "nothing is published");
     let _ = std::fs::remove_dir_all(&base);
 }
 

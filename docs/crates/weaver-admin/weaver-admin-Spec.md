@@ -510,7 +510,7 @@ choice made in advance, for an operator who will not stand watch.
 | no | yes | false | reported | yes | yes | either | the reported save point | `Closed` | none | `Unloaded` |
 | no | yes | false | reported | yes | no | either | none lands; the file stays in the room | left `Open` | `NoCleanUnload`, the room's file recovered or named unpublishable | refuses `SavePointNotTaken` naming `published` |
 
-**The `save-point` verb's publication** (S17, the operator's ruling of 2026-10-14 on #140) has rows of its own, keyed by whether the reported `event_run` is the run the marker stands open on, read by section 4's marker reading under the verb's invocation lock (a marker that does not read, or reads other than `Open`, is no match), then by whether the report's file published. The verb writes no marker.
+**The `save-point` verb's publication** (S17, the operator's ruling of 2026-10-14 on #140) has rows of its own, keyed by whether the reported `event_run` is the run the marker stands open on, read by section 4's marker reading under the verb's invocation lock (a marker that reads other than `Open` is no match; one that does not read refuses `BoundaryUnverified` before anything is published, the file left in the room for the next verb), then by whether the report's file published. The verb writes no marker.
 
 | `event_run` the marker's run | Published | Publication | Answer |
 |---|---|---|---|
@@ -1990,12 +1990,13 @@ and judged again in full and its digest checked against its name, the bytes copi
 being the bytes judged in that read. **The room holds at most 4096 finished names**
 (S16, the operator's ruling of 2026-10-14 on #140; provisional, measured): the listing
 keeps finished names alone and stops past the bound, and the scan then refuses
-`BoundaryUnverified` naming the room and its count, so the member cannot make a verb's
-scan as long as its file count. The number is provisional, as the trace queue's is, and
-measured: every scan records the room's finished-name count in `admin.log`, a `publish`
-line in the log's form whose outcome is `the room holds <n> finished names` (or `more than
-4096` where it refused), and the lifecycle verification prints the largest count its
-run saw. So the scan's reading is bounded by the room's
+`BoundaryUnverified` naming the room, before any entry is opened, so the entries a verb's
+scan opens and reads are bounded whatever the room holds; every other name is read by the
+listing as a directory entry and never opened or kept. The number is provisional, as the
+trace queue's is, and measured: every scan records the room's finished-name count in
+`admin.log`, a `publish` line in the log's form whose outcome is `the room holds <n>
+finished names` (or `more than 4096` where it refused), and the lifecycle verification
+prints the largest count its run saw before its take-down. So the scan's reading is bounded by the room's
 entry count and not by its aggregate size, a whole image is read only for a file the
 cap admits, at most one image stands in this root process's memory, and a file the
 member changes after the scan is refused. **One verb publishes at most 32 room files, and copies one

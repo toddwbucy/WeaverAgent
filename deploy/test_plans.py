@@ -3185,6 +3185,15 @@ class LifecycleRoomCountTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("admin.log records no room scan", result.stdout)
 
+    def test_a_count_that_does_not_read_is_said_and_passed_over(self):
+        result = self.report([
+            self.line("publish", "the room holds  finished names"),
+            self.line("publish", "the room holds 2 finished names"),
+        ])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("a publish line's count does not read", result.stdout)
+        self.assertIn("over 1 scans: 2 finished names", result.stdout)
+
     def test_the_report_runs_before_the_take_down_on_both_paths(self):
         script = (DEPLOY / "verify-lifecycle.sh").read_text()
         tail = script[script.index('if [ "$KEEP" -eq 1 ]; then\n  STEP_LABEL='):]

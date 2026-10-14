@@ -503,7 +503,9 @@ print(found)'
 # of 4096 finished names is provisional and measured, every scan recording
 # `the room holds <n> finished names` (or `more than <bound>`) on a
 # `publish` line. A printed line, not a check: the run reads the counts its
-# own verbs left, before step 9 takes the territory down.
+# own verbs left before step 9 takes the territory down, the take-down's own
+# unload uncounted. Only a line naming the `publish` verb is parsed, and an
+# outcome whose count is not a number is said and passed over.
 room_count_report() {
   STEP_LABEL="the room's count"
   plan "the largest finished-name count admin.log records for a room scan, printed (S16, provisional at 4096)"
@@ -514,7 +516,7 @@ room_count_report() {
     return 0
   fi
   while IFS= read -r line; do
-    [ -n "$line" ] || continue
+    case "$line" in *'"verb":"publish"'*) ;; *) continue ;; esac
     verb=$(json_at "$line" verb)
     [ "$verb" = publish ] || continue
     json_req outcome "$line" outcome "a publish line names its outcome"
@@ -524,6 +526,9 @@ room_count_report() {
       *) continue ;;
     esac
     count=${count%% *}
+    case "$count" in
+      ''|*[!0-9]*) measured "a publish line's count does not read: $outcome"; continue ;;
+    esac
     scans=$((scans + 1))
     [ "$count" -le "$largest" ] || largest=$count
   done <<<"$log"

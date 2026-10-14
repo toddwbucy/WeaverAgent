@@ -1569,9 +1569,11 @@ fn save_point(
     // operator's ruling of 2026-10-14 on #140; 3.0, the `save-point` verb's
     // publication): the worker runs as the agent's uid, so a report naming
     // another run is not this run's save point, and its file publishes as
-    // recovered. A marker that does not read, or reads other than `Open`, is
-    // no match.
-    let this_run = open_run(config).ok().flatten().as_deref() == Some(report.event_run.0.as_str());
+    // recovered. A marker that reads other than `Open` is no match; **one
+    // that does not read refuses** `BoundaryUnverified` before anything is
+    // published, the file left in the room for the next verb, never minted
+    // recovered on a read that failed.
+    let this_run = open_run(config)?.as_deref() == Some(report.event_run.0.as_str());
     let reports = match conclusion::publication_of(this_run) {
         conclusion::Publication::Reported => {
             vec![(report.clone(), save_points::Arrival::Demand)]

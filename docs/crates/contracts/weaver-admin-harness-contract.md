@@ -204,7 +204,11 @@ refused here.
 The legs the harness names are the answer, the finished answer and the member dead, a
 member's failed write arriving as the answer missed; admin names a fourth of its own,
 `published`, at the unload and the `save-point` verb, where the save point was reported
-and its publication did not land, per `weaver-admin-operator-contract` section 3.
+and its publication did not land, or, at the `save-point` verb, where the report names
+another run than the one the marker stands open on and its file publishes as recovered,
+per `weaver-admin-operator-contract` section 3. **A report is accepted only for the open
+marker's run** (#140, S17): the position and order it carries are taken for that run's
+save point alone.
 
 **Enter the run.** Opened by admin. Admin directs the harness to enter, supplying the
 session identity, the run reference, the kind of the binding, the trace sink handle, the

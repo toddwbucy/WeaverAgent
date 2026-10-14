@@ -86,44 +86,39 @@ fn sync_path(directory: &Path) -> std::io::Result<()> {
 
 /// The names the directory holds, read through its descriptor.
 fn list_directory(directory: BorrowedFd<'_>) -> nix::Result<Vec<String>> {
-    // **A listing that fails is never an empty directory** (the custody
-    // audit's G9): a failed `dup`, open or read of an entry answers the error,
-    // so a refusal that rests on the directory's contents fails closed.
-    let duplicate = nix::unistd::dup(directory)?;
-    let mut dir = nix::dir::Dir::from_fd(duplicate)?;
-    let mut names = Vec::new();
-    for entry in dir.iter() {
-        let entry = entry?;
-        if let Ok(name) = entry.file_name().to_str()
-            && name != "."
-            && name != ".."
-        {
-            names.push(name.to_string());
-        }
-    }
-    Ok(names)
+    let mut seen = 0;
+    list_kept(
+        directory,
+        &|name| name != "." && name != "..",
+        usize::MAX,
+        &mut seen,
+    )
 }
 
-/// **The room's finished names, read through its descriptor, at most
-/// `bound + 1`**: any other name is passed over unkept, and the listing stops
-/// once it has seen one past the bound, `finished` counting what it kept.
-/// A listing that fails is never an empty room, as `list_directory` holds.
-fn list_finished(
+/// **The names `keep` admits, read through the directory's descriptor, at
+/// most `bound` of them kept**: `kept` counts every admitted name read, and
+/// the listing stops at the first past the bound, so `kept` is then
+/// `bound + 1`. A name `keep` refuses is read and passed over, never kept.
+/// **A listing that fails is never an empty directory** (the custody audit's
+/// G9): a failed `dup`, open or read of an entry answers the error, so a
+/// refusal that rests on the directory's contents fails closed.
+fn list_kept(
     directory: BorrowedFd<'_>,
+    keep: &dyn Fn(&str) -> bool,
     bound: usize,
-    finished: &mut usize,
+    kept: &mut usize,
 ) -> nix::Result<Vec<String>> {
     let duplicate = nix::unistd::dup(directory)?;
     let mut dir = nix::dir::Dir::from_fd(duplicate)?;
     let mut names = Vec::new();
-    *finished = 0;
+    *kept = 0;
     for entry in dir.iter() {
         let entry = entry?;
         if let Ok(name) = entry.file_name().to_str()
-            && is_finished_name(name)
+            && keep(name)
         {
-            *finished += 1;
-            if *finished > bound {
+            *kept += 1;
+            if *kept > bound {
                 break;
             }
             names.push(name.to_string());
@@ -787,8 +782,9 @@ struct RoomEntry {
 /// **At most `bound` finished names** (S16, the operator's ruling of
 /// 2026-10-14 on #140; Spec section 6): the listing keeps finished names
 /// alone and stops past the bound, refusing `BoundaryUnverified` naming the
-/// room before any is scanned, so the member cannot make a verb's scan, and
-/// the invocation lock with it, as long as its file count. `finished` is set
+/// room before any is scanned, so the entries the scan opens and reads are
+/// bounded whatever the room holds. Every other name is still read by the
+/// listing, as a directory entry, and is never opened or kept. `finished` is set
 /// to the count seen once the listing reads, `bound + 1` where it stopped,
 /// for the caller to record; a listing that fails sets nothing.
 fn read_room(
@@ -802,14 +798,14 @@ fn read_room(
     // G12), the descriptor `open_room` opened without following a link, so
     // the listing and every open and removal below resolve the one
     // directory judged and never the path again.
-    let names = list_finished(room, bound, &mut count).map_err(|e| {
+    let names = list_kept(room, &is_finished_name, bound, &mut count).map_err(|e| {
         diag!("weaver-admin: the room does not list ({e}); nothing is published");
         LifecycleRefusal::BoundaryUnverified
     })?;
     *finished = Some(count);
     if count > bound {
         diag!(
-            "weaver-admin: the room holds more than {bound} finished save points, past the scan's bound; nothing is published until it is cleared"
+            "weaver-admin: the room holds more than {bound} finished save points ({count} read before the listing stopped), past the scan's bound; nothing is published until it is cleared"
         );
         return Err(LifecycleRefusal::BoundaryUnverified);
     }
