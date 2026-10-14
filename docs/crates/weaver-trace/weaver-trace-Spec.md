@@ -1531,6 +1531,7 @@ impl Recorder {
     /// The crate's one constructor and its one receive site.
     pub fn receive(sink: OwnedFd, run: RunRef, session: SessionRef)
         -> Result<Self, Failure>
+    pub fn bound_submissions(&mut self, bound: Duration)
 
     pub fn submit(&mut self, event: Event) -> Result<Sequence, Failure>
     pub fn structure(&self) -> &WorkingStructure
@@ -1575,6 +1576,8 @@ to: trace-sequence-gapless
 proceeds on the return, with the stream write still in flight, which is the trade
 charter section 4.2 makes deliberately. A submission that cannot append is a failure
 before anything is queued, so the two sinks cannot disagree about what was admitted.
+A submission that finds no queue slot within the submission bound (section 6) is a
+failure before either sink is touched, and its sequence is not consumed.
 
 ```graph
 node: trace-admission-precedes-fan-out
@@ -1701,6 +1704,33 @@ from: trace-pressure-reported-not-authored
 to: axiom-join-key-travels-with-the-work
 ```
 
+**The submission bound** (#120). A submission waits for a queue slot once the queue
+holds the depth less `unload`'s reserve (section 7). Until 2026-10-13 it waited with no
+limit, so a sink that stays open and stops reading held the harness's serve thread in
+a submission: a `Leave` sent to it was never heard, and admin's escalation ended the
+run. **`bound_submissions` bounds the wait.** The harness sets it once, at its receive
+and before the run's first submission, and a recorder never bounded waits as before.
+
+- **A submission that finds no slot within the bound fails `SubmitStalled`** (section
+  9), naming the sequence it would have taken, before either sink is touched. Nothing
+  reaches the working structure, the tee or the queue, and the sequence is not
+  consumed, so the run stays gapless.
+- **The stall is terminal**, as a failed write is. Every later submission but
+  `unload`'s fails `SubmitStalled` at once, naming the same sequence, so a run waits on
+  a stalled sink once and never again.
+- **`unload` is not bounded.** Its slot is reserved, so its submission never waits for
+  one, and it is admitted after a stall at the sequence the stall named.
+
+**The bound is 74 seconds**, half the leave bound less the gate's settle margin, both
+defined in `weaver-types`: `LEAVE_BOUND_MS / 2 - LOWER_SETTLE_MARGIN_MS`, 150000 / 2 -
+1000 = 74000 milliseconds. This crate links nothing (section 1) and holds no value
+for it, so the harness computes the bound and hands it over. A `Leave` that arrives
+while a submission stalls is heard within 74 seconds of the stall's start, which
+leaves 76 of admin's 150, the larger half, for the leave's own legs. The margin keeps
+the stall's expiry strictly inside that half. Where the leave's legs take their worst
+case, 136 seconds (`weaver-harness-Spec` section 6), no stall fits beside them and
+admin's escalation ends the run as before (`weaver-admin-Spec` section 3, I3).
+
 **A write that fails against a live process is named and surfaced, never
 swallowed**, per charter section 4.2. A tail lost to process death is the different
 failure the charter separates, and this crate reports the first and cannot report
@@ -1754,16 +1784,17 @@ to: trace-receive-site-takes-no-flag
 **Drain empties the queue and returns.** At unload the harness calls `drain` before
 answering left, so a left answer means everything admitted reached the sink, per the
 coordination contract's ordering. At process death nothing drains and the tail is
-forfeited, which this crate cannot report because the process reporting it is the
-one that died. **`drain_by` bounds the wait**: it answers as `drain` does where the
-queue empties by the deadline, and otherwise `Expired` naming how many records were
-still queued, the wait given up on them while the writer goes on; the harness's leave
-drains so under its shared deadline (`weaver-harness-Spec` section 6) and names the
-forfeit itself. **The queue's last slot is the run's `unload`'s** (`UNLOAD_RESERVE`, one): every
-other record's submit waits once the queue holds the depth less the reserve, so "the
-queue is full" means that depth for every record but `unload`, and the terminal event is
-admitted however the sink stalls. Only `unload` takes the reserve, and a run authors
-one. **`abandon` gives the writer up** after the caller's last bounded drain expired: the
+forfeited, which this crate cannot report because the process reporting it is the one
+that died. **`drain_by` bounds the wait**: it answers as `drain` does where the queue
+empties by the deadline, and otherwise `Expired` naming how many records were still
+queued, the wait given up on them while the writer goes on; the harness's leave drains
+so under its shared deadline (`weaver-harness-Spec` section 6) and names the forfeit
+itself. **The queue's last slot is the run's `unload`'s** (`UNLOAD_RESERVE`, one): every
+other record's submit waits once the queue holds the depth less the reserve, for at most
+the submission bound of section 6, so "the queue is full" means that depth for every
+record but `unload`, and the terminal event is admitted however the sink stalls,
+unbounded and never waiting. Only `unload` takes the reserve, and a run authors one.
+**`abandon` gives the writer up** after the caller's last bounded drain expired: the
 records still queued are forfeited, as at process death (`weaver-trace-PRD` section
 4.2), the writer begins no further record, and dropping the recorder detaches its thread
 rather than wait on a sink that stopped taking writes, so the process can exit; a record
@@ -1804,6 +1835,7 @@ pub enum Failure {
     CommitFailed { sequence: Sequence, source: WriteError },
     AppendFailed { sequence: Sequence },
     WriteTargetUnusable { source: WriteError },
+    SubmitStalled { sequence: Sequence },
 }
 
 pub enum SubmitRefusal {
@@ -1813,9 +1845,10 @@ pub enum SubmitRefusal {
 }
 ```
 
-Four cases, matching `weaver-harness-trace-contract` section 5 one to one.
+Five cases, matching `weaver-harness-trace-contract` section 5 one to one.
 **Both counts moved together on 2026-08-22**, when pressure stopped being a
-failure and left each enumeration in the same act. Nothing returns a partial
+failure and left each enumeration in the same act, and again on 2026-10-13, when the
+submission bound's stall joined each (#120). Nothing returns a partial
 result with a success status, and every refusal names its case rather than
 carrying a string, so a caller branches on a value.
 `Failure` is exhaustive, so a fifth case reaches every caller at compile time in
@@ -1834,6 +1867,13 @@ edge: grounds
 from: trace-failure-enum-exhaustive
 to: axiom-contract-is-a-complete-interface
 ```
+
+**`SubmitStalled` names a submission that found no queue slot within the bound**
+(section 6). Nothing landed, and the sequence it names is the one the submission would
+have taken. It is not a refusal, the event being admissible, and not pressure, the
+event never landing: the record is missing what the run authored, as under
+`CommitFailed`, so the harness latches on it as on any failed authoring
+(`weaver-harness-Spec` section 4).
 
 **`AppendFailed` fails loudly and does not attempt recovery.** The contract gives
 the recorder the resolution and there is no record to rebuild from since the cut of
@@ -2086,6 +2126,15 @@ the fact exists.
   Watched to fail when the event is omitted, when it is authored after
   `message.assistant`, when the payload's fragment is dropped or differs from the
   `UnrecoveredCall` block's, and when the kind leaves its pairing row.
+- The submission bound, per section 6: against a sink that stays open and takes
+  nothing, with the queue full to `unload`'s reserve, a bounded submission fails
+  `SubmitStalled` within the bound, leaving no row in the structure and consuming no
+  sequence, and a later one fails at once. Watched to fail when the wait loses its
+  deadline, the test's watchdog then expiring, and when the stall is not kept
+  standing. `unload` is admitted into its reserved slot after a stall at the named
+  sequence, watched to fail when the standing stall refuses it. The harness's half,
+  that the run's record is bounded at the enter and a stalled authoring latches, is
+  `weaver-harness-Spec` section 9's.
 - Close-on-exec on the descriptors the worker receives, **owed to
   `weaver-harness-Spec`** rather than run here, the flag being supplied at the
   harness's receive site per `weaver-admin-harness-contract` section 5. The test

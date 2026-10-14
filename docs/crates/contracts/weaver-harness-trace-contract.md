@@ -210,6 +210,12 @@ microsecond instrument. No field is ever read for the one job it cannot do.
 handle, obtained from `weaver-admin` in the enter directive. The harness never
 asks the recorder to open a path, and the recorder offers no way to.
 
+**The submission bound, with the handles** (#120). The harness sets the bound on a
+submission's wait for queue room when it receives the recorder, before the run's
+first submission, and treats a stalled submission as it treats commit failed: the
+session is failed rather than continued. The bound's value is `weaver-trace-Spec`
+section 6's.
+
 **Everything authored, and no filtering at either end.** The harness submits every
 event it authors and the recorder records every event it admits, per the ruling of
 2026-08-02 that retired the recording levels. What an operator elects at load
@@ -304,6 +310,12 @@ section 3. It never drops an admitted event quietly. A tail forfeited to process
 death is outside this obligation, because the process that would report it is the
 one that died.
 
+**A bounded wait at a full queue** (#120). Where the writer's queue is full, a
+submission waits for room no longer than the bound the harness set, then answers
+submission stalled with nothing admitted, so a sink that stops reading cannot hold
+the harness's thread past the bound. The run's `unload` is outside the bound, its
+queue slot reserved.
+
 **One rendering, held and handed.** The working structure holds the canonical
 form the stream carries, byte-identical, per the ruling of 2026-08-01 that retired
 the relational projection, so nothing exists between the two to reconcile.
@@ -341,6 +353,12 @@ failure and stays one, under commit failed.
   present, and there is no record to rebuild from since the cut of 2026-08-01.
 - **Write target unusable.** A handle is closed, is not writable, or does not
   satisfy the required flags.
+- **Submission stalled** (#120). The stream writer's queue took no record within the
+  bound the harness set at the receive, the sink open and not reading. The event was
+  not admitted and has no effect on either sink, and the session is failed rather than
+  continued, as under commit failed, the record missing what the run authored. Every
+  later submission fails the same way at once, but the run's `unload`, whose queue slot
+  is reserved and never waits.
 
 Three entries left this vocabulary with the cut of 2026-08-01, unload divergence,
 record invalid on read, and resume refused, each presupposing a program-owned record
@@ -391,6 +409,8 @@ How each check is implemented is Spec work. What must be checkable is stated her
 
 - A refused submission leaves no event in the working structure and no line on
   the stream.
+- A stalled submission returns within its bound, leaving no event in the working
+  structure and no line on the stream.
 - Admitted sequence is monotonic and gapless under concurrent authoring during a
   single run, and every run's numbering begins fresh.
 - An append failure after admission fails loudly and never continues stale.

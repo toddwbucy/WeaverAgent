@@ -1587,12 +1587,16 @@ I9; section 6 item 6). **The depth is read rather than returned** as of
 2026-08-22: it arrived as a `Failure` the recorder handed back after the
 event had already landed, so acting on it meant treating a recorded event as
 a lost one.
-Nothing on any turn path waits on the sink, per `weaver-harness-PRD` section
-5, and the working structure's return is the acknowledgment the interior
-proceeds on. The authoring itself is section 3's record and is not restated
-here. **The never-waits property is review's by election,** a double sink that
-never drains reaching it while a turn proceeds, and this suite buying the
-back-pressure measurement section 9 defers instead.
+Nothing on any turn path waits on the sink, per `weaver-harness-PRD` section 5, and the
+working structure's return is the acknowledgment the interior proceeds on. The one wait
+is at a queue full to `unload`'s reserve, and it is bounded: this crate bounds the
+serving record's submissions at the enter, the record received, by `SUBMIT_BOUND_MS`,
+the value `weaver-trace-Spec` section 6 states and derives, so a sink that stops reading
+holds a submission at most that long and the serve loop then hears its directives
+(#120). The authoring itself is section 3's record and is not restated here. **The
+never-waits property is review's by election,** a double sink that never drains reaching
+it while a turn proceeds, and this suite buying the back-pressure measurement section 9
+defers instead.
 
 ```graph
 node: harness-nothing-waits-on-the-sink
@@ -1611,6 +1615,9 @@ record's ending is the evidence. **A failed authoring is latched on the record**
 whatever failed:
 - the writer's failure, met at the next submission or drain, since nothing on a turn
   path waits on the sink;
+- a submission that stalled past the submission bound (`SubmitStalled`,
+  `weaver-trace-Spec` section 6), the sink open and not reading, met at that
+  submission;
 - a submission refused on its own (`RefusedOnSubmit`, or an event outside the
   diagnostic vocabulary) with the writer sound;
 - a diagnostic write, whose drain is vacuous;
@@ -3128,6 +3135,14 @@ Each reader has a test that drives it with a record whose writer failed, or with
 latched by a submission refused on its own while the writer is sound. Each test is
 watched to fail when its reader's read is removed. The latch is pinned the same way,
 and fails when it is never set.
+
+**A stalled submission returns and latches** (section 4, #120). The enter's serving
+record carries the submission bound, watched to fail when the enter does not set it.
+Against a sink that stays open and takes nothing, an authoring into a queue full to
+`unload`'s reserve returns within a short bound and latches the record, and the leave
+after it still admits `unload` into its reserved slot and refuses
+`DescriptorsUnusable`, watched to fail, by the test's watchdog, when the record is
+received unbounded.
 
 **The in-run event table is enforced by a decision function and its table**, on the
 operator's agreement of 2026-10-09 recorded on #1, owed by the lifecycle act's code.
