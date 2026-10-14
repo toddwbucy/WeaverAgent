@@ -796,6 +796,18 @@ else:
     refuse(f"unknown record operation {op}")
 PY
 purge_record() { python3 -I -c "$PURGE_RECORD_PY" "$RECORD_PARENT" "$RECORD_DIR_NAME" "$@"; }
+# **path_identity PATH: what a path is, beyond its name** (#140): its device,
+# inode, owner uid and birth time (0 where the filesystem keeps none), read
+# without following a final link. Device and inode alone are reused once a path
+# is gone; a replacement made by another owner, or at another second, differs.
+path_identity() { stat -c '%d:%i:%u:%W' -- "$1" 2>/dev/null; }
+# **held_is PATH: whether PATH is still the object root's record held**, the
+# identity read now equal to the one recorded when the purge judged it.
+held_is() {
+  local now
+  now=$(path_identity "$1") || return 1
+  [ -n "${HELD["$1"]:-}" ] && [ "${HELD["$1"]}" = "$now" ]
+}
 # **purge_began LIST: whether a purge has already acted on this box**: the
 # list names /etc/weaver and it no longer stands. A purge withdraws the roots
 # and removes /etc/weaver as its first removals, and nothing else removes it, so
@@ -816,7 +828,7 @@ record_lines_outside() {
     [ -n "$line" ] && listed["$line"]=1
   done < "$2"
   while IFS= read -r line; do
-    case $line in "" | "prefix "* | "held "*) continue ;; esac
+    case $line in "" | "prefix "* | "held "* | "uid "* | "gid "*) continue ;; esac
     [ -n "${listed["$line"]:-}" ] || printf '%s\n' "$line"
   done < "$1"
   true
@@ -864,13 +876,24 @@ else
   [ -z "$OUTSIDE" ] || die "PURGE-LIST names what this purge would not find, so nothing is purged: ${OUTSIDE//$'\n'/; }"
   purge_lines_within "$PURGE_LIST" > "$PURGE_ACTED"
   for p in "${!PREFIXES[@]}"; do printf 'prefix %s\n' "$p"; done >> "$PURGE_ACTED"
-  # **Each path's identity, as judged** (#140): a rerun removes a path only
-  # while it is still the object this run judged, so a /tmp name another
-  # principal takes after a reboot is never removed as root by name alone.
-  while IFS= read -r line; do
-    case $line in "path "*) ;; *) continue ;; esac
-    held=$(stat -c '%d:%i' -- "${line#path }" 2>/dev/null) && printf 'held %s %s\n' "$held" "${line#path }"
-  done < <(grep '^path ' -- "$PURGE_ACTED") >> "$PURGE_ACTED"
+  # **What each removal acts on, as judged** (#140): every listed path's and
+  # every root's identity, and every listed account's number, so a rerun
+  # removes only the object this run judged: a /tmp name another principal
+  # takes after a reboot, a /etc/weaver or a root made again, or an account
+  # made again under the same name, refuses the rerun rather than go as root.
+  {
+    while IFS= read -r line; do
+      case $line in
+        "path "*) held=$(path_identity "${line#path }") && printf 'held %s %s\n' "$held" "${line#path }" ;;
+        "user "*) held=$(getent passwd "${line#user }" | cut -d: -f3) && [ -n "$held" ] && printf 'uid %s %s\n' "$held" "${line#user }" ;;
+        "group "*) held=$(getent group "${line#group }" | cut -d: -f3) && [ -n "$held" ] && printf 'gid %s %s\n' "$held" "${line#group }" ;;
+      esac
+    done < <(grep -E '^(path|user|group) ' -- "$PURGE_ACTED")
+    for root in "${AGENT_ROOTS[@]}"; do
+      held=$(path_identity "$root") && printf 'held %s %s\n' "$held" "$root"
+    done
+    true
+  } >> "$PURGE_ACTED"
 fi
 [ ${#ACTIVE_UNITS[@]} -eq 0 ] || die "units still active: ${ACTIVE_UNITS[*]}"
 [ ${#RUNNING[@]} -eq 0 ] || die "agents still run or cannot be read: ${RUNNING[*]}"
@@ -901,18 +924,36 @@ for u in "${UNITS[@]}"; do systemctl stop "$u" 2>/dev/null || true; systemctl re
 systemctl stop "$SLICE" 2>/dev/null && plan "stopped $SLICE" || true
 
 
+# The identities root's record holds, by name: a line's name is everything
+# after its identity, blanks and all.
+declare -A HELD=() HELD_UID=() HELD_GID=()
+while IFS= read -r line; do
+  case $line in
+    "held "*) rest=${line#held }; HELD["${rest#* }"]=${rest%% *} ;;
+    "uid "*) rest=${line#uid }; HELD_UID["${rest#* }"]=${rest%% *} ;;
+    "gid "*) rest=${line#gid }; HELD_GID["${rest#* }"]=${rest%% *} ;;
+  esac
+done < "$PURGE_ACTED"
+
 say "the config roots"
 # **The roots go first** (deploy/REDEPLOY.md section 2, #140): each is withdrawn
 # whole by one rename to a name no discovery takes, so a stop leaves a root
 # standing whole or not at all, never one half removed for its admin to refuse,
 # and with the roots gone a rerun asks no admin: its run check is the process
 # check under the weaver accounts, which go last.
-if grep -qxF 'path /etc/weaver' -- "$PURGE_ACTED"; then
+# **Each is the object judged, or nothing goes** (Codex on #159, round 1):
+# /etc/weaver and every root are checked against the record before a root is
+# withdrawn, so a /etc/weaver put back or made again after a stop is never
+# removed as the one judged.
+if grep -qxF 'path /etc/weaver' -- "$PURGE_ACTED" && { [ -e /etc/weaver ] || [ -L /etc/weaver ]; }; then
+  held_is /etc/weaver || die "/etc/weaver is not the object this purge judged (held ${HELD[/etc/weaver]:-none}, now $(path_identity /etc/weaver || echo unreadable)), so nothing more is removed. Look at it, then rerun the purge"
   for base in /etc/weaver/admin*; do
     [ -d "$base" ] && [ ! -L "$base" ] || continue
     for root in "$base"/*/; do
       root=${root%/}
-      [ -d "$root" ] && [ ! -L "$root" ] || continue
+      # The roots discovery takes, and no other: the rest go with /etc/weaver.
+      [ -d "$root" ] && [ ! -L "$root" ] && [[ "${root##*/}" =~ ^[A-Za-z0-9_-]+$ ]] || continue
+      held_is "$root" || die "$root is not a root this purge judged, so nothing more is removed. Look at it, then rerun the purge"
       mv -T -- "$root" "$base/.${root##*/}.purging" || die "$root cannot be withdrawn, so nothing more is removed: a root left standing with its territory gone would refuse every rerun. Look at it, then rerun the purge"
       plan "withdrew $root"
     done
@@ -921,21 +962,13 @@ if grep -qxF 'path /etc/weaver' -- "$PURGE_ACTED"; then
 fi
 
 say "paths"
-# The identity each path held when it was judged, by path: a line's path is
-# everything after its identity, blanks and all.
-declare -A HELD=()
-while IFS= read -r line; do
-  case $line in "held "*) rest=${line#held }; HELD["${rest#* }"]=${rest%% *} ;; esac
-done < "$PURGE_ACTED"
 while IFS= read -r line; do
   kind=${line%% *} name=${line#* }
   case $kind in
     path)
       case "$name" in */models|*/models/*) plan "kept $name"; continue;; esac
       if [ ! -e "$name" ] && [ ! -L "$name" ]; then plan "$name: already gone"; continue; fi
-      now=$(stat -c '%d:%i' -- "$name" 2>/dev/null || true)
-      held=${HELD["$name"]:-}
-      [ -n "$held" ] && [ "$held" = "$now" ] || die "$name is not the object this purge judged (held ${held:-none}, now ${now:-unreadable}), so it is not removed and nothing more is. Look at it, then rerun the purge"
+      held_is "$name" || die "$name is not the object this purge judged (held ${HELD["$name"]:-none}, now $(path_identity "$name" || echo unreadable)), so it is not removed and nothing more is. Look at it, then rerun the purge"
       if rm -rf -- "$name"; then plan "removed $name"
       else plan "$name: not removed"; PURGE_FAILED=1
       fi ;;
@@ -949,7 +982,10 @@ while IFS= read -r line; do
   kind=${line%% *} name=${line#* }
   case $kind in
     user)
-      if ! getent passwd "$name" >/dev/null; then plan "user $name: already gone"
+      now=$(getent passwd "$name" | cut -d: -f3 || true)
+      if [ -z "$now" ]; then plan "user $name: already gone"
+      elif [ "$now" != "${HELD_UID["$name"]:-}" ]; then
+        die "user $name is not the account this purge judged (uid ${HELD_UID["$name"]:-none}, now $now), so it is not removed and nothing more is. Look at it, then rerun the purge"
       elif userdel -r "$name" 2>/dev/null; then plan "removed user $name (and home)"
       elif userdel "$name" 2>/dev/null; then plan "removed user $name"
       else plan "user $name: not removed"; PURGE_FAILED=1
@@ -965,7 +1001,10 @@ while IFS= read -r line; do
     # said, never taken for a failure, and every arm ends in a status this
     # loop's last line can stand on, so no caller under `set -e` stops here.
     group)
-      if ! getent group "$name" >/dev/null; then plan "group $name: already gone with its user"
+      now=$(getent group "$name" | cut -d: -f3 || true)
+      if [ -z "$now" ]; then plan "group $name: already gone with its user"
+      elif [ "$now" != "${HELD_GID["$name"]:-}" ]; then
+        die "group $name is not the group this purge judged (gid ${HELD_GID["$name"]:-none}, now $now), so it is not removed and nothing more is. Look at it, then rerun the purge"
       elif groupdel "$name" 2>/dev/null; then plan "removed group $name"
       else plan "group $name: not removed"; PURGE_FAILED=1
       fi ;;

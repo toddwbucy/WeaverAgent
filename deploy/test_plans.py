@@ -3980,7 +3980,8 @@ class PurgeRecordTests(unittest.TestCase):
         helpers = cut("RECORD_PARENT=/var/lib", "# **Everything under DEST is read as the operator**")
         decision = (cut('[[ "$COPY_SUM" =~', 'plan "verified"\n')
                     + cut("# **The record is written here", 'say "units"\n'))
-        first = min(text.index(h) for h in ('say "the config roots"\n', 'say "paths"\n', 'say "accounts"\n'))
+        first = min(text.index(h) for h in ("# The identities root's record holds", 'say "the config roots"\n',
+                                            'say "paths"\n', 'say "accounts"\n'))
         region = text[first:text.index('say "purged. the archive is $DEST"', first)]
         if phases is not None:
             headers = sorted(region.index(h) for h in ('say "the config roots"\n', 'say "paths"\n',
@@ -3999,6 +4000,8 @@ class PurgeRecordTests(unittest.TestCase):
                    + "trap 'command rm -f -- \"$PURGE_ACTED\"' EXIT\n"
                    + 'COPY_SUM=$(sha256sum < "$PURGE_LIST" | cut -d" " -f1)\nDEST=archive\n'
                    + f"declare -A PREFIXES=([{shlex.quote(str(box / 'opt/weaver'))}]=1)\nACTIVE_UNITS=() RUNNING=()\n"
+                   # The roots discovery found, as it finds them on a first run.
+                   + "AGENT_ROOTS=(); for r in /etc/weaver/admin*/*/; do [ -d \"$r\" ] && AGENT_ROOTS+=(\"${r%/}\"); done\n"
                    + decision + region + 'echo PURGED\n')
         program = program.replace("/etc/weaver", f"{box}/etc/weaver").replace(
             "RECORD_PARENT=/var/lib", f"RECORD_PARENT={box}/var/lib")
@@ -4077,6 +4080,95 @@ class PurgeRecordTests(unittest.TestCase):
         self.assertIn(f"{entry} is not the object this purge judged", ran.stderr)
         self.assertTrue((entry / "theirs").exists())
         self.assertTrue(self.record(box).exists())
+
+    def resum(self, record, edit):
+        """RECORD's lines through EDIT, summed again as the record writes
+        itself: a change only a reused inode or a new account could show."""
+        head, plist, _, body = record.read_text().split("\n", 3)
+        body = edit(body)
+        record.write_text(f"{head}\n{plist}\nacted {hashlib.sha256(body.encode()).hexdigest()}\n{body}")
+        record.chmod(0o600)
+
+    def test_a_weaver_config_made_again_after_a_stop_is_not_removed(self):
+        """Codex on #159, round 1 (P1): /etc/weaver removed, then put back
+        or made again before the rerun, is not the object judged, so the
+        rerun refuses and the new tree stands. Perturbation: drop the check
+        before the roots, and the new configuration is removed."""
+        box = self.box()
+        self.assertEqual(self.run_purge(box, phases=1).returncode, 0)
+        self.assertFalse((box / "etc/weaver").exists())
+        (box / "etc/weaver/admin/b").mkdir(parents=True)
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn(f"{box}/etc/weaver is not the object this purge judged", ran.stderr)
+        self.assertTrue((box / "etc/weaver/admin/b").is_dir(), "the new configuration stands")
+
+    def test_a_root_made_again_inside_the_judged_config_is_not_withdrawn(self):
+        """Perturbation: drop the root's check, and the new root goes."""
+        box = self.box()
+        self.assertEqual(self.run_purge(box, phases=0).returncode, 0)
+        root = box / "etc/weaver/admin/a"
+        shutil.rmtree(root)
+        root.mkdir()
+        (root / "territory").write_text(f"{box}/var/lib/weaver-agent/weaver-a\n")
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn(f"{root} is not a root this purge judged", ran.stderr)
+        self.assertTrue(root.is_dir())
+
+    def test_a_reused_inode_under_another_owner_is_not_removed(self):
+        """Codex on #159, round 1 (P2): device and inode are reused once a
+        path is gone, so the identity carries the owner and the birth time
+        too. The replacement here takes the judged entry's device and inode
+        as the record holds them, written in as only a reused inode could
+        show it, under another owner: the rerun refuses and it stands.
+        Perturbation: compare device and inode alone, and it is removed."""
+        box = self.box()
+        self.assertEqual(self.run_purge(box, phases=1).returncode, 0)
+        entry = box / "tmp/weaver-a-scratch"
+        entry.rmdir()
+        entry.mkdir()
+        (entry / "theirs").write_text("")
+        st = os.stat(entry)
+        record = self.record(box)
+
+        def collide(body):
+            out = []
+            for line in body.splitlines():
+                if line.startswith("held ") and line.endswith(f" {entry}"):
+                    birth = line.split(" ", 2)[1].split(":")[3]
+                    line = f"held {st.st_dev}:{st.st_ino}:2001:{birth} {entry}"
+                out.append(line)
+            return "".join(l + "\n" for l in out)
+        self.resum(record, collide)
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn(f"{entry} is not the object this purge judged", ran.stderr)
+        self.assertTrue((entry / "theirs").exists())
+
+    def test_an_account_made_again_under_its_name_is_not_removed(self):
+        """An account or a group removed and made again under the same name,
+        with another number, is not the one judged. Perturbations: remove a
+        user, or a group, by name alone, and the new one goes."""
+        box = self.box()
+        self.assertEqual(self.run_purge(box, phases=2).returncode, 0)
+        passwd = box / "model/passwd"
+        passwd.write_text(passwd.read_text().replace("weaver-a:x:2001:", "weaver-a:x:4242:"))
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn("user weaver-a is not the account this purge judged (uid 2001, now 4242)", ran.stderr)
+        self.assertIn("weaver-a:x:4242:", passwd.read_text())
+        # The same for a group made again: the trace group, which no user
+        # takes with it, under another number.
+        box = self.box()
+        self.assertEqual(self.run_purge(box, phases=2).returncode, 0)
+        group = box / "model/group"
+        group.write_text(group.read_text().replace("weaver-a-trace:x:3003:", "weaver-a-trace:x:4343:"))
+        passwd = box / "model/passwd"
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn("group weaver-a-trace is not the group this purge judged (gid 3003, now 4343)", ran.stderr)
+        self.assertIn("weaver-a-trace:x:4343:", group.read_text())
 
     def test_a_removal_that_fails_keeps_the_record_and_the_rerun_finishes(self):
         """Perturbation: remove the record whatever failed, and the rerun
