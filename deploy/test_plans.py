@@ -3828,7 +3828,8 @@ class DecommissionTests(unittest.TestCase):
         self.assertLess(judged, self.script.index('say "the delegated door, shut"'))
         self.assertNotIn('done < "$DEST/PURGE-LIST"', self.script)
         self.assertNotIn('done < "$PURGE_LIST"', self.script)
-        self.assertEqual(self.script.count('done < "$PURGE_ACTED"'), 3)
+        # The three removal loops and the identities the paths loop reads.
+        self.assertEqual(self.script.count('done < "$PURGE_ACTED"'), 4)
         self.assertLess(judged, self.script.index('purge_lines_within "$PURGE_LIST" > "$PURGE_ACTED"'))
         # **A line passed over is never acted on**: only lines the
         # derivation holds reach the removal loops, so a path that did not
@@ -3877,11 +3878,10 @@ class DecommissionTests(unittest.TestCase):
         self.assertLess(purge, second)
 
 
-# The account database's stand-ins for the purge's accounts step (#140):
-# getent reads the model's passwd and group, userdel removes the user and,
-# as the real one does under USERGROUPS_ENAB, the user's private group where
-# no other member holds it, and groupdel removes a group, failing on one that
-# is gone.
+# The account database's stand-ins for the purge (#140): getent reads the
+# model's passwd and group, userdel removes the user from both and, as the real
+# one does under USERGROUPS_ENAB, the user's private group where no other member
+# holds it, and groupdel removes a group, failing on one that is gone.
 ACCOUNT_MODEL = r"""#!/usr/bin/env python3
 import os, pathlib, sys
 name = pathlib.Path(sys.argv[0]).name
@@ -3903,54 +3903,18 @@ elif name == "userdel":
     if not any(f[0] == who for f in rows("passwd")):
         sys.exit(6)
     write("passwd", [f for f in rows("passwd") if f[0] != who])
-    write("group", [f for f in rows("group") if not (f[0] == who and f[3] == "")])
+    kept = []
+    for f in rows("group"):
+        members = [m for m in f[3].split(",") if m and m != who]
+        if f[0] == who and not members:
+            continue
+        kept.append(f[:3] + [",".join(members)])
+    write("group", kept)
 elif name == "groupdel":
     if not any(f[0] == args[-1] for f in rows("group")):
         sys.exit(6)
     write("group", [f for f in rows("group") if f[0] != args[-1]])
 """
-
-
-class PurgeAccountsTests(unittest.TestCase):
-    """**The accounts step completes when userdel took a group with its user**
-    (#140): the purge's own accounts section, run over a model account
-    database whose userdel removes a user's private group as the real one
-    does, the list's groups in the order the archive writes them, the
-    connector's weaver-<agent>-admincon last."""
-
-    def test_a_group_userdel_removed_is_done_and_the_purge_goes_on(self):
-        """Run inside a function under `set -euo pipefail`, where a loop
-        whose last line ends in a failed `&&` stops the caller. Perturbation:
-        the group arm as it stood (`getent ... && { ... }`), and the caller
-        stops after the accounts, saying nothing of the last group."""
-        script = (DEPLOY / "decommission.sh").read_text()
-        accounts = script[script.index('say "accounts"\n'):script.index('# The prefixes the record holds')]
-        scratch = tempfile.TemporaryDirectory(prefix="purge-accounts-")
-        self.addCleanup(scratch.cleanup)
-        model = Path(scratch.name)
-        users = ["weaver-a", "weaver-a-state", "weaver-a-relay", "weaver-a-admincon"]
-        (model / "passwd").write_text("".join(f"{u}:x:{2001 + i}:{2001 + i}::/nonexistent:/bin/false\n"
-                                              for i, u in enumerate(users)))
-        groups = users[:3] + ["weaver-a-trace", "weaver-a-admin", "weaver-a-admincon"]
-        (model / "group").write_text("".join(f"{g}:x:{3001 + i}:\n" for i, g in enumerate(groups)))
-        (model / "acted").write_text("".join(f"user {u}\n" for u in users)
-                                     + "".join(f"group {g}\n" for g in groups))
-        for tool in ("getent", "userdel", "groupdel"):
-            stand_in = model / tool
-            stand_in.write_text(ACCOUNT_MODEL)
-            stand_in.chmod(0o755)
-        env = {**os.environ, "PATH": str(model) + os.pathsep + os.environ["PATH"], "MODEL": str(model)}
-        env.pop("BASH_ENV", None)
-        program = ("set -euo pipefail\nsay() { printf '== %s\\n' \"$*\"; }\nplan() { printf '   %s\\n' \"$*\"; }\n"
-                   f"PURGE_ACTED={shlex.quote(str(model / 'acted'))}\n"
-                   "accounts() {\n" + accounts + "}\naccounts\necho AFTER\n")
-        ran = subprocess.run(["bash", "-c", program], env=env, text=True, capture_output=True, timeout=20)
-        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
-        self.assertIn("AFTER", ran.stdout, "the purge goes on past the accounts")
-        self.assertIn("group weaver-a-admincon: already gone with its user", ran.stdout)
-        self.assertIn("removed group weaver-a-trace", ran.stdout)
-        self.assertEqual((model / "passwd").read_text() + (model / "group").read_text(), "",
-                         "every account and group is gone")
 
 
 class PurgeRecordTests(unittest.TestCase):
@@ -3959,18 +3923,16 @@ class PurgeRecordTests(unittest.TestCase):
     reading and writing, its decision between a first run and a rerun, and
     its removal phases in the order the script states them, cut after each
     phase. The model runs under `unshare --map-root-user`, so the box's files
-    are root's as the record's checks need. The account database is the
-    accounts test's model, its userdel taking a private group with its user."""
+    are root's as the record's checks need. The account database is laid out
+    as create-agent makes it: the relay with no group of its own, the agent's
+    and the member's groups holding the operator and the connector, so only
+    the connector's group goes with its user."""
 
     def setUp(self):
         self.script = (DEPLOY / "decommission.sh").read_text()
         probe = subprocess.run(["unshare", "--map-root-user", "true"], capture_output=True)
         if probe.returncode != 0:
             self.skipTest("unshare --map-root-user is not available")
-
-    def cut(self, start, end):
-        a = self.script.index(start)
-        return self.script[a:self.script.index(end, a)]
 
     def box(self):
         scratch = tempfile.TemporaryDirectory(prefix="purge-record-")
@@ -3985,10 +3947,12 @@ class PurgeRecordTests(unittest.TestCase):
         for d in (box, box / "var", box / "var/lib"):
             d.chmod(0o755)
         users = ["weaver-a", "weaver-a-state", "weaver-a-relay", "weaver-a-admincon"]
-        groups = users[:3] + ["weaver-a-trace", "weaver-a-admin", "weaver-a-admincon"]
+        members = {"weaver-a": "op", "weaver-a-state": "weaver-a-admincon,op", "weaver-a-trace": "op",
+                   "weaver-a-admin": "weaver-a-admincon,op", "weaver-a-admincon": ""}
+        groups = list(members)
         (box / "model/passwd").write_text("".join(f"{u}:x:{2001 + i}:{2001 + i}::/nonexistent:/bin/false\n"
                                                   for i, u in enumerate(users)))
-        (box / "model/group").write_text("".join(f"{g}:x:{3001 + i}:\n" for i, g in enumerate(groups)))
+        (box / "model/group").write_text("".join(f"{g}:x:{3001 + i}:{members[g]}\n" for i, g in enumerate(groups)))
         # /etc/weaver listed last of the paths: the archive writes it first,
         # and the purge's order must not rest on the list's.
         listed = ([f"path {box}/var/lib/weaver-agent", f"path {box}/opt/weaver/bin",
@@ -4006,14 +3970,16 @@ class PurgeRecordTests(unittest.TestCase):
             stand_in.chmod(0o755)
         return box
 
-    def run_purge(self, box, phases=None, script=None, removals=None):
+    def run_purge(self, box, phases=None, removals=None, failing=None):
         """One `--purge` over BOX from the record's decision on: every phase,
         or the first PHASES of them in the script's own order, then a stop, or
-        a stop after its REMOVALS-th `rm`, mid-phase, as an interrupt lands."""
-        text = script or self.script
+        a stop after its REMOVALS-th `rm`, mid-phase, as an interrupt lands. A
+        command FAILING names (`rm` or `mv`) fails on its first call."""
+        text = self.script
         cut = lambda a, b: text[text.index(a):text.index(b, text.index(a))]
         helpers = cut("RECORD_PARENT=/var/lib", "# **Everything under DEST is read as the operator**")
-        decision = cut('[[ "$COPY_SUM" =~', 'plan "verified"\n')
+        decision = (cut('[[ "$COPY_SUM" =~', 'plan "verified"\n')
+                    + cut("# **The record is written here", 'say "units"\n'))
         first = min(text.index(h) for h in ('say "the config roots"\n', 'say "paths"\n', 'say "accounts"\n'))
         region = text[first:text.index('say "purged. the archive is $DEST"', first)]
         if phases is not None:
@@ -4025,10 +3991,12 @@ class PurgeRecordTests(unittest.TestCase):
                    "die() { printf 'REFUSED: %s\\n' \"$*\" >&2; exit 1; }\n"
                    "purge_lines_outside() { :; }\npurge_lines_within() { cat \"$1\"; }\n"
                    + ("" if removals is None else
-                      "RM_SEEN=0\nrm() { command rm \"$@\"; RM_SEEN=$((RM_SEEN + 1)); "
-                      f"[ \"$RM_SEEN\" -lt {removals} ] || exit 0; }}\n")
+                      "RM_SEEN=0\nrm() { local s=0; command rm \"$@\" || s=$?; RM_SEEN=$((RM_SEEN + 1)); "
+                      f"[ \"$RM_SEEN\" -lt {removals} ] || exit 0; return \"$s\"; }}\n")
+                   + ("" if failing is None else f"{failing}() {{ return 1; }}\n")
                    + helpers
                    + f"PURGE_LIST={shlex.quote(str(box / 'PURGE-LIST'))}\nPURGE_ACTED=$(mktemp)\n"
+                   + "trap 'command rm -f -- \"$PURGE_ACTED\"' EXIT\n"
                    + 'COPY_SUM=$(sha256sum < "$PURGE_LIST" | cut -d" " -f1)\nDEST=archive\n'
                    + f"declare -A PREFIXES=([{shlex.quote(str(box / 'opt/weaver'))}]=1)\nACTIVE_UNITS=() RUNNING=()\n"
                    + decision + region + 'echo PURGED\n')
@@ -4068,8 +4036,70 @@ class PurgeRecordTests(unittest.TestCase):
         ran = self.run_purge(box)
         self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
         self.assertIn("root's record written", ran.stdout)
+        # Only the connector's group goes with its user; the agent's and the
+        # member's hold the operator and are removed by groupdel.
         self.assertIn("group weaver-a-admincon: already gone with its user", ran.stdout)
+        self.assertIn("removed group weaver-a-state", ran.stdout)
+        self.assertIn("PURGED", ran.stdout)
         self.assert_purged(box)
+
+    def test_a_completed_purge_run_again_refuses_and_says_why(self):
+        box = self.box()
+        self.assertEqual(self.run_purge(box).returncode, 0)
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn("a purge has completed here", ran.stderr)
+
+    def test_an_agent_taken_down_by_hand_after_the_archive_leaves_the_rest_to_purge(self):
+        """An account gone is not the sign of a purge begun: a box where the
+        relay was removed by hand after the archive purges the rest."""
+        box = self.box()
+        passwd = box / "model/passwd"
+        passwd.write_text("".join(l + "\n" for l in passwd.read_text().splitlines() if not l.startswith("weaver-a-relay:")))
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        self.assertIn("user weaver-a-relay: already gone", ran.stdout)
+        self.assert_purged(box)
+
+    def test_a_path_replaced_since_it_was_judged_is_not_removed(self):
+        """A rerun removes a path only while it is the object judged: a /tmp
+        name another principal took after a reboot refuses the rerun, naming
+        it, and stands. Perturbation: drop the identity check, and the rerun
+        removes the stranger's entry as root."""
+        box = self.box()
+        self.assertEqual(self.run_purge(box, phases=1).returncode, 0)
+        entry = box / "tmp/weaver-a-scratch"
+        entry.rmdir()
+        entry.mkdir()
+        (entry / "theirs").write_text("")
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn(f"{entry} is not the object this purge judged", ran.stderr)
+        self.assertTrue((entry / "theirs").exists())
+        self.assertTrue(self.record(box).exists())
+
+    def test_a_removal_that_fails_keeps_the_record_and_the_rerun_finishes(self):
+        """Perturbation: remove the record whatever failed, and the rerun
+        finds no record on a box a purge acted on, and refuses."""
+        box = self.box()
+        ran = self.run_purge(box, failing="rm")
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn("not removed", ran.stdout)
+        self.assertIn("root's record is kept", ran.stderr)
+        self.assertTrue(self.record(box).exists())
+        again = self.run_purge(box)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assert_purged(box)
+
+    def test_a_root_that_cannot_be_withdrawn_refuses_before_any_path_goes(self):
+        """Perturbation: go on past a root not withdrawn, and its territory
+        goes while it stands, which its admin then refuses."""
+        box = self.box()
+        ran = self.run_purge(box, failing="mv")
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn("cannot be withdrawn", ran.stderr)
+        self.assertTrue((box / "var/lib/weaver-agent/weaver-a").exists(), "the territory stands with its root")
+        self.assertEqual(self.roots_without_territory(box), [])
 
     def test_a_purge_stopped_after_each_phase_reruns_to_completion(self):
         """Stopped after each phase, and after each single removal within
@@ -4129,7 +4159,7 @@ class PurgeRecordTests(unittest.TestCase):
                 self.record(box).unlink()
                 ran = self.run_purge(box)
                 self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
-                self.assertIn("a purge has already acted on this box", ran.stderr)
+                self.assertIn("root holds no record of a purge in progress", ran.stderr)
 
 
 class RoundOneOf79Tests(unittest.TestCase):
