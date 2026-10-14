@@ -452,6 +452,7 @@ manifest_field() { # manifest_field LINE FIELD(1-4): LINE counted from 1, or "la
   else manifest | sed -n "$1p" | cut -d' ' -f"$2"; fi
 }
 marker() { sudo -n cat -- "$R/run.marker" 2>/dev/null || printf 'absent'; }
+
 expect_marker() { # expect_marker RUN STATE
   local m; m=$(marker)
   expect_at "the run marker names run $1" "$1" "$m" run
@@ -478,6 +479,24 @@ for line in sys.stdin:
         continue
     named.append(line.rstrip("\n"))
 print("\n".join(named) if named else "none")'
+}
+# queue_peak_since OFFSET: the last trace-queue line (#120) the worker appended to
+# worker.log past OFFSET, read as `<peak> of <depth>, the mark at <mark>`; `none`
+# where it wrote none, and `unreadable` where root's read failed. A reading for the
+# operator, never a check.
+queue_peak_since() {
+  local text
+  text=$(sudo -n tail -c +"$(( $1 + 1 ))" -- "$T/worker.log" 2>/dev/null) || { printf 'unreadable'; return 0; }
+  printf '%s' "$text" | python3 -c 'import json, sys
+found = "none"
+for line in sys.stdin:
+    try:
+        d = json.loads(line)
+    except ValueError:
+        continue
+    if isinstance(d, dict) and d.get("queue") == "trace":
+        found = "%s of %s, the mark at %s" % (d.get("peak"), d.get("depth"), d.get("mark"))
+print(found)'
 }
 # expect_in_order CHECK FILE NEEDLE...: each needle in FILE, after the last.
 expect_in_order() {
@@ -806,8 +825,11 @@ step_4() {
   run_line "deploy/turn.py $A \"In one sentence, what were you asked to be?\""
   want "unloaded; the marker closed; a second manifest line arrived leave (SP_B); the unload event not forced; a save_point event for SP_B"
   want "show unloaded with no constituent; load idle; its lineage names SP_B and the previous run, named_at_restore false, no reset; a recall event after it"
+  want "reported, not checked: the trace queue's peak depth at the unload, from worker.log (#120)"
   [ "$APPLY" -eq 1 ] || return 0
+  local log_at; log_at=$(file_size "$T/worker.log")
   ask unload; expect_state unload unloaded
+  measured "the trace queue's peak depth at the unload, from worker.log: $(queue_peak_since "$log_at")"
   expect_marker "$RUN" closed
   expect_eq "the manifest holds two lines" 2 "$(manifest_count)"
   expect_eq "line 2 arrived at the leave" leave "$(manifest_field 2 2)"

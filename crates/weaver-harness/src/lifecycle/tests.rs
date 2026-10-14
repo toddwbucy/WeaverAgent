@@ -3693,6 +3693,153 @@ fn record_then_drop(run: Run, reader: std::io::PipeReader) -> Vec<serde_json::Va
     events
 }
 
+/// **The leave writes the trace queue's peak to standard error** (#120;
+/// `weaver-harness-Spec` section 4): after its last drain, one line naming
+/// the run's peak depth, the capacity and the high-water mark, which admin's
+/// start step points at worker.log. The leave runs in a child of this test
+/// binary, whose standard error is read here, against a sink that takes
+/// nothing, so the queue grows with every record the leave authors and the
+/// line's peak equals the run's final one only where it was written after
+/// `unload`. Perturbations: drop the line, and none is found; write it before
+/// `unload`, and its peak falls one short of the run's.
+#[test]
+fn the_leave_writes_the_queue_peak_line() {
+    if peak_child("serving") {
+        return;
+    }
+    let child = run_peak_child("serving", std::process::Stdio::piped());
+    assert!(child.status.success(), "{child:?}");
+    let lines = stderr_objects(&child);
+    let line = lines
+        .iter()
+        .find(|value| value["queue"] == "trace")
+        .unwrap_or_else(|| panic!("a queue-peak line on standard error: {lines:?}"));
+    let final_peak = lines
+        .iter()
+        .find_map(|value| value["child_peak"].as_u64())
+        .expect("the child names the run's final peak");
+    assert!(final_peak > 1, "records queued behind the stuck sink");
+    assert_eq!(line["organ"], "harness", "{line}");
+    assert_eq!(
+        line["peak"], final_peak,
+        "written after the leave's last enqueue"
+    );
+    assert_eq!(line["depth"], weaver_trace::QUEUE_DEPTH, "{line}");
+    assert_eq!(line["mark"], weaver_trace::HIGH_WATER_MARK, "{line}");
+}
+
+/// **A diagnostic leave writes no queue-peak line** (#120;
+/// `weaver-harness-Spec` section 4): its record queues nothing. Perturbation:
+/// write the line whatever the arm, and a line with peak zero is found.
+#[test]
+fn a_diagnostic_leave_writes_no_queue_peak_line() {
+    if peak_child("diagnostic") {
+        return;
+    }
+    let child = run_peak_child("diagnostic", std::process::Stdio::piped());
+    assert!(child.status.success(), "{child:?}");
+    let lines = stderr_objects(&child);
+    assert!(
+        !lines.iter().any(|value| value["queue"] == "trace"),
+        "{lines:?}"
+    );
+}
+
+/// **A queue-peak line standard error cannot take ends nothing** (#120): the
+/// leave runs with standard error on a device that refuses every write, as
+/// a full disk under worker.log does, and returns. Perturbation: write the
+/// line with `eprintln!`, and the child panics.
+#[test]
+fn a_queue_peak_line_that_cannot_be_written_ends_nothing() {
+    if peak_child("full") {
+        return;
+    }
+    let full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .expect("/dev/full");
+    let child = run_peak_child("full", std::process::Stdio::from(full));
+    assert!(child.status.success(), "{child:?}");
+}
+
+/// The variable that runs a queue-peak test as the child whose standard
+/// error its parent reads, naming the child's mode.
+const PEAK_CHILD: &str = "WEAVER_HARNESS_TEST_PEAK_CHILD";
+
+/// The child's half of a queue-peak test: where [`PEAK_CHILD`] names `mode`,
+/// a run leaves and `true` is answered, the parent reading what it wrote.
+fn peak_child(mode: &str) -> bool {
+    if std::env::var(PEAK_CHILD).as_deref() != Ok(mode) {
+        return false;
+    }
+    let (mut run, _spare, _sink) = entered_run(None);
+    releasing_spu(&mut run);
+    let reader = match mode {
+        "diagnostic" => {
+            let fd = OwnedFd::from(
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open("/dev/null")
+                    .expect("/dev/null"),
+            );
+            run.recorder = crate::record::Record::from(
+                weaver_diagnostic::Recorder::receive(
+                    fd,
+                    weaver_diagnostic::RunRef("r-1".into()),
+                    weaver_diagnostic::SessionRef("s-1".into()),
+                )
+                .expect("recorder"),
+            );
+            None
+        }
+        _ => Some(stalled_writer(&mut run, 32, 8_192)),
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(300);
+    let _ = leave_after(
+        &mut run,
+        Some(weaver_types::Cause { uid: 7 }),
+        false,
+        None,
+        None,
+        Some(deadline),
+    );
+    if mode == "serving" {
+        eprintln!(
+            "{}",
+            serde_json::json!({ "child_peak": run.recorder.pressure().peak })
+        );
+    }
+    if let Some(reader) = reader {
+        let _ = record_then_drop(run, reader);
+    }
+    true
+}
+
+/// The child run, the test of the same mode alone, its standard error as
+/// asked.
+fn run_peak_child(mode: &str, stderr: std::process::Stdio) -> std::process::Output {
+    let test = match mode {
+        "serving" => "lifecycle::tests::the_leave_writes_the_queue_peak_line",
+        "diagnostic" => "lifecycle::tests::a_diagnostic_leave_writes_no_queue_peak_line",
+        _ => "lifecycle::tests::a_queue_peak_line_that_cannot_be_written_ends_nothing",
+    };
+    std::process::Command::new(std::env::current_exe().expect("this binary"))
+        .args([test, "--exact", "--nocapture", "--test-threads=1"])
+        .env(PEAK_CHILD, mode)
+        .stdout(std::process::Stdio::null())
+        .stderr(stderr)
+        .output()
+        .expect("the child runs")
+}
+
+/// The JSON objects among a child's standard error lines.
+fn stderr_objects(child: &std::process::Output) -> Vec<serde_json::Value> {
+    String::from_utf8_lossy(&child.stderr)
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect()
+}
+
 /// An SPU lifecycle stand-in answering every directive `Released`.
 fn releasing_spu(run: &mut Run) {
     let (spu_lifecycle, spu_far) = OrganChannel::pair().expect("pair");

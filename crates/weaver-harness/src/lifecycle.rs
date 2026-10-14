@@ -3090,6 +3090,21 @@ fn leave_after(
             .drain()
             .map_err(|_| LifecycleRefusal::DescriptorsUnusable),
     };
+    // **The queue's peak, outside the record** (#120; `weaver-harness-Spec`
+    // section 4): after the last drain, one line on standard error, which
+    // admin's start step points at worker.log. A diagnostic record queues
+    // nothing and says nothing. **A failed write is no fault of the leave's**:
+    // `eprintln!` panics where standard error cannot take the line (a full
+    // disk under worker.log), which would end the worker before its answer,
+    // so the write's error is dropped, as `channel.rs` drops its own.
+    if serving {
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stderr(),
+            "{}",
+            queue_peak_notice(run.recorder.pressure().peak)
+        );
+    }
     if let Some(refusal) = first_refusal {
         return Err(refusal);
     }
@@ -3834,10 +3849,6 @@ fn clear_dumpable() -> Result<(), AdoptionFault> {
     Ok(())
 }
 
-/// Authors the seated identity prefix beside the load, one `message.system`
-/// per declared message, and authors the door's refusal as a `fault` where a
-/// message carries a role the door does not write.
-///
 /// The column ask's derivation, per `weaver-harness-Spec` section 6.1: the
 /// ask is written where and only where the binding is diagnostic and the
 /// readout is elected. A serving harness never writes it - the discipline
@@ -3848,6 +3859,22 @@ fn clear_dumpable() -> Result<(), AdoptionFault> {
 /// conforms: harness-serving-writes-no-column-ask
 fn column_ask_for(diagnostic: bool, readout_elected: bool) -> bool {
     diagnostic && readout_elected
+}
+
+/// **The trace queue's peak at the leave** (#120; `weaver-harness-Spec`
+/// section 4): the run's peak depth, the queue's capacity and the high-water
+/// mark, one JSON line in the harness's diagnostic form, the evidence for
+/// [`weaver_trace::QUEUE_DEPTH`] that the pressure fault, silent below the
+/// mark, does not give.
+fn queue_peak_notice(peak: usize) -> String {
+    serde_json::json!({
+        "organ": "harness",
+        "queue": "trace",
+        "peak": peak,
+        "depth": weaver_trace::QUEUE_DEPTH,
+        "mark": weaver_trace::HIGH_WATER_MARK,
+    })
+    .to_string()
 }
 
 /// The typed line that names what a diagnostic enter waits on, per

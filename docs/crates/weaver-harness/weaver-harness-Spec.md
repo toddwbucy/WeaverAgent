@@ -7,7 +7,7 @@ floor. Code is written against it under the gates of Working Process section 6.
 **Document ID:** `weaver-harness-Spec`
 **Parent:** `weaver-harness-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #136
+**Landing PR:** #154
 
 ---
 
@@ -1583,16 +1583,19 @@ per `weaver-trace-Spec` section 6, carrying the floor's `fault-report` as
 section 3 states. **The terminal `unload` is the one exception**: the leave reads the
 depth before it authors `unload` and reports any pressure then, and once `unload` is
 authored no event follows, the check after it skipped (`weaver-admin-Spec` section 3,
-I9; section 6 item 6). **The depth is read rather than returned** as of
-2026-08-22: it arrived as a `Failure` the recorder handed back after the
-event had already landed, so acting on it meant treating a recorded event as
-a lost one.
-Nothing on any turn path waits on the sink, per `weaver-harness-PRD` section
-5, and the working structure's return is the acknowledgment the interior
-proceeds on. The authoring itself is section 3's record and is not restated
-here. **The never-waits property is review's by election,** a double sink that
-never drains reaching it while a turn proceeds, and this suite buying the
-back-pressure measurement section 9 defers instead.
+I9; section 6 item 6). **After a serving leave's last drain this crate writes one line
+on standard error**, worker.log, a JSON object whose `queue` is `trace`, naming the
+run's peak queue depth as `peak`, the queue's capacity as `depth` and the high-water
+mark as `mark` (`weaver-trace-Spec` section 6, #120). It reaches no event, a diagnostic
+record writes none, and a failed write of it is dropped, never a fault of the leave.
+**The depth is read rather than returned** as of 2026-08-22: it arrived as a `Failure`
+the recorder handed back after the event had already landed, so acting on it meant
+treating a recorded event as a lost one. Nothing on any turn path waits on the sink, per
+`weaver-harness-PRD` section 5, and the working structure's return is the acknowledgment
+the interior proceeds on. The authoring itself is section 3's record and is not restated
+here. **The never-waits property is review's by election,** a double sink that never
+drains reaching it while a turn proceeds, and this suite buying the back-pressure
+measurement section 9 defers instead.
 
 ```graph
 node: harness-nothing-waits-on-the-sink
