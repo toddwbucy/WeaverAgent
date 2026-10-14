@@ -2434,6 +2434,17 @@ weaver-<agent>/      root's; the agent's cgroup
   `cgroup.procs` and the common ancestor's, here `worker/`'s. Owning no directory, the
   agent's account can neither make nor remove a cgroup, nor change any other interface
   file (`cgroup.type`, `cgroup.subtree_control`, `run/cgroup.procs`, `run/cgroup.kill`).
+- **Every directory is `0755`, set through its descriptor after its `mkdir`** (Codex on
+  #161): `mkdir` applies the invoking process's umask, so under a root umask of `077` a
+  directory would come out `0700` and the agent's account could not reach its three files.
+  The start step opens each directory it made `O_DIRECTORY` and sets its mode by
+  `fchmod`, whatever the umask, never by path. `0755` because the agent's account
+  needs search on `weaver-<agent>/` and `worker/` to reach `worker/cgroup.procs` and
+  `tools/`, and read on `tools/` for the worker's `O_DIRECTORY` open of it and for its
+  `cgroup.events`, while write stays root's. `0711` would serve the search but not the
+  worker's open of `tools/`, and one mode for all five keeps the judgment one. Nothing
+  they let the agent's account read is secret: the pids `show` already prints. The three
+  delegated files keep the mode the kernel gives them, writable by their owner.
 - **The member and the relay sit outside `worker/`**, under their own accounts, in
   root's `constituents/`. `cgroup.kill` signals without a per-process permission check,
   so a kill the agent's account could write over them would be a kill over the trace's
@@ -2654,6 +2665,9 @@ The instruments:
   agent's cgroup gone. Watched to fail when the run end's kill is dropped.
 - **C2, the start:** a load over a populated cgroup with the run lock free refuses
   `AgentRunning` and kills nothing.
+- **C3, the modes:** a start step run under a umask of `077` still leaves every
+  directory `0755`, and the worker opens `tools/` and writes its three files. Watched to
+  fail when the `fchmod` is dropped and the directories come out `0700`.
 - **C3:** the agent's account cannot write `constituents/cgroup.procs` or
   `run/cgroup.procs`, nor make or remove a cgroup. Watched to fail when a directory is
   given to the agent's account.
