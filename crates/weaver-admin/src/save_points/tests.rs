@@ -783,6 +783,8 @@ fn a_fifo_in_the_room_does_not_wedge_the_publication() {
                 },
                 available: &mut available_bytes,
                 cap: PUBLISH_CAP,
+                room_bound: ROOM_SCAN_BOUND,
+                finished: None,
             },
         )
         .map(|(lines, deferred)| (lines.len(), deferred));
@@ -912,6 +914,8 @@ fn a_verb_publishes_at_most_its_cap_oldest_first() {
                 after_scan: &mut || {},
                 available: &mut available_bytes,
                 cap,
+                room_bound: ROOM_SCAN_BOUND,
+                finished: None,
             },
         )
         .unwrap()
@@ -991,6 +995,8 @@ fn a_copy_is_made_only_where_the_space_stands_free() {
             after_scan: &mut || {},
             available: &mut |_| Ok(free),
             cap: PUBLISH_CAP,
+            room_bound: ROOM_SCAN_BOUND,
+            finished: None,
         },
     )
     .unwrap();
@@ -1372,6 +1378,8 @@ fn the_room_is_copied_from_bytes_judged_in_the_same_read() {
             after_scan: &mut || std::fs::write(&swapped, &other).unwrap(),
             available: &mut available_bytes,
             cap: PUBLISH_CAP,
+            room_bound: ROOM_SCAN_BOUND,
+            finished: None,
         },
     )
     .unwrap();
@@ -2301,4 +2309,58 @@ fn a_fifo_at_the_manifest_is_refused_without_blocking() {
         "refused at once"
     );
     drop(scratch);
+}
+
+/// **The room's scan holds at most its bound of finished names** (S16, the
+/// operator's ruling of 2026-10-14 on #140; Spec section 6): a room at the
+/// bound scans and publishes, names that are not finished not counted, and
+/// the count comes back for `admin.log`; one finished name past it refuses
+/// `BoundaryUnverified` before any is scanned, nothing published, the count
+/// past the bound. The bound here is the test's three; production's is
+/// pinned beside. Perturbations: drop the refusal and the room past the bound
+/// publishes; count every name and the room at the bound refuses.
+#[test]
+fn the_rooms_scan_refuses_past_its_bound_and_counts_what_it_saw() {
+    assert_eq!(ROOM_SCAN_BOUND, 4096, "the bound the Spec states");
+    let publish_bounded = |room: &std::path::Path, dir: &std::path::Path, mine: Owner| {
+        let mut hooks = PublishHooks {
+            after_scan: &mut || {},
+            available: &mut available_bytes,
+            cap: PUBLISH_CAP,
+            room_bound: 3,
+            finished: None,
+        };
+        let published = publish_with(
+            open_directory(room).unwrap().as_fd(),
+            mine.uid,
+            open_directory(dir).unwrap().as_fd(),
+            (mine.uid, mine.gid),
+            mine,
+            &[],
+            &mut hooks,
+        );
+        (published, hooks.finished)
+    };
+    // At the bound, beside names that are not finished.
+    let (_at, room, dir, mine, names) = room_of_save_points("room-at-bound", 3);
+    std::fs::write(room.join("notes.txt"), b"not a save point").unwrap();
+    std::fs::write(room.join(format!("{}.part", "a".repeat(64))), b"unfinished").unwrap();
+    let (published, finished) = publish_bounded(&room, &dir, mine);
+    let (lines, _) = published.expect("a room at the bound scans");
+    assert_eq!(lines.len(), names.len());
+    assert_eq!(finished, Some(3));
+    // One past it.
+    let (_past, room, dir, mine, names) = room_of_save_points("room-past-bound", 4);
+    let (published, finished) = publish_bounded(&room, &dir, mine);
+    assert_eq!(published.err(), Some(LifecycleRefusal::BoundaryUnverified));
+    assert_eq!(finished, Some(4), "the count past the bound");
+    assert!(
+        read_manifest(open_directory(&dir).unwrap().as_fd(), mine)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        names.iter().all(|(name, _)| room.join(name).exists()),
+        "nothing taken from the room"
+    );
 }

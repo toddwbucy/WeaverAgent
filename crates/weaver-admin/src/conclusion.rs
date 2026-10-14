@@ -94,15 +94,31 @@ pub struct Outcome {
     pub printed: Printed,
 }
 
+/// **How a reported save point is published** (S17, the operator's ruling
+/// of 2026-10-14 on #140): a report is accepted only for the run the marker
+/// stands open on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Publication {
+    /// The room, the reported save point with its event's position and its
+    /// arrival.
+    Reported,
+    /// The room, the reported file among the recovered: no position, ordered
+    /// by the member's own count, never as the reported save point.
+    Recovered,
+}
+
 /// The first half of the table: settled from the `Left` alone, or a
-/// publication of the reported save point to attempt first.
+/// publication to attempt first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Conclusion {
     /// Nothing is published.
     Settled(Outcome),
     /// Attempt the publication, then `after_publication` with whether it
     /// landed.
-    Publish { this_run: bool },
+    Publish {
+        this_run: bool,
+        publication: Publication,
+    },
 }
 
 /// **The keys, tested in the Spec's order**, so every reachable `Left` matches
@@ -152,7 +168,41 @@ pub fn conclude(kind: LeftKind) -> Conclusion {
         LeftKind::TerritoryUnjudged => settled(MarkerWrite::Forced, Printed::Unloaded),
         LeftKind::NoState => settled(MarkerWrite::Closed, Printed::Unloaded),
         LeftKind::ForcedNotTaken => settled(MarkerWrite::Forced, Printed::Unloaded),
-        LeftKind::Reported { this_run } => Conclusion::Publish { this_run },
+        LeftKind::Reported { this_run } => Conclusion::Publish {
+            this_run,
+            publication: publication_of(this_run),
+        },
+    }
+}
+
+/// **A report is accepted only for the open marker's run** (S17): this
+/// run's is published as reported, any other's file as recovered.
+pub fn publication_of(this_run: bool) -> Publication {
+    if this_run {
+        Publication::Reported
+    } else {
+        Publication::Recovered
+    }
+}
+
+/// What the `save-point` verb answers (3.0, the `save-point` verb's
+/// publication).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SavePointAnswer {
+    /// `SavePointTaken` with the report.
+    Taken,
+    /// Refused `SavePointNotTaken` naming `published`.
+    NotTakenPublished,
+}
+
+/// **The `save-point` verb's table, after its publication** (S17): it answers
+/// the save point taken only where the report is this run's and its file
+/// published as reported; a report of another run, its file published as
+/// recovered, answers no save point of this run.
+pub fn save_point_answer(this_run: bool, landed: bool) -> SavePointAnswer {
+    match (this_run, landed) {
+        (true, true) => SavePointAnswer::Taken,
+        (true, false) | (false, true | false) => SavePointAnswer::NotTakenPublished,
     }
 }
 

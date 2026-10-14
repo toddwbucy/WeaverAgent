@@ -370,7 +370,13 @@ state. An `unload` whose leave save point was reported and did not publish refus
 the next load's reset, per `weaver-admin-Spec` section 3: unlike every other leg, the
 run has ended and the save point stands unpublished in the member's room. A
 `save-point` whose publication does not land refuses `SavePointNotTaken` naming
-`published` too, the run still open. `force-unload` takes the leave save point as
+`published` too, the run still open, and so does one whose report names another run than
+the one the marker stands open on: its file is published as recovered, never as this
+run's save point, so no save point of this run was published (`weaver-admin-Spec` 3.0,
+the `save-point` verb's publication; #140, S17). **A member's room past 4096 finished
+names refuses `BoundaryUnverified`** at every verb that publishes (a `load`, an `unload`,
+a `save-point`), until the operator clears it (`weaver-admin-Spec` section 6; #140,
+S16). `force-unload` takes the leave save point as
 `unload` does and ends the run whether or not it can be taken, refusing
 `SavePointNotTaken` naming `published` where it was taken and did not publish, per
 section 4.1. A `stop`

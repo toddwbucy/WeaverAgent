@@ -494,7 +494,7 @@ choice made in advance, for an operator who will not stand watch.
 7. The harness releases the SPU and the member (S7), authoring a `fault` for an SPU that dies in its release, and reads the recorder's depth, reporting any pressure, then authors `unload`, the run's terminal event, carrying the release outcome, drains the writer's queue to the stream, and answers `Left{save_point, forced}`. **The definition of `forced`**, the one every other document cites: `forced` on `unload` and on `Left` is the leave's state at its end, never the directive it began as, true where the leave was directed forced, joined, a declared bound passing, or a dead gate or SPU (a `force-unload` directing it, one joining it, the bounds below, or ruling (A) of the organ-death table), and false for a leave that stayed graceful; where a bound or a dead organ turned it, the cause stays the graceful caller's and no `forced_by` is named.
 8. This crate concludes (the conclusion, below), as its outcome table gives for the `Left` answered: S0 where the marker closes `Closed`, S0d where it stays `Open`.
 
-**The conclusion: any caller answered `Left` concludes**, on the operator's ruling of 2026-10-09 recorded on #1. Every admin invocation the harness answers with the leave's `Left` concludes the same way, whichever way it came to be answered: the graceful holder, a sole force, or a force that joined. **It takes the invocation lock first**, the holder already holding it and a joined force waiting behind the holder, and, holding it, reads the run's marker by section 4's marker-write rule: where the rule leaves the marker alone, it changes nothing and prints `Unloaded` once the run lock is free. Otherwise, still holding the invocation lock, it waits for the run lock to free (S8a), so no `load` can start a new run in the gap, then publishes the reported save point where one is reported and acts as the row below for the `Left` it was answered. **A marker closed for a run is never rewritten**, so the conclusion is idempotent per run, and the join is only a second way a caller comes to be answered `Left`.
+**The conclusion: any caller answered `Left` concludes**, on the operator's ruling of 2026-10-09 recorded on #1. Every admin invocation the harness answers with the leave's `Left` concludes the same way, whichever way it came to be answered: the graceful holder, a sole force, or a force that joined. **It takes the invocation lock first**, the holder already holding it and a joined force waiting behind the holder, and, holding it, reads the run's marker by section 4's marker-write rule: where the rule leaves the marker alone, it changes nothing and prints `Unloaded` once the run lock is free. Otherwise, still holding the invocation lock, it waits for the run lock to free (S8a), so no `load` can start a new run in the gap, then publishes the room, the reported save point as reported where its `event_run` is the run the marker stands open on and as recovered otherwise (S17, the operator's ruling of 2026-10-14 on #140), and acts as the row below for the `Left` it was answered. **A marker closed for a run is never rewritten**, so the conclusion is idempotent per run, and the join is only a second way a caller comes to be answered `Left`.
 
 **The conclusion's outcomes, exhaustive.** Every `Left` the harness can answer (`weaver-admin-harness-contract` section 3, the leave) has one row; a `Left` the table lacks is a defect (section 10). **The printed column holds for the leave's own caller and a force that joined it**: each waits for the run lock before it prints, so `Unloaded` is true, and a failed publication refuses whichever met it. The rollback's `Left` reaches the load invocation alone, which prints its own refusal.
 
@@ -506,9 +506,17 @@ choice made in advance, for an operator who will not stand watch.
 | no | no (K5, the operator's ruling of 2026-10-08 on #99; section 3, a force does not depend on the territory) | | reported or none | | | true | none: nothing is written into an unjudged territory, the room's files waiting for a load, which judges it first | `Forced` | `ForcedUnload` | `Unloaded`, the run ended |
 | no | yes | true: no state to keep (every diagnostic binding, and a serving run with no member seam) | none | | | either | none: the run has nothing to keep | `Closed` (I4: nothing was lost) | none | `Unloaded` |
 | no | yes | false | none: not taken (a leg missed, or the member dead) | | | true (sole, joined, past a declared bound, or a dead gate or SPU) | none | `Forced` | `ForcedUnload`, the latest published save point restored | `Unloaded` |
-| no | yes | false | reported | no | | either | the reported save point | left `Open` (the marker closes clean only for this run's own save point, section 6) | `NoCleanUnload` | `Unloaded` |
+| no | yes | false | reported | no | | either | the room's files, the reported one as recovered: no position, ordered by the member's own count, never as the reported save point (S17) | left `Open` (the marker closes clean only for this run's own save point, section 6) | `NoCleanUnload` | `Unloaded` |
 | no | yes | false | reported | yes | yes | either | the reported save point | `Closed` | none | `Unloaded` |
 | no | yes | false | reported | yes | no | either | none lands; the file stays in the room | left `Open` | `NoCleanUnload`, the room's file recovered or named unpublishable | refuses `SavePointNotTaken` naming `published` |
+
+**The `save-point` verb's publication** (S17, the operator's ruling of 2026-10-14 on #140) has rows of its own, keyed by whether the reported `event_run` is the run the marker stands open on, read by section 4's marker reading under the verb's invocation lock (a marker that reads other than `Open` is no match; one that does not read refuses `BoundaryUnverified` before anything is published, the file left in the room for the next verb), then by whether the report's file published. The verb writes no marker.
+
+| `event_run` the marker's run | Published | Publication | Answer |
+|---|---|---|---|
+| yes | yes | the room, the reported save point as on demand, with the event's position | `SavePointTaken` with the report |
+| yes | no | what lands; the reported file stays in the room for the next verb | refuses `SavePointNotTaken` naming `published` |
+| no | | the room, the reported file as recovered: no position, never as the reported save point | refuses `SavePointNotTaken` naming `published`: no save point of this run was published, the file standing as recovered and said so in `admin.log` |
 
 **Combinations the harness never answers, each unreachable and why:** a rollback that is not forced, or that reports a save point (a rollback's `Leave` carries `forced` and takes none); an unjudged territory with `forced` false (an unforced verb judges the territory before it directs a leave and refuses `BoundaryUnverified`, so no graceful `Left` arrives there); `no_state` true with a save point reported (a run with no state to keep takes none); and `no_state` false with no save point and `forced` false (a leave that stayed graceful and missed its save point answers `SavePointNotTaken`, not `Left`, below).
 
@@ -881,8 +889,9 @@ reported save point is published as on a lock that freed, the same refusal follo
 where it does not land, so `Unloaded` is never answered over a leave save point left in
 the room. **The marker closes clean only for this run's own save point** (the push review
 of 197e80b): a report whose `event_run` is not the run the marker stands open on, the
-reference this crate minted, publishes and leaves the marker open, so the next load
-records the reset. The report's covered `run` is not compared, a run restored and left
+reference this crate minted, is not accepted: its file publishes as recovered, never as
+the reported save point (S17, the operator's ruling of 2026-10-14 on #140), and the
+marker is left open, so the next load records the reset. The report's covered `run` is not compared, a run restored and left
 with no turn covering the prior run's position. **A verb that finds the run already
 ended, the lock free, publishes the room first** (the #94 survey's S11): a publication
 that refuses or leaves a file refuses `SavePointNotTaken` naming the publication again.
@@ -1978,7 +1987,16 @@ G12). **The scan reads only the stamp line** (Codex on #94, round 30): each entr
 judged by its owner, its size against the save point's bound and its first line, read
 to at most 4 KiB, and the whole file is read only at its own copy, where it is opened
 and judged again in full and its digest checked against its name, the bytes copied
-being the bytes judged in that read. So the scan's reading is bounded by the room's
+being the bytes judged in that read. **The room holds at most 4096 finished names**
+(S16, the operator's ruling of 2026-10-14 on #140; provisional, measured): the listing
+keeps finished names alone and stops past the bound, and the scan then refuses
+`BoundaryUnverified` naming the room, before any entry is opened, so the entries a verb's
+scan opens and reads are bounded whatever the room holds; every other name is read by the
+listing as a directory entry and never opened or kept. The number is provisional, as the
+trace queue's is, and measured: every scan records the room's finished-name count in
+`admin.log`, a `publish` line in the log's form whose outcome is `the room holds <n>
+finished names` (or `more than 4096` where it refused), and the lifecycle verification
+prints the largest count its run saw before its take-down. So the scan's reading is bounded by the room's
 entry count and not by its aggregate size, a whole image is read only for a file the
 cap admits, at most one image stands in this root process's memory, and a file the
 member changes after the scan is refused. **One verb publishes at most 32 room files, and copies one
@@ -1998,7 +2016,12 @@ naming a save-point format this crate does not read, each refuse the verb
 the suffix, the one form the member writes, so an uppercase name is no finished name
 and is ignored, never deferred. **A `save-point` whose
 save point does not publish refuses `SavePointNotTaken` naming the publication** (the
-#94 survey's S12), as the unload names it, the run still open. **The publication reads
+#94 survey's S12), as the unload names it, the run still open, and so does one whose
+report names another run than the one the marker stands open on, its file published as
+recovered (S17; 3.0, the `save-point` verb's publication). **A report is accepted only
+for the open marker's run**: the worker runs as the agent's uid, so the position and the
+ordering a report carries are taken for this run's save point only, and a report of any
+other run is a recovered file. **The publication reads
 no declaration** (the #94 survey's S8): the member's uid is the account database's by its
 derived name and the room is the territory's, so an unload or a `save-point` publishes
 whatever the declaration says after the run began, and an agent electing no member has

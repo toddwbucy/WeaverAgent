@@ -498,6 +498,50 @@ for line in sys.stdin:
         found = "%s of %s, the mark at %s" % (d.get("peak"), d.get("depth"), d.get("mark"))
 print(found)'
 }
+# **room_count_report: the largest room count this run's admin.log records**
+# (S16, the operator's ruling of 2026-10-14 on #140): the room scan's bound
+# of 4096 finished names is provisional and measured, every scan recording
+# `the room holds <n> finished names` (or `more than <bound>`) on a
+# `publish` line. A printed line, not a check: the run reads the counts its
+# own verbs left before step 9 takes the territory down, the take-down's own
+# unload uncounted. Only a line naming the `publish` verb is parsed, and an
+# outcome whose count is not a number is said and passed over, its
+# past-the-bound wording with it.
+room_count_report() {
+  STEP_LABEL="the room's count"
+  plan "the largest finished-name count admin.log records for a room scan, printed (S16, provisional at 4096)"
+  [ "$APPLY" -eq 1 ] || return 0
+  local log line verb outcome count beyond largest=-1 scans=0 past=0
+  if ! log=$(sudo -n cat -- "$T/admin.log" 2>/dev/null); then
+    measured "admin.log does not read, so no room count is reported"
+    return 0
+  fi
+  while IFS= read -r line; do
+    case "$line" in *'"verb":"publish"'*) ;; *) continue ;; esac
+    verb=$(json_at "$line" verb)
+    [ "$verb" = publish ] || continue
+    json_req outcome "$line" outcome "a publish line names its outcome"
+    case "$outcome" in
+      "the room holds more than "*" finished names") count=${outcome#the room holds more than }; beyond=1 ;;
+      "the room holds "*" finished names") count=${outcome#the room holds }; beyond=0 ;;
+      *) continue ;;
+    esac
+    count=${count%% *}
+    case "$count" in
+      ''|*[!0-9]*) measured "a publish line's count does not read: $outcome"; continue ;;
+    esac
+    scans=$((scans + 1))
+    [ "$beyond" -eq 0 ] || past=1
+    [ "$count" -le "$largest" ] || largest=$count
+  done <<<"$log"
+  if [ "$scans" -eq 0 ]; then
+    measured "admin.log records no room scan"
+  elif [ "$past" -eq 1 ]; then
+    measured "the largest room count over $scans scans: more than $largest finished names, past the bound"
+  else
+    measured "the largest room count over $scans scans: $largest finished names"
+  fi
+}
 # expect_in_order CHECK FILE NEEDLE...: each needle in FILE, after the last.
 expect_in_order() {
   local check=$1 file=$2; shift 2
@@ -1247,6 +1291,7 @@ if [ "$KEEP" -eq 1 ]; then
     fi
   fi
   manual_checks
+  room_count_report
   say "kept: $A stands loaded for the checks above; when they are made, take it down with"
   plan "deploy/verify-lifecycle.sh --agent $A --cleanup --apply${ARCHIVE:+ --archive $ARCHIVE}"
   if [ "$APPLY" -eq 1 ]; then
@@ -1257,6 +1302,7 @@ if [ "$KEEP" -eq 1 ]; then
   exit 0
 fi
 manual_checks
+room_count_report
 say "the checks above were not made: the run goes on to take $A down; rerun with --keep to make them against a loaded agent"
 step_9
 if [ "$APPLY" -eq 1 ]; then
