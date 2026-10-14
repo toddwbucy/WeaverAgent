@@ -55,6 +55,8 @@
 # the paths the archive's own PURGE-LIST names, so a purge can never reach
 # past what was kept. Running `--purge` against a directory `--archive` did
 # not finish refuses by name.
+# **The purge's order, root's record and its rerun are deploy/REDEPLOY.md
+# section 2's** (#140).
 #
 # **Models stay.** `/opt/weaver/models` is neither a binary nor a
 # configuration; it is a hash-pinned artifact the redeploy loads again, and
@@ -236,7 +238,7 @@ say "runs"
 # running where any other state or a transition answers; unknown for a
 # refusal or anything that does not parse.
 run_verdict() {
-  python3 -c '
+  python3 -I -c '
 import json, sys
 try:
     d = json.loads(sys.argv[1])
@@ -511,7 +513,11 @@ if [ "$MODE" = archive ]; then
   say "runs, asked again"
   query_runs
   if [ ${#RUNNING[@]} -gt 0 ]; then
-    for entry in "${MOVED[@]}"; do mv -T -- "${entry%%|*}" "${entry##*|}" && plan "restored ${entry##*|}"; done
+    for entry in "${MOVED[@]}"; do
+      if mv -T -- "${entry%%|*}" "${entry##*|}"; then plan "restored ${entry##*|}"
+      else plan "${entry##*|} could not be restored from ${entry%%|*}: move it back by hand"
+      fi
+    done
     die "agents run or cannot be read: ${RUNNING[*]}. The sudo rules are restored; unload each, then rerun"
   fi
   as_op sh -c 'umask 077 && mkdir -p "$1"' _ "$DEST" || die "the operator cannot create $DEST"
@@ -656,8 +662,8 @@ purge_candidates() {
 # stands and that purge_candidates does not hold.** Judged in bash, each line
 # read as the removal loops read it, so the string judged is the string acted
 # on. A line naming what no longer stands is passed over, there being nothing
-# to remove, so a purge stopped part way can be run again; any line of a
-# kind the purge does not know is named.
+# to remove; any line of a kind the purge does not know is named. A rerun of a
+# purge that began acts on root's record and never reaches this judgment.
 #
 # **A line passed over is never acted on**: the removal loops read only the
 # lines purge_lines_within keeps, those the derivation holds. A line that did
@@ -696,6 +702,201 @@ purge_lines_within() {
   true
 }
 
+# **Root's record of the purge** (deploy/REDEPLOY.md section 2, #140): the
+# lines purge_lines_within kept, judged while everything stood, and the prefixes
+# the derivation found, kept where only root writes and the purge never reaches,
+# keyed by the PURGE-LIST sum. A rerun against the same archive acts on it rather
+# than deriving again from a box the purge has half removed. /var/lib is where a
+# root tool keeps its state, and the name begins with no `weaver`, so no
+# discovery glob of this script or another reaches it.
+RECORD_PARENT=/var/lib
+RECORD_DIR_NAME=decommission-weaver
+# **purge_record OP KEY: read, write or remove the record named KEY**, beneath
+# held directory descriptors and following no link: the parent held closed by
+# root, the directory root's 0700, the file root's 0600, written whole under a
+# temporary name, synced, renamed into place, and the directory synced. The
+# record carries the sum of what it holds, so `read` answers its lines only
+# where they are what was written: 3 where no record stands, 4 where it is
+# not root's, not whole, or names another list.
+read -r -d '' PURGE_RECORD_PY <<'PY' || true
+import hashlib, os, stat, sys
+parent, name, op, key = sys.argv[1:5]
+head = b"weaver-purge-record 1\n"
+def refuse(why):
+    sys.stderr.write(why + "\n")
+    sys.exit(4)
+held = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+try:
+    pfd = os.open(parent, held)
+except OSError as e:
+    refuse(f"{parent}: {e.strerror}")
+st = os.fstat(pfd)
+if st.st_uid != 0 or st.st_mode & 0o022:
+    refuse(f"{parent} is not held closed by root")
+try:
+    dfd = os.open(name, held, dir_fd=pfd)
+except FileNotFoundError:
+    if op != "write":
+        sys.exit(3)
+    os.mkdir(name, 0o700, dir_fd=pfd)
+    os.fsync(pfd)
+    dfd = os.open(name, held, dir_fd=pfd)
+    os.fchmod(dfd, 0o700)
+except OSError as e:
+    refuse(f"{parent}/{name}: {e.strerror}")
+st = os.fstat(dfd)
+if st.st_uid != 0 or stat.S_IMODE(st.st_mode) != 0o700:
+    refuse(f"{parent}/{name} is not root's 0700")
+if op == "write":
+    body = sys.stdin.buffer.read()
+    text = (head + b"purge-list " + key.encode() + b"\nacted "
+            + hashlib.sha256(body).hexdigest().encode() + b"\n" + body)
+    temporary = "." + key + ".writing"
+    try:
+        os.unlink(temporary, dir_fd=dfd)
+    except FileNotFoundError:
+        pass
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                 0o600, dir_fd=dfd)
+    os.fchmod(fd, 0o600)
+    view = memoryview(text)
+    while view:
+        view = view[os.write(fd, view):]
+    os.fsync(fd)
+    os.close(fd)
+    os.rename(temporary, key, src_dir_fd=dfd, dst_dir_fd=dfd)
+    os.fsync(dfd)
+elif op == "read":
+    try:
+        fd = os.open(key, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dfd)
+    except FileNotFoundError:
+        sys.exit(3)
+    except OSError as e:
+        refuse(f"{parent}/{name}/{key}: {e.strerror}")
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or stat.S_IMODE(st.st_mode) != 0o600:
+        refuse(f"{parent}/{name}/{key} is not root's 0600 file")
+    data = b""
+    while chunk := os.read(fd, 65536):
+        data += chunk
+    lines = data.split(b"\n", 3)
+    if len(lines) < 4 or lines[0] + b"\n" != head or lines[1] != b"purge-list " + key.encode():
+        refuse(f"{parent}/{name}/{key} is not the record of this purge list")
+    if lines[2] != b"acted " + hashlib.sha256(lines[3]).hexdigest().encode():
+        refuse(f"{parent}/{name}/{key} does not hold what it summed when it was written")
+    sys.stdout.buffer.write(lines[3])
+elif op == "remove":
+    try:
+        os.unlink(key, dir_fd=dfd)
+    except FileNotFoundError:
+        pass
+    os.fsync(dfd)
+    try:
+        os.rmdir(name, dir_fd=pfd)
+        os.fsync(pfd)
+    except OSError:
+        pass
+else:
+    refuse(f"unknown record operation {op}")
+PY
+purge_record() { python3 -I -c "$PURGE_RECORD_PY" "$RECORD_PARENT" "$RECORD_DIR_NAME" "$@"; }
+# **path_identity PATH: what a path is, beyond its name** (#140): its device,
+# inode, owner uid and birth time (0 where the filesystem keeps none), read
+# without following a final link. Device and inode alone are reused once a path
+# is gone; a replacement made by another owner, or at another second, differs.
+path_identity() { stat -c '%d:%i:%u:%W' -- "$1" 2>/dev/null; }
+# **held_is PATH: whether PATH is still the object root's record held**, the
+# identity read now equal to the one recorded when the purge judged it.
+held_is() {
+  local now
+  now=$(path_identity "$1") || return 1
+  [ -n "${HELD["$1"]:-}" ] && [ "${HELD["$1"]}" = "$now" ]
+}
+# **load_held: the identities root's record holds, by name** (#140): a line's
+# name is everything after its identity, blanks and all. Paths and roots are
+# held by their identity, a judged directory's direct entries by theirs, the
+# accounts and groups by their numbers, and the legacy units by name.
+load_held() {
+  declare -gA HELD=() HELD_UID=() HELD_GID=() HELD_ENTRY=() HELD_UNIT=()
+  local line rest
+  while IFS= read -r line; do
+    case $line in
+      "held "*) rest=${line#held }; HELD["${rest#* }"]=${rest%% *} ;;
+      "entry "*) rest=${line#entry }; HELD_ENTRY["${rest#* }"]=${rest%% *} ;;
+      "uid "*) rest=${line#uid }; HELD_UID["${rest#* }"]=${rest%% *} ;;
+      "gid "*) rest=${line#gid }; HELD_GID["${rest#* }"]=${rest%% *} ;;
+      "unit "*) HELD_UNIT["${line#unit }"]=1 ;;
+    esac
+  done < "$PURGE_ACTED"
+}
+# **rerun_unchanged: whether everything a rerun would act on is what the first
+# run judged** (Codex on #159, round 3, and its second reader): every unit,
+# every root and every account still standing recorded and unchanged, and every
+# listed path still standing unchanged with the same direct entries, none new
+# and none replaced. Checked whole before a rerun's first act, so a rerun never
+# removes, stops or changes what the first run did not judge. Names the first
+# that is not, and answers 1.
+rerun_unchanged() {
+  local u r line p entry now scan
+  for u in "${UNITS[@]}"; do
+    [ -n "${HELD_UNIT["$u"]:-}" ] || { printf 'the unit %s, which this purge did not judge\n' "$u"; return 1; }
+  done
+  for r in "${AGENT_ROOTS[@]}"; do
+    held_is "$r" || { printf 'the root %s, which is not one this purge judged\n' "$r"; return 1; }
+  done
+  scan=$(mktemp)
+  while IFS= read -r line; do
+    case $line in
+      "path "*)
+        p=${line#path }
+        [ -e "$p" ] || [ -L "$p" ] || continue
+        case "$p" in */models|*/models/*) continue ;; esac
+        held_is "$p" || { rm -f -- "$scan"; printf '%s, which is not the object this purge judged\n' "$p"; return 1; }
+        [ -d "$p" ] && [ ! -L "$p" ] || continue
+        find "$p" -mindepth 1 -maxdepth 1 -print0 > "$scan" || { rm -f -- "$scan"; printf '%s, whose entries cannot be read\n' "$p"; return 1; }
+        while IFS= read -r -d '' entry; do
+          now=$(path_identity "$entry" || true)
+          [ -n "${HELD_ENTRY["$entry"]:-}" ] && [ "${HELD_ENTRY["$entry"]}" = "$now" ] \
+            || { rm -f -- "$scan"; printf '%s in %s, which is not what this purge judged there\n' "$entry" "$p"; return 1; }
+        done < "$scan" ;;
+      "user "*)
+        now=$(getent passwd "${line#user }" | cut -d: -f3 || true)
+        [ -z "$now" ] || [ "$now" = "${HELD_UID["${line#user }"]:-}" ] \
+          || { rm -f -- "$scan"; printf 'the user %s, which is not the account this purge judged\n' "${line#user }"; return 1; } ;;
+      "group "*)
+        now=$(getent group "${line#group }" | cut -d: -f3 || true)
+        [ -z "$now" ] || [ "$now" = "${HELD_GID["${line#group }"]:-}" ] \
+          || { rm -f -- "$scan"; printf 'the group %s, which is not the group this purge judged\n' "${line#group }"; return 1; } ;;
+    esac
+  done < "$PURGE_ACTED"
+  rm -f -- "$scan"
+}
+# **purge_began LIST: whether a purge has already acted on this box**: the
+# list names /etc/weaver and it no longer stands. A purge withdraws the roots
+# and removes /etc/weaver as its first removals, and nothing else removes it, so
+# a box without it and with no record is one a purge completed, or left part
+# way without its record, and the purge refuses rather than derive again from
+# what it left. An account gone is not this sign: an agent taken down by hand
+# between the archive and the purge leaves the rest of the list to purge.
+purge_began() {
+  grep -qxF 'path /etc/weaver' -- "$1" && [ ! -e /etc/weaver ]
+}
+# **record_lines_outside RECORD LIST: each line of RECORD's removals that LIST
+# does not hold**, so a record and the archive it is read against agree line for
+# line; a prefix line is the tail's alone and removes nothing.
+record_lines_outside() {
+  local -A listed=()
+  local line
+  while IFS= read -r line; do
+    [ -n "$line" ] && listed["$line"]=1
+  done < "$2"
+  while IFS= read -r line; do
+    case $line in "" | "prefix "* | "held "* | "entry "* | "uid "* | "gid "* | "unit "*) continue ;; esac
+    [ -n "${listed["$line"]:-}" ] || printf '%s\n' "$line"
+  done < "$1"
+  true
+}
+
 # **Everything under DEST is read as the operator** (#98): the archive is the
 # operator's alone, 0600 in a 0700 directory, and on an export where root's
 # writes are squashed root could not read it either way.
@@ -715,12 +916,37 @@ as_op cat -- "$DEST/PURGE-LIST" > "$PURGE_LIST"
 LISTED_SUM=$(as_op awk '$2 == "PURGE-LIST" { print $1 }' "$DEST/SHA256SUMS")
 COPY_SUM=$(sha256sum < "$PURGE_LIST" | cut -d' ' -f1)
 [ -n "$LISTED_SUM" ] && [ "$LISTED_SUM" = "$COPY_SUM" ] || die "the purge list read is not the one the archive summed; purge refused"
-OUTSIDE=$(purge_lines_outside "$PURGE_LIST")
-[ -z "$OUTSIDE" ] || die "PURGE-LIST names what this purge would not find, so nothing is purged: ${OUTSIDE//$'\n'/; }"
-purge_lines_within "$PURGE_LIST" > "$PURGE_ACTED"
+[[ "$COPY_SUM" =~ ^[0-9a-f]{64}$ ]] || die "the purge list's sum reads as $COPY_SUM; purge refused"
+RERUN=0
+if purge_record read "$COPY_SUM" > "$PURGE_ACTED"; then
+  RERUN=1
+else
+  case $? in
+    3) ;;
+    *) die "root's record of this purge, $RECORD_PARENT/$RECORD_DIR_NAME/$COPY_SUM, does not read back whole (above); nothing is purged. Look at it by hand" ;;
+  esac
+fi
+if [ "$RERUN" = 1 ]; then
+  # **A rerun acts on root's record** (#140): its lines were judged against
+  # the derivation while the box stood whole, and root wrote them, so they are
+  # not judged again against a box the purge has half removed.
+  STRAY=$(record_lines_outside "$PURGE_ACTED" "$PURGE_LIST")
+  [ -z "$STRAY" ] || die "root's record names what this archive's PURGE-LIST does not, so nothing is purged: ${STRAY//$'\n'/; }"
+  plan "a rerun: acting on root's record of the purge begun against this archive"
+else
+  purge_began "$PURGE_LIST" && die "/etc/weaver, which this archive's PURGE-LIST names, is gone, and root holds no record of a purge in progress at $RECORD_PARENT/$RECORD_DIR_NAME/$COPY_SUM: a purge has completed here, or one stopped without its record, and what it left is not derived again. Finish by hand from $DEST/PURGE-LIST"
+  OUTSIDE=$(purge_lines_outside "$PURGE_LIST")
+  [ -z "$OUTSIDE" ] || die "PURGE-LIST names what this purge would not find, so nothing is purged: ${OUTSIDE//$'\n'/; }"
+  purge_lines_within "$PURGE_LIST" > "$PURGE_ACTED"
+  for p in "${!PREFIXES[@]}"; do printf 'prefix %s\n' "$p"; done >> "$PURGE_ACTED"
+fi
 [ ${#ACTIVE_UNITS[@]} -eq 0 ] || die "units still active: ${ACTIVE_UNITS[*]}"
 [ ${#RUNNING[@]} -eq 0 ] || die "agents still run or cannot be read: ${RUNNING[*]}"
 plan "verified"
+load_held
+if [ "$RERUN" = 1 ]; then
+  CHANGED=$(rerun_unchanged) || die "this rerun would act on $CHANGED, so nothing is purged: a rerun never removes what the first run did not judge. Look at it, then rerun the purge, or abandon this purge's record (deploy/REDEPLOY.md section 2)"
+fi
 
 say "the delegated door, shut"
 # **No connector can start a run from here on**: the sudo rules, archived
@@ -728,31 +954,95 @@ say "the delegated door, shut"
 # Only a root shell can still load one, which is the operator running this.
 # A run found now refuses the purge with the rules already gone, and the
 # archive holds them to put back.
-for f in "${SUDO_RULES[@]}"; do rm -f -- "$f" && plan "removed $f"; done
+# A rule that cannot be removed leaves the door open, so it refuses: a failure
+# on the left of `&&` is exempt from `set -e` (Codex on #159, round 2).
+# **Only a rule this purge judged goes** (Codex on #159, round 3): a first run
+# removes a rule its PURGE-LIST names, and a rerun none, every rule judged having
+# gone before the record was written. A rule restored, replaced or made for a new
+# agent since is never removed unarchived: it refuses.
+# Every rule is judged before any goes, so a refusal leaves the door as it stood.
+for f in "${SUDO_RULES[@]}"; do
+  [ "$RERUN" = 0 ] || die "the sudo rule $f stands, and every rule this purge judged went before its record was written: it was put back or made since, so nothing is purged. Look at it, then rerun the purge"
+  grep -qxF "path $f" -- "$PURGE_ACTED" || die "the sudo rule $f is not on this archive's PURGE-LIST, so it is not removed and nothing is purged: archive again to take it"
+done
+for f in "${SUDO_RULES[@]}"; do
+  rm -f -- "$f" || die "the sudo rule $f cannot be removed, so the delegated door is not shut and nothing is purged"
+  plan "removed $f"
+done
 say "runs, asked again"
 query_runs
 [ ${#RUNNING[@]} -eq 0 ] || die "agents run again or cannot be read: ${RUNNING[*]}. The sudo rules are removed and archived in $DEST (sudoers-weaver.tar.zst); unload each, then rerun the purge"
+# **The record is written here, before the first removal of an agent's own**:
+# a stop before this line leaves a box whose next purge is a first run again,
+# and a run found just above leaves no record to be reused when the box serves
+# again.
+if [ "$RERUN" = 0 ]; then
+  # **What each removal acts on, as judged** (#140; Codex on #159, rounds 1
+  # and 3): every listed path's and every root's identity, the direct entries
+  # of every listed directory, every prefix's, every listed account's number
+  # and every legacy unit's name, read once the door is shut and no run stands,
+  # so a rerun acts on nothing the first run did not judge.
+  {
+    while IFS= read -r line; do
+      case $line in
+        "path "*)
+          p=${line#path }
+          held=$(path_identity "$p") || continue
+          printf 'held %s %s\n' "$held" "$p"
+          case "$p" in */models|*/models/*) continue ;; esac
+          [ -d "$p" ] && [ ! -L "$p" ] || continue
+          while IFS= read -r -d '' entry; do
+            case $entry in *$'\n'*) continue ;; esac
+            held=$(path_identity "$entry") && printf 'entry %s %s\n' "$held" "$entry"
+          done < <(find "$p" -mindepth 1 -maxdepth 1 -print0) ;;
+        "user "*) held=$(getent passwd "${line#user }" | cut -d: -f3) && [ -n "$held" ] && printf 'uid %s %s\n' "$held" "${line#user }" ;;
+        "group "*) held=$(getent group "${line#group }" | cut -d: -f3) && [ -n "$held" ] && printf 'gid %s %s\n' "$held" "${line#group }" ;;
+        "prefix "*) held=$(path_identity "${line#prefix }") && printf 'held %s %s\n' "$held" "${line#prefix }" ;;
+      esac
+    done < <(grep -E '^(path|user|group|prefix) ' -- "$PURGE_ACTED")
+    for root in "${AGENT_ROOTS[@]}"; do
+      held=$(path_identity "$root") && printf 'held %s %s\n' "$held" "$root"
+    done
+    for u in "${UNITS[@]}"; do printf 'unit %s\n' "$u"; done
+    true
+  } >> "$PURGE_ACTED"
+  load_held
+  purge_record write "$COPY_SUM" < "$PURGE_ACTED" || die "root's record of this purge cannot be written at $RECORD_PARENT/$RECORD_DIR_NAME; nothing more is purged"
+  plan "root's record written: $RECORD_PARENT/$RECORD_DIR_NAME/$COPY_SUM"
+fi
+PURGE_FAILED=0
 
 say "units"
-for u in "${UNITS[@]}"; do systemctl stop "$u" 2>/dev/null || true; systemctl reset-failed "$u" 2>/dev/null || true; plan "stopped $u"; done
-systemctl stop "$SLICE" 2>/dev/null && plan "stopped $SLICE" || true
+# The legacy units (a box from before #50) this purge recorded, and no other.
+for u in "${!HELD_UNIT[@]}"; do systemctl stop "$u" 2>/dev/null || true; systemctl reset-failed "$u" 2>/dev/null || true; plan "stopped $u"; done
+if [ ${#HELD_UNIT[@]} -gt 0 ]; then systemctl stop "$SLICE" 2>/dev/null && plan "stopped $SLICE" || true; fi
 
 
-say "accounts"
-# Each line split as it was judged, whole: `read` with its default field
-# separators would strip a name's surrounding blanks and act on another path.
-while IFS= read -r line; do
-  kind=${line%% *} name=${line#* }
-  case $kind in
-    user)  userdel -r "$name" 2>/dev/null && plan "removed user $name (and home)" || { userdel "$name" 2>/dev/null && plan "removed user $name" || plan "user $name: not removed"; } ;;
-  esac
-done < "$PURGE_ACTED"
-while IFS= read -r line; do
-  kind=${line%% *} name=${line#* }
-  case $kind in
-    group) getent group "$name" >/dev/null && { groupdel "$name" 2>/dev/null && plan "removed group $name" || plan "group $name: not removed"; } ;;
-  esac
-done < "$PURGE_ACTED"
+say "the config roots"
+# **The roots go first** (deploy/REDEPLOY.md section 2, #140): each is withdrawn
+# whole by one rename to a name no discovery takes, so a stop leaves a root
+# standing whole or not at all, never one half removed for its admin to refuse,
+# and with the roots gone a rerun asks no admin: its run check is the process
+# check under the weaver accounts, which go last.
+# **Each is the object judged, or nothing goes** (Codex on #159, round 1):
+# /etc/weaver and every root are checked against the record before a root is
+# withdrawn, so a /etc/weaver put back or made again after a stop is never
+# removed as the one judged.
+if grep -qxF 'path /etc/weaver' -- "$PURGE_ACTED" && { [ -e /etc/weaver ] || [ -L /etc/weaver ]; }; then
+  held_is /etc/weaver || die "/etc/weaver is not the object this purge judged (held ${HELD[/etc/weaver]:-none}, now $(path_identity /etc/weaver || echo unreadable)), so nothing more is removed. Look at it, then rerun the purge"
+  for base in /etc/weaver/admin*; do
+    [ -d "$base" ] && [ ! -L "$base" ] || continue
+    for root in "$base"/*/; do
+      root=${root%/}
+      # The roots discovery takes, and no other: the rest go with /etc/weaver.
+      [ -d "$root" ] && [ ! -L "$root" ] && [[ "${root##*/}" =~ ^[A-Za-z0-9_-]+$ ]] || continue
+      held_is "$root" || die "$root is not a root this purge judged, so nothing more is removed. Look at it, then rerun the purge"
+      mv -T -- "$root" "$base/.${root##*/}.purging" || die "$root cannot be withdrawn, so nothing more is removed: a root left standing with its territory gone would refuse every rerun. Look at it, then rerun the purge"
+      plan "withdrew $root"
+    done
+  done
+  if rm -rf -- /etc/weaver; then plan "removed /etc/weaver"; else plan "/etc/weaver: not removed"; PURGE_FAILED=1; fi
+fi
 
 say "paths"
 while IFS= read -r line; do
@@ -760,17 +1050,83 @@ while IFS= read -r line; do
   case $kind in
     path)
       case "$name" in */models|*/models/*) plan "kept $name"; continue;; esac
-      rm -rf -- "$name" && plan "removed $name" ;;
+      if [ ! -e "$name" ] && [ ! -L "$name" ]; then plan "$name: already gone"; continue; fi
+      held_is "$name" || die "$name is not the object this purge judged (held ${HELD["$name"]:-none}, now $(path_identity "$name" || echo unreadable)), so it is not removed and nothing more is. Look at it, then rerun the purge"
+      if rm -rf -- "$name"; then plan "removed $name"
+      else plan "$name: not removed"; PURGE_FAILED=1
+      fi ;;
   esac
 done < "$PURGE_ACTED"
-# A prefix left holding only models stays; one left empty goes.
-for p in "${!PREFIXES[@]}"; do
-  [ -d "$p" ] && [ -z "$(ls -A "$p")" ] && rmdir "$p" && plan "removed empty $p"
+
+say "accounts"
+# Each line split as it was judged, whole: `read` with its default field
+# separators would strip a name's surrounding blanks and act on another path.
+while IFS= read -r line; do
+  kind=${line%% *} name=${line#* }
+  case $kind in
+    user)
+      now=$(getent passwd "$name" | cut -d: -f3 || true)
+      if [ -z "$now" ]; then plan "user $name: already gone"
+      elif [ "$now" != "${HELD_UID["$name"]:-}" ]; then
+        die "user $name is not the account this purge judged (uid ${HELD_UID["$name"]:-none}, now $now), so it is not removed and nothing more is. Look at it, then rerun the purge"
+      # Without -r (Codex on #159, round 3, second reader): a home this purge
+      # judged went as a path in step 2, and -r would remove one it did not,
+      # a home outside /home or one made again, and the mail spool.
+      elif userdel "$name" 2>/dev/null; then plan "removed user $name"
+      else plan "user $name: not removed"; PURGE_FAILED=1
+      fi ;;
+  esac
+done < "$PURGE_ACTED"
+while IFS= read -r line; do
+  kind=${line%% *} name=${line#* }
+  case $kind in
+    # **A group userdel already removed is done** (#140): userdel removes a
+    # user's private group with the user (USERGROUPS_ENAB), so the connector's
+    # weaver-<agent>-admincon, the list's last group, is gone by now. It is
+    # said, never taken for a failure, and every arm ends in a status this
+    # loop's last line can stand on, so no caller under `set -e` stops here.
+    group)
+      now=$(getent group "$name" | cut -d: -f3 || true)
+      if [ -z "$now" ]; then plan "group $name: already gone with its user"
+      elif [ "$now" != "${HELD_GID["$name"]:-}" ]; then
+        die "group $name is not the group this purge judged (gid ${HELD_GID["$name"]:-none}, now $now), so it is not removed and nothing more is. Look at it, then rerun the purge"
+      elif groupdel "$name" 2>/dev/null; then plan "removed group $name"
+      else plan "group $name: not removed"; PURGE_FAILED=1
+      fi ;;
+  esac
+done < "$PURGE_ACTED"
+
+# The prefixes the record holds: a rerun derives none once /etc/weaver is gone.
+mapfile -t PURGED_PREFIXES < <(sed -n 's/^prefix //p' "$PURGE_ACTED")
+# A prefix left holding only models stays; one left empty goes, and one that
+# will not go is a removal that failed (Codex on #159, round 2): the record is
+# kept and the purge refuses below, naming it.
+for p in "${PURGED_PREFIXES[@]}"; do
+  [ -d "$p" ] && [ -z "$(ls -A "$p")" ] || continue
+  held_is "$p" || { plan "kept $p: not the directory this purge judged"; continue; }
+  if rmdir -- "$p"; then plan "removed empty $p"
+  else plan "empty $p: not removed"; PURGE_FAILED=1
+  fi
 done
-ldconfig && plan "ldconfig rerun: $(ldconfig -p | grep -cE 'ggml|llama') engine objects still in the cache"
+if ldconfig; then plan "ldconfig rerun: $(ldconfig -p | grep -cE 'ggml|llama') engine objects still in the cache"
+else plan "ldconfig failed: its cache may still name the engine libraries removed; run ldconfig by hand"
+fi
 
 say "what remains"
-for p in "${!PREFIXES[@]}"; do [ -d "$p" ] && find "$p" -maxdepth 1 -mindepth 1 -printf '   %p\n'; done
+for p in "${PURGED_PREFIXES[@]}"; do [ -d "$p" ] && find "$p" -maxdepth 1 -mindepth 1 -printf '   %p\n'; done
 getent passwd | awk -F: '$1 ~ /^weaver-/ {print "   account still present: "$1}'
 systemctl list-units 'weaver-worker@*' --all --no-legend 2>/dev/null | sed 's/^/   unit still present: /' || true
+# **The record goes last**, and only once every removal it names was made: a
+# removal that failed keeps it, so the rerun finds the work left.
+if [ "$PURGE_FAILED" = 1 ]; then
+  die "a removal above failed (\"not removed\"); root's record is kept at $RECORD_PARENT/$RECORD_DIR_NAME/$COPY_SUM. Look at what remains, then rerun the purge"
+fi
+# A record that will not go stands, and a rerun would act on it again: the
+# purge is not reported done (Codex on #159, round 2). No record there (3) is
+# none to remove.
+purge_record remove "$COPY_SUM" || case $? in
+  3) ;;
+  *) die "every removal was made, but root's record $RECORD_PARENT/$RECORD_DIR_NAME/$COPY_SUM cannot be removed and stands, so the purge is not done. Look at what remains above, then remove it by hand: sudo rm $RECORD_PARENT/$RECORD_DIR_NAME/$COPY_SUM" ;;
+esac
+plan "removed root's record $RECORD_PARENT/$RECORD_DIR_NAME/$COPY_SUM"
 say "purged. the archive is $DEST"

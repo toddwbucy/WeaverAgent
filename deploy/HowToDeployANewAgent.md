@@ -454,13 +454,27 @@ nothing more, then its root `/etc/weaver/admin/<name>/`, which ends its admissio
 its run and runtime directories, `<coordination-root>/weaver.run/<name>/` and
 `<coordination-root>/weaver-<name>/`, the second holding the gate's and the harness's
 sockets, which `decommission.sh` purges beside the first (both on tmpfs, so a reboot
-also clears them). `userdel -r` the agent's
-account and `userdel` the member's, the relay's and the connector's, then delete the
-groups, which `userdel` leaves while a member remains and which a later `useradd
---user-group` of the same name would refuse on. Archive the territory and remove it: it
-holds the declaration, the prompt draft, the two logs and the published save points
-beside the state room and the trace, the one record of what was done to the agent, and
-create-agent refuses a territory that stands, so the archive comes first.
+also clears them). Archive the territory and remove it: it holds the declaration, the
+prompt draft, the two logs and the published save points beside the state room and the
+trace, the one record of what was done to the agent, and create-agent refuses a
+territory that stands, so the archive comes first. Remove the agent's `/tmp` entries
+too, while its accounts still resolve, the paths going before the accounts as in the
+purge's order (`deploy/REDEPLOY.md` section 2): once they are gone, an entry's owner
+reads only as a number. They are the entries directly under `/tmp` named `weaver-*` or
+`torchinductor_weaver-*` and owned by one of the agent's accounts, never chosen by name
+alone, since `/tmp` is anyone's to write and another agent's name can begin with this
+one's:
+
+```sh
+for u in weaver-<name> weaver-<name>-state weaver-<name>-relay weaver-<name>-admincon; do
+  sudo find /tmp -mindepth 1 -maxdepth 1 \( -name 'weaver-*' -o -name 'torchinductor_weaver-*' \) \
+    -user "$u" -exec rm -rf -- {} +
+done
+```
+
+Then `userdel -r` the agent's account and `userdel` the member's, the relay's and the
+connector's, then delete the groups, which `userdel` leaves while a member remains and
+which a later `useradd --user-group` of the same name would refuse on.
 
 The groups, once the accounts are gone:
 

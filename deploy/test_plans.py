@@ -6,6 +6,7 @@ The command doubles record every privileged/build invocation. They never
 forward sudo, systemctl, package-manager or Cargo calls to the host.
 """
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -3827,7 +3828,8 @@ class DecommissionTests(unittest.TestCase):
         self.assertLess(judged, self.script.index('say "the delegated door, shut"'))
         self.assertNotIn('done < "$DEST/PURGE-LIST"', self.script)
         self.assertNotIn('done < "$PURGE_LIST"', self.script)
-        self.assertEqual(self.script.count('done < "$PURGE_ACTED"'), 3)
+        # The three removal loops, load_held, and rerun_unchanged.
+        self.assertEqual(self.script.count('done < "$PURGE_ACTED"'), 5)
         self.assertLess(judged, self.script.index('purge_lines_within "$PURGE_LIST" > "$PURGE_ACTED"'))
         # **A line passed over is never acted on**: only lines the
         # derivation holds reach the removal loops, so a path that did not
@@ -3876,6 +3878,527 @@ class DecommissionTests(unittest.TestCase):
         self.assertLess(purge, second)
 
 
+# The account database's stand-ins for the purge (#140): getent reads the
+# model's passwd and group, userdel removes the user from both and, as the real
+# one does under USERGROUPS_ENAB, the user's private group where no other member
+# holds it, and groupdel removes a group, failing on one that is gone.
+ACCOUNT_MODEL = r"""#!/usr/bin/env python3
+import os, pathlib, sys
+name = pathlib.Path(sys.argv[0]).name
+args = sys.argv[1:]
+model = pathlib.Path(os.environ["MODEL"])
+def rows(kind):
+    return [l.split(":") for l in (model / kind).read_text().splitlines() if l]
+def write(kind, kept):
+    (model / kind).write_text("".join(":".join(f) + "\n" for f in kept))
+if name == "getent":
+    # An enumeration answers 0 however few rows match, as on a box, where root's
+    # own always stand; a lookup of a name absent answers 2.
+    hit = [f for f in rows(args[0]) if len(args) == 1 or f[0] == args[1]]
+    if not hit and len(args) > 1:
+        sys.exit(2)
+    print("".join(":".join(f) + "\n" for f in hit), end="")
+elif name == "userdel":
+    with open(model / "calls", "a") as calls:
+        calls.write("userdel " + " ".join(args) + "\n")
+    who = args[-1]
+    if not any(f[0] == who for f in rows("passwd")):
+        sys.exit(6)
+    write("passwd", [f for f in rows("passwd") if f[0] != who])
+    kept = []
+    for f in rows("group"):
+        members = [m for m in f[3].split(",") if m and m != who]
+        if f[0] == who and not members:
+            continue
+        kept.append(f[:3] + [",".join(members)])
+    write("group", kept)
+elif name == "groupdel":
+    if not any(f[0] == args[-1] for f in rows("group")):
+        sys.exit(6)
+    write("group", [f for f in rows("group") if f[0] != args[-1]])
+"""
+
+
+class PurgeRecordTests(unittest.TestCase):
+    """**Root's record of the purge, and its rerun** (#140; deploy/REDEPLOY.md
+    section 2). The purge's own code runs over a model box: the record's
+    reading and writing, its decision between a first run and a rerun, and
+    its removal phases in the order the script states them, cut after each
+    phase. The model runs under `unshare --map-root-user`, so the box's files
+    are root's as the record's checks need. The account database is laid out
+    as create-agent makes it: the relay with no group of its own, the agent's
+    and the member's groups holding the operator and the connector, so only
+    the connector's group goes with its user."""
+
+    def setUp(self):
+        self.script = (DEPLOY / "decommission.sh").read_text()
+        probe = subprocess.run(["unshare", "--map-root-user", "true"], capture_output=True)
+        if probe.returncode != 0:
+            self.skipTest("unshare --map-root-user is not available")
+
+    def box(self):
+        scratch = tempfile.TemporaryDirectory(prefix="purge-record-")
+        self.addCleanup(scratch.cleanup)
+        box = Path(scratch.name).resolve()
+        root = box / "etc/weaver/admin/a"
+        root.mkdir(parents=True)
+        (root / "territory").write_text(f"{box}/var/lib/weaver-agent/weaver-a\n")
+        for d in ("var/lib/weaver-agent/weaver-a", "opt/weaver/bin", "opt/weaver/lib", "tmp/weaver-a-scratch",
+                  "model", "etc/sudoers.d"):
+            (box / d).mkdir(parents=True, exist_ok=True)
+        for d in (box, box / "var", box / "var/lib"):
+            d.chmod(0o755)
+        users = ["weaver-a", "weaver-a-state", "weaver-a-relay", "weaver-a-admincon"]
+        members = {"weaver-a": "op", "weaver-a-state": "weaver-a-admincon,op", "weaver-a-trace": "op",
+                   "weaver-a-admin": "weaver-a-admincon,op", "weaver-a-admincon": ""}
+        groups = list(members)
+        (box / "model/passwd").write_text("".join(f"{u}:x:{2001 + i}:{2001 + i}::/nonexistent:/bin/false\n"
+                                                  for i, u in enumerate(users)))
+        (box / "model/group").write_text("".join(f"{g}:x:{3001 + i}:{members[g]}\n" for i, g in enumerate(groups)))
+        # The rule the archive disabled and listed.
+        (box / "etc/sudoers.d/.weaver-a.decommissioning").write_text("op ALL=(root) NOPASSWD: /bin/true\n")
+        # /etc/weaver listed last of the paths: the archive writes it first,
+        # and the purge's order must not rest on the list's.
+        listed = ([f"path {box}/etc/sudoers.d/.weaver-a.decommissioning", f"path {box}/var/lib/weaver-agent", f"path {box}/opt/weaver/bin",
+                   f"path {box}/opt/weaver/lib", f"path {box}/tmp/weaver-a-scratch", f"path {box}/etc/weaver"]
+                  + [f"user {u}" for u in users] + [f"group {g}" for g in groups])
+        (box / "PURGE-LIST").write_text("".join(line + "\n" for line in listed))
+        for tool in ("getent", "userdel", "groupdel"):
+            stand_in = box / "model" / tool
+            stand_in.write_text(ACCOUNT_MODEL)
+            stand_in.chmod(0o755)
+        for tool, body in (("ldconfig", "#!/bin/sh\n[ \"${1:-}\" = -p ] && echo libggml.so\nexit 0\n"),
+                           ("systemctl", "#!/bin/sh\necho \"systemctl $*\" >> \"$MODEL/calls\"\nexit 0\n")):
+            stand_in = box / "model" / tool
+            stand_in.write_text(body)
+            stand_in.chmod(0o755)
+        return box
+
+    def run_purge(self, box, phases=None, removals=None, failing=None, record_remove_fails=False, units=()):
+        """One `--purge` over BOX from the record's decision on: every phase,
+        or the first PHASES of them in the script's own order, then a stop, or
+        a stop after its REMOVALS-th `rm`, mid-phase, as an interrupt lands. A
+        command FAILING names (`rm`, `mv` or `rmdir`) fails on every call, and
+        with RECORD_REMOVE_FAILS the record's own removal fails."""
+        text = self.script
+        cut = lambda a, b: text[text.index(a):text.index(b, text.index(a))]
+        helpers = cut("RECORD_PARENT=/var/lib", "# **Everything under DEST is read as the operator**")
+        # From the record's decision through the door and the record's writing.
+        decision = cut('[[ "$COPY_SUM" =~', 'say "units"\n')
+        first = text.index('say "units"\n', text.index('[[ "$COPY_SUM" =~'))
+        region = text[first:text.index('say "purged. the archive is $DEST"', first)]
+        if phases is not None:
+            headers = sorted(region.index(h) for h in ('say "the config roots"\n', 'say "paths"\n',
+                                                       'say "accounts"\n'))
+            ends = headers[1:] + [region.index("# The prefixes the record holds")]
+            region = region[:ends[phases - 1]] + "exit 0\n" if phases else "exit 0\n"
+        program = ("set -euo pipefail\nsay() { printf '== %s\\n' \"$*\"; }\nplan() { printf '   %s\\n' \"$*\"; }\n"
+                   "die() { printf 'REFUSED: %s\\n' \"$*\" >&2; exit 1; }\n"
+                   "purge_lines_outside() { :; }\npurge_lines_within() { cat \"$1\"; }\n"
+                   "query_runs() { :; }\n" + shell_function(text, "sudo_rules")
+                   + ("" if removals is None else
+                      "RM_SEEN=0\nrm() { local s=0; command rm \"$@\" || s=$?; RM_SEEN=$((RM_SEEN + 1)); "
+                      f"[ \"$RM_SEEN\" -lt {removals} ] || exit 0; return \"$s\"; }}\n")
+                   + ({None: "", "mv": "mv() { return 1; }\n", "rmdir": "rmdir() { return 1; }\n",
+                       # `rm -rf`, the paths' removal, or `rm -f`, a sudo rule's.
+                       "rm": 'rm() { [ "$1" = -rf ] && return 1; command rm "$@"; }\n',
+                       "rm-f": 'rm() { [ "$1" = -f ] && return 1; command rm "$@"; }\n'}[failing])
+                   + helpers
+                   + ("" if not record_remove_fails else
+                      'eval "$(declare -f purge_record | sed "1s/^purge_record/real_purge_record/")"\n'
+                      'purge_record() { [ "$1" = remove ] && return 4; real_purge_record "$@"; }\n')
+                   + f"PURGE_LIST={shlex.quote(str(box / 'PURGE-LIST'))}\nPURGE_ACTED=$(mktemp)\n"
+                   + "trap 'command rm -f -- \"$PURGE_ACTED\"' EXIT\n"
+                   + 'COPY_SUM=$(sha256sum < "$PURGE_LIST" | cut -d" " -f1)\nDEST=archive\n'
+                   + f"declare -A PREFIXES=([{shlex.quote(str(box / 'opt/weaver'))}]=1)\nACTIVE_UNITS=() RUNNING=()\n"
+                   # The roots discovery found, as it finds them on a first run.
+                   + "AGENT_ROOTS=(); for r in /etc/weaver/admin*/*/; do [ -d \"$r\" ] && AGENT_ROOTS+=(\"${r%/}\"); done\n"
+                   # The rules and the legacy units discovery finds, as it finds them.
+                   + f"mapfile -t SUDO_RULES < <(sudo_rules {shlex.quote(str(box / 'etc/sudoers.d'))})\n"
+                   + "UNITS=(" + " ".join(shlex.quote(u) for u in units) + ")\nSLICE=weaver.slice\n"
+                   + decision + region + 'echo PURGED\n')
+        program = program.replace("/etc/weaver", f"{box}/etc/weaver").replace(
+            "RECORD_PARENT=/var/lib", f"RECORD_PARENT={box}/var/lib")
+        env = {**os.environ, "PATH": f"{box}/model" + os.pathsep + os.environ["PATH"], "MODEL": str(box / "model")}
+        env.pop("BASH_ENV", None)
+        return subprocess.run(["unshare", "--map-root-user", "bash", "-c", program], env=env, text=True,
+                              capture_output=True, timeout=60)
+
+    def record(self, box):
+        sum_ = hashlib.sha256((box / "PURGE-LIST").read_bytes()).hexdigest()
+        return box / "var/lib/decommission-weaver" / sum_
+
+    def assert_purged(self, box):
+        standing = [p for p in ("etc/weaver", "var/lib/weaver-agent", "opt/weaver/bin", "opt/weaver/lib",
+                                "tmp/weaver-a-scratch") if os.path.lexists(box / p)]
+        self.assertEqual(standing, [])
+        self.assertFalse((box / "opt/weaver").exists(), "the prefix left empty goes, named by the record")
+        self.assertEqual((box / "model/passwd").read_text() + (box / "model/group").read_text(), "")
+        self.assertFalse(os.path.lexists(box / "var/lib/decommission-weaver"), "the record goes last")
+
+    def roots_without_territory(self, box):
+        """The roots a rerun's admin `show` would be asked about whose
+        territory is gone: admin refuses those, and the rerun with it."""
+        found = []
+        for base in (box / "etc/weaver").glob("admin*"):
+            for root in base.iterdir():
+                if root.is_dir() and not root.name.startswith("."):
+                    territory = (root / "territory").read_text().strip() if (root / "territory").exists() else ""
+                    if not territory or not os.path.isdir(territory):
+                        found.append(str(root))
+        return found if (box / "etc/weaver").exists() else []
+
+    def test_a_whole_purge_writes_its_record_and_removes_it_last(self):
+        box = self.box()
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        self.assertIn("root's record written", ran.stdout)
+        # Only the connector's group goes with its user; the agent's and the
+        # member's hold the operator and are removed by groupdel.
+        self.assertIn("group weaver-a-admincon: already gone with its user", ran.stdout)
+        self.assertIn("removed group weaver-a-state", ran.stdout)
+        self.assertIn("PURGED", ran.stdout)
+        self.assert_purged(box)
+
+    def test_a_completed_purge_run_again_refuses_and_says_why(self):
+        box = self.box()
+        self.assertEqual(self.run_purge(box).returncode, 0)
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn("a purge has completed here", ran.stderr)
+
+    def test_an_agent_taken_down_by_hand_after_the_archive_leaves_the_rest_to_purge(self):
+        """An account gone is not the sign of a purge begun: a box where the
+        relay was removed by hand after the archive purges the rest."""
+        box = self.box()
+        passwd = box / "model/passwd"
+        passwd.write_text("".join(l + "\n" for l in passwd.read_text().splitlines() if not l.startswith("weaver-a-relay:")))
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        self.assertIn("user weaver-a-relay: already gone", ran.stdout)
+        self.assert_purged(box)
+
+    def test_a_path_replaced_since_it_was_judged_is_not_removed(self):
+        """A rerun removes a path only while it is the object judged: a /tmp
+        name another principal took after a reboot refuses the rerun, naming
+        it, and stands. Perturbation: drop the identity check, and the rerun
+        removes the stranger's entry as root."""
+        box = self.box()
+        self.assertEqual(self.run_purge(box, phases=1).returncode, 0)
+        entry = box / "tmp/weaver-a-scratch"
+        entry.rmdir()
+        entry.mkdir()
+        (entry / "theirs").write_text("")
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn(f"{entry}, which is not the object this purge judged", ran.stderr)
+        self.assertTrue((entry / "theirs").exists())
+        self.assertTrue(self.record(box).exists())
+
+    def resum(self, record, edit):
+        """RECORD's lines through EDIT, summed again as the record writes
+        itself: a change only a reused inode or a new account could show."""
+        head, plist, _, body = record.read_text().split("\n", 3)
+        body = edit(body)
+        record.write_text(f"{head}\n{plist}\nacted {hashlib.sha256(body.encode()).hexdigest()}\n{body}")
+        record.chmod(0o600)
+
+    def test_a_weaver_config_made_again_after_a_stop_is_not_removed(self):
+        """Codex on #159, round 1 (P1): /etc/weaver removed, then put back
+        or made again before the rerun, is not the object judged, so the
+        rerun refuses and the new tree stands. Perturbation: drop the check
+        before the roots, and the new configuration is removed."""
+        box = self.box()
+        self.assertEqual(self.run_purge(box, phases=1).returncode, 0)
+        self.assertFalse((box / "etc/weaver").exists())
+        (box / "etc/weaver/stack").mkdir(parents=True)
+        (box / "etc/weaver/stack/prefix").write_text("/opt/weaver\n")
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn(f"{box}/etc/weaver, which is not the object this purge judged", ran.stderr)
+        self.assertTrue((box / "etc/weaver/stack/prefix").exists(), "the new configuration stands")
+
+    def test_a_root_made_again_inside_the_judged_config_is_not_withdrawn(self):
+        """Perturbation: drop the root's check, and the new root goes."""
+        box = self.box()
+        self.assertEqual(self.run_purge(box, phases=0).returncode, 0)
+        root = box / "etc/weaver/admin/a"
+        shutil.rmtree(root)
+        root.mkdir()
+        (root / "territory").write_text(f"{box}/var/lib/weaver-agent/weaver-a\n")
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn(f"the root {root}, which is not one this purge judged", ran.stderr)
+        self.assertTrue(root.is_dir())
+
+    def test_a_reused_inode_under_another_owner_is_not_removed(self):
+        """Codex on #159, round 1 (P2): device and inode are reused once a
+        path is gone, so the identity carries the owner and the birth time
+        too. The replacement here takes the judged entry's device and inode
+        as the record holds them, written in as only a reused inode could
+        show it, under another owner: the rerun refuses and it stands.
+        Perturbation: compare device and inode alone, and it is removed."""
+        box = self.box()
+        self.assertEqual(self.run_purge(box, phases=1).returncode, 0)
+        entry = box / "tmp/weaver-a-scratch"
+        entry.rmdir()
+        entry.mkdir()
+        (entry / "theirs").write_text("")
+        st = os.stat(entry)
+        record = self.record(box)
+
+        def collide(body):
+            out = []
+            for line in body.splitlines():
+                if line.startswith("held ") and line.endswith(f" {entry}"):
+                    birth = line.split(" ", 2)[1].split(":")[3]
+                    line = f"held {st.st_dev}:{st.st_ino}:2001:{birth} {entry}"
+                out.append(line)
+            return "".join(l + "\n" for l in out)
+        self.resum(record, collide)
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn(f"{entry}, which is not the object this purge judged", ran.stderr)
+        self.assertTrue((entry / "theirs").exists())
+
+    def test_an_account_made_again_under_its_name_is_not_removed(self):
+        """An account or a group removed and made again under the same name,
+        with another number, is not the one judged. Perturbations: remove a
+        user, or a group, by name alone, and the new one goes."""
+        box = self.box()
+        self.assertEqual(self.run_purge(box, phases=2).returncode, 0)
+        passwd = box / "model/passwd"
+        passwd.write_text(passwd.read_text().replace("weaver-a:x:2001:", "weaver-a:x:4242:"))
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn("the user weaver-a, which is not the account this purge judged", ran.stderr)
+        self.assertIn("weaver-a:x:4242:", passwd.read_text())
+        # The same for a group made again: the trace group, which no user
+        # takes with it, under another number.
+        box = self.box()
+        self.assertEqual(self.run_purge(box, phases=2).returncode, 0)
+        group = box / "model/group"
+        group.write_text(group.read_text().replace("weaver-a-trace:x:3003:", "weaver-a-trace:x:4343:"))
+        passwd = box / "model/passwd"
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn("the group weaver-a-trace, which is not the group this purge judged", ran.stderr)
+        self.assertIn("weaver-a-trace:x:4343:", group.read_text())
+
+    def test_a_removal_that_fails_keeps_the_record_and_the_rerun_finishes(self):
+        """Perturbation: remove the record whatever failed, and the rerun
+        finds no record on a box a purge acted on, and refuses."""
+        box = self.box()
+        ran = self.run_purge(box, failing="rm")
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn("not removed", ran.stdout)
+        self.assertIn("root's record is kept", ran.stderr)
+        self.assertTrue(self.record(box).exists())
+        again = self.run_purge(box)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assert_purged(box)
+
+    def test_an_empty_prefix_that_will_not_go_keeps_the_record_and_refuses(self):
+        """Codex on #159, round 2: a failure on the left of `&&` is exempt
+        from `set -e`, so an rmdir that failed passed for done. Perturbation:
+        the prefix's removal as it stood (`rmdir ... && plan`), and the purge
+        reports success, removing its record, with the prefix standing."""
+        box = self.box()
+        ran = self.run_purge(box, failing="rmdir")
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn(f"empty {box}/opt/weaver: not removed", ran.stdout)
+        self.assertIn("root's record is kept", ran.stderr)
+        self.assertTrue((box / "opt/weaver").is_dir())
+        self.assertTrue(self.record(box).exists())
+        again = self.run_purge(box)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assert_purged(box)
+
+    def test_a_record_that_will_not_go_refuses_completion(self):
+        """Codex on #159, round 2. Perturbation: the record's removal as it
+        stood (`purge_record remove ... && plan`), and the purge says it is
+        done with the record standing."""
+        box = self.box()
+        ran = self.run_purge(box, record_remove_fails=True)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn("cannot be removed and stands, so the purge is not done", ran.stderr)
+        self.assertIn("sudo rm ", ran.stderr)
+        self.assertNotIn("PURGED", ran.stdout)
+        self.assertTrue(self.record(box).exists())
+
+    def test_a_sudo_rule_that_will_not_go_refuses(self):
+        """The same class at the door: a rule `rm -f` cannot remove leaves the
+        door open. Perturbation: `rm -f ... && plan`, and the purge goes on."""
+        box = self.box()
+        ran = self.run_purge(box, failing="rm-f")
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn("the delegated door is not shut", ran.stderr)
+        self.assertFalse(self.record(box).exists(), "nothing went on to the record")
+        self.assertTrue((box / "var/lib/weaver-agent/weaver-a").exists())
+
+    def test_a_sudo_rule_the_purge_did_not_judge_is_never_removed(self):
+        """Codex on #159, round 3: a rerun removed every weaver-* rule it
+        found. A rule made for a new agent, or one put back, since the first
+        run refuses the rerun, and both stand; a first run refuses a rule its
+        PURGE-LIST does not name. Perturbations: remove what discovery finds
+        on a rerun, or on a first run whatever is unlisted, and the rules go."""
+        box = self.box()
+        self.assertEqual(self.run_purge(box, phases=1).returncode, 0)
+        rules = box / "etc/sudoers.d"
+        new, back = rules / "weaver-b", rules / ".weaver-a.decommissioning"
+        new.write_text("new\n")
+        back.write_text("put back\n")
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn("nothing is purged", ran.stderr)
+        self.assertEqual((new.read_text(), back.read_text()), ("new\n", "put back\n"))
+        # A new agent's rule alone, the judged one gone: the door refuses it.
+        back.unlink()
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn(f"the sudo rule {new} stands, and every rule this purge judged went before its record", ran.stderr)
+        self.assertTrue(new.exists())
+        # A first run, with a rule made after the archive.
+        box = self.box()
+        unlisted = box / "etc/sudoers.d/weaver-b"
+        unlisted.write_text("new\n")
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn(f"the sudo rule {unlisted} is not on this archive's PURGE-LIST", ran.stderr)
+        self.assertTrue(unlisted.exists())
+        self.assertTrue((box / "etc/sudoers.d/.weaver-a.decommissioning").exists(), "no rule went")
+
+    def test_what_a_rerun_finds_new_inside_a_judged_directory_refuses(self):
+        """Second reader on #159, round 3: a judged directory's identity does
+        not cover what is put in it, so a new agent's territory made under a
+        judged base, or a new entry in /etc/weaver, would go unarchived. The
+        rerun refuses on a direct entry it did not judge, and it stands.
+        Perturbation: skip the entries' check, and they are removed."""
+        box = self.box()
+        self.assertEqual(self.run_purge(box, phases=1).returncode, 0)
+        newcomer = box / "var/lib/weaver-agent/weaver-b"
+        newcomer.mkdir()
+        (newcomer / "trace.ndjson").write_text("")
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn(f"{newcomer} in {box}/var/lib/weaver-agent, which is not what this purge judged there", ran.stderr)
+        self.assertTrue((newcomer / "trace.ndjson").exists())
+        # The same inside a /etc/weaver still standing.
+        box = self.box()
+        self.assertEqual(self.run_purge(box, phases=0).returncode, 0)
+        base = box / "etc/weaver/admin-b"
+        base.mkdir()
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn(f"{base} in {box}/etc/weaver", ran.stderr)
+        self.assertTrue(base.is_dir())
+
+    def test_a_rerun_stops_only_the_units_it_recorded(self):
+        """A legacy unit (a box from before #50) found on a rerun and not
+        recorded refuses; the units recorded are stopped. Perturbation: stop
+        what discovery finds, and the new unit is stopped."""
+        box = self.box()
+        self.assertEqual(self.run_purge(box, phases=0, units=["weaver-worker@a.service"]).returncode, 0)
+        ran = self.run_purge(box, units=["weaver-worker@a.service", "weaver-worker@b.service"])
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn("the unit weaver-worker@b.service, which this purge did not judge", ran.stderr)
+        calls = (box / "model/calls").read_text() if (box / "model/calls").exists() else ""
+        self.assertNotIn("weaver-worker@b", calls)
+        ran = self.run_purge(box, units=["weaver-worker@a.service"])
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        self.assertIn("systemctl stop weaver-worker@a.service", (box / "model/calls").read_text())
+
+    def test_userdel_takes_no_home_and_a_prefix_made_again_is_kept(self):
+        """Second reader on #159, round 3: `userdel -r` removed a home and a
+        mail spool no one judged, so the accounts go without it; and a prefix
+        made again since it was judged is kept, not rmdir'd by name.
+        Perturbations: `userdel -r`, or rmdir the prefix by name alone."""
+        box = self.box()
+        self.assertEqual(self.run_purge(box, phases=3).returncode, 0)
+        self.assertNotIn("userdel -r", (box / "model/calls").read_text())
+        prefix = box / "opt/weaver"
+        prefix.rmdir()
+        prefix.mkdir()
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        self.assertIn(f"kept {prefix}: not the directory this purge judged", ran.stdout)
+        self.assertTrue(prefix.is_dir())
+
+    def test_a_root_that_cannot_be_withdrawn_refuses_before_any_path_goes(self):
+        """Perturbation: go on past a root not withdrawn, and its territory
+        goes while it stands, which its admin then refuses."""
+        box = self.box()
+        ran = self.run_purge(box, failing="mv")
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn("cannot be withdrawn", ran.stderr)
+        self.assertTrue((box / "var/lib/weaver-agent/weaver-a").exists(), "the territory stands with its root")
+        self.assertEqual(self.roots_without_territory(box), [])
+
+    def test_a_purge_stopped_after_each_phase_reruns_to_completion(self):
+        """Stopped after each phase, and after each single removal within
+        one. Perturbations: put the paths before the config roots, and a stop
+        after a territory goes leaves a root whose territory is gone, which
+        its admin refuses; read no record on the rerun, and it refuses the box
+        a purge has acted on."""
+        # A whole purge of the model removes with six `rm`s: the door's rule,
+        # /etc/weaver once its roots are withdrawn, then the four other paths.
+        stops = [{"phases": n} for n in range(4)] + [{"removals": n} for n in range(1, 7)]
+        for stop in stops:
+            with self.subTest(**stop):
+                box = self.box()
+                first = self.run_purge(box, **stop)
+                self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+                # The first removal is the door's rule, made before the record:
+                # a stop there leaves a box whose next purge is a first run.
+                self.assertEqual(self.record(box).exists(), stop != {"removals": 1},
+                                 "the record stands across every stop after it is written")
+                self.assertEqual(self.roots_without_territory(box), [], "no root is left for admin to refuse")
+                again = self.run_purge(box)
+                self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+                if stop != {"removals": 1}:
+                    self.assertIn("a rerun: acting on root's record", again.stdout)
+                self.assert_purged(box)
+
+    def test_a_record_changed_since_it_was_written_refuses_the_rerun(self):
+        """Perturbation: drop the record's own sum check, and the changed
+        record is acted on."""
+        box = self.box()
+        self.assertEqual(self.run_purge(box, phases=1).returncode, 0)
+        record = self.record(box)
+        record.write_text(record.read_text() + f"path {box}/opt\n")
+        record.chmod(0o600)
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn("does not hold what it summed", ran.stderr)
+        self.assertNotIn("PURGED", ran.stdout)
+        self.assertTrue((box / "opt/weaver/lib").exists(), "nothing more was removed")
+
+    def test_a_record_of_another_list_or_naming_what_the_list_does_not_refuses(self):
+        box = self.box()
+        self.assertEqual(self.run_purge(box, phases=1).returncode, 0)
+        record = self.record(box)
+        lines = record.read_text().split("\n", 3)
+        body = lines[3] + f"path {box}/opt\n"
+        record.write_text("\n".join(lines[:2]) + "\nacted " + hashlib.sha256(body.encode()).hexdigest() + "\n" + body)
+        record.chmod(0o600)
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn("names what this archive's PURGE-LIST does not", ran.stderr)
+        self.assertTrue((box / "opt/weaver/lib").exists())
+
+    def test_a_missing_record_on_a_box_a_purge_acted_on_refuses(self):
+        """Perturbation: skip `purge_began`, and the rerun derives again from
+        the half-removed box."""
+        for phases in (1, 3):
+            with self.subTest(stopped_after_phases=phases):
+                box = self.box()
+                self.assertEqual(self.run_purge(box, phases=phases).returncode, 0)
+                self.record(box).unlink()
+                ran = self.run_purge(box)
+                self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+                self.assertIn("root holds no record of a purge in progress", ran.stderr)
+
+
 class RoundOneOf79Tests(unittest.TestCase):
     """Codex's first pass on #79: the connector probe, the purge's fresh look,
     and the credential before every install path, each run or read as the
@@ -3919,7 +4442,7 @@ class RoundOneOf79Tests(unittest.TestCase):
         # step, and this fails.
         script = (DEPLOY / "decommission.sh").read_text()
         purge = script[script.index(" 3. purge\n"):]
-        door = purge.index('for f in "${SUDO_RULES[@]}"; do rm -f')
+        door = purge.index('for f in "${SUDO_RULES[@]}"; do\n  [ "$RERUN" = 0 ]')
         again = purge.index("\nquery_runs\n")
         refusal = purge.index('die "agents run again or cannot be read')
         first_destructive = purge.index('say "units"')
