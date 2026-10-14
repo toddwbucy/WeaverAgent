@@ -70,7 +70,7 @@ fn the_dial_refuses_within_its_bound() {
     let dir = scratch("bound");
     let path = dir.join("nothing-listens-here.sock");
     let started = std::time::Instant::now();
-    let refused = dial(&path, nix::unistd::getuid().as_raw());
+    let refused = dial(&path, nix::unistd::getuid().as_raw(), &dir.0);
     let elapsed = started.elapsed();
     assert!(
         matches!(refused, Err(ChannelFault::NoListener)),
@@ -106,13 +106,13 @@ fn a_full_backlog_refuses_within_the_bound() {
     // then the queue closes.
     let mut held = Vec::new();
     for _ in 0..8 {
-        match dial(&path, nix::unistd::getuid().as_raw()) {
+        match dial(&path, nix::unistd::getuid().as_raw(), &dir.0) {
             Ok(c) => held.push(c),
             Err(_) => break,
         }
     }
     let started = std::time::Instant::now();
-    let refused = dial(&path, nix::unistd::getuid().as_raw());
+    let refused = dial(&path, nix::unistd::getuid().as_raw(), &dir.0);
     let elapsed = started.elapsed();
     assert!(
         matches!(refused, Err(ChannelFault::NotDialable)),
@@ -138,7 +138,7 @@ fn the_dial_wins_the_race_when_the_bind_is_late() {
         std::thread::sleep(std::time::Duration::from_millis(120));
         harness_listener(&bind_dir)
     });
-    let connected = dial(&path, nix::unistd::getuid().as_raw());
+    let connected = dial(&path, nix::unistd::getuid().as_raw(), &dir.0);
     let (listener, _) = late.join().expect("thread");
     assert!(
         connected.is_ok(),
@@ -159,7 +159,7 @@ fn the_dial_wins_the_race_when_the_bind_is_late() {
 fn one_write_is_one_read() {
     let dir = scratch("framing");
     let (listener, path) = harness_listener(&dir);
-    let admin = dial(&path, nix::unistd::getuid().as_raw()).expect("dial");
+    let admin = dial(&path, nix::unistd::getuid().as_raw(), &dir.0).expect("dial");
     let worker = harness_accepts(&listener);
     let worker = Coordination::adopt(worker);
     worker.send(&directive(1, "alpha")).expect("first write");
@@ -181,7 +181,7 @@ fn one_write_is_one_read() {
 fn a_bound_past_the_clock_waits_and_reads() {
     let dir = scratch("unbounded");
     let (listener, path) = harness_listener(&dir);
-    let admin = dial(&path, nix::unistd::getuid().as_raw()).expect("dial");
+    let admin = dial(&path, nix::unistd::getuid().as_raw(), &dir.0).expect("dial");
     let worker = Coordination::adopt(harness_accepts(&listener));
     worker.send(&directive(7, "alpha")).expect("write");
     let read = admin
@@ -203,7 +203,7 @@ fn a_bound_past_the_clock_waits_and_reads() {
 fn a_capped_poll_timeout_with_time_left_waits_again() {
     let dir = scratch("poll-cap");
     let (listener, path) = harness_listener(&dir);
-    let admin = dial(&path, nix::unistd::getuid().as_raw()).expect("dial");
+    let admin = dial(&path, nix::unistd::getuid().as_raw(), &dir.0).expect("dial");
     let worker = Coordination::adopt(harness_accepts(&listener));
     let answering = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(150));
@@ -232,7 +232,7 @@ fn a_capped_poll_timeout_with_time_left_waits_again() {
 fn truncation_is_a_channel_fault() {
     let dir = scratch("truncate");
     let (listener, path) = harness_listener(&dir);
-    let admin = dial(&path, nix::unistd::getuid().as_raw()).expect("dial");
+    let admin = dial(&path, nix::unistd::getuid().as_raw(), &dir.0).expect("dial");
     let worker = harness_accepts(&listener);
     let oversized = vec![b'x'; MAX_ENVELOPE_BYTES + 4096];
     // SAFETY: a raw send is how the test produces a message larger than
@@ -270,7 +270,7 @@ fn the_enter_carries_its_descriptor_in_one_message() {
     use std::os::fd::AsFd;
     let dir = scratch("ancillary");
     let (listener, path) = harness_listener(&dir);
-    let admin = dial(&path, nix::unistd::getuid().as_raw()).expect("dial");
+    let admin = dial(&path, nix::unistd::getuid().as_raw(), &dir.0).expect("dial");
     let worker_fd = harness_accepts(&listener);
 
     let sink = std::fs::File::create(dir.join("sink")).expect("sink");
@@ -323,9 +323,9 @@ fn the_dial_refuses_a_listener_that_is_not_the_worker() {
     let (listener, path) = harness_listener(&dir);
     let me = nix::unistd::getuid().as_raw();
     let started = std::time::Instant::now();
-    let refused = dial(&path, me.wrapping_add(1));
+    let refused = dial(&path, me.wrapping_add(1), &dir.0);
     assert!(
-        matches!(refused, Err(ChannelFault::WrongPeer { uid }) if uid == me),
+        matches!(refused, Err(ChannelFault::WrongPeer { uid, .. }) if uid == me),
         "{refused:?}"
     );
     assert!(
@@ -333,8 +333,126 @@ fn the_dial_refuses_a_listener_that_is_not_the_worker() {
         "a wrong peer is not retried to the ceiling"
     );
     assert!(
-        dial(&path, me).is_ok(),
+        dial(&path, me, &dir.0).is_ok(),
         "the worker's own listener connects"
     );
     drop(listener);
+}
+
+/// A forked child of the suite's own uid that listens at `socket`, holding a
+/// run lock's description on `run_lock` first where it is given one, and
+/// answering once it listens. **A real second process**, as the gate, the
+/// SPU or a tool is to the worker: the uid alone cannot tell them apart.
+/// The ready byte says whether the child stands as asked, so a failed open,
+/// lock or bind fails the test here rather than reading as a refusal.
+fn forked_listener(socket: &std::path::Path, run_lock: Option<&std::path::Path>) -> Forked {
+    // Built before the fork, so the child only calls what a fork of a
+    // threaded process may.
+    let address = UnixAddr::new(socket).expect("address");
+    let lock_path =
+        run_lock.map(|path| std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap());
+    let lock = nix::libc::flock {
+        l_type: nix::libc::F_WRLCK as i16,
+        l_whence: nix::libc::SEEK_SET as i16,
+        l_start: 0,
+        l_len: 0,
+        l_pid: 0,
+    };
+    let (ready_read, ready_write) = nix::unistd::pipe().unwrap();
+    // SAFETY: the child calls only async-signal-safe functions.
+    match unsafe { nix::unistd::fork() }.unwrap() {
+        nix::unistd::ForkResult::Child => {
+            crate::start::close_inherited_except(Some(ready_write.as_raw_fd()));
+            // SAFETY: open, fcntl, socket, bind, listen, write, pause and
+            // _exit are async-signal-safe.
+            unsafe {
+                let mut stands = true;
+                if let Some(path) = &lock_path {
+                    let fd = nix::libc::open(
+                        path.as_ptr(),
+                        nix::libc::O_RDWR | nix::libc::O_CREAT,
+                        0o600,
+                    );
+                    stands &= fd >= 0 && nix::libc::fcntl(fd, nix::libc::F_OFD_SETLK, &lock) == 0;
+                }
+                let listener = nix::libc::socket(nix::libc::AF_UNIX, nix::libc::SOCK_SEQPACKET, 0);
+                stands &= listener >= 0
+                    && nix::libc::bind(
+                        listener,
+                        nix::sys::socket::SockaddrLike::as_ptr(&address),
+                        nix::sys::socket::SockaddrLike::len(&address),
+                    ) == 0
+                    && nix::libc::listen(listener, 8) == 0;
+                nix::libc::write(
+                    ready_write.as_raw_fd(),
+                    [u8::from(stands)].as_ptr().cast(),
+                    1,
+                );
+                nix::libc::pause();
+                nix::libc::_exit(0);
+            }
+        }
+        nix::unistd::ForkResult::Parent { child } => {
+            drop(ready_write);
+            let mut byte = [0u8; 1];
+            nix::unistd::read(&ready_read, &mut byte).unwrap();
+            let forked = Forked(child);
+            assert_eq!(byte[0], 1, "the forked listener did not stand as asked");
+            forked
+        }
+    }
+}
+
+/// A forked listener, ended and reaped when dropped. **Ended on a failed
+/// assertion as well**: the child holds the test harness's output pipe, so
+/// one left paused would hold the run open after the test has failed.
+struct Forked(nix::unistd::Pid);
+
+impl Drop for Forked {
+    fn drop(&mut self) {
+        // SAFETY: kill on a child this test forked and has not yet reaped.
+        unsafe { nix::libc::kill(self.0.as_raw(), nix::libc::SIGKILL) };
+        let _ = nix::sys::wait::waitpid(self.0, None);
+    }
+}
+
+/// **A listener of the worker's uid that is not the worker is refused**
+/// (#140; Spec section 7): two forked children of the suite's uid, the
+/// worker holding the run lock's description and listening at its name, an
+/// impostor holding none and listening at the agent's name, as an organ or
+/// tool that replaced it would. The impostor refuses `WrongPeer` naming its
+/// pid, without the ceiling's retries; the worker's own listener connects.
+/// Perturbation: drop the holder check from `listener_is_the_worker` and the
+/// impostor is dialed; break the holder scan (`holds` looking for another
+/// lock kind) and the worker is refused.
+#[test]
+fn the_dial_refuses_a_listener_of_the_workers_uid_that_holds_no_run_lock() {
+    let dir = scratch("pid");
+    let me = nix::unistd::getuid().as_raw();
+    let worker_name = dir.0.join("worker.sock");
+    let impostor_name = dir.0.join("alpha.sock");
+    let worker = forked_listener(&worker_name, Some(&dir.0.join("run.lock")));
+    let impostor = forked_listener(&impostor_name, None);
+    assert!(
+        crate::start::run_lock_held(&dir.0).unwrap(),
+        "the worker holds the run lock, so the impostor stands beside a live run"
+    );
+
+    let started = std::time::Instant::now();
+    let refused = dial(&impostor_name, me, &dir.0);
+    assert!(
+        matches!(refused, Err(ChannelFault::WrongPeer { uid, pid }) if uid == me && pid == impostor.0.as_raw()),
+        "{refused:?}"
+    );
+    assert!(
+        started.elapsed() < DIAL_CEILING,
+        "a wrong peer is not retried to the ceiling"
+    );
+    let accepted = dial(&worker_name, me, &dir.0);
+    assert!(
+        accepted.is_ok(),
+        "the process holding the run lock is the worker: {accepted:?}"
+    );
+
+    drop((impostor, worker));
 }

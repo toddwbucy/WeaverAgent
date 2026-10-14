@@ -13,9 +13,10 @@
 //! sandbox and this crate connects, per `weaver-admin-harness-contract`
 //! section 2. What refuses a stranger dialing in is the credential the
 //! harness reads at its accept. **What refuses a stranger dialed is the
-//! credential this crate reads after its connect** (#98): the socket stands
-//! in a directory the agent owns, so the peer's uid must be the agent's
-//! worker account, or the name was replaced and the dial is refused.
+//! credential this crate reads after its connect** (#98, #140): the socket
+//! stands in a directory the agent owns, so the peer must be the agent's
+//! worker, its account and its process, or the name was replaced and the
+//! dial is refused.
 //!
 //! **The dial retries within a bound.** The load starts the unit and then
 //! dials, and the bind is the worker's first act, so the race is structural.
@@ -49,14 +50,19 @@ pub enum ChannelFault {
     NoListener,
     /// An answer did not arrive within its exchange's bound, per section 3.
     Unanswered,
-    /// **The peer is not this agent's worker** (#98; `weaver-admin-Spec`
-    /// section 7): the listener's uid, read by `SO_PEERCRED` after the
-    /// connect, is not the worker account's. The socket's directory is the
-    /// agent's, so a name replaced there could aim this invocation at
-    /// another agent's worker, or at any listener on the box. Refused at
-    /// once and never retried, a wrong peer being no transient absence.
+    /// **The peer is not this agent's worker** (#98, #140;
+    /// `weaver-admin-Spec` section 7): the listener's uid, read by
+    /// `SO_PEERCRED` after the connect, is not the worker account's, or the
+    /// listening process, read through its pidfd, is not the one holding the
+    /// run lock. The socket's directory is the agent's, so a name replaced
+    /// there could aim this invocation at another agent's worker, at any
+    /// listener on the box, or at an organ or tool under the worker's own
+    /// uid. Refused at once and never retried, a wrong peer being no
+    /// transient absence. `pid` is `SO_PEERCRED`'s, the listener's at
+    /// `listen`.
     WrongPeer {
         uid: u32,
+        pid: i32,
     },
 }
 
@@ -91,10 +97,14 @@ const DIAL_INTERVAL: Duration = Duration::from_millis(10);
 /// verb arriving while another is in flight meets exactly that. The flag is
 /// cleared once connected, because everything after the dial, the enter
 /// directive and the answer it waits for, is blocking work.
-pub fn dial(socket_path: &Path, worker_uid: u32) -> Result<Coordination, ChannelFault> {
+pub fn dial(
+    socket_path: &Path,
+    worker_uid: u32,
+    run_directory: &Path,
+) -> Result<Coordination, ChannelFault> {
     let deadline = Instant::now() + DIAL_CEILING;
     loop {
-        match dial_once(socket_path, worker_uid) {
+        match dial_once(socket_path, worker_uid, run_directory) {
             Ok(connection) => return Ok(connection),
             // Not a transient absence: the name itself is unusable, so the
             // ceiling would spend a second reaching the same answer.
@@ -115,7 +125,11 @@ pub fn dial(socket_path: &Path, worker_uid: u32) -> Result<Coordination, Channel
     }
 }
 
-fn dial_once(socket_path: &Path, worker_uid: u32) -> Result<Coordination, ChannelFault> {
+fn dial_once(
+    socket_path: &Path,
+    worker_uid: u32,
+    run_directory: &Path,
+) -> Result<Coordination, ChannelFault> {
     let fd = socket(
         AddressFamily::Unix,
         SockType::SeqPacket,
@@ -148,10 +162,84 @@ fn dial_once(socket_path: &Path, worker_uid: u32) -> Result<Coordination, Channe
             "weaver-admin: the coordination socket's listener is uid {}, not the agent's worker (uid {worker_uid}), so it is not dialed",
             peer.uid()
         );
-        return Err(ChannelFault::WrongPeer { uid: peer.uid() });
+        return Err(ChannelFault::WrongPeer {
+            uid: peer.uid(),
+            pid: peer.pid(),
+        });
+    }
+    // **And the process, not only the account** (#140): the gate, the SPU
+    // and every tool run under the worker's uid, so the listener must be the
+    // process holding the run lock's description.
+    if !listener_is_the_worker(&fd, peer.pid(), run_directory) {
+        diag!(
+            "weaver-admin: the coordination socket's listener, pid {}, is not the process holding the agent's run lock, so it is not dialed",
+            peer.pid()
+        );
+        return Err(ChannelFault::WrongPeer {
+            uid: peer.uid(),
+            pid: peer.pid(),
+        });
     }
     clear_nonblocking(&fd)?;
     Ok(Coordination { fd, ordinal: 0 })
+}
+
+/// **Whether the listener is the worker's process**, per section 7: the
+/// listener's pidfd (`SO_PEERPIDFD`) reads `SO_PEERCRED`'s pid, that pid
+/// holds the run lock's description, and the pidfd still reads the same pid
+/// after the scan. `SO_PEERCRED`'s pid is fixed at `listen` and outlives its
+/// process, so a reaped listener's number, reused by the next run's worker,
+/// would pass the scan; its pidfd reads `-1` once it is gone, and a process
+/// cannot give up its pid while it lives. A kernel without `SO_PEERPIDFD`
+/// (before Linux 6.5) answers no pidfd, and the listener is not judged the
+/// worker.
+fn listener_is_the_worker(fd: &OwnedFd, pid: i32, run_directory: &Path) -> bool {
+    let Some(pidfd) = peer_pidfd(fd) else {
+        return false;
+    };
+    if pidfd_pid(&pidfd) != Some(pid) {
+        return false;
+    }
+    // #118: a test-only hook, kept beside the production code it observes:
+    // the suite's stand-in workers are its own threads, so a listener that
+    // is this process is taken for the worker. Production admin never
+    // listens on this channel.
+    #[cfg(test)]
+    if pid == std::process::id() as i32 {
+        return true;
+    }
+    crate::start::holds_run_lock(run_directory, pid) && pidfd_pid(&pidfd) == Some(pid)
+}
+
+/// The listener's pidfd, read by `SO_PEERPIDFD` on the connected end.
+fn peer_pidfd(fd: &OwnedFd) -> Option<OwnedFd> {
+    let mut raw: nix::libc::c_int = -1;
+    let mut length = std::mem::size_of::<nix::libc::c_int>() as nix::libc::socklen_t;
+    // SAFETY: getsockopt writes at most `length` bytes into `raw`, which
+    // outlives the call.
+    let answered = unsafe {
+        nix::libc::getsockopt(
+            fd.as_raw_fd(),
+            nix::libc::SOL_SOCKET,
+            nix::libc::SO_PEERPIDFD,
+            (&mut raw as *mut nix::libc::c_int).cast(),
+            &mut length,
+        )
+    };
+    // SAFETY: the kernel just installed this descriptor and nothing else
+    // owns it.
+    (answered == 0 && raw >= 0)
+        .then(|| unsafe { <OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(raw) })
+}
+
+/// The pid a pidfd names, from its `Pid:` line in `/proc/self/fdinfo`, `-1`
+/// once the process is gone.
+fn pidfd_pid(pidfd: &OwnedFd) -> Option<i32> {
+    std::fs::read_to_string(format!("/proc/self/fdinfo/{}", pidfd.as_raw_fd()))
+        .ok()?
+        .lines()
+        .find_map(|line| line.strip_prefix("Pid:"))
+        .and_then(|value| value.trim().parse().ok())
 }
 
 /// Returns the connected end to blocking mode. Everything after the dial waits

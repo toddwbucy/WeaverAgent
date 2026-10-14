@@ -1034,8 +1034,9 @@ thread_local! {
 }
 
 /// **The coordination socket dialed, its peer judged the agent's worker**
-/// (#98; Spec section 7): the expected uid is the worker account's, resolved
-/// by name as the start step resolves it. An account that does not resolve
+/// (#98, #140; Spec section 7): the expected uid is the worker account's,
+/// resolved by name as the start step resolves it, and the listening process
+/// must hold the run lock in the agent's run directory. An account that does not resolve
 /// stands no worker, and the dial is refused as one nothing could answer.
 fn dial_worker(config: &ServiceConfig) -> Result<channel::Coordination, channel::ChannelFault> {
     let identity = inventory::identity_for(&AgentName(config.agent.clone()));
@@ -1056,7 +1057,11 @@ fn dial_worker(config: &ServiceConfig) -> Result<channel::Coordination, channel:
             return Err(channel::ChannelFault::NotDialable);
         }
     };
-    channel::dial(&config.coordination_socket(), worker_uid)
+    channel::dial(
+        &config.coordination_socket(),
+        worker_uid,
+        &config.run_directory(),
+    )
 }
 
 /// **Observes the run through the harness's own word**, per Spec section 3

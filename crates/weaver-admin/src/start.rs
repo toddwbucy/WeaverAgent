@@ -526,23 +526,37 @@ pub fn holders(run_directory: &Path) -> Vec<Holder> {
         if pid == own {
             continue;
         }
-        let Ok(descriptors) = std::fs::read_dir(process.path().join("fd")) else {
-            continue;
-        };
-        for descriptor in descriptors.flatten() {
-            let Some(fd) = descriptor
+        found.extend(holding_descriptors(pid, target).map(|fd| Holder { pid, fd }));
+    }
+    found
+}
+
+/// **Whether one process holds the run lock's description**, per section 7,
+/// the dial's peer: the holder scan above, for one pid. A lock file that
+/// does not stat, or a descriptor table that does not read, holds nothing.
+pub fn holds_run_lock(run_directory: &Path, pid: i32) -> bool {
+    let Ok(lock) = std::fs::metadata(run_directory.join("run.lock")) else {
+        return false;
+    };
+    holding_descriptors(pid, (lock.dev(), lock.ino()))
+        .next()
+        .is_some()
+}
+
+/// The numbers in one process's table whose description holds the lock on
+/// `target`.
+fn holding_descriptors(pid: i32, target: (u64, u64)) -> impl Iterator<Item = i32> {
+    std::fs::read_dir(format!("/proc/{pid}/fd"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|descriptor| {
+            descriptor
                 .file_name()
                 .to_str()
                 .and_then(|n| n.parse::<i32>().ok())
-            else {
-                continue;
-            };
-            if holds(pid, fd, target) {
-                found.push(Holder { pid, fd });
-            }
-        }
-    }
-    found
+        })
+        .filter(move |&fd| holds(pid, fd, target))
 }
 
 /// **Whether a descriptor holds the run lock**: it refers to the lock file,
