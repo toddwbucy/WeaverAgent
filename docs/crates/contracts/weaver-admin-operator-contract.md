@@ -184,11 +184,13 @@ rollback), which includes the wait for the agent's processes to end. **An invoca
 caller disappears**, its outcome recorded in the agent's `admin.log`, so a caller that
 gives up reads the outcome from the next `show`.
 
-**The agent's lifetime is bound to its admin-con**, on the operator's ruling of
-2026-10-03 on #72, enforced by the containment the invoker runs in, and the program
-depends on no supervisor for it. Each agent has its own admin-con, and stopping that
-admin-con stops its agent and only its agent: the management plane going down may mean
-it was taken over, so the agent fails closed with it. A dropped invocation is not a
+**The agent's lifetime is bound to the containment it was loaded in**, on the operator's
+rulings of 2026-10-03 on #72 and of 2026-10-14 on #111: admin-con's when admin-con loads
+it, or the delegated containment a direct load runs in. It is enforced by that
+containment, and the program depends on no supervisor for it. Each agent has its own
+admin-con, and stopping that admin-con stops an agent it loaded and only that agent: the
+management plane going down may mean it was taken over, so the agent fails closed with
+it. A long-lived agent is loaded through admin-con. A dropped invocation is not a
 stopped admin-con, and still runs to completion, per the bound above. Three consequences
 are the invoker's to build against: an orderly stop of admin-con unloads its agent
 first, a kill is an unclean stop whose next load resets to the latest save point, and
