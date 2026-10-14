@@ -4202,5 +4202,132 @@ class DocsMirrorTests(unittest.TestCase):
             ])
 
 
+# What cargo prints, in the shapes the stand-in below replays: a crate that
+# does not compile (diagnostics on stderr, no `test result` line, 101), and
+# the summary lines of a run, one per test binary.
+CARGO_COMPILE_FAILURE = (
+    "   Compiling weaver-harness v0.1.0\n"
+    "error[E0425]: cannot find value `undeclared` in this scope\n"
+    "  --> crates/weaver-harness/src/lifecycle.rs:10:5\n"
+    "error: could not compile `weaver-harness` (lib test) due to 1 previous error\n"
+)
+
+
+class CargoStepTests(unittest.TestCase):
+    """The deploy scripts' cargo steps keep cargo's output and status (#128).
+    Each step is lifted from the script as it ships and run against a
+    stand-in `cargo` that writes what cargo writes and exits as it exits.
+    Perturbation: put the old `cargo ... | grep -E '^test result' | awk`
+    back in either script's test step and the compile failure prints
+    "0 passed, 0 failed" with no diagnostic; drop the zero-total refusal and
+    a run of no tests passes; drop the build's status and a failed build
+    goes on."""
+
+    STAND_IN = """#!/bin/sh
+printf '%s' "$CARGO_STDOUT"
+printf '%s' "$CARGO_STDERR" >&2
+exit "${CARGO_EXIT:-0}"
+"""
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix="weaver-cargo-step-")
+        self.addCleanup(self.scratch.cleanup)
+        self.bin = Path(self.scratch.name) / "bin"
+        self.bin.mkdir()
+        cargo = self.bin / "cargo"
+        cargo.write_text(self.STAND_IN)
+        cargo.chmod(0o755)
+        self.tmp = Path(self.scratch.name) / "tmp"
+        self.tmp.mkdir()
+
+    def step(self, script, name, stdout="", stderr="", status=0):
+        # Each step starts from an empty directory, so one subtest's kept
+        # log never counts in another's.
+        for left in self.tmp.iterdir():
+            if left.is_file():
+                left.unlink()
+        text = (DEPLOY / script).read_text()
+        body = "\n".join([
+            "set -euo pipefail",
+            "die() { printf '\\nREFUSED: %s\\n' \"$*\" >&2; exit 1; }",
+            shell_function(text, name),
+            name,
+        ])
+        env = dict(os.environ,
+                   PATH=f"{self.bin}:{os.environ['PATH']}",
+                   BUILT=str(self.tmp / "release"),
+                   MEMBER_FEATURES="weaver-harness/pyworker",
+                   FEATURES="weaver-spu/cuda",
+                   CARGO_STDOUT=stdout, CARGO_STDERR=stderr,
+                   CARGO_EXIT=str(status))
+        return subprocess.run(["bash", "-c", body], env=env,
+                              capture_output=True, text=True, timeout=30)
+
+    def kept_logs(self):
+        return sorted(log for log in self.tmp.iterdir() if log.is_file())
+
+    def test_a_crate_that_does_not_compile_refuses_with_its_diagnostics(self):
+        for script in ("update-stack.sh", "bootstrap-stack.sh"):
+            with self.subTest(script=script):
+                ran = self.step(script, "run_tests", stdout="   Compiling weaver-trace v0.1.0\n",
+                                stderr=CARGO_COMPILE_FAILURE, status=101)
+                self.assertNotEqual(ran.returncode, 0)
+                self.assertIn("error[E0425]", ran.stderr)
+                self.assertIn("cargo exited 101", ran.stderr)
+                logs = [log for log in self.kept_logs() if log.name == "weaver-deploy-tests.log"]
+                self.assertEqual(len(logs), 1, logs)
+                self.assertIn(str(logs[0]), ran.stderr, "the refusal names the kept log")
+                self.assertIn("could not compile", logs[0].read_text())
+                logs[0].unlink()
+
+    def test_a_failed_test_refuses_and_a_clean_run_passes_and_removes_its_log(self):
+        failed = ("test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s\n"
+                  "test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s\n")
+        clean = ("test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s\n"
+                 "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s\n")
+        for script in ("update-stack.sh", "bootstrap-stack.sh"):
+            with self.subTest(script=script):
+                ran = self.step(script, "run_tests", stdout=failed, status=101)
+                self.assertNotEqual(ran.returncode, 0)
+                self.assertIn("6 passed, 1 failed", ran.stdout)
+                for log in self.kept_logs():
+                    log.unlink()
+                ran = self.step(script, "run_tests", stdout=clean)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                self.assertIn("7 passed, 0 failed", ran.stdout)
+                self.assertEqual(self.kept_logs(), [], "a clean run keeps no log")
+
+    def test_a_run_of_no_tests_refuses(self):
+        for script in ("update-stack.sh", "bootstrap-stack.sh"):
+            with self.subTest(script=script):
+                ran = self.step(script, "run_tests", stdout="   Compiling weaver-trace v0.1.0\n")
+                self.assertNotEqual(ran.returncode, 0)
+                self.assertIn("0 passed", ran.stderr)
+                for log in self.kept_logs():
+                    log.unlink()
+
+    def test_a_failed_build_refuses_with_its_diagnostics(self):
+        ran = self.step("bootstrap-stack.sh", "run_build", stderr=CARGO_COMPILE_FAILURE, status=101)
+        self.assertNotEqual(ran.returncode, 0)
+        self.assertIn("error[E0425]", ran.stderr)
+        self.assertIn("the build failed (cargo exited 101)", ran.stderr)
+        kept = self.kept_logs()
+        self.assertEqual(len(kept), 1, kept)
+        self.assertIn(str(kept[0]), ran.stderr, "the refusal names the kept log")
+        kept[0].unlink()
+        ran = self.step("bootstrap-stack.sh", "run_build",
+                        stdout="warning: unused variable: `x`\n")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertEqual([log for log in self.kept_logs() if log.name == "weaver-deploy-build.log"], [],
+                         "a clean build keeps no log")
+
+    def test_no_cargo_step_pipes_cargo_into_a_filter(self):
+        for script in ("update-stack.sh", "bootstrap-stack.sh"):
+            with self.subTest(script=script):
+                for number, line in enumerate((DEPLOY / script).read_text().splitlines(), 1):
+                    if re.match(r"\s*(NVCC_CCBIN=\S+\s+)?cargo (test|build)\b", line):
+                        self.assertNotRegex(line, r"\|\s*(grep|awk)", f"{script}:{number}")
+
+
 if __name__ == "__main__":
     unittest.main()
