@@ -196,8 +196,14 @@ pub struct StateSeam {
     /// is still owed to no ask, so the next line read is discarded where it
     /// is that rest, and the retry's answer is never read behind a suffix
     /// that would miss it. A line that parses whole is no rest: every frame
-    /// is one JSON object, and a proper suffix of one never parses, so the
-    /// part drained was never finished and the line is the next answer.
+    /// is one JSON object on one line, and a proper suffix of an object's
+    /// text either ends inside a string (it began inside one, and the quotes
+    /// after it are odd in number) or ends on a closer it never opened, so
+    /// the part drained was never finished and the line is the next answer.
+    /// Were a line to parse here anyway, it is judged as any line: a
+    /// snapshot-protocol frame of another ask is dropped by its number or
+    /// kind, and anything else misses the ask it lands in, never passing as
+    /// an answer the member did not send.
     discarding: bool,
     /// **The next snapshot ask's ordinal**, per residency from 1 (Codex on
     /// #94, round 10): the ask carries it, the member echoes it on the answer

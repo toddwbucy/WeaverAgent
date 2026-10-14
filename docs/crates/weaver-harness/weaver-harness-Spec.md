@@ -2360,9 +2360,12 @@ its next ask the seam drains, without blocking, whatever lines or part of one th
 sent late, discarding them and saying so in one diagnostic line with the count, the
 resync for every ask; a part of a line read inside the missed wait is held for that
 drain, and a drain that ends inside a line discards the rest of it through its newline
-when it arrives, before any line is read, unless what arrives parses whole, every frame
-being one JSON object of which no proper suffix parses, so a part never finished costs
-no answer (#140); **and a late answer is dropped by its number**: the retry's ask
+when it arrives, before any line is read, unless what arrives parses whole: every frame
+is one JSON object on one line, and a proper suffix of an object's text ends inside a
+string or on a closer it never opened, so a line that parses is no remainder and a part
+never finished costs no answer. A line that parsed here anyway is judged as any line, a
+snapshot-protocol frame of another ask dropped by its number or kind and anything else
+missing the ask it lands in (#140); **and a late answer is dropped by its number**: the retry's ask
 carries the next ordinal, and an answer of either kind, the `snapshot` answer or the
 `finished` answer, that arrives past the drain carrying the ordinal of an ask before is
 dropped and said while the wait goes on inside the bound, so a
