@@ -170,11 +170,17 @@ What it does, so the log can say which step a failure was at:
    --features weaver-harness/pyworker,weaver-state/sqlite`. The selection is the
    crates the stack runs, with the store engine's feature on, so the engine an agent
    elects is tested before it is installed. A
-   workspace-wide `cargo test --locked` also compiles and passes (#37).
+   workspace-wide `cargo test --locked` also compiles and passes (#37). Cargo's output
+   goes to a log in the target directory, named as the step begins: a crate that does
+   not compile, a failed test or no test at all refuses, printing the first lines cargo
+   names as the cause and the log's last 60, and naming the log, which is kept (#128).
+   `update-stack.sh`'s test step does the same.
 4. `cargo build --release --locked --workspace --features
    weaver-spu/cuda,weaver-harness/pyworker,weaver-state/sqlite`. The engine is named,
    though it is the default, or the member refuses an agent electing it at load
-   (measured 2026-09-11).
+   (measured 2026-09-11). The CUDA host compiler is `NVCC_CCBIN`, defaulted as
+   `update-stack.sh` defaults it. A build that fails refuses the same way, never going on
+   to install what an earlier build left in the target directory (#128).
 5. Installs the seven members to `<prefix>/bin` (root, 0755), `weaver-trace-relay`
    beside the worker where admin finds it, and the `libggml*` and `libllama*` objects
    to `<prefix>/lib`, from llama-cpp-sys's `out/lib` under the target's `build/`

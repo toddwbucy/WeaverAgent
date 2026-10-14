@@ -207,15 +207,68 @@ plan "built into    $BUILT"
 # weaver-analysis left the workspace on 2026-09-30, so the selection is the
 # three members whose tests reach the seams this install serves.
 say "test"
-cargo test --release --locked \
-  -p weaver-trace -p weaver-harness -p weaver-state \
-  --features "$MEMBER_FEATURES" 2>&1 | grep -E '^test result' | \
-  awk '{p+=$4; f+=$6} END {printf "   %d passed, %d failed\n", p, f; exit (f>0)}' \
-  || die "tests failed; read them with: cargo test --release --locked -p weaver-trace -p weaver-harness -p weaver-state --features $MEMBER_FEATURES"
+# **Cargo's output goes to a log, never through a pipe** (#128): a crate
+# that fails to compile prints no `test result` line, and the old
+# `cargo | grep | awk` answered "0 passed, 0 failed", took grep's status under
+# `pipefail` rather than cargo's, and discarded every diagnostic. Cargo's own
+# status is kept, the counts are read from the log whole, and a failure, a
+# failed test or no test at all prints the first lines cargo names as the
+# cause and the log's last 60 on stderr, and refuses naming the log, which is
+# kept; a clean run removes it. The log is the operator's, beside cargo's own
+# output in the target directory, named by this run's pid so runs sharing a
+# target directory never write each other's, and named as the step begins so
+# a long step can be followed.
+run_tests() {
+  local log="${BUILT%/release}/weaver-deploy-tests-$$.log" rc=0 totals passed failed
+  mkdir -p -- "${BUILT%/release}" || die "cannot make the target directory ${BUILT%/release} for the test step's log"
+  printf '   output: %s\n' "$log"
+  cargo test --release --locked \
+    -p weaver-trace -p weaver-harness -p weaver-state \
+    --features "$MEMBER_FEATURES" >"$log" 2>&1 || rc=$?
+  totals=$(awk '/^test result/ {p+=$4; f+=$6} END {print p+0, f+0}' "$log") \
+    || die "cannot read the test step's log $log"
+  passed=${totals% *}
+  failed=${totals#* }
+  printf '   %d passed, %d failed\n' "$passed" "$failed"
+  if [ "$rc" -ne 0 ] || [ "$failed" -gt 0 ] || [ "$passed" -eq 0 ]; then
+    # The cause first, where cargo names one, then the run's end: a long
+    # captured output can push the panic or the first error out of the tail.
+    grep -m 12 -E -A 6 '^(error(\[|:)|failures:|---- )|panicked at' -- "$log" >&2 || true
+    printf '   ...\n' >&2
+    tail -n 60 -- "$log" >&2
+    die "the tests did not pass (cargo exited $rc, $passed passed, $failed failed); the whole output is kept in $log"
+  fi
+  rm -f -- "$log"
+}
+run_tests
 
 # ---------------------------------------------------------------- 3. build
 say "build"
-cargo build --release --locked --workspace --features "$FEATURES" 2>&1 | grep -E '^(error|warning: unused)' -A4 || true
+# **A build that fails refuses with its diagnostics** (#128): its status was
+# discarded behind `| grep ... || true`, and the binary check below then
+# passed on whatever an earlier build left in the target directory. The
+# output goes to a log as the test step's does; a clean build prints its
+# unused-code warnings from it as before. **The CUDA host compiler is
+# update-stack.sh's default too**, the two scripts building one workspace:
+# a failed build no longer passing on stale binaries, a host compiler the
+# kernels refuse would otherwise stop a bootstrap the update builds.
+run_build() {
+  local log="${BUILT%/release}/weaver-deploy-build-$$.log" rc=0
+  printf '   output: %s\n' "$log"
+  NVCC_CCBIN=${NVCC_CCBIN:-/usr/bin/g++-15} \
+    cargo build --release --locked --workspace --features "$FEATURES" >"$log" 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    # The cause first, where cargo names one, then the run's end: a long
+    # captured output can push the panic or the first error out of the tail.
+    grep -m 12 -E -A 6 '^(error(\[|:)|failures:|---- )|panicked at' -- "$log" >&2 || true
+    printf '   ...\n' >&2
+    tail -n 60 -- "$log" >&2
+    die "the build failed (cargo exited $rc); the whole output is kept in $log"
+  fi
+  grep -E '^(error|warning: unused)' -A4 -- "$log" || true
+  rm -f -- "$log"
+}
+run_build
 for b in $MEMBERS; do [ -x "$BUILT/$b" ] || die "$BUILT/$b was not built"; done
 # `sed -n 1p` reads the whole listing, where `head -1` closed the pipe on
 # `ls` and `pipefail` with `set -e` ended the script; `|| true` lets no match
