@@ -475,12 +475,13 @@ agent's reachability, observed through closure and authored to the stream as the
 `fault` event, per the fault-carrier ruling of 2026-08-01, the operator's tooling
 keying on it there. A tool execution open when the gate dies has no answer coming: the
 harness closes it `Killed { by: fault }`, **its outcome indeterminate and never re-run
-automatically**. The harness first ends every process still in the execution's
-containment, or, where it cannot, ends service with that failure recorded and leaves
-the rest to admin's run end (#111, `weaver-admin-Spec` section 6.1 stating the
-mechanism, with its one exception). So nothing of the command left in its containment
-runs on past either ending, though the command may have completed before the end
-reached it (`weaver-admin-Spec` section 3, the organ-death table, and Codex on #109,
+automatically**. The harness first delivers an end to every process still in the
+execution's containment, or, where it cannot, ends service with that failure recorded
+and leaves the rest to admin's run end (#111, `weaver-admin-Spec` section 6.1 stating the
+mechanism and its stated exceptions). Where the end was delivered, nothing of the
+command left in its containment does further work. Where it could not be, the command
+may run on until the run's end. Either way the command may have completed before the
+end reached it (`weaver-admin-Spec` section 3, the organ-death table, and Codex on #109,
 round 43). **The gate ends every process still in each execution's containment at
 every end of it**, a command that left its process group or its session included, or,
 where it cannot, exits with the execution unanswered (section 2, `weaver-gate-Spec`

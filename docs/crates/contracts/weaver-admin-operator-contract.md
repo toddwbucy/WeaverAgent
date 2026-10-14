@@ -316,7 +316,9 @@ section 6.1) and the publication after the answer come on top, their total state
 - **Alone** (S2, S3, S9): the gate closes at once
   and every request it holds is recorded refused and its connection closed; the turn in
   flight is cancelled and recorded as a stop for the unload; no wind-down runs; the
-  leave save point is taken as at any unload. It prints `Unloaded`. Where the save point
+  leave save point is taken as at any unload. It prints `Unloaded`, or, where the agent's
+  processes do not all end within the containment bound, refuses `WorkerWouldNotExit`,
+  publishing nothing and answering no state. Where the save point
   published, the marker closes and the next load records no reset; where it could not
   be taken, the marker stands `Forced` and the next load records `ForcedUnload`; where it
   was taken and did not publish, the force has still ended the run, but it refuses
@@ -394,17 +396,21 @@ file's bytes, as the kernel serves them, digest to the line; durability on the d
 rests on the syncs `weaver-admin-Spec` section 6 makes before it. **A member's room past 4096 finished
 names refuses `BoundaryUnverified`** at every verb that publishes (a `load`, an `unload`,
 a `save-point`), until the operator clears it (`weaver-admin-Spec` section 6; #140,
-S16). **Containment refuses four ways** (`weaver-admin-Spec` section 6.1, #111). A
+S16). **Containment refuses in these ways** (`weaver-admin-Spec` section 6.1, #111). A
 `load` on a box without a containment that admits a child made by root and ends all of
 its processes at once (the floor is `weaver-admin-Spec` section 6.1's), or from an
 invoker whose containment is not delegated or admits no child, refuses
 `BoundaryUnverified`, naming what is missing. A `load` meeting processes of an ended run
 still standing refuses `AgentRunning`, naming them, for `unload` to end. An `unload` or
-`force-unload` whose agent's processes do not all end within the Spec's bound refuses
+`force-unload` whose agent's processes do not all end within the containment bound refuses
 `WorkerWouldNotExit`, naming them, and answers no state. Any verb after a load that
 finds, in the recorded place, a containment other than the one that load made refuses
 `BoundaryUnverified`, naming both, and acts on nothing. A recorded containment found
-gone was already removed, so the verb clears the stale record and goes on. `force-unload` takes the leave save point as
+gone was already removed, so the verb clears the stale record and goes on. A record of
+the containment that does not read refuses `BoundaryUnverified` too, and so does a load
+that finds a containment where the agent's would be made that is not root's. A run's
+end whose containment cannot be removed refuses `BoundaryUnverified`, naming it, and
+publishes nothing. `force-unload` takes the leave save point as
 `unload` does and ends the run whether or not it can be taken, refusing
 `SavePointNotTaken` naming `published` where it was taken and did not publish, per
 section 4.1. A `stop`

@@ -591,16 +591,14 @@ or forks anything**, so no organ inherits a writable descriptor to root's lock f
 write end that would keep the relay alive, and no window exists in which one could. The
 organs never hold the run lock, being bound to the worker by their death signal instead.
 **The tool executions are bound by the agent's cgroup, not by a death signal**
-(`weaver-admin-Spec` section 6.1, #111): the worker starts in the agent's `run/` cgroup and
-every organ inherits it, and the gate runs each shell in the `tools/` beside it. **The
-worker kills `tools/` whole when it reads the gate's death**, writing `tools/cgroup.kill`
-and waiting for it to empty within the kill's bound before it closes an open execution
-`Killed { by: fault }`, and **again at its unwind, before it answers `Left`**, so nothing
-still in an execution's cgroup outlives the gate or the leave. **A `tools/` that will not
-empty within the kill's bound ends service**, as an organ death the record cannot hold
-ends it (section 4, a latched record): the worker unwinds and never serves on with it
-populated. Its own cgroup it cannot kill, being inside
-it, and admin's run end does.
+(#111): the worker starts in the agent's `run/` cgroup and every organ inherits it, and
+the gate runs each shell in the `tools/` beside it. **`weaver-admin-Spec` section 6.1
+states the mechanism, the containment bound and every path, and this section carries
+only this crate's part**: the worker kills `tools/` when it reads the gate's death and
+again at its unwind, before it answers `Left`, waiting and ending service as 6.1 says,
+a `tools/` that will not empty ending service as an organ death the record cannot hold
+ends it (section 4, a latched record). Its own cgroup it cannot kill, being inside it,
+and admin's run end does.
 **An empty number is skipped and said**: a worker started by hand, or by a stack from
 before the start step, holds nothing at 9 and serves, and it names the absence on its
 standard error, as it names a 9 holding something other than a regular file, so a start
@@ -2238,8 +2236,8 @@ forced unload (sole); S2, S3 and S9 x force-unload). A `Leave` with `forced` tru
 admin's `force-unload`, has this crate interrupt a tool call out as item 2 does, then
 lower the gate at once from its raised position, **the lower's bound running from the
 interrupt and never waiting on the interrupted execution's end**, past which the gate is
-reaped as at its death and the call closed `Killed { by: fault }` (`weaver-admin-Spec`
-section 6.1) (**a gate step this crate skips where
+killed (`SIGKILL`) and reaped as at its death and the call closed `Killed { by: fault }`
+(`weaver-admin-Spec` section 6.1) (**a gate step this crate skips where
 the gate is already lowered, S9, or absent, a diagnostic binding: it sends no
 `ToolInterrupt`, `Quiesce` or `Lower` there, `Lower` being once only, and from S9, no
 turn running, the forced leave goes straight to the save point**; Codex on #109, round 47), with no quiesce and no drain, reading

@@ -125,12 +125,13 @@ admin refuses.
 (#111, `weaver-admin-Spec` section 6.1 stating the mechanism). Admin starts the worker
 inside the agent's containment, and every process the worker makes stays inside it.
 Nothing on this channel names the containment. Each party's obligation:
-- **The harness** ends every process still in an open tool execution's containment when
-  the gate dies, and again at its unwind, before `Left`, or, where it cannot, ends
-  service with that failure recorded and leaves the rest to admin's run end. It ends
-  service too where they will not end within the Spec's bound. A process of the agent's account that moved itself out
-  of the execution's containment is admin's to end, at the run's end
-  (`weaver-admin-Spec` section 6.1, C1's exception).
+- **The harness** delivers an end to every process still in an open tool execution's
+  containment when the gate dies, and again at its unwind, before `Left`. While serving,
+  where they do not end within the containment bound, or the end cannot be delivered,
+  it ends service with that failure recorded. Inside a leave it waits on none of them.
+  What it could not end, and a process of the agent's account that moved itself out of
+  the execution's containment, is admin's to end at the run's end (`weaver-admin-Spec`
+  section 6.1, C1's two stated exceptions).
 - **Admin** ends every process of the agent at the run's end, in its conclusion under
   the invocation lock once the run lock frees, before it answers `Unloaded`. So
   `Unloaded` on this seam's far side means no process of the agent stands.
