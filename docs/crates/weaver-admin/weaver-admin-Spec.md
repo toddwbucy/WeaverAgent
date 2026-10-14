@@ -2363,7 +2363,10 @@ invoker's** (section 6, the lifetime, and the operator's ruling of 2026-10-03 on
 - **The record:** because a later verb may run from another containment (the operator's
   shell after admin-con's load), the start step records the agent's cgroup's path in
   `cgroup` in the run directory, root's and `0600`, beside `run.lock`, before its first
-  fork. Every later verb finds the cgroup through that record, never through its own
+  fork. **It is written atomically** (Codex on #161): to a temporary in the run directory,
+  synced, renamed over `cgroup`, and the run directory synced, so a crash leaves the old
+  record, the new one, or none, never a partial one. A load that meets a temporary left
+  behind removes it. Every later verb finds the cgroup through that record, never through its own
   `/proc/self/cgroup`. A record that does not read, or that names anything but a
   `weaver-<agent>` directory on the `cgroup2` mount, refuses `BoundaryUnverified`.
   **The start step never needs the record to find its own cgroup** (Codex on #161): the
@@ -2454,7 +2457,13 @@ weaver-<agent>/      root's; the agent's cgroup
     section 2), it writes `tools/cgroup.kill` and waits for it to empty before it closes
     an open execution `Killed { by: fault }` (`weaver-harness-Spec` section 2.2). Past the
     bound it closes the execution all the same, closes the turn in flight
-    `Stopped { reason: fault }`, and ends service.
+    `Stopped { reason: fault }`, and ends service. **"Closed" here means the kill was
+    delivered and the execution can do no further work, not that every process of it
+    has exited** (Codex on #161): once `cgroup.kill` has delivered `SIGKILL`, a process
+    executes no further instruction of its own and ends when its system call returns.
+    So `Killed { by: fault }`, its outcome indeterminate, is the truthful record, and no
+    turn follows it, service having ended. The run end's kill and its own bound hold
+    what remains, and past that bound the run end refuses `WorkerWouldNotExit`.
   - At its unwind, before it answers `Left`, it kills `tools/` the same way.
   - The worker cannot kill its own cgroup, being inside it.
 - **Admin's run end is the conclusion's**, under the invocation lock (section 3, the
@@ -2538,6 +2547,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | admin dies inside a run end | A4, or A1 partly removed | as left | the next `unload` or `force-unload` writes the kill again, which is idempotent, and finishes the removal |
 | admin dies inside the start step | A1 or A2 | as left | A1 is removed by the next load. A2 holds the run lock and is the S8b of section 3, ended by `unload` |
 | admin dies between the `mkdir` and the record's write | A1, no record | A1, no record | the next load's `mkdir` meets `EEXIST` at the deterministic path, finds it root's and empty, removes it and makes it afresh |
+| admin dies while writing the record | A1, a temporary record and no record (or the previous record) | as left | the next load removes the temporary, then judges the cgroup at the deterministic path as above, the rename never having exposed a partial record |
 | admin's start step, `EEXIST` on a populated cgroup | A3 | A3 | refuses `AgentRunning`, naming the processes, and kills nothing (I8) |
 | a tool command writes its own pid to `worker/cgroup.procs` (the agent's account can) | T1 | T0 or T1, the process in `worker/` | out of reach of its execution's end and of the gate's death, never out of the agent's cgroup: held by the run end |
 
