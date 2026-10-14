@@ -97,7 +97,11 @@ toddwbucy/WeaverWeb#15: sudo's `pam_session` is off for the connector's user
 and with it the agent it starts, into a containment other than the invoker's, which
 would silently break the lifetime binding of section 3. A requirement on the boundary is
 declared and checked: the invoker verifies after a load that every constituent `show`
-names sits in its own containment. No prompt, turn, task, or run
+names sits in its own containment, which since #111 means beneath its own cgroup, in the
+agent's cgroup admin makes there (`weaver-admin-Spec` section 6.1). **The invoker's
+containment must let root make a child cgroup in it** (a systemd unit's
+`Delegate=yes`), and must not be the hierarchy's root, or the load refuses
+`BoundaryUnverified`. No prompt, turn, task, or run
 crosses, per apex section 6.
 
 **At the trace door, one request line**: a byte offset on a record boundary and the
@@ -387,8 +391,8 @@ rests on the syncs `weaver-admin-Spec` section 6 makes before it. **A member's r
 names refuses `BoundaryUnverified`** at every verb that publishes (a `load`, an `unload`,
 a `save-point`), until the operator clears it (`weaver-admin-Spec` section 6; #140,
 S16). **Containment refuses three ways** (`weaver-admin-Spec` section 6.1, #111): a
-`load` on a box without cgroup v2 or `cgroup.kill` (Linux 5.14) refuses
-`BoundaryUnverified`, naming what is missing; a `load` meeting processes of an ended run
+`load` on a box without cgroup v2 or `cgroup.kill` (Linux 5.14), or from an invoker at
+the hierarchy's root, refuses `BoundaryUnverified`, naming what is missing; a `load` meeting processes of an ended run
 still standing refuses `AgentRunning`, naming them, for `unload` to end; and an `unload`
 or `force-unload` whose agent's processes do not all end within the kill's bound refuses
 `WorkerWouldNotExit`, naming them, and answers no state. `force-unload` takes the leave save point as

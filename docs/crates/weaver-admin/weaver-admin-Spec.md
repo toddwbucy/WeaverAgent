@@ -494,7 +494,7 @@ choice made in advance, for an operator who will not stand watch.
 7. The harness releases the SPU and the member (S7), authoring a `fault` for an SPU that dies in its release, and reads the recorder's depth, reporting any pressure, then authors `unload`, the run's terminal event, carrying the release outcome, drains the writer's queue to the stream, and answers `Left{save_point, forced}`. **The definition of `forced`**, the one every other document cites: `forced` on `unload` and on `Left` is the leave's state at its end, never the directive it began as, true where the leave was directed forced, joined, a declared bound passing, or a dead gate or SPU (a `force-unload` directing it, one joining it, the bounds below, or ruling (A) of the organ-death table), and false for a leave that stayed graceful; where a bound or a dead organ turned it, the cause stays the graceful caller's and no `forced_by` is named.
 8. This crate concludes (the conclusion, below), as its outcome table gives for the `Left` answered: S0 where the marker closes `Closed`, S0d where it stays `Open`.
 
-**The conclusion: any caller answered `Left` concludes**, on the operator's ruling of 2026-10-09 recorded on #1. Every admin invocation the harness answers with the leave's `Left` concludes the same way, whichever way it came to be answered: the graceful holder, a sole force, or a force that joined. **It takes the invocation lock first**, the holder already holding it and a joined force waiting behind the holder, and, holding it, reads the run's marker by section 4's marker-write rule: where the rule leaves the marker alone, it changes nothing and prints `Unloaded` once the run lock is free. Otherwise, still holding the invocation lock, it waits for the run lock to free (S8a), so no `load` can start a new run in the gap, then publishes the room, the reported save point as reported where its `event_run` is the run the marker stands open on and as recovered otherwise (S17, the operator's ruling of 2026-10-14 on #140), and acts as the row below for the `Left` it was answered. **A marker closed for a run is never rewritten**, so the conclusion is idempotent per run, and the join is only a second way a caller comes to be answered `Left`.
+**The conclusion: any caller answered `Left` concludes**, on the operator's ruling of 2026-10-09 recorded on #1. Every admin invocation the harness answers with the leave's `Left` concludes the same way, whichever way it came to be answered: the graceful holder, a sole force, or a force that joined. **It takes the invocation lock first**, the holder already holding it and a joined force waiting behind the holder, and, holding it, reads the run's marker by section 4's marker-write rule: where the rule leaves the marker alone, it changes nothing and prints `Unloaded` once the run lock is free. Otherwise, still holding the invocation lock, it waits for the run lock to free (S8a), so no `load` can start a new run in the gap, then kills and removes the agent's cgroup (section 6.1, the run end), then publishes the room, the reported save point as reported where its `event_run` is the run the marker stands open on and as recovered otherwise (S17, the operator's ruling of 2026-10-14 on #140), and acts as the row below for the `Left` it was answered. **A marker closed for a run is never rewritten**, so the conclusion is idempotent per run, and the join is only a second way a caller comes to be answered `Left`.
 
 **The conclusion's outcomes, exhaustive.** Every `Left` the harness can answer (`weaver-admin-harness-contract` section 3, the leave) has one row; a `Left` the table lacks is a defect (section 10). **The printed column holds for the leave's own caller and a force that joined it**: each waits for the run lock before it prints, so `Unloaded` is true, and a failed publication refuses whichever met it. The rollback's `Left` reaches the load invocation alone, which prints its own refusal.
 
@@ -988,11 +988,13 @@ having been carried where no table shows it, such as a descriptor in flight on a
 **An agent reported unloaded while any constituent still runs is the one report this
 verb must never produce**: where the lock is still held after the escalation, the verb
 refuses `WorkerWouldNotExit` and answers no state, which the rollback of this section
-records as an act it could not undo, per charter section 5. **Once the lock is free the
-escalation kills the agent's cgroup whole** (section 6.1, the run end), so what no
-holder scan names, an organ outliving the worker by its death signal's instant or a tool
-that left its execution, is ended too, and a cgroup that does not empty within the
-kill's bound refuses `WorkerWouldNotExit` the same way.
+records as an act it could not undo, per charter section 5. **The escalation writes no
+cgroup**: its lock-free phase ends the run lock's holders, and the conclusion that
+follows it, under the invocation lock and the marker-write rule, kills the agent's
+cgroup whole (section 6.1, the run end). So what no holder scan names, an organ outliving
+the worker by its death signal's instant or a tool that left its execution, is ended
+too, and a cgroup that does not empty within the kill's bound refuses
+`WorkerWouldNotExit` the same way.
 
 **A held lock after a clean leave is the case this clause exists for, and a free lock is
 the ordinary end.** The leave the previous step confirmed causes the worker to exit, the
@@ -1728,8 +1730,9 @@ containment the invocation ran in, so where admin-con runs as a service the work
 member and the relay share its group, and stopping admin-con stops its agent and only
 its agent, each agent having its own. **That is the intended behaviour and not a leak**:
 the management plane going down may mean it was taken over, so the agent fails closed
-with it. This crate moves no process into a group of its own and asks no supervisor to,
-so the binding is the invoker's containment's and never this crate's code. The
+with it. This crate asks no supervisor, and the one cgroup it makes, the agent's, it
+makes beneath the invoker's own (section 6.1, #111), so the binding is still the
+invoker's containment's and never this crate's code. The
 consequences are stated in `weaver-admin-operator-contract` section 3 and carried to
 toddwbucy/WeaverWeb#15: an orderly stop
 of admin-con unloads first, a kill is an unclean stop that resets the next load to the
@@ -2338,134 +2341,153 @@ process of the unit, and two cases escaped what replaced it:
 - **A tool command leaves its process group**, by a new session or a double fork, so the
   gate's group kill never reached it, even with the gate alive.
 
-Every agent runs in a cgroup of its own, killed whole by the kernel. The worker's death is
-covered too: what the worker leaves behind stays inside, and the run's end kills it.
-**This section is the one statement of the mechanism**: `weaver-gate-Spec` section 8,
-`weaver-harness-Spec` section 2.2 and the two contracts that carry a seam of it
-(`weaver-admin-harness-contract` section 2, `weaver-harness-gate-contract` section 5)
-cite it and restate none of it.
+Every agent runs in a cgroup of its own, and the kernel kills it whole. The worker's
+death is covered too: what the worker leaves behind stays inside, and the next run end
+kills it. **This section is the one statement of the mechanism.** `weaver-gate-Spec`
+section 8, `weaver-harness-Spec` section 2.2 and the contracts that carry a seam of it
+cite it and restate none of it: `weaver-admin-harness-contract` section 2,
+`weaver-harness-gate-contract` sections 2 and 5, and `weaver-admin-operator-contract`
+sections 3 and 5.
+
+**The agent's cgroup is made beneath the invoker's, so its lifetime stays the
+invoker's** (section 6, the lifetime; the operator's ruling of 2026-10-03 on #72).
+- **Where:** the start step reads the cgroup its own invocation runs in from
+  `/proc/self/cgroup`. That is the invoker's containment: admin-con's unit, the
+  operator's session, or a container's cgroup. The start step makes the agent's cgroup
+  as its child, `<invoker's cgroup>/weaver-<agent>/`, named for the agent's account.
+- **What it keeps:** stopping the invoker's containment still ends the agent, since a
+  cgroup's kill or a unit's stop reaches every descendant. So the agent fails closed
+  with admin-con as before, and one rule serves a box and a container alike (#86).
+- **Why not its own top-level cgroup:** a separate tree would have cut that binding.
+- **The record:** because a later verb may run from another containment (the operator's
+  shell after admin-con's load), the start step records the agent's cgroup's path in
+  `cgroup` in the run directory, root's and `0600`, beside `run.lock`, before its first
+  fork. Every later verb finds the cgroup through that record, never through its own
+  `/proc/self/cgroup`. A record that does not read, or that names anything but a
+  `weaver-<agent>` directory on the `cgroup2` mount, refuses `BoundaryUnverified`.
+- **The invoker's requirement:** its containment must let root make a child cgroup, as a
+  systemd unit does with `Delegate=yes`, and must not be the hierarchy's root.
+  `weaver-admin-operator-contract` section 3 carries this.
 
 **The floor: cgroup v2's unified hierarchy at `/sys/fs/cgroup`, and `cgroup.kill`
-(Linux 5.14).** The start step checks both before it makes anything. The first is a
-`cgroup2` filesystem at the mount, read by `statfs`. The second is a `cgroup.kill` file
-in the agent's cgroup once made. **Where either is missing the load refuses
-`BoundaryUnverified`, naming what is missing, and stands nothing**, failing closed, as
-the dial does on a kernel without its pidfd (section 7). An agent with no containment
-would be an agent whose tools outlive their calls, which this section exists to end.
+(Linux 5.14).** The start step checks the floor before it makes anything:
+- a `cgroup2` filesystem at the mount, read by `statfs`;
+- an invoker's cgroup that is not the hierarchy's root;
+- a `cgroup.kill` file in that invoker's cgroup, which every non-root cgroup carries on a
+  kernel that has it.
 
-**The layout.** Each agent's cgroup is `/sys/fs/cgroup/weaver/weaver-<agent>/`, named for
-the agent's account. `weaver/` is made by the first load that finds it absent, root's
-and `0755`, and is left standing for every agent. Beneath the agent's cgroup:
+**Where any is missing the load refuses `BoundaryUnverified`, naming what is missing,
+and makes nothing**, failing closed, as the dial does on a kernel without its pidfd
+(section 7). An agent with no containment would be an agent whose tools outlive their
+calls.
+
+**The layout.** Beneath the agent's cgroup:
 
 ```text
-weaver/weaver-<agent>/        root's; never delegated
-  constituents/               root's: the state member and the trace relay
-  worker/                     delegated to the agent's account
-    run/                      the worker and every organ it forks: the SPU, the classify arm, the gate
-    tools/                    the gate's shell executions
+weaver-<agent>/      root's; the agent's cgroup
+  constituents/      root's: the state member and the trace relay
+  worker/            root's directory; its cgroup.procs the agent's account's
+    run/             root's: the worker and every organ it forks (the SPU, the classify arm, the gate)
+    tools/           root's directory; its cgroup.procs and cgroup.kill the agent's account's: the shell executions
 ```
 
-- **Processes live only in leaves** (`constituents/`, `run/`, `tools/`). No controller is
-  enabled on any of them, so cgroup v2's rule against processes in an inner cgroup does
-  not bind today. The leaf layout keeps it open to a later election of a controller
-  (`pids`, `memory`) without moving a process.
-- **The delegation is `worker/` alone.** Its directory and its `cgroup.procs`,
-  `cgroup.threads` and `cgroup.subtree_control`, and all of `run/` and `tools/` with
-  their `cgroup.procs` and `cgroup.kill`, are chowned to the agent's account. That is
-  what lets the gate move its shell from `run/` to `tools/`: the kernel requires write
-  access to the common ancestor's `cgroup.procs`, here `worker/`'s. It is also what lets
-  the gate and the worker write `tools/cgroup.kill`.
-- **The member and the relay sit outside the delegation**, under their own accounts in
-  root's `constituents/`. A process of the agent's account can neither move them into a
-  cgroup it controls nor kill them through one: `cgroup.kill` signals without a
-  per-process permission check, so delegating the whole of the agent's cgroup would hand
-  its account a kill over the trace's relay.
-- **The delegated subtree is capped.** The start step sets `cgroup.max.depth` to 2 and
-  `cgroup.max.descendants` to 4 on `weaver-<agent>/`. These files are root's and are
-  never delegated. With the four cgroups above standing, the agent's account can make no
-  cgroup of its own.
-- **Root places every constituent itself.** The start step makes the cgroups and
-  delegates `worker/` before it forks anything, holding both locks (section 3, the
-  order within a load). Each constituent is placed by its own child writing `0` to its leaf's
-  `cgroup.procs`, through a descriptor opened before the fork, after the fork and before
-  the privilege drop and the exec. So no constituent runs an instruction of its own
-  outside the agent's cgroup, and every fork after inherits its parent's cgroup.
-
-**Where the cgroup lives was checked against the box on 2026-10-14.** The box mounts
-`cgroup2` at `/sys/fs/cgroup` with `nsdelegate`, as the root of a unified hierarchy.
-systemd manages its own subtrees (`init.scope`, `system.slice`, `user.slice`), and the
-root already carries cgroups systemd did not make. A root shell's invocation of admin
-sits in a session scope under `user.slice`, and admin, as root, writes beside systemd's
-tree. A process moved out of the session's scope no longer ends with that session.
-
-**In a container, the runtime's cgroup is the agent's cgroup** (#86, deployment-neutral).
-Admin makes `constituents/` and `worker/` beneath the cgroup it finds itself in, in place
-of `weaver/weaver-<agent>/`, and the runtime's end of the container is the run's end.
+- **Every directory is root's, and three files are the agent's account's**:
+  `worker/cgroup.procs`, `tools/cgroup.procs` and `tools/cgroup.kill`. That is exactly
+  what the gate's move of a shell into `tools/`, and the gate's and the worker's kill of
+  `tools/`, need: the kernel allows a migration to a writer of both the destination's
+  `cgroup.procs` and the common ancestor's, here `worker/`'s. Owning no directory, the
+  agent's account can neither make nor remove a cgroup, nor change any other interface
+  file (`cgroup.type`, `cgroup.subtree_control`, `run/cgroup.procs`, `run/cgroup.kill`).
+- **The member and the relay sit outside `worker/`**, under their own accounts, in
+  root's `constituents/`. `cgroup.kill` signals without a per-process permission check,
+  so a kill the agent's account could write over them would be a kill over the trace's
+  relay. No file of `constituents/` is the agent's.
+- **Processes live only in leaves**, `constituents/`, `run/` and `tools/`. No controller
+  is enabled on any of them, so cgroup v2's rule against processes in an inner cgroup
+  does not bind today.
+- **Root places every constituent itself.** The start step makes the cgroups, sets the
+  three files' owner and writes the record before it forks anything, holding both locks
+  (section 3, the order within a load). Each constituent is placed by its own child
+  writing `0` to its leaf's `cgroup.procs`, through a descriptor opened before the fork,
+  after the fork and before the privilege drop and the exec. So no constituent runs an
+  instruction of its own outside the agent's cgroup, and every fork after inherits its
+  parent's cgroup.
+- **The gate starts each shell directly in `tools/`**, by `clone3` with
+  `CLONE_INTO_CGROUP` (Linux 5.7, beneath the floor) on a descriptor of `tools/`. So no
+  instant exists in which a shell stands outside `tools/` while the gate or the worker
+  may already have killed it and read it empty.
 
 **Who does what, and when.**
 
 - **The gate**, at each execution (`weaver-gate-Spec` section 8):
-  - The shell's child writes `0` to `tools/cgroup.procs` before it execs the shell, so
-    the command starts inside `tools/`.
-  - At every end the gate writes `tools/cgroup.kill`, then waits for `tools/cgroup.events`
-    to read `populated 0` before it answers. Every end means the shell's exit, the clock,
-    a cancel, an interrupt and the channel's closure.
+  - The shell is born in `tools/`.
+  - At every end the gate writes `tools/cgroup.kill`, then waits for
+    `tools/cgroup.events` to read `populated 0` before it answers. Every end means the
+    shell's exit, the clock, a cancel, an interrupt and the channel's closure.
   - The kill replaces the process-group signal: it reaches a command that left its group
     or its session, and leaves nothing holding the pipes.
   - Executions are serial (`weaver-gate-Spec` section 8), so `tools/` holds one
     execution's processes at a time, and one leaf killed at every end is a per-execution
     cgroup without the cost of making and removing one per call.
+  - A write to `tools/cgroup.kill` that fails is the machinery's: the gate answers
+    `Errored` and exits, the gate's death below.
 - **The worker**:
   - When it reads the gate's death (the channel's closure, `weaver-organ-channel`
     section 2), it writes `tools/cgroup.kill` and waits for it to empty before it closes
     an open execution `Killed { by: fault }` (`weaver-harness-Spec` section 2.2).
-  - At its unwind, before it answers `Left`, it kills `tools/` the same way, so an
-    execution the leave interrupted holds nothing past the leave.
+  - At its unwind, before it answers `Left`, it kills `tools/` the same way.
   - The worker cannot kill its own cgroup, being inside it.
-- **Admin's run end**:
-  - **Where:** `unload`'s conclusion, `force-unload`'s, the escalation (S11) and a load's
-    rollback.
+- **Admin's run end is the conclusion's**, under the invocation lock (section 3, the
+  conclusion):
+  - **Where:** `unload`'s conclusion, `force-unload`'s, a joined force's conclusion after
+    its escalation, the rollback's, and `unload` or `force-unload` over an ended run
+    (S0d).
   - **When:** once the run lock is free, so the member and the relay have ended on their
-    own and no constituent is cut short mid-write. For the escalation, after it has
-    ended the lock's holders.
-  - **The kill:** admin writes `cgroup.kill` on `weaver-<agent>/` and waits for it to
-    empty.
-  - **The removal:** admin removes the four cgroups and the agent's own, deepest first,
+    own and no constituent is cut short mid-write.
+  - **The marker rule:** it follows section 4's marker-write rule as the conclusion
+    does. A conclusion that leaves the marker alone for another run, a load having taken
+    the lock between, leaves that run's cgroup alone too.
+  - **Never lock-free:** the escalation's lock-free phase ends the run lock's holders
+    and never writes a cgroup.
+  - **The kill and the removal:** admin writes `cgroup.kill` on `weaver-<agent>/` and
+    waits for it to empty. It then removes `run/`, `tools/`, `worker/`, `constituents/`
+    and `weaver-<agent>/`, deepest first, an `ENOENT` read as removed, then the record,
     and only then publishes, writes the marker and prints.
   - **The record:** a kill that found processes still standing is said in `admin.log`
     with their pids, the one record that something of the run outlived its leave.
-  - **`Unloaded` means nothing of the agent stands:** the run lock free and the agent's
-    cgroup gone.
-- **Admin's start**:
-  - **An empty cgroup:** one left standing by an invocation that died after its kill is
-    removed and made afresh, so its delegation is this load's.
+- **Admin's start:**
+  - **An empty cgroup:** a cgroup the record names that stands empty, left by a crash
+    with nothing still running or by an invocation that died inside its removal, is
+    removed with its record and made afresh.
   - **A populated cgroup with the run lock free** (the run's leftovers after a crash):
     the load refuses `AgentRunning`, naming the processes, and kills nothing, a load
-    never ending a run (I8). `unload` and `force-unload` end it by the run-end kill.
+    never ending a run (I8). `unload` and `force-unload` end it by the run end.
 
-**The kill's bound: 5 seconds for `populated 0` after a `cgroup.kill`**, this Spec's
-election, provisional and measured like section 6's. `SIGKILL` cannot be caught, so only
-a process in an uninterruptible sleep holds a cgroup past it.
+**The kill's bound: 30 seconds for `populated 0` after a `cgroup.kill`**, this Spec's
+election, provisional and measured like section 6's. A killed process stays counted
+until its exit has released its files and memory, and an SPU's device context is among
+them, which can take seconds; a process in an uninterruptible sleep can hold it longer.
 - **At the gate:** a `tools/` still populated past the bound ends the gate, which exits.
-  The harness then reads a gate's death as after any (`weaver-harness-gate-contract`
-  section 5), and the worker's kill and the run end hold what remains.
+  The harness then reads a gate's death as it reads any other
+  (`weaver-harness-gate-contract` section 5), and the worker's kill and the run end hold
+  what remains.
 - **At the worker:** past the bound, the worker serves on, and the run end holds what
   remains.
 - **At admin:** past the bound, admin refuses `WorkerWouldNotExit`, naming the pids, and
-  answers no state, an agent reported unloaded while any process of it still runs being
-  the report this crate never makes (section 3).
+  answers no state, the cgroup and its record left for the next `unload`. An agent
+  reported unloaded while any process of it still runs is the report this crate never
+  makes (section 3).
 
 **The state table.** One per agent, for the agent's cgroup (`A`) and its `tools/` leaf
 (`T`), with the events each actor may cause.
 
 | State | Meaning |
 |---|---|
-| A0 | absent |
-| A1 | standing, empty, delegated: the start step's own, before its first fork |
+| A0 | absent, no record |
+| A1 | standing, empty, no run: the start step's own before its first fork, a crash's after nothing of it ran on, or an invocation's that died inside its removal |
 | A2 | populated, the run lock held: a run stands |
 | A3 | populated, the run lock free: a run's leftovers after a crash |
 | A4 | killed, not yet empty: inside a run end's bound |
-| A5 | empty after a run end: removed at once, back to A0 |
 | T0 | `tools/` empty |
 | T1 | one execution's processes in `tools/` |
 | T2 | `tools/` killed, not yet empty: inside the gate's or the worker's bound |
@@ -2473,31 +2495,32 @@ a process in an uninterruptible sleep holds a cgroup past it.
 | Actor and event | From | To | What it does |
 |---|---|---|---|
 | admin's start step, the floor missing | any | unchanged | refuses `BoundaryUnverified`; nothing made |
-| admin's start step | A0 | A1, then A2 | makes the cgroups, caps and delegates, places the member, the relay and the worker |
-| admin's start step | A1 or A5 (an empty one standing) | A0, then as above | removes it and makes it afresh |
+| admin's start step | A0 | A1, then A2 | makes the cgroups and the record, sets the three files' owner, places the member, the relay and the worker |
+| admin's start step | A1 | A0, then as above | removes it and its record and makes it afresh |
 | admin's start step | A3 | A3 | refuses `AgentRunning`, naming the processes; kills nothing (I8) |
-| admin's start step | A2 | A2 | refuses `AgentRunning` at the run lock, before the cgroup is looked at (section 6) |
-| the gate, an execution opened | T0 | T1 | the shell's child places itself in `tools/` before its exec |
+| admin's start step | A2 or A4 | unchanged | refuses `AgentRunning` at the run lock, before the cgroup is looked at (section 3); A4 with the lock free refuses `AgentRunning` as A3 does |
+| the gate, an execution opened | T0 | T1 | the shell is born in `tools/` |
 | the gate, the execution's end (exit, clock, cancel, interrupt, closure) | T1 | T2, then T0 | `tools/cgroup.kill`, the wait, then the answer |
-| the gate, `tools/` not empty within the bound | T2 | T2 | the gate exits: the gate's death below |
+| the gate, `tools/` not empty within the bound, or its kill's write failing | T2 | T2 | the gate exits: the gate's death below |
 | the gate dies | T0, T1 or T2 | T2, then T0 | the worker kills `tools/`, waits, closes an open execution `Killed { by: fault }` |
 | the worker's unwind (the leave, graceful or forced) | T0 or T1 | T0 | the worker kills `tools/` and waits, before `Left` |
-| the worker dies | A2 | A2, then A3 once the member and the relay end | the organs die by their death signal (`weaver-harness-Spec` section 2.2); `tools/` keeps what it held, contained, for the run end |
+| the worker dies | A2 | A2, then A3 or A1 once the member and the relay end | the organs die by their death signal (`weaver-harness-Spec` section 2.2); `tools/` keeps what it held, contained |
 | the member or the relay dies | A2 | A2 | nothing of the cgroup changes |
-| admin's run end (`unload`'s or `force-unload`'s conclusion, the escalation, a rollback) | A2 (the lock freed) or A3 | A4, then A5, then A0 | `cgroup.kill` on the agent's cgroup, the wait, the removal, then publication, the marker and the answer |
+| admin's run end (a conclusion under the invocation lock) | A2 with the lock freed, A3, or A1 | A4 (where populated), then A0 | `cgroup.kill` on the agent's cgroup, the wait, the removal and the record's, then publication, the marker and the answer |
+| admin's run end, the marker another run's | any | unchanged | nothing: the cgroup is that run's |
 | admin's run end, not empty within the bound | A4 | A4 | refuses `WorkerWouldNotExit`, naming the pids |
-| admin dies inside a run end | A4 | A4, or A3 if the kill was not yet written | the next `unload` or `force-unload` writes the kill again, which is idempotent |
+| admin dies inside a run end | A4, or A1 partly removed | as left | the next `unload` or `force-unload` writes the kill again, which is idempotent, and finishes the removal |
 | admin dies inside the start step | A1 or A2 | as left | A1 is removed by the next load; A2 holds the run lock and is the S8b of section 3, ended by `unload` |
-| a tool command writes its own `cgroup.procs` (the agent's account can) | T1 | T0 or T1, the process in `run/` | out of reach of its execution's end and of the gate's death, never out of the agent's cgroup: held by the run end |
+| a tool command writes its own pid to `worker/cgroup.procs` (the agent's account can) | T1 | T0 or T1, the process in `worker/` | out of reach of its execution's end and of the gate's death, never out of the agent's cgroup: held by the run end |
 
 **The invariants**, each held where the table says:
 
 | # | Invariant | Held by |
 |---|---|---|
-| C1 | **No tool process outlives its execution's end.** Before the gate answers, `tools/` is empty: a command that left its process group or its session is in `tools/` all the same. A gate's death empties `tools/` by the worker's kill. **The one exception is stated:** a command running as the agent's account can move itself out of `tools/` into `run/` by writing `cgroup.procs`, since the delegation that lets the gate move its shell lets the shell move itself. That process escapes C1 and is held by C2. | the gate; the worker on the gate's death |
-| C2 | **No process of the agent outlives its run.** `Unloaded` is answered only with the run lock free and the agent's cgroup killed, emptied and removed, and a load stands a run only in a cgroup it made. **The window is stated:** from a crash that ends the run with no admin verb (the worker dying, then the member and the relay) to the next `unload`, `force-unload` or refused load, leftovers run on. They are contained in A3: they cannot leave the agent's cgroup, which a write to a root-owned ancestor would need, and a load refuses on them. | admin's run end; the start step's refusal on A3 |
-| C3 | **The agent's account reaches only `worker/`.** It can move and kill only what `worker/` holds, so it can neither move nor kill the member or the relay. It cannot leave `weaver-<agent>/`, and the cap leaves it no cgroup of its own to make. | the layout; root's `constituents/`; the cap |
-| C4 | **Every process of the agent starts inside.** Each constituent is placed by its own child before its exec, and every fork after inherits. | the start step's placement |
+| C1 | **No tool process outlives its execution's end.** A shell is born in `tools/`, and before the gate answers, `tools/` is empty: a command that left its process group or its session is in `tools/` all the same. A gate's death empties `tools/` by the worker's kill. **The one exception is stated:** a command running as the agent's account can move itself out of `tools/` into `worker/` by writing `worker/cgroup.procs`, since the file that lets the gate move its shell lets the shell move itself. That process escapes C1 and is held by C2. A later election of a controller on `worker/` would meet it there and must place it first. | the gate; the worker on the gate's death |
+| C2 | **No process of the agent outlives its run's end.** `Unloaded` is answered only where no process of the agent stands: the run lock free and the agent's cgroup absent or empty. The run end answers it only after killing and removing the cgroup. A load stands a run only in a cgroup it made. **The window is stated:** after a crash that ends the run with no admin verb (the worker dying, then the member and the relay), leftovers run on until the next `unload` or `force-unload`. A load refuses on them and kills nothing, and `show` names them. They are contained in A3: leaving the agent's cgroup needs a write to a file of root's. | admin's run end; the start step's refusal on A3; `show`'s ladder |
+| C3 | **The agent's account reaches only three files.** Through them it can move a process within `worker/` and kill `tools/`, and nothing else: no member, no relay, no cgroup made or removed, no interface file of root's changed. | the layout's ownership |
+| C4 | **Every process of the agent starts inside.** Each constituent is placed by its own child before its exec, each shell is born in `tools/`, and every fork after inherits. | the start step's placement; the gate's `clone3` |
 
 **What the trace records: nothing new.**
 - A tool execution the gate's kill ended at the clock, a cancel or an interrupt is the
@@ -2511,8 +2534,17 @@ a process in an uninterruptible sleep holds a cgroup past it.
 - No event and no field is added.
 
 **The instruments the code act owes**, each perturbation-verified (section 10). They need
-a cgroup v2 mount the suite can write, a delegated subtree or a user namespace with its
-own cgroup namespace, and the code act says which it uses.
+a cgroup v2 subtree the suite can write, such as a delegated user scope, and the code act
+says which it uses. **Measured on 2026-10-14 in such a scope**, the kernel's side of
+this section holds as stated:
+- a process moved itself from `run/` into `tools/` where it could write both `cgroup.procs`
+  files and their common ancestor's;
+- `cgroup.kill` ended a command that had started a new session and double-forked, and
+  `tools/` read `populated 0`;
+- a process of the delegatee's uid moved itself out of `tools/` and survived its kill,
+  C1's stated exception.
+
+The instruments:
 - **C1, at the gate:** a command that starts a new session and sleeps past the clock is
   ended at the clock. Watched to fail when the kill of `tools/` is a process-group signal.
 - **C1, the gate's death:** a gate killed with a command open leaves `tools/` empty once
@@ -2522,11 +2554,11 @@ own cgroup namespace, and the code act says which it uses.
   agent's cgroup gone. Watched to fail when the run end's kill is dropped.
 - **C2, the start:** a load over a populated cgroup with the run lock free refuses
   `AgentRunning` and kills nothing.
-- **C3:** the agent's account cannot write `constituents/cgroup.procs`, nor make a
-  cgroup under `worker/`. Watched to fail when the delegation is widened to the agent's
-  cgroup, or the cap is dropped.
-- **The floor:** a start step that finds no `cgroup2` mount, or no `cgroup.kill`,
-  refuses `BoundaryUnverified` and makes nothing.
+- **C3:** the agent's account cannot write `constituents/cgroup.procs` or
+  `run/cgroup.procs`, nor make or remove a cgroup. Watched to fail when a directory is
+  given to the agent's account.
+- **The floor:** a start step that finds no `cgroup2` mount, an invoker at the root, or no
+  `cgroup.kill`, refuses `BoundaryUnverified` and makes nothing.
 
 ## 7. The coordination channel
 

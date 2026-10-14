@@ -1048,11 +1048,13 @@ second executable separating nothing.
 
 **The cgroup is closed, and by neither of the two candidates.** It was posed as a
 provisioning artifact that load populates against a residency artifact created at load
-and torn down at unload. Under delegation the init system made one per unit, and since
-2026-10-03 this program makes none: the agent stays in its invoker's containment,
-which binds its lifetime and bounds what it consumes, per the Spec's section 6, a bound
-of its own is the packaging's, and the worker's organs dying with it is the harness's,
-per `weaver-harness-Spec` section 2.
+and torn down at unload. Under delegation the init system made one per unit. From
+2026-10-03 this program made none. Since the operator's ruling of 2026-10-14 on #111 it
+makes one per agent, beneath the invoker's own, so the agent stays in its invoker's
+containment, which binds its lifetime and bounds what it consumes, and the kernel kills
+the agent's cgroup whole at every run end (the Spec's section 6.1). A bound of its own is
+still the packaging's, and the worker's organs dying with it is still the harness's, per
+`weaver-harness-Spec` section 2.
 
 **Drop-first is closed and its subject is gone.** The start step drops in its own child
 before the exec, so the worker starts as the agent uid and there is no privilege window

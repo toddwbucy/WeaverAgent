@@ -182,8 +182,8 @@ loop of section 4, `umask` around the bind for the mode election of section
 3, `getsockopt` for the peer credential with `getuid` for the predicate it
 feeds, `User::from_uid` for the home the shell starts in, which comes from
 the account database because there the uid's home is a fact rather than a
-variable the agent's environment may or may not carry, and, for section 8, `waitid` for the reap, the write of `0` to `tools/cgroup.procs`
-that places the shell's child, the write of `tools/cgroup.kill` that ends an
+variable the agent's environment may or may not carry, and, for section 8, `waitid` for the reap, `clone3` with `CLONE_INTO_CGROUP`
+that starts the shell in `tools/`, the write of `tools/cgroup.kill` that ends an
 execution, and a read of `tools/cgroup.events` for the wait on its emptying
 (`weaver-admin-Spec` section 6.1).
 **The bind, the listen and the accept are not among them.**
@@ -1321,9 +1321,10 @@ nearest match.
 
 **The invocation forks the shell into the agent's `tools/` cgroup and
 supervises it to the caller's clock** (`weaver-admin-Spec` section 6.1, which
-states the mechanism; #111). The shell's child places itself in `tools/`
-before its exec, so the command and everything it forks start there, a new
-session or a double fork included. The caller's timeout crossed the exchange,
+states the mechanism; #111). The shell is born in `tools/`, forked by `clone3`
+with `CLONE_INTO_CGROUP`, so the command and everything it forks start there,
+a new session or a double fork included, and no instant exists in which it
+stands outside while the gate may already have killed `tools/`. The caller's timeout crossed the exchange,
 already validated against the declared maximum at the refusal layer, and it is
 the one kill clock. **Every end of an execution kills `tools/` whole**: the
 shell's exit, the clock, a cancel, an interrupt and the channel's closure each
