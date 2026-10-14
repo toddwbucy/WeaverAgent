@@ -183,8 +183,10 @@ loop of section 4, `umask` around the bind for the mode election of section
 3, `getsockopt` for the peer credential with `getuid` for the predicate it
 feeds, `User::from_uid` for the home the shell starts in, which comes from
 the account database because there the uid's home is a fact rather than a
-variable the agent's environment may or may not carry, and, for section 8, `waitid` for the reap, `prctl` and `openat` with `write` in the
-shell's child before its exec (the parent-death signal, and the move into `tools/`), the
+variable the agent's environment may or may not carry, and, for section 8, `waitid` for the reap, `poll` on the channel end in the supervision
+wait's slices, `prctl`, `getppid`, and `openat` with `write` in the shell's child before
+its exec (the parent-death signal, the check that its parent still stands, and the move
+into `tools/`), the
 write of `tools/cgroup.kill` that ends an execution, and a read of `tools/cgroup.events`
 for the wait on its emptying (`weaver-admin-Spec` section 6.1). **Every one of
 `tools/cgroup.procs`, `tools/cgroup.kill` and `tools/cgroup.events` is opened by
