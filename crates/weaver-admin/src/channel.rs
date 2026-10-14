@@ -170,9 +170,9 @@ fn dial_once(
     // **And the process, not only the account** (#140): the gate, the SPU
     // and every tool run under the worker's uid, so the listener must be the
     // process holding the run lock's description.
-    if !listener_is_the_worker(&fd, peer.pid(), run_directory) {
+    if let Err(why) = listener_is_the_worker(&fd, peer.pid(), run_directory) {
         diag!(
-            "weaver-admin: the coordination socket's listener, pid {}, is not the process holding the agent's run lock, so it is not dialed",
+            "weaver-admin: the coordination socket's listener, pid {}, {why}, so it is not dialed",
             peer.pid()
         );
         return Err(ChannelFault::WrongPeer {
@@ -185,51 +185,42 @@ fn dial_once(
 }
 
 /// **Whether the listener is the worker's process**, per section 7: the
-/// listener's pidfd (`SO_PEERPIDFD`) reads `SO_PEERCRED`'s pid, that pid
-/// holds the run lock's description, and the pidfd still reads the same pid
-/// after the scan. `SO_PEERCRED`'s pid is fixed at `listen` and outlives its
-/// process, so a reaped listener's number, reused by the next run's worker,
-/// would pass the scan; its pidfd reads `-1` once it is gone, and a process
-/// cannot give up its pid while it lives. A kernel without `SO_PEERPIDFD`
-/// (before Linux 6.5) answers no pidfd, and the listener is not judged the
-/// worker.
-fn listener_is_the_worker(fd: &OwnedFd, pid: i32, run_directory: &Path) -> bool {
-    let Some(pidfd) = peer_pidfd(fd) else {
-        return false;
-    };
-    if pidfd_pid(&pidfd) != Some(pid) {
-        return false;
-    }
+/// listener's pidfd (`SO_PEERPIDFD`) is read, `SO_PEERCRED`'s pid holds the
+/// run lock's description, and the pidfd still reads that pid after the
+/// scan. `SO_PEERCRED`'s pid is fixed at `listen` and outlives its process,
+/// so a reaped listener's number, reused by the next run's worker, would
+/// pass the scan; its pidfd reads `-1` once it is gone, and a process cannot
+/// give up its pid while it lives, so one read after the scan shows the pid
+/// named the listener throughout. Answers why not, each cause named apart
+/// for `admin.log`: a kernel without `SO_PEERPIDFD` (before Linux 6.5), a
+/// descriptor table root cannot read, a process holding no run lock, and a
+/// listener gone.
+fn listener_is_the_worker(
+    fd: &OwnedFd,
+    pid: i32,
+    run_directory: &Path,
+) -> Result<(), &'static str> {
+    let pidfd = nix::sys::socket::getsockopt(fd, nix::sys::socket::sockopt::PeerPidfd)
+        .map_err(|_| "cannot be judged: the kernel answers no pidfd for it (SO_PEERPIDFD, Linux 6.5 or later)")?;
     // #118: a test-only hook, kept beside the production code it observes:
     // the suite's stand-in workers are its own threads, so a listener that
     // is this process is taken for the worker. Production admin never
     // listens on this channel.
     #[cfg(test)]
     if pid == std::process::id() as i32 {
-        return true;
+        return Ok(());
     }
-    crate::start::holds_run_lock(run_directory, pid) && pidfd_pid(&pidfd) == Some(pid)
-}
-
-/// The listener's pidfd, read by `SO_PEERPIDFD` on the connected end.
-fn peer_pidfd(fd: &OwnedFd) -> Option<OwnedFd> {
-    let mut raw: nix::libc::c_int = -1;
-    let mut length = std::mem::size_of::<nix::libc::c_int>() as nix::libc::socklen_t;
-    // SAFETY: getsockopt writes at most `length` bytes into `raw`, which
-    // outlives the call.
-    let answered = unsafe {
-        nix::libc::getsockopt(
-            fd.as_raw_fd(),
-            nix::libc::SOL_SOCKET,
-            nix::libc::SO_PEERPIDFD,
-            (&mut raw as *mut nix::libc::c_int).cast(),
-            &mut length,
-        )
-    };
-    // SAFETY: the kernel just installed this descriptor and nothing else
-    // owns it.
-    (answered == 0 && raw >= 0)
-        .then(|| unsafe { <OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(raw) })
+    match crate::start::holds_run_lock(run_directory, pid) {
+        Err(()) => {
+            return Err("cannot be judged: its descriptor table or the run lock does not read");
+        }
+        Ok(false) => return Err("is not the process holding the agent's run lock"),
+        Ok(true) => {}
+    }
+    if pidfd_pid(&pidfd) != Some(pid) {
+        return Err("is gone, its pid no longer naming the process that listened");
+    }
+    Ok(())
 }
 
 /// The pid a pidfd names, from its `Pid:` line in `/proc/self/fdinfo`, `-1`

@@ -2377,15 +2377,19 @@ listener that handed its socket to a child and was reaped still read as its old 
 which the kernel may hand to any later process, the next run's worker among them. A
 socket renamed into place by an impostor would then be judged by a process that never
 listened. So the dial also reads `SO_PEERPIDFD`, a pidfd on the listener itself, and
-takes the pid from its `/proc/self/fdinfo/<n>` `Pid:` line, which reads `-1` once the
-listener is gone (measured the same day). The judgment is: that pid is
-`SO_PEERCRED`'s, it holds the run lock, and the pidfd still reads the same pid after
-the holder scan. A process cannot give up its pid while it lives, so a pid read
-through a live pidfd on both sides of the scan named the listener throughout. A
-listener that is gone, a pid that holds no run lock, or a pidfd that cannot be read
-refuses `WrongPeer` naming the listener's uid and pid. **`SO_PEERPIDFD` needs Linux 6.5
-or later**; where the kernel lacks it the dial refuses the same way, a peer that
-cannot be judged being no worker, so no verb that dials runs on an older kernel.
+reads the pid it names from its `/proc/self/fdinfo/<n>` `Pid:` line, which reads `-1`
+once the listener is gone (measured the same day). The judgment is: `SO_PEERCRED`'s
+pid holds the run lock, and after that scan the pidfd still reads that pid. A pidfd's
+pid only ever turns to `-1`, and a process cannot give up its pid while it lives, so
+one read after the scan shows the pid named the listener throughout. Any failure
+refuses `WrongPeer` naming the listener's uid and pid, and `admin.log`'s line names
+which one it was, so an operator tells an impostor from a host that cannot judge:
+the kernel answering no pidfd, the listener's descriptor table or the run lock not
+reading (root reads every table; a reduced capability set or a `/proc` that hides
+processes from root would not), a process holding no run lock, or a listener gone.
+**`SO_PEERPIDFD` needs Linux 6.5 or later**; where the kernel lacks it the dial refuses
+the same way, a peer that cannot be judged being no worker, so no verb that dials runs
+on an older kernel.
 
 Any refusal of the peer is `WrongPeer`, at once and with no retry. `show` then refuses
 `BoundaryUnverified`, a joining `force-unload` ends the run by the escalation on the
