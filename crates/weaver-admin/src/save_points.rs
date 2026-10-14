@@ -1111,6 +1111,7 @@ pub fn publish_counting(
         cap: PUBLISH_CAP,
         room_bound: ROOM_SCAN_BOUND,
         finished: None,
+        before_read_back: &mut |_, _| {},
     };
     let published = publish_with(
         room, member_uid, directory, file_owner, owner, reports, &mut hooks,
@@ -1140,9 +1141,12 @@ fn available_bytes(directory: BorrowedFd<'_>) -> std::io::Result<u64> {
 
 /// What a test may vary in a publication: a hook run between the room's scan
 /// and the first copy, the free-space look, the per-verb cap and the scan's
-/// bound; and what the scan saw, the room's finished-name count.
+/// bound, and a hook run on each published name between its directory's sync
+/// and its read-back (#157); and what the scan saw, the room's finished-name
+/// count.
 struct PublishHooks<'a> {
     after_scan: &'a mut dyn FnMut(),
+    before_read_back: &'a mut dyn FnMut(BorrowedFd<'_>, &str),
     available: &'a mut dyn FnMut(BorrowedFd<'_>) -> std::io::Result<u64>,
     cap: usize,
     room_bound: usize,
@@ -1420,6 +1424,36 @@ fn publish_with(
                 entry.name
             );
             remove_temporary();
+            deferred = true;
+            break;
+        }
+        // **The published copy is read back before its line is written**
+        // (#157), per Spec section 6: opened again through the directory's
+        // descriptor and judged as a load judges it, its bytes must digest
+        // to the room's digest, so the line, and a `SavePointTaken` or an
+        // `Unloaded` built on it, names bytes the kernel serves at that
+        // name. It proves nothing of the device, a read right after a write
+        // being served from the page cache; durability rests on the syncs
+        // above. A copy that does not read back is unlinked, the directory
+        // synced, and the verb stops as a deferral, the room's copy kept.
+        (hooks.before_read_back)(directory, &name);
+        let read_back = match open_judged(directory, &name, file_owner) {
+            Ok(Some((_, judged))) if judged.digest == entry.digest => Ok(()),
+            Ok(Some((_, judged))) => Err(format!("its bytes digest to {}", judged.digest)),
+            Ok(None) => Err("it is gone".to_string()),
+            Err(fault) => Err(fault.why),
+        };
+        if let Err(why) = read_back {
+            diag!(
+                "weaver-admin: the published {name} does not read back to its digest ({why}); it is removed, and the room's {} and every later save point are left for the next verb",
+                entry.name
+            );
+            let _ = nix::unistd::unlinkat(
+                directory,
+                name.as_str(),
+                nix::unistd::UnlinkatFlags::NoRemoveDir,
+            );
+            let _ = sync_directory(directory);
             deferred = true;
             break;
         }

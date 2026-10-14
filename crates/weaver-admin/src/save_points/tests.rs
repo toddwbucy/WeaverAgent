@@ -785,6 +785,7 @@ fn a_fifo_in_the_room_does_not_wedge_the_publication() {
                 cap: PUBLISH_CAP,
                 room_bound: ROOM_SCAN_BOUND,
                 finished: None,
+                before_read_back: &mut |_, _| {},
             },
         )
         .map(|(lines, deferred)| (lines.len(), deferred));
@@ -916,6 +917,7 @@ fn a_verb_publishes_at_most_its_cap_oldest_first() {
                 cap,
                 room_bound: ROOM_SCAN_BOUND,
                 finished: None,
+                before_read_back: &mut |_, _| {},
             },
         )
         .unwrap()
@@ -997,6 +999,7 @@ fn a_copy_is_made_only_where_the_space_stands_free() {
             cap: PUBLISH_CAP,
             room_bound: ROOM_SCAN_BOUND,
             finished: None,
+            before_read_back: &mut |_, _| {},
         },
     )
     .unwrap();
@@ -1380,6 +1383,7 @@ fn the_room_is_copied_from_bytes_judged_in_the_same_read() {
             cap: PUBLISH_CAP,
             room_bound: ROOM_SCAN_BOUND,
             finished: None,
+            before_read_back: &mut |_, _| {},
         },
     )
     .unwrap();
@@ -2329,6 +2333,7 @@ fn the_rooms_scan_refuses_past_its_bound_and_counts_what_it_saw() {
             cap: PUBLISH_CAP,
             room_bound: 3,
             finished: None,
+            before_read_back: &mut |_, _| {},
         };
         let published = publish_with(
             open_directory(room).unwrap().as_fd(),
@@ -2363,4 +2368,94 @@ fn the_rooms_scan_refuses_past_its_bound_and_counts_what_it_saw() {
         names.iter().all(|(name, _)| room.join(name).exists()),
         "nothing taken from the room"
     );
+}
+
+/// **The published copy is read back before its line is written** (#157;
+/// Spec section 6): a reported save point whose published copy is
+/// corrupted between the rename and the read-back appends no line, so the
+/// verb's report did not land (3.0: `SavePointNotTaken` naming
+/// `published`); the corrupted copy is removed, the room's copy stays and
+/// the verb says it deferred. The next publication, its read-back clean,
+/// lands the same save point under its line. Perturbation: drop the
+/// read-back and the corrupted copy gets its line; make the read-back
+/// refuse every copy and the clean publication lands nothing.
+#[test]
+fn a_published_copy_that_does_not_read_back_gets_no_line() {
+    let (_scratch, room, dir, mine, _) = room_of_save_points("read-back", 0);
+    let bytes = save_point("r-1", 3, 1, 3_000_000_000, b"reported");
+    let digest = judge(&bytes).unwrap().digest;
+    let room_name = format!("{digest}{SUFFIX}");
+    std::fs::write(room.join(&room_name), &bytes).unwrap();
+    let report = || weaver_types::SavePointReport {
+        save_point: digest.clone(),
+        name: room_name.clone(),
+        run: weaver_types::RunId("r-1".into()),
+        sequence: 3,
+        turn: 1,
+        event_run: weaver_types::RunId("r-1".into()),
+        position: 3,
+    };
+    let dir_fd = open_directory(&dir).unwrap();
+    let mut corrupted = None;
+    let (lines, deferred) = publish_with(
+        open_directory(&room).unwrap().as_fd(),
+        mine.uid,
+        dir_fd.as_fd(),
+        (mine.uid, mine.gid),
+        mine,
+        &[(report(), Arrival::Demand)],
+        &mut PublishHooks {
+            after_scan: &mut || {},
+            available: &mut available_bytes,
+            cap: PUBLISH_CAP,
+            room_bound: ROOM_SCAN_BOUND,
+            finished: None,
+            before_read_back: &mut |_, name| {
+                // One byte of the payload flipped in place, the file's
+                // owner, mode and length as the publication left them.
+                let path = dir.join(name);
+                let mut published = std::fs::read(&path).unwrap();
+                *published.last_mut().unwrap() ^= 0xff;
+                std::fs::write(&path, &published).unwrap();
+                corrupted = Some(name.to_string());
+            },
+        },
+    )
+    .unwrap();
+    let corrupted = corrupted.expect("the read-back hook ran");
+    assert!(
+        lines.is_empty(),
+        "a copy that does not read back gets no line: {lines:?}"
+    );
+    assert!(deferred, "and the verb says it deferred");
+    assert!(
+        read_manifest(dir_fd.as_fd(), mine).unwrap().is_empty(),
+        "the manifest names nothing"
+    );
+    assert!(
+        !dir.join(&corrupted).exists(),
+        "the corrupted copy is removed, so the next verb publishes afresh"
+    );
+    assert!(room.join(&room_name).exists(), "the room's copy stays");
+
+    let (lines, deferred) = publish_noting_deferral(
+        open_directory(&room).unwrap().as_fd(),
+        mine.uid,
+        dir_fd.as_fd(),
+        (mine.uid, mine.gid),
+        mine,
+        &[(report(), Arrival::Demand)],
+    )
+    .unwrap();
+    assert!(!deferred);
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line.digest.as_str())
+            .collect::<Vec<_>>(),
+        vec![digest.as_str()],
+        "a clean read-back lands the save point under its line"
+    );
+    assert_eq!(std::fs::read(dir.join(&lines[0].name)).unwrap(), bytes);
+    assert!(!room.join(&room_name).exists(), "and the room's copy goes");
 }
