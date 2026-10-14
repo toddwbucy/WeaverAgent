@@ -35,8 +35,9 @@ code must conform to, declared at the clauses that argue them rather than
 gathered in one place, per that format's section 6, and `asserts` runs from the
 crate rather than from this document, which is why the document needs no node of
 its own. **What this document leans on and does not argue is declared by the
-crate that argues it,** and carries no record here. The descriptor's number and
-the fork discipline that leaves this process one inherited descriptor are
+crate that argues it,** and carries no record here. The descriptors' numbers and
+the fork discipline that leaves this process two inherited descriptors, the channel
+end and the means to place its executions in their containment (#111), are
 `weaver-harness-Spec`'s, per its sections 2.2 and 8. The floor's three
 exhaustive wire enums, `PeerIdentity`'s missing `Deserialize`, the socket-type
 election with the boundary and truncation tests it owes the pair-creating

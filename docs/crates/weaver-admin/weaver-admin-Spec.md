@@ -2488,10 +2488,10 @@ weaver-<agent>/      root's; the agent's cgroup
 - **The worker**:
   - When it reads the gate's death (the channel's closure, `weaver-organ-channel`
     section 2), it writes `tools/cgroup.kill` and waits for it to empty before it closes
-    an open execution `Killed { by: fault }` (`weaver-harness-Spec` section 2.2), within
-    what remains of the execution's one bound (below). After a gate that delivered its
-    kill and waited the bound out, nothing remains, so a `tools/` not empty at once ends
-    service. Past the
+    an open execution `Killed { by: fault }` (`weaver-harness-Spec` section 2.2). **It
+    waits a full bound from its own first kill** (below): it cannot tell whether the dead
+    gate delivered a kill first, and nothing on the seam says, so it never assumes one.
+    Its kill is idempotent, and a kill the gate delivered only makes the wait shorter. Past the
     bound it closes the execution all the same, closes the turn in flight
     `Stopped { reason: fault }`, and ends service.
   - **Where its write of `tools/cgroup.kill` fails**, no kill was delivered, so the
@@ -2540,20 +2540,20 @@ weaver-<agent>/      root's; the agent's cgroup
     never ending a run (I8). `unload` and `force-unload` end it by the run end.
 
 **The kill's bound: 30 seconds for `populated 0` after a `cgroup.kill`**, this Spec's
-election, provisional and measured like section 6's, and stated here once. **It is one
-bound per execution, measured from the first kill delivered to it** (Codex on #161): the
-gate's, or, where no kill was delivered before the worker's (the gate crashed
-mid-execution, or its write failed), the worker's. A later waiter gets only what
-remains of it. An execution's kill fires at the caller's number, and its exchange
-completes within that number plus this bound (`weaver-harness-gate-contract` section 2),
-on every path:
+election, provisional and measured like section 6's, and stated here once. **Each
+waiter waits it from its own first kill** (Codex on #161): the gate from its kill, and
+the worker, on the gate's death, from its own, since it cannot know whether the gate's
+kill was delivered. An execution's kill fires at the caller's number, and **its exchange
+completes within that number plus this bound, or plus twice it where the gate dies
+during its own wait** (`weaver-harness-gate-contract` section 2):
 
 | Path | Who waits | The exchange completes within |
 |---|---|---|
 | the gate's kill delivered, `tools/` empties | the gate | the caller's number plus at most the bound, answered by the gate |
-| the gate's kill delivered, `tools/` not empty within the bound | the gate, the bound whole, then the worker with nothing left | the caller's number plus the bound: the gate exits unanswered, the worker finds `tools/` populated at once, closes the execution `Killed { by: fault }` and ends service |
+| the gate's kill delivered, `tools/` not empty within the bound | the gate, the bound whole, then the worker, a bound whole from its own kill | the caller's number plus twice the bound: the gate exits unanswered at its bound, then the worker kills again, waits, closes the execution `Killed { by: fault }`, and ends service where `tools/` is still populated |
 | the gate's write failed, no kill delivered | the worker, the bound whole from its own first kill | the caller's number plus the bound: the gate exits at once, the worker's write or `kill(2)` fallback delivers the first kill |
 | the gate crashed mid-execution, no kill delivered | the worker, the bound whole from its own first kill | at most the caller's number plus the bound, the crash coming before the clock |
+| the gate's kill delivered, then the gate crashed during its wait | the gate, part of the bound, then the worker, a bound whole from its own kill | at most the caller's number plus twice the bound: the worker cannot tell this from a crash before any kill, and its own kill and wait hold the rest |
  **A forced leave does
 not wait it out**: the lower's bound (section 3, `LOWER_BOUND_MS`) runs from the
 interrupt and does not wait on the interrupted execution's end, and past it the gate is
@@ -2604,7 +2604,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | the gate, the execution's end (exit, clock, cancel, interrupt, closure) | T1 | T2, then T0 | `tools/cgroup.kill`, the wait, then the answer |
 | the gate, its write of `tools/cgroup.kill` failing | T1 | T1 | no kill was delivered: the gate exits with the execution unanswered, the gate's death below, and the worker's fallback ends it |
 | the gate, `tools/` not empty within the bound after a delivered kill | T2 | T2 | the gate exits with the execution unanswered: the gate's death below |
-| the gate dies | T0, T1 or T2 | T2, then T0 | the worker kills `tools/`, waits what remains of the execution's one bound (the whole bound where no kill was delivered before), and closes an open execution `Killed { by: fault }` |
+| the gate dies | T0, T1 or T2 | T2, then T0 | the worker kills `tools/`, waits a full bound from its own kill, and closes an open execution `Killed { by: fault }` |
 | the worker, `tools/` not empty within the bound | T2 | T2 | the worker ends service and unwinds, never serving on: the run end holds what remains |
 | the worker, its write of `tools/cgroup.kill` failing | T1 | T1, then T2 by the fallback's kills, then T0 | no kill was delivered by the write, so the worker sends `SIGKILL` by `kill(2)` to each pid in `tools/cgroup.procs`, repeating within the bound |
 | the worker, the write and the fallback both failing | T1 | T1 | the worker closes the execution `Killed { by: fault }`, its `fault`'s account naming that containment failed and the kill was not delivered, and ends service: the run end holds what remains |

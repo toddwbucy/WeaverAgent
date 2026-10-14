@@ -221,9 +221,9 @@ parse recovered them, and the caller's clock - and interprets nothing.
 states. The tool declares a maximum, the caller's number must be equal to or
 less than that maximum, and the gate adopts the caller's number as the kill
 clock for that invocation. **The kill fires at the caller's number, and the exchange
-completes within the caller's number plus the containment bound, on every path**,
-answered by the gate or closed by the harness, the bound being one per execution
-that `weaver-admin-Spec` section 6.1 states once, the wait for the invocation's containment
+completes within the caller's number plus the containment bound, or plus twice it
+where the gate dies during its own wait**, answered by the gate or closed by the
+harness, the bound being the one `weaver-admin-Spec` section 6.1 states once, the wait for the invocation's containment
 to empty after the kill. That bound is no second clock: it moves no kill, and a caller
 that waits for the answer waits on that sum. A clock beyond the maximum refuses rather than
 clamps, because a clamped clock silently changes the caller's wait and the
