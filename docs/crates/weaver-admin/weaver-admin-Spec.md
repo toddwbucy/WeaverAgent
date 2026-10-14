@@ -2445,7 +2445,10 @@ weaver-<agent>/      root's; the agent's cgroup
   instruction of its own outside the agent's cgroup, and every fork after inherits its
   parent's cgroup.
 - **The gate starts each shell directly in `tools/`**, by `clone3` with
-  `CLONE_INTO_CGROUP` (Linux 5.7, beneath the floor) on a descriptor of `tools/`. So no
+  `CLONE_INTO_CGROUP` (Linux 5.7, beneath the floor) on a descriptor of `tools/` the
+  worker opens once at the enter and hands the gate at its fork, at descriptor 4
+  (`weaver-harness-Spec` section 2.2), never re-resolved by path. A worker that cannot
+  open it stands no gate, and the load refuses. So no
   instant exists in which a shell stands outside `tools/` while the gate or the worker
   may already have killed it and read it empty.
 
@@ -2519,7 +2522,9 @@ weaver-<agent>/      root's; the agent's cgroup
     never ending a run (I8). `unload` and `force-unload` end it by the run end.
 
 **The kill's bound: 30 seconds for `populated 0` after a `cgroup.kill`**, this Spec's
-election, provisional and measured like section 6's. A killed process stays counted
+election, provisional and measured like section 6's, and stated here once. An
+execution's kill fires at the caller's number, and its exchange completes within that
+number plus this bound (`weaver-harness-gate-contract` section 2). A killed process stays counted
 until its exit has released its files and memory, and an SPU's device context is among
 them, which can take seconds. A process in an uninterruptible sleep can hold it longer.
 - **At the gate:** a `tools/` still populated past the bound makes the gate exit with

@@ -500,7 +500,15 @@ a duplication moved anything, and execs, so the organ binary finds its ends at
 3 and, where it has a second, at 4 from its first instruction. **The order is
 the channels' own:** the lifecycle channel every organ holds takes 3, and an
 organ's further channel takes the next number, so the gate's single end sits
-where the SPU's first does. Until the decoder cut of 2026-08-02 an organ held
+where the SPU's first does. **The gate is handed one further descriptor after its
+end, at 4**: a handle on the agent's `tools/` cgroup (`weaver-admin-Spec` section 6.1,
+#111), which the worker opens `O_DIRECTORY` once at the enter, judges once, and never
+resolves by path again, the territory's descriptor route (`weaver-admin-Spec` section
+9). It crosses the gate's exec as the ends do, its flag cleared by the same placement,
+and the gate's `clone3` starts each shell in `tools/` through it. **A worker that cannot
+open or judge it stands no gate**: the gate's arm of the enter refuses
+`BoundaryUnverified`, wrapped `OrganRefused` in the aggregate (section 3, the enter),
+and the load rolls back. Until the decoder cut of 2026-08-02 an organ held
 one end and this paragraph named one number, and the SPU's second channel is
 what made the order need stating. This realizes apex section 12's topology,
 the numbering being this Spec's own election. **The numbering is owed to

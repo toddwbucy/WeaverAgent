@@ -114,8 +114,9 @@ and its channel to the SPU, every one withheld from children, the received ones 
 receive
 rule and the created ones from creation, per `weaver-admin-harness-contract` section
 5 and `weaver-harness-spu-contract` section 1. That discipline is what keeps all of
-them out of the gate's process: **the gate receives this seam's end and no other
-handle, and a build in which the gate holds a trace, coordination, or
+them out of the gate's process: **the gate receives this seam's end and, beside it, one
+further handle, on the execution's containment** (#111, `weaver-admin-Spec` section 6.1
+and `weaver-harness-Spec` section 2.2 stating how), **and no other handle, and a build in which the gate holds a trace, coordination, or
 residency handle is broken whether or not it uses one.** The gate re-establishes the
 property on its own end after its final image
 replacement, and makes its memory unreadable to its own principal in the same act,
@@ -219,7 +220,11 @@ parse recovered them, and the caller's clock - and interprets nothing.
 **One clock, the caller's.** Every invocation carries a timeout the caller
 states. The tool declares a maximum, the caller's number must be equal to or
 less than that maximum, and the gate adopts the caller's number as the kill
-clock for that invocation. A clock beyond the maximum refuses rather than
+clock for that invocation. **The kill fires at the caller's number, and the exchange
+completes within the caller's number plus the containment bound** that
+`weaver-admin-Spec` section 6.1 states once, the wait for the invocation's containment
+to empty after the kill. That bound is no second clock: it moves no kill, and a caller
+that waits for the answer waits on that sum. A clock beyond the maximum refuses rather than
 clamps, because a clamped clock silently changes the caller's wait and the
 two-clock disagreement returns by the back door. **What the clock holds is
 every process still in the invocation's containment** (the operator's ruling
@@ -401,8 +406,9 @@ sent it, unaltered and uninterpreted. It guarantees that it opens no exchange th
 document does not enumerate, and that a turn it has stopped opens no further
 execution, the calls the emission still held going unopened rather than
 cancelled one by one. It guarantees that it creates this seam's channel and
-passes that end to the child it creates and no other, **every other handle it holds
-being withheld from that child at the moment it is created**, per section 1. It
+passes that end, and the one handle on the execution's containment, to the child it
+creates and no other, **every other handle it holds being withheld from that child at
+the moment it is created**, per section 1. It
 guarantees that it raises the
 gate last in the enter fan-out and, at a leave, quiesces it first and lowers it
 before the leave's save point, per apex section 6 and `weaver-admin-Spec` section 3,

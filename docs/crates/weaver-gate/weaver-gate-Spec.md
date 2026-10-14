@@ -1323,7 +1323,9 @@ nearest match.
 **The invocation forks the shell into the agent's `tools/` cgroup and
 supervises it to the caller's clock** (#111, `weaver-admin-Spec` section 6.1
 stating the mechanism). The shell is born in `tools/`, forked by `clone3`
-with `CLONE_INTO_CGROUP`, so the command and everything it forks start there,
+with `CLONE_INTO_CGROUP` through the handle on `tools/` this crate receives at
+descriptor 4 beside its channel end (`weaver-harness-Spec` section 2.2), never
+through a path, so the command and everything it forks start there,
 a new session or a double fork included, and no instant exists in which it
 stands outside while the gate may already have killed `tools/`. The caller's timeout crossed the exchange,
 already validated against the declared maximum at the refusal layer, and it is
