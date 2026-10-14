@@ -331,8 +331,8 @@ this file and `AGENTS.md`, which are the Planner's, also go through a pull reque
    list the threads created since the push from the GraphQL thread graph (the REST
    comment listing paginates at thirty). **Codex also posts findings as issue
    comments on the pull request**, which neither the thread graph nor the merge state
-   shows: list the issue comments since the push as well. `main` requires every conversation resolved, so
-   an answered thread is resolved by id. `BLOCKED` means only that some protection
+   shows: list the issue comments since the push as well. `main` requires every
+   conversation resolved, so an answered thread is resolved by id. `BLOCKED` means only that some protection
    holds the merge: here, with no required reviews or checks, it is usually an
    unresolved thread, but read the branch protection when it is not.
 4. Every finding is graded and answered on the pull request, fixed or declined with the
