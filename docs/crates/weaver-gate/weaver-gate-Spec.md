@@ -229,9 +229,13 @@ to: gate-no-runtime-no-logging-no-yaml
 **The channel end arrives at descriptor 3, inherited rather than
 re-decided.** `weaver-harness-Spec` section 2.2 elects the number and owes it
 to this document, and this document takes it: the exec'd binary finds its
-one inherited descriptor at 3, the first after the standard streams, and
-wraps it as an owned handle at entry. It is the only descriptor this process
-begins with beyond the standard streams, per the fork discipline of
+channel end at 3, the first after the standard streams, and wraps it as an
+owned handle at entry. **Beside it, at 4, is its one further descriptor, the
+handle on the agent's `tools/` cgroup** that section 8's `clone3` uses
+(`weaver-admin-Spec` section 6.1, #111), wrapped the same way and marked
+close-on-exec at entry as 3 is, so no shell inherits it. These two are the only
+descriptors this process begins with beyond the standard streams, per the fork
+discipline of
 `weaver-harness-gate-contract` section 1, which makes a build in which this
 crate holds a trace, coordination, or residency handle broken whether or not
 it uses one. That property is the harness's to enforce at the fork and this

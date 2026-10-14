@@ -2374,8 +2374,11 @@ invoker's** (section 6, the lifetime, and the operator's ruling of 2026-10-03 on
   record, the new one, or none, never a partial one. A load that meets a temporary left
   behind removes it. **The record holds the cgroup directory's identity beside its
   path** (Codex on #161): the device and inode the loader's `fstat` read on the directory
-  it made. A later verb opens the recorded path and compares the identity. Where they
-  differ, or the path does not open, it refuses `BoundaryUnverified`, naming both, and
+  it made. A later verb opens the recorded path and compares the identity. **A recorded
+  cgroup absent at its path is A0, already removed** (Codex on #161): the verb removes the
+  stale record and goes on, acting on nothing there, so an admin killed between the
+  cgroup's removal and the record's wedges nothing. **Only a cgroup present at the path
+  with another device and inode refuses `BoundaryUnverified`**, naming both, and the verb
   acts on nothing, so a verb that reaches another cgroup at that path fails closed
   rather than act on it. Every later verb finds the cgroup through that record, never through its own
   `/proc/self/cgroup`. A record that does not read, or that names anything but a
@@ -2583,10 +2586,12 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | admin's run end (a conclusion under the invocation lock) | A2 with the lock freed, A3, or A1 | A4 (where populated), then A0 | `cgroup.kill` on the agent's cgroup, the wait, the removal and the record's, then publication, the marker and the answer |
 | admin's run end, the marker another run's | any | unchanged | nothing: the cgroup is that run's |
 | admin's run end, not empty within the bound | A4 | A4 | refuses `WorkerWouldNotExit`, naming the pids |
-| admin dies inside a run end | A4, or A1 partly removed | as left | the next `unload` or `force-unload` writes the kill again, which is idempotent, and finishes the removal |
+| admin dies inside a run end | A4, A1 partly removed, or A0 with its record standing | as left | the next `unload` or `force-unload` writes the kill again, which is idempotent, and finishes the removal, the record last. Where the cgroup is already gone and only its record stands, that verb reads the absent path as A0 and removes the record (the row for a recorded path absent) |
 | admin dies inside the start step | A1 or A2 | as left | A1 is removed by the next load. A2 holds the run lock and is the S8b of section 3, ended by `unload` |
 | admin dies between the `mkdir` and the record's write | A1, no record | A1, no record | the next load's `mkdir` meets `EEXIST` at the deterministic path, finds it root's and empty, removes it and makes it afresh |
-| a later verb, the recorded path in its view not the recorded identity | any | unchanged | refuses `BoundaryUnverified`, naming the path and both identities, and acts on nothing |
+| a later verb, a cgroup present at the recorded path with another device and inode | any | unchanged | refuses `BoundaryUnverified`, naming the path and both identities, and acts on nothing |
+| a later verb, the recorded path absent | A0, a stale record | A0, no record | the cgroup was already removed: the verb removes the stale record and goes on, acting on nothing there |
+| admin killed between the cgroup's removal and the record's | A0, a stale record | A0, a stale record | the next verb finds the recorded path absent, reads it as A0, removes the record and goes on |
 | admin dies while writing the record | A1, a temporary record and no record (or the previous record) | as left | the next load removes the temporary, then judges the cgroup at the deterministic path as above, the rename never having exposed a partial record |
 | admin's start step, `EEXIST` on a populated cgroup | A3 | A3 | refuses `AgentRunning`, naming the processes, and kills nothing (I8) |
 | a tool command writes its own pid to `worker/cgroup.procs` (the agent's account can) | T1 | T0 or T1, the process in `worker/` | out of reach of its execution's end and of the gate's death, never out of the agent's cgroup: held by the run end |

@@ -232,7 +232,9 @@ ways, order preserved, nothing retained after the response returns.
 ## 3. What this crate must not hold
 
 **No trace authorship, and no descriptor to the record.** It holds
-its seam end and its listener and nothing else, which the contract's fork discipline
+its seam end, the one handle on the execution's containment
+(`weaver-admin-Spec` section 6.1) and its listener and nothing else, which the
+contract's fork discipline
 makes structural rather than behavioral.
 
 **No channel to `weaver-admin`.** Admin holds one seam, and what this crate has to

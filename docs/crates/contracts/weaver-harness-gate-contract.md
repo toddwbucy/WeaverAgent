@@ -108,7 +108,8 @@ lost the agent's reachability, not a connection to it, and section 5 says what t
 means. A gate that observes closure closes its listener and exits, which is how a
 gate process never outlives the interior it fronts.
 
-**The child carries this end and nothing else.** At the moment the gate's process is
+**The child carries this end and the one handle on the execution's containment, and
+nothing else.** At the moment the gate's process is
 created the harness holds the trace sink handle, its channel to admin,
 and its channel to the SPU, every one withheld from children, the received ones by the
 receive
@@ -444,8 +445,9 @@ guarantees that it answers a refusal rather than exiting on one. It guarantees t
 it admits only the principals the boundary predicate names and that the predicate
 excludes the agent's own principal, per `weaver-gate-PRD` section 2. It guarantees that
 it
-authors no trace event, holds no handle beyond this seam's end and its listener,
-retains nothing across a raise and a lower, and exits on observing closure.
+authors no trace event, holds no handle beyond this seam's end, the one handle on
+the execution's containment (section 1) and its listener, retains nothing across a
+raise and a lower, and exits on observing closure.
 
 ## 5. Failure
 
@@ -502,7 +504,8 @@ record**, the `load` event being what opens the run. That is named at
 
 **On the harness.** It opens no exchange this document does not enumerate. It does
 not alter or interpret the instruction. It does not pass a handle across the gate
-child other than this seam's. It does not treat the gate as a peer of the organs it
+child other than this seam's end and the one handle on the execution's containment
+(section 1). It does not treat the gate as a peer of the organs it
 sequences: the gate confirms inside the aggregate like every other arm of the
 fan-out.
 

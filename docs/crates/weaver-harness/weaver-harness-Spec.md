@@ -3132,8 +3132,8 @@ above all, and a decode end carries a resident session's traffic, which is a
 different capability rather than a smaller one. The mechanism is the atomic
 `SOCK_CLOEXEC` of section 2.2, no window between creation and flag. The test
 forks a child and enumerates its descriptors, confirming that each organ fork
-carries exactly the ends that organ is owed, two at the SPU's and one at the
-gate's, and that nothing crosses a tool fork, watched to fail when the atomic
+carries exactly the ends that organ is owed, two at the SPU's, and one at the
+gate's with the handle on `tools/` beside it (section 2.2, #111), and that nothing crosses a tool fork, watched to fail when the atomic
 flag is dropped to a later `fcntl`.
 
 **The third walk: a same-uid process attaches.** The attack reads or drives
