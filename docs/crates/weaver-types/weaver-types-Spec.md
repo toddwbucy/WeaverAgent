@@ -1660,8 +1660,9 @@ Planner's ruling of 2026-10-12, B3): `InTransition { constituents }`, the field 
 and left off the wire where empty, so the empty answer is the unit answer's bytes. Admin
 fills it from the run lock's holders where `show` prints it on its rungs (i) and (iii), a
 run never entered or one ending (`weaver-admin-Spec` section 3, the ladder). **Since #111
-the field's meaning widens** to the processes of an ended run that still stand in the
-agent's cgroup, filled where `show` prints it on rung (iv) with the run lock free
+`InTransition.constituents`'s meaning widens**, and `State.constituents` keeps its rule
+above, absent wherever no run holds the lock: `InTransition.constituents` also names the
+processes of an ended run that still stand in the agent's cgroup, filled where `show` prints it on rung (iv) with the run lock free
 (`weaver-admin-Spec` section 6.1, A3). It names pids the caller ends with `unload`, as
 before, and its shape is unchanged, so no new variant is needed. The harness sends it
 empty, as does `show`'s rung (0), the holder there being another invocation.

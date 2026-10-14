@@ -243,7 +243,7 @@ state; it reads `show` and acts on what it prints.
 | S2, serving at rest | `AgentRunning` | the graceful unload, below | the forced unload, below | `SavePointTaken` | `RestoreNamed` | `Idle` |
 | S3, serving, a turn in flight | `AgentRunning` | the graceful unload, after the turn | the forced unload, the turn cancelled | `ActivityNotAtRest` | `RestoreNamed` | `Active` |
 | S4 to S7, a graceful unload in progress | `InvocationInFlight` | `InvocationInFlight` | joins, below | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
-| S8a, an unload concluding | `InvocationInFlight` | `InvocationInFlight` | waits for the unload to finish, then prints `Unloaded` | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
+| S8a, an unload concluding | `InvocationInFlight` | `InvocationInFlight` | waits for the unload to finish, then answers as `show` would: `Unloaded` once nothing of the agent stands | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S8b, the worker gone with no answer (it died), a process still holding the run | `AgentRunning` until the run ends, then as S0d | ends what still holds the run, then publishes what the run left as recovered; the next load records `NoCleanUnload` | the same as `unload`, the marker left as it stands | `OutOfOrder` | `RestoreNamed` | `InTransition` with the run's processes named, then `Unloaded` |
 | S9, an unload stopped at its save point | `AgentRunning` | retried: the save point, then down | the forced unload | `SavePointTaken` | `RestoreNamed` | `Idle`, the gate lowered |
 | S10, a force in progress | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
@@ -276,7 +276,11 @@ where another command holds the agent; otherwise the agent's own word where it a
 (`Idle` or `Active`, or `InTransition` while an unload is in progress); `Unanswered`
 where it accepts and does not answer in time, a worker wedged; `InTransition` with the
 run's processes named where no agent listens and a process still holds the run, a run
-that never started or one ending; and `Unloaded` only once nothing holds the run.
+that never started or one ending. It prints `Unloaded` only once nothing holds the run
+and no process of the agent stands. **Every `Unloaded` this section names is printed only once
+nothing of the agent stands** (`weaver-admin-Spec` sections 3 and 6.1): where its
+processes do not all end within the containment bound, the command refuses
+`WorkerWouldNotExit` in its place and publishes nothing (section 5).
 
 **`unload` drains, winds down, saves, then goes down** (`weaver-admin-Spec` section 3,
 the graceful unload). It may take the length of the turn in flight and one generation
@@ -332,13 +336,13 @@ section 6.1) and the publication after the answer come on top, their total state
   the same way (`weaver-admin-Spec` section 3, the conclusion): the `unload` holding the
   lock first, publishing and closing the marker, and the force after it, finding the run
   concluded and changing nothing (I1); each prints only once the run lock has freed,
-  never on the agent's answer alone, so `Unloaded` means no constituent still runs. From
+  never on the agent's answer alone, so `Unloaded` means no process of the agent still runs. From
   S7 on, the leave's outcome being fixed, the join adds nothing to it and concludes the same way,
   and once the agent no longer listens it waits for the unload to finish: at most 150
   seconds and then the escalation while the agent's processes still hold the run, and
   with no deadline once they are gone and the unload is publishing, a publication taking
-  as long as its copy does; it then prints `Unloaded`, nothing
-  being resident: ending the run was its job, and whether the unload's save point
+  as long as its copy does. It then answers as `show` would, `Unloaded` where nothing
+  of the agent stands, nothing being resident: ending the run was its job, and whether the unload's save point
   published is the unload's own answer and the marker's, for the next load.
 - **Beside any other command** (a load in S1, its rollback included, a `save-point`,
   another force): it refuses `InvocationInFlight` and takes over nothing, one command
