@@ -120,6 +120,16 @@ worker binds and listens on this channel in its own process, the one the start s
 handed the run lock, and never through a child it forks and execs, whose listener
 admin refuses.
 
+**The worker starts inside the agent's cgroup, and the cgroup crosses no envelope**
+(`weaver-admin-Spec` section 6.1, #111). Admin's start step places the worker in the
+agent's `run/` cgroup before its exec, and the gate's `tools/` beside it is delegated to
+the agent's account, each found from the cgroup a process starts in. Nothing on this
+channel names a cgroup. Each party's part:
+- **The harness** kills `tools/` on the gate's death and at its unwind, before `Left`.
+- **Admin** kills the agent's cgroup whole once the run lock frees and removes it before
+  it answers `Unloaded`, so `Unloaded` on this seam's far side means nothing of the
+  agent stands.
+
 **The worker holds the agent's own principal from its first instruction and makes its
 memory unreadable to that principal's other processes after its final image
 replacement.** The worker's code never runs above the agent's principal, because admin's

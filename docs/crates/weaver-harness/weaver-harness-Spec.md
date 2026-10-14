@@ -582,6 +582,14 @@ description closes, and the write end of the trace relay's lifetime pipe at desc
 or forks anything**, so no organ inherits a writable descriptor to root's lock file or a
 write end that would keep the relay alive, and no window exists in which one could. The
 organs never hold the run lock, being bound to the worker by their death signal instead.
+**The tool executions are bound by the agent's cgroup, not by a death signal**
+(`weaver-admin-Spec` section 6.1, #111): the worker starts in the agent's `run/` cgroup and
+every organ inherits it, and the gate runs each shell in the `tools/` beside it. **The
+worker kills `tools/` whole when it reads the gate's death**, writing `tools/cgroup.kill`
+and waiting for it to empty within the kill's bound before it closes an open execution
+`Killed { by: fault }`, and **again at its unwind, before it answers `Left`**, so nothing
+of an execution outlives the gate or the leave. Its own cgroup it cannot kill, being inside
+it; admin's run end does.
 **An empty number is skipped and said**: a worker started by hand, or by a stack from
 before the start step, holds nothing at 9 and serves, and it names the absence on its
 standard error, as it names a 9 holding something other than a regular file, so a start

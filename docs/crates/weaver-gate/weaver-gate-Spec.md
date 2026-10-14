@@ -182,7 +182,10 @@ loop of section 4, `umask` around the bind for the mode election of section
 3, `getsockopt` for the peer credential with `getuid` for the predicate it
 feeds, `User::from_uid` for the home the shell starts in, which comes from
 the account database because there the uid's home is a fact rather than a
-variable the agent's environment may or may not carry, and `killpg` with `waitid` for the group kill and the reap of section 8.
+variable the agent's environment may or may not carry, and, for section 8, `waitid` for the reap, the write of `0` to `tools/cgroup.procs`
+that places the shell's child, the write of `tools/cgroup.kill` that ends an
+execution, and a read of `tools/cgroup.events` for the wait on its emptying
+(`weaver-admin-Spec` section 6.1).
 **The bind, the listen and the accept are not among them.**
 `UnixListener::bind` is the standard library's and creates and binds and
 listens in one call, per section 3, which is the shape the one bind site
@@ -1219,7 +1222,7 @@ that format forbids.
   creating call rather than inherited, confirmed by watching the umask guard
   removed and the socket bind at the runner's own umask, per section 3.
 - The shell execution's seven watches are section 8's and are argued there:
-  the one held tool, the one clock, the group kill, the drain riding the
+  the one held tool, the one clock, the kill of `tools/`, the drain riding the
   run, the cancel bringing the clock forward, the late cancel dropped, and
   the exit heard within a slice, each with the removal that makes it fail
   named at the clause. They
@@ -1316,14 +1319,20 @@ than as a table's member: the execution exchange resolves against that one
 name directly, and a name that is not the shell's refuses by name, never a
 nearest match.
 
-**The invocation forks the shell in its own process group and supervises it
-to the caller's clock.** The caller's timeout crossed the exchange, already
-validated against the declared maximum at the refusal layer, and it is the
-one kill clock. Past it the kill reaches the whole group, because `bash`
-leaves descendants holding the pipes' write ends, and a kill that reaped
-only the leader would hold the answer open on a straggler's schedule. The
-exit is observed unreaped before the group is signaled, so the group id
-cannot be reissued between the observation and the kill.
+**The invocation forks the shell into the agent's `tools/` cgroup and
+supervises it to the caller's clock** (`weaver-admin-Spec` section 6.1, which
+states the mechanism; #111). The shell's child places itself in `tools/`
+before its exec, so the command and everything it forks start there, a new
+session or a double fork included. The caller's timeout crossed the exchange,
+already validated against the declared maximum at the refusal layer, and it is
+the one kill clock. **Every end of an execution kills `tools/` whole**: the
+shell's exit, the clock, a cancel, an interrupt and the channel's closure each
+write `tools/cgroup.kill` and wait for `tools/` to empty, within the kill's
+bound, before the answer goes. `bash` leaves descendants holding the pipes'
+write ends, and a kill that reached only the leader, or only its process
+group, would hold the answer open on a straggler's schedule, or leave a
+command that left its group running past its execution's end. A `tools/` not
+empty within the bound ends this crate, which exits, as section 6.1 says.
 
 **The shell starts in the uid's home with `HOME` and no other variable.** This
 crate runs with the agent's environment, per `weaver-harness-Spec` section 2.2
@@ -1356,8 +1365,8 @@ not wake the poll, a child's death making no descriptor of this crate's
 readable, which is why the slice stays and does not stretch to the clock: a
 supervisor that polled the channel for the whole remainder would hold a
 command that exited in its first millisecond until the caller's clock ran
-out. On a cancel the group is
-signaled at once by the same path every ending takes, the drain finishes
+out. On a cancel `tools/` is
+killed at once by the same path every ending takes, the drain finishes
 bounded as it does at the clock, and the answer is a kill naming the cancel
 as its cause, the partial riding as it rides at the clock. **An interrupt is
 the unload's cancel** (`weaver-admin-Spec` section 3, S4 x tool return): the
@@ -1369,7 +1378,7 @@ contract permits arrives on the channel during an execution but the cancel,
 the interrupt and closure, executions being serial and the harness blocked in
 its wait, so an envelope there is one of the two or it is the closure the
 charter already requires this crate to exit on, and closure breaks the same loop, which
-kills the group before the exit as every ending does. The cancel adds no
+kills `tools/` before the exit as every ending does. The cancel adds no
 clock: the caller's number still bounds the wait, and a supervisor that
 never reads the cancel still answers by it.
 
@@ -1451,8 +1460,9 @@ to: gate-execution-exit-heard-within-a-slice
 
 The perturbation obligations are apex section 11's: the unheld-name watch
 fails when the refusal arm is removed, the clock watch fails when the kill
-branch is removed, the group-kill watch fails when the group signal is
-removed and a straggler holds the pipes, and the drain watch fails when the
+branch is removed, the group-kill watch fails when the kill of `tools/` is
+removed and a straggler holds the pipes, and fails too when the kill is a
+process-group signal and the straggler started a new session, and the drain watch fails when the
 readers wait for the exit. The cancel watch cancels a sleep far inside a
 long clock and fails when the channel end leaves the supervision wait, the
 answer then arriving at the clock. The late-cancel watch sends a cancel

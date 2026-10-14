@@ -644,8 +644,8 @@ the whole invocation out. Derived from `weaver-harness-gate-contract` section
 **A cancel is the caller's clock brought forward, and this crate kills on it
 as it kills at the clock.** The harness sends the cancel inside the open
 execution exchange when the operator's stop reaches it mid-invocation, and
-this crate signals the invocation's whole process group at once, descendants
-included, and answers the exchange with a kill that names the cancel as its
+this crate kills the agent's `tools/` cgroup at once, descendants included
+(`weaver-admin-Spec` section 6.1), and answers the exchange with a kill that names the cancel as its
 cause. The contract's one-clock rule stands: the caller's number still bounds
 the exchange, a cancel never lengthens a wait, and a cancel this crate never
 reads leaves the clock to do the same work later.
