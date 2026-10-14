@@ -744,13 +744,26 @@ say "accounts"
 while IFS= read -r line; do
   kind=${line%% *} name=${line#* }
   case $kind in
-    user)  userdel -r "$name" 2>/dev/null && plan "removed user $name (and home)" || { userdel "$name" 2>/dev/null && plan "removed user $name" || plan "user $name: not removed"; } ;;
+    user)
+      if userdel -r "$name" 2>/dev/null; then plan "removed user $name (and home)"
+      elif userdel "$name" 2>/dev/null; then plan "removed user $name"
+      else plan "user $name: not removed"
+      fi ;;
   esac
 done < "$PURGE_ACTED"
 while IFS= read -r line; do
   kind=${line%% *} name=${line#* }
   case $kind in
-    group) getent group "$name" >/dev/null && { groupdel "$name" 2>/dev/null && plan "removed group $name" || plan "group $name: not removed"; } ;;
+    # **A group userdel already removed is done** (#140): userdel removes a
+    # user's private group with the user (USERGROUPS_ENAB), so the connector's
+    # weaver-<agent>-admincon, the list's last group, is gone by now. It is
+    # said, never taken for a failure, and every arm ends in a status this
+    # loop's last line can stand on, so no caller under `set -e` stops here.
+    group)
+      if ! getent group "$name" >/dev/null; then plan "group $name: already gone with its user"
+      elif groupdel "$name" 2>/dev/null; then plan "removed group $name"
+      else plan "group $name: not removed"
+      fi ;;
   esac
 done < "$PURGE_ACTED"
 

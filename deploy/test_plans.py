@@ -3876,6 +3876,80 @@ class DecommissionTests(unittest.TestCase):
         self.assertLess(purge, second)
 
 
+# The account database's stand-ins for the purge's accounts step (#140):
+# getent reads the model's passwd and group, userdel removes the user and,
+# as the real one does under USERGROUPS_ENAB, the user's private group where
+# no other member holds it, and groupdel removes a group, failing on one that
+# is gone.
+ACCOUNT_MODEL = r"""#!/usr/bin/env python3
+import os, pathlib, sys
+name = pathlib.Path(sys.argv[0]).name
+args = sys.argv[1:]
+model = pathlib.Path(os.environ["MODEL"])
+def rows(kind):
+    return [l.split(":") for l in (model / kind).read_text().splitlines() if l]
+def write(kind, kept):
+    (model / kind).write_text("".join(":".join(f) + "\n" for f in kept))
+if name == "getent":
+    hit = [f for f in rows(args[0]) if len(args) == 1 or f[0] == args[1]]
+    if not hit:
+        sys.exit(2)
+    print("".join(":".join(f) + "\n" for f in hit), end="")
+elif name == "userdel":
+    who = args[-1]
+    if not any(f[0] == who for f in rows("passwd")):
+        sys.exit(6)
+    write("passwd", [f for f in rows("passwd") if f[0] != who])
+    write("group", [f for f in rows("group") if not (f[0] == who and f[3] == "")])
+elif name == "groupdel":
+    if not any(f[0] == args[-1] for f in rows("group")):
+        sys.exit(6)
+    write("group", [f for f in rows("group") if f[0] != args[-1]])
+"""
+
+
+class PurgeAccountsTests(unittest.TestCase):
+    """**The accounts step completes when userdel took a group with its user**
+    (#140): the purge's own accounts section, run over a model account
+    database whose userdel removes a user's private group as the real one
+    does, the list's groups in the order the archive writes them, the
+    connector's weaver-<agent>-admincon last."""
+
+    def test_a_group_userdel_removed_is_done_and_the_purge_goes_on(self):
+        """Run inside a function under `set -euo pipefail`, where a loop
+        whose last line ends in a failed `&&` stops the caller. Perturbation:
+        the group arm as it stood (`getent ... && { ... }`), and the caller
+        stops after the accounts, saying nothing of the last group."""
+        script = (DEPLOY / "decommission.sh").read_text()
+        accounts = script[script.index('say "accounts"\n'):script.index('say "paths"\n')]
+        scratch = tempfile.TemporaryDirectory(prefix="purge-accounts-")
+        self.addCleanup(scratch.cleanup)
+        model = Path(scratch.name)
+        users = ["weaver-a", "weaver-a-state", "weaver-a-relay", "weaver-a-admincon"]
+        (model / "passwd").write_text("".join(f"{u}:x:{2001 + i}:{2001 + i}::/nonexistent:/bin/false\n"
+                                              for i, u in enumerate(users)))
+        groups = users[:3] + ["weaver-a-trace", "weaver-a-admin", "weaver-a-admincon"]
+        (model / "group").write_text("".join(f"{g}:x:{3001 + i}:\n" for i, g in enumerate(groups)))
+        (model / "acted").write_text("".join(f"user {u}\n" for u in users)
+                                     + "".join(f"group {g}\n" for g in groups))
+        for tool in ("getent", "userdel", "groupdel"):
+            stand_in = model / tool
+            stand_in.write_text(ACCOUNT_MODEL)
+            stand_in.chmod(0o755)
+        env = {**os.environ, "PATH": str(model) + os.pathsep + os.environ["PATH"], "MODEL": str(model)}
+        env.pop("BASH_ENV", None)
+        program = ("set -euo pipefail\nsay() { printf '== %s\\n' \"$*\"; }\nplan() { printf '   %s\\n' \"$*\"; }\n"
+                   f"PURGE_ACTED={shlex.quote(str(model / 'acted'))}\n"
+                   "accounts() {\n" + accounts + "}\naccounts\necho AFTER\n")
+        ran = subprocess.run(["bash", "-c", program], env=env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        self.assertIn("AFTER", ran.stdout, "the purge goes on past the accounts")
+        self.assertIn("group weaver-a-admincon: already gone with its user", ran.stdout)
+        self.assertIn("removed group weaver-a-trace", ran.stdout)
+        self.assertEqual((model / "passwd").read_text() + (model / "group").read_text(), "",
+                         "every account and group is gone")
+
+
 class RoundOneOf79Tests(unittest.TestCase):
     """Codex's first pass on #79: the connector probe, the purge's fresh look,
     and the credential before every install path, each run or read as the
