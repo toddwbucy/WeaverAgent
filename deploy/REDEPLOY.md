@@ -193,7 +193,9 @@ nothing the operator-writable archive directory holds.
   purge leaves the rest to purge.
 - The record is removed last, after what remains is printed, and only where every
   removal was made: a removal that failed keeps it and refuses, naming the record, so
-  the rerun finds the work left.
+  the rerun finds the work left. An empty prefix that will not go is such a removal. A
+  record that cannot itself be removed refuses completion, naming it, since a rerun
+  would act on it again: look at what remains, then remove it by hand.
 - To abandon a purge begun, and serve again from what stands, put back what the archive
   holds and remove the record by hand: `sudo rm /var/lib/decommission-weaver/<sum>`.
 
