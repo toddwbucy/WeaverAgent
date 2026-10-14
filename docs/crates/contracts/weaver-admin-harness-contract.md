@@ -113,6 +113,13 @@ credential check could not: the expected peer is root, which no tool of the
 agent's holds. The second-opener case `weaver-organ-channel` section 2 rejects
 stays rejected, by refusal at accept rather than by an absent name.
 
+**Admin judges the other direction at its dial** (#98, #140; `weaver-admin-Spec`
+section 7): the listener must run under the worker's account and be the process
+holding the run lock's description, read through a pidfd on the listener. So the
+worker binds and listens on this channel in its own process, the one the start step
+handed the run lock, and never through a child it forks and execs, whose listener
+admin refuses.
+
 **The worker holds the agent's own principal from its first instruction and makes its
 memory unreadable to that principal's other processes after its final image
 replacement.** The worker's code never runs above the agent's principal, because admin's

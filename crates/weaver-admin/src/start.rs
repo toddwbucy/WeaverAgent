@@ -526,23 +526,38 @@ pub fn holders(run_directory: &Path) -> Vec<Holder> {
         if pid == own {
             continue;
         }
-        let Ok(descriptors) = std::fs::read_dir(process.path().join("fd")) else {
-            continue;
-        };
-        for descriptor in descriptors.flatten() {
-            let Some(fd) = descriptor
-                .file_name()
-                .to_str()
-                .and_then(|n| n.parse::<i32>().ok())
-            else {
-                continue;
-            };
-            if holds(pid, fd, target) {
-                found.push(Holder { pid, fd });
-            }
+        if let Ok(held) = holding_descriptors(pid, target) {
+            found.extend(held.map(|fd| Holder { pid, fd }));
         }
     }
     found
+}
+
+/// **Whether one process holds the run lock's description**, per section 7,
+/// the dial's peer: the holder scan above, for one pid. **A lock file that
+/// does not stat, or a descriptor table that does not read, is no answer**
+/// (`Err`), told apart from a table read that holds no lock, so the dial
+/// names a peer it could not judge as such and never as an impostor.
+pub fn holds_run_lock(run_directory: &Path, pid: i32) -> Result<bool, ()> {
+    let lock = std::fs::metadata(run_directory.join("run.lock")).map_err(|_| ())?;
+    Ok(holding_descriptors(pid, (lock.dev(), lock.ino()))
+        .map_err(|_| ())?
+        .next()
+        .is_some())
+}
+
+/// The numbers in one process's table whose description holds the lock on
+/// `target`, or the error reading the table.
+fn holding_descriptors(pid: i32, target: (u64, u64)) -> std::io::Result<impl Iterator<Item = i32>> {
+    Ok(std::fs::read_dir(format!("/proc/{pid}/fd"))?
+        .flatten()
+        .filter_map(|descriptor| {
+            descriptor
+                .file_name()
+                .to_str()
+                .and_then(|n| n.parse::<i32>().ok())
+        })
+        .filter(move |&fd| holds(pid, fd, target)))
 }
 
 /// **Whether a descriptor holds the run lock**: it refers to the lock file,
