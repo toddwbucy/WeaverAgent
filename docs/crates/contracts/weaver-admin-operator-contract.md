@@ -97,11 +97,10 @@ toddwbucy/WeaverWeb#15: sudo's `pam_session` is off for the connector's user
 and with it the agent it starts, into a containment other than the invoker's, which
 would silently break the lifetime binding of section 3. A requirement on the boundary is
 declared and checked: the invoker verifies after a load that every constituent `show`
-names sits in its own containment, which since #111 means beneath its own cgroup, in the
-agent's cgroup admin makes there (`weaver-admin-Spec` section 6.1). **The invoker's
-containment must let root make a child cgroup in it** (a systemd unit's
-`Delegate=yes`), and must not be the hierarchy's root, or the load refuses
-`BoundaryUnverified`. No prompt, turn, task, or run
+names sits in its own containment, which since #111 means inside the invoker's own, in
+the agent's containment admin makes there (`weaver-admin-Spec` section 6.1). **The
+invoker's containment must admit a child containment that root makes, and must not be
+the whole host's**, or the load refuses `BoundaryUnverified`. No prompt, turn, task, or run
 crosses, per apex section 6.
 
 **At the trace door, one request line**: a byte offset on a record boundary and the
@@ -169,8 +168,8 @@ lock, on toddwbucy/WeaverWeb#15: the process id of every one of them, the worker
 state member and the trace relay, so a caller can check that each sits in its own
 containment at every load. They are absent where no run stands. **`Unloaded` means
 nothing resident**, and `show` prints it only once the run lock is free and no process
-of an ended run still stands (`weaver-admin-Spec` section 6.1; where one does, `show`
-prints `InTransition` naming them): while any
+of an ended run still stands (`weaver-admin-Spec` section 6.1), printing `InTransition`
+naming them where one does. While any
 constituent still holds it and no worker answers, a run that never entered or one
 ending, `show` prints `InTransition` with the constituents named (`weaver-admin-Spec`
 section 5), in the answer's optional `constituents` field (`weaver-types-Spec` section
@@ -236,7 +235,7 @@ state; it reads `show` and acts on what it prints.
 | State | `load` | `unload` | `force-unload` | `save-point` | `restore` | `show` |
 |---|---|---|---|---|---|---|
 | S0, down, clean | the load's answer, or its refusal | `Unloaded`, nothing to do | `Unloaded`, nothing to do | `OutOfOrder` | `RestoreNamed` | `Unloaded` |
-| S0d, down, a run ended without closing | as S0, the load recording the reset; `AgentRunning` naming them where processes of the ended run are still standing (`weaver-admin-Spec` section 6.1) | ends any process of the ended run still standing, then publishes the save points the run left as recovered, then `Unloaded`, or `SavePointNotTaken` naming `published` where that fails; the marker left as it stands, the next load records the cause it carries (`NoCleanUnload` where the run was left open, `ForcedUnload` where a force closed it) | ends them and publishes the same way, then `Unloaded`, or refuses as `unload` does; the marker is left as it stands, a force on an agent already down having ended no run, and the next load records the cause it carries | `OutOfOrder` | `RestoreNamed` | `Unloaded`, or `InTransition` naming the processes of the ended run still standing |
+| S0d, down, a run ended without closing | as S0, the load recording the reset, or `AgentRunning` naming them where processes of the ended run are still standing (`weaver-admin-Spec` section 6.1) | ends any process of the ended run still standing, then publishes the save points the run left as recovered, then `Unloaded`, or `SavePointNotTaken` naming `published` where that fails. The marker is left as it stands, and the next load records the cause it carries (`NoCleanUnload` where the run was left open, `ForcedUnload` where a force closed it) | ends them and publishes the same way, then `Unloaded`, or refuses as `unload` does. The marker is left as it stands, a force on an agent already down having ended no run, and the next load records the cause it carries | `OutOfOrder` | `RestoreNamed` | `Unloaded`, or `InTransition` naming the processes of the ended run still standing |
 | S1, loading | `InvocationInFlight` | `InvocationInFlight` | `InvocationInFlight`, a load being no unload to join | `InvocationInFlight` | `InvocationInFlight` | `InTransition` |
 | S2, serving at rest | `AgentRunning` | the graceful unload, below | the forced unload, below | `SavePointTaken` | `RestoreNamed` | `Idle` |
 | S3, serving, a turn in flight | `AgentRunning` | the graceful unload, after the turn | the forced unload, the turn cancelled | `ActivityNotAtRest` | `RestoreNamed` | `Active` |
@@ -390,11 +389,12 @@ file's bytes, as the kernel serves them, digest to the line; durability on the d
 rests on the syncs `weaver-admin-Spec` section 6 makes before it. **A member's room past 4096 finished
 names refuses `BoundaryUnverified`** at every verb that publishes (a `load`, an `unload`,
 a `save-point`), until the operator clears it (`weaver-admin-Spec` section 6; #140,
-S16). **Containment refuses three ways** (`weaver-admin-Spec` section 6.1, #111): a
-`load` on a box without cgroup v2 or `cgroup.kill` (Linux 5.14), or from an invoker at
-the hierarchy's root, refuses `BoundaryUnverified`, naming what is missing; a `load` meeting processes of an ended run
-still standing refuses `AgentRunning`, naming them, for `unload` to end; and an `unload`
-or `force-unload` whose agent's processes do not all end within the kill's bound refuses
+S16). **Containment refuses three ways** (`weaver-admin-Spec` section 6.1, #111). A
+`load` on a box below the containment's floor (cgroup v2 with its whole-group kill,
+Linux 5.14), or from an invoker whose containment admits no child, refuses
+`BoundaryUnverified`, naming what is missing. A `load` meeting processes of an ended run
+still standing refuses `AgentRunning`, naming them, for `unload` to end. An `unload` or
+`force-unload` whose agent's processes do not all end within the Spec's bound refuses
 `WorkerWouldNotExit`, naming them, and answers no state. `force-unload` takes the leave save point as
 `unload` does and ends the run whether or not it can be taken, refusing
 `SavePointNotTaken` naming `published` where it was taken and did not publish, per

@@ -657,7 +657,12 @@ in flight. A tool that finished as the cancel arrived answers in its own
 words. Nothing here opens an exchange, retains anything past the answer, or
 reads content, per section 3.
 
-**What this does not settle.** A descendant that detached itself from the
-group before the kill is the containment question issue #642 carries, and a
-cancel reaches exactly what the clock reaches, no more. How the supervisor
-hears the cancel while a tool runs is the Spec's.
+**A cancel reaches exactly what the clock reaches**, and since the operator's
+ruling of 2026-10-14 on #111 that is every process of the execution: a
+descendant that detached itself from its process group or its session before
+the kill is ended all the same, where the group kill of issue #642 let it run
+on (`weaver-admin-Spec` section 6.1 states the mechanism). **The one exception
+is that section's**: a command running as the agent's account can move itself
+out of the execution's reach, into the worker's part of the agent's
+containment, and is then ended at the run's end, not the execution's. How the
+supervisor hears the cancel while a tool runs is the Spec's.

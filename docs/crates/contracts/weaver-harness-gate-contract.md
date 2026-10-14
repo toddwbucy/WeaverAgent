@@ -222,25 +222,24 @@ less than that maximum, and the gate adopts the caller's number as the kill
 clock for that invocation. A clock beyond the maximum refuses rather than
 clamps, because a clamped clock silently changes the caller's wait and the
 two-clock disagreement returns by the back door. **What the clock holds is
-every process of the invocation, by the agent's `tools/` cgroup** (the
-operator's ruling of 2026-10-14 on #111; `weaver-admin-Spec` section 6.1, which
-states the mechanism). At the clock, and at every other end of the
-invocation, the gate kills `tools/` whole, so nothing of the invocation
-outlives the wait and no stale return arrives at a decision point that is
-already gone. A descendant that leaves the process group, by `setsid` or a
-group of its own, outlived the group kill this clause promised until then
-(measured on 2026-09-21, the ruling of 2026-09-26 on #642), and is inside the
-cgroup all the same. **The one exception is section 6.1's**: a command
-running as the agent's account can move itself out of `tools/` by writing
-the cgroup's own files, and is then held by the run's end, not the
-invocation's.
+every process of the invocation** (the operator's ruling of 2026-10-14 on
+#111, `weaver-admin-Spec` section 6.1 stating the mechanism). At the clock,
+and at every other end of the invocation, the gate ends every process of the
+invocation before it answers, so nothing of the invocation outlives the wait
+and no stale return arrives at a decision point that is already gone. A
+descendant that leaves its process group or its session is ended all the
+same. The group kill this clause promised until then let such a descendant
+outlive the exchange (measured on 2026-09-21, the ruling of 2026-09-26 on
+#642). **The one exception is that section's**: a command running as the
+agent's account can move itself out of the invocation's reach, and is then
+ended at the run's end, not the invocation's.
 
 **Cancel the execution, on the operator's ruling of 2026-09-22.** Sent by
 the harness inside an open execution exchange, at the continue position the
 channel has carried unused until this act, and carrying nothing beyond its
 kind: the operator's stop reached the harness while the tool ran, and the
 harness wants the exchange closed now rather than at the clock. The gate on
-receipt kills `tools/` exactly as the clock would, descendants included, and the exchange completes with its one answer
+receipt ends every process of the invocation exactly as the clock would, descendants included, and the exchange completes with its one answer
 as every execution does. The cancel is the caller's clock brought forward on
 the caller's word, so it adds no second clock: the number that crossed at
 the open still bounds the exchange whether or not the cancel is heard, and a
@@ -288,7 +287,7 @@ being who speaks in the return:
   supervisor - and the account's speaker is the infrastructure, never the
   tool.
 - **Killed.** The caller's clock expired, the caller cancelled, or the
-  unload interrupted, and the gate killed `tools/` whole, descendants included,
+  unload interrupted, and the gate ended every process of the invocation, descendants included,
   because a kill that reaped only the leader would leave the pipes held open
   and the promise above false. The case carries no account from the tool by
   construction - the absence of the tool's words is the fact - and output
@@ -379,7 +378,7 @@ execution while its exchange stands open from the harness's side.
 window, carrying one of the four contents of section 2, so the harness's
 grant construction site fires exactly once per opened call and a call never
 dangles. It guarantees the kill clock is the caller's number and the kill
-reaches every process of the invocation in `tools/`. It guarantees that a cancel it
+reaches every process of the invocation. It guarantees that a cancel it
 reads brings that same kill forward, that the exchange still completes with
 exactly one answer, and that a cancel arriving past the answer changes
 nothing.
@@ -454,12 +453,12 @@ agent's reachability, observed through closure and authored to the stream as the
 `fault` event, per the fault-carrier ruling of 2026-08-01, the operator's tooling
 keying on it there. A tool execution open when the gate dies has no answer coming: the
 harness closes it `Killed { by: fault }`, **its outcome indeterminate and never re-run
-automatically**: the harness first kills the agent's `tools/` cgroup whole and waits for
-it to empty (`weaver-admin-Spec` section 6.1, #111), so nothing of the command runs on,
-but the command may have completed before the kill reached it (`weaver-admin-Spec`
-section 3, the organ-death table; Codex on #109, round 43). **The gate places each shell
-in `tools/` and kills it whole at every end of an execution**, the cgroup reaching a
-command that left its process group or its session (`weaver-gate-Spec` section 8).
+automatically**. The harness first ends every process of the execution (#111,
+`weaver-admin-Spec` section 6.1 stating the mechanism), so nothing of the command runs
+on, but the command may have completed before that end reached it (`weaver-admin-Spec`
+section 3, the organ-death table, and Codex on #109, round 43). **The gate ends every
+process of each execution at every end of it**, a command that left its process group
+or its session included (`weaver-gate-Spec` section 8).
 
 **Nothing on this seam retries.** A refused directive returns to the harness, which
 unwinds, and a re-sent directive would put two attempts behind one operator intent.

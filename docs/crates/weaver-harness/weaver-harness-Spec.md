@@ -589,7 +589,7 @@ worker kills `tools/` whole when it reads the gate's death**, writing `tools/cgr
 and waiting for it to empty within the kill's bound before it closes an open execution
 `Killed { by: fault }`, and **again at its unwind, before it answers `Left`**, so nothing
 of an execution outlives the gate or the leave. Its own cgroup it cannot kill, being inside
-it; admin's run end does.
+it, and admin's run end does.
 **An empty number is skipped and said**: a worker started by hand, or by a stack from
 before the start step, holds nothing at 9 and serves, and it names the absence on its
 standard error, as it names a 9 holding something other than a regular file, so a start
@@ -2881,8 +2881,10 @@ closing the turn around it.** Closing around it leaves the tool running past
 a turn that no longer exists, which the characterization saw as a live
 process for the length of the stop, and narrowing the promise instead would
 have amended `weaver-harness-PRD` section 2 and apex section 6 to carry an
-exception neither states. #642's detached descendant is the gate's group
-kill's to contain and is untouched by this clause.
+exception neither states. #642's detached descendant, which the gate's group
+kill could not reach, is ended since #111 by the gate's kill of the
+execution's cgroup (`weaver-admin-Spec` section 6.1), and this clause is
+untouched by it.
 
 ```graph
 node: harness-stop-polled-during-the-invocation

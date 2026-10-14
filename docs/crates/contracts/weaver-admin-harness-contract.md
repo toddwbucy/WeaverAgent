@@ -120,15 +120,15 @@ worker binds and listens on this channel in its own process, the one the start s
 handed the run lock, and never through a child it forks and execs, whose listener
 admin refuses.
 
-**The worker starts inside the agent's cgroup, and the cgroup crosses no envelope**
-(`weaver-admin-Spec` section 6.1, #111). Admin's start step places the worker in the
-agent's `run/` cgroup before its exec. The gate's `tools/` stands beside it, its
-`cgroup.procs` and `cgroup.kill` writable by the agent's account, and each process finds
-it from the cgroup it starts in. Nothing on this channel names a cgroup. Each party's part:
-- **The harness** kills `tools/` on the gate's death and at its unwind, before `Left`.
-- **Admin** kills the agent's cgroup whole in its conclusion, under the invocation lock
-  once the run lock frees, and removes it before it answers `Unloaded`, so `Unloaded` on this seam's far side means nothing of the
-  agent stands.
+**Every process of the agent is contained, and the containment crosses no envelope**
+(#111, `weaver-admin-Spec` section 6.1 stating the mechanism). Admin starts the worker
+inside the agent's containment, and every process the worker makes stays inside it.
+Nothing on this channel names the containment. Each party's obligation:
+- **The harness** ends every process of an open tool execution when the gate dies, and
+  again at its unwind, before `Left`.
+- **Admin** ends every process of the agent at the run's end, in its conclusion under
+  the invocation lock once the run lock frees, before it answers `Unloaded`. So
+  `Unloaded` on this seam's far side means no process of the agent stands.
 
 **The worker holds the agent's own principal from its first instruction and makes its
 memory unreadable to that principal's other processes after its final image
