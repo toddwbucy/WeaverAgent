@@ -454,7 +454,7 @@ The live restore, a reload of state without a process restart, is A5's, with the
 | S6 | the gate already refuses; at the lower, a frame met is recorded refused and its connection closes | - | - | - (the legs from the lower on are bounded in this crate's 150 seconds) | a leave that stayed graceful: S9, `SavePointNotTaken` naming the leg, nothing more authored, the run entered at rest with the gate lowered; a leave a join, a declared bound or a dead gate or SPU turned forced: the miss recorded as a refusal of the leave naming the leg, S7, `Left{forced: true}` with no save point, the outcome table's forced row, marker `Forced` | S8b, as in S2 | the leg missed is `MemberDead`, as this row's missed-leg cell: a leave that stayed graceful to S9, `force-unload` the recourse; a forced one to the outcome table's forced row, marker `Forced` |
 | S7 | - | - | - | - | - | S8b as far as this crate can tell, as in S2, the trace possibly ending before `unload` | the seam found dead at the release: `release.member` reads `Unconfirmed`, no `fault` authored, a dead peer being no fault (`weaver-harness-state-contract` section 5), and the leave goes on; a member that dies after its seam closed is unseen, `Closed` saying only that the close was made |
 | S9 | the gate is lowered: the connection is refused | - | - | - | - | S8b, as in S2 | stays S9: a retried `unload` refuses `SavePointNotTaken` naming `MemberDead` again, and `force-unload` is the recourse, coming down `Forced` |
-| S10 | the gate lowered at once (once an open execution has ended): a frame met at the lower is recorded refused and its connection closes | `ToolInterrupt`, answered `Killed{by: unload}`, the first outcome winning as in S4, or, where the gate cannot contain the call, the gate's death of the organ-death table (section 6.1) | the turn cancelled: `turn.closed` `Stopped{reason: unload}` | - (no drain or wind-down runs) | the miss recorded as a refusal of the leave naming the leg, S7, `Left{forced: true}` with no save point, marker `Forced` | S8b, as in S2 | the save point not taken, `MemberDead`: as this row's missed-leg cell, marker `Forced` |
+| S10 | the gate lowered at once (once an open execution has ended): a frame met at the lower is recorded refused and its connection closes | `ToolInterrupt`, answered `Killed{by: unload}`, the first outcome winning as in S4, or, where the gate cannot contain the call, the gate's death of the organ-death table (section 6.1). Where the interrupted call's `tools/` does not empty within the lower's bound, the harness reaps the gate (S10 x the gate dies) and the call is `Killed{by: fault}`, indeterminate and never re-run automatically (section 6.1) | the turn cancelled: `turn.closed` `Stopped{reason: unload}` | - (no drain or wind-down runs) | the miss recorded as a refusal of the leave naming the leg, S7, `Left{forced: true}` with no save point, marker `Forced` | S8b, as in S2 | the save point not taken, `MemberDead`: as this row's missed-leg cell, marker `Forced` |
 
 A declared bound that passes after the leave already turned forced (a join, the other bound, or a dead gate or SPU having turned it first) changes nothing: the leave is forced once, by whichever came first, and a bound's timer that fires late is ignored.
 
@@ -2524,7 +2524,13 @@ weaver-<agent>/      root's; the agent's cgroup
 **The kill's bound: 30 seconds for `populated 0` after a `cgroup.kill`**, this Spec's
 election, provisional and measured like section 6's, and stated here once. An
 execution's kill fires at the caller's number, and its exchange completes within that
-number plus this bound (`weaver-harness-gate-contract` section 2). A killed process stays counted
+number plus this bound (`weaver-harness-gate-contract` section 2). **A forced leave does
+not wait it out** (the Planner's ruling of 2026-10-14, on #161): the lower waits its own
+bound (section 3, `LOWER_BOUND_MS`). A forced leave whose interrupted execution's
+`tools/` does not empty within that bound records the call `Killed { by: fault }`,
+indeterminate and never re-run automatically, the gate being reaped as at its death, and
+the worker's kill and the run end still hold its processes. A forced leave stops work
+promptly, so the leave's bounds and section 3's totals do not move. A killed process stays counted
 until its exit has released its files and memory, and an SPU's device context is among
 them, which can take seconds. A process in an uninterruptible sleep can hold it longer.
 - **At the gate:** a `tools/` still populated past the bound makes the gate exit with
