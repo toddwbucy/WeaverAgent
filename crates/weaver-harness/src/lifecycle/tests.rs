@@ -224,6 +224,7 @@ fn entered_run(turn: Option<&str>) -> (Run, OrganChannel, crate::scratch::Scratc
             held_frames: std::collections::VecDeque::new(),
             turn_ordinal: 0,
             gate_lowered: false,
+            lower_refusal: None,
             drain_bound: None,
             wind_down_bound: None,
             leave: None,
@@ -920,6 +921,10 @@ enum LeaveMode {
     FrameDuringLower,
     /// A load's rollback: `Leave { forced: true, rollback: true }`.
     Rollback,
+    /// An unforced `Leave` whose gate stand-in refuses the `Lower` and whose
+    /// `finished` answer never comes, so the leave stops in S9; then a
+    /// forced `Leave` from S9, whose answer is the one captured (#140, S15).
+    RefusedLowerThenForced,
 }
 
 /// The enter against a member stub, left as `mode` says. Answers the
@@ -945,7 +950,7 @@ fn enter_against_a_member_leaving(
         LeaveMode::Directive {
             finished: false,
             ..
-        }
+        } | LeaveMode::RefusedLowerThenForced
     );
 
     let dir = crate::scratch::dir(format!(
@@ -1094,7 +1099,8 @@ fn enter_against_a_member_leaving(
                 | LeaveMode::SavePointAbandoned
                 | LeaveMode::QueuedFrame
                 | LeaveMode::FrameDuringLower
-                | LeaveMode::Rollback => {
+                | LeaveMode::Rollback
+                | LeaveMode::RefusedLowerThenForced => {
                     // The fixture's SPU never admitted, its exec having
                     // failed: its dead arm is dropped and reaped here so
                     // the leave's answer is the save point's and not the
@@ -1127,6 +1133,7 @@ fn enter_against_a_member_leaving(
                     let gate_order = order.clone();
                     let queue_frame = matches!(mode, LeaveMode::QueuedFrame);
                     let frame_during_lower = matches!(mode, LeaveMode::FrameDuringLower);
+                    let refuse_lower = matches!(mode, LeaveMode::RefusedLowerThenForced);
                     gate_stand_in = Some(std::thread::spawn(move || {
                         let channel = gate_far.into_channel();
                         if queue_frame {
@@ -1211,9 +1218,11 @@ fn enter_against_a_member_leaving(
                             let _ = channel.send(&OrganEnvelope {
                                 exchange: envelope.exchange,
                                 position: Position::Close,
-                                payload: weaver_types::Payload::Answer(
-                                    LifecycleAnswer::GateStopped,
-                                ),
+                                payload: if refuse_lower {
+                                    weaver_types::Payload::Refusal(LifecycleRefusal::Malformed)
+                                } else {
+                                    weaver_types::Payload::Answer(LifecycleAnswer::GateStopped)
+                                },
                             });
                             // What the harness writes now reaches a gate
                             // with no connection to carry it.
@@ -1307,13 +1316,13 @@ fn enter_against_a_member_leaving(
                             forced: true,
                             rollback: true,
                         },
-                        LeaveMode::QueuedFrame | LeaveMode::FrameDuringLower => {
-                            LifecycleDirective::Leave {
-                                cause: weaver_types::Cause { uid: 1000 },
-                                forced: false,
-                                rollback: false,
-                            }
-                        }
+                        LeaveMode::QueuedFrame
+                        | LeaveMode::FrameDuringLower
+                        | LeaveMode::RefusedLowerThenForced => LifecycleDirective::Leave {
+                            cause: weaver_types::Cause { uid: 1000 },
+                            forced: false,
+                            rollback: false,
+                        },
                         _ => LifecycleDirective::SavePoint {
                             cause: weaver_types::Cause { uid: 1000 },
                         },
@@ -1328,6 +1337,33 @@ fn enter_against_a_member_leaving(
                             .dispatch_on(&connection, test_exchange(), directive, None, None)
                             .expect("the directive dispatches");
                         answer = Some(admin_peer.recv().expect("the leave answers").payload);
+                    }
+                    if matches!(mode, LeaveMode::RefusedLowerThenForced) {
+                        assert_eq!(
+                            answer,
+                            Some(weaver_types::Payload::Refusal(
+                                LifecycleRefusal::SavePointNotTaken {
+                                    missed: weaver_types::SavePointLeg::Finished,
+                                }
+                            )),
+                            "the graceful leave stops in S9"
+                        );
+                        let (connection, admin_peer) = OrganChannel::pair().expect("force pair");
+                        let admin_peer = admin_peer.into_channel();
+                        harness
+                            .dispatch_on(
+                                &connection,
+                                test_exchange(),
+                                LifecycleDirective::Leave {
+                                    cause: weaver_types::Cause { uid: 1000 },
+                                    forced: true,
+                                    rollback: false,
+                                },
+                                None,
+                                None,
+                            )
+                            .expect("the force dispatches");
+                        answer = Some(admin_peer.recv().expect("the force answers").payload);
                     }
                     still_entered = matches!(harness.state, ChannelState::Entered(_));
                     if let ChannelState::Entered(run) =
@@ -2912,6 +2948,34 @@ fn stop_records_the_close_and_answers_turn_aborted() {
         }
         other => panic!("a stop on a turn answers TurnAborted, got {other:?}"),
     }
+}
+
+/// **The lower's refusal is not lost to a stop in S9** (#140, S15;
+/// `weaver-harness-Spec` section 6): a gate that refuses the `Lower` of a
+/// graceful leave whose `finished` never comes stops the leave in S9,
+/// answered `SavePointNotTaken`; the force that follows completes the unwind
+/// and names the lower's refusal at its seal, never `Left`, its own leg
+/// missed and its lower already done. Perturbation: drop the refusal at the
+/// stop, as before, and the force answers `Left`.
+#[test]
+fn a_lower_refused_before_a_stop_in_s9_is_named_by_the_force_after() {
+    let (_, _, _, answer, still_entered) = enter_against_a_member_leaving(
+        None,
+        false,
+        EMPTY_RESTORED,
+        LeaveMode::RefusedLowerThenForced,
+    );
+    assert_eq!(
+        answer,
+        Some(weaver_types::Payload::Refusal(
+            LifecycleRefusal::OrganRefused {
+                organ: weaver_types::RefusingOrgan::Gate,
+                reason: Box::new(LifecycleRefusal::Malformed),
+            }
+        )),
+        "the force names the lower's refusal"
+    );
+    assert!(!still_entered, "the force completes the unwind");
 }
 
 /// **A gate a leave lowered leaves the run in S9, not S2** (3.0, S9: a

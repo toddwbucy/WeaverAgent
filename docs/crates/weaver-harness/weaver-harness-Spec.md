@@ -2204,7 +2204,9 @@ the run stays entered at rest with the gate lowered, as the leg rule below state
 retry goes straight to the save point, the lower being done (S9 x unload); a
 `save-point` at rest is taken as from S2 (S9 x save-point); a force acts as the sole
 forced leave from there (S9 x force-unload); and a dialer meets no listener (S9 x dialer
-request).
+request). **A refusal the lower answered is carried through the stop, never dropped**
+(#140): the stop authors nothing more, and the retry or the force that completes the
+unwind names it as its first refusal at the seal, as a leave that never stopped would.
 
 **The forced leave stops work and keeps state** (`weaver-admin-Spec` section 3, the
 forced unload (sole); S2, S3 and S9 x force-unload). A `Leave` with `forced` true and `rollback` false, set by
@@ -2356,7 +2358,11 @@ above states. **The seam
 stays alive across the miss**: a missed answer or finished leg retires nothing, and before
 its next ask the seam drains, without blocking, whatever lines or part of one the member
 sent late, discarding them and saying so in one diagnostic line with the count, the
-resync for every ask; **and a late answer is dropped by its number**: the retry's ask
+resync for every ask; a part of a line read inside the missed wait is held for that
+drain, and a drain that ends inside a line discards the rest of it through its newline
+when it arrives, before any line is read, unless what arrives parses whole, every frame
+being one JSON object of which no proper suffix parses, so a part never finished costs
+no answer (#140); **and a late answer is dropped by its number**: the retry's ask
 carries the next ordinal, and an answer of either kind, the `snapshot` answer or the
 `finished` answer, that arrives past the drain carrying the ordinal of an ask before is
 dropped and said while the wait goes on inside the bound, so a

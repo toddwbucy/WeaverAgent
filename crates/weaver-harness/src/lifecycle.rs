@@ -387,6 +387,11 @@ struct Run {
     /// (S9): the run stands entered at rest with no gate, which a gate that
     /// died leaves too, so the lowering is held as its own fact.
     gate_lowered: bool,
+    /// **A refusal the lower answered before the leave stopped in S9** (#140,
+    /// S15): the unwind's first refusal, carried to the retry or the force
+    /// that completes the unwind and named at its seal, since the stop
+    /// authors nothing more (`weaver-harness-Spec` section 6).
+    lower_refusal: Option<LifecycleRefusal>,
     /// The declared drain and wind-down bounds, in seconds, from the enter
     /// (`weaver-harness-Spec` section 6, the bounds); absent is unbounded.
     drain_bound: Option<u64>,
@@ -1584,7 +1589,10 @@ impl Harness {
                             None
                         }
                         // `StopInS9`, the one other answer to a missed leg.
+                        // The lower's refusal is carried to the leave that
+                        // completes the unwind (#140, S15).
                         _ => {
+                            run.lower_refusal = lowered;
                             let latched = run.recorder.failed();
                             answer_all(held.as_ref().expect("the leave"), Err(refusal), latched);
                             return Ok(None);
@@ -2276,6 +2284,7 @@ impl Harness {
             // and the lineage's last turn numbers nothing.
             turn_ordinal: initial_turn_ordinal(payload.restore.as_ref()),
             gate_lowered: false,
+            lower_refusal: None,
             drain_bound: payload.drain_bound,
             wind_down_bound: payload.wind_down_bound,
             leave: None,
@@ -2816,7 +2825,9 @@ fn lower_gate_within(
     shared: Option<std::time::Instant>,
 ) -> (Option<LifecycleRefusal>, bool) {
     let Some(gate) = run.gate.take() else {
-        return (None, false);
+        // From S9, the gate already lowered: a refusal that lower answered
+        // is this unwind's first (#140, S15).
+        return (run.lower_refusal.take(), false);
     };
     // Held as its own fact, since a gate that died leaves no gate too: a
     // leave stopped after this stands the run in S9 (3.0).
