@@ -2348,17 +2348,20 @@ kills it. **This section is the one statement of the mechanism.** `weaver-gate-S
 section 8, `weaver-harness-Spec` section 2.2 and the contracts that carry a seam of it
 cite it and restate none of it: `weaver-admin-harness-contract` section 2,
 `weaver-harness-gate-contract` sections 2 and 5, and `weaver-admin-operator-contract`
-sections 3 and 5.
+sections 3 and 5. **It specifies a host** (the operator's ruling of 2026-10-14, recorded on
+#111): the agent's cgroup on a host whose invoker's containment admits a child root
+makes. A container or cgroup-namespace deployment is later work, tested and built toward
+then, and this section specifies none of it.
 
 **The agent's cgroup is made beneath the invoker's, so its lifetime stays the
 invoker's** (section 6, the lifetime, and the operator's ruling of 2026-10-03 on #72).
 - **Where:** the start step reads the cgroup its own invocation runs in from
-  `/proc/self/cgroup`. That is the invoker's containment: admin-con's unit, the
-  operator's session, or a container's cgroup. The start step makes the agent's cgroup
+  `/proc/self/cgroup`. That is the invoker's containment: admin-con's unit or the
+  operator's session. The start step makes the agent's cgroup
   as its child, `<invoker's cgroup>/weaver-<agent>/`, named for the agent's account.
 - **What it keeps:** stopping the invoker's containment still ends the agent, since a
   cgroup's kill or a unit's stop reaches every descendant. So the agent fails closed
-  with admin-con as before, and one rule serves a box and a container alike (#86).
+  with admin-con as before.
 - **Why not its own top-level cgroup:** a separate tree would have cut that binding.
 - **The record:** because a later verb may run from another containment (the operator's
   shell after admin-con's load), the start step records the agent's cgroup's path in
@@ -2368,11 +2371,10 @@ invoker's** (section 6, the lifetime, and the operator's ruling of 2026-10-03 on
   record, the new one, or none, never a partial one. A load that meets a temporary left
   behind removes it. **The record holds the cgroup directory's identity beside its
   path** (Codex on #161): the device and inode the loader's `fstat` read on the directory
-  it made. A later verb reads the path in its own cgroup-namespace view, opens it and
-  compares the identity. Where they differ, or the path does not open, it refuses
-  `BoundaryUnverified`, naming both, and acts on nothing, never on another cgroup. So a
-  verb from another containment works wherever its view reaches the same cgroup, and
-  fails closed where it does not. Every later verb finds the cgroup through that record, never through its own
+  it made. A later verb opens the recorded path and compares the identity. Where they
+  differ, or the path does not open, it refuses `BoundaryUnverified`, naming both, and
+  acts on nothing, so a verb that reaches another cgroup at that path fails closed
+  rather than act on it. Every later verb finds the cgroup through that record, never through its own
   `/proc/self/cgroup`. A record that does not read, or that names anything but a
   `weaver-<agent>` directory on the `cgroup2` mount, refuses `BoundaryUnverified`.
   **The start step never needs the record to find its own cgroup** (Codex on #161): the
@@ -2383,12 +2385,11 @@ invoker's** (section 6, the lifetime, and the operator's ruling of 2026-10-03 on
 - **The invoker's requirement:** its containment must admit a child cgroup that root
   makes, as a systemd unit does with `Delegate=yes`. `weaver-admin-operator-contract`
   section 3 carries this.
-- **No guard against the host's root cgroup.** Inside a cgroup namespace,
-  `/proc/self/cgroup` reads `/` for a delegated cgroup that is not the host's root, so a
-  path read cannot tell the two apart, and the start step does not try. An invoker at
-  the host's own root has no containment that ever stops, so an agent loaded from there
-  is bound to the host's life. Only a process outside every service and session sits
-  there.
+- **No guard against the host's root cgroup.** The floor's `mkdir` is the one question
+  the start step asks of the invoker's cgroup, and no path is read beside it. An invoker
+  at the host's own root has no containment that ever stops, so an agent loaded from
+  there is bound to the host's life. Only a process outside every service and session
+  sits there.
 
 **The floor: cgroup v2's unified hierarchy at `/sys/fs/cgroup`, and `cgroup.kill`
 (Linux 5.14), checked by making the agent's cgroup** (Codex on #161). The start step:
@@ -2397,8 +2398,7 @@ invoker's** (section 6, the lifetime, and the operator's ruling of 2026-10-03 on
   invoker's containment admits a child that root makes,
 - and requires a `cgroup.kill` file in what it made.
 
-No path is read for the answer, since a cgroup namespace makes a delegated cgroup read
-as `/`. **Where the mount is not `cgroup2`, the `mkdir` fails, or what it made carries no
+No path is read for the answer: the `mkdir` is the question the floor asks. **Where the mount is not `cgroup2`, the `mkdir` fails, or what it made carries no
 `cgroup.kill`, the load refuses `BoundaryUnverified`, naming which, removes what it made,
 and stands nothing**, failing closed, as the dial does on a kernel without its pidfd
 (section 7). An agent with no containment would be an agent whose tools outlive their
