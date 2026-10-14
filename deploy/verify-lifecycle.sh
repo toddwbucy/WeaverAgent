@@ -505,12 +505,13 @@ print(found)'
 # `publish` line. A printed line, not a check: the run reads the counts its
 # own verbs left before step 9 takes the territory down, the take-down's own
 # unload uncounted. Only a line naming the `publish` verb is parsed, and an
-# outcome whose count is not a number is said and passed over.
+# outcome whose count is not a number is said and passed over, its
+# past-the-bound wording with it.
 room_count_report() {
   STEP_LABEL="the room's count"
   plan "the largest finished-name count admin.log records for a room scan, printed (S16, provisional at 4096)"
   [ "$APPLY" -eq 1 ] || return 0
-  local log line verb outcome count largest=-1 scans=0 past=0
+  local log line verb outcome count beyond largest=-1 scans=0 past=0
   if ! log=$(sudo -n cat -- "$T/admin.log" 2>/dev/null); then
     measured "admin.log does not read, so no room count is reported"
     return 0
@@ -521,8 +522,8 @@ room_count_report() {
     [ "$verb" = publish ] || continue
     json_req outcome "$line" outcome "a publish line names its outcome"
     case "$outcome" in
-      "the room holds more than "*" finished names") count=${outcome#the room holds more than }; past=1 ;;
-      "the room holds "*" finished names") count=${outcome#the room holds } ;;
+      "the room holds more than "*" finished names") count=${outcome#the room holds more than }; beyond=1 ;;
+      "the room holds "*" finished names") count=${outcome#the room holds }; beyond=0 ;;
       *) continue ;;
     esac
     count=${count%% *}
@@ -530,6 +531,7 @@ room_count_report() {
       ''|*[!0-9]*) measured "a publish line's count does not read: $outcome"; continue ;;
     esac
     scans=$((scans + 1))
+    [ "$beyond" -eq 0 ] || past=1
     [ "$count" -le "$largest" ] || largest=$count
   done <<<"$log"
   if [ "$scans" -eq 0 ]; then

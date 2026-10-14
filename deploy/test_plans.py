@@ -3130,7 +3130,9 @@ class LifecycleRoomCountTests(unittest.TestCase):
     are in admin.log's own shape (admin's `publish` lines, a load's, and the
     relay's `ended` line, which carries no `verb`). Perturbation: keep the
     first count rather than the largest and the line names 1; drop the
-    past-the-bound reading and that case reads as a count."""
+    past-the-bound reading and that case reads as a count; mark a scan past
+    the bound before its count reads and a malformed past-the-bound line
+    makes a later ordinary count read as past the bound (Codex on #155)."""
 
     def line(self, verb, outcome):
         return json.dumps({"agent": "m1", "command": f"weaver-admin {verb} m1", "outcome": outcome,
@@ -3193,6 +3195,16 @@ class LifecycleRoomCountTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("a publish line's count does not read", result.stdout)
         self.assertIn("over 1 scans: 2 finished names", result.stdout)
+
+    def test_a_past_bound_line_that_does_not_read_marks_nothing_past(self):
+        result = self.report([
+            self.line("publish", "the room holds more than x finished names"),
+            self.line("publish", "the room holds 2 finished names"),
+        ])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("a publish line's count does not read", result.stdout)
+        self.assertIn("over 1 scans: 2 finished names", result.stdout)
+        self.assertNotIn("past the bound", result.stdout)
 
     def test_the_report_runs_before_the_take_down_on_both_paths(self):
         script = (DEPLOY / "verify-lifecycle.sh").read_text()
