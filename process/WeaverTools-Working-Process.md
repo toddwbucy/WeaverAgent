@@ -592,6 +592,33 @@ produced substantive work. **Passing means no finding that changes behaviour or
 corrects a claim is unanswered**, a declined finding being answered with its reason
 on the pull request.
 
+**Every code act passes four reviews, each a different lens**, on the operator's
+arrangement of 2026-10-09, tried on the lifecycle code act and kept on its
+after-action review of 2026-10-13: sixteen Codex rounds over four pull requests,
+against thirty on #94 and about fifty on #109, with no decision-table cell found
+wrong. The four are the Executor's self-check on its own diff before the draft; the
+Planner's grade, a verdict per Spec section plus a walk of the sequences between
+rows, on a clean extract with the gates run there; Codex; and the operator's merge.
+The lenses overlap less than expected: the self-check finds local defects, the
+sequence walk finds gaps between rows, Codex finds races and bounds. **Compute goes
+first to the PRD and Spec, then to review, then to code**, on the same arrangement:
+many rounds on a Spec act are the process, and many on a code act mean the Spec was
+not finished. The Executor plans before code, and a table-shaped decision is built
+test first as a pure function with an exhaustive match, its test transcribed row for
+row from the Spec and perturbed per row. **Every act ends with an after-action
+review**: what was planned, what happened, why they differed, what to sustain and
+what to improve, and each improvement goes into this document, `CLAUDE.md` or the
+seats' standing notes, so the next plan carries it.
+
+**What the first after-action review carried forward**, besides the rules `CLAUDE.md`
+holds for verifiers, scripts and the review invocation. A Spec gives two clocks on one
+seam one origin, stated once, and another document cites the timing rather than
+restating it. A Spec sentence that lands ahead of its code draws the same finding every
+round until the body says, in a do-not-deploy note and a plan row, which act brings
+the code. Work in progress is pushed early, and a renamed repository is cloned anew,
+never reached through a symlink. A seam that draws a second finding gets a full read
+with a second, unanchored reader and experiments before the next push.
+
 **A pass is stated before it is hardened**, on the operator's ruling of 2026-09-27,
 after #716 took fifteen Codex passes and every finding of every pass was valid. Code
 whose exit is a verdict - a pass, a reproduction, an approval - has its Spec state,
@@ -722,6 +749,18 @@ on refusal-path coverage - and the gaps are named at filing so the exception doe
 not become the permanent state. After loop 0, a failing H3 case blocks merge.
 
 ## 7. Current position
+
+**Where the work sits as of 2026-10-13.** The lifecycle of `weaver-admin-Spec`
+section 3.0 is built and verified live: `deploy/verify-lifecycle.sh --apply` ran a
+throwaway agent through every step on 2026-10-13, save point, reload with state
+carried, restore, forced unload on drifted territory, crash recovery and take-down,
+with no check failed. That run is the gate the operator ruled on 2026-10-09 before
+state management. The acts ruled ahead of state management have landed: trace
+integrity (#138), the unrecovered tool call (#136, #141) and admin's custody gaps
+(#142). **State management is the next step and is on hold** for the operator's
+conceptual work, its direction and open questions recorded on epic #146, with #1
+the record of its rulings. Meanwhile the seats work hardening issues that need no
+ruling. The paragraphs below are the record of earlier positions.
 
 **Where the work sits as of 2026-09-27.** The knowledge graph and its upkeep are
 deferred to release, on the operator's ruling of that date recorded in section 6:

@@ -273,6 +273,21 @@ made under an earlier layout or declaration is taken down and recreated with
 drives a throwaway agent through the lifecycle (plan by default, `--apply` to act,
 `--keep` to stop with it loaded for the checks it cannot make). Run logs of redeploys are kept under `docs/project/redeploy-*.md`.
 
+**A verifier is graded against live shapes before it is trusted.** Its event fixtures
+come from a real trace and its refusal orders from admin's code, it runs live at the
+first opportunity, and every run's console output goes to a file from the first run
+(`--apply 2>&1 | tee <file>`). Five of the six defects the first live runs of the
+lifecycle verifier met on 2026-10-12 and 2026-10-13 were the verifier's own. After a
+fix, the steps that follow it are read against the code before the next run, so one
+run does not stop on one assumption per round.
+
+**Shell rules the deploy scripts have paid for.** A variable never carries a name bash
+owns (`LINES`, `COLUMNS`, `SECONDS`, `RANDOM`): bash rewrites `LINES` to the terminal's
+height after any external command. A pipeline under `pipefail` never ends in a consumer
+that stops early (`grep -q`, `head`), because the producer's SIGPIPE fails the pipeline.
+A test of a script models the real signal source (a terminal's process-group signal,
+sudo's pseudo-terminal, a pipe closed early), not the script alone.
+
 ### Reading command output
 
 Cargo writes diagnostics to stderr, so a pipe without `2>&1` prints a clean nothing
@@ -299,17 +314,24 @@ Two Claude Code sessions and the operator (Todd), who closes every loop. The
 directly: it is branch-protected (a direct push was refused on 2026-09-30), so edits to
 this file and `AGENTS.md`, which are the Planner's, also go through a pull request.
 
-1. Gates first: `lock.sh`, fmt, clippy for the touched crate.
+1. Gates first: `lock.sh`, fmt, clippy for the touched crate. Then the Executor's
+   self-check, the first of the four reviews of the Working Process section 6: the
+   `code-review` skill invoked with the worktree path, the diff range and the level as
+   its arguments (it reviews the session's directory otherwise, and a level typed
+   outside its arguments is not parsed), and verification before completion invoked,
+   not followed in shape: the suite is run before the commit that claims it.
 2. The Planner grades the draft against a clean extract of the head. The body carries
    `Implements: <Spec> <sections>`, and each named section gets one verdict: conforms,
    drifted (fix the code), better way (change the Spec in the same pull request, a
    design change going to the operator), or Spec gap (extend the Spec, the operator's
-   ruling).
+   ruling). **Conforms about a behaviour needs a test, not a reading.**
 3. The Planner undrafts. That fires Codex's review; a draft gets no pass. A clean pass
    edits the summary comment in place and posts no thread; findings arrive as review
    threads, sometimes a minute after the summary row flips: wait past the flip, then
    list the threads created since the push from the GraphQL thread graph (the REST
-   comment listing paginates at thirty). `main` requires every conversation resolved, so
+   comment listing paginates at thirty). **Codex also posts findings as issue
+   comments on the pull request**, which neither the thread graph nor the merge state
+   shows: list the issue comments since the push as well. `main` requires every conversation resolved, so
    an answered thread is resolved by id. `BLOCKED` means only that some protection
    holds the merge: here, with no required reviews or checks, it is usually an
    unresolved thread, but read the branch protection when it is not.
