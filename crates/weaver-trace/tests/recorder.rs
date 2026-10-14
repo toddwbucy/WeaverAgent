@@ -892,6 +892,139 @@ fn the_queues_last_slot_is_reserved_for_unload() {
         .expect("the submitter ends once the sink fails");
 }
 
+/// **A bounded submission stalls, lands nothing, and stands** (#120;
+/// `weaver-trace-Spec` section 6, the submission bound): against a sink that
+/// stays open and takes nothing, a submission into a queue full to `unload`'s
+/// reserve fails `SubmitStalled` within the bound, naming the sequence it
+/// would have taken, with no row in the structure and no sequence consumed. A
+/// later submission fails the same at once, and `unload` is admitted into its
+/// reserved slot at the named sequence. Perturbations: wait with no deadline,
+/// and the watchdog expires; keep no standing stall, and the second
+/// submission waits the bound again; refuse `unload` on the standing stall,
+/// and its submission fails.
+#[test]
+fn a_bounded_submission_stalls_lands_nothing_and_stands() {
+    use weaver_trace::{QUEUE_DEPTH, UNLOAD_RESERVE};
+    let (reader, pipe_writer) = std::io::pipe().expect("pipe");
+    let mut r = Recorder::receive(
+        OwnedFd::from(pipe_writer),
+        RunRef("r-1".into()),
+        SessionRef("s-1".into()),
+    )
+    .expect("receives");
+    let bound = std::time::Duration::from_millis(200);
+    r.bound_submissions(bound);
+    r.submit(event(Kind::Load, None, Some(elections())))
+        .unwrap();
+    let account = format!("{{\"pad\":\"{}\"}}", "x".repeat(1_024));
+    let fault = move || {
+        event(
+            Kind::Fault,
+            None,
+            Some(Payload::Fault(raw_payload(&account).unwrap())),
+        )
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        while r.pressure().queued < QUEUE_DEPTH - UNLOAD_RESERVE {
+            r.submit(fault()).unwrap();
+        }
+        let rows = r.structure().len();
+        let next = Sequence(rows as u64);
+        let started = std::time::Instant::now();
+        let stalled = r.submit(fault());
+        let first = started.elapsed();
+        let started = std::time::Instant::now();
+        let again = r.submit(fault());
+        let second = started.elapsed();
+        let rows_after = r.structure().len();
+        let unload = r.submit(event(
+            Kind::Unload,
+            None,
+            Some(Payload::Unload(weaver_trace::UnloadClose {
+                grant_surface: None,
+                cause: None,
+                forced: false,
+                forced_by: None,
+                release: None,
+            })),
+        ));
+        let _ = tx.send((
+            next, stalled, first, again, second, rows, rows_after, unload,
+        ));
+        // The writer is stuck on the unread pipe, so the recorder is
+        // abandoned rather than joined (#117).
+        r.abandon();
+    });
+    let (next, stalled, first, again, second, rows, rows_after, unload) = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("a stalled submission returns within its bound");
+    assert_eq!(stalled, Err(Failure::SubmitStalled { sequence: next }));
+    assert!(first >= bound, "it waited the bound: {first:?}");
+    assert!(
+        first < std::time::Duration::from_secs(5),
+        "and no longer: {first:?}"
+    );
+    assert_eq!(again, Err(Failure::SubmitStalled { sequence: next }));
+    assert!(
+        second < std::time::Duration::from_millis(50),
+        "a standing stall answers at once: {second:?}"
+    );
+    assert_eq!(rows_after, rows, "a stall lands nothing in the structure");
+    assert_eq!(
+        unload,
+        Ok(next),
+        "unload takes its reserved slot at the sequence the stall named"
+    );
+    drop(reader);
+}
+
+/// **A recorder never bounded waits as before** (`weaver-trace-Spec` section
+/// 6): the bound is the harness's to set, and a submission into a full queue
+/// with none set is still waiting at a horizon well past any test bound.
+/// Perturbation: default a bound in the recorder, and the submission returns.
+#[test]
+fn an_unbounded_recorder_still_waits_for_room() {
+    use weaver_trace::{QUEUE_DEPTH, UNLOAD_RESERVE};
+    let (reader, pipe_writer) = std::io::pipe().expect("pipe");
+    let mut r = Recorder::receive(
+        OwnedFd::from(pipe_writer),
+        RunRef("r-1".into()),
+        SessionRef("s-1".into()),
+    )
+    .expect("receives");
+    r.submit(event(Kind::Load, None, Some(elections())))
+        .unwrap();
+    let account = format!("{{\"pad\":\"{}\"}}", "x".repeat(1_024));
+    let fault = move || {
+        event(
+            Kind::Fault,
+            None,
+            Some(Payload::Fault(raw_payload(&account).unwrap())),
+        )
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let submitter = std::thread::spawn(move || {
+        while r.pressure().queued < QUEUE_DEPTH - UNLOAD_RESERVE {
+            r.submit(fault()).unwrap();
+        }
+        tx.send("filled").unwrap();
+        let _ = r.submit(fault());
+        tx.send("returned").unwrap();
+    });
+    let wait = std::time::Duration::from_secs(5);
+    assert_eq!(rx.recv_timeout(wait), Ok("filled"));
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(500))
+            .is_err(),
+        "an unbounded submission waits for room"
+    );
+    drop(reader);
+    submitter
+        .join()
+        .expect("the submitter ends once the sink fails");
+}
+
 /// **The subsystem's wire spellings are pinned, every case, and the organ and
 /// its engine are distinct values.** The field is the record's attribution and
 /// a consumer keys on the strings, so a variant rename or a serde-scheme

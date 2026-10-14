@@ -75,6 +75,7 @@
 //!         Failure::CommitFailed { .. } => "commit_failed",
 //!         Failure::AppendFailed { .. } => "append_failed",
 //!         Failure::WriteTargetUnusable { .. } => "write_target_unusable",
+//!         Failure::SubmitStalled { .. } => "submit_stalled",
 //!     }
 //! }
 //! ```

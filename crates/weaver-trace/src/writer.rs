@@ -165,23 +165,43 @@ impl Writer {
         }
     }
 
-    fn enqueue(&self, sequence: Sequence, line: Line, unload: bool) {
-        // **The reserve** ([`UNLOAD_RESERVE`]): any record but the run's
-        // `unload` waits here until the queue holds fewer than the depth
-        // less the reserve, the writer notifying on every record it takes,
-        // so the terminal event's slot is never another record's.
+    /// **A queue slot taken for one record**, before anything lands.
+    ///
+    /// **The reserve** ([`UNLOAD_RESERVE`]): any record but the run's
+    /// `unload` waits here until the queue holds fewer than the depth less
+    /// the reserve, the writer notifying on every record it takes, so the
+    /// terminal event's slot is never another record's. **The wait is
+    /// bounded by `deadline`** where one is given (#120;
+    /// `weaver-trace-Spec` section 6): at it no slot is taken and this
+    /// answers `false`. `unload` never waits, its slot being reserved.
+    fn reserve(&self, unload: bool, deadline: Option<std::time::Instant>) -> bool {
         let mut state = self.shared.state.lock().expect("writer state");
         while !unload && state.queued >= QUEUE_DEPTH - UNLOAD_RESERVE {
-            state = self.shared.drained.wait(state).expect("writer state");
+            state = match deadline {
+                None => self.shared.drained.wait(state).expect("writer state"),
+                Some(deadline) => {
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        return false;
+                    }
+                    self.shared
+                        .drained
+                        .wait_timeout(state, remaining)
+                        .expect("writer state")
+                        .0
+                }
+            };
         }
         state.queued += 1;
-        drop(state);
-        // A full queue blocks here until the writer frees space: the
-        // deployment's loss bound expressed as backpressure rather than loss,
-        // reached only after the high-water report warned the harness. After a
-        // terminal write failure the writer discards, so the block cannot
-        // outlive a dead sink. A send failure means the writer thread is
-        // gone, surfaced through the boundary's last error.
+        true
+    }
+
+    /// The record handed to the writer, into the slot [`Writer::reserve`]
+    /// took for it.
+    fn enqueue(&self, sequence: Sequence, line: Line) {
+        // The slot was taken by `reserve`, so the channel has room and the
+        // send does not wait. A send failure means the writer thread is gone,
+        // surfaced through the boundary's last error.
         if self.queue.send((sequence, line)).is_err() {
             let mut state = self.shared.state.lock().expect("writer state");
             state.queued -= 1;
@@ -315,6 +335,14 @@ pub struct Recorder {
     /// socket, still answers, so the harness asks this before it takes a
     /// save point and refuses one over holdings that stopped growing.
     tee_lost: bool,
+    /// **The submission bound** (#120; `weaver-trace-Spec` section 6): how
+    /// long a submission waits for a queue slot, set by the harness at its
+    /// receive. `None` waits as before.
+    submit_bound: Option<std::time::Duration>,
+    /// **The stall, standing**: the sequence the first submission to find no
+    /// slot within the bound would have taken. Every later submission but
+    /// `unload`'s fails on it at once.
+    stalled: Option<Sequence>,
 }
 
 impl Recorder {
@@ -331,7 +359,24 @@ impl Recorder {
             writer: Writer::start(sink),
             tee: None,
             tee_lost: false,
+            submit_bound: None,
+            stalled: None,
         })
+    }
+
+    /// **Bound every later submission's wait for a queue slot** (#120;
+    /// `weaver-trace-Spec` section 6): a submission finding none within
+    /// `bound` fails [`Failure::SubmitStalled`] with nothing landed, and the
+    /// stall stands for every later one but `unload`'s, whose slot is
+    /// reserved and never waits. The harness sets it once, at its receive.
+    pub fn bound_submissions(&mut self, bound: std::time::Duration) {
+        self.submit_bound = Some(bound);
+    }
+
+    /// The submission bound set by [`Recorder::bound_submissions`], or `None`
+    /// where the recorder waits as before.
+    pub fn submission_bound(&self) -> Option<std::time::Duration> {
+        self.submit_bound
     }
 
     /// Attach the tee, per `weaver-trace-PRD` section 11: the harness
@@ -366,20 +411,37 @@ impl Recorder {
     /// the `fault` in response; this crate authors no event and holds no
     /// event kind.
     ///
-    /// **At the queue's full depth a submission blocks**, which is the
+    /// **At the queue's full depth a submission waits**, which is the
     /// deployment's loss bound expressed as backpressure: the high-water
-    /// reading warns first, and a terminal write failure frees the block by
-    /// discarding. A block is not an answer this returns, so a caller that
-    /// never reads the depth meets backpressure as latency rather than as a
-    /// value.
+    /// reading warns first, and a terminal write failure frees the wait by
+    /// discarding. **The wait is bounded where the harness set a bound**
+    /// ([`Recorder::bound_submissions`], #120): past it the submission fails
+    /// [`Failure::SubmitStalled`] with nothing landed, and the stall stands
+    /// for every later submission but `unload`'s.
     pub fn submit(&mut self, mut event: Event) -> Result<Sequence, Failure> {
         admit(&event, &self.session, &self.run)?;
         if let Some(failure) = self.writer.standing_failure() {
             return Err(failure);
         }
+        let unload = event.envelope.kind == Kind::Unload;
+        if let Some(sequence) = self.stalled
+            && !unload
+        {
+            return Err(Failure::SubmitStalled { sequence });
+        }
         let sequence = Sequence(self.next);
         event.envelope.sequence = sequence;
         let line = render(&event)?;
+        // **The slot is taken before either sink is touched** (#120): a
+        // submission finding none within the bound lands nothing and
+        // consumes no sequence, so the run stays gapless.
+        let deadline = self
+            .submit_bound
+            .and_then(|bound| std::time::Instant::now().checked_add(bound));
+        if !self.writer.reserve(unload, deadline) {
+            self.stalled = Some(sequence);
+            return Err(Failure::SubmitStalled { sequence });
+        }
         self.next += 1;
         self.structure.append(Record {
             sequence,
@@ -393,8 +455,7 @@ impl Recorder {
             self.tee = None;
             self.tee_lost = true;
         }
-        self.writer
-            .enqueue(sequence, line, event.envelope.kind == Kind::Unload);
+        self.writer.enqueue(sequence, line);
         // **The event has landed and the answer says so**, per
         // `weaver-trace-Spec` section 9 as of 2026-08-22. Pressure was
         // returned here as a `Failure` after this point, so a caller reading

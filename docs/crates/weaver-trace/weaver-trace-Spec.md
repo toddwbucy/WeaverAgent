@@ -1532,6 +1532,7 @@ impl Recorder {
     pub fn receive(sink: OwnedFd, run: RunRef, session: SessionRef)
         -> Result<Self, Failure>
     pub fn bound_submissions(&mut self, bound: Duration)
+    pub fn submission_bound(&self) -> Option<Duration>
 
     pub fn submit(&mut self, event: Event) -> Result<Sequence, Failure>
     pub fn structure(&self) -> &WorkingStructure
@@ -1851,7 +1852,7 @@ failure and left each enumeration in the same act, and again on 2026-10-13, when
 submission bound's stall joined each (#120). Nothing returns a partial
 result with a success status, and every refusal names its case rather than
 carrying a string, so a caller branches on a value.
-`Failure` is exhaustive, so a fifth case reaches every caller at compile time in
+`Failure` is exhaustive, so a sixth case reaches every caller at compile time in
 the act that adds it.
 
 ```graph

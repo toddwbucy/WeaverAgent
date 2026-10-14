@@ -1,14 +1,14 @@
 //! conforms: trace-failure-enum-exhaustive
 //! conforms: trace-append-failed-no-recovery
 //!
-//! The failure vocabulary, per `weaver-trace-Spec` section 9: four cases
+//! The failure vocabulary, per `weaver-trace-Spec` section 9: five cases
 //! matching `weaver-harness-trace-contract` section 5 one to one. Nothing
 //! returns a partial result with a success status, and every refusal names its
 //! case rather than carrying a string, so a caller branches on a value.
 
 use crate::canonical::Sequence;
 
-/// What the recorder can report. Exhaustive, so a fifth case reaches every
+/// What the recorder can report. Exhaustive, so a further case reaches every
 /// caller at compile time in the act that adds it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Failure {
@@ -24,6 +24,12 @@ pub enum Failure {
     },
     WriteTargetUnusable {
         source: WriteError,
+    },
+    /// **No queue slot within the submission bound** (#120;
+    /// `weaver-trace-Spec` section 6): nothing landed, and `sequence` is the
+    /// one the submission would have taken.
+    SubmitStalled {
+        sequence: Sequence,
     },
 }
 

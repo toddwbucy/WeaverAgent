@@ -1953,14 +1953,13 @@ impl Harness {
                 .map_err(|_| EnterFailure::BeforeLoad(LifecycleRefusal::DescriptorsUnusable))?,
             )
         } else {
-            crate::record::Record::from(
-                Recorder::receive(
-                    sink,
-                    RunRef(payload.run.0.clone()),
-                    SessionRef(session.0.clone()),
-                )
-                .map_err(|_| EnterFailure::BeforeLoad(LifecycleRefusal::DescriptorsUnusable))?,
+            receive_serving(
+                sink,
+                RunRef(payload.run.0.clone()),
+                SessionRef(session.0.clone()),
+                std::time::Duration::from_millis(SUBMIT_BOUND_MS),
             )
+            .map_err(|_| EnterFailure::BeforeLoad(LifecycleRefusal::DescriptorsUnusable))?
         };
 
         // The state seam, per `weaver-harness-state-contract` as ruled
@@ -2783,6 +2782,29 @@ fn leave(
     let shared = shared_deadline();
     let (lowered, _) = lower_gate(run, shared);
     leave_after(run, cause, forced, None, lowered, shared)
+}
+
+/// **The submission bound** (#120; `weaver-trace-Spec` section 6, which
+/// states and derives it): half the leave bound less the gate's settle
+/// margin, 74 seconds, so a `Leave` sent while a submission stalls is heard
+/// with the larger half of admin's wait left for the leave's legs.
+const SUBMIT_BOUND_MS: u64 =
+    weaver_types::LEAVE_BOUND_MS / 2 - weaver_types::LOWER_SETTLE_MARGIN_MS;
+
+/// **A serving run's record, received and bounded** (#120): the trace's
+/// recorder on the sink, every submission's wait for a queue slot bounded by
+/// `bound` before the run's first, so a sink that stops reading holds the
+/// serve thread at most that long. The enter receives with
+/// [`SUBMIT_BOUND_MS`].
+fn receive_serving(
+    sink: OwnedFd,
+    run: RunRef,
+    session: SessionRef,
+    bound: std::time::Duration,
+) -> Result<crate::record::Record, weaver_trace::Failure> {
+    let mut recorder = Recorder::receive(sink, run, session)?;
+    recorder.bound_submissions(bound);
+    Ok(crate::record::Record::from(recorder))
 }
 
 /// **The shared deadline** (`weaver-harness-Spec` section 6): taken at the

@@ -2178,6 +2178,17 @@ fn an_enter_with_no_member_seats_no_prefix() {
             panic!("failed before the load: {refusal:?}")
         }
     };
+    // **The enter's serving record is bounded** (#120; `weaver-trace-Spec`
+    // section 6): 74 seconds, half the leave bound less the gate's settle
+    // margin. Perturbation: receive the record unbounded at the enter, and
+    // the bound reads `None`.
+    assert_eq!(
+        run.recorder
+            .serving()
+            .expect("a serving run")
+            .submission_bound(),
+        Some(std::time::Duration::from_secs(74)),
+    );
     let _ = leave(&mut run, None, false);
     drop(run);
 
@@ -3627,6 +3638,75 @@ fn record_then_drop(run: Run, reader: std::io::PipeReader) -> Vec<serde_json::Va
     );
     drop(reader);
     events
+}
+
+/// **A stalled submission returns and latches** (#120; `weaver-harness-Spec`
+/// section 4): a record received as the enter receives one, under a short
+/// bound, against a sink that stays open and takes nothing, answers an
+/// authoring into a queue full to `unload`'s reserve within the bound and
+/// latches, and the leave after it still admits `unload` into its reserved
+/// slot and refuses `DescriptorsUnusable`. Perturbation: receive the record
+/// unbounded, and the watchdog expires.
+#[test]
+fn a_stalled_submission_returns_and_latches() {
+    let (mut run, _spare, _sink) = entered_run(None);
+    releasing_spu(&mut run);
+    let (reader, writer) = std::io::pipe().expect("pipe");
+    run.recorder = receive_serving(
+        OwnedFd::from(writer),
+        RunRef("r-1".into()),
+        SessionRef("s-1".into()),
+        std::time::Duration::from_millis(200),
+    )
+    .expect("recorder");
+    let account = format!("{{\"pad\":\"{}\"}}", "x".repeat(1_024));
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut stalled = None;
+        while stalled.is_none() {
+            if let Err(failure) = run.author.author_fault(
+                &mut run.recorder,
+                Subsystem::Harness,
+                None,
+                &crate::authorship::harness_report(
+                    weaver_types::FaultCase::StreamWriteFailed,
+                    &account,
+                ),
+            ) {
+                stalled = Some(failure);
+            }
+        }
+        let _ = tx.send((run, stalled));
+    });
+    let (mut run, stalled) = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the stalled authoring returns within its bound");
+    assert!(
+        matches!(
+            stalled,
+            Some(crate::record::RecordFailure::Serving(
+                weaver_trace::Failure::SubmitStalled { .. }
+            ))
+        ),
+        "{stalled:?}"
+    );
+    assert!(run.recorder.failed(), "a stall latches the record");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(300);
+    let left = leave_after(
+        &mut run,
+        Some(weaver_types::Cause { uid: 7 }),
+        false,
+        None,
+        None,
+        Some(deadline),
+    );
+    assert_eq!(left, Err(LifecycleRefusal::DescriptorsUnusable));
+    let events = record_then_drop(run, reader);
+    assert_eq!(
+        events.last().map(|e| e["kind"].clone()),
+        Some(serde_json::json!("unload")),
+        "unload took its reserved slot after the stall"
+    );
 }
 
 /// An SPU lifecycle stand-in answering every directive `Released`.
