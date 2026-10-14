@@ -99,8 +99,8 @@ would silently break the lifetime binding of section 3. A requirement on the bou
 declared and checked: the invoker verifies after a load that every constituent `show`
 names sits in its own containment, which since #111 means inside the invoker's own, in
 the agent's containment admin makes there (`weaver-admin-Spec` section 6.1). **The
-invoker's containment must admit a child containment that root makes**, or the load
-refuses `BoundaryUnverified`. No prompt, turn, task, or run
+invoker's containment must be one delegated to the agent's manager, admitting a child
+containment that root makes**, or the load refuses `BoundaryUnverified`. No prompt, turn, task, or run
 crosses, per apex section 6.
 
 **At the trace door, one request line**: a byte offset on a record boundary and the
@@ -395,8 +395,8 @@ a `save-point`), until the operator clears it (`weaver-admin-Spec` section 6; #1
 S16). **Containment refuses four ways** (`weaver-admin-Spec` section 6.1, #111). A
 `load` on a box without a containment that admits a child made by root and ends all of
 its processes at once (the floor is `weaver-admin-Spec` section 6.1's), or from an
-invoker whose containment admits no child, refuses `BoundaryUnverified`, naming what is
-missing. A `load` meeting processes of an ended run
+invoker whose containment is not delegated or admits no child, refuses
+`BoundaryUnverified`, naming what is missing. A `load` meeting processes of an ended run
 still standing refuses `AgentRunning`, naming them, for `unload` to end. An `unload` or
 `force-unload` whose agent's processes do not all end within the Spec's bound refuses
 `WorkerWouldNotExit`, naming them, and answers no state. Any verb after a load whose

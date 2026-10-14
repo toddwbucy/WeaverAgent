@@ -838,9 +838,9 @@ The worker is detached into its own session and reparented to pid 1 by the start
 so nothing of admin's needs to run for the coordination socket or the sink to outlive
 the invocation. **It does not outlive its invoker's containment**, which binds the
 agent's lifetime (the Spec's sections 6 and 6.1), the agent's cgroup always nesting
-beneath the invoker's (the operator's ruling of 2026-10-14 on #111). So a load from a
-shell is bound to that session and may end with the login, where the box ends a
-session's processes at logout, and a long-lived agent is loaded through admin-con.
+beneath the invoker's (the operator's rulings of 2026-10-14 on #111). So an agent is
+bound to the containment it was loaded in, admin-con's or the delegated scope a direct
+load runs in, and a long-lived agent is loaded through admin-con.
 
 **Reading and analysis stay outside the program, and the recut does not move
 them.** A trace carries whatever the agent handled, so the code that parses

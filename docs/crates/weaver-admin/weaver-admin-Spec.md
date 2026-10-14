@@ -2349,15 +2349,18 @@ section 8, `weaver-harness-Spec` section 2.2 and the contracts that carry a seam
 cite it and restate none of it: `weaver-admin-harness-contract` section 2,
 `weaver-harness-gate-contract` sections 2 and 5, and `weaver-admin-operator-contract`
 sections 3 and 5. **It specifies a host** (the operator's ruling of 2026-10-14, recorded on
-#111): the agent's cgroup on a host whose invoker's containment admits a child root
-makes. A container or cgroup-namespace deployment is later work, tested and built toward
-then, and this section specifies none of it.
+#111): the agent's cgroup on a host whose invoker's containment is delegated and admits
+a child root makes. A container or cgroup-namespace deployment is later work, tested and
+built toward then, and this section specifies none of it. **It adds no systemd unit per
+agent**: systemd never starts, stops or restarts the agent, and the delegation this
+section asks of the invoker's containment is all it asks of systemd.
 
 **The agent's cgroup is made beneath the invoker's, so its lifetime stays the
 invoker's** (section 6, the lifetime, and the operator's ruling of 2026-10-03 on #72).
 - **Where:** the start step reads the cgroup its own invocation runs in from
-  `/proc/self/cgroup`. That is the invoker's containment: admin-con's unit or the
-  operator's session. The start step makes the agent's cgroup
+  `/proc/self/cgroup`. That is the invoker's containment: admin-con's unit, or, for a
+  direct load, a delegated scope the operator makes for it. The start step makes the
+  agent's cgroup
   as its child, `<invoker's cgroup>/weaver-<agent>/`, named for the agent's account.
 - **What it keeps:** stopping the invoker's containment still ends the agent, since a
   cgroup's kill or a unit's stop reaches every descendant. So the agent fails closed
@@ -2382,25 +2385,31 @@ invoker's** (section 6, the lifetime, and the operator's ruling of 2026-10-03 on
   between the `mkdir` and the record's write leaves nothing the next load cannot find.
   The record serves verbs run from another containment, and the start step reads it
   only for a run an earlier load made from another containment.
-- **The invoker's requirement:** its containment must admit a child cgroup that root
-  makes, as a systemd unit does with `Delegate=yes`. `weaver-admin-operator-contract`
-  section 3 carries this.
-- **No guard against the host's root cgroup.** The floor's `mkdir` is the one question
-  the start step asks of the invoker's cgroup, and no path is read beside it. An invoker
-  at the host's own root has no containment that ever stops, so an agent loaded from
-  there is bound to the host's life. Only a process outside every service and session
-  sits there.
+- **The invoker's requirement:** its containment must be delegated, so that making
+  subgroups beneath it is no breach of systemd's rule that one writer manages each
+  cgroup (the operator's ruling of 2026-10-14 on #111, Codex on #161). admin-con's unit
+  carries `Delegate=yes`. A direct load runs in a delegated scope made for it, which
+  as root sits under the system slice and not under the operator's login session.
+  `weaver-admin-operator-contract` section 3 carries this.
+- **The host's root cgroup is refused by the same check.** It carries no delegate
+  mark, so an invoker there, outside every service and scope, is refused like any
+  undelegated one.
 
-**The floor: cgroup v2's unified hierarchy at `/sys/fs/cgroup`, and `cgroup.kill`
-(Linux 5.14), checked by making the agent's cgroup** (Codex on #161). The start step:
+**The floor: cgroup v2's unified hierarchy at `/sys/fs/cgroup`, a delegated invoker's
+cgroup, and `cgroup.kill` (Linux 5.14), checked before and by making the agent's
+cgroup** (Codex on #161). The start step:
 - reads a `cgroup2` filesystem at the mount, by `statfs`,
+- reads systemd's delegate mark on the invoker's cgroup before any `mkdir`, as root:
+  the extended attribute `user.delegate` reading `1`, or `trusted.delegate` where
+  systemd set that one, both read,
 - makes `weaver-<agent>/` beneath the invoker's cgroup, which answers whether the
   invoker's containment admits a child that root makes,
 - and requires a `cgroup.kill` file in what it made.
 
-No path is read for the answer: the `mkdir` is the question the floor asks. **Where the mount is not `cgroup2`, the `mkdir` fails, or what it made carries no
-`cgroup.kill`, the load refuses `BoundaryUnverified`, naming which, removes what it made,
-and stands nothing**, failing closed, as the dial does on a kernel without its pidfd
+The delegate mark is the first question and the `mkdir` the second. **Where the mount
+is not `cgroup2`, the invoker's cgroup carries no delegate mark, the `mkdir` fails, or
+what it made carries no `cgroup.kill`, the load refuses `BoundaryUnverified`, naming the
+cgroup and which, removes what it made, and stands nothing**, failing closed, as the dial does on a kernel without its pidfd
 (section 7). An agent with no containment would be an agent whose tools outlive their
 calls.
 
@@ -2543,6 +2552,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 
 | Actor and event | From | To | What it does |
 |---|---|---|---|
+| admin's start step, the invoker's cgroup undelegated (no `user.delegate` or `trusted.delegate` mark) | any | unchanged | refuses `BoundaryUnverified`, naming the cgroup and that it is not delegated, before any `mkdir` |
 | admin's start step, the floor missing (no `cgroup2`, the `mkdir` refused, no `cgroup.kill` in what it made) | any | unchanged | refuses `BoundaryUnverified`, removing what it made |
 | admin's start step | A0 | A1, then A2 | makes the cgroups and the record, sets the three files' owner, places the member, the relay and the worker |
 | admin's start step | A1 | A0, then as above | removes it and its record and makes it afresh |
@@ -2617,6 +2627,9 @@ The instruments:
 - **The floor:** a start step that finds no `cgroup2` mount, a cgroup it cannot make, or
   no `cgroup.kill` in what it made, refuses `BoundaryUnverified` and leaves nothing it
   made.
+- **The delegation:** a load from an invoker's cgroup without the delegate mark refuses
+  `BoundaryUnverified` and makes nothing, and the same load from a delegated one stands.
+  Watched to fail when the mark's check is dropped and the undelegated load stands.
 
 ## 7. The coordination channel
 
