@@ -513,7 +513,11 @@ if [ "$MODE" = archive ]; then
   say "runs, asked again"
   query_runs
   if [ ${#RUNNING[@]} -gt 0 ]; then
-    for entry in "${MOVED[@]}"; do mv -T -- "${entry%%|*}" "${entry##*|}" && plan "restored ${entry##*|}"; done
+    for entry in "${MOVED[@]}"; do
+      if mv -T -- "${entry%%|*}" "${entry##*|}"; then plan "restored ${entry##*|}"
+      else plan "${entry##*|} could not be restored from ${entry%%|*}: move it back by hand"
+      fi
+    done
     die "agents run or cannot be read: ${RUNNING[*]}. The sudo rules are restored; unload each, then rerun"
   fi
   as_op sh -c 'umask 077 && mkdir -p "$1"' _ "$DEST" || die "the operator cannot create $DEST"
@@ -905,7 +909,12 @@ say "the delegated door, shut"
 # Only a root shell can still load one, which is the operator running this.
 # A run found now refuses the purge with the rules already gone, and the
 # archive holds them to put back.
-for f in "${SUDO_RULES[@]}"; do rm -f -- "$f" && plan "removed $f"; done
+# A rule that cannot be removed leaves the door open, so it refuses: a failure
+# on the left of `&&` is exempt from `set -e` (Codex on #159, round 2).
+for f in "${SUDO_RULES[@]}"; do
+  rm -f -- "$f" || die "the sudo rule $f cannot be removed, so the delegated door is not shut and nothing is purged"
+  plan "removed $f"
+done
 say "runs, asked again"
 query_runs
 [ ${#RUNNING[@]} -eq 0 ] || die "agents run again or cannot be read: ${RUNNING[*]}. The sudo rules are removed and archived in $DEST (sudoers-weaver.tar.zst); unload each, then rerun the purge"
@@ -1013,11 +1022,18 @@ done < "$PURGE_ACTED"
 
 # The prefixes the record holds: a rerun derives none once /etc/weaver is gone.
 mapfile -t PURGED_PREFIXES < <(sed -n 's/^prefix //p' "$PURGE_ACTED")
-# A prefix left holding only models stays; one left empty goes.
+# A prefix left holding only models stays; one left empty goes, and one that
+# will not go is a removal that failed (Codex on #159, round 2): the record is
+# kept and the purge refuses below, naming it.
 for p in "${PURGED_PREFIXES[@]}"; do
-  [ -d "$p" ] && [ -z "$(ls -A "$p")" ] && rmdir "$p" && plan "removed empty $p"
+  [ -d "$p" ] && [ -z "$(ls -A "$p")" ] || continue
+  if rmdir -- "$p"; then plan "removed empty $p"
+  else plan "empty $p: not removed"; PURGE_FAILED=1
+  fi
 done
-ldconfig && plan "ldconfig rerun: $(ldconfig -p | grep -cE 'ggml|llama') engine objects still in the cache"
+if ldconfig; then plan "ldconfig rerun: $(ldconfig -p | grep -cE 'ggml|llama') engine objects still in the cache"
+else plan "ldconfig failed: its cache may still name the engine libraries removed; run ldconfig by hand"
+fi
 
 say "what remains"
 for p in "${PURGED_PREFIXES[@]}"; do [ -d "$p" ] && find "$p" -maxdepth 1 -mindepth 1 -printf '   %p\n'; done
@@ -1028,5 +1044,12 @@ systemctl list-units 'weaver-worker@*' --all --no-legend 2>/dev/null | sed 's/^/
 if [ "$PURGE_FAILED" = 1 ]; then
   die "a removal above failed (\"not removed\"); root's record is kept at $RECORD_PARENT/$RECORD_DIR_NAME/$COPY_SUM. Look at what remains, then rerun the purge"
 fi
-purge_record remove "$COPY_SUM" && plan "removed root's record $RECORD_PARENT/$RECORD_DIR_NAME/$COPY_SUM"
+# A record that will not go stands, and a rerun would act on it again: the
+# purge is not reported done (Codex on #159, round 2). No record there (3) is
+# none to remove.
+purge_record remove "$COPY_SUM" || case $? in
+  3) ;;
+  *) die "every removal was made, but root's record $RECORD_PARENT/$RECORD_DIR_NAME/$COPY_SUM cannot be removed and stands, so the purge is not done. Look at what remains above, then remove it by hand: sudo rm $RECORD_PARENT/$RECORD_DIR_NAME/$COPY_SUM" ;;
+esac
+plan "removed root's record $RECORD_PARENT/$RECORD_DIR_NAME/$COPY_SUM"
 say "purged. the archive is $DEST"

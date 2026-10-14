@@ -3970,11 +3970,12 @@ class PurgeRecordTests(unittest.TestCase):
             stand_in.chmod(0o755)
         return box
 
-    def run_purge(self, box, phases=None, removals=None, failing=None):
+    def run_purge(self, box, phases=None, removals=None, failing=None, record_remove_fails=False):
         """One `--purge` over BOX from the record's decision on: every phase,
         or the first PHASES of them in the script's own order, then a stop, or
         a stop after its REMOVALS-th `rm`, mid-phase, as an interrupt lands. A
-        command FAILING names (`rm` or `mv`) fails on its first call."""
+        command FAILING names (`rm`, `mv` or `rmdir`) fails on every call, and
+        with RECORD_REMOVE_FAILS the record's own removal fails."""
         text = self.script
         cut = lambda a, b: text[text.index(a):text.index(b, text.index(a))]
         helpers = cut("RECORD_PARENT=/var/lib", "# **Everything under DEST is read as the operator**")
@@ -3996,6 +3997,9 @@ class PurgeRecordTests(unittest.TestCase):
                       f"[ \"$RM_SEEN\" -lt {removals} ] || exit 0; return \"$s\"; }}\n")
                    + ("" if failing is None else f"{failing}() {{ return 1; }}\n")
                    + helpers
+                   + ("" if not record_remove_fails else
+                      'eval "$(declare -f purge_record | sed "1s/^purge_record/real_purge_record/")"\n'
+                      'purge_record() { [ "$1" = remove ] && return 4; real_purge_record "$@"; }\n')
                    + f"PURGE_LIST={shlex.quote(str(box / 'PURGE-LIST'))}\nPURGE_ACTED=$(mktemp)\n"
                    + "trap 'command rm -f -- \"$PURGE_ACTED\"' EXIT\n"
                    + 'COPY_SUM=$(sha256sum < "$PURGE_LIST" | cut -d" " -f1)\nDEST=archive\n'
@@ -4183,6 +4187,48 @@ class PurgeRecordTests(unittest.TestCase):
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
         self.assert_purged(box)
 
+    def test_an_empty_prefix_that_will_not_go_keeps_the_record_and_refuses(self):
+        """Codex on #159, round 2: a failure on the left of `&&` is exempt
+        from `set -e`, so an rmdir that failed passed for done. Perturbation:
+        the prefix's removal as it stood (`rmdir ... && plan`), and the purge
+        reports success, removing its record, with the prefix standing."""
+        box = self.box()
+        ran = self.run_purge(box, failing="rmdir")
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn(f"empty {box}/opt/weaver: not removed", ran.stdout)
+        self.assertIn("root's record is kept", ran.stderr)
+        self.assertTrue((box / "opt/weaver").is_dir())
+        self.assertTrue(self.record(box).exists())
+        again = self.run_purge(box)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assert_purged(box)
+
+    def test_a_record_that_will_not_go_refuses_completion(self):
+        """Codex on #159, round 2. Perturbation: the record's removal as it
+        stood (`purge_record remove ... && plan`), and the purge says it is
+        done with the record standing."""
+        box = self.box()
+        ran = self.run_purge(box, record_remove_fails=True)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn("cannot be removed and stands, so the purge is not done", ran.stderr)
+        self.assertIn("sudo rm ", ran.stderr)
+        self.assertNotIn("PURGED", ran.stdout)
+        self.assertTrue(self.record(box).exists())
+
+    def test_a_sudo_rule_that_will_not_go_refuses(self):
+        """The same class at the door: a rule `rm -f` cannot remove leaves the
+        door open. Perturbation: `rm -f ... && plan`, and the purge goes on."""
+        start = self.script.index('for f in "${SUDO_RULES[@]}"; do\n  rm -f')
+        door = self.script[start:self.script.index('say "runs, asked again"', start)]
+        self.assertIn("rm -f", door)
+        program = ("set -euo pipefail\nplan() { printf '   %s\\n' \"$*\"; }\n"
+                   "die() { printf 'REFUSED: %s\\n' \"$*\" >&2; exit 1; }\nrm() { return 1; }\n"
+                   "SUDO_RULES=(/etc/sudoers.d/weaver-a)\n" + door + "echo WENT_ON\n")
+        ran = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn("the delegated door is not shut", ran.stderr)
+        self.assertNotIn("WENT_ON", ran.stdout)
+
     def test_a_root_that_cannot_be_withdrawn_refuses_before_any_path_goes(self):
         """Perturbation: go on past a root not withdrawn, and its territory
         goes while it stands, which its admin then refuses."""
@@ -4297,7 +4343,7 @@ class RoundOneOf79Tests(unittest.TestCase):
         # step, and this fails.
         script = (DEPLOY / "decommission.sh").read_text()
         purge = script[script.index(" 3. purge\n"):]
-        door = purge.index('for f in "${SUDO_RULES[@]}"; do rm -f')
+        door = purge.index('for f in "${SUDO_RULES[@]}"; do\n  rm -f')
         again = purge.index("\nquery_runs\n")
         refusal = purge.index('die "agents run again or cannot be read')
         first_destructive = purge.index('say "units"')
