@@ -754,7 +754,7 @@ fn the_pressure_reading_keeps_the_runs_peak_depth() {
     .expect("receives");
     r.submit(event(Kind::Load, None, Some(elections())))
         .unwrap();
-    assert!(r.pressure().peak <= 1, "one record has been queued");
+    assert_eq!(r.pressure().peak, 1, "one record has been queued");
     let account = format!("{{\"kind\":\"{}\"}}", "x".repeat(8_192));
     let mut seen = 0;
     for _ in 0..32 {
