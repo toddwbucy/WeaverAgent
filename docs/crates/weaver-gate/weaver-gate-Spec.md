@@ -1175,7 +1175,8 @@ that format forbids.
 - The unload's interrupt and the first outcome (`weaver-admin-Spec` section 3, S4 x
   tool return), owed by the lifecycle act's code: an execution open when
   `ToolInterrupt` arrives is ended by the cancel's path and answered `Killed { by:
-  unload }`, and `Quiesce` is read only once that execution has ended; a result this
+  unload }`, or, where it cannot be contained, left unanswered as section 8 says, and
+  `Quiesce` is read only once that execution has ended. A result this
   crate sent before the interrupt reached it stands, the interrupt dropped as a late
   cancel is, and no `Killed` follows it. Confirmed by watching the test fail when the
   crossed result is answered `Killed { by: unload }` after it, and when `Quiesce` is
@@ -1352,7 +1353,8 @@ into a false kill. The capture keeps the bound and discards the rest, and
 what was discarded is marked in the answer.
 
 **The answer is one of the contract's four contents and the account's
-speaker is the tag's meaning.** A nonzero exit is a result, the shell's own
+speaker is the tag's meaning**, an execution this crate cannot contain getting no
+answer at all (above). A nonzero exit is a result, the shell's own
 answer accounted in content. A refusal is this crate's voice and nothing
 ran. An error is the machinery's. A kill carries no account from the tool by
 construction, with any drained partial riding as an attachment and never as
@@ -1377,14 +1379,17 @@ the unload's cancel** (`weaver-admin-Spec` section 3, S4 x tool return): the
 harness sends `ToolInterrupt` where an unload, graceful or forced, meets a
 tool call out, and it ends the execution by the cancel's path, the answer a
 kill naming the unload, `Killed { by: unload }`, so the record reads the call
-as never finished and re-runnable at the reload. **The first outcome wins**: a result the gate sent before the interrupt reached it stands, recorded completed with its result, delivered to the turn as in S3 and never re-runnable, the interrupt crossing it dropped as a cancel is; only a call the interrupt actually ended is `Killed { by: unload }` and re-runnable. Nothing the
+as never finished and re-runnable at the reload. An interrupted execution this
+crate cannot contain is not answered, and the harness closes it
+`Killed { by: fault }` as at any gate's death, never re-run automatically. **The first outcome wins**: a result the gate sent before the interrupt reached it stands, recorded completed with its result, delivered to the turn as in S3 and never re-runnable, the interrupt crossing it dropped as a cancel is. Only a call the interrupt actually ended is `Killed { by: unload }` and re-runnable. Nothing the
 contract permits arrives on the channel during an execution but the cancel,
 the interrupt and closure, executions being serial and the harness blocked in
 its wait, so an envelope there is one of the two or it is the closure the
 charter already requires this crate to exit on, and closure breaks the same loop, which
 kills `tools/` before the exit as every ending does. The cancel adds no
 clock: the caller's number still bounds the wait, and a supervisor that
-never reads the cancel still answers by it.
+never reads the cancel still answers by it, or exits unanswered where it
+cannot contain the execution.
 
 **A cancel or an interrupt that arrives past the answer is dropped, never refused.** The
 exchange it names closed from this side when the answer was sent, and the

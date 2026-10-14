@@ -241,7 +241,7 @@ channel has carried unused until this act, and carrying nothing beyond its
 kind: the operator's stop reached the harness while the tool ran, and the
 harness wants the exchange closed now rather than at the clock. The gate on
 receipt ends every process still in the invocation's containment exactly as the clock would, descendants included, and the exchange completes with its one answer
-as every execution does. The cancel is the caller's clock brought forward on
+as every execution does, or, where the gate cannot contain the execution, the gate exits and the harness closes the execution `Killed { by: fault }` (section 5). The cancel is the caller's clock brought forward on
 the caller's word, so it adds no second clock: the number that crossed at
 the open still bounds the exchange whether or not the cancel is heard, and a
 gate that never reads the cancel still answers by the clock. **A cancel that
@@ -381,14 +381,16 @@ as the family parse recovered them, and the caller's clock, uninterpreted,
 opened serially in emission order, and at most one cancel or interrupt per
 execution while its exchange stands open from the harness's side.
 
-**The gate guarantees** an answer to every execution opened inside the raised
-window, carrying one of the four contents of section 2, so the harness's
-grant construction site fires exactly once per opened call and a call never
-dangles. It guarantees the kill clock is the caller's number and the kill
-reaches every process still in the invocation's containment. It guarantees that a cancel it
-reads brings that same kill forward, that the exchange still completes with
-exactly one answer, and that a cancel arriving past the answer changes
-nothing.
+**The gate guarantees** that every execution opened inside the raised window is
+answered, carrying one of the four contents of section 2, or that, where it cannot
+contain the execution, the gate exits and the harness closes the execution `Killed { by: fault }` (section 5). It guarantees the kill clock is the caller's number
+and the kill reaches every process still in the invocation's containment. It guarantees
+that a cancel it reads brings that same kill forward, that the exchange still completes
+with exactly one answer or by that same exit and closure, and that a cancel arriving past
+the answer changes nothing. **What the turn can rely on is a closed execution either
+way**: the harness's grant construction site fires exactly once per opened call, from
+the gate's answer or from the harness's own `Killed { by: fault }`, and a call never
+dangles.
 
 **The harness guarantees** that the instruction it sends is the instruction admin
 sent it, unaltered and uninterpreted. It guarantees that it opens no exchange this

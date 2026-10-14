@@ -650,7 +650,9 @@ cause. The contract's one-clock rule stands: the caller's number still bounds
 the exchange, a cancel never lengthens a wait, and a cancel this crate never
 reads leaves the clock to do the same work later.
 
-**Every execution still completes with one answer.** A cancel that arrives
+**Every execution still completes with one answer, or, where this crate cannot contain
+it, with this crate's exit and the harness's own close** (`weaver-admin-Spec` section
+6.1, `weaver-harness-gate-contract` section 5). A cancel that arrives
 after the answer left is dropped, because the exchange is closed from this
 side and the harness reads what became of the tool from the answer already
 in flight. A tool that finished as the cancel arrived answers in its own
