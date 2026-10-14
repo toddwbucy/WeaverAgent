@@ -2525,7 +2525,7 @@ weaver-<agent>/      root's; the agent's cgroup
 election, provisional and measured like section 6's, and stated here once. An
 execution's kill fires at the caller's number, and its exchange completes within that
 number plus this bound (`weaver-harness-gate-contract` section 2). **A forced leave does
-not wait it out** (the Planner's ruling of 2026-10-14, on #161): the lower waits its own
+not wait it out**: the lower waits its own
 bound (section 3, `LOWER_BOUND_MS`). A forced leave whose interrupted execution's
 `tools/` does not empty within that bound records the call `Killed { by: fault }`,
 indeterminate and never re-run automatically, the gate being reaped as at its death, and
