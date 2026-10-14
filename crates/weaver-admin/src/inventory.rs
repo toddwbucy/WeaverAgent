@@ -707,16 +707,9 @@ fn sink_present_or_creatable(sink: &TraceSink) -> bool {
 /// Whether the sink directory is held by a principal whose custody the charter
 /// recognizes: root, or the admin principal itself. Any other owner controls
 /// the file admin opened, whatever the mode currently reads.
-/// **The window between this check and the sink's open is not closed here, and
-/// the reason is the trust model rather than an oversight.** The path is
-/// resolved twice, once for this validation and once when the sink is opened,
-/// so a party able to write in the directory could replace the target or
-/// redirect it by symlink between them. Every such party is root or the admin
-/// principal, because the check below is what refuses any other owner, and the
-/// charter secures the agent against reaching its own record while securing
-/// nothing against the operator, who is trusted by construction. Descriptor
-/// relative resolution would close the window against an untrusted writer that
-/// this check has already excluded.
+/// **This look is by path, and the sink's open is not**: a file or pipe sink
+/// opens beneath the territory's judged descriptor (`sink::open`, #140), so
+/// the directory judged at the open is the one held, whatever this look read.
 pub fn admin_holds_custody(directory: &Path, boundary: &Boundary) -> bool {
     use std::os::unix::fs::MetadataExt;
     let Ok(meta) = std::fs::metadata(directory) else {

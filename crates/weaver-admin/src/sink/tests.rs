@@ -27,6 +27,30 @@ fn laid_out_trace(dir: &std::path::Path) -> std::path::PathBuf {
     path
 }
 
+/// `super::open` beneath the sink's own directory, opened as the territory
+/// is, with no link followed: the path-shaped calls below judge the sink as
+/// production does, the directory standing where its path says.
+fn open(sink: &TraceSink, custody: &FileCustody) -> Result<OwnedFd, LifecycleRefusal> {
+    let path = match sink {
+        TraceSink::File { path, .. } | TraceSink::Pipe { path, .. } => path,
+        TraceSink::Socket { path } => path,
+    };
+    let directory = directory_of(path.parent().expect("the sink's directory"));
+    super::open(sink, custody, directory.as_fd())
+}
+
+fn directory_of(path: &std::path::Path) -> OwnedFd {
+    nix::fcntl::open(
+        path,
+        nix::fcntl::OFlag::O_RDONLY
+            | nix::fcntl::OFlag::O_DIRECTORY
+            | nix::fcntl::OFlag::O_NOFOLLOW
+            | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::empty(),
+    )
+    .expect("the sink's directory opens")
+}
+
 fn file(path: &std::path::Path, create: bool) -> TraceSink {
     TraceSink::File {
         path: path.to_path_buf(),
@@ -446,4 +470,48 @@ fn a_link_at_the_pipe_sink_refuses() {
     // SAFETY: closing the raw read end this test opened.
     unsafe { nix::libc::close(reader) };
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **The sink opens beneath the territory's descriptor, never the path
+/// again** (#140, the custody audit's G18; Spec section 9): the directory
+/// is judged and held, then moved aside and another made at its name, as a
+/// principal that could rename within the parent might. The trace is created
+/// in the directory judged, and the pipe sink is made there too; nothing
+/// lands at the name's new directory. Perturbation: open the file sink by
+/// its path again and the trace lands in the replacement.
+#[test]
+fn a_sink_opens_beneath_the_judged_directory_and_not_its_path() {
+    let parent = scratch("descriptor");
+    let judged = parent.join("territory");
+    std::fs::create_dir(&judged).unwrap();
+    std::fs::set_permissions(&judged, std::fs::Permissions::from_mode(0o710)).unwrap();
+    let directory = directory_of(&judged);
+    let moved = parent.join("moved");
+    std::fs::rename(&judged, &moved).unwrap();
+    std::fs::create_dir(&judged).unwrap();
+    std::fs::set_permissions(&judged, std::fs::Permissions::from_mode(0o710)).unwrap();
+
+    let trace = judged.join("trace.ndjson");
+    drop(super::open(&file(&trace, true), &custody(), directory.as_fd()).expect("created"));
+    assert!(
+        moved.join("trace.ndjson").exists(),
+        "created in the directory judged"
+    );
+    assert!(!trace.exists(), "nothing lands at the path's new directory");
+
+    let fifo = judged.join("trace.fifo");
+    // No reader holds it, so the open refuses; the FIFO is made all the same.
+    let _ = super::open(
+        &TraceSink::Pipe {
+            path: fifo.clone(),
+            create: true,
+        },
+        &custody(),
+        directory.as_fd(),
+    );
+    assert!(
+        moved.join("trace.fifo").exists(),
+        "made in the directory judged"
+    );
+    assert!(!fifo.exists(), "nothing made at the path's new directory");
 }

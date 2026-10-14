@@ -11,7 +11,7 @@
 //! here and the resulting `OwnedFd` is what travels, so no other module holds
 //! a sink path and the worker never sees one at all.
 
-use std::os::fd::{FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 
@@ -57,11 +57,33 @@ const TRACE_MODE: u32 = 0o640;
 /// `Socket` is a stream connection to the operator's listener, close-on-exec
 /// at the socket call, with no creation flag: something of the operator's must
 /// already be listening, and a connection refused refuses the load.
-pub fn open(sink: &TraceSink, custody: &FileCustody) -> Result<OwnedFd, LifecycleRefusal> {
+///
+/// **A file or a pipe opens beneath `directory`** (#140, the custody audit's
+/// G18), the judged territory's descriptor, per Spec section 9: the sink's
+/// directory is the territory (`sink_within_territory`), and every write
+/// after the judgment goes through its descriptor, never the path again. The
+/// sink's own name is the one component resolved.
+pub fn open(
+    sink: &TraceSink,
+    custody: &FileCustody,
+    directory: BorrowedFd<'_>,
+) -> Result<OwnedFd, LifecycleRefusal> {
     match sink {
-        TraceSink::File { path, create } => open_file(path, *create, custody),
-        TraceSink::Pipe { path, create } => open_fifo(path, *create),
+        TraceSink::File { path, create } => open_file(path, *create, custody, directory),
+        TraceSink::Pipe { path, create } => open_fifo(path, *create, directory),
         TraceSink::Socket { path } => open_socket(path),
+    }
+}
+
+/// The sink's name within its directory, the one component opened beneath
+/// the directory's descriptor.
+fn sink_name(path: &Path) -> Result<std::ffi::CString, LifecycleRefusal> {
+    match path.file_name() {
+        Some(name) => c_string(Path::new(name)),
+        None => {
+            diag!("weaver-admin: the sink {} names no file", path.display());
+            Err(LifecycleRefusal::BoundaryUnverified)
+        }
     }
 }
 
@@ -69,16 +91,14 @@ fn open_file(
     path: &Path,
     create: bool,
     custody: &FileCustody,
+    directory: BorrowedFd<'_>,
 ) -> Result<OwnedFd, LifecycleRefusal> {
-    use std::os::fd::AsRawFd;
     use std::os::unix::fs::MetadataExt;
     let refuse = |why: &str| {
         diag!("weaver-admin: the trace {}: {why}", path.display());
         LifecycleRefusal::BoundaryUnverified
     };
-    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
-        return Err(refuse("names no directory and file"));
-    };
+    let name = sink_name(path)?;
     let trace_gid = nix::unistd::Group::from_name(&custody.trace_group)
         .ok()
         .flatten()
@@ -89,16 +109,16 @@ fn open_file(
                 custody.trace_group
             ))
         })?;
-    let directory = judge_trace_directory(parent, &custody.owners)?;
-    let c_path = c_string(&directory.join(name))?;
+    judge_trace_directory(directory, &custody.owners, path)?;
     let flags = nix::libc::O_WRONLY
         | nix::libc::O_APPEND
         | nix::libc::O_CLOEXEC
         | nix::libc::O_NOFOLLOW
         | nix::libc::O_NONBLOCK;
-    // SAFETY: open with a NUL-terminated path this frame owns; the returned
-    // descriptor is adopted immediately.
-    let mut fd = unsafe { nix::libc::open(c_path.as_ptr(), flags) };
+    // SAFETY: openat beneath a descriptor the caller holds, with a
+    // NUL-terminated name this frame owns; the returned descriptor is
+    // adopted immediately.
+    let mut fd = unsafe { nix::libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
     let mut created = false;
     if fd == -1 {
         let error = std::io::Error::last_os_error();
@@ -107,8 +127,9 @@ fn open_file(
                 // SAFETY: as above; O_EXCL makes this open the creation, so a
                 // name claimed since the first look refuses rather than opens.
                 fd = unsafe {
-                    nix::libc::open(
-                        c_path.as_ptr(),
+                    nix::libc::openat(
+                        directory.as_raw_fd(),
+                        name.as_ptr(),
                         flags | nix::libc::O_CREAT | nix::libc::O_EXCL,
                         TRACE_MODE as nix::libc::c_uint,
                     )
@@ -155,6 +176,11 @@ fn open_file(
         if !laid_out {
             return Err(refuse("could not be given the territory's layout"));
         }
+        // **The new entry is synced into its directory** (#140), so a crash
+        // after the load began leaves the trace the record names.
+        if nix::unistd::fsync(directory).is_err() {
+            return Err(refuse("was created and its directory does not sync"));
+        }
     } else if !custody.owners.contains(&metadata.uid())
         || metadata.gid() != trace_gid
         || metadata.mode() & 0o7777 != TRACE_MODE
@@ -185,41 +211,52 @@ fn open_file(
     Ok(owned)
 }
 
-/// **The trace's directory, judged before the open**: resolved once, held by
-/// one of the custody's owners and writable by no group or other (the
-/// territory's 0710 passage is no write), and
-/// every directory above it held by section 9's rule. Answers the resolved
-/// directory, through which the open goes.
+/// **The trace's directory, judged before the open on its descriptor**: held
+/// by one of the custody's owners and writable by no group or other (the
+/// territory's 0710 passage is no write). In production the descriptor is the
+/// territory's, which section 9's judgment opened with no link followed and
+/// held with every directory above it, so nothing here resolves a path.
 fn judge_trace_directory(
-    parent: &Path,
+    directory: BorrowedFd<'_>,
     owners: &[u32],
-) -> Result<std::path::PathBuf, LifecycleRefusal> {
-    use std::os::unix::fs::MetadataExt;
-    let mut held: Vec<u32> = owners.to_vec();
-    held.push(0);
-    let directory = crate::judge_ancestors(parent, &held)?;
-    let metadata =
-        std::fs::symlink_metadata(&directory).map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
-    if !metadata.is_dir() || !owners.contains(&metadata.uid()) || metadata.mode() & 0o022 != 0 {
+    path: &Path,
+) -> Result<(), LifecycleRefusal> {
+    let stat =
+        nix::sys::stat::fstat(directory).map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
+    let is_dir = nix::sys::stat::SFlag::from_bits_truncate(stat.st_mode)
+        & nix::sys::stat::SFlag::S_IFMT
+        == nix::sys::stat::SFlag::S_IFDIR;
+    if !is_dir || !owners.contains(&stat.st_uid) || stat.st_mode & 0o022 != 0 {
         diag!(
-            "weaver-admin: the trace's directory {} is not held closed: owner {}, mode {:o}",
-            directory.display(),
-            metadata.uid(),
-            metadata.mode() & 0o7777
+            "weaver-admin: the trace {}'s directory is not held closed: owner {}, mode {:o}",
+            path.display(),
+            stat.st_uid,
+            stat.st_mode & 0o7777
         );
         return Err(LifecycleRefusal::BoundaryUnverified);
     }
-    Ok(directory)
+    Ok(())
 }
 
-fn open_fifo(path: &Path, create: bool) -> Result<OwnedFd, LifecycleRefusal> {
-    let c_path = c_string(path)?;
-    // `symlink_metadata`, so a dangling link at the name is not taken for an
+fn open_fifo(
+    path: &Path,
+    create: bool,
+    directory: BorrowedFd<'_>,
+) -> Result<OwnedFd, LifecycleRefusal> {
+    let name = sink_name(path)?;
+    // No link followed, so a dangling link at the name is not taken for an
     // absence and made through.
-    let created = create && std::fs::symlink_metadata(path).is_err();
+    let created = create
+        && nix::sys::stat::fstatat(
+            directory,
+            name.as_c_str(),
+            nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+        )
+        .is_err();
     if created {
-        // SAFETY: mkfifo with a NUL-terminated path this frame owns.
-        let rc = unsafe { nix::libc::mkfifo(c_path.as_ptr(), 0o640) };
+        // SAFETY: mkfifoat beneath a descriptor the caller holds, with a
+        // NUL-terminated name this frame owns.
+        let rc = unsafe { nix::libc::mkfifoat(directory.as_raw_fd(), name.as_ptr(), 0o640) };
         if rc == -1 {
             return Err(LifecycleRefusal::DescriptorsUnusable);
         }
@@ -228,7 +265,7 @@ fn open_fifo(path: &Path, create: bool) -> Result<OwnedFd, LifecycleRefusal> {
     let flags =
         nix::libc::O_WRONLY | nix::libc::O_NONBLOCK | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW;
     // SAFETY: as above.
-    let fd = unsafe { nix::libc::open(c_path.as_ptr(), flags) };
+    let fd = unsafe { nix::libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
     if fd == -1 {
         let errno = std::io::Error::last_os_error().raw_os_error();
         // A link at the name is refused as one, never followed.
@@ -268,7 +305,6 @@ fn open_fifo(path: &Path, create: bool) -> Result<OwnedFd, LifecycleRefusal> {
 }
 
 fn clear_nonblocking(fd: &OwnedFd) -> Result<(), LifecycleRefusal> {
-    use std::os::fd::AsRawFd;
     // SAFETY: fcntl on a descriptor this process owns.
     let flags = unsafe { nix::libc::fcntl(fd.as_raw_fd(), nix::libc::F_GETFL) };
     if flags == -1 {
@@ -309,7 +345,6 @@ fn open_socket(path: &Path) -> Result<OwnedFd, LifecycleRefusal> {
 /// between creation and flag - measured on 2026-08-05, that window does not
 /// exist, and the flag closes the gap rather than narrowing it.
 fn set_close_on_exec(fd: &OwnedFd) -> Result<(), LifecycleRefusal> {
-    use std::os::fd::AsRawFd;
     // SAFETY: fcntl on a descriptor this process owns.
     let rc = unsafe { nix::libc::fcntl(fd.as_raw_fd(), nix::libc::F_SETFD, nix::libc::FD_CLOEXEC) };
     if rc == -1 {
