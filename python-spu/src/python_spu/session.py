@@ -117,16 +117,17 @@ class Session:
             if self.engine.norms:
                 measurement.update(residual_norms=self.engine.norms.copy(),residual_layers=self.engine.layers,
                                    residual_forwards=len(self.engine.norms)//self.engine.layers)
-            content,failed=family.parse(emission)
-            if failed:
-                import sys,json
-                print(json.dumps({'unrecovered_calls':failed}),file=sys.stderr)
+            # The parse's report crosses on the answer as data and never on stderr, per
+            # the decode contract as merged in #136 (#137). A re-feed holds no terminator
+            # of the source's, and qwen2's closer is no stop, so no closer is inferred.
+            content,unrecovered=family.parse(emission)
             request={'rendered':rendered,'template':family.TEMPLATE,'sampling':{
                 'temperature':.7,'top_k':40,'top_p':.95,'repetition_penalty':1.1,
                 'repetition_window':64,'seed':self.seed,'generation_seed':seed},
                 'stop':{'max_tokens':self.max_tokens,'stop_tokens':list(self.engine.stop_tokens),
                         'terminator':self.engine.terminator}}
             return {'kind':'re_fed' if path is not None else 'generated','body':{
-                'emission':emission,'finish':finish,'content':content,'request':request,
+                'emission':emission,'finish':finish,'content':content,
+                **({'unrecovered':unrecovered} if unrecovered else {}),'request':request,
                 'measurement':measurement,'resident':len(self.resident),'capacity':self.capacity}}
         return self.change(work)

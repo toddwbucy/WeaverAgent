@@ -115,3 +115,21 @@ def test_the_engine_loads_every_parameter_at_the_version_dtype(tiny_model):
         assert dtypes=={torch.bfloat16},dtypes
     finally:
         engine.close()
+
+def test_an_unrecovered_call_crosses_on_the_answer_and_never_stderr(session,oracle,capfd,monkeypatch):
+    """The decode contract as merged in #136 (#137): the generation's answer carries the
+    parse's report in `unrecovered` and the fragment as its block, and nothing of it
+    reaches standard error. Every piece the engine renders here opens a call that never
+    closes. Perturbation: print the report to stderr instead of carrying it, as before
+    #137, and the member is absent and stderr is not empty."""
+    from python_spu import family
+    monkeypatch.setattr(session.engine,'detokenize',lambda ids:'<tool_call>{')
+    assert session.open(IDENTITY)=={'kind':'opened'}
+    body=session.generate('t',MESSAGE,lambda frame:None)['body']
+    content,report=family.parse(body['emission'])
+    assert report and body['unrecovered']==report
+    assert body['content']==content
+    assert any(b['type']=='unrecovered_call' for b in body['content'])
+    assert capfd.readouterr().err==''
+    rust=oracle(op='round',type='TokenAnswer',body={'kind':'generated','body':body})
+    assert 'ok' in rust,rust

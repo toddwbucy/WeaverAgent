@@ -27,7 +27,23 @@ class ToolCall(Wire):
 class ToolResult(Wire):
     type: Literal['tool_result']
     content: str
-Block = Annotated[Union[Text, ToolCall, ToolResult], Field(discriminator='type')]
+class UnrecoveredCallBlock(Wire):
+    type: Literal['unrecovered_call']
+    fragment: str
+Block = Annotated[Union[Text, ToolCall, ToolResult, UnrecoveredCallBlock], Field(discriminator='type')]
+class Unclosed(Wire):
+    case: Literal['unclosed']
+class Unparsed(Wire):
+    case: Literal['unparsed']
+    detail: str
+class CallGrammar(Wire):
+    family: str
+    open: str
+    close: str | None = None
+class UnrecoveredCall(Wire):
+    fragment: str
+    reason: Annotated[Union[Unclosed, Unparsed], Field(discriminator='case')]
+    grammar: CallGrammar
 class Message(Wire):
     role: Literal['system', 'user', 'assistant', 'tool_result']
     content: list[Block]
@@ -75,6 +91,7 @@ class Generation(Wire):
     emission: str
     finish: Literal['completed','stopped','length']
     content: list[Block]
+    unrecovered: list[UnrecoveredCall] = []
     request: object
     measurement: object
     resident: U64
@@ -123,13 +140,26 @@ ADAPTERS = {'TokenDirective':TOKEN_DIRECTIVE,'TokenAnswer':TOKEN_ANSWER,
             'SpuInstruction':TypeAdapter(SpuInstruction), 'Generation':TypeAdapter(Generation),
             'SegmentPreamble':TypeAdapter(SegmentPreamble)}
 
+# The members with Rust's skip_serializing_if rule, by the type that declares each
+# (weaver-types-Spec section 4.4): the optional config members, a grammar's absent
+# `close` and a generation's empty `unrecovered` report. **By type, never by key
+# name** (Codex on #152, round 1): the opaque `request` and `measurement` the Rust
+# forwards whole as RawValue may carry a member of the same name, and it stays.
+OMITTED = {(DecoderInstruction,'field_election'): lambda v: v is None,
+           (SpuInstruction,'classify'): lambda v: v is None,
+           (CallGrammar,'close'): lambda v: v is None,
+           (Generation,'unrecovered'): lambda v: v==[]}
+
 def dump(value):
-    # Only optional config members have Rust's skip_serializing_if rule.
     result = value.model_dump(by_alias=True)
-    def clean(obj):
-        if isinstance(obj,dict):
-            return {k:clean(v) for k,v in obj.items()
-                    if not (v is None and k in ('field-election','classify'))}
-        if isinstance(obj,list): return [clean(v) for v in obj]
-        return obj
-    return clean(result)
+    def omit(model,dumped):
+        if isinstance(model,BaseModel):
+            for name,field in type(model).model_fields.items():
+                key=field.alias or name; member=getattr(model,name)
+                rule=OMITTED.get((type(model),name))
+                if rule is not None and rule(member): del dumped[key]
+                else: omit(member,dumped[key])
+        elif isinstance(model,list):
+            for inner,out in zip(model,dumped): omit(inner,out)
+    omit(value,result)
+    return result

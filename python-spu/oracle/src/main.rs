@@ -75,6 +75,48 @@ fn run(v: Value, raw_body: &str) -> Result<Value, String> {
             weaver_spu::family::qwen2::renderer().render_identity(&messages)
                 .map(|s| json!(s)).map_err(|e| format!("{e:?}"))
         },
+        // weaver-spu family's parse of one emission, mapped onto the floor's
+        // types as the SPU's answer carries them (main.rs `answer_parts`):
+        // the content blocks, an unrecovered call as its block, and the report,
+        // per weaver-spu-Spec section 5 (#31, #137). `ended_by` is the stop
+        // that ended the generation, absent where none did.
+        "parse" => {
+            let emission = v["emission"].as_str().ok_or("emission")?;
+            let ended_by = v["ended_by"].as_str();
+            let parsed = weaver_spu::family::qwen2::renderer().parse(emission, ended_by);
+            let content: Vec<weaver_traits::ContentBlock> = parsed
+                .content
+                .into_iter()
+                .map(|piece| match piece {
+                    weaver_spu::family::Content::Text(text) => weaver_traits::ContentBlock::Text { text },
+                    weaver_spu::family::Content::Call { name, arguments } => {
+                        weaver_traits::ContentBlock::ToolCall(weaver_traits::ToolCall { name: name.0, arguments })
+                    }
+                    weaver_spu::family::Content::Unrecovered { fragment } => {
+                        weaver_traits::ContentBlock::UnrecoveredCall { fragment }
+                    }
+                })
+                .collect();
+            let unrecovered: Vec<weaver_types::UnrecoveredCall> = parsed
+                .unrecovered
+                .into_iter()
+                .map(|entry| weaver_types::UnrecoveredCall {
+                    fragment: entry.fragment,
+                    reason: match entry.reason {
+                        weaver_spu::family::Reason::Unclosed => weaver_types::UnrecoveredReason::Unclosed,
+                        weaver_spu::family::Reason::Unparsed(detail) => {
+                            weaver_types::UnrecoveredReason::Unparsed { detail }
+                        }
+                    },
+                    grammar: weaver_types::CallGrammar {
+                        family: entry.grammar.family.to_string(),
+                        open: entry.grammar.open.to_string(),
+                        close: entry.grammar.close.map(str::to_string),
+                    },
+                })
+                .collect();
+            Ok(json!({"content": content, "unrecovered": unrecovered}))
+        },
         "round" => match v["type"].as_str().unwrap_or("") {
             "TokenDirective" => round::<weaver_types::TokenDirective>(raw_body),
             "TokenAnswer" => round::<weaver_types::TokenAnswer>(raw_body),
