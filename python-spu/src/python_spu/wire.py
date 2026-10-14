@@ -27,7 +27,23 @@ class ToolCall(Wire):
 class ToolResult(Wire):
     type: Literal['tool_result']
     content: str
-Block = Annotated[Union[Text, ToolCall, ToolResult], Field(discriminator='type')]
+class UnrecoveredCallBlock(Wire):
+    type: Literal['unrecovered_call']
+    fragment: str
+Block = Annotated[Union[Text, ToolCall, ToolResult, UnrecoveredCallBlock], Field(discriminator='type')]
+class Unclosed(Wire):
+    case: Literal['unclosed']
+class Unparsed(Wire):
+    case: Literal['unparsed']
+    detail: str
+class CallGrammar(Wire):
+    family: str
+    open: str
+    close: str | None = None
+class UnrecoveredCall(Wire):
+    fragment: str
+    reason: Annotated[Union[Unclosed, Unparsed], Field(discriminator='case')]
+    grammar: CallGrammar
 class Message(Wire):
     role: Literal['system', 'user', 'assistant', 'tool_result']
     content: list[Block]
@@ -75,6 +91,7 @@ class Generation(Wire):
     emission: str
     finish: Literal['completed','stopped','length']
     content: list[Block]
+    unrecovered: list[UnrecoveredCall] = []
     request: object
     measurement: object
     resident: U64
@@ -124,12 +141,15 @@ ADAPTERS = {'TokenDirective':TOKEN_DIRECTIVE,'TokenAnswer':TOKEN_ANSWER,
             'SegmentPreamble':TypeAdapter(SegmentPreamble)}
 
 def dump(value):
-    # Only optional config members have Rust's skip_serializing_if rule.
+    # The members with Rust's skip_serializing_if rule: the optional config members,
+    # a generation's empty `unrecovered` report and a grammar's absent `close`
+    # (weaver-types-Spec section 4.4).
     result = value.model_dump(by_alias=True)
     def clean(obj):
         if isinstance(obj,dict):
             return {k:clean(v) for k,v in obj.items()
-                    if not (v is None and k in ('field-election','classify'))}
+                    if not (v is None and k in ('field-election','classify','close'))
+                    and not (v==[] and k=='unrecovered')}
         if isinstance(obj,list): return [clean(v) for v in obj]
         return obj
     return clean(result)
