@@ -1787,8 +1787,11 @@ negatives, each pinned the way the floor pins `PeerIdentity`:** no
 `Deserialize`, no public constructor, no conversion from `ToolResultBlock`.
 It is constructed at exactly one site, the completion of the execution
 exchange of `weaver-harness-gate-contract` section 2, **whichever of the
-exchange's four contents arrived**: the grant carries the tool's result, the
-gate's refusal, the machinery's error, or the kill on the caller's clock,
+exchange's four contents arrived**, or the harness's own `Killed { by: fault }` where
+the gate's death closed the exchange unanswered, a gate that cannot contain an
+execution exiting so (that contract's section 5, `weaver-admin-Spec` section 6.1):
+the grant carries the tool's result, the gate's refusal, the machinery's error, or a
+kill, on the caller's clock or the gate's death,
 per the taxonomy the tool boundary ruling of 2026-08-18 settled on that
 contract, because each is a fact the model must learn and a refusal that
 could not author a tool-result turn would leave the conversation with a hole
@@ -2868,9 +2871,11 @@ connection at once, by section 2.4's `poll` and the serial loop of 6.1, one
 mechanism in its third state. A dial is accepted and credential-checked as
 every dial is, and a stop read there sends the contract's cancel on the open
 execution exchange, at the continue position, and then keeps waiting for
-that exchange's close, which the gate guarantees, the cancel having brought
-the clock forward and added none. The completion is authored from whichever
-of the four contents arrives, a kill naming the cancel in the common case
+that exchange's close, which the gate guarantees by its answer or, where it
+cannot contain the execution, by its exit, the cancel having brought the clock
+forward and added none. The completion is authored from whichever of the four
+contents arrives, or from this crate's own `Killed { by: fault }` where the gate
+exits unanswered, a kill naming the cancel in the common case
 and the tool's own words where it finished as the cancel crossed, so the
 record holds the invocation's end whatever it was. The turn then closes
 stopped with no generation after it: the granted result is constructed at

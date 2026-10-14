@@ -248,8 +248,9 @@ gate that never reads the cancel still answers by the clock. **A cancel that
 crosses the answer in flight is dropped by the gate**, neither refused nor
 queued, because the exchange it names is already closed from the gate's side
 and the harness learns what became of the invocation from the answer it is
-about to read. The harness accepts any of the four contents after a cancel
-for the same reason: the supervisor answers with whatever it observed first,
+about to read. The harness accepts any of the four contents after a cancel,
+or closes the execution `Killed { by: fault }` itself where the gate cannot contain
+it and exits (section 5), for the same reason: the supervisor answers with whatever it observed first,
 the exit or the kill, and a tool that finished as the cancel arrived answers
 in its own words. The stop that causes a cancel is
 `weaver-admin-harness-contract` section 3's, and what the harness does with
@@ -272,8 +273,9 @@ it is never re-runnable, so a completed tool, perhaps one with side effects, nev
 again after the reload; only a call the interrupt actually ended is answered `Killed {
 by: unload }` and is re-runnable.
 
-**Every opened execution completes with an answer, and the answer carries
-one of four contents**, told apart by tag alone, the rule beneath the four
+**Every opened execution is answered by the gate with one of four contents,
+or closed by the harness `Killed { by: fault }` where the gate cannot contain it**
+(section 5, `weaver-admin-Spec` section 6.1), the contents told apart by tag alone, the rule beneath the four
 being who speaks in the return:
 
 - **Result.** The invocation ran and the tool answers in its own words. For
@@ -322,7 +324,9 @@ is the order the model spoke them.
 what it grants**, which is the half of the loop closure this contract
 carries: the harness's granted tool-result value is constructed at this
 exchange's completion and nowhere else, whichever of the four contents
-arrived, per `weaver-harness-Spec` section 6.
+arrived, the harness's own `Killed { by: fault }` where the gate exits unable to
+contain the execution being that completion by closure (section 5), per
+`weaver-harness-Spec` section 6.
 
 **The instruction crosses once, in the raise.** It is not re-sent, revoked, or
 replaced. A gate that needs an instruction it was not given has a failed raise rather
