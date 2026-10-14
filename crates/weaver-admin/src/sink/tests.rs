@@ -515,3 +515,51 @@ fn a_sink_opens_beneath_the_judged_directory_and_not_its_path() {
     );
     assert!(!fifo.exists(), "nothing made at the path's new directory");
 }
+
+/// **The trace's directory is synced on every open it accepts** (#140,
+/// Codex on #148): an existing laid-out trace syncs once, as a created one
+/// does, and a directory that does not sync refuses `BoundaryUnverified`.
+/// Perturbation: sync only a created trace, as the first form did, and the
+/// existing trace opens with no sync.
+#[test]
+fn every_accepted_trace_open_syncs_its_directory() {
+    let dir = scratch("sync");
+    let directory = directory_of(&dir);
+    let synced = std::cell::Cell::new(0);
+    let count = |_: BorrowedFd<'_>| -> nix::Result<()> {
+        synced.set(synced.get() + 1);
+        Ok(())
+    };
+    let created = dir.join("created.ndjson");
+    drop(
+        super::open_syncing(&file(&created, true), &custody(), directory.as_fd(), &count)
+            .expect("created"),
+    );
+    assert_eq!(synced.get(), 1, "the created trace's directory is synced");
+    let existing = laid_out_trace(&dir);
+    drop(
+        super::open_syncing(
+            &file(&existing, false),
+            &custody(),
+            directory.as_fd(),
+            &count,
+        )
+        .expect("the existing trace opens"),
+    );
+    assert_eq!(
+        synced.get(),
+        2,
+        "the existing trace's directory is synced too"
+    );
+    let failing = |_: BorrowedFd<'_>| -> nix::Result<()> { Err(nix::errno::Errno::EIO) };
+    assert_eq!(
+        super::open_syncing(
+            &file(&existing, false),
+            &custody(),
+            directory.as_fd(),
+            &failing
+        )
+        .err(),
+        Some(LifecycleRefusal::BoundaryUnverified)
+    );
+}

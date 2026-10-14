@@ -1476,8 +1476,11 @@ the territory lays it out** (#56): owned by root or the admin principal, grouped
 any other is a trace replaced or never provisioned, which refuses rather than being
 appended to. Where the flag is set and no
 trace stands, admin creates it exclusively (`O_CREAT|O_EXCL`) and gives it that layout,
-then syncs the territory so the new entry is durable, and the next load finds it as
-provisioning would have. Every refusal here is
+so the next load finds it as provisioning would have. **Every open it accepts, of a
+created trace or an existing one, syncs the territory before the descriptor goes to the
+worker** (#140), a sync interrupted by a signal retried, so a trace this crate created
+is durable in its directory, and one left standing by a load whose sync failed never
+passes a later load unsynced; a territory that does not sync refuses. Every refusal here is
 `BoundaryUnverified`, naming the path on stderr. An absent trace without the flag is
 refused earlier, by section 4's inventory, as `BoundaryUnverified` before the open is
 reached, and only a trace that vanishes between the inventory and the open reads

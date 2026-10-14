@@ -47,10 +47,14 @@ pub fn open_directory(path: &Path) -> std::io::Result<OwnedFd> {
 
 /// Sync a directory's entries, so a rename or a creation in it is durable
 /// before anything that depends on it is written, per `weaver-admin-Spec`
-/// section 6.
+/// section 6. A sync a signal interrupted is retried (#140, Codex on #148).
 fn sync_directory(directory: BorrowedFd<'_>) -> std::io::Result<()> {
-    nix::unistd::fsync(directory)?;
-    Ok(())
+    loop {
+        match nix::unistd::fsync(directory) {
+            Err(nix::errno::Errno::EINTR) => {}
+            done => return done.map_err(std::io::Error::from),
+        }
+    }
 }
 
 /// **Adopt an entry that stands in the save-points directory, durably**
@@ -642,7 +646,7 @@ fn append_line_with(
                 .map_err(|e| refuse(format!("does not take mode 0644: {e}")))
             })
             .and_then(|()| {
-                nix::unistd::fsync(directory)
+                sync_directory(directory)
                     .map_err(|e| refuse(format!("'s directory does not sync: {e}")))
             });
         if let Err(refusal) = laid {
@@ -686,7 +690,7 @@ fn append_line_with(
 /// for the judgment to refuse as before.
 fn unmake(directory: BorrowedFd<'_>) {
     let _ = nix::unistd::unlinkat(directory, MANIFEST, nix::unistd::UnlinkatFlags::NoRemoveDir);
-    let _ = nix::unistd::fsync(directory);
+    let _ = sync_directory(directory);
 }
 
 /// The append itself, on the opened manifest: judged, its torn tail

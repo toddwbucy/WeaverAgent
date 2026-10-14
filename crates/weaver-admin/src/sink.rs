@@ -68,10 +68,31 @@ pub fn open(
     custody: &FileCustody,
     directory: BorrowedFd<'_>,
 ) -> Result<OwnedFd, LifecycleRefusal> {
+    open_syncing(sink, custody, directory, &sync_directory)
+}
+
+/// [`open`] with the directory's sync a parameter, so a test can count it
+/// and fail it.
+pub(crate) fn open_syncing(
+    sink: &TraceSink,
+    custody: &FileCustody,
+    directory: BorrowedFd<'_>,
+    sync: &dyn Fn(BorrowedFd<'_>) -> nix::Result<()>,
+) -> Result<OwnedFd, LifecycleRefusal> {
     match sink {
-        TraceSink::File { path, create } => open_file(path, *create, custody, directory),
+        TraceSink::File { path, create } => open_file(path, *create, custody, directory, sync),
         TraceSink::Pipe { path, create } => open_fifo(path, *create, directory),
         TraceSink::Socket { path } => open_socket(path),
+    }
+}
+
+/// `fsync` on a directory, retried where a signal interrupted it.
+fn sync_directory(directory: BorrowedFd<'_>) -> nix::Result<()> {
+    loop {
+        match nix::unistd::fsync(directory) {
+            Err(nix::errno::Errno::EINTR) => {}
+            done => return done,
+        }
     }
 }
 
@@ -92,6 +113,7 @@ fn open_file(
     create: bool,
     custody: &FileCustody,
     directory: BorrowedFd<'_>,
+    sync: &dyn Fn(BorrowedFd<'_>) -> nix::Result<()>,
 ) -> Result<OwnedFd, LifecycleRefusal> {
     use std::os::unix::fs::MetadataExt;
     let refuse = |why: &str| {
@@ -176,11 +198,6 @@ fn open_file(
         if !laid_out {
             return Err(refuse("could not be given the territory's layout"));
         }
-        // **The new entry is synced into its directory** (#140), so a crash
-        // after the load began leaves the trace the record names.
-        if nix::unistd::fsync(directory).is_err() {
-            return Err(refuse("was created and its directory does not sync"));
-        }
     } else if !custody.owners.contains(&metadata.uid())
         || metadata.gid() != trace_gid
         || metadata.mode() & 0o7777 != TRACE_MODE
@@ -205,6 +222,13 @@ fn open_file(
                 "does not say whether it carries an access-control entry",
             ));
         }
+    }
+    // **The trace's directory is synced on every open it accepts** (#140,
+    // Codex on #148), the existing trace's as well as a created one's, so a
+    // trace this crate created whose sync failed, left standing, never
+    // passes a later load unsynced. A directory that does not sync refuses.
+    if let Err(e) = sync(directory) {
+        return Err(refuse(&format!("its directory does not sync ({e})")));
     }
     let owned = OwnedFd::from(file);
     clear_nonblocking(&owned)?;
