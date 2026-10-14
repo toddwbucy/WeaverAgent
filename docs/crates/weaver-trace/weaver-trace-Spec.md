@@ -1668,6 +1668,10 @@ response, per the fault-carrier ruling of 2026-08-01, which is the only way a
 pressure condition reaches the record: this crate authors no event and holds no
 event kind, per charter section 2, and a recorder that emitted its own pressure
 event would have ended the sole-writer property in the act of reporting on it.
+**The run's peak depth is kept beside the depth** (#120): the pressure reading carries
+the highest depth the queue reached in the run, so the harness reports it at the
+leave, outside the record, as the evidence for the queue's depth, and it reaches no
+event.
 
 **Pressure is not a failure and stopped being carried as one 2026-08-22.** It was
 `Failure::CommitPressure`, returned from `submit` **after** the event was pushed to
