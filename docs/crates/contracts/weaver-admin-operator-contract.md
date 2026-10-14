@@ -392,14 +392,17 @@ file's bytes, as the kernel serves them, digest to the line; durability on the d
 rests on the syncs `weaver-admin-Spec` section 6 makes before it. **A member's room past 4096 finished
 names refuses `BoundaryUnverified`** at every verb that publishes (a `load`, an `unload`,
 a `save-point`), until the operator clears it (`weaver-admin-Spec` section 6; #140,
-S16). **Containment refuses three ways** (`weaver-admin-Spec` section 6.1, #111). A
+S16). **Containment refuses four ways** (`weaver-admin-Spec` section 6.1, #111). A
 `load` on a box without a containment that admits a child made by root and ends all of
 its processes at once (the floor is `weaver-admin-Spec` section 6.1's), or from an
 invoker whose containment admits no child, refuses `BoundaryUnverified`, naming what is
 missing. A `load` meeting processes of an ended run
 still standing refuses `AgentRunning`, naming them, for `unload` to end. An `unload` or
 `force-unload` whose agent's processes do not all end within the Spec's bound refuses
-`WorkerWouldNotExit`, naming them, and answers no state. `force-unload` takes the leave save point as
+`WorkerWouldNotExit`, naming them, and answers no state. Any verb after a load whose
+record of the agent's containment no longer names the containment that load made, the
+recorded one gone or another standing in its place, refuses `BoundaryUnverified`,
+naming both, and acts on nothing. `force-unload` takes the leave save point as
 `unload` does and ends the run whether or not it can be taken, refusing
 `SavePointNotTaken` naming `published` where it was taken and did not publish, per
 section 4.1. A `stop`

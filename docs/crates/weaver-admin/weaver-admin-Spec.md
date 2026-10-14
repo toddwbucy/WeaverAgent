@@ -2550,11 +2550,12 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | admin's start step | A2 or A4 | unchanged | refuses `AgentRunning` at the run lock, before the cgroup is looked at (section 3). A4 with the lock free refuses `AgentRunning` as A3 does |
 | the gate, an execution opened | T0 | T1 | the shell is born in `tools/` |
 | the gate, the execution's end (exit, clock, cancel, interrupt, closure) | T1 | T2, then T0 | `tools/cgroup.kill`, the wait, then the answer |
-| the gate, `tools/` not empty within the bound, or its kill's write failing | T2 | T2 | the gate exits with the execution unanswered: the gate's death below |
+| the gate, its write of `tools/cgroup.kill` failing | T1 | T1 | no kill was delivered: the gate exits with the execution unanswered, the gate's death below, and the worker's fallback ends it |
+| the gate, `tools/` not empty within the bound after a delivered kill | T2 | T2 | the gate exits with the execution unanswered: the gate's death below |
 | the gate dies | T0, T1 or T2 | T2, then T0 | the worker kills `tools/`, waits, closes an open execution `Killed { by: fault }` |
 | the worker, `tools/` not empty within the bound | T2 | T2 | the worker ends service and unwinds, never serving on: the run end holds what remains |
-| the worker, its write of `tools/cgroup.kill` failing | T1 or T2 | T2, then T0 | the worker sends `SIGKILL` by `kill(2)` to each pid in `tools/cgroup.procs`, repeating within the bound |
-| the worker, the write and the fallback both failing | T1 or T2 | T1 or T2 | the worker closes the execution `Killed { by: fault }`, its `fault`'s account naming that containment failed and the kill was not delivered, and ends service: the run end holds what remains |
+| the worker, its write of `tools/cgroup.kill` failing | T1 | T1, then T2 by the fallback's kills, then T0 | no kill was delivered by the write, so the worker sends `SIGKILL` by `kill(2)` to each pid in `tools/cgroup.procs`, repeating within the bound |
+| the worker, the write and the fallback both failing | T1 | T1 | the worker closes the execution `Killed { by: fault }`, its `fault`'s account naming that containment failed and the kill was not delivered, and ends service: the run end holds what remains |
 | the worker's unwind (the leave, graceful or forced) | T0 or T1 | T0 | the worker kills `tools/` and waits, before `Left` |
 | the worker dies | A2 | A2, then A3 or A1 once the member and the relay end | the organs die by their death signal (`weaver-harness-Spec` section 2.2), and `tools/` keeps what it held, contained |
 | the member or the relay dies | A2 | A2 | nothing of the cgroup changes |

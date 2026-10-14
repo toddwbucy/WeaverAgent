@@ -1630,11 +1630,14 @@ on #50 that the agent leaves systemd. `PriorUnitUnreaped` named a failed unit wh
 the manager still held, and with no unit there is no name to hold. What a second `load`
 meets instead is the run lock of `weaver-admin-Spec` section 3, held by the run's
 processes and released by the kernel when the last of them is gone, so the refusal says
-one thing and no more: a run of this agent holds the lock now, and the load touched
-nothing, a load never ending an existing run. It does not say the run is serving,
+one thing and no more: a run of this agent holds the lock now, or the agent's cgroup
+still holds an ended run's leftovers (`weaver-admin-Spec` section 6.1, A3, #111), and the
+load touched nothing, a load never ending an existing run or killing what one left. It does not say the run is serving,
 healthy or ever entered, which `show` answers through the observation exchange, and
 ending it is `unload`'s, which the caller issues. A run that died leaves no lock behind,
-so no case for a dead one is needed and none is kept.
+so no case for a dead one is needed and none is kept. Its leftovers, where any outlived
+it in the agent's cgroup, are this same case's second fact, widened rather than a
+variant of their own, since the caller's recourse is the same `unload`.
 
 **`State` carries the run's constituents where admin found any**, per
 toddwbucy/WeaverWeb#15: every pid holding the run lock's description, the worker, the
@@ -1647,23 +1650,30 @@ wherever no run holds the lock, and empty is absent on the wire.
 where another invocation holds the agent's invocation lock, a load or an unload in
 flight, the harness answers it to `Observe` while a leave is pending, so `show`
 prints it too where the leave's caller was killed, and `show` prints it where the run
-lock is held and no worker answers, `Unloaded` meaning nothing resident and printed only
-once the run lock is free, per `weaver-admin-Spec` section 3. It claims no `AgentState`, apex section 6's
+lock is held and no worker answers, or where the lock is free and the agent's cgroup still
+holds an ended run's processes, `Unloaded` meaning nothing resident and printed only once
+the run lock is free and that cgroup holds nothing, per `weaver-admin-Spec` sections 3
+and 6.1. It claims no `AgentState`, apex section 6's
 four states being the harness's to know and the harness being busy with that very
 invocation, so the caller polls again. **It may name the run's constituents** (on the
 Planner's ruling of 2026-10-12, B3): `InTransition { constituents }`, the field optional
 and left off the wire where empty, so the empty answer is the unit answer's bytes. Admin
 fills it from the run lock's holders where `show` prints it on its rungs (i) and (iii), a
-run never entered or one ending (`weaver-admin-Spec` section 3, the ladder); the harness
-sends it empty, as does `show`'s rung (0), the holder there being another invocation.
+run never entered or one ending (`weaver-admin-Spec` section 3, the ladder). **Since #111
+the field's meaning widens** to the processes of an ended run that still stand in the
+agent's cgroup, filled where `show` prints it on rung (iv) with the run lock free
+(`weaver-admin-Spec` section 6.1, A3). It names pids the caller ends with `unload`, as
+before, and its shape is unchanged, so no new variant is needed. The harness sends it
+empty, as does `show`'s rung (0), the holder there being another invocation.
 
 **Four more cases join it on the same ruling, each one fact.** `InvocationInFlight` says
 another invocation holds this agent's invocation lock, so this one touched nothing, per
 `weaver-admin-Spec` section 3. `LockHolderUnknown` says the run lock was held and no
 process holding it could be found, the description having been carried where no
 descriptor table shows it, so no signal was sent. `WorkerWouldNotExit` says a
-constituent of the run still held the run lock after the unload's escalation, so the
-agent was not reported unloaded. `Unanswered` says a stop's or an observation's answer
+constituent of the run still held the run lock after the unload's escalation, or a
+process of the agent's cgroup outlived the run end's kill bound (`weaver-admin-Spec`
+section 6.1, #111), so the agent was not reported unloaded. `Unanswered` says a stop's or an observation's answer
 did not arrive within its bound, at `stop`, at `show`, or at a `load` meeting a silent
 run, which never ends it, per `weaver-admin-Spec` section 3, so the run was left
 as it stands and the invocation lock released. None claims more than its fact, and each
