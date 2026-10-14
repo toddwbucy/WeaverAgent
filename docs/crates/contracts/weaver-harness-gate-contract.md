@@ -287,6 +287,12 @@ being who speaks in the return:
 - **Errored.** The invocation machinery failed - the fork, a pipe, the
   supervisor - and the account's speaker is the infrastructure, never the
   tool.
+  **An execution the gate cannot contain gets none of these answers** (#111,
+  Codex on #161): where the gate cannot end every process still in the
+  invocation's containment, it exits with the execution unanswered, so the
+  harness meets the gate's death and closes the execution `Killed { by: fault }`
+  itself (section 5). An answer sent first would let the harness advance the
+  turn while the command still ran.
 - **Killed.** The caller's clock expired, the caller cancelled, or the
   unload interrupted, and the gate ended every process still in the invocation's containment, descendants included,
   because a kill that reaped only the leader would leave the pipes held open

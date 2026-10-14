@@ -1332,8 +1332,11 @@ write `tools/cgroup.kill` and wait for `tools/` to empty, within the kill's
 bound, before the answer goes. `bash` leaves descendants holding the pipes'
 write ends, and a kill that reached only the leader, or only its process
 group, would hold the answer open on a straggler's schedule, or leave a
-command that left its group running past its execution's end. A `tools/` not
-empty within the bound ends this crate, which exits, as section 6.1 says.
+command that left its group running past its execution's end. **This crate
+never answers an execution it cannot contain**: a failed write of
+`tools/cgroup.kill`, or a `tools/` not empty within the bound, ends this crate
+with the execution unanswered, so the harness meets the gate's death and
+closes the execution itself, as `weaver-admin-Spec` section 6.1 says.
 
 **The shell starts in the uid's home with `HOME` and no other variable.** This
 crate runs with the agent's environment, per `weaver-harness-Spec` section 2.2

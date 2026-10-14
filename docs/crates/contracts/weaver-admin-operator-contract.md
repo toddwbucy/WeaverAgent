@@ -178,8 +178,9 @@ human-readable diagnostics no caller parses. A
 `load` answers once the agent is up or refused, within admin's own bound of 900 seconds
 by default on the agent's start, which a caller's bound must exceed, after any
 publication of recovered files from an unclosed run, which is bounded by their size and
-not by time; a load whose agent does not start inside that bound rolls back before it
-answers, which takes at most 195 seconds more. **An invocation finishes even when its
+not by time. A load whose agent does not start inside that bound rolls back before it
+answers, within the rollback's bound `weaver-admin-Spec` section 3 states (a load's
+rollback), which includes the wait for the agent's processes to end. **An invocation finishes even when its
 caller disappears**, its outcome recorded in the agent's `admin.log`, so a caller that
 gives up reads the outcome from the next `show`.
 
@@ -305,7 +306,9 @@ leave's cause, and the `unload` concludes as a forced leave does. With no bound
 declared, or one alone, the `unload` waits for the agent's answer with no deadline, and
 a caller's own timeout must allow for that; with both declared it waits their sum and
 150 seconds, then escalates as `weaver-admin-Spec` section 3 states. The escalation's
-waits and the publication after the answer come on top, as before.
+waits, the wait for the agent's processes to end at the run's end (`weaver-admin-Spec`
+section 6.1) and the publication after the answer come on top, their total stated once in
+`weaver-admin-Spec` section 3.
 
 **`force-unload` always ends the run, alone or joining an `unload`** (I3).
 - **Alone** (S2, S3, S9): the gate closes at once
