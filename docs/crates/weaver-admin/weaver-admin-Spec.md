@@ -625,7 +625,11 @@ worker of one agent.
   verb retries, re-reading `l_type` before every attempt, for at most `show`'s own
   bound, the dial's, a read being no transition. A holder that changes between the read
   and the next attempt is judged afresh on that attempt, so a shared hold that gives way
-  to an exclusive one turns the wait into the refusal. **A poller can starve the
+  to an exclusive one turns the wait into the refusal. **So does a force's read of the
+  holder** (#125): a `force-unload` refused at once by an exclusive holder that then
+  reads a shared one has met a `show` that took the lock in the gap, and takes again,
+  its wait for readers still the one bound; only a take that waited the bound out
+  refuses with readers named. **A poller can starve the
   exclusive taker, and the behaviour is stated**: Linux record locks give a waiting
   writer no priority, so back-to-back `show` calls can keep a shared hold standing past
   the bound, and the verb then refuses `InvocationInFlight` with the cause named as

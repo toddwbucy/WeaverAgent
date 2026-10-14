@@ -196,30 +196,55 @@ pub fn take_invocation_lock(
     run_directory: &Path,
     verb: crate::verb_table::HolderVerb,
 ) -> Result<InvocationLock, LifecycleRefusal> {
+    take_invocation_lock_judged(run_directory, verb).map_err(|refused| match refused {
+        TakeRefused::Starved => LifecycleRefusal::InvocationInFlight,
+        TakeRefused::Other(refusal) => refusal,
+    })
+}
+
+/// Why the exclusive take refused, for the one caller that acts on the
+/// difference, the force (#125).
+#[derive(Debug, PartialEq)]
+pub enum TakeRefused {
+    /// Readers held the lock past `show`'s bound, the take having waited it
+    /// out: the starved case, `InvocationInFlight` with readers named.
+    Starved,
+    /// Any other refusal: an exclusive holder met at once, a probe that did
+    /// not read (both `InvocationInFlight`), or a lock file that refused.
+    Other(LifecycleRefusal),
+}
+
+/// [`take_invocation_lock`], saying which refusal it met.
+pub fn take_invocation_lock_judged(
+    run_directory: &Path,
+    verb: crate::verb_table::HolderVerb,
+) -> Result<InvocationLock, TakeRefused> {
     let path = run_directory.join("admin.lock");
-    let file = open_lock_file(&path)?;
+    let file = open_lock_file(&path).map_err(TakeRefused::Other)?;
     let deadline = Instant::now() + SHARED_HOLD_WAIT;
     loop {
         let request = whole_file(nix::libc::F_WRLCK);
         // SAFETY: fcntl on a descriptor this frame owns, with a lock it built.
         if unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_SETLK, &request) } == 0 {
-            return recorded(file, verb, &path);
+            return recorded(file, verb, &path).map_err(TakeRefused::Other);
         }
-        contended(&run_directory.join("admin.lock"))?;
+        contended(&run_directory.join("admin.lock")).map_err(TakeRefused::Other)?;
         let mut probe = whole_file(nix::libc::F_WRLCK);
         // SAFETY: as above.
         if unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_GETLK, &mut probe) } != 0 {
-            return Err(LifecycleRefusal::InvocationInFlight);
+            return Err(TakeRefused::Other(LifecycleRefusal::InvocationInFlight));
         }
         match probe.l_type as i32 {
-            nix::libc::F_WRLCK => return Err(LifecycleRefusal::InvocationInFlight),
+            nix::libc::F_WRLCK => {
+                return Err(TakeRefused::Other(LifecycleRefusal::InvocationInFlight));
+            }
             nix::libc::F_RDLCK if Instant::now() < deadline => std::thread::sleep(POLL),
             nix::libc::F_RDLCK => {
                 diag!(
                     "weaver-admin: readers held the invocation lock past show's bound; \
                      retry once the poller pauses"
                 );
-                return Err(LifecycleRefusal::InvocationInFlight);
+                return Err(TakeRefused::Starved);
             }
             // Released between the take and the read: try again at once.
             _ => {}
