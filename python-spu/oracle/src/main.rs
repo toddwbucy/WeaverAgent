@@ -44,9 +44,12 @@ fn run(v: Value, raw_body: &str) -> Result<Value, String> {
         "weights_hash" => {
             let dir = v["path"].as_str().ok_or("path")?;
             let reference = weaver_types::ArtifactRef(dir.into());
-            let resolved = weaver_spu::artifact::resolve(&reference).map_err(|e| format!("{e:?}"))?;
+            let (resolved, kind) = weaver_spu::artifact::resolve_with_kind(&reference)
+                .map_err(|e| format!("{e:?}"))?;
             let mut pinned = weaver_spu::artifact::pin(&resolved).map_err(|e| format!("{e:?}"))?;
-            Ok(json!(weaver_spu::artifact::weights_hash(std::path::Path::new(dir), &mut pinned).0))
+            let hash = weaver_spu::artifact::weights_hash(std::path::Path::new(dir), kind, &mut pinned)
+                .map_err(|e| format!("{e:?}"))?;
+            Ok(json!(hash.0))
         },
         // weaver-spu artifact.rs's read_header over the resolved and pinned artifact:
         // the container and the family the header names, or the refusal, step two.
