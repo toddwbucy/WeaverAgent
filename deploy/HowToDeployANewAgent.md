@@ -1,5 +1,9 @@
 # How to deploy a new agent
 
+**Subject to change.** This runbook runs ahead of the project's actual state. It is only as
+authoritative as it remains functional, never above a Spec or a live run, and it stays a
+moving target until the repository is locked down (the operator's word of 2026-10-15).
+
 One agent, on a box that already runs the stack. First written 2026-09-30 from the
 thinkpad redeploy, and rewritten for the start step of #50, which took the agent out of
 systemd on the operator's ruling of 2026-10-03: admin stands the agent itself, holds its
