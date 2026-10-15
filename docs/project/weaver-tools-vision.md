@@ -247,10 +247,10 @@ The two axes cross rather than nest, and the corners are all occupied except one
   the harness answers deterministically, and nothing crosses the gate.
 - **Elected and dispatched outward.** A registered service the agent addresses across
   the gate, the model asking and the gate carrying it opaque as any other output. This
-  corner listed a bash tool, a database client, and an API call until the port ruling
-  of 2026-08-07, which files a tool by whether it binds a listening port rather than
-  by where its bytes go. None of those three binds one, so all three are internal and
-  dispatched inward, and what remains here is the service that listens.
+  corner holds every tool: the gate is the agent's boundary, so a bash tool, a database
+  client, an API call and a service that listens are all dispatched outward through it
+  (the operator's ruling of 2026-10-15, #172, which retired the port ruling of 2026-08-07
+  that had filed the first three inward by whether they bind a listening port).
 - **Autonomic and dispatched inward.** Held state surfacing because the loop's
   condition was met, entering the decoder's path without the model having asked.
 - **Autonomic and dispatched outward** is the empty corner. The loop reaching the

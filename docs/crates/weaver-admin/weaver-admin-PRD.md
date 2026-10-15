@@ -894,9 +894,10 @@ link, and this would bind what an agent's tools may reach. **The egress ruling o
 2026-08-07 narrows what that costs, and the port ruling of the same date narrows it
 again.** A tool that binds a listening port is external and no longer started by this
 program at all, being a registered application the agent addresses across the gate's
-agent-opened socket per apex section 3 step 7. A tool that binds none is internal, which
-by the port ruling means either loop code inside the worker or a subprocess the harness
-forks per call. **Neither is a process the start step starts beside the worker**, so the
+agent-opened socket per apex section 3 step 7. A tool that binds none is either loop code
+inside the worker (the `weaver-internal` callables) or the shell the gate forks per call,
+which is external like every tool past the gate (the operator's ruling of 2026-10-15,
+#172). **Neither is a process the start step starts beside the worker**, so the
 restriction reaches the worker and what it forks rather than a tool unit of its own, and
 what section 10 keeps is whether it is free for those, the worker's own sockets being
 AF_UNIX by construction and a forked tool's reach being the question `weaver-gate-PRD`
@@ -942,9 +943,9 @@ root-owned and not searchable by the agent uid.
 
 **Same-uid reach is a live hole and the flag that closes it is a requirement stated
 elsewhere.** A tool that binds a listening port is external and is not started by this
-program at all, per apex section 3 step 7. A tool that binds none is internal, either
-loop code inside the worker or a subprocess the harness forks per call, per the port
-ruling of 2026-08-07. **The forked case is the one this paragraph reaches**, and which
+program at all, per apex section 3 step 7. A tool that binds none is either loop code
+inside the worker or the shell the gate forks per call, external like every tool past
+the gate (the operator's ruling of 2026-10-15, #172). **The forked case is the one this paragraph reaches**, and which
 uid it runs under is what `weaver-gate-PRD` section 7 keeps open. Where such a process
 runs as the agent uid, it can attach to the worker and drive the coordination channel
 and the trace descriptor directly, which defeats descriptor scoping. The worker's

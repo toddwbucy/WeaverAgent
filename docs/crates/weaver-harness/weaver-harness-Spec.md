@@ -3124,8 +3124,8 @@ the threat-anchoring rule of the external review of 2026-08-01, and each test
 below is a walk made executable.
 
 **The reference walk: a rogue elected tool reaches for the trace.** The
-adversary is the agent's own tool surface, a subprocess this crate forks per
-call, running as the agent uid with `bash` as the reference case. The attack
+adversary is the agent's own tool surface, a subprocess the gate forks per
+call (#111), running as the agent uid with `bash` as the reference case. The attack
 is inheritance: without close-on-exec every tool subprocess holds a writable
 handle to the trace and edits its own account through a descriptor requiring
 no path and passing no check, or an end of the member's channel and seats

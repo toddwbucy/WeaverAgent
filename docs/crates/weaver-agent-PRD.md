@@ -289,21 +289,25 @@ A proto-stateful agent that:
 3. hands that trace to a sink the agent cannot reach, durability being the
    operator's per `weaver-admin-operator-contract` section 3,
 4. keeps a hot KV cache across turns, flushed on the harness's terms,
-5. executes a real internal tool, with bash as the reference case, invoked by the
-   loop and bounded by the kernel through the identity it runs as,
+5. executes a real tool, with bash as the reference case, invoked by the loop through
+   the gate and bounded by the kernel through the identity it runs as,
 6. fires at least one protoautonomic tool call, where the harness injects a
    deterministic result into the stream in place of a stochastic one, with the
    calculator as the reference case,
 7. can be reloaded with residual readout enabled or disabled by a change to its
    config file alone, with no rebuild.
 
-**Item 5 moved twice in one day and this is where it rests.** The egress ruling of
+**Item 5 moved three times and this is where it rests.** The egress ruling of
 2026-08-07 read it as a tool reached across the gate, and the port ruling of the same
-date settled the discriminator that reading rested on: **a tool that binds a listening
-port is external and one that does not is internal**, and bash binds none. So bash is
-internal, invoked by the loop rather than addressed through a socket, and this item
-asks what it always asked. The external case has its own hook and no reference tool in
-this deliverable, per section 9.
+date made a tool that binds no listening port, bash among them, internal. **The
+operator's ruling of 2026-10-15 (#172) retired that split: the gate is the agent's
+boundary, everything on its far side is external, and a shell session run as a tool
+call is external.** Bash is invoked by the loop through the gate, which forks it per
+call as the agent's account into the agent's `tools/` cgroup (#111), and this item asks
+what it always asked. Whether the shell becomes a service behind a Unix socket, as
+other external tools are, is #172's open part. A tool that binds a listening port,
+addressed across the gate's agent-opened socket, has its own hook and no reference tool
+in this deliverable, per section 9.
 
 Autonomic action, in the sense this program reserves the word, is
 harness-initiated and out of scope here. Protoautonomic names the mechanic
@@ -1010,13 +1014,13 @@ tool crate, and the reason differs on each side of the boundary.
 
 **Outward, what it owns is the grip:** the interface a tool is built to be gripped by.
 A hammer is not installed into a carpenter, it is shaped so a hand can hold it, and the
-boundary contract is that hand stated as a specification. **Which tools fit a grip is
-settled by the port test**, per the port ruling of 2026-08-07: a tool that binds a
-listening port is external and reaches the agent through a grip, and one that does not
-is internal and is loop code the harness runs. A bash tool, a database client, and an
-API caller bind no listening port and are therefore internal, whatever their bytes
-reach. What fits the agent-opened grip is a service that listens, and none of these is
-a crate here either way.
+boundary contract is that hand stated as a specification. **Every tool is external,
+on the far side of the gate**, the agent's boundary (the operator's ruling of
+2026-10-15, #172, retiring the port test's split of 2026-08-07): a tool that binds a
+listening port reaches the agent through the agent-opened grip, the shell is run per
+call by the gate, and a database client or an API caller is external the same way,
+whatever its bytes reach. A new tool defaults to external and is reached through the
+gate, and none of these is a crate here either way.
 
 **The grip is two contracts and not one, as of the egress ruling of 2026-08-07.**
 `weaver-gate-world-contract` is the grip on the world-opened socket, where the world

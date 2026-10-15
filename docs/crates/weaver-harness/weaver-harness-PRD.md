@@ -167,14 +167,15 @@ returning through the same exchange when the seat comes back. The mechanics
 are the Spec's, at its section 6.2.
 
 **The tool system.** The registry, the execution context, and the permission modes.
-Permission modes are operator policy and not a safety boundary. What a tool can reach
-depends on which side of the port test it sits, per the port ruling of 2026-08-07. A
-tool that binds a listening port is external, a registered application the harness
-addresses across the gate's agent-opened seam, and its containment is that application's
-own and the operator's to provision. A tool that binds none is internal, loop code this
-crate runs, and what it can reach is bounded by the kernel through the identity the
-worker holds, which is what this paragraph said before the egress act read it outward
-and is true again. The mode setting governs only whether the operator wants to be
+Permission modes are operator policy and not a safety boundary. **Every tool is
+external, on the far side of the gate**, the agent's boundary (the operator's ruling of
+2026-10-15, #172, retiring the port test's split of 2026-08-07). A tool that binds a
+listening port is a registered application the harness addresses across the gate's
+agent-opened seam, and its containment is that application's own and the operator's to
+provision. The shell the gate runs per call reaches what the agent's account can,
+bounded by the kernel through that identity and by the agent's `tools/` cgroup (#111).
+Loop code this crate runs, the `weaver-internal` callables, holds no process of its own
+and reaches what the worker holds. The mode setting governs only whether the operator wants to be
 consulted before a class of action. Stating this plainly is the point. A permission mode
 that reads as a security control when the kernel is the actual control is a thing that
 gets trusted wrongly later.
