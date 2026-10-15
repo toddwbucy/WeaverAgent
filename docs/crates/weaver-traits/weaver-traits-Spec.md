@@ -557,7 +557,7 @@ eventual constituency is the registered outward service the agent addresses thro
 the gate, as `weaver-traits-PRD` section 3.1 limits `Tool`. **Classification is not
 membership.** Since the operator's ruling of 2026-10-15 (#172) every tool is external,
 the gate being the agent's boundary, and the shell the gate runs per call is external
-with them; it is still outside this trait, being the gate's own verb dispatched directly
+with them. It is still outside this trait, being the gate's own verb dispatched directly
 with no table, and `weaver-gate` links no `weaver-traits`. The inward corners are function loops the
 harness runs beside its control loops and reach no trait here. Which shape the trait
 takes is still the workflow's question, and the classification no longer is.

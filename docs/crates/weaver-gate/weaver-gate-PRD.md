@@ -482,7 +482,7 @@ section keeps them as the record of what the earlier pass could already see.
 architecture seat's ratification of the candidate, or the tool workflow chartering
 **Narrowed by the port ruling of 2026-08-07** to the forked shell, a registered
 service's process being the operator's to provision and loop code holding no separate
-process; the shell is external too (#172), and the cell turns on who forks it. Section 7 carries the reasoning. Until settled, admin's
+process. The shell is external too (#172), and the cell turns on who forks it. Section 7 carries the reasoning. Until settled, admin's
 assumption stands and nothing builds against the separate-uid arm.
 
 **The refusal type.** This seam's refusal reuses `lifecycle-refusal` rather than
