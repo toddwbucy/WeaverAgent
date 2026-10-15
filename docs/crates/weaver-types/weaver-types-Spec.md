@@ -1019,15 +1019,20 @@ holds what it is reading. **The birth time is absent where the filesystem report
 none**, on #73's fourth item: never zero, which would let a reused device and inode read
 as the same file, and a reader holding no birth time to compare leans on the position's
 digest, which a different file fails.
-**The header names the file's length at acceptance** (#88): `length` is the byte
-offset of the end of the last complete record in the file at the moment the relay
-accepted the request, read from the descriptor it holds, the byte after the file's
-last newline. A last line still being written is not counted, so the offset stops
-before it, and an empty file, or one holding no complete record, names 0. It is a
-record boundary like every offset on this wire, so a reader through the door places
-where the file ended at its request, and every record past it was completed after the
-acceptance. A reader wanting that boundary mid-stream asks again: the newest
-connection replaces the old, so a reconnect yields a fresh header.
+**The header names the file's length at the relay's size read** (#88): `length` is the
+byte offset of the end of the last record complete when the relay read the file's size,
+from the descriptor it holds, once the request's position verified: the byte after the
+last newline before that size. A last line still being written at the read is not
+counted, so the offset stops before it, and an empty file, or one holding no complete
+record, names 0. It is a record boundary like every offset on this wire. Every record
+past it completed at or after the read, and a record in progress at the read lies past
+it. **For a reader it is a lower bound**: a record past `length` may have completed
+before the header reached the reader, or before the reader's next act, since the file
+keeps growing after the read. For the backfill and the replay's boundary (#88's first
+two measures, "everything the file held at that moment"), the read is the moment. A
+reader bounding an act of its own (the third) places the act by the trace's own events,
+the act's event, never by `length` alone. A reader wanting a boundary mid-stream asks
+again: the newest connection replaces the old, so a reconnect yields a fresh header.
 At the end of the file the stream keeps following,
 with a heartbeat line while idle. **Every line the stream adds is a `TraceLine`**, so
 the reader in another repository parses one fixed shape: a JSON object whose one member

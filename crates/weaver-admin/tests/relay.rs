@@ -560,7 +560,8 @@ fn header_length(reader: &mut BufReader<UnixStream>) -> u64 {
         .unwrap_or_else(|| panic!("the header names a length: {header}"))
 }
 
-/// **The header names the file's length at acceptance, a record boundary**
+/// **The header names the file's length at the relay's size read, a record
+/// boundary**
 /// (#88; `weaver-types-Spec` section 3.1): over two complete records and a
 /// partial last line, the length is the end of the second record, before the
 /// partial line. Perturbations: name the file's size, and the length lands
@@ -588,7 +589,7 @@ fn an_empty_file_and_a_partial_line_alone_name_zero() {
 }
 
 /// **A reader resuming from the length gets exactly what was completed after
-/// acceptance** (#88's first two measures): the boundary the header named,
+/// the relay's size read** (#88's first two measures): the boundary the header named,
 /// with the digest of the record ending there, streams the partial line once
 /// it is completed and every record after, and nothing from before. The
 /// partial line is longer than one block, so the read back to the last newline
@@ -596,7 +597,7 @@ fn an_empty_file_and_a_partial_line_alone_name_zero() {
 /// on a record boundary and is refused; read back one block only, and the
 /// length is 0 where a record stands.
 #[test]
-fn a_reader_resuming_from_the_length_gets_what_followed_acceptance() {
+fn a_reader_resuming_from_the_length_gets_what_completed_after_the_read() {
     let records: &[u8] = b"{\"a\":1}\n{\"b\":2}\n";
     let partial = format!("{{\"c\":\"{}", "x".repeat(70 * 1024));
     let mut contents = records.to_vec();
@@ -620,18 +621,18 @@ fn a_reader_resuming_from_the_length_gets_what_followed_acceptance() {
         digest(b"{\"b\":2}\n")
     );
     let mut reader = dial(&relay, &request);
-    // **Each acceptance reads its own length**: the second header names the
+    // **Each request's size read is its own**: the second header names the
     // boundary after the record appended since the first.
     let completed = records.len() + partial.len() + b"\"}\n{\"d\":4}\n".len();
     assert_eq!(
         header_length(&mut reader),
         completed as u64,
-        "the second acceptance names the boundary after what was appended"
+        "the second request names the boundary after what was appended"
     );
     let got = line(&mut reader);
     assert!(
         got == format!("{partial}\"}}\n"),
-        "the partial line, completed after acceptance: got {} bytes, the relay logged: {}",
+        "the partial line, completed after the read: got {} bytes, the relay logged: {}",
         got.len(),
         logged(&relay)
     );

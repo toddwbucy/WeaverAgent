@@ -2293,13 +2293,16 @@ logged since no stream line carries one, and never more than one follower stands
 item carried on #50, issuecomment-5969438713). The stream is `weaver-types-Spec` section
 3.1's: a `TraceHeader` line, then the file's own lines from the verified position
 exactly as written, then following with a heartbeat while idle. **The header's length
-is read at acceptance** (#88), as the position's verification's last steps and before
-the follower stands, from the descriptor the relay holds: the file's size, device and
-inode from one `fstat`, then back from the size, a block at a time within the same
+is the file's at the relay's size read** (#88), the position's verification's last
+steps, before the follower stands, from the descriptor the relay holds: the file's
+size, device and inode from one `fstat`, which is the length's moment, then back from
+the size, a block at a time within the same
 bounded steps per pass, to the last newline, the byte after it, or 0 where there is
-none. A read that fails, or a file shrunk below the verified position, refuses the
-connection, logged, rather than name a boundary it did not read, and the `connect` line
-records the length named.
+none. A record completed between that read and the header's queueing lies past it: the
+length is a lower bound, and no rescan narrows a window the file's growth keeps open. A
+read that fails, or a file shrunk below the verified position, refuses the connection,
+logged, rather than name a boundary it did not read, and the `connect` line records the
+length named.
 **The relay parses no
 event**: it hashes one record's bytes to verify a position, a bounded number of blocks
 per pass of its loop, so a record of any length costs it one block of memory and never

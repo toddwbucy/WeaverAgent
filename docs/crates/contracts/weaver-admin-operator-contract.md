@@ -204,21 +204,23 @@ admin-con's unit shape is held on toddwbucy/WeaverWeb#46.
 
 **At the trace door, the record as a read-only stream**: the relay writes a header line
 naming the file's identity (device, inode, and birth time where the filesystem reports
-it) and its length at the moment the relay accepted the request, the end of its last
-complete record and so a record boundary (#88), then the trace's own lines from
+it) and its length at the relay's size read, the end of the last record complete at
+that read and so a record boundary (#88), then the trace's own lines from
 the verified position exactly as written, following new lines with a heartbeat while
 idle, every added line a `TraceLine` of `weaver-types-Spec` section 3.1. It serves
 the file the loaded run opened, so a rotation of the sink's path changes
 nothing it reads and reaches the reader as a new identity in the next run's header, ends
 the stream on a truncation rather than smoothing it over, and refuses a position that
 does not verify before a byte is sent. **The length places a boundary for a reader that
-reads only through the door**: where the file's complete records ended when the relay
-accepted the request, so it can bound a backfill or close a replay at that moment, and
-every record past it was completed after the acceptance. Acceptance follows the
-position's verification, so a reader bounding an act of its own (a verb's invocation)
-waits for the header before the act. A boundary mid-stream is taken by a new request:
-the newest connection from the reader replaces the old, so a reconnect yields a fresh
-header and its length, and no other line carries one.
+reads only through the door**: where the file's complete records ended at the relay's
+size read, once the request's position verified, so it can bound a backfill or close a
+replay at that moment. Every record past it completed at or after the read. **It is a
+lower bound for the reader**: a record past it may have completed before the header
+reached the reader, or before the reader's next act. A reader bounding an act of its own
+(a verb's invocation) places the act by the trace's own events, the act's event, never
+by the length alone. A boundary mid-stream is taken by a new request: the newest
+connection from the reader replaces the old, so a reconnect yields a fresh header and
+its length, and no other line carries one.
 A reader of the record this way reads the file through no grant of its own,
 so the territory's layout gives it nothing.
 

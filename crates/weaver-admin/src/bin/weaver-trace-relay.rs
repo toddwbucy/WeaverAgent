@@ -476,7 +476,7 @@ impl Relay {
             Some(Ok(())) => {}
         }
         let offset = verification.offset;
-        // **The header's identity and length, read at acceptance** (#88;
+        // **The header's identity and length, from the size read** (#88;
         // `weaver-admin-Spec` section 6): measured by the verification's own
         // last steps, from one `fstat` and a bounded walk back, so a read that
         // fails has refused above rather than name what it did not read.
@@ -624,8 +624,10 @@ enum Phase {
     /// The position verified, offset zero at once: the file's size and
     /// identity are read next, from one `fstat`.
     Verified,
-    /// **The header's length, measured back from the size read at
-    /// acceptance** (#88): a block at a time to the last newline, inside the
+    /// **The header's length, measured back from the size read** (#88), the
+    /// length's moment: a record completed after it lies past the length,
+    /// which is a lower bound for the reader, and no rescan chases a growing
+    /// file. A block at a time to the last newline, inside the
     /// same budget as the walk above, so a long unfinished last line never
     /// holds the loop.
     Measure { end: u64 },
@@ -701,9 +703,11 @@ impl Verification {
             match phase {
                 Phase::Done => return Some(Ok(())),
                 Phase::Verified => {
-                    // One `fstat` names the size, the device and the inode, so
-                    // the header never pairs a length with an identity it did
-                    // not read with it.
+                    // **This read is the length's moment** (#88): one `fstat`
+                    // names the size, the device and the inode, so the header
+                    // never pairs a length with an identity it did not read
+                    // with it, and a record completed after it lies past the
+                    // length, a lower bound for the reader.
                     let Ok(metadata) = sink.metadata() else {
                         return Some(Err("the sink cannot be read for its length"));
                     };
