@@ -275,7 +275,9 @@ changing the axis bought.
 
 **The outward corner, elected and dispatched through the gate, is what the rest of
 this section is about.** A tool there is external to the agent and not constitutive
-of it, and this program builds none of them: what it owns is the grip they are built
+of it. The shell the gate runs per call sits in this corner since #172 and is the one
+exception to the dispatch described below: the gate executes it as its own verb, forking
+it into the agent's `tools/` cgroup. Of the registered services, this program builds none: what it owns is the grip they are built
 to fit, per `weaver-agent-PRD` section 9. Its call leaves as ordinary model output,
 crossing the gate opaque and logged, and the harness owns dispatch on the far side, so
 the gate never distinguishes a tool call from any other output. The return is symmetric:

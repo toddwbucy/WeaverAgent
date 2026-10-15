@@ -552,11 +552,13 @@ to: traits-tool-no-safety-classification
 workflow charters it, and that section now cuts on two axes rather than one.** An action
 is elected when the model emits it and autonomic when the loop fires it on a condition
 the loop set, and it is dispatched inward to an organ or outward through the gate.
-**This trait serves the elected and outward corner alone**, and since the operator's
-ruling of 2026-10-15 (#172) every tool is outward: the gate is the agent's boundary, so
-the trait's eventual constituency is every tool the agent addresses through the gate,
-the shell the gate runs per call included, and the port test's narrowing of 2026-08-07
-is retired. The inward corners are function loops the
+**This trait serves the elected and outward corner's registered services alone**: its
+eventual constituency is the registered outward service the agent addresses through
+the gate, as `weaver-traits-PRD` section 3.1 limits `Tool`. **Classification is not
+membership.** Since the operator's ruling of 2026-10-15 (#172) every tool is external,
+the gate being the agent's boundary, and the shell the gate runs per call is external
+with them; it is still outside this trait, being the gate's own verb dispatched directly
+with no table, and `weaver-gate` links no `weaver-traits`. The inward corners are function loops the
 harness runs beside its control loops and reach no trait here. Which shape the trait
 takes is still the workflow's question, and the classification no longer is.
 

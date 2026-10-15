@@ -892,8 +892,8 @@ Restricting the address families the agent may open to `AF_UNIX` is **not** a
 restatement of this program's no-network-surface rule: that rule binds what these crates
 link, and this would bind what an agent's tools may reach. **The egress ruling of
 2026-08-07 narrows what that costs, and the port ruling of the same date narrows it
-again.** A tool that binds a listening port is external and no longer started by this
-program at all, being a registered application the agent addresses across the gate's
+again.** A registered service, a tool that binds a listening port, is no longer started
+by this program at all, being an application the agent addresses across the gate's
 agent-opened socket per apex section 3 step 7. A tool that binds none is either loop code
 inside the worker (the `weaver-internal` callables) or the shell the gate forks per call,
 which is external like every tool past the gate (the operator's ruling of 2026-10-15,
@@ -942,8 +942,8 @@ no bit on it and reaches it only through a passed descriptor, and the trace dire
 root-owned and not searchable by the agent uid.
 
 **Same-uid reach is a live hole and the flag that closes it is a requirement stated
-elsewhere.** A tool that binds a listening port is external and is not started by this
-program at all, per apex section 3 step 7. A tool that binds none is either loop code
+elsewhere.** A registered service, a tool that binds a listening port, is not started by
+this program at all, per apex section 3 step 7. A tool that binds none is either loop code
 inside the worker or the shell the gate forks per call, external like every tool past
 the gate (the operator's ruling of 2026-10-15, #172). **The forked case is the one this paragraph reaches**, and which
 uid it runs under is what `weaver-gate-PRD` section 7 keeps open. Where such a process
