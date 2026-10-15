@@ -5285,6 +5285,78 @@ fn containment_a_conclusion_never_ends_another_loads_cgroup() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// **The escalation concludes the record's run, never the marker's** (6.1,
+/// ownership is the record's; the Planner's grade of #165): a load killed
+/// between its record and its marker leaves the marker open on `r-1` and
+/// the record naming `r-2`, and a forced unload escalated past the leave's
+/// bound ends `r-2`'s cgroup and its stray before it answers `Unloaded`.
+/// Perturbation: conclude the marker's run, and the run end reads
+/// `NotOwned`, the stray running on.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_the_escalation_concludes_the_records_run() {
+    let (config, _report, base) = territory_with_one_room_file("cg-escalated");
+    save_points::write_marker(
+        &config.root,
+        Some(&save_points::Marker::Open { run: "r-1".into() }),
+    )
+    .unwrap();
+    let (scratch, agent) = agent_cgroup_for(&config, "cg-escalated", "r-2");
+    let mut stray = containment::tests::escaper_in(&agent.child("worker/run").unwrap());
+    let holder = stand_in_holder(&config);
+    let _worker = timed_worker(
+        &config,
+        vec![(std::time::Duration::ZERO, idle_declaring((None, None)))],
+    );
+    let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+    end(holder);
+    assert_eq!(answered, unloaded());
+    assert!(stray.wait().is_ok(), "the stray is ended");
+    assert!(
+        scratch
+            .cgroup
+            .child(&agent_cgroup::cgroup_name(&config.agent))
+            .is_err(),
+        "the agent's cgroup is gone"
+    );
+    assert_eq!(
+        save_points::read_marker(&config.root),
+        Some(save_points::Marker::Forced { run: "r-1".into() })
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// **A rollback whose escalation left the run lock held ends no cgroup**
+/// (6.1, admin's run end runs once the run lock is free): the cgroup the
+/// load made and its record are left for the next `unload`, and the
+/// rollback refuses `WorkerWouldNotExit`. Perturbation: run the run end
+/// whether or not the lock freed, and the stray dies.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_a_rollback_with_the_lock_held_ends_no_cgroup() {
+    use std::os::fd::AsFd;
+    let (config, _report, base) = territory_with_one_room_file("cg-held");
+    let (_scratch, agent) = agent_cgroup_for(&config, "cg-held", "r-1");
+    let mut stray = containment::tests::escaper_in(&agent.child("worker/run").unwrap());
+    let (account, contained) = end_rolled_back_cgroup(&config, "r-1", false);
+    assert_eq!(
+        contained,
+        Err(LifecycleRefusal::WorkerWouldNotExit),
+        "{account}"
+    );
+    assert!(stray.try_wait().unwrap().is_none(), "nothing is killed");
+    let run_directory = agent_cgroup::open_run_directory(&config.run_directory()).unwrap();
+    assert!(
+        containment::read_record(run_directory.as_fd(), &config.agent)
+            .unwrap()
+            .is_some(),
+        "the record is kept for the next unload"
+    );
+    let _ = stray.kill();
+    let _ = stray.wait();
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// **A constituent that cannot move itself into its leaf never execs, and
 /// the move comes before the privilege drop** (`weaver-admin-Spec` 6.1, C4;
 /// the plan's first review focus): a placement descriptor the child cannot

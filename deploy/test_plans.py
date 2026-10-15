@@ -2637,18 +2637,25 @@ esac
     def test_lifecycle_step_7_reads_show_by_the_ladder(self):
         # After the worker's kill, show answers by weaver-admin-Spec section
         # 3's ladder: in_transition naming the constituents where any still
-        # holds the run lock (rung iii), unloaded naming none where it is
-        # free; step 7 accepts exactly those two (Codex on #126, round 3).
-        # Perturbation: require unloaded after the kill again, and this fails.
+        # holds the run lock (rung iii) or the agent's cgroup holds them with
+        # the lock free (rung iv), unloaded naming none where it is free and
+        # the cgroup empty; step 7 accepts exactly those two (Codex on #126,
+        # round 3), and asks again while in_transition names none, a process
+        # mid-exit (rung iv; the Planner's grade of #165). Perturbation:
+        # require unloaded after the kill again, or drop the asking again,
+        # and this fails.
         result = self.lifecycle()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("in_transition naming the constituents where any still holds the run lock "
-                      "(rung iii), unloaded with none where the lock is free", result.stdout)
+                      "(rung iii) or the agent's cgroup still holds them with the lock free (rung iv), "
+                      "naming none while a process is mid-exit (rung iv, asked again), unloaded with "
+                      "none where the lock is free and the cgroup empty", result.stdout)
         script = (self.repo / "deploy" / "verify-lifecycle.sh").read_text()
         body = script[script.index("step_7() {"):script.index("step_8() {")]
         self.assertIn("    in_transition/some)", body)
         self.assertIn("    state/none)", body)
         self.assertIn('fail "show after the kill answers by the ladder"', body)
+        self.assertIn('[ "$after" = in_transition ] && { [ "$left" = absent ] || [ "$left" = "[]" ]; } || break', body)
         self.assertNotIn('ask show; expect_state "show after the kill" unloaded', body)
 
     def test_lifecycle_step_8_is_a_plan_only_near_miss_and_8b_always_runs(self):

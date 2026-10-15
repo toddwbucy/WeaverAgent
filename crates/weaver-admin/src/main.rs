@@ -1848,8 +1848,10 @@ fn roll_back(
         account.push(format!("leave {}", if left { "undone" } else { "held" }));
     }
     standing.run_lock = None;
+    let mut lock_free = true;
     if standing.forked {
         let ended = start::escalate(&config.run_directory());
+        lock_free = ended.is_ok();
         account.push(format!(
             "constituents {}",
             match ended {
@@ -1861,19 +1863,41 @@ fn roll_back(
     // **The rollback always ends the cgroup its own load made** (6.1,
     // ownership is the record's), whatever the marker says.
     if let Some(run) = standing.cgroup_run.take() {
-        contained = end_agent_cgroup(config, "load", agent_cgroup::Concluding::Run(&run));
-        account.push(format!(
-            "cgroup {}",
-            match &contained {
-                Ok(()) => "ended".to_string(),
-                Err(refusal) => format!("held: {}", surface::render_refusal(refusal)),
-            }
-        ));
+        let (said, ended) = end_rolled_back_cgroup(config, &run, lock_free);
+        account.push(said);
+        contained = ended;
     }
     if standing.sink_opened {
         account.push("sink closed".to_string());
     }
     (account.join(", "), contained)
+}
+
+/// **The rollback's run end, once the run lock is free** (6.1, admin's run
+/// end: when): an escalation that left the run lock held ended no run, so
+/// the cgroup it made is left with its record for the next `unload`, and
+/// the rollback refuses `WorkerWouldNotExit` as a run end past its bound
+/// does. The account names which.
+fn end_rolled_back_cgroup(
+    config: &ServiceConfig,
+    run: &str,
+    lock_free: bool,
+) -> (String, Result<(), LifecycleRefusal>) {
+    if !lock_free {
+        return (
+            "cgroup held: the run lock did not free, left for the next unload".to_string(),
+            Err(LifecycleRefusal::WorkerWouldNotExit),
+        );
+    }
+    let contained = end_agent_cgroup(config, "load", agent_cgroup::Concluding::Run(run));
+    let said = format!(
+        "cgroup {}",
+        match &contained {
+            Ok(()) => "ended".to_string(),
+            Err(refusal) => format!("held: {}", surface::render_refusal(refusal)),
+        }
+    );
+    (said, contained)
 }
 
 /// **The start step's making of the agent's cgroup** (Spec 6.1), its
@@ -1986,15 +2010,18 @@ fn end_agent_cgroup(
 
 /// **The ladder's rung (iv)** (Spec section 3; 6.1, C2), the run lock free:
 /// `Unloaded` where the agent's cgroup is absent or empty, `InTransition`
-/// naming what it holds otherwise, never `Unloaded` over a process of the
-/// agent. A record that does not read refuses `BoundaryUnverified`.
+/// naming what it holds otherwise, naming none where it reads populated
+/// and lists nothing, never `Unloaded` over a process of the agent. A record that does not read refuses `BoundaryUnverified`.
 fn unloaded_by_ladder(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
     use std::os::fd::AsFd;
     let run_directory = agent_cgroup::open_run_directory(&config.run_directory())
         .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
     match agent_cgroup::holds(run_directory.as_fd(), &config.agent) {
-        Ok(pids) if pids.is_empty() => Ok(unloaded_answer()),
-        Ok(pids) => Ok(LifecycleAnswer::InTransition {
+        Ok(None) => Ok(unloaded_answer()),
+        // Named or not: a cgroup that does not read `populated 0` holds a
+        // process of the agent, one mid-exit among them, and is never
+        // `Unloaded`.
+        Ok(Some(pids)) => Ok(LifecycleAnswer::InTransition {
             constituents: pids.into_iter().map(|pid| pid as u32).collect(),
         }),
         Err(why) => {
@@ -2554,18 +2581,14 @@ fn escalate_joined(
     }
     // **The run end before the marker** (6.1; 3.0, every row that prints
     // `Unloaded` passes the run end first), under the lock, never lock-free.
-    end_agent_cgroup(config, "force-unload", concluding(run.as_deref()))?;
+    // **The escalation concludes the record's run** (6.1, ownership is the
+    // record's, never the marker's): what it ended is whatever held the run
+    // lock, and the cgroup they ran in is the one the record names, a load
+    // killed between its record and its marker leaving the marker on an
+    // earlier run. Another load that stands is caught above, by the marker.
+    end_agent_cgroup(config, "force-unload", agent_cgroup::Concluding::Recorded)?;
     write_by_rule(config, run.as_deref(), conclusion::MarkerWrite::Forced)?;
     unloaded_by_ladder(config)
-}
-
-/// The run a conclusion ends: the one the marker names, or, the invocation
-/// lock held over a run no marker names, the record's (6.1, ownership).
-fn concluding(run: Option<&str>) -> agent_cgroup::Concluding<'_> {
-    run.map_or(
-        agent_cgroup::Concluding::Recorded,
-        agent_cgroup::Concluding::Run,
-    )
 }
 
 /// **The leave directed and concluded**, per Spec section 3: `forced` names
@@ -2623,8 +2646,9 @@ fn leave_within(
     // section 4, the marker-write rule), whichever verb escalated: `Forced`
     // names how the run ended, not who ended it, and the next load records
     // `ForcedUnload`. The room's finished files are recovered at that load.
+    // The escalation concludes the record's run, as `escalate_joined` says.
     let run = open_run(config)?;
-    end_agent_cgroup(config, verb_of(forced), concluding(run.as_deref()))?;
+    end_agent_cgroup(config, verb_of(forced), agent_cgroup::Concluding::Recorded)?;
     write_by_rule(config, run.as_deref(), conclusion::MarkerWrite::Forced)?;
     unloaded_by_ladder(config)
 }

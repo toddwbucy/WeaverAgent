@@ -208,7 +208,7 @@ fn containment_the_run_end_kills_and_removes_the_cgroup() {
     );
     assert_eq!(containment::read_record(fd.as_fd(), "alpha"), Ok(None));
     assert!(tool.wait().is_ok() && stray.wait().is_ok());
-    assert_eq!(holds(fd.as_fd(), "alpha"), Ok(Vec::new()));
+    assert_eq!(holds(fd.as_fd(), "alpha"), Ok(None));
 }
 
 /// **A run end leaves another load's cgroup alone** (6.1, ownership is the
@@ -226,7 +226,7 @@ fn containment_a_run_end_leaves_another_runs_cgroup() {
         Ok(Ended::NotOwned)
     );
     assert!(alive(&mut stray), "another run's process runs on");
-    let held = holds(fd.as_fd(), "alpha").unwrap();
+    let held = holds(fd.as_fd(), "alpha").unwrap().unwrap();
     assert!(held.contains(&(stray.id() as i32)), "{held:?}");
     let _ = stray.kill();
     let _ = stray.wait();
@@ -268,13 +268,14 @@ fn containment_the_ladder_reads_through_the_record() {
     let scratch = ScratchCgroup::new("ladder");
     mark_delegated(&scratch.cgroup);
     let (_dir, fd) = run_directory("ladder");
-    assert_eq!(holds(fd.as_fd(), "alpha"), Ok(Vec::new()), "no record");
+    assert_eq!(holds(fd.as_fd(), "alpha"), Ok(None), "no record");
     let made = make_beneath(invoker(&scratch), fd.as_fd(), "alpha", "run-1", owner()).unwrap();
     drop(made);
-    assert_eq!(holds(fd.as_fd(), "alpha"), Ok(Vec::new()), "empty");
+    assert_eq!(holds(fd.as_fd(), "alpha"), Ok(None), "empty");
     let mut stray = escaper_in(&agent(&scratch).unwrap().child("worker/run").unwrap());
     assert!(
         holds(fd.as_fd(), "alpha")
+            .unwrap()
             .unwrap()
             .contains(&(stray.id() as i32))
     );
@@ -283,7 +284,7 @@ fn containment_the_ladder_reads_through_the_record() {
     let _ = agent(&scratch).unwrap().kill();
     assert!(agent(&scratch).unwrap().wait_empty(BOUND));
     containment::remove_layout(&scratch.cgroup, "weaver-alpha").unwrap();
-    assert_eq!(holds(fd.as_fd(), "alpha"), Ok(Vec::new()), "absent: A0");
+    assert_eq!(holds(fd.as_fd(), "alpha"), Ok(None), "absent: A0");
     scratch.cgroup.make_child("weaver-alpha").unwrap();
     assert!(
         holds(fd.as_fd(), "alpha").is_err(),
@@ -291,11 +292,14 @@ fn containment_the_ladder_reads_through_the_record() {
     );
 }
 
-/// **A listing that fails never reads as holding nothing** (6.1, C2; a
-/// failed read is read as not empty): `worker/tools/` closed to the suite
-/// with a stray inside, the walk skips it and names no process, and the
-/// ladder's read refuses rather than answer empty. Perturbation: read the
-/// pids alone, and the closed cgroup reads as empty.
+/// **A cgroup that lists nothing while it reads populated is never empty**
+/// (6.1, C2, rung (iv); a failed read is read as not empty): the kernel's
+/// listing skips a process mid-exit while `populated` stays 1 (measured on
+/// 2026-10-15), and a listing that fails names none the same way. Here
+/// `worker/tools/` is closed to the suite with a stray inside, so the walk
+/// skips it and names no process, and the ladder's read answers populated
+/// naming none, never `None`. Perturbation: read an empty listing as empty,
+/// and the closed cgroup reads as holding nothing.
 #[test]
 #[ignore = "needs a delegated cgroup scope"]
 fn containment_a_listing_that_fails_never_reads_as_empty() {
@@ -309,7 +313,7 @@ fn containment_a_listing_that_fails_never_reads_as_empty() {
     std::fs::set_permissions(&tools, std::fs::Permissions::from_mode(0o000)).unwrap();
     let held = holds(fd.as_fd(), "alpha");
     std::fs::set_permissions(&tools, std::fs::Permissions::from_mode(0o755)).unwrap();
-    assert!(held.is_err(), "{held:?}");
+    assert_eq!(held, Ok(Some(Vec::new())), "populated, naming none");
     let _ = stray.kill();
     let _ = stray.wait();
 }

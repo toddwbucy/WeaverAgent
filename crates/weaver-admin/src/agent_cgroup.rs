@@ -478,30 +478,32 @@ pub fn run_end(
 // ------------------------------------------------------------- the ladder
 
 /// **What the agent's cgroup holds, for the ladder's rung (iv)** (6.1, C2):
-/// the pids of the cgroup the record names, none where no record stands or
-/// its path is absent (A0), and a refusal's account where the record does
-/// not read or names another cgroup there. Found through the record, never
-/// through this invocation's own cgroup.
-pub fn holds(run_directory: BorrowedFd<'_>, agent: &str) -> Result<Vec<i32>, String> {
+/// `None` where no record stands, its path is absent (A0) or the cgroup
+/// reads `populated 0`, and otherwise the pids it lists, **which may be
+/// none**: the kernel's listing skips a process mid-exit while `populated`
+/// stays 1 through its exit's release of its files and memory (measured on
+/// 2026-10-15: 646 ms after the kill of a process holding 32 GiB), and a
+/// listing that fails names none too, a failed read being read as not
+/// empty. A refusal's account where the record does not read or names
+/// another cgroup there. Found through the record, never through this
+/// invocation's own cgroup.
+pub fn holds(run_directory: BorrowedFd<'_>, agent: &str) -> Result<Option<Vec<i32>>, String> {
     let record = match containment::read_record(run_directory, agent) {
         Ok(Some(record)) => record,
-        Ok(None) => return Ok(Vec::new()),
+        Ok(None) => return Ok(None),
         Err(()) => return Err("the cgroup record does not read".to_string()),
     };
     match containment::recorded_at(&record) {
-        RecordedAt::Absent => Ok(Vec::new()),
+        RecordedAt::Absent => Ok(None),
         RecordedAt::Same => {
             let cgroup = Cgroup::open(&record.path)
                 .map_err(|error| format!("the cgroup {} does not open: {error}", record.path))?;
             // **Emptiness is `populated 0`, a failed read read as not empty**
-            // (6.1): a listing that fails never reads as holding nothing.
-            match (cgroup.populated(), pids(&cgroup)) {
-                (Some(false), _) => Ok(Vec::new()),
-                (_, pids) if !pids.is_empty() => Ok(pids),
-                _ => Err(format!(
-                    "the cgroup {} does not read as empty and names no process",
-                    record.path
-                )),
+            // (6.1): a listing that is empty, or fails, never reads as
+            // holding nothing while `populated` does not read 0.
+            match cgroup.populated() {
+                Some(false) => Ok(None),
+                _ => Ok(Some(pids(&cgroup))),
             }
         }
         RecordedAt::Other | RecordedAt::Unreadable => Err(format!(
