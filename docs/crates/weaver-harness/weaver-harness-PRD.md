@@ -333,10 +333,12 @@ boundary already stands.
 
 **Where that boundary stands moved with the egress ruling of 2026-08-07.** This
 paragraph said the harness executes the tool as the agent's constrained user and the
-kernel decides what that user can touch. Apex step 7 now has the harness address a
-registered tool across the gate's agent-opened seam rather than fork one, so what the
-harness does is reach a boundary rather than run inside it, and what a tool may touch
-is that application's own affair on the far side of the socket. **The seam this
+kernel decides what that user can touch. Apex step 7 now sends every tool call to the
+gate and forks none: the shell is the gate's own verb, forked by the gate per call as
+the agent's account into the agent's `tools/` cgroup (#111, #172), and a registered
+service is addressed across the gate's agent-opened seam, what it may touch being that
+application's own affair on the far side of the socket. Either way the harness reaches a
+boundary rather than running inside it. **The seam this
 requires is chartered and its contract is not written**, per apex section 3 step 7, so
 this charter states the direction and owes the rest to the tool workflow: the exchange
 that carries a tool call toward the gate, this crate's part in it, and what a tool's
@@ -385,9 +387,10 @@ is eight and the table below is six.
 
 **The egress ruling of 2026-08-07 adds no seam here, and the socket count above it is a
 claim worth checking rather than an omission.** Apex section 3 step 7 has the harness
-address a registered tool *through the gate's* agent-opened socket, so this crate's
-counterparty is the gate it already holds a seam with, and what is new is a direction
-on that seam rather than a party. The tool is the gate's peer and not this crate's,
+send every tool call to the gate: the shell's as an execution exchange the gate runs
+itself, and a registered service's *through the gate's* agent-opened socket. So this
+crate's counterparty is the gate it already holds a seam with, and what is new is a
+direction on that seam rather than a party. The tool is the gate's peer and not this crate's,
 which is why no row below is the tool's and why nothing here authenticates a tool. **The
 exchange that carries a tool call is owed by `weaver-harness-gate-contract`**, which
 closes its enumeration at five and says in its section 7 that the clause is drawn
@@ -412,7 +415,7 @@ The six sockets:
 
 | Seam | Peer | The harness's role |
 |---|---|---|
-| Boundary | `weaver-gate` | Receives authenticated work inbound. Opens the exchange that carries a tool call outbound, per apex step 7, which the gate relays to the registered tool and never interprets. Gate never reaches past this seam in either direction. |
+| Boundary | `weaver-gate` | Receives authenticated work inbound. Opens the exchange that carries a tool call outbound, per apex step 7, which the gate either runs as its own shell verb, forked into `tools/`, or relays to a registered service unread. Gate never reaches past this seam in either direction. |
 | Residency | `weaver-spu` | Hands over the model binding it was given to admit, and later asks for its release. One arm of the enter fan-out and one of the unwinding. Consumes the confirmation or the typed refusal, which travels into the aggregate unchanged. |
 | Decode | `weaver-spu` | Opens the resident session, appends each turn's delta, and issues the flush. Requests carry `turn_key` and `session_key`. Consumes the response and its measurement payload. |
 | Classify | `weaver-spu` | Sends content with the turn's trace context to the classify submodule and consumes every label that artifact defines, each scored. The submodule's readiness and its faults arrive here. The submodule is optional by presence per `weaver-spu-PRD` section 15.3, so an agent declaring no classifier stands no end of it. |

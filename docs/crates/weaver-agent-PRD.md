@@ -201,8 +201,8 @@ states how it serves this path.
    Admin, the agent's management plane, opens no socket the world can reach: it
    is an invocation that dials the worker and exits, per section 12, and there
    is no listening network socket anywhere in the program. **The gate carries a
-   second socket, opened by the agent rather than by the world, and step 7's
-   tool traffic crosses it**, per the egress ruling of 2026-08-07. The two are
+   second socket, opened by the agent rather than by the world, and a registered
+   service's traffic in step 7 crosses it**, per the egress ruling of 2026-08-07. The two are
    told apart by which party may open an exchange, per `weaver-organ-channel`
    section 1, and each is single-initiator where an organ channel is not. This
    step's clause once said outbound tool connections do not pass through Gate,
@@ -232,11 +232,17 @@ states how it serves this path.
    reduction alone, per the operator's ruling of 2026-08-30 and
    `weaver-spu-PRD` section 13.7, which carries the criterion and its
    bounds.
-7. If the generation contains a tool call, **the harness addresses it to a
-   registered tool through the gate's agent-opened socket**, per the egress
-   ruling of 2026-08-07. The tool is a standing application the operator
-   provisions, holding its own identity and lifecycle outside the run, and the
-   harness reaches it rather than forking it. The seam is a Unix socket under a
+7. If the generation contains a tool call, the harness sends it to the gate, and it
+   takes one of two paths, both external, the gate being the agent's boundary (the
+   operator's ruling of 2026-10-15, #172). **The shell is the gate's own verb**: the
+   harness sends the call across its seam with the gate as an execution exchange
+   (`weaver-harness-gate-contract` section 2), and the gate forks a shell per call,
+   as the agent's account, into the agent's `tools/` cgroup, kills `tools/` whole at
+   the call's end and answers (`weaver-gate-Spec` section 8, `weaver-admin-Spec`
+   section 6.1). **A registered service is addressed through the gate's agent-opened
+   socket**, per the egress ruling of 2026-08-07. It is a standing application the
+   operator provisions, holding its own identity and lifecycle outside the run, and
+   the harness reaches it rather than forking it, as the gate forks none of it. The seam is a Unix socket under a
    named contract that authenticates its peer, per invariant 5.1, which is the
    floor every other seam already meets and the reason this shape follows
    rather than being elected. This step once had the harness execute the tool as
@@ -247,12 +253,14 @@ states how it serves this path.
    the socket where the agent never becomes it. The harness emits
    `tool.call.started` and `tool.call.completed`, then returns to step 5.
 
-   **What the tool reaches on its own side is not this program's to bound.** The
-   gate selects the application and does not select that application's
+   **What a registered service reaches on its own side is not this program's to
+   bound.** The gate selects the application and does not select that application's
    destinations, and the kernel-enforced containment the old clause named
    belongs to the network-facing layer this program is not building. The
    distinction is `weaver-gate-PRD` section 8's and is why this step states a
-   boundary rather than a containment.
+   boundary rather than a containment for it. **The shell is the other case**: what
+   it reaches is bounded by the agent's account and contained by the agent's
+   `tools/` cgroup, which this program makes.
 8. On a final answer the harness emits `turn.closed`, closing the bracket in
    the stream, the close naming its kind.
 9. The response returns through Gate to the client, one NDJSON line out,
@@ -318,8 +326,7 @@ state to decide when to fire belongs to the later stateful program.
 **Initiation is what these words name, and dispatch is a separate question.** Whether
 an action was elected or initiated is settled by who moved first, which the trace
 records, so it is a fact rather than a reading. Where the harness then routes it,
-inward to the organ whose domain it belongs to or outward through the gate as
-ordinary output, follows from what the action is for and changes nothing about what
+inward to the organ whose domain it belongs to or outward through the gate, follows from what the action is for and changes nothing about what
 it was. **Neither question is answered by where the capability sits**, and an action
 that reaches a network is classified by who moved first exactly as one that never
 leaves the process is. `weaver-tools-vision` section 6 works the cross of the two.

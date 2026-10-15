@@ -1760,8 +1760,9 @@ to: harness-provider-injected-no-wire-format
 
 **Tool dispatch is chartered as of the tool workflow's opening, 2026-08-17,
 and it is the exchange and never the trait.** `tool-trait` opened with
-`weaver-traits-PRD` section 3.1's revision and lives on the gate's side of
-the seam: this crate resolves nothing against it and holds no tool, opening
+`weaver-traits-PRD` section 3.1's revision and belongs to the registered services
+reached across the gate's agent-opened seam, the gate's own shell drawing nothing
+from it (#172): this crate resolves nothing against it and holds no tool, opening
 the execution exchange of `weaver-harness-gate-contract` section 2 per call
 the family parse recovers, which keeps every tool on the far side of the
 loop's membrane where the ratified boundary filed it. What the charter fixed
@@ -1786,8 +1787,9 @@ construction requires a tool
 result constructible from exactly one source, and a harness-side execution
 path that must stay open cannot be closed by the type system, so the in-loop
 construction path and the enforcement are incompatible and the enforcement
-was chosen. Whether the gate spawns tool processes or tools are provisioned
-as peers is the tool workflow's election and the finding rules on neither.
+was chosen. Both have since been settled, each for its own kind: the gate forks
+the shell per call into the agent's `tools/` cgroup (#111), and a registered service
+is a peer the operator provisions (#172).
 What is settled is only which side of the loop's membrane the tool sits on.
 
 **The granted tool result closes the loop at the type level, per the audit of

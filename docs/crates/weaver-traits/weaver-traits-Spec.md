@@ -505,13 +505,15 @@ section 5's ordering.
 
 **The four constraints, inherited and now visible in the signature.** The
 trait is dyn-compatible,
-because `weaver-traits-PRD` section 3.1 has the engine dispatching tools it does
-not know the identity of and that is object dispatch by definition. Its async
+because the registered services `weaver-traits-PRD` section 3.1 names are tools a
+dispatcher addresses without knowing their identity, and that is object dispatch by
+definition. Its async
 methods return an explicitly boxed future rather than using `async fn` in trait,
 because an `async fn` in a trait is not dyn-compatible and the alternative,
 `async-trait`, is a proc-macro dependency on the floor that the boxing writes out
-by hand in three lines. **The boxed future carries `+ Send`**, because the harness
-drives tool calls on a runtime this crate does not name and a future that cannot
+by hand in three lines. **The boxed future carries `+ Send`**, because whichever
+dispatcher drives a registered service's calls does so on a runtime this crate does not
+name and a future that cannot
 cross a thread would bound the executor the composition root may choose, which is
 a transport decision leaking onto the floor. And the trait carries **no safety
 classification of any kind**, per charter section 3.1 and apex section 3 step 7,
