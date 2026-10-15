@@ -102,11 +102,15 @@ pub struct TraceRequest {
 /// nanoseconds since the epoch, so a reader holds what it is reading. **The
 /// birth time is absent where the filesystem reports none**, on #73's fourth
 /// item, never zero, which would make a reused device and inode read as the
-/// same file.
+/// same file. **`length` is the file's at acceptance** (#88): the end of the
+/// last complete record when the relay accepted the request, a record
+/// boundary, 0 for a file holding none, and required, so a reader never takes
+/// an absent boundary for zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TraceHeader {
     pub device: u64,
     pub inode: u64,
+    pub length: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub birth_ns: Option<i128>,
 }

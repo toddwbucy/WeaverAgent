@@ -538,3 +538,83 @@ fn the_header_carries_the_birth_time_where_reported() {
         assert!(birth.is_null(), "absent where unreported: {header}");
     }
 }
+
+/// The header's `length`, read off the first line of a stream.
+fn header_length(reader: &mut BufReader<UnixStream>) -> u64 {
+    let header: serde_json::Value = serde_json::from_str(&line(reader)).unwrap();
+    header["trace_stream"]["header"]["length"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("the header names a length: {header}"))
+}
+
+/// **The header names the file's length at acceptance, a record boundary**
+/// (#88; `weaver-types-Spec` section 3.1): over two complete records and a
+/// partial last line, the length is the end of the second record, before the
+/// partial line. Perturbations: name the file's size, and the length lands
+/// inside the partial line; name nothing, and the header has no length.
+#[test]
+fn the_header_names_the_end_of_the_last_complete_record() {
+    let records: &[u8] = b"{\"a\":1}\n{\"b\":2}\n";
+    let mut contents = records.to_vec();
+    contents.extend_from_slice(b"{\"c\":");
+    let relay = start("length", &contents, me());
+    let mut reader = dial(&relay, "{\"offset\":0}\n");
+    assert_eq!(header_length(&mut reader), records.len() as u64);
+}
+
+/// **An empty file names 0, and so does one holding no complete record.**
+/// Perturbation: name the size for a file of one partial line, and it names
+/// that line's length.
+#[test]
+fn an_empty_file_and_a_partial_line_alone_name_zero() {
+    for (tag, contents) in [("empty", &b""[..]), ("partial", &b"{\"a\":"[..])] {
+        let relay = start(&format!("length-{tag}"), contents, me());
+        let mut reader = dial(&relay, "{\"offset\":0}\n");
+        assert_eq!(header_length(&mut reader), 0, "{tag}");
+    }
+}
+
+/// **A reader resuming from the length gets exactly what was completed after
+/// acceptance** (#88's first two measures): the boundary the header named,
+/// with the digest of the record ending there, streams the partial line once
+/// it is completed and every record after, and nothing from before. The
+/// partial line is longer than one block, so the read back to the last newline
+/// crosses blocks. Perturbations: name the size, and the request at it is not
+/// on a record boundary and is refused; read back one block only, and the
+/// length is 0 where a record stands.
+#[test]
+fn a_reader_resuming_from_the_length_gets_what_followed_acceptance() {
+    let records: &[u8] = b"{\"a\":1}\n{\"b\":2}\n";
+    let partial = format!("{{\"c\":\"{}", "x".repeat(70 * 1024));
+    let mut contents = records.to_vec();
+    contents.extend_from_slice(partial.as_bytes());
+    let relay = start("length-resume", &contents, me());
+    let mut first = dial(&relay, "{\"offset\":0}\n");
+    let length = header_length(&mut first);
+    assert_eq!(
+        length,
+        records.len() as u64,
+        "the boundary is before a partial line past a block"
+    );
+    drop(first);
+    let mut sink = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&relay.sink)
+        .unwrap();
+    sink.write_all(b"\"}\n{\"d\":4}\n").unwrap();
+    let request = format!(
+        "{{\"offset\":{length},\"prior_digest\":\"{}\"}}\n",
+        digest(b"{\"b\":2}\n")
+    );
+    let mut reader = dial(&relay, &request);
+    let header: serde_json::Value = serde_json::from_str(&line(&mut reader)).unwrap();
+    assert!(header["trace_stream"]["header"].is_object(), "{header}");
+    let got = line(&mut reader);
+    assert!(
+        got == format!("{partial}\"}}\n"),
+        "the partial line, completed after acceptance: got {} bytes, the relay logged: {}",
+        got.len(),
+        logged(&relay)
+    );
+    assert_eq!(line(&mut reader), "{\"d\":4}\n");
+}

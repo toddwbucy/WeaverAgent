@@ -476,6 +476,17 @@ impl Relay {
             Some(Ok(())) => {}
         }
         let offset = verification.offset;
+        // **The header's length, read at acceptance** (#88; `weaver-admin-Spec`
+        // section 6): a read that fails refuses rather than name a boundary it
+        // did not read.
+        let Some(length) = record_boundary(&self.sink) else {
+            self.log.record(
+                "refused",
+                Some(candidate.uid),
+                "the sink cannot be read for its length",
+            );
+            return;
+        };
         let Candidate { socket, uid, .. } = candidate;
         if let Some(old) = self.follower.take() {
             self.log.record(
@@ -494,7 +505,7 @@ impl Relay {
             mid_line: false,
             closing: false,
         };
-        follower.queue_line(TraceControl::Header(identity(&self.sink)));
+        follower.queue_line(TraceControl::Header(identity(&self.sink, length)));
         self.log
             .record("connect", Some(uid), &format!("from offset {offset}"));
         self.follower = Some(follower);
@@ -714,9 +725,32 @@ impl Verification {
     }
 }
 
+/// **The end of the file's last complete record** (#88): its size, then back
+/// from it a block at a time to the last newline, the byte after it, or 0
+/// where the file holds none. The sink is appended to and never rewritten in
+/// place, so the bytes before the size read stand while this reads them.
+/// `None` where the size or a block does not read.
+fn record_boundary(sink: &std::fs::File) -> Option<u64> {
+    use std::os::unix::fs::FileExt;
+    let size = sink.metadata().ok()?.len();
+    let mut end = size;
+    let mut block = vec![0u8; CHUNK];
+    while end > 0 {
+        let start = end.saturating_sub(CHUNK as u64);
+        let len = (end - start) as usize;
+        sink.read_exact_at(&mut block[..len], start).ok()?;
+        if let Some(at) = block[..len].iter().rposition(|b| *b == b'\n') {
+            return Some(start + at as u64 + 1);
+        }
+        end = start;
+    }
+    Some(0)
+}
+
 /// The served file's identity: device, inode, and the birth time where the
-/// filesystem reports one, absent otherwise, per #73's fourth item.
-fn identity(sink: &std::fs::File) -> TraceHeader {
+/// filesystem reports one, absent otherwise, per #73's fourth item, with the
+/// length read at acceptance.
+fn identity(sink: &std::fs::File, length: u64) -> TraceHeader {
     use std::os::unix::fs::MetadataExt;
     let (device, inode) = sink
         .metadata()
@@ -725,6 +759,7 @@ fn identity(sink: &std::fs::File) -> TraceHeader {
     TraceHeader {
         device,
         inode,
+        length,
         birth_ns: birth_ns(sink.as_raw_fd()),
     }
 }
