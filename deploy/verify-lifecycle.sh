@@ -24,10 +24,11 @@
 # does, runs the steps in order, and prints PASS or FAIL for every check and
 # every step. The first FAIL stops the run, naming the step, the check, what
 # was expected and what was found, and leaves the agent as it stands for the
-# operator to look at; `--cleanup` takes it down afterwards. One FAIL takes the
-# agent down first: step 8b's load standing over a read entry on the trace, a
-# custody breach left running for no one's look. The near misses
-# (steps 1b, 6b, 8 and 8b) put back exactly what they changed, the trap
+# operator to look at; `--cleanup` takes it down afterwards. One FAIL tries to
+# take the agent down first: step 8b's load standing over a read entry on the
+# trace, a custody breach left running for no one's look. Where that take-down
+# does not answer unloaded, the FAIL says the agent may still stand. The near
+# misses (steps 1b, 6b, 8 and 8b) put back exactly what they changed, the trap
 # included, whatever a check answers.
 #
 # **sudo runs only where admin and the deploy scripts run it**: admin's verbs,
@@ -1134,7 +1135,13 @@ step_8b() {
   if [ "$(json_at "$answer" kind)" != boundary_unverified ]; then
     ask force-unload
     down=${ANSWER:-nothing}
-    fail "load over an access entry on the trace refuses" "boundary_unverified" "$answer; the entry was removed, then force-unload answered $down"
+    # The take-down is checked, not assumed (Codex on #171, round 1): an
+    # agent that did not come down is said to stand, for --cleanup to end.
+    if ! answered_state "$down" unloaded; then
+      fail "load over an access entry on the trace refuses" "boundary_unverified" "$answer; the entry was removed, then force-unload answered $down, so the agent may still stand: take it down with --cleanup"
+    fi
+    expect_unloaded_alone
+    fail "load over an access entry on the trace refuses" "boundary_unverified" "$answer; the entry was removed, then force-unload answered $down, and the agent is down"
   fi
   pass "load answers boundary_unverified"
   # The cause names the trace and the entry admin saw, in the trace's

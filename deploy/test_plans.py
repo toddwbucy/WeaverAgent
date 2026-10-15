@@ -3469,10 +3469,10 @@ class LifecycleStep8bTests(unittest.TestCase):
             + 'APPLY=1; A=m1; AU=weaver-m1; RESTORE=(); LOGDIR=""\n'
             + f'ADMIN_BASE=/nonexistent; ADMIN={shlex.quote(str(self.admin))}; TRACE={shlex.quote(str(self.trace))}\n'
             + 'say() { printf "\\n== %s\\n" "$*"; }\nplan() { :; }\nrun_line() { :; }\nwant() { :; }\n'
-            + 'expect_unloaded_alone() { :; }\nexpect_no_acl() { :; }\nexpect_lay() { :; }\n'
+            + f'expect_unloaded_alone() {{ echo "show alone" >> {log}; }}\nexpect_no_acl() {{ :; }}\nexpect_lay() {{ :; }}\n'
             + lifecycle_functions(script, "begin_step", "end_step", "fail", "pass", "expect_eq", "json_at",
                                   "json_req", "expect_at", "ask", "expect_kind", "restore_acl", "restore_now",
-                                  "step_8b")
+                                  "answered_state", "step_8b")
             + "step_8b\necho FINISHED\n")
 
     def run_step(self, load_cause, load_answer, unload_answer='{"kind":"state","state":"unloaded"}'):
@@ -3500,19 +3500,29 @@ class LifecycleStep8bTests(unittest.TestCase):
         self.assertIn("PASS step 8b (#99 H5, closed by #108): admin's cause names the trace's access-control entry",
                       result.stdout)
         self.assertIn("FINISHED", result.stdout)
-        self.assertEqual(self.calls_made(), ["setfacl -m", "admin load", "setfacl -b"])
+        self.assertEqual(self.calls_made(), ["show alone", "setfacl -m", "admin load", "setfacl -b", "show alone"])
 
     def test_a_load_that_stands_fails_with_the_entry_removed_then_the_agent_down(self):
+        """Anything but the refusal: the entry goes, then the agent is force-
+        unloaded, its answer checked (Codex on #171, round 1). Where it answers
+        unloaded the agent is read down and the step fails saying so; where it
+        does not, the step fails saying the agent may still stand, for
+        --cleanup. Perturbation: drop the check of force-unload's answer, and
+        a take-down that did not take is reported as down."""
         for answer in ('{"kind":"state","state":"idle"}', '{"kind":"in_transition","constituents":[7]}'):
-            with self.subTest(answer=answer):
-                self.calls.unlink(missing_ok=True)
-                result = self.run_step("", answer, unload_answer='{"kind":"agent_running"}')
-                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                self.assertIn("load over an access entry on the trace refuses", result.stdout)
-                self.assertIn('then force-unload answered {"kind":"agent_running"}', result.stderr)
-                self.assertEqual(self.calls_made(), ["setfacl -m", "admin load", "setfacl -b", "admin force-unload"],
-                                 "the entry goes before the take-down")
-                self.assertNotIn("FINISHED", result.stdout)
+            for unload, said, after in (
+                    ('{"kind":"state","state":"unloaded"}', "and the agent is down", ["show alone"]),
+                    ('{"kind":"agent_running"}', "so the agent may still stand: take it down with --cleanup", [])):
+                with self.subTest(answer=answer, unload=unload):
+                    self.calls.unlink(missing_ok=True)
+                    result = self.run_step("", answer, unload_answer=unload)
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn("load over an access entry on the trace refuses", result.stdout)
+                    self.assertIn(f"then force-unload answered {unload}, {said}", result.stderr)
+                    self.assertEqual(self.calls_made(),
+                                     ["show alone", "setfacl -m", "admin load", "setfacl -b", "admin force-unload"]
+                                     + after, "the entry goes before the take-down, checked after it")
+                    self.assertNotIn("FINISHED", result.stdout)
 
     def test_a_cause_that_is_not_the_trace_judgment_fails(self):
         for cause in ("weaver-admin: the declaration /x/agent.toml: carries an access-control entry beyond its mode",
