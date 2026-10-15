@@ -476,6 +476,16 @@ impl Relay {
             Some(Ok(())) => {}
         }
         let offset = verification.offset;
+        // **The header's identity and length, from the size read** (#88;
+        // `weaver-admin-Spec` section 6): measured by the verification's own
+        // last steps, from one `fstat` and a bounded walk back, so a read that
+        // fails has refused above rather than name what it did not read.
+        let header = TraceHeader {
+            device: verification.device,
+            inode: verification.inode,
+            length: verification.length,
+            birth_ns: birth_ns(self.sink.as_raw_fd()),
+        };
         let Candidate { socket, uid, .. } = candidate;
         if let Some(old) = self.follower.take() {
             self.log.record(
@@ -494,9 +504,12 @@ impl Relay {
             mid_line: false,
             closing: false,
         };
-        follower.queue_line(TraceControl::Header(identity(&self.sink)));
-        self.log
-            .record("connect", Some(uid), &format!("from offset {offset}"));
+        follower.queue_line(TraceControl::Header(header));
+        self.log.record(
+            "connect",
+            Some(uid),
+            &format!("from offset {offset}, length {}", header.length),
+        );
         self.follower = Some(follower);
     }
 
@@ -597,6 +610,10 @@ struct Verification {
     digest: String,
     phase: Phase,
     block: Vec<u8>,
+    /// The header's identity and length, set by the last steps (#88).
+    device: u64,
+    inode: u64,
+    length: u64,
 }
 
 enum Phase {
@@ -604,8 +621,18 @@ enum Phase {
     Back { start: u64 },
     /// Hashing the record forward from its start.
     Forward { at: u64, hasher: sha2::Sha256 },
-    /// Nothing to read: offset zero.
+    /// The position verified, offset zero at once: the file's size and
+    /// identity are read next, from one `fstat`.
     Verified,
+    /// **The header's length, measured back from the size read** (#88), the
+    /// length's moment: a record completed after it lies past the length,
+    /// which is a lower bound for the reader, and no rescan chases a growing
+    /// file. A block at a time to the last newline, inside the
+    /// same budget as the walk above, so a long unfinished last line never
+    /// holds the loop.
+    Measure { end: u64 },
+    /// The length is measured: the request is accepted.
+    Done,
 }
 
 impl Verification {
@@ -619,7 +646,10 @@ impl Verification {
                     offset: 0,
                     digest: String::new(),
                     phase: Phase::Verified,
-                    block: Vec::new(),
+                    block: vec![0u8; CHUNK],
+                    device: 0,
+                    inode: 0,
+                    length: 0,
                 }),
                 Some(_) => Err("offset zero carries no prior digest"),
             };
@@ -648,23 +678,76 @@ impl Verification {
                 start: request.offset - 1,
             },
             block: vec![0u8; CHUNK],
+            device: 0,
+            inode: 0,
+            length: 0,
         })
     }
 
-    /// At most `budget` blocks of the walk back and the hash. Answers `None`
-    /// while work remains, else whether the position verifies.
+    /// At most `budget` blocks of the walk back, the hash and the length's
+    /// measure. Answers `None` while work remains, else whether the position
+    /// verifies with its header measured.
     fn step(&mut self, sink: &std::fs::File, budget: usize) -> Option<Result<(), &'static str>> {
         use sha2::Digest;
-        use std::os::unix::fs::FileExt;
+        use std::os::unix::fs::{FileExt, MetadataExt};
         let Verification {
             offset,
             digest,
             phase,
             block,
+            device,
+            inode,
+            length,
         } = self;
         for _ in 0..budget {
             match phase {
-                Phase::Verified => return Some(Ok(())),
+                Phase::Done => return Some(Ok(())),
+                Phase::Verified => {
+                    // **This read is the length's moment** (#88): one `fstat`
+                    // names the size, the device and the inode, so the header
+                    // never pairs a length with an identity it did not read
+                    // with it, and a record completed after it lies past the
+                    // length, a lower bound for the reader.
+                    let Ok(metadata) = sink.metadata() else {
+                        return Some(Err("the sink cannot be read for its length"));
+                    };
+                    if metadata.len() < *offset {
+                        return Some(Err(
+                            "the sink shrank below the position before its length was read",
+                        ));
+                    }
+                    *device = metadata.dev();
+                    *inode = metadata.ino();
+                    *phase = Phase::Measure {
+                        end: metadata.len(),
+                    };
+                }
+                Phase::Measure { end } => {
+                    // **The sink is appended to while the relay reads**, so the
+                    // bytes before the size read stand; a truncation met here
+                    // fails the read and refuses, and the next request finds it.
+                    let from = end.saturating_sub(block.len() as u64);
+                    let len = (*end - from) as usize;
+                    if len > 0 && sink.read_exact_at(&mut block[..len], from).is_err() {
+                        return Some(Err("the sink cannot be read for its length"));
+                    }
+                    match block[..len].iter().rposition(|b| *b == b'\n') {
+                        Some(at) => {
+                            *length = from + at as u64 + 1;
+                            *phase = Phase::Done;
+                        }
+                        None if from == 0 => {
+                            *length = 0;
+                            *phase = Phase::Done;
+                        }
+                        None => *end = from,
+                    }
+                    if matches!(phase, Phase::Done) && *length < *offset {
+                        return Some(Err(
+                            "the sink shrank below the position before its length was read",
+                        ));
+                    }
+                }
                 Phase::Back { start } => {
                     let from = start.saturating_sub(block.len() as u64);
                     let len = (*start - from) as usize;
@@ -695,11 +778,11 @@ impl Verification {
                             .iter()
                             .map(|b| format!("{b:02x}"))
                             .collect();
-                        return Some(if &found == digest {
-                            Ok(())
-                        } else {
-                            Err("the position does not verify")
-                        });
+                        if &found != digest {
+                            return Some(Err("the position does not verify"));
+                        }
+                        *phase = Phase::Verified;
+                        continue;
                     }
                     let len = ((*offset - *at) as usize).min(block.len());
                     if sink.read_exact_at(&mut block[..len], *at).is_err() {
@@ -711,21 +794,6 @@ impl Verification {
             }
         }
         None
-    }
-}
-
-/// The served file's identity: device, inode, and the birth time where the
-/// filesystem reports one, absent otherwise, per #73's fourth item.
-fn identity(sink: &std::fs::File) -> TraceHeader {
-    use std::os::unix::fs::MetadataExt;
-    let (device, inode) = sink
-        .metadata()
-        .map(|metadata| (metadata.dev(), metadata.ino()))
-        .unwrap_or((0, 0));
-    TraceHeader {
-        device,
-        inode,
-        birth_ns: birth_ns(sink.as_raw_fd()),
     }
 }
 

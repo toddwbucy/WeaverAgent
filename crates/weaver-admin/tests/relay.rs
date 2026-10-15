@@ -54,6 +54,19 @@ fn start(tag: &str, contents: &[u8], reader: u32) -> Relay {
 
 /// As `start`, the relay's three waits set to `wait_ms` where given.
 fn start_timed(tag: &str, contents: &[u8], reader: u32, wait_ms: Option<u64>) -> Relay {
+    start_with(tag, reader, wait_ms, &|sink| {
+        std::fs::write(sink, contents).unwrap()
+    })
+}
+
+/// As `start_timed`, the sink made by `make_sink` at its path, so a test can
+/// hand the relay something other than a file of lines.
+fn start_with(
+    tag: &str,
+    reader: u32,
+    wait_ms: Option<u64>,
+    make_sink: &dyn Fn(&std::path::Path),
+) -> Relay {
     let dir = std::env::temp_dir().join(format!("weaver-relay-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -61,7 +74,7 @@ fn start_timed(tag: &str, contents: &[u8], reader: u32, wait_ms: Option<u64>) ->
     let socket = dir.join("trace.sock");
     let sink = dir.join("trace.ndjson");
     let log = dir.join("admin.log");
-    std::fs::write(&sink, contents).unwrap();
+    make_sink(&sink);
     let listener = high(UnixListener::bind(&socket).unwrap().as_raw_fd());
     let sink_fd = high(std::fs::File::open(&sink).unwrap().as_raw_fd());
     let log_fd = high(
@@ -536,5 +549,112 @@ fn the_header_carries_the_birth_time_where_reported() {
         assert_eq!(birth.as_i64().map(i128::from), Some(expected), "{header}");
     } else {
         assert!(birth.is_null(), "absent where unreported: {header}");
+    }
+}
+
+/// The header's `length`, read off the first line of a stream.
+fn header_length(reader: &mut BufReader<UnixStream>) -> u64 {
+    let header: serde_json::Value = serde_json::from_str(&line(reader)).unwrap();
+    header["trace_stream"]["header"]["length"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("the header names a length: {header}"))
+}
+
+/// **The header names the file's length at the relay's size read, a record
+/// boundary**
+/// (#88; `weaver-types-Spec` section 3.1): over two complete records and a
+/// partial last line, the length is the end of the second record, before the
+/// partial line. Perturbations: name the file's size, and the length lands
+/// inside the partial line; name nothing, and the header has no length.
+#[test]
+fn the_header_names_the_end_of_the_last_complete_record() {
+    let records: &[u8] = b"{\"a\":1}\n{\"b\":2}\n";
+    let mut contents = records.to_vec();
+    contents.extend_from_slice(b"{\"c\":");
+    let relay = start("length", &contents, me());
+    let mut reader = dial(&relay, "{\"offset\":0}\n");
+    assert_eq!(header_length(&mut reader), records.len() as u64);
+}
+
+/// **An empty file names 0, and so does one holding no complete record.**
+/// Perturbation: name the size for a file of one partial line, and it names
+/// that line's length.
+#[test]
+fn an_empty_file_and_a_partial_line_alone_name_zero() {
+    for (tag, contents) in [("empty", &b""[..]), ("partial", &b"{\"a\":"[..])] {
+        let relay = start(&format!("length-{tag}"), contents, me());
+        let mut reader = dial(&relay, "{\"offset\":0}\n");
+        assert_eq!(header_length(&mut reader), 0, "{tag}");
+    }
+}
+
+/// **A reader resuming from the length gets exactly what was completed after
+/// the relay's size read** (#88's first two measures): the boundary the header named,
+/// with the digest of the record ending there, streams the partial line once
+/// it is completed and every record after, and nothing from before. The
+/// partial line is longer than one block, so the read back to the last newline
+/// crosses blocks. Perturbations: name the size, and the request at it is not
+/// on a record boundary and is refused; read back one block only, and the
+/// length is 0 where a record stands.
+#[test]
+fn a_reader_resuming_from_the_length_gets_what_completed_after_the_read() {
+    let records: &[u8] = b"{\"a\":1}\n{\"b\":2}\n";
+    let partial = format!("{{\"c\":\"{}", "x".repeat(70 * 1024));
+    let mut contents = records.to_vec();
+    contents.extend_from_slice(partial.as_bytes());
+    let relay = start("length-resume", &contents, me());
+    let mut first = dial(&relay, "{\"offset\":0}\n");
+    let length = header_length(&mut first);
+    assert_eq!(
+        length,
+        records.len() as u64,
+        "the boundary is before a partial line past a block"
+    );
+    drop(first);
+    let mut sink = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&relay.sink)
+        .unwrap();
+    sink.write_all(b"\"}\n{\"d\":4}\n").unwrap();
+    let request = format!(
+        "{{\"offset\":{length},\"prior_digest\":\"{}\"}}\n",
+        digest(b"{\"b\":2}\n")
+    );
+    let mut reader = dial(&relay, &request);
+    // **Each request's size read is its own**: the second header names the
+    // boundary after the record appended since the first.
+    let completed = records.len() + partial.len() + b"\"}\n{\"d\":4}\n".len();
+    assert_eq!(
+        header_length(&mut reader),
+        completed as u64,
+        "the second request names the boundary after what was appended"
+    );
+    let got = line(&mut reader);
+    assert!(
+        got == format!("{partial}\"}}\n"),
+        "the partial line, completed after the read: got {} bytes, the relay logged: {}",
+        got.len(),
+        logged(&relay)
+    );
+    assert_eq!(line(&mut reader), "{\"d\":4}\n");
+}
+
+/// **A length that cannot be read refuses the connection, logged** (#88;
+/// `weaver-admin-Spec` section 6): the relay names no boundary it did not
+/// read. A sink descriptor that is a directory answers `fstat` and fails the
+/// read back. Perturbation: answer 0 where the read fails, and a header
+/// arrives naming it.
+#[test]
+fn a_length_that_cannot_be_read_refuses() {
+    let relay = start_with("length-unread", me(), None, &|sink| {
+        std::fs::create_dir(sink).unwrap();
+        std::fs::write(sink.join("x"), b"x").unwrap();
+    });
+    let mut reader = dial(&relay, "{\"offset\":0}\n");
+    assert_eq!(line(&mut reader), "", "no header for a length not read");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !logged(&relay).contains("the sink cannot be read for its length") {
+        assert!(std::time::Instant::now() < deadline, "{}", logged(&relay));
+        std::thread::sleep(Duration::from_millis(20));
     }
 }

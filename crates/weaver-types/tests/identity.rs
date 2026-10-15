@@ -104,9 +104,10 @@ fn the_trace_stream_lines_are_the_published_shape() {
         line(TraceControl::Header(TraceHeader {
             device: 2049,
             inode: 77,
+            length: 4096,
             birth_ns: Some(1_759_500_000_123_456_789),
         })),
-        r#"{"trace_stream":{"header":{"device":2049,"inode":77,"birth_ns":1759500000123456789}}}"#
+        r#"{"trace_stream":{"header":{"device":2049,"inode":77,"length":4096,"birth_ns":1759500000123456789}}}"#
     );
     assert_eq!(
         line(TraceControl::Heartbeat { wall_ms: 5 }),
@@ -120,10 +121,33 @@ fn the_trace_stream_lines_are_the_published_shape() {
         line(TraceControl::Header(TraceHeader {
             device: 2049,
             inode: 77,
+            length: 0,
             birth_ns: None,
         })),
-        r#"{"trace_stream":{"header":{"device":2049,"inode":77}}}"#,
-        "an unreported birth time is absent, never zero"
+        r#"{"trace_stream":{"header":{"device":2049,"inode":77,"length":0}}}"#,
+        "an unreported birth time is absent, never zero, and an empty file's length is 0"
+    );
+    // **The length is required and round-trips** (#88): a header without it
+    // does not parse, so a reader never takes an absent boundary for zero.
+    let header: TraceLine = serde_json::from_str(
+        r#"{"trace_stream":{"header":{"device":2049,"inode":77,"length":4096,"birth_ns":5}}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        header.trace_stream,
+        TraceControl::Header(TraceHeader {
+            device: 2049,
+            inode: 77,
+            length: 4096,
+            birth_ns: Some(5),
+        })
+    );
+    assert!(
+        serde_json::from_str::<TraceLine>(
+            r#"{"trace_stream":{"header":{"device":2049,"inode":77}}}"#
+        )
+        .is_err(),
+        "a header without its length is refused"
     );
     let back: TraceLine =
         serde_json::from_str(r#"{"trace_stream":{"heartbeat":{"wall_ms":5}}}"#).unwrap();

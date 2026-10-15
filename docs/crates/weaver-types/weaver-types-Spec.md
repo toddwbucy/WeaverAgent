@@ -8,7 +8,7 @@ one's Spec pass. Code is written against it under the gates of Working Process s
 **Document ID:** `weaver-types-Spec`
 **Parent:** `weaver-types-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #136
+**Landing PR:** #174
 
 ---
 
@@ -954,6 +954,7 @@ pub struct TraceRequest {
 pub struct TraceHeader {
     pub device: u64,
     pub inode: u64,
+    pub length: u64,
     pub birth_ns: Option<i128>,
 }
 
@@ -1017,12 +1018,28 @@ identity, its device, inode and birth time in nanoseconds since the epoch, so a 
 holds what it is reading. **The birth time is absent where the filesystem reports
 none**, on #73's fourth item: never zero, which would let a reused device and inode read
 as the same file, and a reader holding no birth time to compare leans on the position's
-digest, which a different file fails. At the end of the file the stream keeps following,
+digest, which a different file fails.
+**The header names the file's length at the relay's size read** (#88): `length` is the
+byte offset of the end of the last record complete when the relay read the file's size,
+from the descriptor it holds, once the request's position verified: the byte after the
+last newline before that size. A last line still being written at the read is not
+counted, so the offset stops before it, and an empty file, or one holding no complete
+record, names 0. It is a record boundary like every offset on this wire. Every record
+past it completed at or after the read, and a record in progress at the read lies past
+it. **For a reader it is a lower bound**: a record past `length` may have completed
+before the header reached the reader, or before the reader's next act, since the file
+keeps growing after the read. For the backfill and the replay's boundary (#88's first
+two measures, "everything the file held at that moment"), the read is the moment. A
+reader bounding an act of its own (the third) places the act by the trace's own events,
+the act's event, never by `length` alone. A reader wanting a boundary mid-stream asks
+again: the newest connection replaces the old, so a reconnect yields a fresh header.
+At the end of the file the stream keeps following,
 with a heartbeat line while idle. **Every line the stream adds is a `TraceLine`**, so
 the reader in another repository parses one fixed shape: a JSON object whose one member
 is `trace_stream`, holding a `TraceControl` externally tagged by case, which no trace
 event carries, the envelope having no such member. The three lines are
-`{"trace_stream":{"header":{"device":...,"inode":...,"birth_ns":...}}}` first,
+`{"trace_stream":{"header":{"device":...,"inode":...,"length":...,"birth_ns":...}}}`
+first,
 `{"trace_stream":{"heartbeat":{"wall_ms":...}}}` while idle, and
 `{"trace_stream":{"truncated":{"size":...}}}` when the run's file shrinks below the
 stream's position, which leaves its identity unchanged. **No line reports the sink's
