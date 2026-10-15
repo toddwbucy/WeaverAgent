@@ -2589,7 +2589,7 @@ esac
                       "step 2 (weaver-admin-Spec section 6, 3.0 S0 x load; #99 K12)",
                       "step 5 (weaver-admin-Spec section 4, 3.0 S0 x restore and outcome row 6; #99 N6)",
                       "step 6b (weaver-admin-Spec section 9, 3.0 outcome row 2; #99 K5)",
-                      "step 8 (#99 N1, N5)", "step 8b (#99 H5, measured)",
+                      "step 8 (#99 N1, N5)", "step 8b (#99 H5, closed by #108)",
                       "step 9 (HowToDeployANewAgent.md section 7)"):
             self.assertIn(f"== {label}:", result.stdout)
 
@@ -2668,7 +2668,7 @@ esac
         result = self.lifecycle()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("== step 8 (#99 N1, N5): a root naming a declaration-directory", result.stdout)
-        self.assertIn("== step 8b (#99 H5, measured):", result.stdout)
+        self.assertIn("== step 8b (#99 H5, closed by #108):", result.stdout)
         self.assertIn("validate refuses config_invalid naming declaration-directory", result.stdout)
         self.assertIn("the plan exits 1 before any build, refusing m1 by name for its declaration-directory",
                       result.stdout)
@@ -3425,6 +3425,88 @@ class LifecycleNearMissTests(unittest.TestCase):
         self.assertEqual(result.returncode, 130, result.stdout + result.stderr)
         self.assertNotIn("FINISHED", result.stdout)
         self.assertEqual(self.mode(), 0o710)
+
+
+# Admin's refusal of a load over a read entry on the trace, as the first live run
+# after #108 met it (olympus, 2026-10-15, ba3eb4e, the lifecycle run's tee):
+# the cause on stderr, then the answer.
+H5_REFUSAL = ("weaver-admin: the trace /var/lib/weaver-agent/weaver-m1/trace.ndjson: "
+              "carries an access-control entry beyond its mode\n"
+              '{"kind":"boundary_unverified"}\n')
+
+
+class LifecycleStep8bTests(unittest.TestCase):
+    """**Step 8b asserts H5 closed** (#99 H5, closed by #108): a load over a
+    read entry for the member on the trace refuses `boundary_unverified`, and
+    admin's cause names the access-control entry. The step runs alone, with
+    sudo, setfacl and admin as stand-ins and admin answering as the live run
+    did. Perturbations: answer a state, and the step fails with the agent
+    force-unloaded and the entry removed; answer the refusal without its
+    cause, and the step fails naming the cause."""
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix="weaver-lifecycle-8b-")
+        self.addCleanup(self.scratch.cleanup)
+        root = Path(self.scratch.name)
+        self.bin_dir = root / "bin"
+        self.bin_dir.mkdir()
+        self.calls = root / "calls"
+        for tool, body in (
+                ("sudo", '#!/bin/sh\n[ "$1" = "-n" ] && shift\nwhile [ "${1#*=}" != "$1" ]; do export "$1"; shift; done\nexec "$@"\n'),
+                ("systemd-run", '#!/bin/sh\nwhile [ "$1" != -- ]; do shift; done\nshift\nexec "$@"\n'),
+                ("setfacl", f'#!/bin/sh\necho "setfacl $*" >> {shlex.quote(str(self.calls))}\n')):
+            stand_in = self.bin_dir / tool
+            stand_in.write_text(body)
+            stand_in.chmod(0o755)
+        self.admin = self.bin_dir / "weaver-admin"
+        self.trace = root / "trace.ndjson"
+        self.trace.write_text("")
+        script = (DEPLOY / "verify-lifecycle.sh").read_text()
+        self.program = (
+            "set -euo pipefail\n"
+            + 'APPLY=1; A=m1; AU=weaver-m1; RESTORE=(); LOGDIR=""\n'
+            + f'ADMIN_BASE=/nonexistent; ADMIN={shlex.quote(str(self.admin))}; TRACE={shlex.quote(str(self.trace))}\n'
+            + 'say() { printf "\\n== %s\\n" "$*"; }\nplan() { :; }\nrun_line() { :; }\nwant() { :; }\n'
+            + 'expect_unloaded_alone() { :; }\nexpect_no_acl() { :; }\nexpect_lay() { :; }\n'
+            + lifecycle_functions(script, "begin_step", "end_step", "fail", "pass", "expect_eq", "json_at",
+                                  "json_req", "expect_at", "ask", "expect_kind", "restore_acl", "restore_now",
+                                  "step_8b")
+            + "step_8b\necho FINISHED\n")
+
+    def run_step(self, admin_body):
+        self.admin.write_text("#!/bin/sh\n" + admin_body)
+        self.admin.chmod(0o755)
+        env = {**os.environ, "PATH": str(self.bin_dir) + os.pathsep + os.environ["PATH"]}
+        env.pop("BASH_ENV", None)
+        return subprocess.run(["bash", "-c", self.program], env=env, text=True, capture_output=True, timeout=20)
+
+    def test_the_live_refusal_passes(self):
+        result = self.run_step(f"printf '%s' {shlex.quote(H5_REFUSAL)}\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PASS step 8b (#99 H5, closed by #108): load answers boundary_unverified", result.stdout)
+        self.assertIn("PASS step 8b (#99 H5, closed by #108): admin's cause names the trace's access-control entry",
+                      result.stdout)
+        self.assertIn("FINISHED", result.stdout)
+        self.assertIn("setfacl -b", self.calls.read_text(), "the entry is removed")
+
+    def test_a_load_that_stands_fails_after_it_is_taken_down(self):
+        result = self.run_step(
+            'case "$1" in\n'
+            "  load) printf '%s\\n' '{\"kind\":\"state\",\"state\":\"idle\"}' ;;\n"
+            f"  force-unload) echo force-unload >> {shlex.quote(str(self.calls))}; "
+            "printf '%s\\n' '{\"kind\":\"state\",\"state\":\"unloaded\"}' ;;\n"
+            "esac\n")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("load over an access entry on the trace refuses", result.stdout)
+        calls = self.calls.read_text()
+        self.assertIn("force-unload", calls, "the agent is taken down")
+        self.assertIn("setfacl -b", calls, "the entry is removed")
+        self.assertNotIn("FINISHED", result.stdout)
+
+    def test_a_refusal_without_its_cause_fails(self):
+        result = self.run_step("""printf '%s\\n' '{"kind":"boundary_unverified"}'\n""")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("admin's cause names the trace's access-control entry", result.stderr)
 
 
 class IndexModeTests(unittest.TestCase):

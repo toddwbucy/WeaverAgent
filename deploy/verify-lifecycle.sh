@@ -1111,28 +1111,33 @@ step_8() {
 }
 
 step_8b() {
-  begin_step 8b "#99 H5, measured" "a read entry for the member on the trace, on the stopped agent"
+  begin_step 8b "#99 H5, closed by #108" "a read entry for the member on the trace, on the stopped agent, refused"
   run_line "setfacl -m u:$AU-state:r $TRACE (put back with setfacl -b by the step and by the exit trap)"
-  run_line "weaver-admin load $A; weaver-admin show $A; weaver-admin force-unload $A where it loaded"
-  want "the trace still shows 640; the member reads it; the load is recorded as measured (today idle, H5 filed on #99, not fixed; after a fix, boundary_unverified)"
+  run_line "weaver-admin load $A (force-unload only where it loads, which fails the step)"
+  want "load refuses boundary_unverified (H5, closed by #108), admin's cause naming the trace's access-control entry"
   want "the entry removed: no access entry on the trace, root:$AU-trace 640"
   [ "$APPLY" -eq 1 ] || return 0
   expect_unloaded_alone
   RESTORE=(restore_acl "$TRACE")
   sudo -n setfacl -m "u:$AU-state:r" -- "$TRACE" || { restore_now || true; fail "the entry applies" "setfacl succeeds" "it failed"; }
-  local shown; shown=$(lay "$TRACE"); shown=${shown/regular empty file/regular file}
-  local reads; reads=$( { [ "$(as_can "$AU-state" test -x "$T")" = yes ] && sudo -n -u "$AU-state" head -c 1 -- "$TRACE" >/dev/null 2>&1; } && echo yes || echo no)
   ask load
-  local load_answer=$ANSWER
+  local load_answer=$ANSWER cause=$ASKED_CAUSE
+  # **A load that stands over the entry is the failure, and is taken down
+  # first**: admin judges each territory file for access entries since #108
+  # (`sink.rs`, the trace's judgment), so a load answering a state is H5 open
+  # again, and the step fails with the agent unloaded and the entry removed.
   if [ "$(json_at "$load_answer" kind)" = state ]; then
-    ask show
     ask force-unload
-    answered_state "$ANSWER" unloaded || { restore_now || true; fail "force-unload after the measured load" "the unloaded state" "$ANSWER"; }
+    restore_now || true
+    fail "load over an access entry on the trace refuses" "boundary_unverified" "$load_answer"
   fi
   restore_now || fail "the entry is removed" "setfacl -b succeeds" "it failed"
-  measured "with the entry the trace shows $shown"
-  measured "the member reads the trace: $reads"
-  measured "the load answered $load_answer"
+  ANSWER=$load_answer
+  expect_kind load boundary_unverified
+  case $cause in
+    *"carries an access-control entry"*) pass "admin's cause names the trace's access-control entry" ;;
+    *) fail "admin's cause names the trace's access-control entry" "an access-control entry beyond its mode" "${cause:-nothing}" ;;
+  esac
   expect_no_acl "$TRACE"
   expect_lay "$TRACE" "root:$AU-trace 640 regular file"
   expect_unloaded_alone
