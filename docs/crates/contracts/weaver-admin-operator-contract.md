@@ -212,11 +212,14 @@ the file the loaded run opened, so a rotation of the sink's path changes
 nothing it reads and reaches the reader as a new identity in the next run's header, ends
 the stream on a truncation rather than smoothing it over, and refuses a position that
 does not verify before a byte is sent. **The length places a boundary for a reader that
-reads only through the door**: where the file ended at its request, so it can bound a
-backfill or close a replay at that moment, and every record past it was written after.
-A boundary mid-stream is taken by a new request: the newest connection from the reader
-replaces the old, so a reconnect yields a fresh header and its length, and no other line
-carries one. A reader of the record this way reads the file through no grant of its own,
+reads only through the door**: where the file's complete records ended when the relay
+accepted the request, so it can bound a backfill or close a replay at that moment, and
+every record past it was completed after the acceptance. Acceptance follows the
+position's verification, so a reader bounding an act of its own (a verb's invocation)
+waits for the header before the act. A boundary mid-stream is taken by a new request:
+the newest connection from the reader replaces the old, so a reconnect yields a fresh
+header and its length, and no other line carries one.
+A reader of the record this way reads the file through no grant of its own,
 so the territory's layout gives it nothing.
 
 **The stream is also the program's one fault carrier,** per the fault-carrier
