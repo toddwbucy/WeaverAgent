@@ -24,9 +24,10 @@ process or a network boundary, never linked:
   They are WeaverWeb's and never this repository's, and they start under the operator's
   provisioning, never under admin. Gate-con reaches the gate's socket. Admin-con issues
   admin's fixed command lines through the box's strict sudo rule and, where the trace
-  sink is a file, reads the trace door. The agent's lifetime is bound to its
-  admin-con, so the agent fails closed when admin-con stops (#72,
-  toddwbucy/WeaverWeb#15). The role map that bounds them is the box's
+  sink is a file, reads the trace door. The agent's lifetime is bound to the
+  containment it was loaded in: admin-con's when admin-con loads it, so the agent fails
+  closed when admin-con stops (#72, toddwbucy/WeaverWeb#15), or the delegated scope a
+  direct load runs in (#111). The role map that bounds them is the box's
   (toddwbucy/WeaverTools#6).
 
 The rule that drew the line: a crate a consumer meets across a network boundary gets its
