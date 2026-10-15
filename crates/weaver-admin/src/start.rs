@@ -581,26 +581,40 @@ struct Pinned {
 }
 
 fn pin(holder: Holder, target: (u64, u64)) -> Option<Pinned> {
-    // SAFETY: pidfd_open takes a pid and flags and answers a descriptor.
-    let raw = unsafe { nix::libc::syscall(nix::libc::SYS_pidfd_open, holder.pid, 0) };
-    if raw < 0 {
-        return None;
-    }
-    // SAFETY: the number was just opened and is owned by nothing else.
-    let pidfd = unsafe { OwnedFd::from_raw_fd(raw as RawFd) };
+    let pidfd = pidfd_open(holder.pid)?;
     holds(holder.pid, holder.fd, target).then_some(Pinned { pidfd })
 }
 
 fn signal(pinned: &Pinned, signal: i32) {
-    // SAFETY: pidfd_send_signal on a pidfd this frame owns, with no siginfo.
+    pidfd_signal(&pinned.pidfd, signal);
+}
+
+/// **A pidfd on a pid**, the pinning the escalation and the run end's
+/// fallback share. `pidfd_open` is one of the stated exceptions to the
+/// election (`weaver-admin-Spec` section 1), by number through `nix`'s
+/// re-exported `libc`, and the descriptor is owned at once.
+pub(crate) fn pidfd_open(pid: i32) -> Option<OwnedFd> {
+    // SAFETY: pidfd_open takes a pid and flags and answers a descriptor.
+    let raw = unsafe { nix::libc::syscall(nix::libc::SYS_pidfd_open, pid, 0) };
+    if raw < 0 {
+        return None;
+    }
+    // SAFETY: the number was just opened and is owned by nothing else.
+    Some(unsafe { OwnedFd::from_raw_fd(raw as RawFd) })
+}
+
+/// **A signal through a pidfd**, the other stated exception. Answers whether
+/// it was sent.
+pub(crate) fn pidfd_signal(pidfd: &OwnedFd, signal: i32) -> bool {
+    // SAFETY: pidfd_send_signal on a pidfd the caller owns, with no siginfo.
     unsafe {
         nix::libc::syscall(
             nix::libc::SYS_pidfd_send_signal,
-            pinned.pidfd.as_raw_fd(),
+            pidfd.as_raw_fd(),
             signal,
             std::ptr::null::<nix::libc::siginfo_t>(),
             0,
-        );
+        ) == 0
     }
 }
 

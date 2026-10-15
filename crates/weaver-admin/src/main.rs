@@ -39,6 +39,7 @@ macro_rules! diag {
 
 mod channel;
 mod conclusion;
+mod containment;
 mod inventory;
 mod log;
 mod save_points;
