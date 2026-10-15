@@ -110,8 +110,9 @@ violating the total bound or arriving short is a channel fault, never a
 partial message.
 
 **Non-inheritance on both ends, by the split the corpus already runs.** The
-harness's end carries the flag from the pair's creation, so no tool
-child process the harness creates inherits a handle to the decode seam. The
+harness's end carries the flag from the pair's creation, so no organ the
+harness forks inherits a handle to the decode seam, the gate included, and so
+no shell the gate forks per tool call. The
 SPU's end is set after its final image replacement, a set and not a check, so nothing a
 later workflow spawns from the SPU inherits it either.
 

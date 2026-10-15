@@ -646,8 +646,10 @@ nothing the agent needs for its own home directory and work.
 
 **The trace descriptor is close-on-exec, and the crate is broken without it.**
 
-Without `O_CLOEXEC`, every subprocess the harness spawns for a tool call inherits a
-writable handle to the trace, and the agent edits its own audit record through a
+Without `O_CLOEXEC`, the trace descriptor would cross every later exec: the harness
+forks its organs, the gate among them, and the gate forks a shell per tool call
+(`weaver-gate-Spec` section 8), so a writable handle to the trace would reach the gate's
+image and from it every shell, and the agent would edit its own audit record through a
 descriptor requiring no path and passing no check.
 
 The flag rides the descriptor and does not cross with a passed handle, so the
