@@ -339,6 +339,14 @@ struct Run {
     /// #111). Held by the run, not the gate's arm, so it outlives the gate
     /// for the kill at its death and at the unwind.
     tools: Option<crate::tools_cgroup::ToolsCgroup>,
+    /// **The leave's one anchor** (`weaver-admin-Spec` 6.1; section 3, the
+    /// leave's bounds): the instant a held leave's turn interrupted its call
+    /// out, from which the lower's window and the shared deadline are both
+    /// measured, so a forced leave never spends the lower's bound twice.
+    /// Taken once by the leave it anchors; absent, the lower's start anchors.
+    leave_anchor: Option<std::time::Instant>,
+    /// The anchor the leave hands its lower, taken by the lower.
+    lower_anchor: Option<std::time::Instant>,
     /// The engine's kill of `tools/` when the gate died with a call open,
     /// taken by the close that names the gate's death.
     gate_contained: Option<(
@@ -1088,6 +1096,11 @@ impl Harness {
                     Some(message) => ports.seed(message),
                     None => entry(&mut ports, &text),
                 };
+                // The interrupt's instant anchors the leave this turn held.
+                let interrupted = ports.interrupted_at();
+                if interrupted.is_some() {
+                    run.leave_anchor = interrupted;
+                }
                 match ran {
                     // A turn the operator's stop aborted answers the
                     // stopped close, the partial standing in the record.
@@ -1560,7 +1573,14 @@ impl Harness {
         // at rest with the gate lowered, the retry or the force
         // finding it so. **The shared deadline runs from the lower's
         // start** (`weaver-harness-Spec` section 6).
-        let shared = shared_deadline();
+        // **One anchor per leave**: the interrupt's instant where the turn
+        // that held this leave interrupted its call, else the lower's start.
+        let anchor = run
+            .leave_anchor
+            .take()
+            .unwrap_or_else(std::time::Instant::now);
+        run.lower_anchor = Some(anchor);
+        let shared = shared_deadline(anchor);
         held.as_mut().expect("the leave").progress.step = LeaveStep::Lowering;
         // A gate that died in the wind-down, or before the lower, is met here.
         {
@@ -2262,6 +2282,8 @@ impl Harness {
             spu: None,
             gate: None,
             tools: None,
+            leave_anchor: None,
+            lower_anchor: None,
             gate_contained: None,
             state: state_seam,
             grants_at_enter,
@@ -2830,7 +2852,12 @@ fn leave(
     cause: Option<weaver_types::Cause>,
     forced: bool,
 ) -> Result<(), LifecycleRefusal> {
-    let shared = shared_deadline();
+    let anchor = run
+        .leave_anchor
+        .take()
+        .unwrap_or_else(std::time::Instant::now);
+    run.lower_anchor = Some(anchor);
+    let shared = shared_deadline(anchor);
     let (lowered, _) = lower_gate(run, shared);
     leave_after(run, cause, forced, None, lowered, shared)
 }
@@ -2839,8 +2866,8 @@ fn leave(
 /// lower's start, the leave bound from it, which the trace's drain, the SPU's
 /// `Release` and the reaps share with whatever the lower and the save
 /// point's legs leave.
-fn shared_deadline() -> Option<std::time::Instant> {
-    std::time::Instant::now().checked_add(std::time::Duration::from_millis(
+fn shared_deadline(anchor: std::time::Instant) -> Option<std::time::Instant> {
+    anchor.checked_add(std::time::Duration::from_millis(
         weaver_types::LEAVE_BOUND_MS,
     ))
 }
@@ -2878,8 +2905,24 @@ fn lower_gate_within(
     // **The lower's window bounds the gate's reap too**: the save point's
     // legs come after the lower, so a gate that never exits is killed at the
     // lower's bound, never held to the shared deadline (the self-check of B2).
-    let window = std::time::Instant::now().checked_add(std::time::Duration::from_millis(bound_ms));
-    let lowered = lower_exchange(run, &gate.channel, run.gate_ordinal, bound_ms);
+    // **It runs from the leave's anchor** (`weaver-admin-Spec` 6.1; Codex on
+    // #167): after an interrupt the window is the one that began there, so a
+    // gate past it is reaped at once and the bound is never spent twice.
+    let anchor = run
+        .lower_anchor
+        .take()
+        .unwrap_or_else(std::time::Instant::now);
+    let window = anchor.checked_add(std::time::Duration::from_millis(bound_ms));
+    // Rounded up, so a lower anchored now waits its whole bound.
+    let remaining_ms = window.map_or(bound_ms, |window| {
+        window
+            .saturating_duration_since(std::time::Instant::now())
+            .as_micros()
+            .div_ceil(1000)
+            .try_into()
+            .unwrap_or(bound_ms)
+    });
+    let lowered = lower_exchange(run, &gate.channel, run.gate_ordinal, remaining_ms);
     // **Answered or not, the channel closes and the gate is reaped**: a gate
     // that did not answer inside the bound meets its channel closed, which is
     // death to it (`weaver-harness-gate-contract` section 1).

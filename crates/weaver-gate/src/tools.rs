@@ -279,6 +279,11 @@ fn run_in_home(
     // that left its group or its session, which a group signal did not.
     // Cleanup has no tool outcome election: only the supervisor decides
     // whether the clock killed the run.
+    // **One containment bound per end** (Codex on #167): the kill's wait and
+    // the leader's reap share a deadline taken here, so an execution's
+    // exchange completes within the caller's number plus the bound, as 6.1's
+    // table states, never plus twice it.
+    let deadline = std::time::Instant::now() + cgroup::CONTAINMENT_BOUND;
     let contained = tools.contain(cgroup::CONTAINMENT_BOUND);
     // **The leader is signalled by its pid, then reaped within the bound**
     // (Codex on #167): the shell runs as the agent's account and may have
@@ -289,7 +294,7 @@ fn run_in_home(
     // execution not contained.
     let reaped = if contained {
         let _ = nix::sys::signal::kill(group, nix::sys::signal::Signal::SIGKILL);
-        reap_within(&mut child, cgroup::CONTAINMENT_BOUND)
+        reap_within(&mut child, deadline)
     } else {
         None
     };
@@ -338,14 +343,14 @@ fn run_in_home(
     Ok(output)
 }
 
-/// The leader's reap within `bound`, by a non-blocking wait in slices:
+/// The leader's reap by `deadline`, by a non-blocking wait in slices:
 /// `None` where it did not exit in time (an uninterruptible sleep), which the
-/// caller takes as an execution not contained.
+/// caller takes as an execution not contained. One check is made even past
+/// the deadline, so a leader already exited is reaped.
 fn reap_within(
     child: &mut std::process::Child,
-    bound: std::time::Duration,
+    deadline: std::time::Instant,
 ) -> Option<std::io::Result<std::process::ExitStatus>> {
-    let deadline = std::time::Instant::now() + bound;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return Some(Ok(status)),

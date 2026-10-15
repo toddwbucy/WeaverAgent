@@ -195,6 +195,8 @@ fn entered_run(turn: Option<&str>) -> (Run, OrganChannel, crate::scratch::Scratc
             }),
             gate: None,
             tools: None,
+            leave_anchor: None,
+            lower_anchor: None,
             gate_contained: None,
             diagnostic: None,
             state: None,
@@ -8547,9 +8549,11 @@ fn containment_the_lower_sweeps_tools() {
 /// bound** (`weaver-admin-Spec` 6.1, a forced leave's reap past the lower's
 /// bound; the self-check of #111's PR C): the gate takes the interrupt and
 /// never answers it, and the engine closes the call `Killed { by: fault }`
-/// at the lower's bound from the interrupt, the leave going on to `Left`.
+/// at the lower's bound from the interrupt, the leave going on to `Left`,
+/// and the lower reaps the gate in what remains of that same window.
 /// Perturbation: drop the interrupt's bound, and the leave waits for the
-/// gate's channel to close, a minute later.
+/// gate's channel to close, a minute later; start the lower's window afresh,
+/// and the leave takes two lower bounds.
 #[test]
 fn a_forced_leave_closes_a_call_its_gate_never_answers_within_the_lower_bound() {
     use std::os::fd::AsRawFd;
@@ -8691,9 +8695,13 @@ fn a_forced_leave_closes_a_call_its_gate_never_answers_within_the_lower_bound() 
         panic!("{left:?}");
     };
     assert!(forced);
+    // **One anchor per leave** (Codex on #167): the lower's window began at
+    // the interrupt, so the gate is reaped when that one window ends and the
+    // whole leave takes one lower bound, not two.
+    eprintln!("a forced leave over an unanswering gate took {took:?}");
     assert!(
-        took < std::time::Duration::from_millis(3 * weaver_types::LOWER_BOUND_MS),
-        "the leave never waited on the gate's answer: {took:?}"
+        took < std::time::Duration::from_millis(weaver_types::LOWER_BOUND_MS + 4_000),
+        "the leave spent the lower's bound once: {took:?}"
     );
     let stream = std::fs::read_to_string(&sink_path).expect("the sink");
     assert!(

@@ -443,6 +443,14 @@ impl<'a> Ports<'a> {
         }
     }
 
+    /// **When this turn interrupted its call out**, for the leave that
+    /// follows: the lower's window and the leave's shared deadline are both
+    /// measured from it (`weaver-admin-Spec` 6.1, the lower's bound runs
+    /// from the interrupt), so one instant anchors the whole leave.
+    pub(crate) fn interrupted_at(&self) -> Option<std::time::Instant> {
+        self.interrupted_at.get()
+    }
+
     /// The drain's deadline of a leave held while it stays graceful.
     fn held_drain_deadline(&self) -> Option<std::time::Instant> {
         let held = self.leave.as_ref()?.as_ref()?;
@@ -1398,7 +1406,8 @@ impl<'a> Ports<'a> {
                         **slot = Some((context, contained));
                     }
                 }
-                self.interrupted_at.set(None);
+                // The interrupt's instant stays for the leave's lower, whose
+                // window it already spent: the gate is reaped there at once.
                 self.unload_interrupted = true;
                 let outcome = weaver_types::ToolOutcome::Killed {
                     partial: None,
