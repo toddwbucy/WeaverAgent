@@ -81,9 +81,9 @@ pub struct StartFacts {
     pub run_lock_held: bool,
     pub cgroup2: bool,
     pub delegated: bool,
-    /// The invoker's directory and its `cgroup.procs` both root's (#166's
-    /// guard): no account but root can move a process out of the agent's
-    /// cgroup.
+    /// The invoker's cgroup, the files delegated with it and every cgroup
+    /// above it root's (#166's guard): no account but root can move a
+    /// process out of the agent's cgroup.
     pub invoker_roots: bool,
     /// At the deterministic path, the invoker's cgroup plus `weaver-<agent>/`.
     pub at_path: Standing,
@@ -128,8 +128,8 @@ pub enum StartRefusal {
     NoCgroup2,
     /// `BoundaryUnverified`: the invoker's cgroup carries no delegate mark.
     NotDelegated,
-    /// `BoundaryUnverified`: the invoker's cgroup, or its `cgroup.procs`, is
-    /// not root's (#166's guard).
+    /// `BoundaryUnverified`: the invoker's cgroup, a file delegated with it,
+    /// or a cgroup above it is not root's (#166's guard).
     InvokerNotRoots,
     /// `BoundaryUnverified`: a cgroup standing that is not root's.
     NotRoots,
@@ -659,19 +659,83 @@ pub fn is_cgroup2() -> bool {
         .is_ok_and(|fs| fs.filesystem_type() == nix::sys::statfs::CGROUP2_SUPER_MAGIC)
 }
 
+/// The files systemd hands a delegatee with a delegated cgroup: whoever
+/// owns one of them can move processes or change the subtree.
+const DELEGATION_FILES: [&str; 3] = ["cgroup.procs", "cgroup.threads", "cgroup.subtree_control"];
+
+/// How far up the walk to the mount goes before it refuses: deeper than any
+/// hierarchy systemd makes.
+const ANCESTOR_LIMIT: usize = 64;
+
 /// **The invoker's ownership** (6.1, the floor; #166's guard): the
-/// invoker's directory and its `cgroup.procs` both owned by `uid`, read by
-/// `fstat` of the descriptor and `fstatat` beneath it, never by path. Root
-/// in production; the user-scope instruments pass the suite's own uid.
+/// invoker's directory and every file systemd delegates with it
+/// (`cgroup.procs`, `cgroup.threads`, `cgroup.subtree_control`) owned by
+/// `uid`, and every cgroup above it up to the mount root, its directory and
+/// its `cgroup.procs`, owned by root or by `uid`: a migration needs write on
+/// the common ancestor's `cgroup.procs`, which can be any cgroup from the
+/// invoker up to the mount root, and a delegatee owning one could move the
+/// agent's processes beneath it. Under the user scope the levels above
+/// `user@<uid>.service` are root's and the ones below the suite's. Read by `fstat` of the descriptor,
+/// `fstatat` beneath it and `openat` of `..`, never by path. Root in
+/// production; the user-scope instruments pass the suite's own uid.
 pub fn owned_by(cgroup: &Cgroup, uid: u32) -> bool {
-    let directory = nix::sys::stat::fstat(cgroup.fd()).is_ok_and(|stat| stat.st_uid == uid);
-    let procs = nix::sys::stat::fstatat(
-        cgroup.fd(),
-        "cgroup.procs",
-        nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
-    )
-    .is_ok_and(|stat| stat.st_uid == uid);
-    directory && procs
+    let directory = fstat(cgroup.fd()).is_ok_and(|stat| stat.st_uid == uid);
+    directory && delegated_files_owned(cgroup.fd(), uid) && ancestors_owned(cgroup.fd(), uid)
+}
+
+/// Every file of [`DELEGATION_FILES`] beneath `cgroup` owned by `uid`, a
+/// missing one refusing.
+fn delegated_files_owned(cgroup: BorrowedFd<'_>, uid: u32) -> bool {
+    DELEGATION_FILES.iter().all(|name| {
+        nix::sys::stat::fstatat(cgroup, *name, AtFlags::AT_SYMLINK_NOFOLLOW)
+            .is_ok_and(|stat| stat.st_uid == uid)
+    })
+}
+
+/// Whether every cgroup above the invoker admits `uid`, by
+/// [`ancestor_owners`] and [`ancestors_admit`]. A walk that fails refuses.
+fn ancestors_owned(start: BorrowedFd<'_>, uid: u32) -> bool {
+    ancestor_owners(start).is_some_and(|owners| ancestors_admit(&owners, uid))
+}
+
+/// Each ancestor's directory and `cgroup.procs` owners, in that order, from
+/// the invoker's parent up to the mount root, read by `openat` of `..`.
+/// `None` where the walk cannot read an ancestor, reaches a directory that
+/// is its own parent, or passes [`ANCESTOR_LIMIT`] without meeting the
+/// mount root.
+pub fn ancestor_owners(start: BorrowedFd<'_>) -> Option<Vec<u32>> {
+    let mount = nix::sys::stat::stat(CGROUP_ROOT).ok()?;
+    let mut owners = Vec::new();
+    let mut current: Option<OwnedFd> = None;
+    for _ in 0..ANCESTOR_LIMIT {
+        let here = current.as_ref().map_or(start, |fd| fd.as_fd());
+        let stat = fstat(here).ok()?;
+        if (stat.st_dev, stat.st_ino) == (mount.st_dev, mount.st_ino) {
+            return Some(owners);
+        }
+        let parent = openat(
+            here,
+            "..",
+            OFlag::O_DIRECTORY | OFlag::O_CLOEXEC | OFlag::O_RDONLY,
+            Mode::empty(),
+        )
+        .ok()?;
+        let above = fstat(&parent).ok()?;
+        if (above.st_dev, above.st_ino) == (stat.st_dev, stat.st_ino) {
+            return None;
+        }
+        let procs =
+            nix::sys::stat::fstatat(&parent, "cgroup.procs", AtFlags::AT_SYMLINK_NOFOLLOW).ok()?;
+        owners.extend([above.st_uid, procs.st_uid]);
+        current = Some(parent);
+    }
+    None
+}
+
+/// **The ancestors' rule** (#166's guard): every ancestor's directory and
+/// `cgroup.procs` owned by root or by the floor's owner.
+pub fn ancestors_admit(owners: &[u32], uid: u32) -> bool {
+    owners.iter().all(|&owner| owner == 0 || owner == uid)
 }
 
 /// **systemd's delegate mark** on a cgroup, read as root: `user.delegate`

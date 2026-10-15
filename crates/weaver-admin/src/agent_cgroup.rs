@@ -217,7 +217,7 @@ pub fn make_beneath(
                     "the invoker's cgroup {invoker_path} is not delegated (no user.delegate or trusted.delegate mark)"
                 )),
                 StartRefusal::InvokerNotRoots => StartRefused::Unverified(format!(
-                    "the invoker's cgroup {invoker_path} or its cgroup.procs is not root's, so a process of the agent could be moved out of its cgroup (#166)"
+                    "the invoker's cgroup {invoker_path}, a file delegated with it, or a cgroup above it is not root's, so a process of the agent could be moved out of its cgroup (#166)"
                 )),
                 StartRefusal::NotRoots => {
                     StartRefused::Unverified(format!("a cgroup {name} stands that is not root's"))
