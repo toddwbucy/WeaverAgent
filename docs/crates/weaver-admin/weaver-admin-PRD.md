@@ -834,10 +834,13 @@ earlier form of this section built a lesser principal between the operator and t
 kernel, a service account with a narrow delegation, and the recut removes the
 middle: the authority the delegation bounded is authority root already holds, and
 the bound that matters, what the agent can reach, is the kernel's and unchanged.
-What outlives the operator's login session is the worker itself, detached into its own
-session and reparented to pid 1 by the start step, so nothing of admin's needs to run
-for the coordination socket or the sink to survive a logout. It does not outlive its
-invoker's containment, which binds the agent's lifetime, per the Spec's section 6.
+The worker is detached into its own session and reparented to pid 1 by the start step,
+so nothing of admin's needs to run for the coordination socket or the sink to outlive
+the invocation. **It does not outlive its invoker's containment**, which binds the
+agent's lifetime (the Spec's sections 6 and 6.1), the agent's cgroup always nesting
+beneath the invoker's (the operator's rulings of 2026-10-14 on #111). So an agent is
+bound to the containment it was loaded in, admin-con's or the delegated scope a direct
+load runs in, and a long-lived agent is loaded through admin-con.
 
 **Reading and analysis stay outside the program, and the recut does not move
 them.** A trace carries whatever the agent handled, so the code that parses
@@ -855,11 +858,12 @@ declared, passes the handle, implements no transport, and elects no destination.
 getting wrong.** The smell this corpus rejected was a shared service accepting many
 agents and routing commands among them. A worker running one statically provisioned
 agent identity is the opposite of that: it is the wall drawn around exactly one agent,
-built from OS primitives rather than from a supervisor's bookkeeping. **Keep-alive past
-a logout is the start step's detach, and keep-alive past a crash or a reboot is the
-packaging's**, on the operator's ruling of 2026-10-03 on #50: the worker takes its own
-session and outlives the shell that started it, though not its invoker's containment,
-and restarting it on a crash or a reboot
+built from OS primitives rather than from a supervisor's bookkeeping. **Keep-alive is
+the invoker's containment's, and keep-alive past a crash or a reboot is the
+packaging's**, on the operator's rulings of 2026-10-03 on #50 and of 2026-10-14 on #111:
+the worker takes its own session and outlives the invocation that started it, never its
+invoker's containment, so a long-lived agent is loaded through admin-con, and
+restarting it on a crash or a reboot
 is for whoever packages and deploys the agent, with systemd, a container or anything
 else, and not this framework's.
 
@@ -1048,11 +1052,13 @@ second executable separating nothing.
 
 **The cgroup is closed, and by neither of the two candidates.** It was posed as a
 provisioning artifact that load populates against a residency artifact created at load
-and torn down at unload. Under delegation the init system made one per unit, and since
-2026-10-03 this program makes none: the agent stays in its invoker's containment,
-which binds its lifetime and bounds what it consumes, per the Spec's section 6, a bound
-of its own is the packaging's, and the worker's organs dying with it is the harness's,
-per `weaver-harness-Spec` section 2.
+and torn down at unload. Under delegation the init system made one per unit. From
+2026-10-03 this program made none. Since the operator's ruling of 2026-10-14 on #111 it
+makes one per agent, beneath the invoker's own, so the agent stays in its invoker's
+containment, which binds its lifetime and bounds what it consumes, and the kernel kills
+the agent's cgroup whole at every run end (the Spec's section 6.1). A bound of its own is
+still the packaging's, and the worker's organs dying with it is still the harness's, per
+`weaver-harness-Spec` section 2.
 
 **Drop-first is closed and its subject is gone.** The start step drops in its own child
 before the exec, so the worker starts as the agent uid and there is no privilege window

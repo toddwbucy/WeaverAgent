@@ -115,10 +115,26 @@ stays rejected, by refusal at accept rather than by an absent name.
 
 **Admin judges the other direction at its dial** (#98, #140; `weaver-admin-Spec`
 section 7): the listener must run under the worker's account and be the process
-holding the run lock's description, read through a pidfd on the listener. So the
+holding the run lock, judged so that a pid reused since the listener ended is never
+taken for it (that section states how). So the
 worker binds and listens on this channel in its own process, the one the start step
 handed the run lock, and never through a child it forks and execs, whose listener
 admin refuses.
+
+**Every process of the agent is contained, and the containment crosses no envelope**
+(#111, `weaver-admin-Spec` section 6.1 stating the mechanism). Admin starts the worker
+inside the agent's containment, and every process the worker makes stays inside it.
+Nothing on this channel names the containment. Each party's obligation:
+- **The harness** delivers an end to every process still in an open tool execution's
+  containment when the gate dies, and again at its unwind, before `Left`. While serving,
+  where they do not end within the containment bound, or the end cannot be delivered,
+  it ends service with that failure recorded. Inside a leave it waits on none of them.
+  What it could not end, and a process of the agent's account that moved itself out of
+  the execution's containment, is admin's to end at the run's end (`weaver-admin-Spec`
+  section 6.1, C1's two stated exceptions).
+- **Admin** ends every process of the agent at the run's end, in its conclusion under
+  the invocation lock once the run lock frees, before it answers `Unloaded`. So
+  `Unloaded` on this seam's far side means no process of the agent stands.
 
 **The worker holds the agent's own principal from its first instruction and makes its
 memory unreadable to that principal's other processes after its final image
@@ -398,7 +414,8 @@ trustworthy at every moment a dial is accepted, the one bound being the single t
 whose decode is in progress. Where no worker answers the dial at all, admin has no
 exchange to open and answers by `weaver-admin-Spec` section 3's ladder for `show`:
 `InTransition` with the constituents named while the run lock is held, and `Unloaded`
-only once it is free, the one place residency is read.
+only once it is free and no process of the agent stands, `InTransition` naming those
+that do, the one place residency is read.
 
 **There is no alert exchange, per the fault-carrier ruling of 2026-08-01.** A fault
 the worker survives is a `fault` event, authored by the harness into the stream

@@ -108,14 +108,15 @@ lost the agent's reachability, not a connection to it, and section 5 says what t
 means. A gate that observes closure closes its listener and exits, which is how a
 gate process never outlives the interior it fronts.
 
-**The child carries this end and nothing else.** At the moment the gate's process is
+**The child carries this end and the means to place each execution in its containment, and nothing
+else.** At the moment the gate's process is
 created the harness holds the trace sink handle, its channel to admin,
 and its channel to the SPU, every one withheld from children, the received ones by the
 receive
 rule and the created ones from creation, per `weaver-admin-harness-contract` section
 5 and `weaver-harness-spu-contract` section 1. That discipline is what keeps all of
-them out of the gate's process: **the gate receives this seam's end and no other
-handle, and a build in which the gate holds a trace, coordination, or
+them out of the gate's process: **the gate is given this seam's end and the means to place each execution in its containment** (#111, `weaver-admin-Spec` section 6.1 and
+`weaver-harness-Spec` section 2.2 stating how), **and nothing else beyond them, and a build in which the gate holds a trace, coordination, or
 residency handle is broken whether or not it uses one.** The gate re-establishes the
 property on its own end after its final image
 replacement, and makes its memory unreadable to its own principal in the same act,
@@ -219,36 +220,45 @@ parse recovered them, and the caller's clock - and interprets nothing.
 **One clock, the caller's.** Every invocation carries a timeout the caller
 states. The tool declares a maximum, the caller's number must be equal to or
 less than that maximum, and the gate adopts the caller's number as the kill
-clock for that invocation. A clock beyond the maximum refuses rather than
+clock for that invocation. **The kill fires at the caller's number, and the exchange
+completes within the caller's number plus the containment bound, or plus twice it
+where the gate dies during its own wait**, answered by the gate or closed by the
+harness, the bound being the one `weaver-admin-Spec` section 6.1 states once, the wait for the invocation's containment
+to empty after the kill. That bound is no second clock: it moves no kill, and a caller
+that waits for the answer waits on that sum. A clock beyond the maximum refuses rather than
 clamps, because a clamped clock silently changes the caller's wait and the
 two-clock disagreement returns by the back door. **What the clock holds is
-the invocation's process group, and no more**, on the operator's ruling of
-2026-09-26 (#642). At the clock the gate kills the whole group, so nothing
-in that group outlives the wait and no stale return arrives at a decision
-point that is already gone. A descendant that leaves the group, by `setsid`
-or a process group of its own, is outside that kill and can outlive the
-exchange, which was measured on 2026-09-21. The gate holds nothing to
-orphan, it is a gate, so this clause promises what process-group supervision
-holds. **Containment beyond the group is owed**, a boundary holding every
-descendant whatever group it enters, and it lands with its own Spec clause
-and lifecycle tests rather than as a promise here.
+every process still in the invocation's containment** (the operator's ruling
+of 2026-10-14 on #111, `weaver-admin-Spec` section 6.1 stating the
+mechanism). At the clock, and at every other end of the invocation, the gate
+ends every such process before it answers, so nothing left in the
+invocation's containment outlives the wait and no stale return arrives at a
+decision point that is already gone. A
+descendant that leaves its process group or its session is ended all the
+same. The group kill this clause promised until then let such a descendant
+outlive the exchange (measured on 2026-09-21, the ruling of 2026-09-26 on
+#642). **The one exception is that section's**: a command running as the
+agent's account can move itself out of the invocation's reach, and is then
+ended at the run's end, not the invocation's.
 
 **Cancel the execution, on the operator's ruling of 2026-09-22.** Sent by
 the harness inside an open execution exchange, at the continue position the
 channel has carried unused until this act, and carrying nothing beyond its
 kind: the operator's stop reached the harness while the tool ran, and the
 harness wants the exchange closed now rather than at the clock. The gate on
-receipt kills the invocation's whole process group exactly as the clock
-would, descendants included, and the exchange completes with its one answer
-as every execution does. The cancel is the caller's clock brought forward on
-the caller's word, so it adds no second clock: the number that crossed at
-the open still bounds the exchange whether or not the cancel is heard, and a
-gate that never reads the cancel still answers by the clock. **A cancel that
+receipt ends every process still in the invocation's containment exactly as the clock would, descendants included, and the exchange completes with its one answer
+as every execution does, or, where the gate cannot contain the execution, the gate exits and the harness closes the execution `Killed { by: fault }` (section 5). The cancel is the caller's clock brought forward on
+the caller's word, so it adds no second clock: the kill fires by the number that
+crossed at the open whether or not the cancel is heard, and the exchange completes
+within the completion rule above (section 2, one clock), the caller's number plus the
+containment bound or twice it. A gate that never reads the cancel still kills by the
+clock. **A cancel that
 crosses the answer in flight is dropped by the gate**, neither refused nor
 queued, because the exchange it names is already closed from the gate's side
 and the harness learns what became of the invocation from the answer it is
-about to read. The harness accepts any of the four contents after a cancel
-for the same reason: the supervisor answers with whatever it observed first,
+about to read. The harness accepts any of the four contents after a cancel,
+or closes the execution `Killed { by: fault }` itself where the gate cannot contain
+it and exits (section 5), for the same reason: the supervisor answers with whatever it observed first,
 the exit or the kill, and a tool that finished as the cancel arrived answers
 in its own words. The stop that causes a cancel is
 `weaver-admin-harness-contract` section 3's, and what the harness does with
@@ -271,8 +281,9 @@ it is never re-runnable, so a completed tool, perhaps one with side effects, nev
 again after the reload; only a call the interrupt actually ended is answered `Killed {
 by: unload }` and is re-runnable.
 
-**Every opened execution completes with an answer, and the answer carries
-one of four contents**, told apart by tag alone, the rule beneath the four
+**Every opened execution is answered by the gate with one of four contents,
+or closed by the harness `Killed { by: fault }` where the gate cannot contain it**
+(section 5, `weaver-admin-Spec` section 6.1), the contents told apart by tag alone, the rule beneath the four
 being who speaks in the return:
 
 - **Result.** The invocation ran and the tool answers in its own words. For
@@ -286,8 +297,14 @@ being who speaks in the return:
 - **Errored.** The invocation machinery failed - the fork, a pipe, the
   supervisor - and the account's speaker is the infrastructure, never the
   tool.
+  **An execution the gate cannot contain gets none of these answers** (#111,
+  Codex on #161): where the gate cannot end every process still in the
+  invocation's containment, it exits with the execution unanswered, so the
+  harness meets the gate's death and closes the execution `Killed { by: fault }`
+  itself (section 5). An answer sent first would let the harness advance the
+  turn while the command still ran.
 - **Killed.** The caller's clock expired, the caller cancelled, or the
-  unload interrupted, and the gate killed the invocation's whole process group, descendants included,
+  unload interrupted, and the gate ended every process still in the invocation's containment, descendants included,
   because a kill that reaped only the leader would leave the pipes held open
   and the promise above false. The case carries no account from the tool by
   construction - the absence of the tool's words is the fact - and output
@@ -315,7 +332,9 @@ is the order the model spoke them.
 what it grants**, which is the half of the loop closure this contract
 carries: the harness's granted tool-result value is constructed at this
 exchange's completion and nowhere else, whichever of the four contents
-arrived, per `weaver-harness-Spec` section 6.
+arrived, the harness's own `Killed { by: fault }` where the gate exits unable to
+contain the execution being that completion by closure (section 5), per
+`weaver-harness-Spec` section 6.
 
 **The instruction crosses once, in the raise.** It is not re-sent, revoked, or
 replaced. A gate that needs an instruction it was not given has a failed raise rather
@@ -374,22 +393,25 @@ as the family parse recovered them, and the caller's clock, uninterpreted,
 opened serially in emission order, and at most one cancel or interrupt per
 execution while its exchange stands open from the harness's side.
 
-**The gate guarantees** an answer to every execution opened inside the raised
-window, carrying one of the four contents of section 2, so the harness's
-grant construction site fires exactly once per opened call and a call never
-dangles. It guarantees the kill clock is the caller's number and the kill
-reaches the invocation's whole process group. It guarantees that a cancel it
-reads brings that same kill forward, that the exchange still completes with
-exactly one answer, and that a cancel arriving past the answer changes
-nothing.
+**The gate guarantees** that every execution opened inside the raised window is
+answered, carrying one of the four contents of section 2, or that, where it cannot
+contain the execution, the gate exits and the harness closes the execution `Killed { by: fault }` (section 5). It guarantees the kill clock is the caller's number
+and the kill reaches every process still in the invocation's containment. It guarantees
+that a cancel it reads brings that same kill forward, that the exchange still completes
+with exactly one answer or by that same exit and closure, and that a cancel arriving past
+the answer changes nothing. **What the turn can rely on is a closed execution either
+way**: the harness's grant construction site fires exactly once per opened call, from
+the gate's answer or from the harness's own `Killed { by: fault }`, and a call never
+dangles.
 
 **The harness guarantees** that the instruction it sends is the instruction admin
 sent it, unaltered and uninterpreted. It guarantees that it opens no exchange this
 document does not enumerate, and that a turn it has stopped opens no further
 execution, the calls the emission still held going unopened rather than
 cancelled one by one. It guarantees that it creates this seam's channel and
-passes that end to the child it creates and no other, **every other handle it holds
-being withheld from that child at the moment it is created**, per section 1. It
+passes that end, and the means to place each execution in its containment, to the child it creates
+and no other, **every other handle it holds being withheld from that child at
+the moment it is created**, per section 1. It
 guarantees that it raises the
 gate last in the enter fan-out and, at a leave, quiesces it first and lowers it
 before the leave's save point, per apex section 6 and `weaver-admin-Spec` section 3,
@@ -425,8 +447,8 @@ guarantees that it answers a refusal rather than exiting on one. It guarantees t
 it admits only the principals the boundary predicate names and that the predicate
 excludes the agent's own principal, per `weaver-gate-PRD` section 2. It guarantees that
 it
-authors no trace event, holds no handle beyond this seam's end and its listener,
-retains nothing across a raise and a lower, and exits on observing closure.
+authors no trace event, holds nothing beyond this seam's end, the means to place each execution in its containment (section 1) and its listener, retains nothing across a
+raise and a lower, and exits on observing closure.
 
 ## 5. Failure
 
@@ -453,11 +475,17 @@ agent's reachability, observed through closure and authored to the stream as the
 `fault` event, per the fault-carrier ruling of 2026-08-01, the operator's tooling
 keying on it there. A tool execution open when the gate dies has no answer coming: the
 harness closes it `Killed { by: fault }`, **its outcome indeterminate and never re-run
-automatically**, since the shell the gate supervised runs in its own process group with
-no parent-death signal of its own (`weaver-gate-Spec` section 8, the shell forked in its
-own group; the gate's parent-death signal is elected for the gate alone), so it may still
-run or may have completed (`weaver-admin-Spec` section 3, the organ-death table; Codex on
-#109, round 43).
+automatically**. The harness first delivers an end to every process still in the
+execution's containment, or, where it cannot, ends service with that failure recorded
+and leaves the rest to admin's run end (#111, `weaver-admin-Spec` section 6.1 stating the
+mechanism and its stated exceptions). Where the end was delivered, nothing of the
+command left in its containment does further work. Where it could not be, the command
+may run on until the run's end. Either way the command may have completed before the
+end reached it (`weaver-admin-Spec` section 3, the organ-death table, and Codex on #109,
+round 43). **The gate ends every process still in each execution's containment at
+every end of it**, a command that left its process group or its session included, or,
+where it cannot, exits with the execution unanswered (section 2, `weaver-gate-Spec`
+section 8).
 
 **Nothing on this seam retries.** A refused directive returns to the harness, which
 unwinds, and a re-sent directive would put two attempts behind one operator intent.
@@ -478,7 +506,7 @@ record**, the `load` event being what opens the run. That is named at
 
 **On the harness.** It opens no exchange this document does not enumerate. It does
 not alter or interpret the instruction. It does not pass a handle across the gate
-child other than this seam's. It does not treat the gate as a peer of the organs it
+child other than this seam's end, and gives it nothing beyond that end but the means to place each execution in its containment (section 1). It does not treat the gate as a peer of the organs it
 sequences: the gate confirms inside the aggregate like every other arm of the
 fan-out.
 

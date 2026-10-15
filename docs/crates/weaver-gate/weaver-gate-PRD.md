@@ -232,7 +232,9 @@ ways, order preserved, nothing retained after the response returns.
 ## 3. What this crate must not hold
 
 **No trace authorship, and no descriptor to the record.** It holds
-its seam end and its listener and nothing else, which the contract's fork discipline
+its seam end, the one handle on the execution's containment
+(`weaver-admin-Spec` section 6.1) and its listener and nothing else, which the
+contract's fork discipline
 makes structural rather than behavioral.
 
 **No channel to `weaver-admin`.** Admin holds one seam, and what this crate has to
@@ -644,20 +646,29 @@ the whole invocation out. Derived from `weaver-harness-gate-contract` section
 **A cancel is the caller's clock brought forward, and this crate kills on it
 as it kills at the clock.** The harness sends the cancel inside the open
 execution exchange when the operator's stop reaches it mid-invocation, and
-this crate signals the invocation's whole process group at once, descendants
-included, and answers the exchange with a kill that names the cancel as its
-cause. The contract's one-clock rule stands: the caller's number still bounds
-the exchange, a cancel never lengthens a wait, and a cancel this crate never
-reads leaves the clock to do the same work later.
+this crate kills the agent's `tools/` cgroup at once, descendants included
+(`weaver-admin-Spec` section 6.1), and answers the exchange with a kill that names the cancel as its
+cause. The contract's one-clock rule stands: the kill fires at the caller's number at
+the latest, the exchange completing within the contract's completion rule
+(`weaver-harness-gate-contract` section 2), a cancel never lengthens a wait, and a
+cancel this crate never reads leaves the clock to do the same work later.
 
-**Every execution still completes with one answer.** A cancel that arrives
+**Every execution still completes with one answer, or, where this crate cannot contain
+it, with this crate's exit and the harness's own close** (`weaver-admin-Spec` section
+6.1, `weaver-harness-gate-contract` section 5). A cancel that arrives
 after the answer left is dropped, because the exchange is closed from this
 side and the harness reads what became of the tool from the answer already
 in flight. A tool that finished as the cancel arrived answers in its own
 words. Nothing here opens an exchange, retains anything past the answer, or
 reads content, per section 3.
 
-**What this does not settle.** A descendant that detached itself from the
-group before the kill is the containment question issue #642 carries, and a
-cancel reaches exactly what the clock reaches, no more. How the supervisor
-hears the cancel while a tool runs is the Spec's.
+**A cancel reaches exactly what the clock reaches**, and since the operator's
+ruling of 2026-10-14 on #111 that is every process still in the execution's
+containment: a
+descendant that detached itself from its process group or its session before
+the kill is ended all the same, where the group kill of issue #642 let it run
+on (`weaver-admin-Spec` section 6.1 states the mechanism). **The one exception
+is that section's**: a command running as the agent's account can move itself
+out of the execution's reach, into the worker's part of the agent's
+containment, and is then ended at the run's end, not the execution's. How the
+supervisor hears the cancel while a tool runs is the Spec's.

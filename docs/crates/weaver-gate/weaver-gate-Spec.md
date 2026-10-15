@@ -35,8 +35,9 @@ code must conform to, declared at the clauses that argue them rather than
 gathered in one place, per that format's section 6, and `asserts` runs from the
 crate rather than from this document, which is why the document needs no node of
 its own. **What this document leans on and does not argue is declared by the
-crate that argues it,** and carries no record here. The descriptor's number and
-the fork discipline that leaves this process one inherited descriptor are
+crate that argues it,** and carries no record here. The descriptors' numbers and
+the fork discipline that leaves this process two inherited descriptors, the channel
+end and the means to place its executions in their containment (#111), are
 `weaver-harness-Spec`'s, per its sections 2.2 and 8. The floor's three
 exhaustive wire enums, `PeerIdentity`'s missing `Deserialize`, the socket-type
 election with the boundary and truncation tests it owes the pair-creating
@@ -182,7 +183,14 @@ loop of section 4, `umask` around the bind for the mode election of section
 3, `getsockopt` for the peer credential with `getuid` for the predicate it
 feeds, `User::from_uid` for the home the shell starts in, which comes from
 the account database because there the uid's home is a fact rather than a
-variable the agent's environment may or may not carry, and `killpg` with `waitid` for the group kill and the reap of section 8.
+variable the agent's environment may or may not carry, and, for section 8, `waitid` for the reap, `poll` on the channel end in the supervision
+wait's slices, `prctl`, `getppid`, and `openat` with `write` in the shell's child before
+its exec (the parent-death signal, the check that its parent still stands, and the move
+into `tools/`), the
+write of `tools/cgroup.kill` that ends an execution, and a read of `tools/cgroup.events`
+for the wait on its emptying (`weaver-admin-Spec` section 6.1). **Every one of
+`tools/cgroup.procs`, `tools/cgroup.kill` and `tools/cgroup.events` is opened by
+`openat` beneath the handle at descriptor 4, never by path.**
 **The bind, the listen and the accept are not among them.**
 `UnixListener::bind` is the standard library's and creates and binds and
 listens in one call, per section 3, which is the shape the one bind site
@@ -226,9 +234,14 @@ to: gate-no-runtime-no-logging-no-yaml
 **The channel end arrives at descriptor 3, inherited rather than
 re-decided.** `weaver-harness-Spec` section 2.2 elects the number and owes it
 to this document, and this document takes it: the exec'd binary finds its
-one inherited descriptor at 3, the first after the standard streams, and
-wraps it as an owned handle at entry. It is the only descriptor this process
-begins with beyond the standard streams, per the fork discipline of
+channel end at 3, the first after the standard streams, and wraps it as an
+owned handle at entry. **Beside it, at 4, is its one further descriptor, the
+handle on the agent's `tools/` cgroup** beneath which section 8 opens `tools/`'s files
+(`weaver-admin-Spec` section 6.1, #111), wrapped the same way and marked
+close-on-exec at entry as 3 is, so no shell inherits it: it stays open across the shell's fork, for the child's move,
+and closes at its exec. These two are the only
+descriptors this process begins with beyond the standard streams, per the fork
+discipline of
 `weaver-harness-gate-contract` section 1, which makes a build in which this
 crate holds a trace, coordination, or residency handle broken whether or not
 it uses one. That property is the harness's to enforce at the fork and this
@@ -1172,7 +1185,8 @@ that format forbids.
 - The unload's interrupt and the first outcome (`weaver-admin-Spec` section 3, S4 x
   tool return), owed by the lifecycle act's code: an execution open when
   `ToolInterrupt` arrives is ended by the cancel's path and answered `Killed { by:
-  unload }`, and `Quiesce` is read only once that execution has ended; a result this
+  unload }`, or, where it cannot be contained, left unanswered as section 8 says, and
+  `Quiesce` is read only once that execution has ended. A result this
   crate sent before the interrupt reached it stands, the interrupt dropped as a late
   cancel is, and no `Killed` follows it. Confirmed by watching the test fail when the
   crossed result is answered `Killed { by: unload }` after it, and when `Quiesce` is
@@ -1219,7 +1233,7 @@ that format forbids.
   creating call rather than inherited, confirmed by watching the umask guard
   removed and the socket bind at the runner's own umask, per section 3.
 - The shell execution's seven watches are section 8's and are argued there:
-  the one held tool, the one clock, the group kill, the drain riding the
+  the one held tool, the one clock, the kill of `tools/`, the drain riding the
   run, the cancel bringing the clock forward, the late cancel dropped, and
   the exit heard within a slice, each with the removal that makes it fail
   named at the clause. They
@@ -1316,14 +1330,39 @@ than as a table's member: the execution exchange resolves against that one
 name directly, and a name that is not the shell's refuses by name, never a
 nearest match.
 
-**The invocation forks the shell in its own process group and supervises it
-to the caller's clock.** The caller's timeout crossed the exchange, already
-validated against the declared maximum at the refusal layer, and it is the
-one kill clock. Past it the kill reaches the whole group, because `bash`
-leaves descendants holding the pipes' write ends, and a kill that reaped
-only the leader would hold the answer open on a straggler's schedule. The
-exit is observed unreaped before the group is signaled, so the group id
-cannot be reissued between the observation and the kill.
+**The invocation forks the shell into the agent's `tools/` cgroup and
+supervises it to the caller's clock** (#111, `weaver-admin-Spec` section 6.1
+stating the mechanism). **The shell's child moves itself into `tools/` before its
+exec**: it is spawned as before (the standard library's `Command`, its own process
+group, its environment cleared), and in its `pre_exec`, before the exec, it sets its
+parent-death signal to `SIGKILL` and checks its parent still stands, then opens
+`cgroup.procs` by `openat` beneath the handle on `tools/` at descriptor 4 (received beside
+its channel end, `weaver-harness-Spec` section 2.2) and writes `0`. These are `nix`'s
+calls, the path built as a `CStr` before the fork, so each is async-signal-safe and
+allocates nothing, and none needs raw `libc`. So the child runs only
+this crate's own code until the move succeeds, and the command and everything it forks
+start in `tools/`, a new session or a double fork included. **No instant leaves a
+command outside while the gate may already have killed `tools/`**: the spawn returns
+only once the child has exec'd, the standard library reporting an exec or `pre_exec`
+failure through its own close-on-exec pipe, so the gate's supervision, and every kill
+it makes, begins after the move. A gate that dies before then takes the child with it,
+by the parent-death signal. **A child whose move fails ends before its exec**, the spawn
+answering that failure, and the gate answers `Errored` with nothing run, never a
+containment failure: nothing reached `tools/`. The move needs write on
+`tools/cgroup.procs` and on the common ancestor's, `worker/cgroup.procs`, both among the
+three files the agent's account holds (`weaver-admin-Spec` section 6.1). The caller's timeout crossed the exchange,
+already validated against the declared maximum at the refusal layer, and it is
+the one kill clock. **Every end of an execution kills `tools/` whole**: the
+shell's exit, the clock, a cancel, an interrupt and the channel's closure each
+write `tools/cgroup.kill` and wait for `tools/` to empty, within the kill's
+bound, before the answer goes. `bash` leaves descendants holding the pipes'
+write ends, and a kill that reached only the leader, or only its process
+group, would hold the answer open on a straggler's schedule, or leave a
+command that left its group running past its execution's end. **This crate
+never answers an execution it cannot contain**: a failed write of
+`tools/cgroup.kill`, or a `tools/` not empty within the bound, ends this crate
+with the execution unanswered, so the harness meets the gate's death and
+closes the execution itself, as `weaver-admin-Spec` section 6.1 says.
 
 **The shell starts in the uid's home with `HOME` and no other variable.** This
 crate runs with the agent's environment, per `weaver-harness-Spec` section 2.2
@@ -1339,7 +1378,8 @@ into a false kill. The capture keeps the bound and discards the rest, and
 what was discarded is marked in the answer.
 
 **The answer is one of the contract's four contents and the account's
-speaker is the tag's meaning.** A nonzero exit is a result, the shell's own
+speaker is the tag's meaning**, an execution this crate cannot contain getting no
+answer at all (above). A nonzero exit is a result, the shell's own
 answer accounted in content. A refusal is this crate's voice and nothing
 ran. An error is the machinery's. A kill carries no account from the tool by
 construction, with any drained partial riding as an attachment and never as
@@ -1356,22 +1396,26 @@ not wake the poll, a child's death making no descriptor of this crate's
 readable, which is why the slice stays and does not stretch to the clock: a
 supervisor that polled the channel for the whole remainder would hold a
 command that exited in its first millisecond until the caller's clock ran
-out. On a cancel the group is
-signaled at once by the same path every ending takes, the drain finishes
+out. On a cancel `tools/` is
+killed at once by the same path every ending takes, the drain finishes
 bounded as it does at the clock, and the answer is a kill naming the cancel
 as its cause, the partial riding as it rides at the clock. **An interrupt is
 the unload's cancel** (`weaver-admin-Spec` section 3, S4 x tool return): the
 harness sends `ToolInterrupt` where an unload, graceful or forced, meets a
 tool call out, and it ends the execution by the cancel's path, the answer a
 kill naming the unload, `Killed { by: unload }`, so the record reads the call
-as never finished and re-runnable at the reload. **The first outcome wins**: a result the gate sent before the interrupt reached it stands, recorded completed with its result, delivered to the turn as in S3 and never re-runnable, the interrupt crossing it dropped as a cancel is; only a call the interrupt actually ended is `Killed { by: unload }` and re-runnable. Nothing the
+as never finished and re-runnable at the reload. An interrupted execution this
+crate cannot contain is not answered, and the harness closes it
+`Killed { by: fault }` as at any gate's death, never re-run automatically. **The first outcome wins**: a result the gate sent before the interrupt reached it stands, recorded completed with its result, delivered to the turn as in S3 and never re-runnable, the interrupt crossing it dropped as a cancel is. Only a call the interrupt actually ended is `Killed { by: unload }` and re-runnable. Nothing the
 contract permits arrives on the channel during an execution but the cancel,
 the interrupt and closure, executions being serial and the harness blocked in
 its wait, so an envelope there is one of the two or it is the closure the
 charter already requires this crate to exit on, and closure breaks the same loop, which
-kills the group before the exit as every ending does. The cancel adds no
-clock: the caller's number still bounds the wait, and a supervisor that
-never reads the cancel still answers by it.
+kills `tools/` before the exit as every ending does. The cancel adds no
+clock: the kill still fires by the caller's number, the exchange completing within
+the contract's completion rule (`weaver-harness-gate-contract` section 2,
+`weaver-admin-Spec` section 6.1), and a supervisor that never reads the cancel still
+kills by it, then answers or exits unanswered where it cannot contain the execution.
 
 **A cancel or an interrupt that arrives past the answer is dropped, never refused.** The
 exchange it names closed from this side when the answer was sent, and the
@@ -1451,8 +1495,9 @@ to: gate-execution-exit-heard-within-a-slice
 
 The perturbation obligations are apex section 11's: the unheld-name watch
 fails when the refusal arm is removed, the clock watch fails when the kill
-branch is removed, the group-kill watch fails when the group signal is
-removed and a straggler holds the pipes, and the drain watch fails when the
+branch is removed, the group-kill watch fails when the kill of `tools/` is
+removed and a straggler holds the pipes, and fails too when the kill is a
+process-group signal and the straggler started a new session, and the drain watch fails when the
 readers wait for the exit. The cancel watch cancels a sleep far inside a
 long clock and fails when the channel end leaves the supervision wait, the
 answer then arriving at the clock. The late-cancel watch sends a cancel

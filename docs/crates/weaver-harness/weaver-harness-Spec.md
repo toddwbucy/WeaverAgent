@@ -500,7 +500,16 @@ a duplication moved anything, and execs, so the organ binary finds its ends at
 3 and, where it has a second, at 4 from its first instruction. **The order is
 the channels' own:** the lifecycle channel every organ holds takes 3, and an
 organ's further channel takes the next number, so the gate's single end sits
-where the SPU's first does. Until the decoder cut of 2026-08-02 an organ held
+where the SPU's first does. **The gate is handed one further descriptor after its
+end, at 4**: a handle on the agent's `tools/` cgroup (`weaver-admin-Spec` section 6.1,
+#111), which the worker opens `O_DIRECTORY` once at the enter, judges once, and never
+resolves by path again, the territory's descriptor route (`weaver-admin-Spec` section
+9). It crosses the gate's exec as the ends do, its flag cleared by the same placement,
+and beneath it the gate opens `tools/`'s files, each shell's child moving itself into
+`tools/` through it before its exec (`weaver-gate-Spec` section 8). **A worker that cannot
+open or judge it stands no gate**: the gate's arm of the enter refuses
+`BoundaryUnverified`, wrapped `OrganRefused` in the aggregate (section 3, the enter),
+and the load rolls back. Until the decoder cut of 2026-08-02 an organ held
 one end and this paragraph named one number, and the SPU's second channel is
 what made the order need stating. This realizes apex section 12's topology,
 the numbering being this Spec's own election. **The numbering is owed to
@@ -582,6 +591,15 @@ description closes, and the write end of the trace relay's lifetime pipe at desc
 or forks anything**, so no organ inherits a writable descriptor to root's lock file or a
 write end that would keep the relay alive, and no window exists in which one could. The
 organs never hold the run lock, being bound to the worker by their death signal instead.
+**The tool executions are bound by the agent's cgroup, not by a death signal**
+(#111): the worker starts in the agent's `run/` cgroup and every organ inherits it, and
+the gate runs each shell in the `tools/` beside it. **`weaver-admin-Spec` section 6.1
+states the mechanism, the containment bound and every path, and this section carries
+only this crate's part**: the worker kills `tools/` when it reads the gate's death and
+again at its unwind, before it answers `Left`, waiting and ending service as 6.1 says,
+a `tools/` that will not empty ending service as an organ death the record cannot hold
+ends it (section 4, a latched record). Its own cgroup it cannot kill, being inside it,
+and admin's run end does.
 **An empty number is skipped and said**: a worker started by hand, or by a stack from
 before the start step, holds nothing at 9 and serves, and it names the absence on its
 standard error, as it names a 9 holding something other than a regular file, so a start
@@ -914,7 +932,16 @@ election is a manifest property and the record is this crate's,**
 `weaver-admin-Spec` section 1, `weaver-gate-Spec` section 1, and
 `weaver-spu-Spec` section 1 each inheriting these grounds rather than re-arguing
 them: the manifest carries one OS crate and no `libc` or `rustix` line of this
-crate's own. The ownership the election buys is the other claim in this
+crate's own. **The containment of #111 adds** `openat` beneath a directory descriptor,
+`fstat`, and `read` and `write` on the agent's `tools/` cgroup files, all `nix`'s
+(`weaver-admin-Spec` section 6.1), and **one stated exception to "no raw `libc`"**: the
+worker's pinned fallback makes `pidfd_open` and `pidfd_send_signal` as raw system calls
+by number (`SYS_pidfd_open`, `SYS_pidfd_send_signal`) through `nix`'s re-exported
+`libc`, because `nix` 0.31 exposes no pidfd signalling. It adds no dependency, the
+re-export being `nix`'s own, and it is the precedent `weaver-admin`'s escalation already
+set for the same two calls (`weaver-admin-Spec` section 1). The pidfd each call opens
+is wrapped at once as an owned descriptor, so the custody this election buys holds
+beyond those two numbers. The ownership the election buys is the other claim in this
 paragraph and it is a type property, so it takes the compiler under section 8's
 first sorting rather than the manifest read.
 
@@ -1776,8 +1803,11 @@ negatives, each pinned the way the floor pins `PeerIdentity`:** no
 `Deserialize`, no public constructor, no conversion from `ToolResultBlock`.
 It is constructed at exactly one site, the completion of the execution
 exchange of `weaver-harness-gate-contract` section 2, **whichever of the
-exchange's four contents arrived**: the grant carries the tool's result, the
-gate's refusal, the machinery's error, or the kill on the caller's clock,
+exchange's four contents arrived**, or the harness's own `Killed { by: fault }` where
+the gate's death closed the exchange unanswered, a gate that cannot contain an
+execution exiting so (that contract's section 5, `weaver-admin-Spec` section 6.1):
+the grant carries the tool's result, the gate's refusal, the machinery's error, or a
+kill, on the caller's clock or the gate's death,
 per the taxonomy the tool boundary ruling of 2026-08-18 settled on that
 contract, because each is a fact the model must learn and a refusal that
 could not author a tool-result turn would leave the conversation with a hole
@@ -2214,7 +2244,10 @@ unwind names it as its first refusal at the seal, as a leave that never stopped 
 **The forced leave stops work and keeps state** (`weaver-admin-Spec` section 3, the
 forced unload (sole); S2, S3 and S9 x force-unload). A `Leave` with `forced` true and `rollback` false, set by
 admin's `force-unload`, has this crate interrupt a tool call out as item 2 does, then
-lower the gate at once from its raised position (**a gate step this crate skips where
+lower the gate at once from its raised position, **the lower's bound running from the
+interrupt and never waiting on the interrupted execution's end**, past which the gate is
+killed (`SIGKILL`) and reaped as at its death and the call closed `Killed { by: fault }`
+(`weaver-admin-Spec` section 6.1) (**a gate step this crate skips where
 the gate is already lowered, S9, or absent, a diagnostic binding: it sends no
 `ToolInterrupt`, `Quiesce` or `Lower` there, `Lower` being once only, and from S9, no
 turn running, the forced leave goes straight to the save point**; Codex on #109, round 47), with no quiesce and no drain, reading
@@ -2857,9 +2890,11 @@ connection at once, by section 2.4's `poll` and the serial loop of 6.1, one
 mechanism in its third state. A dial is accepted and credential-checked as
 every dial is, and a stop read there sends the contract's cancel on the open
 execution exchange, at the continue position, and then keeps waiting for
-that exchange's close, which the gate guarantees, the cancel having brought
-the clock forward and added none. The completion is authored from whichever
-of the four contents arrives, a kill naming the cancel in the common case
+that exchange's close, which the gate guarantees by its answer or, where it
+cannot contain the execution, by its exit, the cancel having brought the clock
+forward and added none. The completion is authored from whichever of the four
+contents arrives, or from this crate's own `Killed { by: fault }` where the gate
+exits unanswered, a kill naming the cancel in the common case
 and the tool's own words where it finished as the cancel crossed, so the
 record holds the invocation's end whatever it was. The turn then closes
 stopped with no generation after it: the granted result is constructed at
@@ -2873,8 +2908,10 @@ closing the turn around it.** Closing around it leaves the tool running past
 a turn that no longer exists, which the characterization saw as a live
 process for the length of the stop, and narrowing the promise instead would
 have amended `weaver-harness-PRD` section 2 and apex section 6 to carry an
-exception neither states. #642's detached descendant is the gate's group
-kill's to contain and is untouched by this clause.
+exception neither states. #642's detached descendant, which the gate's group
+kill could not reach, is ended since #111 by the gate's kill of the
+execution's cgroup (`weaver-admin-Spec` section 6.1), and this clause is
+untouched by it.
 
 ```graph
 node: harness-stop-polled-during-the-invocation
@@ -3106,8 +3143,8 @@ above all, and a decode end carries a resident session's traffic, which is a
 different capability rather than a smaller one. The mechanism is the atomic
 `SOCK_CLOEXEC` of section 2.2, no window between creation and flag. The test
 forks a child and enumerates its descriptors, confirming that each organ fork
-carries exactly the ends that organ is owed, two at the SPU's and one at the
-gate's, and that nothing crosses a tool fork, watched to fail when the atomic
+carries exactly the ends that organ is owed, two at the SPU's, and one at the
+gate's with the handle on `tools/` beside it (section 2.2, #111), and that nothing crosses a tool fork, watched to fail when the atomic
 flag is dropped to a later `fcntl`.
 
 **The third walk: a same-uid process attaches.** The attack reads or drives
