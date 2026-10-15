@@ -99,8 +99,12 @@ would silently break the lifetime binding of section 3. A requirement on the bou
 declared and checked: the invoker verifies after a load that every constituent `show`
 names sits in its own containment, which since #111 means inside the invoker's own, in
 the agent's containment admin makes there (`weaver-admin-Spec` section 6.1). **The
-invoker's containment must be one delegated to the agent's manager, admitting a child
-containment that root makes**, or the load refuses `BoundaryUnverified`. No prompt, turn, task, or run
+invoker's containment must be one delegated to the agent's manager, root's, and admitting
+a child containment that root makes**, or the load refuses `BoundaryUnverified`. Root's
+means its directory and its `cgroup.procs` are owned by root, so no account but root can
+move the agent's processes out of the agent's containment (#166's guard, the operator's
+ruling of 2026-10-15). A load from admin-con's own delegated unit is not root's and is
+refused until #166, the placement and the lifetime binding to the invoker, is ruled. No prompt, turn, task, or run
 crosses, per apex section 6.
 
 **At the trace door, one request line**: a byte offset on a record boundary and the
@@ -185,17 +189,18 @@ caller disappears**, its outcome recorded in the agent's `admin.log`, so a calle
 gives up reads the outcome from the next `show`.
 
 **The agent's lifetime is bound to the containment it was loaded in**, on the operator's
-rulings of 2026-10-03 on #72 and of 2026-10-14 on #111: admin-con's when admin-con loads
-it, or the delegated containment a direct load runs in. It is enforced by that
-containment, and the program depends on no supervisor for it. Each agent has its own
-admin-con, and stopping that admin-con stops an agent it loaded and only that agent: the
-management plane going down may mean it was taken over, so the agent fails closed with
-it. A long-lived agent is loaded through admin-con. A dropped invocation is not a
-stopped admin-con, and still runs to completion, per the bound above. Three consequences
-are the invoker's to build against: an orderly stop of admin-con unloads its agent
-first, a kill is an unclean stop whose next load resets to the latest save point, and
-the invoker's resource limits contain the agent. The cross-repository half is
-toddwbucy/WeaverWeb#15.
+rulings of 2026-10-03 on #72 and of 2026-10-14 on #111: the root-owned delegated scope
+the load runs in. It is enforced by that containment, and the program depends on no
+supervisor for it. **A load through admin-con is refused until #166 is ruled** (the
+operator's ruling of 2026-10-15): admin-con's own unit is delegated to the connector's
+account and is not root's, so the binding of #72 to admin-con, under which stopping an
+agent's admin-con stopped that agent, is parked with #166, which carries the placement,
+the lifetime binding to the invoker, and a systemd unit per agent once the stack is
+stable. A dropped invocation still runs to completion, per the bound above. Two
+consequences are the invoker's to build against: a kill of the containment is an unclean
+stop whose next load resets to the latest save point, and the containment's resource
+limits contain the agent. The cross-repository half is toddwbucy/WeaverWeb#15, and
+admin-con's unit shape is held on toddwbucy/WeaverWeb#46.
 
 **At the trace door, the record as a read-only stream**: the relay writes a header line
 naming the file's identity (device, inode, and birth time where the filesystem reports
@@ -403,7 +408,7 @@ a `save-point`), until the operator clears it (`weaver-admin-Spec` section 6; #1
 S16). **Containment refuses in these ways** (`weaver-admin-Spec` section 6.1, #111). A
 `load` on a box without a containment that admits a child made by root and ends all of
 its processes at once (the floor is `weaver-admin-Spec` section 6.1's), or from an
-invoker whose containment is not delegated or admits no child, refuses
+invoker whose containment is not delegated, not root's, or admits no child, refuses
 `BoundaryUnverified`, naming what is missing. A `load` meeting processes of an ended run
 still standing refuses `AgentRunning`, naming them, for `unload` to end. An `unload` or
 `force-unload` whose agent's processes do not all end within the containment bound refuses

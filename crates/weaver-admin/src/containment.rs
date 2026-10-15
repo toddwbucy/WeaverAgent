@@ -81,6 +81,10 @@ pub struct StartFacts {
     pub run_lock_held: bool,
     pub cgroup2: bool,
     pub delegated: bool,
+    /// The invoker's directory and its `cgroup.procs` both root's (#166's
+    /// guard): no account but root can move a process out of the agent's
+    /// cgroup.
+    pub invoker_roots: bool,
     /// At the deterministic path, the invoker's cgroup plus `weaver-<agent>/`.
     pub at_path: Standing,
     /// What the record names, where one stands.
@@ -124,6 +128,9 @@ pub enum StartRefusal {
     NoCgroup2,
     /// `BoundaryUnverified`: the invoker's cgroup carries no delegate mark.
     NotDelegated,
+    /// `BoundaryUnverified`: the invoker's cgroup, or its `cgroup.procs`, is
+    /// not root's (#166's guard).
+    InvokerNotRoots,
     /// `BoundaryUnverified`: a cgroup standing that is not root's.
     NotRoots,
     /// `BoundaryUnverified`: a record that does not read, or a cgroup at the
@@ -146,6 +153,9 @@ pub fn start_judgment(facts: StartFacts) -> StartAction {
     }
     if !facts.delegated {
         return StartAction::Refuse(StartRefusal::NotDelegated);
+    }
+    if !facts.invoker_roots {
+        return StartAction::Refuse(StartRefusal::InvokerNotRoots);
     }
     // A record naming a cgroup absent at its path is A0, already removed:
     // the record is stale, and is removed before the `mkdir` (the row for a
@@ -647,6 +657,21 @@ fn io_errno(error: std::io::Error) -> Errno {
 pub fn is_cgroup2() -> bool {
     nix::sys::statfs::statfs(CGROUP_ROOT)
         .is_ok_and(|fs| fs.filesystem_type() == nix::sys::statfs::CGROUP2_SUPER_MAGIC)
+}
+
+/// **The invoker's ownership** (6.1, the floor; #166's guard): the
+/// invoker's directory and its `cgroup.procs` both owned by `uid`, read by
+/// `fstat` of the descriptor and `fstatat` beneath it, never by path. Root
+/// in production; the user-scope instruments pass the suite's own uid.
+pub fn owned_by(cgroup: &Cgroup, uid: u32) -> bool {
+    let directory = nix::sys::stat::fstat(cgroup.fd()).is_ok_and(|stat| stat.st_uid == uid);
+    let procs = nix::sys::stat::fstatat(
+        cgroup.fd(),
+        "cgroup.procs",
+        nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+    )
+    .is_ok_and(|stat| stat.st_uid == uid);
+    directory && procs
 }
 
 /// **systemd's delegate mark** on a cgroup, read as root: `user.delegate`

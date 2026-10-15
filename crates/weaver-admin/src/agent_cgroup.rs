@@ -121,18 +121,24 @@ pub fn make(
     owner: (u32, u32),
 ) -> Result<Made, StartRefused> {
     let invoker = containment::own_cgroup().and_then(|path| Cgroup::open(&path));
-    make_beneath(invoker, run_directory, agent, run, owner)
+    make_beneath(invoker, run_directory, agent, run, owner, ROOT)
 }
+
+/// The owner the floor requires of the invoker's cgroup in production.
+const ROOT: u32 = 0;
 
 /// [`make`] beneath a named invoker's cgroup, the one `/proc/self/cgroup`
 /// names in production, so an instrument can stand a delegated invoker of
-/// its own.
+/// its own. `floor_owner` is the owner the floor requires of the invoker's
+/// directory and its `cgroup.procs`: root in production, the suite's own
+/// uid under a user scope, which is the level the instruments reach.
 pub fn make_beneath(
     invoker: std::io::Result<Cgroup>,
     run_directory: BorrowedFd<'_>,
     agent: &str,
     run: &str,
     owner: (u32, u32),
+    floor_owner: u32,
 ) -> Result<Made, StartRefused> {
     let name = cgroup_name(agent);
     let _ = nix::unistd::unlinkat(
@@ -142,6 +148,9 @@ pub fn make_beneath(
     );
     let cgroup2 = containment::is_cgroup2();
     let delegated = invoker.as_ref().is_ok_and(containment::delegated);
+    let invoker_roots = invoker
+        .as_ref()
+        .is_ok_and(|inv| containment::owned_by(inv, floor_owner));
     let invoker_path = invoker.as_ref().map_or_else(
         |_| "an unread cgroup".to_string(),
         |inv| inv.relative().to_string(),
@@ -182,6 +191,7 @@ pub fn make_beneath(
         run_lock_held: false,
         cgroup2,
         delegated,
+        invoker_roots,
         at_path,
         recorded,
     };
@@ -205,6 +215,9 @@ pub fn make_beneath(
                 )),
                 StartRefusal::NotDelegated => StartRefused::Unverified(format!(
                     "the invoker's cgroup {invoker_path} is not delegated (no user.delegate or trusted.delegate mark)"
+                )),
+                StartRefusal::InvokerNotRoots => StartRefused::Unverified(format!(
+                    "the invoker's cgroup {invoker_path} or its cgroup.procs is not root's, so a process of the agent could be moved out of its cgroup (#166)"
                 )),
                 StartRefusal::NotRoots => {
                     StartRefused::Unverified(format!("a cgroup {name} stands that is not root's"))

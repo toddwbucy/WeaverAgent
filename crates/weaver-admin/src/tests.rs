@@ -5206,6 +5206,7 @@ fn agent_cgroup_for(
             nix::unistd::getuid().as_raw(),
             nix::unistd::getgid().as_raw(),
         ),
+        nix::unistd::getuid().as_raw(),
     )
     .expect("the agent's cgroup is made");
     drop(made);

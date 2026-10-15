@@ -19,6 +19,7 @@ fn facts(at_path: Standing, recorded: RecordAtStart) -> StartFacts {
         run_lock_held: false,
         cgroup2: true,
         delegated: true,
+        invoker_roots: true,
         at_path,
         recorded,
     }
@@ -50,6 +51,13 @@ fn the_start_step_judges_by_its_rows_in_order() {
     assert_eq!(
         start_judgment(undelegated),
         StartAction::Refuse(StartRefusal::NotDelegated)
+    );
+    // #166's guard: an invoker not root's, after the mark, before any mkdir.
+    let mut not_roots = facts(Standing::Empty, RecordAtStart::None);
+    not_roots.invoker_roots = false;
+    assert_eq!(
+        start_judgment(not_roots),
+        StartAction::Refuse(StartRefusal::InvokerNotRoots)
     );
     // A0: made afresh.
     assert_eq!(
@@ -114,6 +122,27 @@ fn the_start_step_judges_by_its_rows_in_order() {
         start_judgment(facts(Standing::Empty, RecordAtStart::Absent)),
         StartAction::RemoveThenMake
     );
+}
+
+/// **The invoker's ownership reads its `cgroup.procs` too** (6.1, the
+/// floor; #166's guard): a directory owned as required but holding no
+/// `cgroup.procs` of that owner is not admitted. A plain directory stands
+/// in for the invoker's, reached beneath the mount by `..`, since no
+/// cgroup's `cgroup.procs` can be given another owner without root.
+/// Perturbation: read the directory's owner alone, and it is admitted.
+#[test]
+fn the_invokers_ownership_reads_its_procs_file_too() {
+    let base = std::env::temp_dir().join(format!("weaver-admin-owned-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let up = "/..".repeat(CGROUP_ROOT.matches('/').count());
+    let directory = Cgroup::open(&format!("{up}{}", base.display())).unwrap();
+    let uid = nix::unistd::getuid().as_raw();
+    assert!(!owned_by(&directory, uid), "no cgroup.procs: not admitted");
+    std::fs::write(base.join("cgroup.procs"), b"").unwrap();
+    assert!(owned_by(&directory, uid), "both the owner's: admitted");
+    assert!(!owned_by(&directory, uid.wrapping_add(1)), "another owner");
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 /// 6.1's rows for the floor's `cgroup.kill` and the start's `fchmod`,

@@ -33,8 +33,15 @@ fn made(tag: &str, run: &str) -> (ScratchCgroup, crate::scratch::Scratch, OwnedF
     let scratch = ScratchCgroup::new(tag);
     mark_delegated(&scratch.cgroup);
     let (dir, fd) = run_directory(tag);
-    let made = make_beneath(invoker(&scratch), fd.as_fd(), "alpha", run, owner())
-        .expect("the agent's cgroup is made beneath a delegated invoker");
+    let made = make_beneath(
+        invoker(&scratch),
+        fd.as_fd(),
+        "alpha",
+        run,
+        owner(),
+        owner().0,
+    )
+    .expect("the agent's cgroup is made beneath a delegated invoker");
     (scratch, dir, fd, made)
 }
 
@@ -102,9 +109,45 @@ fn containment_the_start_makes_the_layout_and_its_record() {
 fn containment_an_undelegated_invoker_makes_nothing() {
     let scratch = ScratchCgroup::new("undelegated");
     let (_dir, fd) = run_directory("undelegated");
-    let refused = make_beneath(invoker(&scratch), fd.as_fd(), "alpha", "run-1", owner());
+    let refused = make_beneath(
+        invoker(&scratch),
+        fd.as_fd(),
+        "alpha",
+        "run-1",
+        owner(),
+        owner().0,
+    );
     assert!(
         matches!(&refused, Err(StartRefused::Unverified(why)) if why.contains("not delegated")),
+        "{refused:?}"
+    );
+    assert!(agent(&scratch).is_err(), "nothing made");
+    assert_eq!(containment::read_record(fd.as_fd(), "alpha"), Ok(None));
+}
+
+/// **An invoker that is not root's makes nothing** (6.1, the floor; #166's
+/// guard): a delegated invoker whose directory and `cgroup.procs` are not
+/// the owner the floor requires refuses naming it, before any `mkdir`, and
+/// no record is written. The suite's scope is the suite's own, so the
+/// floor's owner is a parameter here: requiring another uid stands for
+/// production's root. Perturbation: drop the check, and the cgroup is made.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_an_invoker_not_roots_makes_nothing() {
+    let scratch = ScratchCgroup::new("not-roots-invoker");
+    mark_delegated(&scratch.cgroup);
+    let (_dir, fd) = run_directory("not-roots-invoker");
+    let another = owner().0.wrapping_add(1);
+    let refused = make_beneath(
+        invoker(&scratch),
+        fd.as_fd(),
+        "alpha",
+        "run-1",
+        owner(),
+        another,
+    );
+    assert!(
+        matches!(&refused, Err(StartRefused::Unverified(why)) if why.contains("is not root's")),
         "{refused:?}"
     );
     assert!(agent(&scratch).is_err(), "nothing made");
@@ -122,7 +165,14 @@ fn containment_a_start_over_leftovers_refuses_and_kills_nothing() {
     drop(made);
     let run = agent(&scratch).unwrap().child("worker/run").unwrap();
     let mut stray = escaper_in(&run);
-    let refused = make_beneath(invoker(&scratch), fd.as_fd(), "alpha", "run-2", owner());
+    let refused = make_beneath(
+        invoker(&scratch),
+        fd.as_fd(),
+        "alpha",
+        "run-2",
+        owner(),
+        owner().0,
+    );
     match refused {
         Err(StartRefused::Leftovers(pids)) => {
             assert!(pids.contains(&(stray.id() as i32)), "{pids:?}");
@@ -143,13 +193,27 @@ fn containment_a_start_over_leftovers_refuses_and_kills_nothing() {
 fn containment_an_empty_cgroup_is_made_afresh() {
     let (scratch, _dir, fd, first) = made("afresh", "run-1");
     drop(first);
-    let second = make_beneath(invoker(&scratch), fd.as_fd(), "alpha", "run-2", owner())
-        .expect("A1 with its record is made afresh");
+    let second = make_beneath(
+        invoker(&scratch),
+        fd.as_fd(),
+        "alpha",
+        "run-2",
+        owner(),
+        owner().0,
+    )
+    .expect("A1 with its record is made afresh");
     assert_eq!(second.record.run, "run-2");
     drop(second);
     containment::remove_record(fd.as_fd()).unwrap();
-    let third = make_beneath(invoker(&scratch), fd.as_fd(), "alpha", "run-3", owner())
-        .expect("A1 at the path with no record is made afresh");
+    let third = make_beneath(
+        invoker(&scratch),
+        fd.as_fd(),
+        "alpha",
+        "run-3",
+        owner(),
+        owner().0,
+    )
+    .expect("A1 at the path with no record is made afresh");
     assert_eq!(third.record.run, "run-3");
 }
 
@@ -162,8 +226,15 @@ fn containment_a_stale_record_is_removed_and_the_cgroup_made() {
     let (scratch, _dir, fd, first) = made("stale", "run-1");
     drop(first);
     containment::remove_layout(&scratch.cgroup, "weaver-alpha").unwrap();
-    let made = make_beneath(invoker(&scratch), fd.as_fd(), "alpha", "run-2", owner())
-        .expect("a stale record wedges nothing");
+    let made = make_beneath(
+        invoker(&scratch),
+        fd.as_fd(),
+        "alpha",
+        "run-2",
+        owner(),
+        owner().0,
+    )
+    .expect("a stale record wedges nothing");
     let record = containment::read_record(fd.as_fd(), "alpha")
         .unwrap()
         .unwrap();
@@ -269,7 +340,15 @@ fn containment_the_ladder_reads_through_the_record() {
     mark_delegated(&scratch.cgroup);
     let (_dir, fd) = run_directory("ladder");
     assert_eq!(holds(fd.as_fd(), "alpha"), Ok(None), "no record");
-    let made = make_beneath(invoker(&scratch), fd.as_fd(), "alpha", "run-1", owner()).unwrap();
+    let made = make_beneath(
+        invoker(&scratch),
+        fd.as_fd(),
+        "alpha",
+        "run-1",
+        owner(),
+        owner().0,
+    )
+    .unwrap();
     drop(made);
     assert_eq!(holds(fd.as_fd(), "alpha"), Ok(None), "empty");
     let mut stray = escaper_in(&agent(&scratch).unwrap().child("worker/run").unwrap());
