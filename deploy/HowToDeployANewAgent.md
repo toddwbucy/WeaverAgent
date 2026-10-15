@@ -302,7 +302,8 @@ are in `<territory>/worker.log`, the state member's in `<territory>/state/state.
 `deploy/verify-lifecycle.sh --agent <throwaway>`, run as the operator (it runs each load
 in a delegated scope itself), verifies a whole lifecycle end to end
 (create, load, seed, save points, restore, force-unload, crash recovery, the refusal by
-name of a root of an older layout, take-down) on a throwaway agent it creates; it plans
+name of a root of an older layout, the refusal of a load over an access entry on the
+trace, take-down) on a throwaway agent it creates; it plans
 unless given `--apply`, and `--keep` stops it before the take-down so the checks it
 cannot make are made against the loaded agent.
 

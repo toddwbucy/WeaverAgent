@@ -24,8 +24,11 @@
 # does, runs the steps in order, and prints PASS or FAIL for every check and
 # every step. The first FAIL stops the run, naming the step, the check, what
 # was expected and what was found, and leaves the agent as it stands for the
-# operator to look at; `--cleanup` takes it down afterwards. The near misses
-# (steps 1b, 6b, 8 and 8b) put back exactly what they changed, the trap
+# operator to look at; `--cleanup` takes it down afterwards. One FAIL tries to
+# take the agent down first: step 8b's load standing over a read entry on the
+# trace, a custody breach left running for no one's look. Where that take-down
+# does not answer unloaded, the FAIL says the agent may still stand. The near
+# misses (steps 1b, 6b, 8 and 8b) put back exactly what they changed, the trap
 # included, whatever a check answers.
 #
 # **sudo runs only where admin and the deploy scripts run it**: admin's verbs,
@@ -1111,28 +1114,54 @@ step_8() {
 }
 
 step_8b() {
-  begin_step 8b "#99 H5, measured" "a read entry for the member on the trace, on the stopped agent"
+  begin_step 8b "#99 H5, closed by #108" "a read entry for the member on the trace, on the stopped agent, refused"
   run_line "setfacl -m u:$AU-state:r $TRACE (put back with setfacl -b by the step and by the exit trap)"
-  run_line "weaver-admin load $A; weaver-admin show $A; weaver-admin force-unload $A where it loaded"
-  want "the trace still shows 640; the member reads it; the load is recorded as measured (today idle, H5 filed on #99, not fixed; after a fix, boundary_unverified)"
+  run_line "weaver-admin load $A (force-unload only where it loads, which fails the step)"
+  run_line "setfacl -b $TRACE, then weaver-admin load $A (the control), then weaver-admin force-unload $A"
+  want "load refuses boundary_unverified (H5, closed by #108), admin's cause recorded as measured"
+  want "with the entry removed the same agent loads (a state), so the refusal was the entry's, then force-unload answers unloaded and the agent is alone"
   want "the entry removed: no access entry on the trace, root:$AU-trace 640"
   [ "$APPLY" -eq 1 ] || return 0
   expect_unloaded_alone
   RESTORE=(restore_acl "$TRACE")
   sudo -n setfacl -m "u:$AU-state:r" -- "$TRACE" || { restore_now || true; fail "the entry applies" "setfacl succeeds" "it failed"; }
-  local shown; shown=$(lay "$TRACE"); shown=${shown/regular empty file/regular file}
-  local reads; reads=$( { [ "$(as_can "$AU-state" test -x "$T")" = yes ] && sudo -n -u "$AU-state" head -c 1 -- "$TRACE" >/dev/null 2>&1; } && echo yes || echo no)
   ask load
-  local load_answer=$ANSWER
-  if [ "$(json_at "$load_answer" kind)" = state ]; then
-    ask show
-    ask force-unload
-    answered_state "$ANSWER" unloaded || { restore_now || true; fail "force-unload after the measured load" "the unloaded state" "$ANSWER"; }
-  fi
+  local answer=$ANSWER cause=$ASKED_CAUSE down
+  # **Anything but the refusal may have stood, and is taken down, the entry
+  # removed first** (the self-check on this act): admin judges each territory
+  # file for access entries since #108 (`sink.rs`, the trace's judgment), so a
+  # load that answers anything else is H5 open again or a run of unknown
+  # standing. The entry goes before the force-unload, so no member opens the
+  # trace while the take-down runs, and the step fails naming both answers.
   restore_now || fail "the entry is removed" "setfacl -b succeeds" "it failed"
-  measured "with the entry the trace shows $shown"
-  measured "the member reads the trace: $reads"
-  measured "the load answered $load_answer"
+  if [ "$(json_at "$answer" kind)" != boundary_unverified ]; then
+    ask force-unload
+    down=${ANSWER:-nothing}
+    # The take-down is checked, not assumed (Codex on #171, round 1): an
+    # agent that did not come down is said to stand, for --cleanup to end.
+    if ! answered_state "$down" unloaded; then
+      fail "load over an access entry on the trace refuses" "boundary_unverified" "$answer; the entry was removed, then force-unload answered $down, so the agent may still stand: take it down with --cleanup"
+    fi
+    expect_unloaded_alone
+    fail "load over an access entry on the trace refuses" "boundary_unverified" "$answer; the entry was removed, then force-unload answered $down, and the agent is down"
+  fi
+  pass "load answers boundary_unverified"
+  # **Admin's cause is evidence for the operator, not a check** (Codex on #171,
+  # round 2): stderr is outside admin's interface (weaver-admin-Spec section
+  # 3), so its wording is recorded and the refusal is attributed by the run.
+  measured "admin's cause: ${cause:-nothing}"
+  # **The control: the same agent and the same scope, only the entry gone.**
+  # A refusal with the entry and a load without it pins the refusal to the
+  # entry with no prose read. The control is taken down and its answer checked.
+  ask load
+  local control=$ANSWER
+  ask force-unload
+  down=${ANSWER:-nothing}
+  answered_state "$down" unloaded \
+    || fail "the control load, without the entry, is taken down" "unloaded" "load answered $control, then force-unload answered $down, so the agent may still stand: take it down with --cleanup"
+  [ "$(json_at "$control" kind)" = state ] \
+    || fail "the same agent loads with the entry removed, so the refusal was the entry's" "a state" "$control"
+  pass "the same agent loads with the entry removed, so the refusal was the entry's"
   expect_no_acl "$TRACE"
   expect_lay "$TRACE" "root:$AU-trace 640 regular file"
   expect_unloaded_alone
