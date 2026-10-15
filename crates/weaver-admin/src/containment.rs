@@ -21,7 +21,7 @@
 )]
 
 use std::io::{Read, Write};
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -91,9 +91,20 @@ pub struct StartFacts {
     pub delegated: bool,
     /// At the deterministic path, the invoker's cgroup plus `weaver-<agent>/`.
     pub at_path: Standing,
-    /// Where a record names a cgroup elsewhere (an earlier load from another
-    /// containment), `Absent` where no record names one.
-    pub recorded: Standing,
+    /// What the record names, where one stands.
+    pub recorded: RecordAtStart,
+}
+
+/// The record at the start: none, one that does not read, one naming a
+/// cgroup absent at its path, one naming another cgroup there (another
+/// device and inode), or the recorded cgroup itself and what stands there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordAtStart {
+    None,
+    Unreadable,
+    Absent,
+    Other,
+    Same(Standing),
 }
 
 /// The start step's answer before it forks anything.
@@ -119,6 +130,9 @@ pub enum StartRefusal {
     NotDelegated,
     /// `BoundaryUnverified`: a cgroup standing that is not root's.
     NotRoots,
+    /// `BoundaryUnverified`: a record that does not read, or a cgroup at the
+    /// recorded path with another device and inode, acting on nothing.
+    RecordUnverified,
     /// `AgentRunning`: an ended run's leftovers (A3, or A4 with the lock
     /// free), killing nothing (I8).
     Leftovers,
@@ -137,7 +151,16 @@ pub fn start_judgment(facts: StartFacts) -> StartAction {
     if !facts.delegated {
         return StartAction::Refuse(StartRefusal::NotDelegated);
     }
-    match (facts.at_path, facts.recorded) {
+    // A record naming a cgroup absent at its path is A0, already removed:
+    // the record is stale, and the write of this load's record replaces it.
+    let recorded = match facts.recorded {
+        RecordAtStart::None | RecordAtStart::Absent => Standing::Absent,
+        RecordAtStart::Same(standing) => standing,
+        RecordAtStart::Unreadable | RecordAtStart::Other => {
+            return StartAction::Refuse(StartRefusal::RecordUnverified);
+        }
+    };
+    match (facts.at_path, recorded) {
         (Standing::NotRoots, _) | (_, Standing::NotRoots) => {
             StartAction::Refuse(StartRefusal::NotRoots)
         }
@@ -154,6 +177,8 @@ pub fn start_judgment(facts: StartFacts) -> StartAction {
 /// `fchmod`, owner and record writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MadeStep {
+    /// The `mkdir` of `constituents/`, `worker/`, `run/` or `tools/`.
+    LayoutMade(bool),
     KillFilePresent(bool),
     ModesSet(bool),
     OwnersSet(bool),
@@ -172,11 +197,13 @@ pub enum MadeAction {
 /// and record writes: each failure removes what the start made and refuses.
 pub fn made_judgment(step: MadeStep) -> MadeAction {
     match step {
-        MadeStep::KillFilePresent(true)
+        MadeStep::LayoutMade(true)
+        | MadeStep::KillFilePresent(true)
         | MadeStep::ModesSet(true)
         | MadeStep::OwnersSet(true)
         | MadeStep::RecordWritten(true) => MadeAction::GoOn,
-        MadeStep::KillFilePresent(false)
+        MadeStep::LayoutMade(false)
+        | MadeStep::KillFilePresent(false)
         | MadeStep::ModesSet(false)
         | MadeStep::OwnersSet(false)
         | MadeStep::RecordWritten(false) => MadeAction::RemoveAndRefuse,
@@ -186,10 +213,12 @@ pub fn made_judgment(step: MadeStep) -> MadeAction {
 // ------------------------------------------------------------- ownership
 
 /// **Ownership is the record's, never the marker's** (6.1): a run end ends
-/// only the cgroup its record names as made for the run being concluded. A
-/// rollback passes its own load's run, which made the cgroup.
-pub fn owns(record_run: &str, concluded_run: &str) -> bool {
-    record_run == concluded_run
+/// only the cgroup its record names as made for the run being concluded,
+/// judged by the record's run and identity: the run is the concluded one,
+/// and the cgroup at the recorded path is the recorded one. A rollback passes
+/// its own load's run, which made the cgroup.
+pub fn owns(record_run: &str, concluded_run: &str, at: RecordedAt) -> bool {
+    record_run == concluded_run && at == RecordedAt::Same
 }
 
 // ------------------------------------------------------------- the record
@@ -239,8 +268,9 @@ pub enum RunEndStep {
     /// The write of `cgroup.kill` on the agent's cgroup.
     Kill { written: bool },
     /// The pinned fallback over the agent's cgroup and its descendants,
-    /// repeated within the bound, where the write failed.
-    Fallback { delivered: bool },
+    /// repeated within the bound until it empties, where the write failed.
+    /// It is its own wait, so it goes on to the removal or refuses.
+    Fallback { emptied: bool },
     /// The wait for `populated 0` within the bound.
     Wait { emptied: bool },
     /// The removal, deepest first, `ENOENT` read as removed.
@@ -273,8 +303,8 @@ pub fn run_end_next(step: RunEndStep) -> RunEndAction {
     match step {
         RunEndStep::Kill { written: true } => RunEndAction::Wait,
         RunEndStep::Kill { written: false } => RunEndAction::Fallback,
-        RunEndStep::Fallback { delivered: true } => RunEndAction::Wait,
-        RunEndStep::Fallback { delivered: false } => RunEndAction::RefuseWorkerWouldNotExit,
+        RunEndStep::Fallback { emptied: true } => RunEndAction::Remove,
+        RunEndStep::Fallback { emptied: false } => RunEndAction::RefuseWorkerWouldNotExit,
         RunEndStep::Wait { emptied: true } => RunEndAction::Remove,
         RunEndStep::Wait { emptied: false } => RunEndAction::RefuseWorkerWouldNotExit,
         RunEndStep::Remove { removed: true } => RunEndAction::RemoveRecord,
@@ -285,6 +315,14 @@ pub fn run_end_next(step: RunEndStep) -> RunEndAction {
 }
 
 // ------------------------------------------------------------- the primitives
+
+/// Which step of making a child cgroup failed: the `mkdir` (or the open of
+/// what it made), or the `fchmod`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MakeChildError {
+    Mkdir(Errno),
+    Mode(Errno),
+}
 
 /// A cgroup held by its directory descriptor, with its path beneath the
 /// mount (as `/proc/<pid>/cgroup` names it) for the pinned fallback's check.
@@ -342,17 +380,19 @@ impl Cgroup {
         })
     }
 
-    /// **Makes a child cgroup and sets its mode through its descriptor**,
-    /// whatever the umask (6.1, the modes). `EEXIST` comes back as
-    /// `Errno::EEXIST` for the start step's judgment.
-    pub fn make_child(&self, name: &str) -> nix::Result<Self> {
-        mkdirat(
-            self.dir.as_fd(),
-            name,
-            Mode::from_bits_truncate(DIRECTORY_MODE),
-        )?;
-        let made = self.child(name).map_err(io_errno)?;
-        fchmod(made.dir.as_fd(), Mode::from_bits_truncate(DIRECTORY_MODE))?;
+    /// **Makes a child cgroup closed and opens it up through its
+    /// descriptor**: made `0700` and set `DIRECTORY_MODE` by `fchmod`, so its
+    /// mode is never the umask's and never wider than intended in between
+    /// (6.1, the modes). `EEXIST` comes back as `Mkdir(EEXIST)` for the start
+    /// step's judgment.
+    pub fn make_child(&self, name: &str) -> Result<Self, MakeChildError> {
+        mkdirat(self.dir.as_fd(), name, Mode::from_bits_truncate(0o700))
+            .map_err(MakeChildError::Mkdir)?;
+        let made = self
+            .child(name)
+            .map_err(|error| MakeChildError::Mkdir(io_errno(error)))?;
+        fchmod(made.dir.as_fd(), Mode::from_bits_truncate(DIRECTORY_MODE))
+            .map_err(MakeChildError::Mode)?;
         Ok(made)
     }
 
@@ -475,9 +515,13 @@ impl Cgroup {
                     }
                 }
             }
+            // A child that does not open (removed between the listing and
+            // the open, or closed to this account) is skipped, as a pid
+            // failing a step is: the next pass finds what remains.
             for name in names {
-                let child = found[at].child(&name)?;
-                found.push(child);
+                if let Ok(child) = found[at].child(&name) {
+                    found.push(child);
+                }
             }
             at += 1;
         }
@@ -488,27 +532,22 @@ impl Cgroup {
     /// descendants: each pid read from `cgroup.procs` is pinned by a pidfd,
     /// confirmed through `/proc/<pid>/cgroup`, read after the open, to stand
     /// in the cgroup it was read from, then sent `SIGKILL` through the pidfd.
-    /// A pid failing any step is skipped. Answers whether every pid read was
-    /// signalled and every listing read.
-    pub fn signal_pinned_pass(&self) -> bool {
+    /// A pid failing any step, or a listing that does not read, is skipped,
+    /// the next pass finding what remains.
+    pub fn signal_pinned_pass(&self) {
         let Ok(cgroups) = self.subtree() else {
-            return false;
+            return;
         };
-        let mut all = true;
         for cgroup in &cgroups {
-            let Ok(pids) = cgroup.procs() else {
-                all = false;
-                continue;
-            };
-            for pid in pids {
-                all &= signal_pinned(pid, &cgroup.relative);
+            for pid in cgroup.procs().unwrap_or_default() {
+                signal_pinned(pid, &cgroup.relative);
             }
         }
-        all
     }
 
-    /// The fallback repeated within `bound` until the cgroup empties.
-    /// Answers whether it emptied.
+    /// **The fallback step** (6.1, the run end's): passes repeated within
+    /// `bound` until the cgroup empties, so it is its own wait. Answers
+    /// whether it emptied, the run end's `Fallback { emptied }`.
     pub fn fallback_until_empty(&self, bound: Duration) -> bool {
         let deadline = Instant::now() + bound;
         loop {
@@ -527,43 +566,34 @@ impl Cgroup {
 
 /// **The child's own move**, for `pre_exec`: `0` written to the
 /// `cgroup.procs` descriptor `procs_for_placement` opened before the fork.
-/// Async-signal-safe: one `write` on a static buffer, allocating nothing.
+/// Async-signal-safe: one `nix` `write` on a static buffer, allocating
+/// nothing. **It must come first in the same `pre_exec` as the privilege
+/// drop**: the standard library runs `pre_exec` after `Command::uid` and
+/// `gid`, so a constituent whose drop were left to those would move itself
+/// after it, against 6.1's order (the move, then the drop, then the exec).
+/// admin's spawns drop privileges inside their own `pre_exec` already.
 pub fn place_self(procs: RawFd) -> std::io::Result<()> {
-    // SAFETY: write is async-signal-safe, on a descriptor opened before the
-    // fork, with a static buffer.
-    if unsafe { nix::libc::write(procs, b"0".as_ptr().cast(), 1) } == 1 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
+    // SAFETY: the descriptor was opened before the fork and stays open until
+    // the exec closes it, so the borrow outlives the call.
+    let procs = unsafe { BorrowedFd::borrow_raw(procs) };
+    match nix::unistd::write(procs, b"0") {
+        Ok(1) => Ok(()),
+        Ok(_) => Err(std::io::Error::other("a short write of cgroup.procs")),
+        Err(errno) => Err(std::io::Error::from(errno)),
     }
 }
 
 /// A pid pinned by a pidfd and confirmed in `relative` after the open, then
-/// signalled through the pidfd. The two pidfd calls are the stated exception
-/// to the election (`weaver-admin-Spec` section 1), by number through `nix`'s
-/// re-exported `libc`.
+/// signalled through the pidfd, by the pinning `start.rs` holds for the
+/// escalation. Answers whether the signal went.
 fn signal_pinned(pid: i32, relative: &str) -> bool {
-    // SAFETY: pidfd_open takes a pid and flags and answers a descriptor.
-    let raw = unsafe { nix::libc::syscall(nix::libc::SYS_pidfd_open, pid, 0) };
-    if raw < 0 {
+    let Some(pidfd) = crate::start::pidfd_open(pid) else {
         return false;
-    }
-    // SAFETY: the number was just opened and is owned by nothing else.
-    let pidfd = unsafe { OwnedFd::from_raw_fd(raw as RawFd) };
+    };
     if process_cgroup(pid).as_deref() != Some(relative) {
         return false;
     }
-    // SAFETY: pidfd_send_signal on a pidfd this frame owns, with no siginfo.
-    let sent = unsafe {
-        nix::libc::syscall(
-            nix::libc::SYS_pidfd_send_signal,
-            pidfd.as_raw_fd(),
-            nix::libc::SIGKILL,
-            std::ptr::null::<nix::libc::siginfo_t>(),
-            0,
-        )
-    };
-    sent == 0
+    crate::start::pidfd_signal(&pidfd, nix::libc::SIGKILL)
 }
 
 /// The unified hierarchy's path `/proc/<pid>/cgroup` names, `/` first.
@@ -651,14 +681,14 @@ pub fn remove_layout(parent: &Cgroup, name: &str) -> nix::Result<()> {
 /// three delegated files set to the agent's account. Answers the step that
 /// failed, for `made_judgment`.
 pub fn make_layout(agent: &Cgroup, uid: u32, gid: u32) -> Result<(), MadeStep> {
-    let constituents = agent.make_child("constituents");
-    let worker = agent.make_child("worker");
-    let (Ok(_), Ok(worker)) = (constituents, worker) else {
-        return Err(MadeStep::ModesSet(false));
+    let failed = |error: MakeChildError| match error {
+        MakeChildError::Mkdir(_) => MadeStep::LayoutMade(false),
+        MakeChildError::Mode(_) => MadeStep::ModesSet(false),
     };
-    let (Ok(_), Ok(_)) = (worker.make_child("run"), worker.make_child("tools")) else {
-        return Err(MadeStep::ModesSet(false));
-    };
+    agent.make_child("constituents").map_err(failed)?;
+    let worker = agent.make_child("worker").map_err(failed)?;
+    worker.make_child("run").map_err(failed)?;
+    worker.make_child("tools").map_err(failed)?;
     for file in DELEGATED_FILES {
         if agent.chown_file(file, uid, gid).is_err() {
             return Err(MadeStep::OwnersSet(false));
@@ -734,7 +764,13 @@ pub fn read_record(run_directory: BorrowedFd<'_>, agent: &str) -> Result<Option<
         .file_name()
         .and_then(|name| name.to_str())
         == Some(format!("weaver-{agent}").as_str());
-    if !named || !record.path.starts_with('/') {
+    // A path beneath the mount, `/` first, with no `.` or `..` or empty
+    // component, so the record cannot point out of the mount.
+    let plain = record
+        .path
+        .strip_prefix('/')
+        .is_some_and(|rest| rest.split('/').all(|part| !matches!(part, "" | "." | "..")));
+    if !named || !plain {
         return Err(());
     }
     Ok(Some(record))
@@ -754,6 +790,13 @@ pub fn recorded_at(record: &Record) -> RecordedAt {
     match Cgroup::open(&record.path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => RecordedAt::Absent,
         Err(_) => RecordedAt::Unreadable,
+        // The opened directory must be on the cgroup2 mount (6.1, the record).
+        Ok(cgroup)
+            if !nix::sys::statfs::fstatfs(cgroup.fd())
+                .is_ok_and(|fs| fs.filesystem_type() == nix::sys::statfs::CGROUP2_SUPER_MAGIC) =>
+        {
+            RecordedAt::Unreadable
+        }
         Ok(cgroup) => match cgroup.identity() {
             Ok(identity) if identity == (record.dev, record.ino) => RecordedAt::Same,
             Ok(_) => RecordedAt::Other,

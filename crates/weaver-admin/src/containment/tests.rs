@@ -14,7 +14,7 @@ use std::os::unix::fs::PermissionsExt;
 
 // ------------------------------------------------------------- the rows
 
-fn facts(at_path: Standing, recorded: Standing) -> StartFacts {
+fn facts(at_path: Standing, recorded: RecordAtStart) -> StartFacts {
     StartFacts {
         run_lock_held: false,
         cgroup2: true,
@@ -30,7 +30,7 @@ fn facts(at_path: Standing, recorded: Standing) -> StartFacts {
 fn the_start_step_judges_by_its_rows_in_order() {
     // A2 or A4 with the lock held: AgentRunning at the run lock, before the
     // cgroup is looked at, even where the floor would also refuse.
-    let mut held = facts(Standing::Populated, Standing::Absent);
+    let mut held = facts(Standing::Populated, RecordAtStart::None);
     held.run_lock_held = true;
     held.cgroup2 = false;
     assert_eq!(
@@ -38,14 +38,14 @@ fn the_start_step_judges_by_its_rows_in_order() {
         StartAction::Refuse(StartRefusal::RunLockHeld)
     );
     // The floor's mount, then the mark, before any mkdir.
-    let mut no_mount = facts(Standing::Absent, Standing::Absent);
+    let mut no_mount = facts(Standing::Absent, RecordAtStart::None);
     no_mount.cgroup2 = false;
     no_mount.delegated = false;
     assert_eq!(
         start_judgment(no_mount),
         StartAction::Refuse(StartRefusal::NoCgroup2)
     );
-    let mut undelegated = facts(Standing::Empty, Standing::Absent);
+    let mut undelegated = facts(Standing::Empty, RecordAtStart::None);
     undelegated.delegated = false;
     assert_eq!(
         start_judgment(undelegated),
@@ -53,35 +53,60 @@ fn the_start_step_judges_by_its_rows_in_order() {
     );
     // A0: made afresh.
     assert_eq!(
-        start_judgment(facts(Standing::Absent, Standing::Absent)),
+        start_judgment(facts(Standing::Absent, RecordAtStart::None)),
         StartAction::Make
     );
     // A1 at the path, or where a record names one: removed and remade.
     assert_eq!(
-        start_judgment(facts(Standing::Empty, Standing::Absent)),
+        start_judgment(facts(Standing::Empty, RecordAtStart::None)),
         StartAction::RemoveThenMake
     );
     assert_eq!(
-        start_judgment(facts(Standing::Absent, Standing::Empty)),
+        start_judgment(facts(
+            Standing::Absent,
+            RecordAtStart::Same(Standing::Empty)
+        )),
         StartAction::RemoveThenMake
     );
     // A3 (or A4 with the lock free) at either: AgentRunning, killing nothing.
     assert_eq!(
-        start_judgment(facts(Standing::Populated, Standing::Absent)),
+        start_judgment(facts(Standing::Populated, RecordAtStart::None)),
         StartAction::Refuse(StartRefusal::Leftovers)
     );
     assert_eq!(
-        start_judgment(facts(Standing::Empty, Standing::Populated)),
+        start_judgment(facts(
+            Standing::Empty,
+            RecordAtStart::Same(Standing::Populated)
+        )),
         StartAction::Refuse(StartRefusal::Leftovers)
     );
     // Not root's at either: BoundaryUnverified, before leftovers.
     assert_eq!(
-        start_judgment(facts(Standing::NotRoots, Standing::Absent)),
+        start_judgment(facts(Standing::NotRoots, RecordAtStart::None)),
         StartAction::Refuse(StartRefusal::NotRoots)
     );
     assert_eq!(
-        start_judgment(facts(Standing::Populated, Standing::NotRoots)),
+        start_judgment(facts(
+            Standing::Populated,
+            RecordAtStart::Same(Standing::NotRoots)
+        )),
         StartAction::Refuse(StartRefusal::NotRoots)
+    );
+    // A record that does not read, or another cgroup at its path:
+    // BoundaryUnverified, acting on nothing, before what stands at the path.
+    assert_eq!(
+        start_judgment(facts(Standing::Empty, RecordAtStart::Unreadable)),
+        StartAction::Refuse(StartRefusal::RecordUnverified)
+    );
+    assert_eq!(
+        start_judgment(facts(Standing::Absent, RecordAtStart::Other)),
+        StartAction::Refuse(StartRefusal::RecordUnverified)
+    );
+    // A record naming a cgroup absent at its path is A0, stale: the path
+    // alone is judged.
+    assert_eq!(
+        start_judgment(facts(Standing::Absent, RecordAtStart::Absent)),
+        StartAction::Make
     );
 }
 
@@ -90,6 +115,8 @@ fn the_start_step_judges_by_its_rows_in_order() {
 #[test]
 fn a_failed_step_of_the_making_removes_and_refuses() {
     for (step, answer) in [
+        (MadeStep::LayoutMade(true), MadeAction::GoOn),
+        (MadeStep::LayoutMade(false), MadeAction::RemoveAndRefuse),
         (MadeStep::KillFilePresent(true), MadeAction::GoOn),
         (MadeStep::ModesSet(true), MadeAction::GoOn),
         (MadeStep::OwnersSet(true), MadeAction::GoOn),
@@ -106,15 +133,26 @@ fn a_failed_step_of_the_making_removes_and_refuses() {
     }
 }
 
-/// Ownership is the record's: a run end ends only the cgroup its record
-/// names for the run being concluded. Perturbation: answer `true`.
+/// Ownership is the record's, by its run and its identity: a run end ends
+/// only the cgroup its record names for the run being concluded, standing at
+/// the recorded path as the recorded cgroup. Perturbation: drop either half.
 #[test]
-fn a_run_end_owns_only_its_records_run() {
-    assert!(owns("run-7", "run-7"));
+fn a_run_end_owns_only_its_records_run_and_cgroup() {
+    assert!(owns("run-7", "run-7", RecordedAt::Same));
     assert!(
-        !owns("run-8", "run-7"),
+        !owns("run-8", "run-7", RecordedAt::Same),
         "another load's cgroup is left alone"
     );
+    for at in [
+        RecordedAt::Other,
+        RecordedAt::Absent,
+        RecordedAt::Unreadable,
+    ] {
+        assert!(
+            !owns("run-7", "run-7", at),
+            "{at:?} is not the recorded cgroup"
+        );
+    }
 }
 
 /// 6.1's rows for a later verb's record. Perturbation: any arm changed.
@@ -139,9 +177,9 @@ fn the_run_end_steps_by_its_rows() {
     for (step, next) in [
         (RunEndStep::Kill { written: true }, RunEndAction::Wait),
         (RunEndStep::Kill { written: false }, RunEndAction::Fallback),
-        (RunEndStep::Fallback { delivered: true }, RunEndAction::Wait),
+        (RunEndStep::Fallback { emptied: true }, RunEndAction::Remove),
         (
-            RunEndStep::Fallback { delivered: false },
+            RunEndStep::Fallback { emptied: false },
             RunEndAction::RefuseWorkerWouldNotExit,
         ),
         (RunEndStep::Wait { emptied: true }, RunEndAction::Remove),
@@ -189,8 +227,9 @@ fn run_directory(tag: &str) -> (crate::scratch::Scratch, OwnedFd) {
 
 /// **The record is written atomically and read back**: a temporary left
 /// behind is removed, the file is `0600`, a record naming anything but a
-/// `weaver-<agent>` directory does not read, and none standing is `None`.
-/// Perturbation: drop the name check, and the foreign record reads.
+/// `weaver-<agent>` directory, or whose path leaves the mount, does not read,
+/// and none standing is `None`. Perturbation: drop the name check, or the
+/// component check, and the foreign record reads.
 #[test]
 fn the_record_round_trips_and_refuses_a_foreign_path() {
     let (dir, fd) = run_directory("round");
@@ -220,6 +259,16 @@ fn the_record_round_trips_and_refuses_a_foreign_path() {
         read_record(fd.as_fd(), "beta"),
         Err(()),
         "a record naming another agent's cgroup does not read"
+    );
+    let escaping = Record {
+        path: "/../../tmp/weaver-alpha".into(),
+        ..record.clone()
+    };
+    write_record(fd.as_fd(), &escaping).unwrap();
+    assert_eq!(
+        read_record(fd.as_fd(), "alpha"),
+        Err(()),
+        "a record whose path leaves the mount does not read"
     );
     std::fs::write(dir.0.join(RECORD), b"{not json").unwrap();
     assert_eq!(read_record(fd.as_fd(), "alpha"), Err(()));
@@ -354,20 +403,19 @@ fn containment_the_floor_reads_on_this_host() {
     assert!(!scratch.cgroup.has_file("no-such-interface-file"));
 }
 
-/// **The layout's modes hold under a umask of 077** (6.1, C3's modes):
-/// every directory the start makes is `0755`, set by `fchmod`, and the three
-/// delegated files take the given owner. Perturbation: drop the `fchmod`,
-/// and the directories come out `0700`.
+/// **The layout's modes are set by `fchmod`, never by the umask** (6.1,
+/// C3's modes): every directory is made `0700` and opened up to `0755`
+/// through its descriptor, so a root umask of `077`, which `mkdir` would
+/// apply, cannot narrow it, and no test here needs to change the
+/// process-wide umask. The three delegated files take the given owner.
+/// Perturbation: drop the `fchmod`, and the directories stay `0700`.
 #[test]
 #[ignore = "needs a delegated cgroup scope"]
-fn containment_the_layout_is_0755_under_umask_077() {
+fn containment_the_layout_is_0755_by_fchmod() {
     let scratch = ScratchCgroup::new("modes");
     let uid = nix::unistd::getuid().as_raw();
     let gid = nix::unistd::getgid().as_raw();
-    let before = nix::sys::stat::umask(Mode::from_bits_truncate(0o077));
-    let made = make_layout(&scratch.cgroup, uid, gid);
-    nix::sys::stat::umask(before);
-    made.expect("the layout is made");
+    make_layout(&scratch.cgroup, uid, gid).expect("the layout is made");
     for inner in LAYOUT_DEEPEST_FIRST {
         let mode = fstat(scratch.cgroup.child(inner).unwrap().fd())
             .unwrap()
@@ -412,6 +460,10 @@ fn containment_the_pinned_fallback_empties_without_the_kill() {
     let scratch = ScratchCgroup::new("fallback");
     let leaf = scratch.cgroup.make_child("leaf").unwrap();
     let mut child = escaper_in(&leaf);
+    assert!(
+        leaf.procs().unwrap().len() >= 3,
+        "the escapers stand before the fallback"
+    );
     assert!(
         scratch.cgroup.fallback_until_empty(Duration::from_secs(5)),
         "emptied"
