@@ -1117,7 +1117,9 @@ step_8b() {
   begin_step 8b "#99 H5, closed by #108" "a read entry for the member on the trace, on the stopped agent, refused"
   run_line "setfacl -m u:$AU-state:r $TRACE (put back with setfacl -b by the step and by the exit trap)"
   run_line "weaver-admin load $A (force-unload only where it loads, which fails the step)"
-  want "load refuses boundary_unverified (H5, closed by #108), admin's cause naming the trace's access-control entry"
+  run_line "setfacl -b $TRACE, then weaver-admin load $A (the control), then weaver-admin force-unload $A"
+  want "load refuses boundary_unverified (H5, closed by #108), admin's cause recorded as measured"
+  want "with the entry removed the same agent loads (a state), so the refusal was the entry's, then force-unload answers unloaded and the agent is alone"
   want "the entry removed: no access entry on the trace, root:$AU-trace 640"
   [ "$APPLY" -eq 1 ] || return 0
   expect_unloaded_alone
@@ -1144,14 +1146,22 @@ step_8b() {
     fail "load over an access entry on the trace refuses" "boundary_unverified" "$answer; the entry was removed, then force-unload answered $down, and the agent is down"
   fi
   pass "load answers boundary_unverified"
-  # The cause names the trace and the entry admin saw, in the trace's
-  # judgment's own words: not another file's entry, and not admin's refusal
-  # for an entry it could not read.
-  case $cause in
-    *"the trace $TRACE: carries an access-control entry beyond its mode"*)
-      pass "admin's cause names the trace's access-control entry" ;;
-    *) fail "admin's cause names the trace's access-control entry" "the trace $TRACE: carries an access-control entry beyond its mode" "${cause:-nothing}" ;;
-  esac
+  # **Admin's cause is evidence for the operator, not a check** (Codex on #171,
+  # round 2): stderr is outside admin's interface (weaver-admin-Spec section
+  # 3), so its wording is recorded and the refusal is attributed by the run.
+  measured "admin's cause: ${cause:-nothing}"
+  # **The control: the same agent and the same scope, only the entry gone.**
+  # A refusal with the entry and a load without it pins the refusal to the
+  # entry with no prose read. The control is taken down and its answer checked.
+  ask load
+  local control=$ANSWER
+  ask force-unload
+  down=${ANSWER:-nothing}
+  answered_state "$down" unloaded \
+    || fail "the control load, without the entry, is taken down" "unloaded" "load answered $control, then force-unload answered $down, so the agent may still stand: take it down with --cleanup"
+  [ "$(json_at "$control" kind)" = state ] \
+    || fail "the same agent loads with the entry removed, so the refusal was the entry's" "a state" "$control"
+  pass "the same agent loads with the entry removed, so the refusal was the entry's"
   expect_no_acl "$TRACE"
   expect_lay "$TRACE" "root:$AU-trace 640 regular file"
   expect_unloaded_alone
