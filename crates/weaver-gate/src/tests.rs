@@ -10,11 +10,13 @@ use weaver_types::{AccessRule, AgentName, ExchangeId, GateInstruction};
 /// the result already sent stands, and no `Killed` and no refusal follow
 /// it. Removing the late-interrupt drop fails the third execution.
 #[test]
-fn a_cancel_past_the_answer_is_dropped() {
+#[ignore = "runs a shell: needs a delegated cgroup scope"]
+fn a_cancel_past_the_answer_is_dropped_in_tools() {
     use nix::sys::socket::{MsgFlags, recv, send};
     use std::os::fd::AsRawFd;
     if std::env::var_os("WEAVER_LATE_CANCEL_CHILD").is_some() {
         let channel = channel::adopt().expect("inherited channel");
+        weaver_gate::tools::cgroup::adopt().expect("the scratch tools/ at 4");
         assert_eq!(serve(channel), ExitCode::SUCCESS);
         return;
     }
@@ -24,11 +26,16 @@ fn a_cancel_past_the_answer_is_dropped() {
     command
         .args([
             "--exact",
-            "tests::a_cancel_past_the_answer_is_dropped",
+            "tests::a_cancel_past_the_answer_is_dropped_in_tools",
+            "--include-ignored",
             "--nocapture",
         ])
         .env("WEAVER_LATE_CANCEL_CHILD", "1");
-    test_common::place_inherited(&mut command, &[child_end.as_raw_fd()]);
+    let tools = test_common::ScratchTools::new();
+    test_common::place_inherited(
+        &mut command,
+        &[child_end.as_raw_fd(), tools.dir.as_raw_fd()],
+    );
     let mut child = command.spawn().unwrap();
     drop(child_end);
     let late_cancel = scratch("late-cancel");
@@ -127,11 +134,13 @@ fn a_cancel_past_the_answer_is_dropped() {
 /// supervision end the execution on any message, or name the interrupt a
 /// cancel, and this fails.
 #[test]
-fn the_interrupt_then_the_quiesce_through_the_served_loop() {
+#[ignore = "runs a shell: needs a delegated cgroup scope"]
+fn the_interrupt_then_the_quiesce_through_the_served_loop_in_tools() {
     use nix::sys::socket::{MsgFlags, recv, send};
     use std::os::fd::AsRawFd;
     if std::env::var_os("WEAVER_INTERRUPT_QUIESCE_CHILD").is_some() {
         let channel = channel::adopt().expect("inherited channel");
+        weaver_gate::tools::cgroup::adopt().expect("the scratch tools/ at 4");
         assert_eq!(serve(channel), ExitCode::SUCCESS);
         return;
     }
@@ -141,11 +150,16 @@ fn the_interrupt_then_the_quiesce_through_the_served_loop() {
     command
         .args([
             "--exact",
-            "tests::the_interrupt_then_the_quiesce_through_the_served_loop",
+            "tests::the_interrupt_then_the_quiesce_through_the_served_loop_in_tools",
+            "--include-ignored",
             "--nocapture",
         ])
         .env("WEAVER_INTERRUPT_QUIESCE_CHILD", "1");
-    test_common::place_inherited(&mut command, &[child_end.as_raw_fd()]);
+    let tools = test_common::ScratchTools::new();
+    test_common::place_inherited(
+        &mut command,
+        &[child_end.as_raw_fd(), tools.dir.as_raw_fd()],
+    );
     let mut child = command.spawn().unwrap();
     drop(child_end);
     let socket = scratch("interrupt-quiesce");
@@ -631,4 +645,83 @@ fn a_mis_shapen_exchange_refuses_before_the_directive_runs() {
         Payload::Refusal(LifecycleRefusal::OutOfOrder)
     );
     assert!(matches!(state, HookState::BeforeRaise), "nothing was bound");
+}
+
+/// **The handle on `tools/` never reaches a shell** (`weaver-gate-Spec`
+/// section 2): entry marks descriptor 4 close-on-exec, so it stays open
+/// across the shell's fork for the move and closes at its exec, and the
+/// shell's own descriptor table holds no 4. Perturbation: drop the flag's
+/// set from the handle's adoption, and the shell lists 4.
+#[test]
+#[ignore = "runs a shell: needs a delegated cgroup scope"]
+fn the_tools_handle_never_reaches_the_shell_in_tools() {
+    use nix::sys::socket::{MsgFlags, recv, send};
+    use std::os::fd::AsRawFd;
+    if std::env::var_os("WEAVER_HANDLE_SHELL_CHILD").is_some() {
+        let channel = channel::adopt().expect("inherited channel");
+        weaver_gate::tools::cgroup::adopt().expect("the scratch tools/ at 4");
+        assert_eq!(serve(channel), ExitCode::SUCCESS);
+        return;
+    }
+    let (harness, child_end) = test_common::seqpacket_pair();
+    test_common::bound_receives(&harness, 10);
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "tests::the_tools_handle_never_reaches_the_shell_in_tools",
+            "--include-ignored",
+            "--nocapture",
+        ])
+        .env("WEAVER_HANDLE_SHELL_CHILD", "1");
+    let tools = test_common::ScratchTools::new();
+    test_common::place_inherited(
+        &mut command,
+        &[child_end.as_raw_fd(), tools.dir.as_raw_fd()],
+    );
+    let mut child = command.spawn().unwrap();
+    drop(child_end);
+    let socket = scratch("handle-shell");
+    let ready = test_common::ask(
+        &harness,
+        1,
+        LifecycleDirective::Raise {
+            instruction: instruction(),
+            socket: socket.to_path_buf(),
+        },
+    );
+    assert_eq!(ready.payload, Payload::Answer(LifecycleAnswer::GateReady));
+    let execution = ExchangeId {
+        opener: Opener::Harness,
+        ordinal: 2,
+    };
+    send(
+        harness.as_raw_fd(),
+        &serde_json::to_vec(&OrganEnvelope {
+            exchange: execution.clone(),
+            position: Position::Open,
+            payload: Payload::Tool(weaver_types::ToolExecution {
+                name: weaver_types::ToolName("bash".into()),
+                arguments: r#"{"command":"ls /proc/$$/fd"}"#.into(),
+                clock_ms: 2_000,
+            }),
+        })
+        .unwrap(),
+        MsgFlags::empty(),
+    )
+    .unwrap();
+    let mut buffer = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
+    let n = recv(harness.as_raw_fd(), &mut buffer, MsgFlags::empty()).unwrap();
+    let answer = serde_json::from_slice::<OrganEnvelope>(&buffer[..n]).unwrap();
+    drop(harness);
+    assert!(test_common::wait_bounded(&mut child, 5, "handle-shell child").success());
+    let Payload::ToolAnswer(weaver_types::ToolOutcome::Result { content }) = answer.payload else {
+        panic!("a result: {answer:?}");
+    };
+    let listed: Vec<&str> = content.lines().collect();
+    assert!(!listed.contains(&"4"), "the shell holds no 4: {listed:?}");
+    assert!(
+        listed.contains(&"0"),
+        "the listing is the shell's: {listed:?}"
+    );
 }

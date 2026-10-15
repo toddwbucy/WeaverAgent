@@ -264,3 +264,67 @@ pub fn tell(end: &OwnedFd, ordinal: u64, directive: LifecycleDirective) {
     let body = serde_json::to_vec(&envelope).expect("an envelope encodes");
     send(end.as_raw_fd(), &body, MsgFlags::empty()).expect("the directive is sent");
 }
+
+/// **A plain directory for descriptor 4**, beside the channel's end at 3
+/// (`weaver-gate-Spec` section 2): entry takes any directory as its handle on
+/// `tools/`, so a gate that runs no shell needs no cgroup. A shell run in it
+/// would meet no `cgroup.procs` and answer `Errored`.
+pub fn plain_tools() -> OwnedFd {
+    std::fs::File::open(std::env::temp_dir())
+        .expect("a plain directory opens")
+        .into()
+}
+
+/// **A scratch `tools/` cgroup** beneath the user manager's delegated scope,
+/// for a gate that runs a shell (#111's PR C): one per test, killed and
+/// removed when dropped. Outside a delegated scope it fails naming why, never
+/// passing by skip.
+pub struct ScratchTools {
+    path: PathBuf,
+    pub dir: OwnedFd,
+}
+
+impl ScratchTools {
+    pub fn new() -> Self {
+        use std::os::unix::fs::MetadataExt;
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let own = std::fs::read_to_string("/proc/self/cgroup")
+            .ok()
+            .and_then(|text| {
+                text.lines()
+                    .find_map(|line| line.strip_prefix("0::"))
+                    .map(|own| own.trim().trim_end_matches('/').to_string())
+            })
+            .expect("/proc/self/cgroup names a unified cgroup");
+        let parent = PathBuf::from(format!("/sys/fs/cgroup{own}"));
+        assert!(
+            std::fs::metadata(&parent)
+                .is_ok_and(|meta| meta.uid() == nix::unistd::getuid().as_raw())
+                && parent.join("cgroup.procs").exists(),
+            "a gate that runs a shell needs a delegated scope this account owns, and {own} is not one: run it as \
+             `systemd-run --user --scope -p Delegate=yes cargo test -p weaver-gate --locked -- --ignored tools`"
+        );
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = parent.join(format!("weaver-gate-itest-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir(&path);
+        std::fs::create_dir(&path).expect("a scratch tools/ is made");
+        let dir = std::fs::File::open(&path)
+            .expect("the scratch tools/ opens")
+            .into();
+        Self { path, dir }
+    }
+}
+
+impl Drop for ScratchTools {
+    fn drop(&mut self) {
+        let _ = std::fs::write(self.path.join("cgroup.kill"), b"1");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while std::fs::read_to_string(self.path.join("cgroup.events"))
+            .is_ok_and(|events| events.contains("populated 1"))
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let _ = std::fs::remove_dir(&self.path);
+    }
+}

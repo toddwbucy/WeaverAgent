@@ -194,6 +194,8 @@ fn entered_run(turn: Option<&str>) -> (Run, OrganChannel, crate::scratch::Scratc
                 last_word: crate::spawn::LastWord::quiet(),
             }),
             gate: None,
+            tools: None,
+            gate_contained: None,
             diagnostic: None,
             state: None,
             grants_at_enter: None,
@@ -8246,4 +8248,297 @@ fn no_seat_is_granted_over_a_latched_record() {
     latch_by_refusal(&mut run);
     let (mut harness, _dir) = harness_entered(run);
     assert!(harness.grant_seat("identity", &[]).is_none());
+}
+
+/// **C1, the gate's death: a gate dying with a call open leaves `tools/`
+/// empty once the worker closes the execution** (`weaver-admin-Spec` 6.1,
+/// C1's instrument; the gate dies while serving): the SPU asks a call, the
+/// gate stand-in starts a command in a scratch `tools/` that leaves its
+/// session and double-forks, and dies with the call open. The worker kills
+/// `tools/` and waits before it closes the call `Killed { by: fault }`, the
+/// gate's death naming the containment and the call, and the run serves on.
+/// **The level:** the stand-in gate is a thread holding the gate's channel
+/// and the command a process the test starts in `tools/`, since no fixture
+/// here forks a real gate; the worker's side is the serve loop's own.
+/// Perturbation: drop the engine's kill, and the account names no call
+/// closed after the containment; drop the kill from `contain`, and the
+/// command outlives the call.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_a_gate_dying_with_a_call_open_leaves_tools_empty() {
+    use std::os::fd::AsRawFd;
+
+    use nix::sys::socket::{
+        AddressFamily, MsgFlags, SockFlag, SockType, recv as sock_recv, send as sock_send,
+        socketpair,
+    };
+
+    let layout = crate::tools_cgroup::tests::ScratchLayout::new("gate-death");
+    let (mut run, _spare, sink_path) = entered_run(None);
+    run.tools =
+        Some(crate::tools_cgroup::ToolsCgroup::open_beside_run(&layout.run).expect("tools/ opens"));
+    let (near, far) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .expect("socketpair");
+    run.spu.as_mut().expect("the arm stands").decode = crate::channel::decode_from_owned(near);
+    let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+    run.gate = Some(GateChannel {
+        channel: gate_end,
+        pid: nix::unistd::Pid::from_raw(i32::MAX),
+        last_word: crate::spawn::LastWord::quiet(),
+    });
+    let gate_peer = gate_peer.into_channel();
+    // The SPU asks one tool call, then answers whatever follows plainly.
+    let decode_peer = std::thread::spawn(move || {
+        let mut buf = vec![0u8; 65536];
+        let _ = sock_recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("the append");
+        let call = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            unrecovered: vec![],
+            content: vec![weaver_traits::ContentBlock::ToolCall(
+                weaver_traits::ToolCall {
+                    name: "bash".into(),
+                    arguments: r#"{"command":"sleep 300"}"#.into(),
+                },
+            )],
+            emission: "calling".into(),
+            finish: weaver_types::Finish::Completed,
+            resident: 64,
+            capacity: 4096,
+            request: serde_json::value::RawValue::from_string(r#"{"rendered":"r"}"#.into())
+                .unwrap(),
+            measurement: serde_json::value::RawValue::from_string(r#"{}"#.into()).unwrap(),
+        });
+        sock_send(
+            far.as_raw_fd(),
+            &serde_json::to_vec(&call).unwrap(),
+            MsgFlags::empty(),
+        )
+        .expect("the call");
+        far
+    });
+    gate_peer
+        .send(&OrganEnvelope {
+            exchange: ExchangeId {
+                opener: Opener::Gate,
+                ordinal: 1,
+            },
+            position: Position::Open,
+            payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry(
+                b"{\"text\":\"run something\"}",
+            )),
+        })
+        .expect("frame sends");
+    let tools_leaf = layout.leaf("worker/tools");
+    // The gate takes the call, starts its command in tools/, and dies with
+    // the call open.
+    let gate_stand_in = std::thread::spawn(move || {
+        let open = gate_peer.recv().expect("the call");
+        assert!(
+            matches!(open.payload, weaver_types::Payload::Tool(_)),
+            "{open:?}"
+        );
+        let command = crate::tools_cgroup::tests::escaper_in(&tools_leaf);
+        drop(gate_peer);
+        command
+    });
+    let (verb_end, _admin_end) = OrganChannel::pair().expect("admin pair");
+    let (mut harness, _dir) = harness_entered(run);
+    let mut verb_slot = Some(verb_end);
+    let served = harness.serve_gate_wake(
+        "identity",
+        &[],
+        &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
+            ports.turn(vec![weaver_traits::Message {
+                role: weaver_traits::Role::User,
+                content: vec![weaver_traits::ContentBlock::Text {
+                    text: text.to_string(),
+                }],
+            }])
+        },
+        &mut verb_slot,
+    );
+    let mut command = gate_stand_in.join().expect("the gate stand-in");
+    assert!(served.is_ok(), "the run serves on: {served:?}");
+    let tools = crate::tools_cgroup::ToolsCgroup::open_beside_run(&layout.run).unwrap();
+    assert_eq!(tools.populated(), Some(false), "tools/ is empty");
+    assert!(
+        command.try_wait().unwrap().is_some(),
+        "the command is ended"
+    );
+    drop(harness);
+    drop(decode_peer.join());
+    let events: Vec<serde_json::Value> = std::fs::read_to_string(&sink_path)
+        .expect("the sink")
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("a record line"))
+        .collect();
+    let death = events
+        .iter()
+        .find(|e| e["kind"] == "fault" && e["payload"]["account"]["organ"] == "gate")
+        .unwrap_or_else(|| panic!("the gate's death: {events:?}"));
+    assert_eq!(
+        death["payload"]["account"]["containment"], "tools/ killed and emptied",
+        "{death}"
+    );
+    assert_eq!(
+        death["payload"]["account"]["call"], "closed killed by the fault once tools/ was contained",
+        "{death}"
+    );
+}
+
+/// **The second walk owed: the gate is forked with exactly its end and the
+/// handle on `tools/`** (`weaver-harness-Spec` section 8's second walk, with
+/// the handle beside the end, section 2.2): a stand-in exec'd by the gate's
+/// own fork lists its descriptors, which are the standard streams, its end
+/// at 3 and a directory at 4, the one handed. Perturbation: drop the handle
+/// from the gate's fork, and 4 is missing.
+#[test]
+fn the_gate_is_forked_with_its_end_at_3_and_tools_at_4() {
+    use std::os::fd::AsFd;
+    let base = std::env::temp_dir().join(format!("weaver-gate-walk-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("tools")).unwrap();
+    let report = base.join("report");
+    let stand_in = base.join("gate");
+    std::fs::write(
+        &stand_in,
+        format!(
+            "#!/bin/sh\nls /proc/$$/fd > {report}.tmp\nreadlink /proc/$$/fd/4 >> {report}.tmp\nmv {report}.tmp {report}\n",
+            report = report.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        &stand_in,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let tools = std::fs::File::open(base.join("tools")).unwrap();
+    let (_gate, gate_child) = OrganChannel::pair().expect("gate pair");
+    // SAFETY: forked from the test's own thread, which outlives the
+    // stand-in's few instructions.
+    let pid = unsafe { fork_gate(&stand_in, &gate_child, tools.as_fd(), None) }.expect("the fork");
+    let _ = nix::sys::wait::waitpid(pid, None);
+    let listed = std::fs::read_to_string(&report).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&base);
+    let mut lines = listed.lines();
+    let mut numbers: Vec<u32> = lines
+        .by_ref()
+        .take_while(|line| line.parse::<u32>().is_ok())
+        .map(|line| line.parse().unwrap())
+        // bash, where it is `/bin/sh`, opens its own script at 255 after its
+        // exec: the stand-in's, not one the fork handed.
+        .filter(|&number| number != 255)
+        .collect();
+    numbers.sort_unstable();
+    assert_eq!(numbers, vec![0, 1, 2, 3, 4], "{listed}");
+    assert!(
+        listed.trim_end().ends_with("/tools"),
+        "4 is the handle on tools/: {listed}"
+    );
+}
+
+/// **A worker that cannot open `tools/` stands no gate** (`weaver-harness-Spec`
+/// section 2.2; `weaver-admin-Spec` 6.1, the worker's row): the suite's own
+/// process sits in no `worker/run`, so the open refuses, and the gate's arm
+/// answers `OrganRefused { Gate, BoundaryUnverified }`. The enter opens it
+/// before the gate's pair and fork, so no gate is forked. Perturbation:
+/// refuse anything else, and this fails.
+#[test]
+fn a_worker_that_cannot_open_tools_refuses_the_gates_arm() {
+    assert_eq!(
+        open_tools().err(),
+        Some(LifecycleRefusal::OrganRefused {
+            organ: weaver_types::RefusingOrgan::Gate,
+            reason: Box::new(LifecycleRefusal::BoundaryUnverified),
+        })
+    );
+}
+
+/// **The forced reap past the bound is `SIGKILL`, then the reap**
+/// (`weaver-admin-Spec` 6.1, a forced leave's reap past the lower's bound;
+/// `weaver-harness-Spec` section 6): a child that ignores `SIGTERM` and
+/// never exits is killed at the deadline and reaped, so no wait of the
+/// gate's own on its containment holds the reap. Perturbation: send
+/// `SIGTERM` in its place, and the reap never returns inside the bound.
+#[test]
+fn the_forced_reap_past_its_deadline_kills_and_reaps() {
+    let mut child = std::process::Command::new("sh")
+        .args(["-c", "trap '' TERM; while :; do sleep 1; done"])
+        .spawn()
+        .expect("a stand-in that ignores SIGTERM");
+    let pid = nix::unistd::Pid::from_raw(child.id() as i32);
+    let began = std::time::Instant::now();
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        reap_by(
+            pid,
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(200)),
+        );
+        let _ = done.send(());
+    });
+    let reaped = finished
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .is_ok();
+    if !reaped {
+        let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+    }
+    assert!(reaped, "reaped past the deadline");
+    assert!(began.elapsed() >= std::time::Duration::from_millis(200));
+    assert!(
+        nix::sys::signal::kill(pid, None).is_err(),
+        "the stand-in is gone and reaped"
+    );
+    // Reaped by `reap_by` already: the standard library's wait finds no child.
+    assert!(child.wait().is_err());
+}
+
+/// **Service ends on a serving containment that failed, never inside a
+/// leave** (`weaver-admin-Spec` 6.1, the worker's rows 2680 and 2682, and
+/// the leave's): `PastBound` and `Undelivered` while serving end it; an
+/// emptied `tools/`, and anything inside a leave, do not. Perturbation:
+/// change an arm, and its row fails.
+#[test]
+fn service_ends_on_a_serving_containment_that_failed() {
+    use crate::tools_cgroup::{Containment::*, Context::*};
+    assert!(!ends_service(None));
+    assert!(!ends_service(Some((Serving, Emptied))));
+    assert!(ends_service(Some((Serving, PastBound))));
+    assert!(ends_service(Some((Serving, Undelivered))));
+    assert!(!ends_service(Some((Leave, Delivered))));
+    assert!(!ends_service(Some((Leave, Undelivered))));
+}
+
+/// **The unwind kills `tools/` at the gate's lower, before `Left`**
+/// (`weaver-admin-Spec` 6.1, the worker's unwind; `weaver-harness-Spec`
+/// section 2.2): every leave lowers the gate first, and a command still in
+/// `tools/` there is killed by the lower's sweep. Here the gate has died, so
+/// the lower meets its channel closed. Perturbation: drop the lower's
+/// sweep, and the command outlives the leave.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_the_lower_sweeps_tools() {
+    let layout = crate::tools_cgroup::tests::ScratchLayout::new("lower");
+    let (mut run, _spare, _sink) = entered_run(None);
+    run.tools =
+        Some(crate::tools_cgroup::ToolsCgroup::open_beside_run(&layout.run).expect("tools/ opens"));
+    let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+    run.gate = Some(GateChannel {
+        channel: gate_end,
+        pid: nix::unistd::Pid::from_raw(i32::MAX),
+        last_word: crate::spawn::LastWord::quiet(),
+    });
+    let mut command = crate::tools_cgroup::tests::escaper_in(&layout.leaf("worker/tools"));
+    drop(gate_peer);
+    let _ = lower_gate_within(&mut run, 100, None);
+    let tools = crate::tools_cgroup::ToolsCgroup::open_beside_run(&layout.run).unwrap();
+    assert!(
+        tools.wait_empty(std::time::Duration::from_secs(5)),
+        "the lower's sweep emptied tools/"
+    );
+    assert!(command.wait().is_ok());
 }

@@ -40,7 +40,8 @@ fn spawn_gate_as(child_end: std::os::fd::RawFd, log: &std::path::Path) -> Child 
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::from(log));
-    place_inherited(&mut command, &[child_end]);
+    let tools = common::plain_tools();
+    place_inherited(&mut command, &[child_end, tools.as_raw_fd()]);
     unsafe {
         command.pre_exec(|| {
             if nix::libc::setgroups(0, std::ptr::null()) != 0
@@ -52,7 +53,9 @@ fn spawn_gate_as(child_end: std::os::fd::RawFd, log: &std::path::Path) -> Child 
             Ok(())
         });
     }
-    command.spawn().expect("the binary starts")
+    let child = command.spawn().expect("the binary starts");
+    drop(tools);
+    child
 }
 
 fn root_admitted() -> GateInstruction {

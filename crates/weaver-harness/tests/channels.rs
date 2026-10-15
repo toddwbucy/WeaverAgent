@@ -266,7 +266,8 @@ fn child_ends_land_from_descriptor_three() {
     // calls only, then _exit.
     match unsafe { nix::unistd::fork() }.expect("fork") {
         nix::unistd::ForkResult::Child => {
-            let placed = unsafe { weaver_harness::place_child_ends(&[&far_a, &far_b]) };
+            let placed =
+                unsafe { weaver_harness::place_child_ends(&[far_a.as_fd(), far_b.as_fd()]) };
             let mut ok = placed.is_ok() as u8;
             for offset in 0..2 {
                 let fd = FIRST_ORGAN_DESCRIPTOR + offset;

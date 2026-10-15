@@ -1,9 +1,79 @@
+//! The shell execution's suite. **Every test that runs a shell is a cgroup
+//! instrument** (the Planner's ruling of 2026-10-15 on #111's PR C): the
+//! shell's child moves itself into `tools/` before its exec, so each runs in
+//! a scratch `tools/` of its own beneath the user manager's delegated scope,
+//! `#[ignore]`d and run as
+//! `systemd-run --user --scope -p Delegate=yes cargo test -p weaver-gate --locked -- --ignored tools::`,
+//! and outside a delegated scope it fails naming why, never passing by skip.
+//! A refusal runs no shell, so those stay plain tests, handed a plain
+//! directory as their `tools/`: a regression that spawned would meet a
+//! `cgroup.procs` that is not there and answer `Errored`.
+
 use super::*;
 use weaver_types::ToolName;
 
+/// One execution in a scratch `tools/` of its own.
 fn execute(execution: &ToolExecution) -> ToolOutcome {
+    let scratch = ScratchTools::new();
     let (near, _far) = pair();
-    super::execute(execution, &near, &exchange()).expect("execution channel")
+    super::execute_in(execution, &near, &exchange(), &scratch.tools).expect("execution channel")
+}
+
+/// One execution handed a plain directory as its `tools/`, for the refusals.
+fn refuse(execution: &ToolExecution) -> ToolOutcome {
+    let (near, _far) = pair();
+    let plain = std::fs::File::open(std::env::temp_dir()).expect("a plain directory opens");
+    let tools = Tools::from_owned(plain.into());
+    super::execute_in(execution, &near, &exchange(), &tools).expect("execution channel")
+}
+
+/// A scratch `tools/` cgroup beneath the delegated scope this suite runs in,
+/// one per test, since the suite's tests run in parallel and a kill of a
+/// shared one would end another test's shell. Killed and removed when
+/// dropped.
+pub(crate) struct ScratchTools {
+    pub(crate) path: std::path::PathBuf,
+    pub(crate) tools: Tools,
+}
+
+impl ScratchTools {
+    pub(crate) fn new() -> Self {
+        use std::os::unix::fs::MetadataExt;
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let own = std::fs::read_to_string("/proc/self/cgroup")
+            .ok()
+            .and_then(|text| {
+                text.lines()
+                    .find_map(|line| line.strip_prefix("0::"))
+                    .map(|own| own.trim().trim_end_matches('/').to_string())
+            })
+            .expect("/proc/self/cgroup names a unified cgroup");
+        let parent = std::path::PathBuf::from(format!("/sys/fs/cgroup{own}"));
+        assert!(
+            std::fs::metadata(&parent)
+                .is_ok_and(|meta| meta.uid() == nix::unistd::getuid().as_raw())
+                && parent.join("cgroup.procs").exists(),
+            "the shell's tests need a delegated scope this account owns, and {own} is not one: run them as \
+             `systemd-run --user --scope -p Delegate=yes cargo test -p weaver-gate --locked -- --ignored tools::`"
+        );
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = parent.join(format!("weaver-gate-test-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir(&path);
+        std::fs::create_dir(&path).expect("a scratch tools/ is made");
+        let dir = std::fs::File::open(&path).expect("the scratch tools/ opens");
+        Self {
+            path,
+            tools: Tools::from_owned(dir.into()),
+        }
+    }
+}
+
+impl Drop for ScratchTools {
+    fn drop(&mut self) {
+        let _ = self.tools.kill();
+        let _ = self.tools.wait_empty(std::time::Duration::from_secs(5));
+        let _ = std::fs::remove_dir(&self.path);
+    }
 }
 
 fn pair() -> (Channel, Channel) {
@@ -46,6 +116,7 @@ pub(super) fn wait_entered() {
 ///
 /// Perturbation: drop the `env_clear` and the command prints the value.
 #[test]
+#[ignore = "runs a shell: needs a delegated cgroup scope"]
 fn a_command_sees_home_and_not_the_gates_environment() {
     assert!(
         std::env::var_os("CARGO_PKG_NAME").is_some(),
@@ -68,7 +139,9 @@ fn a_command_sees_home_and_not_the_gates_environment() {
 /// conforms: gate-execution-cancel-brings-the-clock-forward
 /// Removing the channel from supervision makes this reach the clock.
 #[test]
+#[ignore = "runs a shell: needs a delegated cgroup scope"]
 fn a_cancel_brings_the_clock_forward() {
+    let scratch = ScratchTools::new();
     use std::time::{Duration, Instant};
     let (gate, harness) = pair();
     let (entered, waiting) = std::sync::mpsc::sync_channel(1);
@@ -89,7 +162,7 @@ fn a_cancel_brings_the_clock_forward() {
         harness
     });
     let started = Instant::now();
-    let outcome = super::execute(
+    let outcome = super::execute_in(
         &ToolExecution {
             name: ToolName(SHELL_NAME.into()),
             arguments: r#"{"command":"echo partial; sleep 5"}"#.into(),
@@ -97,6 +170,7 @@ fn a_cancel_brings_the_clock_forward() {
         },
         &gate,
         &exchange(),
+        &scratch.tools,
     )
     .unwrap();
     let _harness = peer.join().unwrap();
@@ -118,7 +192,9 @@ fn a_cancel_brings_the_clock_forward() {
 /// finished and re-runnable at the reload. Perturbation: answer the
 /// interrupt as a misplaced message, and the clock kills it instead.
 #[test]
+#[ignore = "runs a shell: needs a delegated cgroup scope"]
 fn an_interrupt_kills_an_open_execution_by_unload() {
+    let scratch = ScratchTools::new();
     use std::time::{Duration, Instant};
     let (gate, harness) = pair();
     let (entered, waiting) = std::sync::mpsc::sync_channel(1);
@@ -138,7 +214,7 @@ fn an_interrupt_kills_an_open_execution_by_unload() {
         harness
     });
     let started = Instant::now();
-    let outcome = super::execute(
+    let outcome = super::execute_in(
         &ToolExecution {
             name: ToolName(SHELL_NAME.into()),
             arguments: r#"{"command":"echo partial; sleep 5"}"#.into(),
@@ -146,6 +222,7 @@ fn an_interrupt_kills_an_open_execution_by_unload() {
         },
         &gate,
         &exchange(),
+        &scratch.tools,
     )
     .unwrap();
     let _harness = peer.join().unwrap();
@@ -164,7 +241,9 @@ fn an_interrupt_kills_an_open_execution_by_unload() {
 /// The child cannot exit before the first wait. Replacing the slice
 /// with the remaining clock therefore fails even on a fast machine.
 #[test]
+#[ignore = "runs a shell: needs a delegated cgroup scope"]
 fn an_exit_is_heard_within_a_slice() {
+    let scratch = ScratchTools::new();
     use std::time::{Duration, Instant};
     let path = std::env::temp_dir().join(format!("weaver-exit-release-{}", std::process::id()));
     let _ = std::fs::remove_file(&path);
@@ -191,7 +270,7 @@ fn an_exit_is_heard_within_a_slice() {
     let (gate, _harness) = pair();
     let started = Instant::now();
     let arguments = serde_json::json!({"command": format!("while [ ! -f '{}' ]; do sleep 0.01; done; echo finished", path.display())}).to_string();
-    let outcome = super::execute(
+    let outcome = super::execute_in(
         &ToolExecution {
             name: ToolName(SHELL_NAME.into()),
             arguments,
@@ -199,6 +278,7 @@ fn an_exit_is_heard_within_a_slice() {
         },
         &gate,
         &exchange(),
+        &scratch.tools,
     )
     .unwrap();
     peer.join().unwrap();
@@ -222,11 +302,20 @@ fn shell(arguments: &str, clock_ms: u64) -> ToolOutcome {
     })
 }
 
+/// [`shell`] for a call that refuses before anything runs.
+fn refused(arguments: &str, clock_ms: u64) -> ToolOutcome {
+    refuse(&ToolExecution {
+        name: ToolName(SHELL_NAME.into()),
+        arguments: arguments.into(),
+        clock_ms,
+    })
+}
+
 /// **A name that is not the shell's refuses by name, in this crate's
 /// own voice, and nothing runs.** The one verb has no nearest match.
 #[test]
 fn a_name_that_is_not_the_shells_refuses_by_name() {
-    let outcome = execute(&ToolExecution {
+    let outcome = refuse(&ToolExecution {
         name: ToolName("calculator".into()),
         arguments: r#"{"command":"true"}"#.into(),
         clock_ms: 1_000,
@@ -246,7 +335,7 @@ fn a_name_that_is_not_the_shells_refuses_by_name() {
 #[test]
 fn a_clock_outside_the_maximum_refuses_rather_than_clamps() {
     for clock in [0, SHELL_MAX_CLOCK_MS + 1] {
-        let outcome = shell(r#"{"command":"true"}"#, clock);
+        let outcome = refused(r#"{"command":"true"}"#, clock);
         let ToolOutcome::Refused { reason } = outcome else {
             panic!("a refusal answers for {clock}: {outcome:?}");
         };
@@ -268,7 +357,7 @@ fn malformed_arguments_refuse_in_the_gates_voice() {
             "the arguments carry no command string",
         ),
     ] {
-        let outcome = shell(arguments, 1_000);
+        let outcome = refused(arguments, 1_000);
         let ToolOutcome::Refused { reason } = outcome else {
             panic!("a refusal answers: {outcome:?}");
         };
@@ -280,6 +369,7 @@ fn malformed_arguments_refuse_in_the_gates_voice() {
 /// output crosses, stderr is named, and a nonzero exit is a result -
 /// the shell's own answer - never an error.
 #[test]
+#[ignore = "runs a shell: needs a delegated cgroup scope"]
 fn the_shell_runs_where_it_promises() {
     let outcome = shell(r#"{"command":"pwd"}"#, 10_000);
     let ToolOutcome::Result { content } = outcome else {
@@ -313,6 +403,7 @@ fn the_shell_runs_where_it_promises() {
 /// pipe's write end, and the group kill at the exit is what lets the
 /// readers finish.
 #[test]
+#[ignore = "runs a shell: needs a delegated cgroup scope"]
 fn a_chatty_command_and_a_straggler_both_answer_promptly() {
     let started = std::time::Instant::now();
     let outcome = shell(
@@ -368,6 +459,7 @@ fn with_detached_descendant(command: &str) -> String {
 /// The handoff's 50 ms clock checks latency alone. Output capture has a
 /// separate 500 ms test, so process startup need not win a 50 ms echo race.
 #[test]
+#[ignore = "runs a shell: needs a delegated cgroup scope"]
 fn a_detached_descendant_cannot_hold_the_answer_past_the_clock() {
     require_setsid();
     const CLOCK_MS: u64 = 50;
@@ -388,6 +480,7 @@ fn a_detached_descendant_cannot_hold_the_answer_past_the_clock() {
 /// A completed leader keeps its account and does not spend the remaining
 /// caller budget waiting for a detached descendant's inherited pipes.
 #[test]
+#[ignore = "runs a shell: needs a delegated cgroup scope"]
 fn a_detached_descendant_cannot_hold_the_answer_after_the_leader_exits() {
     require_setsid();
     for code in [0, 7] {
@@ -414,6 +507,7 @@ fn a_detached_descendant_cannot_hold_the_answer_after_the_leader_exits() {
 
 /// A short clock does not turn an already observed exit into a kill.
 #[test]
+#[ignore = "runs a shell: needs a delegated cgroup scope"]
 fn a_completed_nonzero_exit_keeps_its_account_with_a_short_clock() {
     require_setsid();
     let command = with_detached_descendant("echo done; exit 7");
@@ -430,6 +524,7 @@ fn a_completed_nonzero_exit_keeps_its_account_with_a_short_clock() {
 /// Capture truncation is visible on both timeout and normal-exit paths,
 /// and an exit status is not part of the output that gets truncated.
 #[test]
+#[ignore = "runs a shell: needs a delegated cgroup scope"]
 fn a_detached_descendant_does_not_hide_truncation_or_exit_status() {
     require_setsid();
     for redirect in ["", " >&2"] {
@@ -625,6 +720,7 @@ fn failed_capture_cleanup_stops_and_joins_both_readers() {
 /// kill.** The clock here is tiny because the constant is what a
 /// deployment tunes and the mechanism is what this watches.
 #[test]
+#[ignore = "runs a shell: needs a delegated cgroup scope"]
 fn a_command_past_the_clock_is_killed_with_its_partial_attached() {
     let outcome = shell(r#"{"command":"echo early; sleep 5"}"#, 200);
     let ToolOutcome::Killed {
@@ -651,5 +747,131 @@ fn a_command_past_the_clock_is_killed_with_its_partial_attached() {
     assert!(
         partial.is_none(),
         "a silent command attaches nothing: {partial:?}"
+    );
+}
+
+// ------------------------------------------------------------- the agent's cgroup
+
+/// The execution's answer, run in `scratch`'s `tools/`.
+fn execute_in_scratch(
+    scratch: &ScratchTools,
+    arguments: &str,
+    clock_ms: u64,
+) -> Result<ToolOutcome, Unanswered> {
+    let (near, _far) = pair();
+    super::execute_in(
+        &ToolExecution {
+            name: ToolName(SHELL_NAME.into()),
+            arguments: arguments.into(),
+            clock_ms,
+        },
+        &near,
+        &exchange(),
+        &scratch.tools,
+    )
+}
+
+/// **C1 at the gate: a command that left its session is ended at the clock**
+/// (`weaver-admin-Spec` 6.1, C1's instrument): a shell that starts a new
+/// session and double-forks a sleeper past the clock is killed whole, and
+/// `tools/` reads `populated 0` when the answer comes. Perturbation: end the
+/// execution by a process-group signal in place of the kill of `tools/`,
+/// and the detached sleeper survives the answer.
+#[test]
+#[ignore = "runs a shell: needs a delegated cgroup scope"]
+fn the_clock_ends_a_command_that_left_its_session() {
+    require_setsid();
+    let scratch = ScratchTools::new();
+    let outcome = execute_in_scratch(
+        &scratch,
+        r#"{"command":"setsid sh -c '(sleep 30 &) ; sleep 30' & sleep 30"}"#,
+        500,
+    )
+    .expect("answered");
+    assert!(
+        matches!(
+            outcome,
+            ToolOutcome::Killed {
+                by: KillCause::Clock,
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        scratch.tools.populated(),
+        Some(false),
+        "nothing of the execution outlives its answer"
+    );
+}
+
+/// **The shell runs inside `tools/`** (`weaver-gate-Spec` section 8; 6.1,
+/// C4): the shell's own `/proc/self/cgroup` names the `tools/` it was
+/// handed. Perturbation: drop the move from `pre_exec`, and the shell names
+/// the suite's own cgroup.
+#[test]
+#[ignore = "runs a shell: needs a delegated cgroup scope"]
+fn the_shell_runs_inside_tools() {
+    let scratch = ScratchTools::new();
+    let outcome = execute_in_scratch(&scratch, r#"{"command":"cat /proc/self/cgroup"}"#, 2_000)
+        .expect("answered");
+    let ToolOutcome::Result { content } = outcome else {
+        panic!("a result: {outcome:?}");
+    };
+    let name = scratch
+        .path
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    assert!(
+        content.trim().ends_with(&format!("/{name}")),
+        "the shell's cgroup is the scratch tools/ {name}: {content}"
+    );
+}
+
+/// **A move that fails is the machinery's: `Errored`, and nothing ran**
+/// (`weaver-gate-Spec` section 8; 6.1, the gate's spawn failing): a handle
+/// on a plain directory has no `cgroup.procs`, so the child ends before its
+/// exec and a command that would leave a marker leaves none. Perturbation:
+/// drop the move, and the command runs and the marker stands.
+#[test]
+fn a_move_that_fails_answers_errored_and_runs_nothing() {
+    let marker = std::env::temp_dir().join(format!("weaver-gate-move-{}", std::process::id()));
+    let _ = std::fs::remove_file(&marker);
+    let outcome = refuse(&ToolExecution {
+        name: ToolName(SHELL_NAME.into()),
+        arguments: serde_json::json!({"command": format!("touch {}", marker.display())})
+            .to_string(),
+        clock_ms: 2_000,
+    });
+    let ran = marker.exists();
+    let _ = std::fs::remove_file(&marker);
+    assert!(
+        matches!(outcome, ToolOutcome::Errored { .. }),
+        "{outcome:?}"
+    );
+    assert!(!ran, "nothing ran");
+}
+
+/// **An execution the gate cannot contain is never answered**
+/// (`weaver-gate-Spec` section 8; 6.1, the gate's write of `cgroup.kill`
+/// failing): `cgroup.kill` closed to the gate after the spawn's move, the
+/// execution ends unanswered, `Uncontained`, which the gate's serve loop
+/// turns into its exit (read, not run here: the binary's exit is the
+/// harness's to meet). Perturbation: answer whatever the kill came to, and
+/// the execution is answered.
+#[test]
+#[ignore = "runs a shell: needs a delegated cgroup scope"]
+fn an_execution_the_gate_cannot_kill_is_unanswered() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = ScratchTools::new();
+    let kill = scratch.path.join("cgroup.kill");
+    std::fs::set_permissions(&kill, std::fs::Permissions::from_mode(0o444)).unwrap();
+    let answered = execute_in_scratch(&scratch, r#"{"command":"echo done"}"#, 2_000);
+    std::fs::set_permissions(&kill, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(
+        matches!(answered, Err(Unanswered::Uncontained)),
+        "{answered:?}"
     );
 }

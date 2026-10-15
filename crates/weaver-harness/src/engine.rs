@@ -135,6 +135,17 @@ pub(crate) struct GatePort<'a> {
     pub(crate) channel: &'a crate::channel::OrganChannel,
     pub(crate) ordinal: &'a mut u64,
     pub(crate) held: &'a mut std::collections::VecDeque<weaver_types::OrganEnvelope>,
+    /// The handle on `tools/` the worker kills when the gate dies with a call
+    /// open (`weaver-admin-Spec` 6.1), `None` where none was opened.
+    pub(crate) tools: Option<&'a crate::tools_cgroup::ToolsCgroup>,
+    /// Where that kill's outcome is left for the lifecycle, which names it
+    /// in the gate's death and ends service on it while serving.
+    pub(crate) contained: Option<
+        &'a mut Option<(
+            crate::tools_cgroup::Context,
+            crate::tools_cgroup::Containment,
+        )>,
+    >,
 }
 
 /// The wind-down turn's user message (`weaver-admin-Spec` 3.0, graceful step
@@ -1368,7 +1379,26 @@ impl<'a> Ports<'a> {
                 // fault** (`weaver-admin-Spec` 3.0, S3, S4, S5 and S10 x the
                 // gate dies; `weaver-harness-gate-contract` section 5): its
                 // outcome indeterminate and never re-run automatically.
+                // **The worker kills `tools/` first** (6.1, the worker's
+                // rows): serving, it waits a full bound from its own kill
+                // before it closes the call; with a leave held, it kills and
+                // does not wait. The outcome is left for the lifecycle.
                 Err(_) => {
+                    let context = if self.leave.as_ref().is_some_and(|slot| slot.is_some()) {
+                        crate::tools_cgroup::Context::Leave
+                    } else {
+                        crate::tools_cgroup::Context::Serving
+                    };
+                    if let Some(tools) = gate.tools {
+                        let contained = crate::tools_cgroup::contain(
+                            tools,
+                            context,
+                            crate::tools_cgroup::CONTAINMENT_BOUND,
+                        );
+                        if let Some(slot) = gate.contained.as_mut() {
+                            **slot = Some((context, contained));
+                        }
+                    }
                     let outcome = weaver_types::ToolOutcome::Killed {
                         partial: None,
                         by: weaver_types::KillCause::Fault,

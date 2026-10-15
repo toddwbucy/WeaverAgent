@@ -22,7 +22,9 @@
 use std::ffi::CString;
 use std::path::Path;
 
-use crate::channel::{ChildEnd, place_child_ends};
+use std::os::fd::BorrowedFd;
+
+use crate::channel::place_child_ends;
 
 /// Forks an organ binary, handing it the ends it is owed at descriptor 3
 /// upward in the channels' own order: the lifecycle channel every organ holds
@@ -39,7 +41,7 @@ use crate::channel::{ChildEnd, place_child_ends};
 /// process.
 pub unsafe fn fork_organ(
     binary: &Path,
-    ends: &[&ChildEnd],
+    ends: &[BorrowedFd<'_>],
     arguments: &[String],
     stderr: Option<std::os::fd::RawFd>,
 ) -> Result<nix::unistd::Pid, nix::Error> {
