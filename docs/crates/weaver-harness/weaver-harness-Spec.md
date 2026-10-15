@@ -933,7 +933,7 @@ election is a manifest property and the record is this crate's,**
 `weaver-spu-Spec` section 1 each inheriting these grounds rather than re-arguing
 them: the manifest carries one OS crate and no `libc` or `rustix` line of this
 crate's own. **The containment of #111 adds** `openat` beneath a directory descriptor,
-`fstat`, and `read` and `write` on the agent's `tools/` cgroup files, all `nix`'s
+`fstat`, `fstatfs` (the handle on the `cgroup2` filesystem), and `read` and `write` on the agent's `tools/` cgroup files, all `nix`'s
 (`weaver-admin-Spec` section 6.1), and **one stated exception to "no raw `libc`"**: the
 worker's pinned fallback makes `pidfd_open` and `pidfd_send_signal` as raw system calls
 by number (`SYS_pidfd_open`, `SYS_pidfd_send_signal`) through `nix`'s re-exported

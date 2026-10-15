@@ -1035,8 +1035,10 @@ fn recv_octets(end: BorrowedFd<'_>) -> Result<Vec<u8>, ChannelFault> {
 /// # Safety
 ///
 /// Must be called only in a forked child, before its exec, and only with ends
-/// this process created.
-pub unsafe fn place_child_ends(ends: &[&ChildEnd]) -> Result<(), nix::Error> {
+/// this process created. An end is any descriptor the organ is owed: a
+/// channel's [`ChildEnd`], or the gate's handle on `tools/` beside it
+/// (`weaver-harness-Spec` section 2.2, #111).
+pub unsafe fn place_child_ends(ends: &[BorrowedFd<'_>]) -> Result<(), nix::Error> {
     if ends.len() > MAX_PLACED_ENDS {
         return Err(nix::Error::EINVAL);
     }
@@ -1052,7 +1054,7 @@ pub unsafe fn place_child_ends(ends: &[&ChildEnd]) -> Result<(), nix::Error> {
     // descending layout is reachable whenever an earlier close left a hole.
     let mut sources = [0 as RawFd; MAX_PLACED_ENDS];
     for (index, end) in ends.iter().enumerate() {
-        let mut source = end.end.as_raw_fd();
+        let mut source = end.as_raw_fd();
         if source >= FIRST_ORGAN_DESCRIPTOR && source < target_end {
             // SAFETY: fcntl is async-signal-safe. F_DUPFD_CLOEXEC returns the
             // lowest free descriptor at or above the floor, which is outside

@@ -31,9 +31,19 @@ use common::{
 };
 use weaver_types::{LifecycleAnswer, LifecycleDirective, Payload};
 
-/// Start the gate with its one end at descriptor 3. Standard error goes to a
-/// file rather than a pipe, since nothing drains a pipe until after the wait.
+/// Start the gate with its one end at descriptor 3 and a plain directory as
+/// its `tools/` at 4. Standard error goes to a file rather than a pipe, since
+/// nothing drains a pipe until after the wait.
 fn spawn_gate(child_end: std::os::fd::RawFd) -> (Child, common::ScratchFile) {
+    let tools = common::plain_tools();
+    spawn_gate_with(child_end, Some(tools.as_raw_fd()))
+}
+
+/// [`spawn_gate`] with whatever sits at descriptor 4, or nothing.
+fn spawn_gate_with(
+    child_end: std::os::fd::RawFd,
+    fourth: Option<std::os::fd::RawFd>,
+) -> (Child, common::ScratchFile) {
     let log_path = common::ScratchFile(std::env::temp_dir().join(format!(
         "weaver-gate-entry-{}-{}.log",
         std::process::id(),
@@ -45,7 +55,10 @@ fn spawn_gate(child_end: std::os::fd::RawFd) -> (Child, common::ScratchFile) {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::from(log));
-    place_inherited(&mut command, &[child_end]);
+    match fourth {
+        Some(fourth) => place_inherited(&mut command, &[child_end, fourth]),
+        None => place_inherited(&mut command, &[child_end]),
+    }
     (command.spawn().expect("the binary starts"), log_path)
 }
 
@@ -390,4 +403,44 @@ fn a_dial_storm_leaves_the_channel_answering() {
     assert!(status.success());
     std::fs::remove_file(&path).ok();
     std::fs::remove_file(&log_path).ok();
+}
+
+/// **A gate without its handle on `tools/` refuses every directive**
+/// (`weaver-gate-Spec` section 2; `weaver-harness-Spec` section 2.2): with
+/// nothing at descriptor 4, a regular file there, or a directory on no
+/// `cgroup2` filesystem, entry refuses and the
+/// `Raise` is answered `BoundaryUnverified`, so no shell could ever run
+/// outside the agent's cgroup. Perturbation: drop the handle's adoption
+/// from entry, take a non-directory, or take any directory, and the gate
+/// raises.
+#[test]
+fn a_gate_without_its_tools_handle_refuses_every_directive() {
+    let file = std::fs::File::open("/proc/self/exe").expect("a regular file opens");
+    let plain = common::not_a_cgroup();
+    for (case, fourth) in [
+        ("absent", None),
+        ("a regular file", Some(file.as_raw_fd())),
+        ("a directory not a cgroup", Some(plain.as_raw_fd())),
+    ] {
+        let path = socket_path(&format!("no-tools-{}", case.replace(' ', "-")));
+        let (harness, child_end) = seqpacket_pair();
+        let (mut child, log_path) = spawn_gate_with(child_end.as_raw_fd(), fourth);
+        drop(child_end);
+        let answer = ask(
+            &harness,
+            1,
+            LifecycleDirective::Raise {
+                instruction: instruction(),
+                socket: path.to_path_buf(),
+            },
+        );
+        drop(harness);
+        wait_bounded(&mut child, 30, "a_gate_without_its_tools_handle");
+        std::fs::remove_file(&log_path).ok();
+        assert_eq!(
+            answer.payload,
+            Payload::Refusal(weaver_types::LifecycleRefusal::BoundaryUnverified),
+            "{case} at 4"
+        );
+    }
 }

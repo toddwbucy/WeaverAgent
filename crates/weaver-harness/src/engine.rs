@@ -135,6 +135,17 @@ pub(crate) struct GatePort<'a> {
     pub(crate) channel: &'a crate::channel::OrganChannel,
     pub(crate) ordinal: &'a mut u64,
     pub(crate) held: &'a mut std::collections::VecDeque<weaver_types::OrganEnvelope>,
+    /// The handle on `tools/` the worker kills when the gate dies with a call
+    /// open (`weaver-admin-Spec` 6.1), `None` where none was opened.
+    pub(crate) tools: Option<&'a crate::tools_cgroup::ToolsCgroup>,
+    /// Where that kill's outcome is left for the lifecycle, which names it
+    /// in the gate's death and ends service on it while serving.
+    pub(crate) contained: Option<
+        &'a mut Option<(
+            crate::tools_cgroup::Context,
+            crate::tools_cgroup::Containment,
+        )>,
+    >,
 }
 
 /// The wind-down turn's user message (`weaver-admin-Spec` 3.0, graceful step
@@ -260,6 +271,11 @@ pub struct Ports<'a> {
     /// (`weaver-admin-Spec` 3.0, S3 to S5 x the gate dies): no longer
     /// watched, its death the run's to author once the turn returns.
     gate_lost: bool,
+    /// When the call out was interrupted (`ToolInterrupt`): **the lower's
+    /// bound runs from the interrupt** (`weaver-admin-Spec` 6.1, a forced
+    /// leave does not wait it out), and past it the call is closed
+    /// `Killed { by: fault }` without the gate's answer.
+    interrupted_at: std::cell::Cell<Option<std::time::Instant>>,
 }
 
 /// Why a turn did not complete. A refusal the seam typed is the session
@@ -376,6 +392,7 @@ impl<'a> Ports<'a> {
             deadline_passed: false,
             cut_by_leave: false,
             gate_lost: false,
+            interrupted_at: std::cell::Cell::new(None),
         }
     }
 
@@ -404,6 +421,9 @@ impl<'a> Ports<'a> {
         turn: &TurnKey,
         execution: Option<&weaver_types::ExchangeId>,
     ) -> Result<(), TurnError> {
+        if execution.is_some() && self.interrupted_at.get().is_none() {
+            self.interrupted_at.set(Some(std::time::Instant::now()));
+        }
         match execution {
             Some(execution) => self
                 .gate
@@ -421,6 +441,14 @@ impl<'a> Ports<'a> {
                 .send_directive(&TokenDirective::Cancel { turn: turn.clone() })
                 .map_err(|_| TurnError::ChannelLost),
         }
+    }
+
+    /// **When this turn interrupted its call out**, for the leave that
+    /// follows: the lower's window and the leave's shared deadline are both
+    /// measured from it (`weaver-admin-Spec` 6.1, the lower's bound runs
+    /// from the interrupt), so one instant anchors the whole leave.
+    pub(crate) fn interrupted_at(&self) -> Option<std::time::Instant> {
+        self.interrupted_at.get()
     }
 
     /// The drain's deadline of a leave held while it stays graceful.
@@ -1327,6 +1355,7 @@ impl<'a> Ports<'a> {
             self.unload_interrupted = true;
             return Ok(crate::tools::ToolResult::granted(&outcome));
         }
+        self.interrupted_at.set(None);
         let gate = self
             .gate
             .as_mut()
@@ -1357,6 +1386,49 @@ impl<'a> Ports<'a> {
             use std::os::fd::AsFd;
             let wake =
                 self.exchange_wake(self.gate.as_ref().expect("invocation gate").channel.as_fd())?;
+            // **Past the lower's bound from the interrupt the call is closed
+            // without the gate** (`weaver-admin-Spec` 6.1, a forced leave's
+            // reap past the lower's bound): `Killed { by: fault }`, its
+            // outcome indeterminate and never re-run, `tools/` killed once
+            // and not waited on, the leave going on to the lower, which
+            // reaps the gate by `SIGKILL`. The gate's late answer, if any,
+            // meets the lower.
+            if matches!(wake, ExchangeWake::InterruptBound) {
+                let gate = self.gate.as_mut().expect("invocation gate");
+                if let Some(tools) = gate.tools {
+                    let context = crate::tools_cgroup::Context::Leave;
+                    let contained = crate::tools_cgroup::contain(
+                        tools,
+                        context,
+                        crate::tools_cgroup::CONTAINMENT_BOUND,
+                    );
+                    if let Some(slot) = gate.contained.as_mut() {
+                        **slot = Some((context, contained));
+                    }
+                }
+                // The interrupt's instant stays for the leave's lower, whose
+                // window it already spent: the gate is reaped there at once.
+                self.unload_interrupted = true;
+                let outcome = weaver_types::ToolOutcome::Killed {
+                    partial: None,
+                    by: weaver_types::KillCause::Fault,
+                };
+                let completed =
+                    serde_json::to_string(&outcome).map_err(|_| TurnError::ChannelLost)?;
+                let completed =
+                    weaver_trace::raw_payload(&completed).ok_or(TurnError::ChannelLost)?;
+                // The harness's own word: the gate never answered.
+                self.author
+                    .author(
+                        self.recorder,
+                        Kind::ToolCallCompleted,
+                        Subsystem::Harness,
+                        Some(turn),
+                        Some(Payload::Deferred(completed)),
+                    )
+                    .map_err(|_| TurnError::ChannelLost)?;
+                return Ok(crate::tools::ToolResult::granted(&outcome));
+            }
             if !matches!(wake, ExchangeWake::Work) {
                 self.handle_turn_control(wake, turn, stop, Some(&exchange))?;
                 continue;
@@ -1368,7 +1440,38 @@ impl<'a> Ports<'a> {
                 // fault** (`weaver-admin-Spec` 3.0, S3, S4, S5 and S10 x the
                 // gate dies; `weaver-harness-gate-contract` section 5): its
                 // outcome indeterminate and never re-run automatically.
+                // **The worker kills `tools/` first** (6.1, the worker's
+                // rows): serving, it waits a full bound from its own kill
+                // before it closes the call; with a leave held, it kills and
+                // does not wait. The outcome is left for the lifecycle.
                 Err(_) => {
+                    let context = if self.leave.as_ref().is_some_and(|slot| slot.is_some()) {
+                        crate::tools_cgroup::Context::Leave
+                    } else {
+                        crate::tools_cgroup::Context::Serving
+                    };
+                    // Only a gate that hung up is dead: a live gate's
+                    // unreadable frame ends service without a kill, the
+                    // unwind's lower sweeping what remains.
+                    let dead = {
+                        use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+                        use std::os::fd::AsFd;
+                        let mut fds = [PollFd::new(gate.channel.as_fd(), PollFlags::POLLIN)];
+                        matches!(poll(&mut fds, PollTimeout::ZERO), Ok(n) if n > 0)
+                            && fds[0].revents().is_some_and(|revents| {
+                                revents.intersects(PollFlags::POLLHUP | PollFlags::POLLERR)
+                            })
+                    };
+                    if let Some(tools) = gate.tools.filter(|_| dead) {
+                        let contained = crate::tools_cgroup::contain(
+                            tools,
+                            context,
+                            crate::tools_cgroup::CONTAINMENT_BOUND,
+                        );
+                        if let Some(slot) = gate.contained.as_mut() {
+                            **slot = Some((context, contained));
+                        }
+                    }
                     let outcome = weaver_types::ToolOutcome::Killed {
                         partial: None,
                         by: weaver_types::KillCause::Fault,
@@ -1492,6 +1595,8 @@ impl<'a> Ports<'a> {
                 }
                 self.interrupt_running(turn, execution)?;
             }
+            // Taken by `execute_call` before it reaches here.
+            ExchangeWake::InterruptBound => {}
             ExchangeWake::Dial => {
                 let Some(slot) = self.pending.as_deref_mut() else {
                     return Ok(());
@@ -2065,6 +2170,8 @@ impl<'a> Ports<'a> {
                 // A diagnostic replay stands no gate; a hang-up is not
                 // watched again.
                 ExchangeWake::GateLost => self.gate_lost = true,
+                // Only an execution waits on the interrupt's bound.
+                ExchangeWake::InterruptBound => {}
                 // The coordination channel is heard while the re-feed
                 // streams, exactly as a generation hears it, and everything
                 // but a channel loss is refused: the replay has no stop
@@ -2375,6 +2482,28 @@ impl<'a> Ports<'a> {
             // it stays graceful. Past it the wake is the deadline's.
             let deadline = self.leave_deadline.or_else(|| self.held_drain_deadline());
             let deadline = deadline.filter(|_| !self.deadline_passed);
+            // **The interrupted call's bound**, while the gate is the work.
+            let interrupt = self
+                .interrupted_at
+                .get()
+                .filter(|_| {
+                    self.gate.as_ref().is_some_and(|gate| {
+                        std::os::fd::AsRawFd::as_raw_fd(&gate.channel.as_fd())
+                            == std::os::fd::AsRawFd::as_raw_fd(&work)
+                    })
+                })
+                .and_then(|at| {
+                    at.checked_add(std::time::Duration::from_millis(
+                        weaver_types::LOWER_BOUND_MS,
+                    ))
+                });
+            if interrupt.is_some_and(|d| std::time::Instant::now() >= d) {
+                return Ok(ExchangeWake::InterruptBound);
+            }
+            let deadline = match (deadline, interrupt) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
             // **The clock is read before every wait** (Codex on #119, round
             // 1): a generation that keeps its channel readable never lets the
             // wait time out, and it is the one the bound exists to cut.
@@ -2383,6 +2512,9 @@ impl<'a> Ports<'a> {
             }
             let wait = crate::lifecycle::poll_timeout_until(deadline);
             match poll(&mut fds, wait) {
+                Ok(0) if interrupt.is_some_and(|d| std::time::Instant::now() >= d) => {
+                    return Ok(ExchangeWake::InterruptBound);
+                }
                 Ok(0) if deadline.is_some_and(|d| std::time::Instant::now() >= d) => {
                     return Ok(ExchangeWake::Deadline);
                 }
@@ -2431,6 +2563,9 @@ enum ExchangeWake {
     Deadline,
     /// The gate's channel hung up.
     GateLost,
+    /// The lower's bound passed from the interrupt of the call out, the
+    /// gate not having answered it.
+    InterruptBound,
 }
 
 /// The load facts a test lends the seat, where no enter built them.

@@ -20,6 +20,7 @@ use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use weaver_gate::channel::{self, Channel, ChannelFault, EntryFault};
 use weaver_gate::hook::{AcceptOutcome, Hook, RaiseRefusal};
 use weaver_gate::relay::{self, Relay};
+use weaver_gate::tools::Unanswered;
 use weaver_types::{
     ExchangeId, LifecycleAnswer, LifecycleDirective, LifecycleRefusal, Opener, OrganEnvelope,
     Payload, Position,
@@ -64,7 +65,20 @@ fn main() -> ExitCode {
     // Entry performs its two hygiene sets and one election before the first
     // read.
     match channel::adopt() {
-        Ok(channel) => serve(channel),
+        // **Beside the channel, at 4, the handle on `tools/`**
+        // (`weaver-gate-Spec` section 2): a gate without it could run no
+        // shell inside the agent's cgroup, so it refuses every directive
+        // `BoundaryUnverified`, as for a hygiene set that failed.
+        Ok(channel) => match weaver_gate::tools::cgroup::adopt() {
+            Ok(()) => serve(channel),
+            Err(fault) => {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({"refusal": "boundary_unverified", "tools": format!("{fault:?}")})
+                );
+                refuse_everything(channel)
+            }
+        },
         Err(EntryFault::Unusable) => {
             // Mute by construction: with no usable channel the only refusal
             // available is the exit the harness observes.
@@ -409,9 +423,20 @@ fn serve_channel_event(channel: &Channel, state: &mut HookState) -> Result<(), E
     {
         match weaver_gate::tools::execute(execution, channel, &envelope.exchange) {
             Ok(outcome) => Payload::ToolAnswer(outcome),
-            Err(ChannelFault::Closed) => return Err(ExitCode::SUCCESS),
-            Err(fault) => {
+            Err(Unanswered::Channel(ChannelFault::Closed)) => return Err(ExitCode::SUCCESS),
+            Err(Unanswered::Channel(fault)) => {
                 eprintln!("{}", fault_line(&fault));
+                return Err(ExitCode::FAILURE);
+            }
+            // **An execution this gate cannot contain is never answered**
+            // (`weaver-gate-Spec` section 8): the gate exits, the harness
+            // meets its death, closes the call `Killed { by: fault }`, and
+            // kills `tools/` itself.
+            Err(Unanswered::Uncontained) => {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({"died": "tools/ could not be contained: the execution is unanswered"})
+                );
                 return Err(ExitCode::FAILURE);
             }
         }

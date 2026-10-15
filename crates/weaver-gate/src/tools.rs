@@ -3,7 +3,6 @@
 //! conforms: gate-shell-the-one-held-tool
 //! conforms: gate-execution-one-clock
 //! conforms: gate-execution-four-contents
-//! conforms: gate-execution-group-kill
 //! conforms: gate-execution-drain-rides-the-run
 //!
 //! The shell execution, per `weaver-gate-Spec` section 8 and the tool
@@ -23,7 +22,10 @@
 //! crate's voice with nothing run, an error is the machinery's, and a kill
 //! carries no tool voice by construction.
 
+pub mod cgroup;
+
 use crate::channel::{Channel, ChannelFault};
+use cgroup::Tools;
 use weaver_types::{
     ExchangeId, KillCause, LifecycleRefusal, OrganEnvelope, Payload, Position, ToolExecution,
     ToolOutcome,
@@ -41,14 +43,46 @@ pub const SHELL_MAX_CLOCK_MS: u64 = 60_000;
 /// the pipe empties, and the truncation marks itself in the answer.
 const SHELL_OUTPUT_BOUND: usize = 32 * 1024;
 
-/// Execute one call, answering one of the exchange's four contents.
+/// Why an execution has no answer: the channel failed, or the gate could not
+/// contain it (`weaver-gate-Spec` section 8), and then it exits with the
+/// execution unanswered so the harness meets its death.
+#[derive(Debug)]
+pub enum Unanswered {
+    Channel(ChannelFault),
+    /// The write of `tools/cgroup.kill` failed, or `tools/` did not empty
+    /// within the containment bound.
+    Uncontained,
+}
+
+/// Execute one call in the `tools/` entry adopted, answering one of the
+/// exchange's four contents.
 pub fn execute(
     execution: &ToolExecution,
     channel: &Channel,
     exchange: &ExchangeId,
-) -> Result<ToolOutcome, ChannelFault> {
-    execute_inner(execution, channel, exchange).or_else(|end| match end {
-        ShellEnd::Channel(fault) => Err(fault),
+) -> Result<ToolOutcome, Unanswered> {
+    match cgroup::adopted() {
+        Some(tools) => execute_in(execution, channel, exchange, tools),
+        // Entry refuses a gate with no handle, so no execution reaches here
+        // without one; answered as the machinery's all the same.
+        None => Ok(ToolOutcome::Errored {
+            detail: "no tools/ cgroup was handed to the gate".to_string(),
+        }),
+    }
+}
+
+/// [`execute`] in a named `tools/`: the one adopted, or the suite's
+/// scratch one. Not public: no caller outside this crate may run a shell in
+/// any `tools/` but the one entry adopted at descriptor 4.
+pub(crate) fn execute_in(
+    execution: &ToolExecution,
+    channel: &Channel,
+    exchange: &ExchangeId,
+    tools: &Tools,
+) -> Result<ToolOutcome, Unanswered> {
+    execute_inner(execution, channel, exchange, tools).or_else(|end| match end {
+        ShellEnd::Channel(fault) => Err(Unanswered::Channel(fault)),
+        ShellEnd::Uncontained => Err(Unanswered::Uncontained),
         other => Ok(other.into_outcome()),
     })
 }
@@ -57,6 +91,7 @@ fn execute_inner(
     execution: &ToolExecution,
     channel: &Channel,
     exchange: &ExchangeId,
+    tools: &Tools,
 ) -> Result<ToolOutcome, ShellEnd> {
     if execution.name.0 != SHELL_NAME {
         return Ok(ToolOutcome::Refused {
@@ -107,6 +142,7 @@ fn execute_inner(
         std::time::Duration::from_millis(execution.clock_ms),
         channel,
         exchange,
+        tools,
     ) {
         Ok(content) => Ok(ToolOutcome::Result { content }),
         Err(end) => Err(end),
@@ -126,6 +162,8 @@ enum ShellEnd {
         by: KillCause,
     },
     Channel(ChannelFault),
+    /// The kill of `tools/` failed or did not empty it within the bound.
+    Uncontained,
 }
 
 impl ShellEnd {
@@ -133,7 +171,9 @@ impl ShellEnd {
         match self {
             ShellEnd::Errored { detail } => ToolOutcome::Errored { detail },
             ShellEnd::Killed { partial, by } => ToolOutcome::Killed { partial, by },
-            ShellEnd::Channel(_) => unreachable!("channel faults stay below the exchange"),
+            ShellEnd::Channel(_) | ShellEnd::Uncontained => {
+                unreachable!("an unanswered end stays below the exchange")
+            }
         }
     }
 }
@@ -146,15 +186,29 @@ fn run_in_home(
     deadline: std::time::Duration,
     channel: &Channel,
     exchange: &ExchangeId,
+    tools: &Tools,
 ) -> Result<String, ShellEnd> {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
-    // The child leads its own process group, so the kill below reaches
-    // descendants still in `bash -c`'s group: a background child would otherwise
-    // inherit the pipe's write end and hold the readers open after the
-    // shell itself exited.
-    let mut child = Command::new("bash")
+    // **The child moves itself into `tools/` before its exec**
+    // (`weaver-gate-Spec` section 8; `weaver-admin-Spec` 6.1, C4): the
+    // handle's number and the gate's pid are read here, before the fork, so
+    // the child's `pre_exec` allocates nothing. The spawn returns only once
+    // the child has exec'd, so every kill below begins after the move, and a
+    // move that fails fails the spawn: `Errored`, nothing run.
+    let handle = tools.raw();
+    let gate = nix::unistd::getpid();
+    let mut shell = Command::new("bash");
+    // SAFETY: `move_self` makes only async-signal-safe `nix` calls on
+    // numbers and a path read before the fork.
+    unsafe {
+        shell.pre_exec(move || cgroup::move_self(handle, gate));
+    }
+    // The child still leads its own process group, as before the cgroup's
+    // kill: the group no longer carries the kill, and keeping it changes
+    // nothing else.
+    let mut child = shell
         .arg("-c")
         .arg(command)
         .current_dir(home)
@@ -171,7 +225,7 @@ fn run_in_home(
         .process_group(0)
         .spawn()
         .map_err(|error| ShellEnd::Errored {
-            detail: format!("the fork failed: {error}"),
+            detail: format!("the fork, or the shell's move into tools/, failed: {error}"),
         })?;
     let group = nix::unistd::Pid::from_raw(child.id() as i32);
 
@@ -218,13 +272,46 @@ fn run_in_home(
             }
         }
     };
-    // All endings kill the same group before reaping and release both
-    // readers, including a failed waitid or wait. Cleanup has no tool outcome
-    // election: only the supervisor decides whether the clock killed the run.
-    let _ = nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL);
-    // Also signal the unreaped leader in case it left the original group.
-    let _ = nix::sys::signal::kill(group, nix::sys::signal::Signal::SIGKILL);
-    let reaped = child.wait();
+    // **Every end kills `tools/` whole and waits for it to empty before the
+    // answer** (`weaver-gate-Spec` section 8; `weaver-admin-Spec` 6.1): the
+    // shell's exit, the clock, a cancel, an interrupt and the channel's
+    // closure alike, a failed waitid included. The kill reaches a command
+    // that left its group or its session, which a group signal did not.
+    // Cleanup has no tool outcome election: only the supervisor decides
+    // whether the clock killed the run.
+    // **One containment bound per end** (Codex on #167): the kill's wait and
+    // the leader's reap share a deadline taken here, so an execution's
+    // exchange completes within the caller's number plus the bound, as 6.1's
+    // table states, never plus twice it.
+    let deadline = std::time::Instant::now() + cgroup::CONTAINMENT_BOUND;
+    let contained = tools.contain(cgroup::CONTAINMENT_BOUND);
+    // **The leader is signalled by its pid, then reaped within the bound**
+    // (Codex on #167): the shell runs as the agent's account and may have
+    // moved itself out of `tools/` (6.1, C1's first stated exception), where
+    // the kill of `tools/` does not reach it and an unbounded reap would
+    // hang the gate. It is this process's own unreaped child, so its pid
+    // cannot have been reused. A leader not reaped within the bound is an
+    // execution not contained.
+    let reaped = if contained {
+        let _ = nix::sys::signal::kill(group, nix::sys::signal::Signal::SIGKILL);
+        reap_within(&mut child, deadline)
+    } else {
+        None
+    };
+    let reaped = if let Some(reaped) = reaped {
+        reaped
+    } else {
+        // **An execution the gate cannot contain is never answered**: the
+        // leader is signalled, the readers are released, and the gate exits
+        // so the harness meets its death. The leader is not reaped: a
+        // process that would not die is likely what kept `tools/` populated,
+        // and a wait on it could hold the gate past its own bound. The gate's
+        // exit reparents it.
+        let _ = nix::sys::signal::kill(group, nix::sys::signal::Signal::SIGKILL);
+        let _ = finish_draining(&finished, out_reader, err_reader);
+        drop(child);
+        return Err(ShellEnd::Uncontained);
+    };
     let drained = finish_draining(&finished, out_reader, err_reader);
     let killed_by = ending?;
     let status = reaped.map_err(|error| ShellEnd::Errored {
@@ -254,6 +341,27 @@ fn run_in_home(
         output.push_str("(no output)");
     }
     Ok(output)
+}
+
+/// The leader's reap by `deadline`, by a non-blocking wait in slices:
+/// `None` where it did not exit in time (an uninterruptible sleep), which the
+/// caller takes as an execution not contained. One check is made even past
+/// the deadline, so a leader already exited is reaped.
+fn reap_within(
+    child: &mut std::process::Child,
+    deadline: std::time::Instant,
+) -> Option<std::io::Result<std::process::ExitStatus>> {
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(Ok(status)),
+            Ok(None) => {}
+            Err(error) => return Some(Err(error)),
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
 
 /// Wait for a cancel or the unload's interrupt without postponing the next

@@ -616,6 +616,6 @@ register under G5.
 **What this act closes.** The fault cases a running hook raises are named at
 `weaver-gate-PRD` section 13.4, and with them the corpus-wide case set behind
 the `fault` event closes across all three organs: the SPU's at its section
-13.10, the gate's at its 13.4, and the harness's five at
-`weaver-harness-PRD` section 5, landed in this same act. The payload's shape
+13.10, the gate's at its 13.4, and the harness's at
+`weaver-harness-PRD` section 5, the first five landed in this same act. The payload's shape
 lands with the trace act against the closed set.

@@ -333,6 +333,26 @@ struct Run {
     run: weaver_types::RunId,
     spu: Option<SpuChannels>,
     gate: Option<GateChannel>,
+    /// The handle on the agent's `tools/` cgroup, opened once at the enter
+    /// before the gate's fork and handed it at descriptor 4
+    /// (`weaver-harness-Spec` section 2.2; `weaver-admin-Spec` section 6.1,
+    /// #111). Held by the run, not the gate's arm, so it outlives the gate
+    /// for the kill at its death and at the unwind.
+    tools: Option<crate::tools_cgroup::ToolsCgroup>,
+    /// **The leave's one anchor** (`weaver-admin-Spec` 6.1; section 3, the
+    /// leave's bounds): the instant a held leave's turn interrupted its call
+    /// out, from which the lower's window and the shared deadline are both
+    /// measured, so a forced leave never spends the lower's bound twice.
+    /// Taken once by the leave it anchors; absent, the lower's start anchors.
+    leave_anchor: Option<std::time::Instant>,
+    /// The anchor the leave hands its lower, taken by the lower.
+    lower_anchor: Option<std::time::Instant>,
+    /// The engine's kill of `tools/` when the gate died with a call open,
+    /// taken by the close that names the gate's death.
+    gate_contained: Option<(
+        crate::tools_cgroup::Context,
+        crate::tools_cgroup::Containment,
+    )>,
     /// The state seam's ask end, per `weaver-harness-Spec` section 6: a
     /// clone of the standing state channel, granted to the seat as the
     /// state port. `None` where the leg is not standing, which the port
@@ -1049,6 +1069,8 @@ impl Harness {
                     channel: &gate.channel,
                     ordinal: &mut run.gate_ordinal,
                     held: &mut run.held_frames,
+                    tools: run.tools.as_ref(),
+                    contained: Some(&mut run.gate_contained),
                 });
                 let mut ports = crate::engine::Ports::grant(
                     &spu.decode,
@@ -1074,6 +1096,11 @@ impl Harness {
                     Some(message) => ports.seed(message),
                     None => entry(&mut ports, &text),
                 };
+                // The interrupt's instant anchors the leave this turn held.
+                let interrupted = ports.interrupted_at();
+                if interrupted.is_some() {
+                    run.leave_anchor = interrupted;
+                }
                 match ran {
                     // A turn the operator's stop aborted answers the
                     // stopped close, the partial standing in the record.
@@ -1139,7 +1166,7 @@ impl Harness {
                     // 2026-10-09): it carries on, turned forced by (A). Only
                     // a worker that dies leaves admin no `Left`.
                     Err(crate::engine::TurnError::ChannelLost) => {
-                        let turn = close_turn_on_death(run)?;
+                        let turn = close_turn_on_death(run, death_context(run))?;
                         if let Some(held) = run.leave.as_mut() {
                             held.progress.leave =
                                 crate::lifecycle_table::leave_on_arrival(held.progress.leave, true);
@@ -1306,45 +1333,57 @@ impl Harness {
             OrganDeath::Gate => Event::GateDies,
             OrganDeath::Spu => Event::SpuDies,
         };
-        let author_death = |run: &mut Run, name: &str, last_word: Option<String>| {
-            let mut account =
-                serde_json::json!({"organ": name, "death": "channel closed, the run standing"});
-            if let Some(line) = last_word {
-                account["last_word"] =
-                    serde_json::from_str(&line).unwrap_or(serde_json::Value::String(line));
-            }
-            let account = account.to_string();
-            run.author
-                .author_fault(
-                    &mut run.recorder,
-                    Subsystem::Harness,
-                    run.turn_in_flight.clone().as_ref(),
-                    &crate::authorship::harness_report(
-                        weaver_types::FaultCase::OrganDeathObserved,
-                        &account,
-                    ),
-                )
-                .is_ok()
-        };
+        let author_death =
+            |run: &mut Run, name: &str, last_word: Option<String>, contained: Option<Contained>| {
+                let mut account =
+                    serde_json::json!({"organ": name, "death": "channel closed, the run standing"});
+                if let Some(line) = last_word {
+                    account["last_word"] =
+                        serde_json::from_str(&line).unwrap_or(serde_json::Value::String(line));
+                }
+                if let Some(words) = containment_words(contained) {
+                    account["containment"] = serde_json::Value::String(words.to_string());
+                }
+                let account = account.to_string();
+                run.author
+                    .author_fault(
+                        &mut run.recorder,
+                        Subsystem::Harness,
+                        run.turn_in_flight.clone().as_ref(),
+                        &crate::authorship::harness_report(
+                            weaver_types::FaultCase::OrganDeathObserved,
+                            &account,
+                        ),
+                    )
+                    .is_ok()
+            };
         match respond(run.position(None), event) {
             Response::NoCell => {}
             // **The record holds or service ends** (the Planner's ruling of
             // 2026-10-09): a death's fault that cannot be authored ends
             // service before the organ is torn down, so the run never serves
             // on with the record of it missing.
+            // **The worker kills `tools/` and waits a full bound from its
+            // own kill** (`weaver-admin-Spec` 6.1, the gate dies while
+            // serving), the account naming what that came to, and a `tools/`
+            // that will not empty, or a kill not delivered, ends service.
             Response::GateFaultServeOn => {
                 let last_word = run.gate.as_ref().and_then(|gate| gate.last_word.take());
-                if !author_death(run, "gate", last_word) {
+                let contained = contain_tools(run, death_context(run));
+                if !author_death(run, "gate", last_word, contained) {
                     return Err(ChannelFault::Closed);
                 }
                 if let Some(gate) = run.gate.take() {
                     drop(gate.channel);
                     reap_by(gate.pid, lower_window());
                 }
+                if ends_service(contained) {
+                    return Err(ChannelFault::Closed);
+                }
             }
             Response::SpuFaultServeOnRefuseLater | Response::SpuFaultRetriedReleaseUnconfirmed => {
                 let last_word = run.spu.as_ref().and_then(|spu| spu.last_word.take());
-                if !author_death(run, "spu", last_word) {
+                if !author_death(run, "spu", last_word, None) {
                     return Err(ChannelFault::Closed);
                 }
                 if let Some(spu) = run.spu.take() {
@@ -1406,6 +1445,8 @@ impl Harness {
             channel: &gate.channel,
             ordinal: &mut run.gate_ordinal,
             held: &mut run.held_frames,
+            tools: run.tools.as_ref(),
+            contained: Some(&mut run.gate_contained),
         });
         let mut ports = crate::engine::Ports::grant(
             &spu.decode,
@@ -1436,7 +1477,8 @@ impl Harness {
                 Err(ChannelFault::Closed)
             }
             Err(crate::engine::TurnError::ChannelLost) => {
-                close_turn_on_death(run)?;
+                // The wind-down is the leave's: nothing waits on `tools/`.
+                close_turn_on_death(run, crate::tools_cgroup::Context::Leave)?;
                 // **An SPU dead in the wind-down turns the leave forced**
                 // (A): the wind-down cannot run.
                 if run.spu.is_none() {
@@ -1531,7 +1573,14 @@ impl Harness {
         // at rest with the gate lowered, the retry or the force
         // finding it so. **The shared deadline runs from the lower's
         // start** (`weaver-harness-Spec` section 6).
-        let shared = shared_deadline();
+        // **One anchor per leave**: the interrupt's instant where the turn
+        // that held this leave interrupted its call, else the lower's start.
+        let anchor = run
+            .leave_anchor
+            .take()
+            .unwrap_or_else(std::time::Instant::now);
+        run.lower_anchor = Some(anchor);
+        let shared = shared_deadline(anchor);
         held.as_mut().expect("the leave").progress.step = LeaveStep::Lowering;
         // A gate that died in the wind-down, or before the lower, is met here.
         {
@@ -2232,6 +2281,10 @@ impl Harness {
             run: payload.run.clone(),
             spu: None,
             gate: None,
+            tools: None,
+            leave_anchor: None,
+            lower_anchor: None,
+            gate_contained: None,
             state: state_seam,
             grants_at_enter,
             load: weaver_types::LoadFacts {
@@ -2397,7 +2450,7 @@ impl Harness {
         let spu_pid = match unsafe {
             crate::spawn::fork_organ(
                 &self.organs.spu,
-                &[&lifecycle_child, &decode_child],
+                &[lifecycle_child.as_fd(), decode_child.as_fd()],
                 &self.parameters.spu_arguments(),
                 Some(std::os::fd::AsRawFd::as_raw_fd(&spu_stderr)),
             )
@@ -2512,7 +2565,7 @@ impl Harness {
             let pid = match unsafe {
                 crate::spawn::fork_organ(
                     binary,
-                    &[&child],
+                    &[child.as_fd()],
                     &arguments,
                     Some(std::os::fd::AsRawFd::as_raw_fd(&classify_stderr)),
                 )
@@ -2558,6 +2611,15 @@ impl Harness {
             weaver_types::EnterBinding::Diagnostic => return Ok(run),
         };
 
+        // **A worker that cannot open or judge `tools/` stands no gate**
+        // (`weaver-harness-Spec` section 2.2; `weaver-admin-Spec` 6.1, the
+        // worker's row): the gate's arm refuses `BoundaryUnverified`, wrapped
+        // `OrganRefused` as any refusal of the gate's arm is, and the load
+        // rolls back. Opened once, here, and never resolved by path again.
+        let tools = match open_tools() {
+            Ok(tools) => tools,
+            Err(refusal) => after_load!(run, refusal),
+        };
         // The gate pair is created only after the SPU's answer confirms
         // residency: one organ's readiness gates another organ's
         // construction, which neither organ can see from inside its domain.
@@ -2571,10 +2633,10 @@ impl Harness {
             Err(_) => after_load!(run, LifecycleRefusal::DescriptorsUnusable),
         };
         let gate_pid = match unsafe {
-            crate::spawn::fork_organ(
+            fork_gate(
                 &self.organs.gate,
-                &[&gate_child],
-                &[],
+                &gate_child,
+                std::os::fd::AsFd::as_fd(&tools),
                 Some(std::os::fd::AsRawFd::as_raw_fd(&gate_stderr)),
             )
         } {
@@ -2583,6 +2645,7 @@ impl Harness {
         };
         drop(gate_child);
         drop(gate_stderr);
+        run.tools = Some(tools);
         run.gate_ordinal += 1;
         if let Err(refusal) = exchange(
             &gate,
@@ -2789,7 +2852,12 @@ fn leave(
     cause: Option<weaver_types::Cause>,
     forced: bool,
 ) -> Result<(), LifecycleRefusal> {
-    let shared = shared_deadline();
+    let anchor = run
+        .leave_anchor
+        .take()
+        .unwrap_or_else(std::time::Instant::now);
+    run.lower_anchor = Some(anchor);
+    let shared = shared_deadline(anchor);
     let (lowered, _) = lower_gate(run, shared);
     leave_after(run, cause, forced, None, lowered, shared)
 }
@@ -2798,8 +2866,8 @@ fn leave(
 /// lower's start, the leave bound from it, which the trace's drain, the SPU's
 /// `Release` and the reaps share with whatever the lower and the save
 /// point's legs leave.
-fn shared_deadline() -> Option<std::time::Instant> {
-    std::time::Instant::now().checked_add(std::time::Duration::from_millis(
+fn shared_deadline(anchor: std::time::Instant) -> Option<std::time::Instant> {
+    anchor.checked_add(std::time::Duration::from_millis(
         weaver_types::LEAVE_BOUND_MS,
     ))
 }
@@ -2826,7 +2894,8 @@ fn lower_gate_within(
 ) -> (Option<LifecycleRefusal>, bool) {
     let Some(gate) = run.gate.take() else {
         // From S9, the gate already lowered: a refusal that lower answered
-        // is this unwind's first (#140, S15).
+        // is this unwind's first (#140, S15). `tools/` was swept at that
+        // lower.
         return (run.lower_refusal.take(), false);
     };
     // Held as its own fact, since a gate that died leaves no gate too: a
@@ -2836,8 +2905,24 @@ fn lower_gate_within(
     // **The lower's window bounds the gate's reap too**: the save point's
     // legs come after the lower, so a gate that never exits is killed at the
     // lower's bound, never held to the shared deadline (the self-check of B2).
-    let window = std::time::Instant::now().checked_add(std::time::Duration::from_millis(bound_ms));
-    let lowered = lower_exchange(run, &gate.channel, run.gate_ordinal, bound_ms);
+    // **It runs from the leave's anchor** (`weaver-admin-Spec` 6.1; Codex on
+    // #167): after an interrupt the window is the one that began there, so a
+    // gate past it is reaped at once and the bound is never spent twice.
+    let anchor = run
+        .lower_anchor
+        .take()
+        .unwrap_or_else(std::time::Instant::now);
+    let window = anchor.checked_add(std::time::Duration::from_millis(bound_ms));
+    // Rounded up, so a lower anchored now waits its whole bound.
+    let remaining_ms = window.map_or(bound_ms, |window| {
+        window
+            .saturating_duration_since(std::time::Instant::now())
+            .as_micros()
+            .div_ceil(1000)
+            .try_into()
+            .unwrap_or(bound_ms)
+    });
+    let lowered = lower_exchange(run, &gate.channel, run.gate_ordinal, remaining_ms);
     // **Answered or not, the channel closes and the gate is reaped**: a gate
     // that did not answer inside the bound meets its channel closed, which is
     // death to it (`weaver-harness-gate-contract` section 1).
@@ -2846,12 +2931,30 @@ fn lower_gate_within(
     // forced (A). The second value says it died.
     use std::os::fd::AsFd;
     let died = lowered.is_err() && hung_up(gate.channel.as_fd());
+    // **The unwind's kill of `tools/`, before `Left`** (6.1, the worker's
+    // unwind; `weaver-harness-Spec` section 2.2): every leave lowers the gate
+    // here, before its save point and its `unload`, so this is the last
+    // sweep, the write or one pinned pass, never a wait. After every
+    // answered execution `tools/` is already empty.
+    // Always the unwind's own sweep, never an earlier kill's result (the
+    // Planner's grade of #167): an earlier pass's outcome is spent here.
+    run.gate_contained = None;
+    let contained = contain_tools(run, crate::tools_cgroup::Context::Leave);
     if died {
         author_gate_death(
             run,
             gate.last_word.take(),
             "its channel was lost at the lower",
+            contained,
         );
+    } else if matches!(
+        contained,
+        Some((_, crate::tools_cgroup::Containment::Undelivered))
+    ) {
+        // `Left` is answered all the same, the fault naming the failed
+        // containment (6.1, the unwind with both failing): its own case, the
+        // gate having lowered and not died.
+        author_containment_undelivered(run, contained);
     }
     drop(gate.channel);
     reap_by(gate.pid, [window, shared].into_iter().flatten().min());
@@ -3398,7 +3501,10 @@ fn drain_gate(
 /// organ reaped. **The record holds or service ends**: a record that cannot
 /// be authored refuses before anything is torn down (the Planner's ruling of
 /// 2026-10-09). Returns the turn that closed, for its dialer's close.
-fn close_turn_on_death(run: &mut Run) -> Result<Option<TurnKey>, ChannelFault> {
+fn close_turn_on_death(
+    run: &mut Run,
+    context: crate::tools_cgroup::Context,
+) -> Result<Option<TurnKey>, ChannelFault> {
     let turn = run.turn_in_flight.take();
     let mut recorded = true;
     if let Some(turn) = turn.as_ref() {
@@ -3430,15 +3536,39 @@ fn close_turn_on_death(run: &mut Run) -> Result<Option<TurnKey>, ChannelFault> {
         .spu
         .as_ref()
         .is_some_and(|spu| hung_up(spu.decode.as_fd()));
+    // **A gate lost mid-turn has `tools/` killed before its death is
+    // named** (`weaver-admin-Spec` 6.1): the engine's kill where a call was
+    // open, else the worker's own, in the caller's context, a leave's never
+    // waiting.
+    let from_call = if gate_dead {
+        run.gate_contained.take()
+    } else {
+        None
+    };
+    let contained = if gate_dead {
+        from_call.or_else(|| contain_tools(run, context))
+    } else {
+        None
+    };
     for (organ, dead) in [("gate", gate_dead), ("spu", spu_dead)] {
         if !dead {
             continue;
         }
-        let account = serde_json::json!({
+        let mut account = serde_json::json!({
             "organ": organ,
             "death": "its channel was lost mid-turn",
-        })
-        .to_string();
+        });
+        if organ == "gate"
+            && let Some(words) = containment_words(contained)
+        {
+            account["containment"] = serde_json::Value::String(words.to_string());
+            if from_call.is_some() {
+                account["call"] = serde_json::Value::String(
+                    "closed killed by the fault once tools/ was contained".to_string(),
+                );
+            }
+        }
+        let account = account.to_string();
         recorded &= run
             .author
             .author_fault(
@@ -3463,6 +3593,11 @@ fn close_turn_on_death(run: &mut Run) -> Result<Option<TurnKey>, ChannelFault> {
         let pid = spu.pid;
         drop(spu);
         reap_by(pid, lower_window());
+    }
+    // The turn closed `Stopped { reason: fault }` above, its one close: a
+    // `tools/` that would not empty, or a kill not delivered, ends service.
+    if ends_service(contained) {
+        return Err(ChannelFault::Closed);
     }
     Ok(turn)
 }
@@ -3507,10 +3642,16 @@ pub(crate) fn deadline_after(bound_s: Option<u64>) -> Option<std::time::Instant>
 /// point's legs go on, needing no gate.
 fn gate_died_in_leave(run: &mut Run, leave: &mut PendingLeave) {
     if let Some(gate) = run.gate.take() {
+        // Inside a leave the worker kills `tools/` and does not wait (6.1).
+        let contained = run
+            .gate_contained
+            .take()
+            .or_else(|| contain_tools(run, crate::tools_cgroup::Context::Leave));
         author_gate_death(
             run,
             gate.last_word.take(),
             "its channel was lost during the leave",
+            contained,
         );
         drop(gate.channel);
         reap_by(gate.pid, lower_window());
@@ -3518,13 +3659,129 @@ fn gate_died_in_leave(run: &mut Run, leave: &mut PendingLeave) {
     leave.progress.leave = crate::lifecycle_table::Leave::Forced;
 }
 
+/// **The worker's handle on `tools/`, or the gate's arm's refusal**
+/// (`weaver-harness-Spec` section 2.2; `weaver-admin-Spec` 6.1, the worker's
+/// row): a worker that cannot open or judge it stands no gate, refusing
+/// `BoundaryUnverified` wrapped `OrganRefused` as any refusal of the gate's
+/// arm is, the reason on standard error.
+fn open_tools() -> Result<crate::tools_cgroup::ToolsCgroup, LifecycleRefusal> {
+    crate::tools_cgroup::ToolsCgroup::open_from_own().map_err(|refused| {
+        eprintln!("weaver-harness: the agent's tools/ cgroup: {refused}");
+        LifecycleRefusal::OrganRefused {
+            organ: weaver_types::RefusingOrgan::Gate,
+            reason: Box::new(LifecycleRefusal::BoundaryUnverified),
+        }
+    })
+}
+
+/// **The gate's fork**: its end at 3 and the handle on `tools/` at 4, by the
+/// channels' own order (`weaver-harness-Spec` section 2.2), and no argument.
+///
+/// # Safety
+///
+/// [`crate::spawn::fork_organ`]'s: the caller is the serving thread.
+unsafe fn fork_gate(
+    binary: &std::path::Path,
+    end: &crate::channel::ChildEnd,
+    tools: std::os::fd::BorrowedFd<'_>,
+    stderr: Option<std::os::fd::RawFd>,
+) -> Result<nix::unistd::Pid, nix::Error> {
+    // SAFETY: the caller's.
+    unsafe { crate::spawn::fork_organ(binary, &[end.as_fd(), tools], &[], stderr) }
+}
+
+/// The worker's kill of `tools/` and what it came to, in the context it ran.
+type Contained = (
+    crate::tools_cgroup::Context,
+    crate::tools_cgroup::Containment,
+);
+
+/// **The worker's kill of `tools/`** (`weaver-admin-Spec` 6.1, the worker's
+/// rows), `None` where no handle was opened (a run with no gate).
+fn contain_tools(run: &Run, context: crate::tools_cgroup::Context) -> Option<Contained> {
+    run.tools.as_ref().map(|tools| {
+        (
+            context,
+            crate::tools_cgroup::contain(tools, context, crate::tools_cgroup::CONTAINMENT_BOUND),
+        )
+    })
+}
+
+/// **The context a gate's death meets `tools/` in** (6.1): a leave held,
+/// which the table's at-rest position does not show (a turn's answer that
+/// finds the gate gone with a leave the turn held), is a leave's, and
+/// nothing waits on `tools/` inside a leave; otherwise the worker serves.
+fn death_context(run: &Run) -> crate::tools_cgroup::Context {
+    if run.leave.is_some() {
+        crate::tools_cgroup::Context::Leave
+    } else {
+        crate::tools_cgroup::Context::Serving
+    }
+}
+
+/// **Whether a containment ends service** (6.1, the worker's rows): while
+/// serving, a `tools/` that did not empty within the bound, or a kill the
+/// write and the fallback both failed to deliver. Inside a leave nothing
+/// ends service; the leave goes on.
+fn ends_service(contained: Option<Contained>) -> bool {
+    use crate::tools_cgroup::{Containment, Context};
+    matches!(
+        contained,
+        Some((
+            Context::Serving,
+            Containment::PastBound | Containment::Undelivered
+        ))
+    )
+}
+
+/// What the gate's death account says of the containment.
+fn containment_words(contained: Option<Contained>) -> Option<&'static str> {
+    use crate::tools_cgroup::Containment;
+    contained.map(|(_, containment)| match containment {
+        Containment::Emptied => "tools/ killed and emptied",
+        Containment::Delivered => "tools/ killed, not waited on inside the leave",
+        Containment::PastBound => "tools/ killed and not empty within the bound: service ends",
+        Containment::Undelivered => {
+            "containment failed: the write of cgroup.kill and the pinned fallback both failed, the kill not delivered"
+        }
+    })
+}
+
+/// **The unwind's undelivered sweep** as its own `fault`
+/// (`tools_containment_undelivered`, `weaver-harness-PRD` section 5): the
+/// account names the organ whose `tools/` it was and what the containment
+/// came to, and no death. Latched on a failure (#116), read at the seal.
+fn author_containment_undelivered(run: &mut Run, contained: Option<Contained>) {
+    let mut account = serde_json::json!({"organ": "gate"});
+    if let Some(words) = containment_words(contained) {
+        account["containment"] = serde_json::Value::String(words.to_string());
+    }
+    let _ = run.author.author_fault(
+        &mut run.recorder,
+        Subsystem::Harness,
+        None,
+        &crate::authorship::harness_report(
+            weaver_types::FaultCase::ToolsContainmentUndelivered,
+            &account.to_string(),
+        ),
+    );
+}
+
 /// The gate's death as a `fault`, its last word riding the account where it
 /// spoke one that parses.
-fn author_gate_death(run: &mut Run, last_word: Option<String>, death: &str) {
+fn author_gate_death(
+    run: &mut Run,
+    last_word: Option<String>,
+    death: &str,
+    contained: Option<Contained>,
+) {
     let mut account = serde_json::json!({"organ": "gate", "death": death});
     if let Some(line) = last_word {
         account["last_word"] =
             serde_json::from_str(&line).unwrap_or(serde_json::Value::String(line));
+    }
+    if let Some(words) = containment_words(contained) {
+        account["containment"] = serde_json::Value::String(words.to_string());
     }
     // Latched on a failure (#116), read at the leave's seal, which refuses
     // `DescriptorsUnusable`.

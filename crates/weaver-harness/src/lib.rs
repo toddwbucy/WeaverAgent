@@ -109,6 +109,7 @@ mod replay;
 mod spawn;
 mod state;
 mod tools;
+mod tools_cgroup;
 
 pub use assembly::{Prompt, assemble};
 pub use authorship::{Author, licensed};
