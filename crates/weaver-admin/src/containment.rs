@@ -115,6 +115,10 @@ pub enum StartAction {
     /// Remove the empty cgroup standing, with any record, then make afresh
     /// (A1).
     RemoveThenMake,
+    /// Remove a stale record, its recorded path absent (A0), then make
+    /// afresh: the record goes before the `mkdir`, so a load that dies
+    /// before its own record's write leaves no record naming a cgroup gone.
+    RemoveRecordThenMake,
     Refuse(StartRefusal),
 }
 
@@ -152,7 +156,9 @@ pub fn start_judgment(facts: StartFacts) -> StartAction {
         return StartAction::Refuse(StartRefusal::NotDelegated);
     }
     // A record naming a cgroup absent at its path is A0, already removed:
-    // the record is stale, and the write of this load's record replaces it.
+    // the record is stale, and is removed before the `mkdir` (the row for a
+    // recorded path absent), so a load dying before its own record's write
+    // leaves no record naming the path with the old identity.
     let recorded = match facts.recorded {
         RecordAtStart::None | RecordAtStart::Absent => Standing::Absent,
         RecordAtStart::Same(standing) => standing,
@@ -168,6 +174,9 @@ pub fn start_judgment(facts: StartFacts) -> StartAction {
             StartAction::Refuse(StartRefusal::Leftovers)
         }
         (Standing::Empty, _) | (_, Standing::Empty) => StartAction::RemoveThenMake,
+        (Standing::Absent, Standing::Absent) if facts.recorded == RecordAtStart::Absent => {
+            StartAction::RemoveRecordThenMake
+        }
         (Standing::Absent, Standing::Absent) => StartAction::Make,
     }
 }
@@ -177,6 +186,10 @@ pub fn start_judgment(facts: StartFacts) -> StartAction {
 /// `fchmod`, owner and record writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MadeStep {
+    /// The `mkdir` of the agent's own cgroup, `weaver-<agent>/`, failing
+    /// other than with `EEXIST` (the floor's second question: the invoker's
+    /// containment admits no child root makes), or what it made not root's.
+    CgroupMade(bool),
     /// The `mkdir` of `constituents/`, `worker/`, `run/` or `tools/`.
     LayoutMade(bool),
     KillFilePresent(bool),
@@ -193,16 +206,19 @@ pub enum MadeAction {
     RemoveAndRefuse,
 }
 
-/// 6.1's rows for the floor's `cgroup.kill` and the start's `fchmod`, owner
-/// and record writes: each failure removes what the start made and refuses.
+/// 6.1's rows for the floor's `mkdir` and `cgroup.kill` and the start's
+/// layout, `fchmod`, owner and record writes: each failure removes what the
+/// start made and refuses `BoundaryUnverified`.
 pub fn made_judgment(step: MadeStep) -> MadeAction {
     match step {
-        MadeStep::LayoutMade(true)
+        MadeStep::CgroupMade(true)
+        | MadeStep::LayoutMade(true)
         | MadeStep::KillFilePresent(true)
         | MadeStep::ModesSet(true)
         | MadeStep::OwnersSet(true)
         | MadeStep::RecordWritten(true) => MadeAction::GoOn,
-        MadeStep::LayoutMade(false)
+        MadeStep::CgroupMade(false)
+        | MadeStep::LayoutMade(false)
         | MadeStep::KillFilePresent(false)
         | MadeStep::ModesSet(false)
         | MadeStep::OwnersSet(false)
@@ -317,10 +333,11 @@ pub fn run_end_next(step: RunEndStep) -> RunEndAction {
 // ------------------------------------------------------------- the primitives
 
 /// Which step of making a child cgroup failed: the `mkdir` (or the open of
-/// what it made), or the `fchmod`.
+/// what it made), what it opened not being root's, or the `fchmod`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MakeChildError {
     Mkdir(Errno),
+    NotRoots,
     Mode(Errno),
 }
 
@@ -391,6 +408,14 @@ impl Cgroup {
         let made = self
             .child(name)
             .map_err(|error| MakeChildError::Mkdir(io_errno(error)))?;
+        // **What was opened must be what root made** (the Planner's grade of
+        // #164): the invoker's delegated cgroup is its delegatee's, which can
+        // remove the fresh directory and make its own between the `mkdir`
+        // and the open. One not root's is never opened up or built on.
+        if !fstat(made.dir.as_fd()).is_ok_and(|stat| stat.st_uid == nix::unistd::geteuid().as_raw())
+        {
+            return Err(MakeChildError::NotRoots);
+        }
         fchmod(made.dir.as_fd(), Mode::from_bits_truncate(DIRECTORY_MODE))
             .map_err(MakeChildError::Mode)?;
         Ok(made)
@@ -682,7 +707,7 @@ pub fn remove_layout(parent: &Cgroup, name: &str) -> nix::Result<()> {
 /// failed, for `made_judgment`.
 pub fn make_layout(agent: &Cgroup, uid: u32, gid: u32) -> Result<(), MadeStep> {
     let failed = |error: MakeChildError| match error {
-        MakeChildError::Mkdir(_) => MadeStep::LayoutMade(false),
+        MakeChildError::Mkdir(_) | MakeChildError::NotRoots => MadeStep::LayoutMade(false),
         MakeChildError::Mode(_) => MadeStep::ModesSet(false),
     };
     agent.make_child("constituents").map_err(failed)?;

@@ -102,11 +102,17 @@ fn the_start_step_judges_by_its_rows_in_order() {
         start_judgment(facts(Standing::Absent, RecordAtStart::Other)),
         StartAction::Refuse(StartRefusal::RecordUnverified)
     );
-    // A record naming a cgroup absent at its path is A0, stale: the path
-    // alone is judged.
+    // A record naming a cgroup absent at its path is A0, stale: removed
+    // before the mkdir, so a load dying before its own record's write wedges
+    // nothing. Where an empty cgroup stands at the path, its removal takes
+    // the record with it.
     assert_eq!(
         start_judgment(facts(Standing::Absent, RecordAtStart::Absent)),
-        StartAction::Make
+        StartAction::RemoveRecordThenMake
+    );
+    assert_eq!(
+        start_judgment(facts(Standing::Empty, RecordAtStart::Absent)),
+        StartAction::RemoveThenMake
     );
 }
 
@@ -115,6 +121,8 @@ fn the_start_step_judges_by_its_rows_in_order() {
 #[test]
 fn a_failed_step_of_the_making_removes_and_refuses() {
     for (step, answer) in [
+        (MadeStep::CgroupMade(true), MadeAction::GoOn),
+        (MadeStep::CgroupMade(false), MadeAction::RemoveAndRefuse),
         (MadeStep::LayoutMade(true), MadeAction::GoOn),
         (MadeStep::LayoutMade(false), MadeAction::RemoveAndRefuse),
         (MadeStep::KillFilePresent(true), MadeAction::GoOn),
