@@ -2292,7 +2292,12 @@ inside its one process, so the replaced follower's connection is closed, the rea
 logged since no stream line carries one, and never more than one follower stands (the
 item carried on #50, issuecomment-5969438713). The stream is `weaver-types-Spec` section
 3.1's: a `TraceHeader` line, then the file's own lines from the verified position
-exactly as written, then following with a heartbeat while idle. **The relay parses no
+exactly as written, then following with a heartbeat while idle. **The header's length
+is read at acceptance** (#88), once the position verifies and before the follower
+stands, from the descriptor the relay holds: the file's size, then back from it, a block
+at a time, to the last newline, the byte after it, or 0 where there is none. A read that
+fails refuses the connection, logged, rather than name a boundary it did not read.
+**The relay parses no
 event**: it hashes one record's bytes to verify a position, a bounded number of blocks
 per pass of its loop, so a record of any length costs it one block of memory and never
 holds the loop away from the lifetime pipe or the follower, and copies bytes, whole
