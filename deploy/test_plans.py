@@ -308,9 +308,11 @@ class PlanTests(unittest.TestCase):
         for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
                      "VISUDO_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
                      "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS", "GROUP_WRITES",
-                     "LAYOUT_GROUPS", "FIXTURE_ADMIN", "ADMIN_CALLS", "UNLOAD_ANSWER"):
+                     "LAYOUT_GROUPS", "FIXTURE_ADMIN", "ADMIN_CALLS", "UNLOAD_ANSWER", "MISPLACED",
+                     "KEEP_CGROUP"):
             self.env.pop(name, None)
-        # Redirect even shell builtin /home probes into the fixture. The
+        # Redirect even shell builtin /home probes, and the cgroup mount's
+        # reads, into the fixture. The
         # production scripts have no test-only path switches and never read
         # the host's real agent homes during these tests.
         preamble = self.root / "fixture.bash"
@@ -318,12 +320,16 @@ class PlanTests(unittest.TestCase):
   local arg
   fixture_mapped=()
   for arg in "$@"; do
-    case "$arg" in /home/*|/run/systemd/system) arg="$FIXTURE_ROOT$arg";; esac
+    case "$arg" in
+      /home/*|/run/systemd/system) arg="$FIXTURE_ROOT$arg";;
+      /sys/fs/cgroup/*) arg="$FIXTURE_ROOT/cgroup-fs${arg#/sys/fs/cgroup}";;
+    esac
     fixture_mapped+=("$arg")
   done
 }
 [() { fixture_args "$@"; builtin [ "${fixture_mapped[@]}"; }
 test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
+grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
 """)
         self.env["BASH_ENV"] = str(preamble)
 
@@ -954,9 +960,15 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
 
     def verify_fixture(self):
         """An admitted agent whose admin is a stub: `load` starts a real
-        process standing in for the run's constituents and writes a load
-        event, `show` names it, `unload` ends it unless KEEP_ALIVE is set."""
+        process standing in for the run's constituents, lists it in the agent's
+        cgroup beneath the invoker's under a stand-in cgroup mount, and writes
+        a load event, `show` names it, `unload` ends it and removes the cgroup
+        unless KEEP_ALIVE is set (or, for the cgroup, KEEP_CGROUP)."""
         self.env.update(FIXTURE_UID="0", FIXTURE_ACCOUNT_UID=str(os.getuid()))
+        cgroup_fs = self.root / "cgroup-fs"
+        own = Path("/proc/self/cgroup").read_text().split("0::", 1)[1].strip()
+        agent_cgroup = cgroup_fs / own.lstrip("/") / "weaver-m1"
+
         root = self.config / "m1"
         root.mkdir()
         self.decl.mkdir(parents=True)
@@ -974,6 +986,8 @@ case "$1" in
   validate) echo '{{"kind":"validated"}}' ;;
   load) sleep 300 >/dev/null 2>&1 &
         echo $! > {state}/pid
+        mkdir -p {agent_cgroup}/constituents {agent_cgroup}/worker/run
+        [ -n "$MISPLACED" ] || echo $! > {agent_cgroup}/constituents/cgroup.procs
         echo '{{"kind":"load"}}' >> {sink}
         echo '{{"kind":"state","state":"idle"}}' ;;
   show) if [ -f {state}/pid ]; then
@@ -983,6 +997,7 @@ case "$1" in
             [ -n "$KEEP_ALIVE" ] || kill $(cat {state}/pid)
             cp {state}/pid {state}/last; rm {state}/pid
           fi
+          [ -n "$KEEP_ALIVE$KEEP_CGROUP" ] || rm -rf {agent_cgroup}
           echo '{{"kind":"state","state":"unloaded"}}' ;;
 esac
 """)
@@ -1008,8 +1023,34 @@ esac
         finally:
             self.end_stand_in(state)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-        self.assertIn("in the invoker's cgroup", result.stdout)
-        self.assertIn("every constituent gone, show unloaded", result.stdout)
+        self.assertIn("in constituents beneath the invoker's cgroup", result.stdout)
+        self.assertIn("every constituent gone, the agent's cgroup gone, show unloaded", result.stdout)
+
+    def test_verify_load_refuses_a_constituent_outside_the_agents_cgroup(self):
+        """**A constituent not in the agent's cgroup beneath the invoker's,
+        and an agent's cgroup outliving the unload, each refuse**
+        (weaver-admin-Spec 6.1): verify-load reads each constituent's leaf
+        and the cgroup's absence after the unload. Perturbations: drop the
+        leaf check, and the misplaced constituent is verified; drop the
+        absence check, and the cgroup left standing is."""
+        for case, variable, said in (
+                ("misplaced", "MISPLACED", "is not in "),
+                ("outlived", "KEEP_CGROUP", "outlived the unload")):
+            with self.subTest(case):
+                shutil.rmtree(self.config / "m1", ignore_errors=True)
+                shutil.rmtree(self.decl, ignore_errors=True)
+                shutil.rmtree(self.root / "stub-state", ignore_errors=True)
+                shutil.rmtree(self.root / "installed", ignore_errors=True)
+                shutil.rmtree(self.root / "cgroup-fs", ignore_errors=True)
+                state = self.verify_fixture()
+                self.env[variable] = "1"
+                try:
+                    result = self.run_script("verify-load.sh", "m1")
+                finally:
+                    del self.env[variable]
+                    self.end_stand_in(state)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(said, result.stderr)
 
     def test_verify_load_reads_its_unload_and_takes_only_a_load_event(self):
         """**verify-load reads its first unload's answer, and only `load` is a

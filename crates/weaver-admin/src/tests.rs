@@ -4648,7 +4648,18 @@ fn the_member_spawn_lands_the_members_identity_as_root() {
         .unwrap()
         .expect("a free run lock");
 
-    let harness_end = stand_state_member(&service, &inventory, &run_lock, None);
+    // Stands in for `constituents/cgroup.procs`, which takes the move's `0`.
+    let placement = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/null")
+        .unwrap();
+    let harness_end = stand_state_member(
+        &service,
+        &inventory,
+        &run_lock,
+        None,
+        std::os::fd::AsRawFd::as_raw_fd(&placement),
+    );
     assert!(harness_end.is_some(), "the member stands");
     let territory = sink.join("state");
     let status = territory.join("status");
@@ -4726,6 +4737,13 @@ fn the_worker_spawn_lands_its_identity_and_allowlist_as_root() {
         )
     };
     assert!(leaked >= 50);
+    // Stands in for the leaf's `cgroup.procs`: the child's move writes `0`
+    // to it first, which `/dev/null` takes (the move's own instruments are
+    // `containment`'s).
+    let placement = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/null")
+        .unwrap();
     let mut child = start::spawn_worker(start::WorkerStart {
         binary: std::path::Path::new("/bin/sleep"),
         arguments: vec!["30".to_string()],
@@ -4736,6 +4754,7 @@ fn the_worker_spawn_lands_its_identity_and_allowlist_as_root() {
         log: &log,
         run_lock: &run_lock,
         relay_write: Some(std::os::fd::AsRawFd::as_raw_fd(&relay_write)),
+        placement: std::os::fd::AsRawFd::as_raw_fd(&placement),
     })
     .expect("the worker spawns");
     // The stand-in is `sleep` itself, which changes nothing it inherited,
@@ -4871,6 +4890,13 @@ fn the_relay_spawn_lands_its_identity_and_allowlist_as_root() {
     let (lifetime_read, lifetime_write) = nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC).unwrap();
     // SAFETY: the watch runs this instrument alone, one thread.
     unsafe { std::env::set_var("WEAVER_TRACE_RELAY_TEST_MS", "1") };
+    // Stands in for the leaf's `cgroup.procs`: the child's move writes `0`
+    // to it first, which `/dev/null` takes (the move's own instruments are
+    // `containment`'s).
+    let placement = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/null")
+        .unwrap();
     let mut child = start::spawn_relay(start::RelayStart {
         binary: &stand_in,
         reader_uid: 4246,
@@ -4883,6 +4909,7 @@ fn the_relay_spawn_lands_its_identity_and_allowlist_as_root() {
         log: &log,
         lifetime_read: &lifetime_read,
         run_lock: &run_lock,
+        placement: std::os::fd::AsRawFd::as_raw_fd(&placement),
     })
     .expect("the relay spawns");
     let pid = child.id();
@@ -5155,4 +5182,176 @@ fn a_listener_that_is_not_the_worker_is_refused_and_the_run_untouched() {
         Some(save_points::Marker::Open { run: "r-1".into() }),
         "the marker stays open"
     );
+}
+
+// ------------------------------------------------------------- the agent's cgroup
+
+/// The agent's cgroup made for `run` beneath a delegated scratch invoker,
+/// its record in the config's run directory, as the start step makes it.
+fn agent_cgroup_for(
+    config: &ServiceConfig,
+    tag: &str,
+    run: &str,
+) -> (containment::tests::ScratchCgroup, containment::Cgroup) {
+    use std::os::fd::AsFd;
+    let scratch = containment::tests::ScratchCgroup::new(tag);
+    containment::tests::mark_delegated(&scratch.cgroup);
+    let run_directory = agent_cgroup::open_run_directory(&config.run_directory()).unwrap();
+    let made = agent_cgroup::make_beneath(
+        containment::Cgroup::open(scratch.cgroup.relative()),
+        run_directory.as_fd(),
+        &config.agent,
+        run,
+        (
+            nix::unistd::getuid().as_raw(),
+            nix::unistd::getgid().as_raw(),
+        ),
+    )
+    .expect("the agent's cgroup is made");
+    drop(made);
+    let cgroup = scratch
+        .cgroup
+        .child(&agent_cgroup::cgroup_name(&config.agent))
+        .unwrap();
+    (scratch, cgroup)
+}
+
+/// **An `unload` over an ended run with a stray in `run/` answers `Unloaded`
+/// only with the agent's cgroup gone** (`weaver-admin-Spec` 6.1, C2's
+/// instrument; 3.0, S0d), and `show` names the stray until then (rung (iv)).
+/// Perturbation: drop the run end from the ended run's conclusion, and the
+/// unload answers `InTransition` naming the stray.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_an_unload_over_an_ended_run_ends_its_stray() {
+    let (config, _report, base) = territory_with_one_room_file("cg-unload");
+    let (scratch, agent) = agent_cgroup_for(&config, "cg-unload", "r-1");
+    let mut stray = containment::tests::escaper_in(&agent.child("worker/run").unwrap());
+    match show(&config) {
+        Ok(LifecycleAnswer::InTransition { constituents }) => {
+            assert!(constituents.contains(&stray.id()), "{constituents:?}");
+        }
+        other => panic!("show names the stray, not {other:?}"),
+    }
+    assert_eq!(
+        unload_within(&config, TEST_UNLOAD_BOUNDS, false),
+        unloaded()
+    );
+    assert!(stray.wait().is_ok(), "the stray is ended");
+    assert!(
+        scratch
+            .cgroup
+            .child(&agent_cgroup::cgroup_name(&config.agent))
+            .is_err(),
+        "the agent's cgroup is gone"
+    );
+    assert_eq!(show(&config), unloaded());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// **A conclusion never ends another load's cgroup** (6.1, ownership is
+/// the record's): a `Left` concluded for `r-1` while the record names `r-2`
+/// leaves that cgroup and its stray, and answers by the ladder, naming the
+/// stray, never `Unloaded`. Perturbation: conclude by the record's run, and
+/// the stray dies.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_a_conclusion_never_ends_another_loads_cgroup() {
+    let (config, _report, base) = territory_with_one_room_file("cg-other");
+    save_points::write_marker(
+        &config.root,
+        Some(&save_points::Marker::Open { run: "r-1".into() }),
+    )
+    .unwrap();
+    let (_scratch, agent) = agent_cgroup_for(&config, "cg-other", "r-2");
+    let mut stray = containment::tests::escaper_in(&agent.child("worker/run").unwrap());
+    let left = Left {
+        save_point: None,
+        forced: true,
+        no_state: false,
+    };
+    match conclude_answered(&config, Some("r-1"), &left) {
+        Ok(LifecycleAnswer::InTransition { constituents }) => {
+            assert!(constituents.contains(&stray.id()), "{constituents:?}");
+        }
+        other => panic!("the ladder names the stray, not {other:?}"),
+    }
+    assert!(
+        stray.try_wait().unwrap().is_none(),
+        "another load's stray runs on"
+    );
+    let _ = stray.kill();
+    let _ = stray.wait();
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// **A constituent that cannot move itself into its leaf never execs, and
+/// the move comes before the privilege drop** (`weaver-admin-Spec` 6.1, C4;
+/// the plan's first review focus): a placement descriptor the child cannot
+/// write ends the worker's and the relay's children in `pre_exec` with the
+/// write's own `EBADF`, so the spawn fails and the load rolls back. Run
+/// unprivileged, a move placed after the drop would meet the drop's `EPERM`
+/// first. Perturbations: drop the move from either spawn, or move it after
+/// the drop, and the spawn fails with `EPERM`.
+#[test]
+fn a_constituent_that_cannot_move_itself_never_execs() {
+    let base = std::env::temp_dir().join(format!("weaver-admin-placement-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let run_directory = base.join("run");
+    std::fs::create_dir_all(&run_directory).unwrap();
+    let run_lock = start::take_run_lock(&run_directory).unwrap().unwrap();
+    let log = start::open_log(&base.join("worker.log"), None).unwrap();
+    // Opened read-only: the child's write of `0` fails.
+    let unwritable = std::fs::File::open("/dev/null").unwrap();
+    let placement = std::os::fd::AsRawFd::as_raw_fd(&unwritable);
+    let worker = start::spawn_worker(start::WorkerStart {
+        binary: std::path::Path::new("/bin/sleep"),
+        arguments: vec!["30".to_string()],
+        uid: 4242,
+        gid: 4243,
+        home: std::path::Path::new("/nonexistent/home/alpha"),
+        library_path: None,
+        log: &log,
+        run_lock: &run_lock,
+        relay_write: None,
+        placement,
+    });
+    assert_eq!(
+        worker.err().and_then(|error| error.raw_os_error()),
+        Some(nix::libc::EBADF),
+        "the worker's child ends at its move"
+    );
+    let stand_in = |path: &str| -> std::os::fd::OwnedFd {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap()
+            .into()
+    };
+    let (listener, sink, lifetime) = (
+        stand_in("/dev/null"),
+        stand_in("/dev/null"),
+        stand_in("/dev/null"),
+    );
+    let relay = start::spawn_relay(start::RelayStart {
+        binary: std::path::Path::new("/bin/sleep"),
+        reader_uid: 4244,
+        agent: "alpha",
+        boundary_digest: "digest",
+        uid: 4245,
+        gid: 4246,
+        listener: &listener,
+        sink: &sink,
+        log: &log,
+        lifetime_read: &lifetime,
+        run_lock: &run_lock,
+        placement,
+    });
+    assert_eq!(
+        relay.err().and_then(|error| error.raw_os_error()),
+        Some(nix::libc::EBADF),
+        "the relay's child ends at its move"
+    );
+    let _ = std::fs::remove_dir_all(&base);
 }

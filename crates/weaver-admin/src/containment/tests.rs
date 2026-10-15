@@ -218,7 +218,7 @@ fn the_run_end_steps_by_its_rows() {
 
 // ------------------------------------------------------------- the record
 
-fn run_directory(tag: &str) -> (crate::scratch::Scratch, OwnedFd) {
+pub(crate) fn run_directory(tag: &str) -> (crate::scratch::Scratch, OwnedFd) {
     let dir = crate::scratch::Scratch(
         std::env::temp_dir().join(format!("weaver-admin-record-{tag}-{}", std::process::id())),
     );
@@ -289,14 +289,14 @@ fn the_record_round_trips_and_refuses_a_foreign_path() {
 
 /// A scratch cgroup beneath the delegated scope this suite runs in, killed
 /// and removed when dropped.
-struct ScratchCgroup {
+pub(crate) struct ScratchCgroup {
     parent: Cgroup,
     name: String,
-    cgroup: Cgroup,
+    pub(crate) cgroup: Cgroup,
 }
 
 impl ScratchCgroup {
-    fn new(tag: &str) -> Self {
+    pub(crate) fn new(tag: &str) -> Self {
         let own = own_cgroup().expect("/proc/self/cgroup reads");
         let parent = Cgroup::open(&own).expect("the suite's own cgroup opens");
         // The user manager's delegated scope carries no delegate mark of its
@@ -354,11 +354,35 @@ fn remove_tree(parent: &Cgroup, name: &str) -> nix::Result<()> {
     unlinkat(parent.fd(), name, UnlinkatFlags::RemoveDir)
 }
 
+/// **Sets systemd's mark on a scratch cgroup the suite owns**, standing the
+/// delegated invoker the floor asks for: the user manager's scope carries no
+/// mark (measured on 2026-10-14), and cgroupfs lets a cgroup's owner set a
+/// `user.*` extended attribute.
+pub(crate) fn mark_delegated(cgroup: &Cgroup) {
+    // SAFETY: fsetxattr on a descriptor this frame borrows, reading one byte
+    // of a static buffer.
+    let set = unsafe {
+        nix::libc::fsetxattr(
+            cgroup.fd().as_raw_fd(),
+            c"user.delegate".as_ptr(),
+            b"1".as_ptr().cast(),
+            1,
+            0,
+        )
+    };
+    assert_eq!(
+        set,
+        0,
+        "user.delegate sets on the scratch invoker: {}",
+        std::io::Error::last_os_error()
+    );
+}
+
 /// A process started in `cgroup`: a shell that starts a new session and
 /// double-forks a sleeper, then sleeps itself. **The child moves itself in
 /// before its exec**, as 6.1's constituents and shells do: admitted after
 /// the spawn, the shell could fork its escapers first and leave them outside.
-fn escaper_in(cgroup: &Cgroup) -> std::process::Child {
+pub(crate) fn escaper_in(cgroup: &Cgroup) -> std::process::Child {
     use std::os::unix::process::CommandExt;
     let procs = cgroup.procs_for_placement().expect("cgroup.procs opens");
     let raw = procs.as_raw_fd();

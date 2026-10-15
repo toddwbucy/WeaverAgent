@@ -10,15 +10,7 @@
 //! own small copy of the kill and the wait: no organ links another, and the
 //! floor does no OS work (the Planner's ruling of 2026-10-14 on the plan).
 //!
-//! Uncalled until the wiring act (PR B of the #111 code act).
-
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into the start step and the run end by #111's PR B"
-    )
-)]
+//! The verbs meet them through `agent_cgroup`.
 
 use std::io::{Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
@@ -831,4 +823,4 @@ pub fn recorded_at(record: &Record) -> RecordedAt {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

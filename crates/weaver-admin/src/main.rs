@@ -37,6 +37,7 @@ macro_rules! diag {
     }};
 }
 
+mod agent_cgroup;
 mod channel;
 mod conclusion;
 mod containment;
@@ -432,6 +433,7 @@ fn stand_state_member(
     inventory: &inventory::Inventory,
     run_lock: &start::RunLock,
     save_point: Option<std::os::fd::OwnedFd>,
+    placement: std::os::fd::RawFd,
 ) -> Option<std::os::fd::OwnedFd> {
     // `none` declines the member, per `weaver-state-PRD` section 4 as of
     // 2026-09-04: nothing is stood, no territory is made, and the harness's
@@ -525,6 +527,10 @@ fn stand_state_member(
     unsafe {
         use std::os::unix::process::CommandExt;
         member.pre_exec(move || {
+            // **The move into the agent's cgroup comes first** (6.1, C4),
+            // before any descriptor is placed and before the privilege drop:
+            // a failure ends the child before its exec.
+            containment::place_self(placement)?;
             // **The member takes its own session and resets the invocation's
             // ignored signals**, per Spec section 6, and holds the run lock's
             // description for its life, per section 3.
@@ -1154,6 +1160,9 @@ struct Standing {
     /// The run this load opened the marker for, which the rollback leaves
     /// the marker open on where the entered run did not leave.
     run_reference: Option<String>,
+    /// The run this load made the agent's cgroup for, once made: the
+    /// rollback always ends that cgroup, whatever the marker says (6.1).
+    cgroup_run: Option<String>,
 }
 
 /// **`load` keeps one promise**, per Spec section 3 and the operator's ruling
@@ -1250,6 +1259,29 @@ fn run_load(
     )?;
     let worker_log = start::open_log(&config.worker_log(), Some(config.file_owner()))
         .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
+    // **The run is minted before the agent's cgroup is made**, per Spec
+    // section 7 and 6.1: the record names the run its load made it for, and
+    // is written before the first fork. The reference is this crate's, and a
+    // load that cannot read the randomness it rests on refuses rather than
+    // carrying a reference that looks like the others and is not guaranteed.
+    let run_reference =
+        channel::mint_run_reference(&agent.0).ok_or(LifecycleRefusal::BoundaryUnverified)?;
+    // **The agent's cgroup is made holding both locks, before any
+    // constituent forks** (Spec section 3, the order within a load; 6.1).
+    let cgroup = make_agent_cgroup(config, agent, &run_reference.0, &account)?;
+    standing.cgroup_run = Some(run_reference.0.clone());
+    record(
+        config,
+        "load",
+        &format!(
+            "the agent's cgroup {} for run {}",
+            cgroup.record.path, cgroup.record.run
+        ),
+    );
+    let constituents_procs = {
+        use std::os::fd::AsRawFd;
+        cgroup.constituents_procs().as_raw_fd()
+    };
 
     // **The trace door stands only for a file sink**, per Spec section 6: a
     // stale door is cleared on every load, and for a file sink the relay is
@@ -1258,7 +1290,7 @@ fn run_load(
     start::clear_trace_door(&config.run_directory())?;
     let relay_write = match &inventory.config.trace_sink {
         weaver_types::TraceSink::File { .. } => {
-            let (_relay, write) = stand_relay(config, agent, &sink, &run_lock)?;
+            let (_relay, write) = stand_relay(config, agent, &sink, &run_lock, constituents_procs)?;
             standing.forked = true;
             Some(write)
         }
@@ -1270,6 +1302,7 @@ fn run_load(
         &inventory,
         &run_lock,
         selected.map(|selected| selected.descriptor),
+        constituents_procs,
     );
     standing.forked |= state_end.is_some();
     // **An elected member that does not stand refuses the load**: the
@@ -1307,6 +1340,10 @@ fn run_load(
         log: &worker_log,
         run_lock: &run_lock,
         relay_write: relay_write.as_ref().map(std::os::fd::AsRawFd::as_raw_fd),
+        placement: {
+            use std::os::fd::AsRawFd;
+            cgroup.run_procs().as_raw_fd()
+        },
     })
     .map_err(|_| LifecycleRefusal::BindFailed)?;
     standing.forked = true;
@@ -1326,13 +1363,8 @@ fn run_load(
         Err(_) => return Err(refusal_from_worker(&mut worker)),
     };
     let ordinal = coordination.next_ordinal();
-    // **The session is read and the run is minted**, per Spec section 7. The
-    // session is the operator's, declared in the config and carried
-    // uninterpreted. The reference is this crate's, and a load that cannot
-    // read the randomness it rests on refuses rather than carrying a
-    // reference that looks like the others and is not guaranteed.
-    let run_reference =
-        channel::mint_run_reference(&agent.0).ok_or(LifecycleRefusal::BoundaryUnverified)?;
+    // **The session is read**, per Spec section 7: the operator's, declared
+    // in the config and carried uninterpreted. The run was minted above.
     // Held before the enter goes, so a rollback after it names the run
     // whatever the answer was (K1).
     standing.run_reference = Some(run_reference.0.clone());
@@ -1673,6 +1705,7 @@ fn stand_relay(
     agent: &AgentName,
     sink: &std::os::fd::OwnedFd,
     run_lock: &start::RunLock,
+    placement: std::os::fd::RawFd,
 ) -> Result<(std::process::Child, std::os::fd::OwnedFd), LifecycleRefusal> {
     let base = inventory::identity_for(agent);
     let missing = |what: &str| {
@@ -1723,6 +1756,7 @@ fn stand_relay(
         log: &log,
         lifetime_read: &lifetime_read,
         run_lock,
+        placement,
     })
     .map_err(|_| LifecycleRefusal::BindFailed)?;
     Ok((relay, lifetime_write))
@@ -1816,10 +1850,154 @@ fn roll_back(config: &ServiceConfig, standing: &mut Standing) -> String {
             }
         ));
     }
+    // **The rollback always ends the cgroup its own load made** (6.1,
+    // ownership is the record's), whatever the marker says.
+    if let Some(run) = standing.cgroup_run.take() {
+        account.push(format!(
+            "cgroup {}",
+            match end_agent_cgroup(config, "load", agent_cgroup::Concluding::Run(&run)) {
+                Ok(()) => "ended".to_string(),
+                Err(refusal) => format!("held: {}", surface::render_refusal(&refusal)),
+            }
+        ));
+    }
     if standing.sink_opened {
         account.push("sink closed".to_string());
     }
     account.join(", ")
+}
+
+/// **The start step's making of the agent's cgroup** (Spec 6.1), its
+/// refusals named on standard error and in `admin.log`: an ended run's
+/// leftovers refuse `AgentRunning`, naming them and killing nothing (I8),
+/// and every other refusal is `BoundaryUnverified`, naming the cgroup and
+/// which question failed.
+fn make_agent_cgroup(
+    config: &ServiceConfig,
+    agent: &AgentName,
+    run: &str,
+    account: &AgentAccount,
+) -> Result<agent_cgroup::Made, LifecycleRefusal> {
+    use std::os::fd::AsFd;
+    let run_directory = agent_cgroup::open_run_directory(&config.run_directory())
+        .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
+    agent_cgroup::make(
+        run_directory.as_fd(),
+        &agent.0,
+        run,
+        (account.uid, account.gid),
+    )
+    .map_err(|refused| match refused {
+        agent_cgroup::StartRefused::Leftovers(pids) => {
+            let named = name_pids(&pids);
+            diag!(
+                "weaver-admin: the agent's cgroup holds an ended run's leftovers ({named}); unload ends them"
+            );
+            record(config, "load", &format!("refused: leftovers {named}"));
+            LifecycleRefusal::AgentRunning
+        }
+        agent_cgroup::StartRefused::Unverified(why) => {
+            diag!("weaver-admin: the agent's cgroup: {why}");
+            record(config, "load", &format!("refused: {why}"));
+            LifecycleRefusal::BoundaryUnverified
+        }
+    })
+}
+
+/// **The run end of the agent's cgroup** (Spec 6.1, admin's run end), under
+/// the invocation lock once the run lock is free, before anything is
+/// published, a marker written or a state answered. A kill that found
+/// processes standing, and a record that did not remove, are said in
+/// `admin.log`. Past the bound it refuses `WorkerWouldNotExit`, naming the
+/// pids, and a removal or a record that fails refuses `BoundaryUnverified`.
+fn end_agent_cgroup(
+    config: &ServiceConfig,
+    verb: &'static str,
+    concluding: agent_cgroup::Concluding<'_>,
+) -> Result<(), LifecycleRefusal> {
+    use std::os::fd::AsFd;
+    let run_directory = agent_cgroup::open_run_directory(&config.run_directory())
+        .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
+    match agent_cgroup::run_end(
+        run_directory.as_fd(),
+        &config.agent,
+        concluding,
+        containment::CONTAINMENT_BOUND,
+    ) {
+        Ok(agent_cgroup::Ended::Removed {
+            standing,
+            record_removed,
+        }) => {
+            if !standing.is_empty() {
+                record(
+                    config,
+                    verb,
+                    &format!(
+                        "the run end's kill found {} still standing",
+                        name_pids(&standing)
+                    ),
+                );
+            }
+            if !record_removed {
+                record(
+                    config,
+                    verb,
+                    "the agent's cgroup is removed and its record did not remove; the next verb removes it",
+                );
+            }
+            Ok(())
+        }
+        Ok(agent_cgroup::Ended::Stale { record_removed }) => {
+            if !record_removed {
+                record(
+                    config,
+                    verb,
+                    "a stale cgroup record did not remove; the next verb removes it",
+                );
+            }
+            Ok(())
+        }
+        Ok(agent_cgroup::Ended::NoRecord | agent_cgroup::Ended::NotOwned) => Ok(()),
+        Err(agent_cgroup::EndRefused::WouldNotExit(pids)) => {
+            let named = name_pids(&pids);
+            diag!(
+                "weaver-admin: the agent's cgroup did not empty within the containment bound ({named})"
+            );
+            record(config, verb, &format!("refused: would not exit {named}"));
+            Err(LifecycleRefusal::WorkerWouldNotExit)
+        }
+        Err(agent_cgroup::EndRefused::Unverified(why)) => {
+            diag!("weaver-admin: the agent's cgroup: {why}");
+            record(config, verb, &format!("refused: {why}"));
+            Err(LifecycleRefusal::BoundaryUnverified)
+        }
+    }
+}
+
+/// **The ladder's rung (iv)** (Spec section 3; 6.1, C2), the run lock free:
+/// `Unloaded` where the agent's cgroup is absent or empty, `InTransition`
+/// naming what it holds otherwise, never `Unloaded` over a process of the
+/// agent. A record that does not read refuses `BoundaryUnverified`.
+fn unloaded_by_ladder(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    use std::os::fd::AsFd;
+    let run_directory = agent_cgroup::open_run_directory(&config.run_directory())
+        .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
+    match agent_cgroup::holds(run_directory.as_fd(), &config.agent) {
+        Ok(pids) if pids.is_empty() => Ok(unloaded_answer()),
+        Ok(pids) => Ok(LifecycleAnswer::InTransition {
+            constituents: pids.into_iter().map(|pid| pid as u32).collect(),
+        }),
+        Err(why) => {
+            diag!("weaver-admin: the agent's cgroup: {why}");
+            Err(LifecycleRefusal::BoundaryUnverified)
+        }
+    }
+}
+
+/// Pids as `admin.log` names them.
+fn name_pids(pids: &[i32]) -> String {
+    let named: Vec<String> = pids.iter().map(i32::to_string).collect();
+    format!("pids [{}]", named.join(", "))
 }
 
 /// The agent's account, resolved by name as the start step needs it: the
@@ -1872,11 +2050,6 @@ fn show(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
         }
     };
     let (seen, load) = see_run(config)?;
-    let unloaded = || LifecycleAnswer::State {
-        state: weaver_types::AgentState::Unloaded,
-        load: None,
-        constituents: Vec::new(),
-    };
     // **The constituents are read after the run lock, so an empty read is
     // read against the lock again** (Codex on #126, round 4): the last
     // member or relay can let go during the observation's failed dial, and
@@ -1887,13 +2060,13 @@ fn show(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
     let in_transition = || -> Result<LifecycleAnswer, LifecycleRefusal> {
         let pids = constituents(&run_directory);
         if pids.is_empty() && !start::run_lock_held(&run_directory)? {
-            return Ok(unloaded());
+            return unloaded_by_ladder(config);
         }
         Ok(LifecycleAnswer::InTransition { constituents: pids })
     };
     Ok(
         match verb_table::act(verb_table::Verb::Show, verb_table::class_of(seen)) {
-            VerbAction::ShowUnloaded => unloaded(),
+            VerbAction::ShowUnloaded => unloaded_by_ladder(config)?,
             VerbAction::ShowWorkersWord => match seen {
                 Seen::RunLockHeld(WorkerSeen::Idle) => LifecycleAnswer::State {
                     state: weaver_types::AgentState::Idle,
@@ -1967,11 +2140,12 @@ struct UnloadBounds {
 
 /// Spec section 3's values: the leave's 150 seconds, thirty after `left`,
 /// ten from `SIGTERM` to `SIGKILL` and five for the last read. A forced
-/// unload holds the invocation lock at most 202 seconds before its
+/// unload holds the invocation lock at most 232 seconds before its
 /// publication: the observation's dial 1 and answer 5, the leave's dial 1,
-/// the leave 150, the escalation 45 (thirty, ten and five); a graceful one
-/// those past its declared drain and wind-down bounds, or without a deadline
-/// where either is undeclared. A number WeaverWeb builds against.
+/// the leave 150, the escalation 45 (thirty, ten and five) and the run end's
+/// containment bound 30 (6.1); a graceful one those past its declared drain
+/// and wind-down bounds, or without a deadline where either is undeclared. A
+/// number WeaverWeb builds against.
 const UNLOAD_BOUNDS: UnloadBounds = UnloadBounds {
     leave: LEAVE_BOUND,
     after_left: start::AFTER_LEFT,
@@ -2306,7 +2480,7 @@ fn behind_another_run(
     );
     Ok(Some(
         if start::wait_free(&config.run_directory(), bounds.after_left) {
-            Ok(unloaded_answer())
+            unloaded_by_ladder(config)
         } else {
             Err(LifecycleRefusal::AgentRunning)
         },
@@ -2346,7 +2520,7 @@ fn wait_after_seal(
     if let Some(answer) = behind_another_run(config, bounds, run.as_deref())? {
         return answer;
     }
-    Ok(unloaded_answer())
+    unloaded_by_ladder(config)
 }
 
 /// **The joined force's escalation, in two phases** (Spec section 3, S11;
@@ -2368,8 +2542,20 @@ fn escalate_joined(
     if let Some(answer) = behind_another_run(config, bounds, run.as_deref())? {
         return answer;
     }
+    // **The run end before the marker** (6.1; 3.0, every row that prints
+    // `Unloaded` passes the run end first), under the lock, never lock-free.
+    end_agent_cgroup(config, "force-unload", concluding(run.as_deref()))?;
     write_by_rule(config, run.as_deref(), conclusion::MarkerWrite::Forced)?;
-    Ok(unloaded_answer())
+    unloaded_by_ladder(config)
+}
+
+/// The run a conclusion ends: the one the marker names, or, the invocation
+/// lock held over a run no marker names, the record's (6.1, ownership).
+fn concluding(run: Option<&str>) -> agent_cgroup::Concluding<'_> {
+    run.map_or(
+        agent_cgroup::Concluding::Recorded,
+        agent_cgroup::Concluding::Run,
+    )
 }
 
 /// **The leave directed and concluded**, per Spec section 3: `forced` names
@@ -2428,8 +2614,14 @@ fn leave_within(
     // names how the run ended, not who ended it, and the next load records
     // `ForcedUnload`. The room's finished files are recovered at that load.
     let run = open_run(config)?;
+    end_agent_cgroup(config, verb_of(forced), concluding(run.as_deref()))?;
     write_by_rule(config, run.as_deref(), conclusion::MarkerWrite::Forced)?;
-    Ok(unloaded_answer())
+    unloaded_by_ladder(config)
+}
+
+/// The verb `admin.log` names for an unload.
+fn verb_of(forced: bool) -> &'static str {
+    if forced { "force-unload" } else { "unload" }
 }
 
 /// The answer an unload gives where the run has ended.
@@ -2525,13 +2717,19 @@ fn conclude_answered(
     left: &Left,
 ) -> Result<LifecycleAnswer, LifecycleRefusal> {
     let Some(run) = run else {
-        return Ok(unloaded_answer());
+        return unloaded_by_ladder(config);
     };
+    // **The run end comes first, under the lock, the run lock free** (6.1;
+    // 3.0, the conclusion): it ends the cgroup only where the record names
+    // it made for this run, and a refusal publishes nothing and writes no
+    // marker. Where the marker-write rule leaves the marker alone, nothing
+    // is published and the answer is the ladder's.
+    end_agent_cgroup(config, "unload", agent_cgroup::Concluding::Run(run))?;
     if !matches!(
         read_marker_or_refuse(config)?,
         Some(save_points::Marker::Open { run: ref open }) if open == run
     ) {
-        return Ok(unloaded_answer());
+        return unloaded_by_ladder(config);
     }
     let seen = conclusion::Seen {
         rollback: None,
@@ -2584,7 +2782,7 @@ fn conclude_answered(
     };
     write_by_rule(config, Some(run), outcome.marker)?;
     match outcome.printed {
-        conclusion::Printed::Unloaded => Ok(unloaded_answer()),
+        conclusion::Printed::Unloaded => unloaded_by_ladder(config),
         conclusion::Printed::SavePointNotTakenPublished => {
             diag!(
                 "weaver-admin: the leave's save point did not publish; the marker stays open and the unload does not complete"
@@ -2664,6 +2862,9 @@ fn open_run(config: &ServiceConfig) -> Result<Option<String>, LifecycleRefusal> 
 /// record a reset over a leave that did take its save point; the leave's
 /// provenance in the marker is the lifecycle act's.
 fn conclude_ended(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    // **An ended run's leftovers are killed whole first** (3.0, S0d; 6.1):
+    // the run end of the run its record names, before the publication.
+    end_agent_cgroup(config, "unload", agent_cgroup::Concluding::Recorded)?;
     let not_published = || {
         record(
             config,
@@ -2679,7 +2880,7 @@ fn conclude_ended(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRe
     if deferred {
         return Err(not_published());
     }
-    Ok(unloaded_answer())
+    unloaded_by_ladder(config)
 }
 
 /// **The leave's save point that did not publish**, per Spec section 3: the
