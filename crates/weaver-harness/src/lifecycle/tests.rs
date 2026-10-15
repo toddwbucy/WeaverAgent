@@ -8542,3 +8542,278 @@ fn containment_the_lower_sweeps_tools() {
     );
     assert!(command.wait().is_ok());
 }
+
+/// **A forced leave never waits on the interrupted call past the lower's
+/// bound** (`weaver-admin-Spec` 6.1, a forced leave's reap past the lower's
+/// bound; the self-check of #111's PR C): the gate takes the interrupt and
+/// never answers it, and the engine closes the call `Killed { by: fault }`
+/// at the lower's bound from the interrupt, the leave going on to `Left`.
+/// Perturbation: drop the interrupt's bound, and the leave waits for the
+/// gate's channel to close, a minute later.
+#[test]
+fn a_forced_leave_closes_a_call_its_gate_never_answers_within_the_lower_bound() {
+    use std::os::fd::AsRawFd;
+
+    use nix::sys::socket::{
+        AddressFamily, MsgFlags, SockFlag, SockType, recv as sock_recv, send as sock_send,
+        socketpair,
+    };
+
+    let (mut run, _spare, sink_path) = entered_run(None);
+    let (near, far) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .expect("socketpair");
+    run.spu.as_mut().expect("the arm stands").decode = crate::channel::decode_from_owned(near);
+    let (spu_lifecycle, spu_far) = OrganChannel::pair().expect("spu lifecycle pair");
+    run.spu.as_mut().expect("the arm stands").lifecycle = spu_lifecycle;
+    let spu_far = spu_far.into_channel();
+    let releases = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = releases.clone();
+    std::thread::spawn(move || {
+        while let Ok(asked) = spu_far.recv() {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = spu_far.send(&OrganEnvelope {
+                exchange: asked.exchange,
+                position: Position::Close,
+                payload: weaver_types::Payload::Answer(LifecycleAnswer::Released),
+            });
+        }
+    });
+    let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+    run.gate = Some(GateChannel {
+        channel: gate_end,
+        pid: nix::unistd::Pid::from_raw(i32::MAX),
+        last_word: crate::spawn::LastWord::quiet(),
+    });
+    let gate_peer = gate_peer.into_channel();
+    // The SPU asks one tool call and stays standing.
+    let decode_peer = std::thread::spawn(move || {
+        let mut buf = vec![0u8; 65536];
+        let _ = sock_recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("the append");
+        let call = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            unrecovered: vec![],
+            content: vec![weaver_traits::ContentBlock::ToolCall(
+                weaver_traits::ToolCall {
+                    name: "bash".into(),
+                    arguments: r#"{"command":"sleep 5"}"#.into(),
+                },
+            )],
+            emission: "calling".into(),
+            finish: weaver_types::Finish::Completed,
+            resident: 64,
+            capacity: 4096,
+            request: serde_json::value::RawValue::from_string(r#"{"rendered":"r"}"#.into())
+                .unwrap(),
+            measurement: serde_json::value::RawValue::from_string(r#"{}"#.into()).unwrap(),
+        });
+        sock_send(
+            far.as_raw_fd(),
+            &serde_json::to_vec(&call).unwrap(),
+            MsgFlags::empty(),
+        )
+        .expect("the call");
+        far
+    });
+    gate_peer
+        .send(&OrganEnvelope {
+            exchange: ExchangeId {
+                opener: Opener::Gate,
+                ordinal: 1,
+            },
+            position: Position::Open,
+            payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry(
+                b"{\"text\":\"run something\"}",
+            )),
+        })
+        .expect("frame sends");
+    let (verb_end, admin_end) = OrganChannel::pair().expect("admin pair");
+    let admin = admin_end.into_channel();
+    // The gate takes the call; the leave is heard during the call's wait;
+    // the gate then dies with the call open.
+    let (handed, admin_back) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let open = gate_peer.recv().expect("the call");
+        assert!(
+            matches!(open.payload, weaver_types::Payload::Tool(_)),
+            "{open:?}"
+        );
+        admin
+            .send(&OrganEnvelope {
+                exchange: ExchangeId {
+                    opener: Opener::Admin,
+                    ordinal: 4,
+                },
+                position: Position::Open,
+                payload: weaver_types::Payload::Directive(LifecycleDirective::Leave {
+                    cause: weaver_types::Cause { uid: 7 },
+                    forced: true,
+                    rollback: false,
+                }),
+            })
+            .expect("the leave sends");
+        let _ = handed.send(admin);
+        // The gate takes the interrupt and never answers it, its channel
+        // held open well past the lower's bound.
+        let interrupt = gate_peer.recv().expect("the interrupt");
+        assert!(
+            matches!(interrupt.payload, weaver_types::Payload::ToolInterrupt),
+            "{interrupt:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        drop(gate_peer);
+    });
+    let (mut harness, _dir) = harness_entered(run);
+    let began = std::time::Instant::now();
+    let mut verb_slot = Some(verb_end);
+    let served = harness.serve_gate_wake(
+        "identity",
+        &[],
+        &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
+            let delta = vec![weaver_traits::Message {
+                role: weaver_traits::Role::User,
+                content: vec![weaver_traits::ContentBlock::Text {
+                    text: text.to_string(),
+                }],
+            }];
+            ports.turn(delta)
+        },
+        &mut verb_slot,
+    );
+    let took = began.elapsed();
+    let admin = admin_back.recv().expect("admin handed back");
+    assert!(served.is_ok(), "{served:?}");
+    let left = admin.recv().expect("admin is answered");
+    let weaver_types::Payload::Answer(LifecycleAnswer::Left { forced, .. }) = left.payload else {
+        panic!("{left:?}");
+    };
+    assert!(forced);
+    assert!(
+        took < std::time::Duration::from_millis(3 * weaver_types::LOWER_BOUND_MS),
+        "the leave never waited on the gate's answer: {took:?}"
+    );
+    let stream = std::fs::read_to_string(&sink_path).expect("the sink");
+    assert!(
+        stream.contains(r#""by":"fault""#),
+        "the call the gate never answered closes killed by the fault: {stream}"
+    );
+    drop(decode_peer.join());
+}
+
+/// **A live gate's unreadable frame mid-call kills nothing in `tools/`**
+/// (the self-check of #111's PR C): the engine kills `tools/` only where
+/// the gate's channel hung up, so a gate that is alive and sends what the
+/// harness cannot read ends service without a kill, and leaves no stale
+/// containment for the unwind to read. Perturbation: kill on every receive
+/// error, and the command in `tools/` dies.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_a_live_gates_bad_frame_kills_nothing() {
+    use std::os::fd::AsRawFd;
+
+    use nix::sys::socket::{
+        AddressFamily, MsgFlags, SockFlag, SockType, recv as sock_recv, send as sock_send,
+        socketpair,
+    };
+
+    let layout = crate::tools_cgroup::tests::ScratchLayout::new("bad-frame");
+    let (mut run, _spare, _sink) = entered_run(None);
+    run.tools =
+        Some(crate::tools_cgroup::ToolsCgroup::open_beside_run(&layout.run).expect("tools/ opens"));
+    let (near, far) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .expect("socketpair");
+    run.spu.as_mut().expect("the arm stands").decode = crate::channel::decode_from_owned(near);
+    let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+    run.gate = Some(GateChannel {
+        channel: gate_end,
+        pid: nix::unistd::Pid::from_raw(i32::MAX),
+        last_word: crate::spawn::LastWord::quiet(),
+    });
+    let gate_peer = gate_peer.into_channel();
+    let decode_peer = std::thread::spawn(move || {
+        let mut buf = vec![0u8; 65536];
+        let _ = sock_recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("the append");
+        let call = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            unrecovered: vec![],
+            content: vec![weaver_traits::ContentBlock::ToolCall(
+                weaver_traits::ToolCall {
+                    name: "bash".into(),
+                    arguments: r#"{"command":"sleep 300"}"#.into(),
+                },
+            )],
+            emission: "calling".into(),
+            finish: weaver_types::Finish::Completed,
+            resident: 64,
+            capacity: 4096,
+            request: serde_json::value::RawValue::from_string(r#"{"rendered":"r"}"#.into())
+                .unwrap(),
+            measurement: serde_json::value::RawValue::from_string(r#"{}"#.into()).unwrap(),
+        });
+        sock_send(
+            far.as_raw_fd(),
+            &serde_json::to_vec(&call).unwrap(),
+            MsgFlags::empty(),
+        )
+        .expect("the call");
+        far
+    });
+    gate_peer
+        .send(&OrganEnvelope {
+            exchange: ExchangeId {
+                opener: Opener::Gate,
+                ordinal: 1,
+            },
+            position: Position::Open,
+            payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry(
+                b"{\"text\":\"run something\"}",
+            )),
+        })
+        .expect("frame sends");
+    let tools_leaf = layout.leaf("worker/tools");
+    let gate_stand_in = std::thread::spawn(move || {
+        let _open = gate_peer.recv().expect("the call");
+        let command = crate::tools_cgroup::tests::escaper_in(&tools_leaf);
+        // Octets the harness cannot read, the gate standing.
+        let _ = sock_send(
+            std::os::fd::AsFd::as_fd(&gate_peer).as_raw_fd(),
+            b"not an envelope",
+            MsgFlags::empty(),
+        );
+        (gate_peer, command)
+    });
+    let (verb_end, _admin_end) = OrganChannel::pair().expect("admin pair");
+    let (mut harness, _dir) = harness_entered(run);
+    let mut verb_slot = Some(verb_end);
+    let _ = harness.serve_gate_wake(
+        "identity",
+        &[],
+        &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
+            ports.turn(vec![weaver_traits::Message {
+                role: weaver_traits::Role::User,
+                content: vec![weaver_traits::ContentBlock::Text {
+                    text: text.to_string(),
+                }],
+            }])
+        },
+        &mut verb_slot,
+    );
+    let (gate_peer, mut command) = gate_stand_in.join().expect("the gate stand-in");
+    let alive = command.try_wait().unwrap().is_none();
+    let _ = command.kill();
+    let _ = command.wait();
+    drop(gate_peer);
+    drop(harness);
+    drop(decode_peer.join());
+    assert!(
+        alive,
+        "the command in tools/ was not killed by a live gate's bad frame"
+    );
+}

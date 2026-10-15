@@ -71,8 +71,10 @@ pub fn execute(
     }
 }
 
-/// [`execute`] in a named `tools/`: the suite's scratch one.
-pub fn execute_in(
+/// [`execute`] in a named `tools/`: the one adopted, or the suite's
+/// scratch one. Not public: no caller outside this crate may run a shell in
+/// any `tools/` but the one entry adopted at descriptor 4.
+pub(crate) fn execute_in(
     execution: &ToolExecution,
     channel: &Channel,
     exchange: &ExchangeId,
@@ -284,9 +286,12 @@ fn run_in_home(
         // **An execution the gate cannot contain is never answered**: the
         // leader is killed so the reap returns, the readers are released,
         // and the gate exits so the harness meets its death.
+        // The leader is not reaped: a process that would not die is likely
+        // what kept `tools/` populated, and a wait on it could hold the gate
+        // past its own bound. The gate's exit reparents it.
         let _ = nix::sys::signal::kill(group, nix::sys::signal::Signal::SIGKILL);
-        let _ = child.wait();
         let _ = finish_draining(&finished, out_reader, err_reader);
+        drop(child);
         return Err(ShellEnd::Uncontained);
     };
     let drained = finish_draining(&finished, out_reader, err_reader);

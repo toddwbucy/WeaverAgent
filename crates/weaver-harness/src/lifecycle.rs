@@ -1153,7 +1153,13 @@ impl Harness {
                     // 2026-10-09): it carries on, turned forced by (A). Only
                     // a worker that dies leaves admin no `Left`.
                     Err(crate::engine::TurnError::ChannelLost) => {
-                        let turn = close_turn_on_death(run)?;
+                        // Inside a leave nothing waits on `tools/` (6.1).
+                        let context = if run.leave.is_some() {
+                            crate::tools_cgroup::Context::Leave
+                        } else {
+                            crate::tools_cgroup::Context::Serving
+                        };
+                        let turn = close_turn_on_death(run, context)?;
                         if let Some(held) = run.leave.as_mut() {
                             held.progress.leave =
                                 crate::lifecycle_table::leave_on_arrival(held.progress.leave, true);
@@ -1464,7 +1470,8 @@ impl Harness {
                 Err(ChannelFault::Closed)
             }
             Err(crate::engine::TurnError::ChannelLost) => {
-                close_turn_on_death(run)?;
+                // The wind-down is the leave's: nothing waits on `tools/`.
+                close_turn_on_death(run, crate::tools_cgroup::Context::Leave)?;
                 // **An SPU dead in the wind-down turns the leave forced**
                 // (A): the wind-down cannot run.
                 if run.spu.is_none() {
@@ -3456,7 +3463,10 @@ fn drain_gate(
 /// organ reaped. **The record holds or service ends**: a record that cannot
 /// be authored refuses before anything is torn down (the Planner's ruling of
 /// 2026-10-09). Returns the turn that closed, for its dialer's close.
-fn close_turn_on_death(run: &mut Run) -> Result<Option<TurnKey>, ChannelFault> {
+fn close_turn_on_death(
+    run: &mut Run,
+    context: crate::tools_cgroup::Context,
+) -> Result<Option<TurnKey>, ChannelFault> {
     let turn = run.turn_in_flight.take();
     let mut recorded = true;
     if let Some(turn) = turn.as_ref() {
@@ -3490,14 +3500,15 @@ fn close_turn_on_death(run: &mut Run) -> Result<Option<TurnKey>, ChannelFault> {
         .is_some_and(|spu| hung_up(spu.decode.as_fd()));
     // **A gate lost mid-turn has `tools/` killed before its death is
     // named** (`weaver-admin-Spec` 6.1): the engine's kill where a call was
-    // open, else the worker's own, serving.
+    // open, else the worker's own, in the caller's context, a leave's never
+    // waiting.
     let from_call = if gate_dead {
         run.gate_contained.take()
     } else {
         None
     };
     let contained = if gate_dead {
-        from_call.or_else(|| contain_tools(run, crate::tools_cgroup::Context::Serving))
+        from_call.or_else(|| contain_tools(run, context))
     } else {
         None
     };

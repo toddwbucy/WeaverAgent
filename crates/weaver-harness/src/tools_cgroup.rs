@@ -52,6 +52,8 @@ pub enum OpenRefused {
     NotACgroup,
     /// A file the worker must write beneath `tools/` did not open for write.
     File(&'static str, nix::Error),
+    /// `cgroup.events` does not read.
+    Events,
 }
 
 impl std::fmt::Display for OpenRefused {
@@ -63,6 +65,7 @@ impl std::fmt::Display for OpenRefused {
             Self::NotADirectory => write!(f, "tools/ is not a directory"),
             Self::NotACgroup => write!(f, "tools/ is not on the cgroup2 filesystem"),
             Self::File(name, errno) => write!(f, "tools/{name} does not open for write: {errno}"),
+            Self::Events => write!(f, "tools/cgroup.events does not read"),
         }
     }
 }
@@ -118,6 +121,11 @@ impl ToolsCgroup {
                 .open_for_write(name)
                 .map_err(|errno| OpenRefused::File(name, errno))?;
         }
+        // The wait reads `cgroup.events`: one it cannot read would turn every
+        // gate death into a bound's wait and the end of service.
+        if tools.populated().is_none() {
+            return Err(OpenRefused::Events);
+        }
         Ok(tools)
     }
 
@@ -165,15 +173,13 @@ impl ToolsCgroup {
         }
     }
 
-    /// The pids `cgroup.procs` lists, none where it does not read.
-    pub fn pids(&self) -> Vec<i32> {
-        self.read("cgroup.procs")
-            .map(|text| {
-                text.lines()
-                    .filter_map(|line| line.trim().parse().ok())
-                    .collect()
-            })
-            .unwrap_or_default()
+    /// The pids `cgroup.procs` lists, `None` where it does not read.
+    pub fn pids(&self) -> Option<Vec<i32>> {
+        self.read("cgroup.procs").map(|text| {
+            text.lines()
+                .filter_map(|line| line.trim().parse().ok())
+                .collect()
+        })
     }
 
     /// **The pinned fallback's one pass** (6.1): each pid `cgroup.procs`
@@ -181,12 +187,16 @@ impl ToolsCgroup {
     /// `/proc/<pid>/cgroup` read after that open, and only then sent
     /// `SIGKILL` through the pidfd, so a pid reused since the read, standing
     /// outside `tools/`, is never signalled. Answers whether a kill was
-    /// delivered to what stands: `true` where `tools/` listed nothing or at
-    /// least one pid was signalled.
+    /// delivered to what stands: `true` where `tools/` reads empty or at
+    /// least one pid was signalled. **Nothing read is nothing delivered**: a
+    /// listing that fails, or an empty one with `tools/` not reading
+    /// `populated 0`, answers `false`.
     pub fn signal_pinned_pass(&self) -> bool {
-        let pids = self.pids();
+        let Some(pids) = self.pids() else {
+            return false;
+        };
         if pids.is_empty() {
-            return self.populated() != Some(true);
+            return self.populated() == Some(false);
         }
         let mut delivered = false;
         for pid in pids {

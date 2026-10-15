@@ -91,7 +91,8 @@ pub fn adopted() -> Option<&'static Tools> {
 impl Tools {
     /// A handle on a directory the caller opened: the suite's scratch
     /// `tools/`.
-    pub fn from_owned(dir: OwnedFd) -> Self {
+    #[cfg(test)]
+    pub(crate) fn from_owned(dir: OwnedFd) -> Self {
         Self { dir }
     }
 

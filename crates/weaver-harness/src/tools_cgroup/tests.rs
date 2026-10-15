@@ -367,3 +367,39 @@ fn stand_in_opens_from_own() {
     };
     std::fs::write(report, answer).unwrap();
 }
+
+/// **Nothing read is nothing delivered** (6.1, the worker's rows with the
+/// write and the fallback both failing): an empty `tools/` whose
+/// `cgroup.procs` the worker cannot read answers no kill delivered, so the
+/// containment reports `Undelivered` and its `fault` names the failure.
+/// Perturbation: read a failed listing as empty and delivered, and the pass
+/// answers `true`.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_an_unreadable_listing_delivers_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    let layout = ScratchLayout::new("unreadable");
+    let tools = ToolsCgroup::open_beside_run(&layout.run).unwrap();
+    let procs = layout.leaf("worker/tools/cgroup.procs");
+    std::fs::set_permissions(&procs, std::fs::Permissions::from_mode(0o200)).unwrap();
+    let delivered = tools.signal_pinned_pass();
+    std::fs::set_permissions(&procs, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(!delivered);
+}
+
+/// **A `tools/` whose `cgroup.events` the worker cannot read refuses at the
+/// open** (6.1, the worker's row for `tools/` not opened or judged): the
+/// wait reads it, and one unreadable would turn every gate death into a
+/// bound's wait and the end of service. Perturbation: drop the events
+/// judgment, and the open stands.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_unreadable_events_refuse_the_open() {
+    use std::os::unix::fs::PermissionsExt;
+    let layout = ScratchLayout::new("events");
+    let events = layout.leaf("worker/tools/cgroup.events");
+    std::fs::set_permissions(&events, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let opened = ToolsCgroup::open_beside_run(&layout.run);
+    std::fs::set_permissions(&events, std::fs::Permissions::from_mode(0o444)).unwrap();
+    assert!(matches!(opened, Err(OpenRefused::Events)), "{opened:?}");
+}
