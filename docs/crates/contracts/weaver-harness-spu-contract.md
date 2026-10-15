@@ -144,10 +144,10 @@ that end the SPU's child carries closes at the SPU's own final image replacement
 is what keeps a
 second end of this seam out of the SPU's address space, per `weaver-spu-PRD` section
 7's rule that the crate receives the channel end and no other handle. And it is
-what keeps this end out of every tool the harness elects for the life of the seam,
-since the harness creates a child process per tool call and a handle without the flag
-survives every one of those forks, an inherited end there handing the tool surface a
-release directive on the residency seam.
+what keeps this end out of every tool the agent runs for the life of the seam: the
+harness forks its organs, the gate among them, and the gate forks a shell per tool call,
+so a handle without the flag would cross the gate's exec and every shell's after it, an
+inherited end there handing the tool surface a release directive on the residency seam.
 
 ## 2. The exchanges
 
