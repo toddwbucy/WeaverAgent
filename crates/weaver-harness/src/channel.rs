@@ -459,10 +459,13 @@ impl OrganChannel {
     /// Creates a pair with close-on-exec set atomically at creation by
     /// `SOCK_CLOEXEC` in the `socketpair` call rather than by a later `fcntl`.
     ///
-    /// The atomic form is elected because the alternative has a window: this
-    /// process forks a subprocess per tool call, and a fork between creation
-    /// and a separate `fcntl` would inherit an unflagged end, which for the
-    /// residency seam is a release directive handed to the tool surface.
+    /// An unflagged end would cross every later exec: this process forks its
+    /// organs, the gate among them, and the gate forks a shell per tool call,
+    /// so an end of the residency seam left unflagged would reach the gate's
+    /// image and from it every shell, a release directive handed to the tool
+    /// surface. The atomic form is elected because a separate `fcntl` on the
+    /// creating thread is safe only by an ordering no type enforces
+    /// (`weaver-harness-Spec` section 2.2).
     pub fn pair() -> Result<(OrganChannel, ChildEnd), ChannelFault> {
         let (near, far) = socketpair(
             AddressFamily::Unix,

@@ -167,8 +167,8 @@ returning through the same exchange when the seat comes back. The mechanics
 are the Spec's, at its section 6.2.
 
 **The tool system.** The registry, the execution context, and the permission modes.
-Permission modes are operator policy and not a safety boundary. **Every tool is
-external, on the far side of the gate**, the agent's boundary (the operator's ruling of
+Permission modes are operator policy and not a safety boundary. **Every outward tool
+is external, on the far side of the gate**, the agent's boundary (the operator's ruling of
 2026-10-15, #172, retiring the port test's split of 2026-08-07). A tool that binds a
 listening port is a registered application the harness addresses across the gate's
 agent-opened seam, and its containment is that application's own and the operator's to
@@ -333,8 +333,8 @@ boundary already stands.
 
 **Where that boundary stands moved with the egress ruling of 2026-08-07.** This
 paragraph said the harness executes the tool as the agent's constrained user and the
-kernel decides what that user can touch. Apex step 7 now sends every tool call to the
-gate and forks none: the shell is the gate's own verb, forked by the gate per call as
+kernel decides what that user can touch. Apex step 7 now sends every outward tool call
+to the gate and forks none: the shell is the gate's own verb, forked by the gate per call as
 the agent's account into the agent's `tools/` cgroup (#111, #172), and a registered
 service is addressed across the gate's agent-opened seam, what it may touch being that
 application's own affair on the far side of the socket. Either way the harness reaches a
@@ -387,7 +387,7 @@ is eight and the table below is six.
 
 **The egress ruling of 2026-08-07 adds no seam here, and the socket count above it is a
 claim worth checking rather than an omission.** Apex section 3 step 7 has the harness
-send every tool call to the gate: the shell's as an execution exchange the gate runs
+send every outward tool call to the gate: the shell's as an execution exchange the gate runs
 itself, and a registered service's *through the gate's* agent-opened socket. So this
 crate's counterparty is the gate it already holds a seam with, and what is new is a
 direction on that seam rather than a party. The tool is the gate's peer and not this crate's,

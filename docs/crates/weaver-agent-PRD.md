@@ -232,8 +232,9 @@ states how it serves this path.
    reduction alone, per the operator's ruling of 2026-08-30 and
    `weaver-spu-PRD` section 13.7, which carries the criterion and its
    bounds.
-7. If the generation contains a tool call, the harness sends it to the gate, and it
-   takes one of two paths, both external, the gate being the agent's boundary (the
+7. If the generation contains a tool call the harness does not answer itself (a
+   protoautonomic call such as the calculator is answered inward, item 6, and crosses
+   nothing), the harness sends it to the gate, and it takes one of two paths, both external, the gate being the agent's boundary (the
    operator's ruling of 2026-10-15, #172). **The shell is the gate's own verb**: the
    harness sends the call across its seam with the gate as an execution exchange
    (`weaver-harness-gate-contract` section 2), and the gate forks a shell per call,
@@ -1021,8 +1022,8 @@ tool crate, and the reason differs on each side of the boundary.
 
 **Outward, what it owns is the grip:** the interface a tool is built to be gripped by.
 A hammer is not installed into a carpenter, it is shaped so a hand can hold it, and the
-boundary contract is that hand stated as a specification. **Every tool is external,
-on the far side of the gate**, the agent's boundary (the operator's ruling of
+boundary contract is that hand stated as a specification. **Every outward tool is
+external, on the far side of the gate**, the agent's boundary (the operator's ruling of
 2026-10-15, #172, retiring the port test's split of 2026-08-07): a tool that binds a
 listening port reaches the agent through the agent-opened grip, the shell is run per
 call by the gate, and a database client or an API caller is external the same way,

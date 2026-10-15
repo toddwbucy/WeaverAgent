@@ -61,7 +61,8 @@ build no tools. A bash tool, a database client, an API caller are not crates
 here and never will be, because a hammer is not installed into a carpenter, it
 is shaped so a hand can grip it. What the framework owns is the grip: the
 boundary contract a tool is built to fit. The gate is the agent's boundary, and
-every tool is on its far side, external and reached through the gate: a service
+every tool the agent calls out to is on its far side, external and reached through
+the gate: a service
 that listens, and the shell the gate runs per call alike. That is why external
 tooling can stay
 external at no cost to the agent, and why the thing on the far side of that

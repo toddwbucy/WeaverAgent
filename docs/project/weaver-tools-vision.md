@@ -418,18 +418,20 @@ Added 2026-08-11, on the ratification of the reasoning-loop criterion. The agent
 divides at a seam the stripping method exposed rather than any plan drew, and the
 division gives the road its shape. The reasoning loop is the center: what directly
 enhances the processing of meaning, built first because nothing else can be built
-without it. Around it is the shell, still the agent: tools including the local
-shell, durable identity written through admin, the corrective mechanisms that may
-come. The shell earns its place against its own bar, and center-first means
-built-first, never matters-more.
+without it. Around it is the shell, still the agent: durable identity written through
+admin, the function loops the harness runs, the corrective mechanisms that may come.
+Tools are not in it. The shell earns its place against its own bar, and center-first
+means built-first, never matters-more.
 
-The loop's edge is the gate, and the agent's edge is the network boundary: what
-crosses a network line is outside the agent entirely, for now and by ruling. The
-ruling reads network lines alone, and a local Unix socket crosses no boundary
-that counts, which is how a tool sits one socket away and still inside the
-agent. That crossing is what the crossings-per-decode-step measure prices as
-nearly free, so the loop calls its shell without ceremony and contains none of
-it.
+**The gate is the agent's edge** (the operator's ruling of 2026-10-15, #172, which
+replaced this section's earlier reading that the agent's edge was the network
+boundary and a tool one local socket away still inside the agent). What crosses the
+gate is outside the agent, a local Unix socket included, so every tool the agent calls
+out to is external: a registered service, and the bash session the gate runs per call.
+The network boundary remains only as a bound on what a registered service may reach,
+which is that service's own affair. The crossing through the gate is what the
+crossings-per-decode-step measure prices as nearly free, so the loop calls its tools
+without ceremony and contains none of them.
 
 The reasoning loop nearing completion does not complete the agent. It is a road
 marker, the first one that runs, and the criterion that bounded it is the same

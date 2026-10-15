@@ -557,7 +557,8 @@ the loop set, and it is dispatched inward to an organ or outward through the gat
 **This trait serves the elected and outward corner's registered services alone**: its
 eventual constituency is the registered outward service the agent addresses through
 the gate, as `weaver-traits-PRD` section 3.1 limits `Tool`. **Classification is not
-membership.** Since the operator's ruling of 2026-10-15 (#172) every tool is external,
+membership.** Since the operator's ruling of 2026-10-15 (#172) every outward tool is
+external,
 the gate being the agent's boundary, and the shell the gate runs per call is external
 with them. It is still outside this trait, being the gate's own verb dispatched directly
 with no table, and `weaver-gate` links no `weaver-traits`. The inward corners are function loops the
