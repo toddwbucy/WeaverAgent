@@ -136,7 +136,8 @@ The SPU also re-establishes the property on its own end of this channel after th
 final
 image replacement, and the step is a set rather than a check, per `weaver-organ-channel`
 section 2,
-so that no child process a later workflow spawns from the SPU inherits the seam. The
+so that the seam survives the exec of no child process a later workflow spawns from
+the SPU. The
 harness's own end of this channel carries the same flag from the moment the pair is
 created, before any child exists rather than after one. The property is established
 before any child, so the copy of

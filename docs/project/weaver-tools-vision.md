@@ -238,7 +238,8 @@ first.
 
 **Dispatch is the second axis and it is a consequence.** The harness routes an
 elected action inward to the organ whose domain it belongs to, or outward through the
-gate as ordinary output. Autonomic action is dispatched by the loop that fired it,
+gate: to a registered service as ordinary output, or to the gate's own shell verb as an
+execution exchange. Autonomic action is dispatched by the loop that fired it,
 usually inward, to the organ whose condition was met.
 
 The two axes cross rather than nest, and the corners are all occupied except one:
@@ -246,11 +247,16 @@ The two axes cross rather than nest, and the corners are all occupied except one
 - **Elected and dispatched inward.** The protoautonomic calculator. The model asks,
   the harness answers deterministically, and nothing crosses the gate.
 - **Elected and dispatched outward.** A registered service the agent addresses across
-  the gate, the model asking and the gate carrying it opaque as any other output. This
-  corner holds every tool: the gate is the agent's boundary, so a bash tool, a database
-  client, an API call and a service that listens are all dispatched outward through it
-  (the operator's ruling of 2026-10-15, #172, which retired the port ruling of 2026-08-07
-  that had filed the first three inward by whether they bind a listening port).
+  the gate, the model asking and the gate carrying it opaque as any other output. A
+  database client and an API call sit here as services, the port ruling of 2026-08-07
+  that had filed them inward by whether they bind a listening port being retired (the
+  operator's ruling of 2026-10-15, #172: the gate is the agent's boundary, and every tool
+  past it is external).
+- **The shell, elected and run by the gate itself.** External too, by the same ruling,
+  and outside the corner above: the harness sends the call to the gate as a typed
+  execution exchange, the gate parses its command and forks a shell per call into the
+  agent's `tools/` cgroup (#111), and the answer returns on that exchange. It is the
+  gate's own verb, not ordinary output the gate carries unread.
 - **Autonomic and dispatched inward.** Held state surfacing because the loop's
   condition was met, entering the decoder's path without the model having asked.
 - **Autonomic and dispatched outward** is the empty corner. The loop reaching the
@@ -275,9 +281,7 @@ changing the axis bought.
 
 **The outward corner, elected and dispatched through the gate, is what the rest of
 this section is about.** A tool there is external to the agent and not constitutive
-of it. The shell the gate runs per call sits in this corner since #172 and is the one
-exception to the dispatch described below: the gate executes it as its own verb, forking
-it into the agent's `tools/` cgroup. Of the registered services, this program builds none: what it owns is the grip they are built
+of it, and this program builds none of them: what it owns is the grip they are built
 to fit, per `weaver-agent-PRD` section 9. Its call leaves as ordinary model output,
 crossing the gate opaque and logged, and the harness owns dispatch on the far side, so
 the gate never distinguishes a tool call from any other output. The return is symmetric:

@@ -110,11 +110,12 @@ violating the total bound or arriving short is a channel fault, never a
 partial message.
 
 **Non-inheritance on both ends, by the split the corpus already runs.** The
-harness's end carries the flag from the pair's creation, so no organ the
-harness forks inherits a handle to the decode seam, the gate included, and so
-no shell the gate forks per tool call. The
-SPU's end is set after its final image replacement, a set and not a check, so nothing a
-later workflow spawns from the SPU inherits it either.
+harness's end carries the flag from the pair's creation, so it cannot survive the exec
+of any organ the harness forks, the gate's included, and so cannot reach any shell the
+gate forks per tool call: the gate holds an inherited copy only between its fork and its
+exec, which closes it. The SPU's end is set after its final image replacement, a set and
+not a check, so it survives the exec of nothing a later workflow spawns from the SPU
+either.
 
 **Closure is not an answer.** A closed channel with an exchange outstanding
 is the far party dead mid-exchange, treated as that exchange's failure and
