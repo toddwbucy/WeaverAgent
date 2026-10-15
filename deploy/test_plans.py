@@ -3428,20 +3428,21 @@ class LifecycleNearMissTests(unittest.TestCase):
 
 
 # Admin's refusal of a load over a read entry on the trace, as the first live run
-# after #108 met it (olympus, 2026-10-15, ba3eb4e, the lifecycle run's tee):
-# the cause on stderr, then the answer.
-H5_REFUSAL = ("weaver-admin: the trace /var/lib/weaver-agent/weaver-m1/trace.ndjson: "
-              "carries an access-control entry beyond its mode\n"
-              '{"kind":"boundary_unverified"}\n')
+# after #108 met it (2026-10-15, ba3eb4e, the lifecycle run's tee): the cause on
+# stderr, naming the trace, then the answer on stdout.
+H5_CAUSE = "weaver-admin: the trace {trace}: carries an access-control entry beyond its mode"
+H5_ANSWER = '{"kind":"boundary_unverified"}'
 
 
 class LifecycleStep8bTests(unittest.TestCase):
     """**Step 8b asserts H5 closed** (#99 H5, closed by #108): a load over a
     read entry for the member on the trace refuses `boundary_unverified`, and
-    admin's cause names the access-control entry. The step runs alone, with
-    sudo, setfacl and admin as stand-ins and admin answering as the live run
-    did. Perturbations: answer a state, and the step fails with the agent
-    force-unloaded and the entry removed; answer the refusal without its
+    admin's cause names that trace's access-control entry in the trace's
+    judgment's own words. The step runs alone, with sudo, systemd-run,
+    setfacl and admin as stand-ins, admin answering as the live run did, its
+    cause on stderr. Perturbations: answer anything else, and the step fails
+    with the entry removed and then the agent force-unloaded, naming both
+    answers; name another file's entry, admin's "does not say whether", or no
     cause, and the step fails naming the cause."""
 
     def setUp(self):
@@ -3451,10 +3452,11 @@ class LifecycleStep8bTests(unittest.TestCase):
         self.bin_dir = root / "bin"
         self.bin_dir.mkdir()
         self.calls = root / "calls"
+        log = shlex.quote(str(self.calls))
         for tool, body in (
-                ("sudo", '#!/bin/sh\n[ "$1" = "-n" ] && shift\nwhile [ "${1#*=}" != "$1" ]; do export "$1"; shift; done\nexec "$@"\n'),
+                ("sudo", '#!/bin/sh\n[ "$1" = "-n" ] && shift\nexec env "$@"\n'),
                 ("systemd-run", '#!/bin/sh\nwhile [ "$1" != -- ]; do shift; done\nshift\nexec "$@"\n'),
-                ("setfacl", f'#!/bin/sh\necho "setfacl $*" >> {shlex.quote(str(self.calls))}\n')):
+                ("setfacl", f'#!/bin/sh\necho "setfacl $1" >> {log}\n')):
             stand_in = self.bin_dir / tool
             stand_in.write_text(body)
             stand_in.chmod(0o755)
@@ -3473,40 +3475,53 @@ class LifecycleStep8bTests(unittest.TestCase):
                                   "step_8b")
             + "step_8b\necho FINISHED\n")
 
-    def run_step(self, admin_body):
-        self.admin.write_text("#!/bin/sh\n" + admin_body)
+    def run_step(self, load_cause, load_answer, unload_answer='{"kind":"state","state":"unloaded"}'):
+        log = shlex.quote(str(self.calls))
+        self.admin.write_text(
+            "#!/bin/sh\n"
+            f'echo "admin $1" >> {log}\n'
+            'case "$1" in\n'
+            f"  load) [ -z {shlex.quote(load_cause)} ] || printf '%s\\n' {shlex.quote(load_cause)} >&2; "
+            f"printf '%s\\n' {shlex.quote(load_answer)} ;;\n"
+            f"  force-unload) printf '%s\\n' {shlex.quote(unload_answer)} ;;\n"
+            "esac\n")
         self.admin.chmod(0o755)
         env = {**os.environ, "PATH": str(self.bin_dir) + os.pathsep + os.environ["PATH"]}
         env.pop("BASH_ENV", None)
         return subprocess.run(["bash", "-c", self.program], env=env, text=True, capture_output=True, timeout=20)
 
+    def calls_made(self):
+        return self.calls.read_text().splitlines()
+
     def test_the_live_refusal_passes(self):
-        result = self.run_step(f"printf '%s' {shlex.quote(H5_REFUSAL)}\n")
+        result = self.run_step(H5_CAUSE.format(trace=self.trace), H5_ANSWER)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("PASS step 8b (#99 H5, closed by #108): load answers boundary_unverified", result.stdout)
         self.assertIn("PASS step 8b (#99 H5, closed by #108): admin's cause names the trace's access-control entry",
                       result.stdout)
         self.assertIn("FINISHED", result.stdout)
-        self.assertIn("setfacl -b", self.calls.read_text(), "the entry is removed")
+        self.assertEqual(self.calls_made(), ["setfacl -m", "admin load", "setfacl -b"])
 
-    def test_a_load_that_stands_fails_after_it_is_taken_down(self):
-        result = self.run_step(
-            'case "$1" in\n'
-            "  load) printf '%s\\n' '{\"kind\":\"state\",\"state\":\"idle\"}' ;;\n"
-            f"  force-unload) echo force-unload >> {shlex.quote(str(self.calls))}; "
-            "printf '%s\\n' '{\"kind\":\"state\",\"state\":\"unloaded\"}' ;;\n"
-            "esac\n")
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("load over an access entry on the trace refuses", result.stdout)
-        calls = self.calls.read_text()
-        self.assertIn("force-unload", calls, "the agent is taken down")
-        self.assertIn("setfacl -b", calls, "the entry is removed")
-        self.assertNotIn("FINISHED", result.stdout)
+    def test_a_load_that_stands_fails_with_the_entry_removed_then_the_agent_down(self):
+        for answer in ('{"kind":"state","state":"idle"}', '{"kind":"in_transition","constituents":[7]}'):
+            with self.subTest(answer=answer):
+                self.calls.unlink(missing_ok=True)
+                result = self.run_step("", answer, unload_answer='{"kind":"agent_running"}')
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("load over an access entry on the trace refuses", result.stdout)
+                self.assertIn('then force-unload answered {"kind":"agent_running"}', result.stderr)
+                self.assertEqual(self.calls_made(), ["setfacl -m", "admin load", "setfacl -b", "admin force-unload"],
+                                 "the entry goes before the take-down")
+                self.assertNotIn("FINISHED", result.stdout)
 
-    def test_a_refusal_without_its_cause_fails(self):
-        result = self.run_step("""printf '%s\\n' '{"kind":"boundary_unverified"}'\n""")
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("admin's cause names the trace's access-control entry", result.stderr)
+    def test_a_cause_that_is_not_the_trace_judgment_fails(self):
+        for cause in ("weaver-admin: the declaration /x/agent.toml: carries an access-control entry beyond its mode",
+                      f"weaver-admin: the trace {self.trace}: does not say whether it carries an access-control entry",
+                      ""):
+            with self.subTest(cause=cause):
+                result = self.run_step(cause, H5_ANSWER)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("admin's cause names the trace's access-control entry", result.stderr)
 
 
 class IndexModeTests(unittest.TestCase):
