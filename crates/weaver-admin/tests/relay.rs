@@ -54,6 +54,19 @@ fn start(tag: &str, contents: &[u8], reader: u32) -> Relay {
 
 /// As `start`, the relay's three waits set to `wait_ms` where given.
 fn start_timed(tag: &str, contents: &[u8], reader: u32, wait_ms: Option<u64>) -> Relay {
+    start_with(tag, reader, wait_ms, &|sink| {
+        std::fs::write(sink, contents).unwrap()
+    })
+}
+
+/// As `start_timed`, the sink made by `make_sink` at its path, so a test can
+/// hand the relay something other than a file of lines.
+fn start_with(
+    tag: &str,
+    reader: u32,
+    wait_ms: Option<u64>,
+    make_sink: &dyn Fn(&std::path::Path),
+) -> Relay {
     let dir = std::env::temp_dir().join(format!("weaver-relay-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -61,7 +74,7 @@ fn start_timed(tag: &str, contents: &[u8], reader: u32, wait_ms: Option<u64>) ->
     let socket = dir.join("trace.sock");
     let sink = dir.join("trace.ndjson");
     let log = dir.join("admin.log");
-    std::fs::write(&sink, contents).unwrap();
+    make_sink(&sink);
     let listener = high(UnixListener::bind(&socket).unwrap().as_raw_fd());
     let sink_fd = high(std::fs::File::open(&sink).unwrap().as_raw_fd());
     let log_fd = high(
@@ -607,8 +620,14 @@ fn a_reader_resuming_from_the_length_gets_what_followed_acceptance() {
         digest(b"{\"b\":2}\n")
     );
     let mut reader = dial(&relay, &request);
-    let header: serde_json::Value = serde_json::from_str(&line(&mut reader)).unwrap();
-    assert!(header["trace_stream"]["header"].is_object(), "{header}");
+    // **Each acceptance reads its own length**: the second header names the
+    // boundary after the record appended since the first.
+    let completed = records.len() + partial.len() + b"\"}\n{\"d\":4}\n".len();
+    assert_eq!(
+        header_length(&mut reader),
+        completed as u64,
+        "the second acceptance names the boundary after what was appended"
+    );
     let got = line(&mut reader);
     assert!(
         got == format!("{partial}\"}}\n"),
@@ -617,4 +636,24 @@ fn a_reader_resuming_from_the_length_gets_what_followed_acceptance() {
         logged(&relay)
     );
     assert_eq!(line(&mut reader), "{\"d\":4}\n");
+}
+
+/// **A length that cannot be read refuses the connection, logged** (#88;
+/// `weaver-admin-Spec` section 6): the relay names no boundary it did not
+/// read. A sink descriptor that is a directory answers `fstat` and fails the
+/// read back. Perturbation: answer 0 where the read fails, and a header
+/// arrives naming it.
+#[test]
+fn a_length_that_cannot_be_read_refuses() {
+    let relay = start_with("length-unread", me(), None, &|sink| {
+        std::fs::create_dir(sink).unwrap();
+        std::fs::write(sink.join("x"), b"x").unwrap();
+    });
+    let mut reader = dial(&relay, "{\"offset\":0}\n");
+    assert_eq!(line(&mut reader), "", "no header for a length not read");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !logged(&relay).contains("the sink cannot be read for its length") {
+        assert!(std::time::Instant::now() < deadline, "{}", logged(&relay));
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
