@@ -122,11 +122,11 @@ own terms are what opened it.** The block held because tool dispatch was
 harness-internal and no seam crossed it, so no vocabulary clause could draw
 `tool-trait`. The ratified loop boundary of 2026-08-11 inverted that ground:
 every tool sits outside the reasoning loop, dispatch crosses the gate seam,
-and `weaver-harness-gate-contract` section 7 draws the definition - the
-clause that could not exist while no seam crossed is the clause that
-demanded it. The definition is now shaped against its consumers, the gate's
-executor and the harness's dispatch, which is what the anticipatory-contract
-rule always required and the workflow now supplies. The block's history
+and the tool workflow drew the definition - the clause that could not exist
+while no seam crossed is the clause that demanded it. Its consumer is the
+registered service the agent addresses through the gate (section 3.1 above):
+the gate's shell is its own verb, dispatched with no table, and draws nothing
+from this crate, as `weaver-harness-gate-contract` section 7 records (#172). The block's history
 stands as stated: recorded on the working list from 2026-07-29, landed here
 2026-08-01, held until the workflow demanded the shape.
 
@@ -136,10 +136,11 @@ a per-invocation read, mutate, or destructive judgment that every tool was oblig
 return. That is gone, and the ground it rests on outlived the clause that first stated
 it. Apex section 3 step 7 moved tool safety off the tool: it read that a tool executes
 as the agent's constrained user bounded by filesystem permissions, sudoers, and cgroups,
-and the egress ruling of 2026-08-07 replaced that with a registered application the
-agent addresses across a socket, whose containment is the application's own and not this
-program's to state. **Both readings put the judgment somewhere other than in a method
-the tool answers**, which is the whole of what this negative needed. A trait method
+and the egress ruling of 2026-08-07 replaced that, for a registered application the
+agent addresses across a socket, with a containment that is the application's own and
+not this program's to state. The shell the gate runs per call is contained by the
+agent's account and its `tools/` cgroup (#111). **Every reading puts the judgment
+somewhere other than in a method the tool answers**, which is the whole of what this negative needed. A trait method
 asking a tool whether it is dangerous is a heuristic standing where a boundary already
 stands, and its presence would invite the belief that the answer is load-bearing. The
 ruling narrows what this program claims about that boundary and takes nothing back from

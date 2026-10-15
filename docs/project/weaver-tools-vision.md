@@ -238,7 +238,8 @@ first.
 
 **Dispatch is the second axis and it is a consequence.** The harness routes an
 elected action inward to the organ whose domain it belongs to, or outward through the
-gate as ordinary output. Autonomic action is dispatched by the loop that fired it,
+gate: to a registered service as ordinary output, or to the gate's own shell verb as an
+execution exchange. Autonomic action is dispatched by the loop that fired it,
 usually inward, to the organ whose condition was met.
 
 The two axes cross rather than nest, and the corners are all occupied except one:
@@ -246,11 +247,16 @@ The two axes cross rather than nest, and the corners are all occupied except one
 - **Elected and dispatched inward.** The protoautonomic calculator. The model asks,
   the harness answers deterministically, and nothing crosses the gate.
 - **Elected and dispatched outward.** A registered service the agent addresses across
-  the gate, the model asking and the gate carrying it opaque as any other output. This
-  corner listed a bash tool, a database client, and an API call until the port ruling
-  of 2026-08-07, which files a tool by whether it binds a listening port rather than
-  by where its bytes go. None of those three binds one, so all three are internal and
-  dispatched inward, and what remains here is the service that listens.
+  the gate, the model asking and the gate carrying it opaque as any other output. A
+  database client and an API call sit here as services, the port ruling of 2026-08-07
+  that had filed them inward by whether they bind a listening port being retired (the
+  operator's ruling of 2026-10-15, #172: the gate is the agent's boundary, and every tool
+  past it is external).
+- **The shell, elected and run by the gate itself.** External too, by the same ruling,
+  and outside the corner above: the harness sends the call to the gate as a typed
+  execution exchange, the gate parses its command and forks a shell per call into the
+  agent's `tools/` cgroup (#111), and the answer returns on that exchange. It is the
+  gate's own verb, not ordinary output the gate carries unread.
 - **Autonomic and dispatched inward.** Held state surfacing because the loop's
   condition was met, entering the decoder's path without the model having asked.
 - **Autonomic and dispatched outward** is the empty corner. The loop reaching the
@@ -412,18 +418,20 @@ Added 2026-08-11, on the ratification of the reasoning-loop criterion. The agent
 divides at a seam the stripping method exposed rather than any plan drew, and the
 division gives the road its shape. The reasoning loop is the center: what directly
 enhances the processing of meaning, built first because nothing else can be built
-without it. Around it is the shell, still the agent: tools including the local
-shell, durable identity written through admin, the corrective mechanisms that may
-come. The shell earns its place against its own bar, and center-first means
-built-first, never matters-more.
+without it. Around it is the shell, still the agent: durable identity written through
+admin, the function loops the harness runs, the corrective mechanisms that may come.
+Tools are not in it. The shell earns its place against its own bar, and center-first
+means built-first, never matters-more.
 
-The loop's edge is the gate, and the agent's edge is the network boundary: what
-crosses a network line is outside the agent entirely, for now and by ruling. The
-ruling reads network lines alone, and a local Unix socket crosses no boundary
-that counts, which is how a tool sits one socket away and still inside the
-agent. That crossing is what the crossings-per-decode-step measure prices as
-nearly free, so the loop calls its shell without ceremony and contains none of
-it.
+**The gate is the agent's edge** (the operator's ruling of 2026-10-15, #172, which
+replaced this section's earlier reading that the agent's edge was the network
+boundary and a tool one local socket away still inside the agent). What crosses the
+gate is outside the agent, a local Unix socket included, so every tool the agent calls
+out to is external: a registered service, and the bash session the gate runs per call.
+The network boundary remains only as a bound on what a registered service may reach,
+which is that service's own affair. The crossing through the gate is what the
+crossings-per-decode-step measure prices as nearly free, so the loop calls its tools
+without ceremony and contains none of them.
 
 The reasoning loop nearing completion does not complete the agent. It is a road
 marker, the first one that runs, and the criterion that bounded it is the same

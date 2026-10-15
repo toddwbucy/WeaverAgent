@@ -387,27 +387,30 @@ dumpable flag on every process of the worker's family, and close-on-exec on ever
 descriptor at every fork, including the creating party's own ends.
 
 **The cell narrows to one case and does not close, and an earlier cut of this act said
-it closed.** The port ruling of 2026-08-07 removes two of the three tools it used to
-reach. A tool that binds a listening port is external, a registered application the
-operator provisions and this program forks none of, so no uid of its is this program's
-to choose. Loop code the operator compiles into the worker holds no separate process
-and so no separate uid. **What remains is the shell this crate forks per call**, which
-`weaver-harness-Spec` section 10 describes as a subprocess running as the
-agent uid and builds a reference walk on. The word internal names the
-agent-level answer the port test gives, and under the ratified loop boundary
-of 2026-08-11 the same shell is external to the reasoning loop, every tool
-being on the far side of this crate by that criterion - two answers naming
-two boundaries rather than contradicting each other. As of the tool boundary
-ruling of 2026-08-18 the word also names a third thing, the `weaver-internal`
-promotion space, which holds inward-dispatched callables and no process, so
-no uid question of this cell reaches it. That process has a
-uid, the choice between the agent's and one this crate owns is live for it, and the
-descriptor custody the walk protects is exactly what the choice decides.
+it closed.** The cell is decided by who forks or provisions a tool's process, not by
+what the tool is called. A registered service, one that binds a listening port, is a
+process the operator provisions and this program forks none of, so no uid of its is this
+program's to choose. Loop code the operator compiles into the worker holds no separate
+process and so no separate uid. **What remains is the shell this crate forks per call**, which
+`weaver-harness-Spec` section 8 describes as a subprocess running as the
+agent uid and builds a reference walk on. **That shell is external** (the operator's
+ruling of 2026-10-15, #172): this crate is the agent's boundary, everything on its far
+side is external, and a shell session run as a tool call is on its far side. The port
+test's "internal" for a tool that binds no listening port is retired with it, and so is
+the reading that had this shell internal to the agent while external to the reasoning
+loop: one boundary names it now, and the registered service is external as well. The
+word internal names only the `weaver-internal` promotion space (the tool boundary ruling
+of 2026-08-18), which holds inward-dispatched callables and no process, so no uid
+question of this cell reaches it. **The shell is the one process this crate forks**, so
+its uid is this program's choice: the choice between the agent's and one this crate
+owns is live for it, and the descriptor custody the walk protects is exactly what the
+choice decides.
 
 **PENDING stands for that case, on the arms section 8 stages.** What it awaits is
 unchanged, the tool workflow chartering plus a stated rationale. The egress ruling
-supplied one for the external case and the port ruling removed that case from this
-cell rather than answering it, so neither ruling has priced the arm that remains.
+supplied one for the registered service and the port ruling removed that case from this
+cell rather than answering it, its process being the operator's to provision, so
+neither ruling has priced the arm that remains.
 
 ## 8. What does not cross, and what waits
 
@@ -477,9 +480,9 @@ section keeps them as the record of what the earlier pass could already see.
 
 **The tool-uid ruling.** Stated in section 7 with its candidate. **Settled by:** the
 architecture seat's ratification of the candidate, or the tool workflow chartering
-**Narrowed by the port ruling of 2026-08-07** to the forked shell, an external
-tool being the operator's to provision and loop code holding no separate
-process. Section 7 carries the reasoning. Until settled, admin's
+**Narrowed by the port ruling of 2026-08-07** to the forked shell, a registered
+service's process being the operator's to provision and loop code holding no separate
+process. The shell is external too (#172), and the cell turns on who forks it. Section 7 carries the reasoning. Until settled, admin's
 assumption stands and nothing builds against the separate-uid arm.
 
 **The refusal type.** This seam's refusal reuses `lifecycle-refusal` rather than

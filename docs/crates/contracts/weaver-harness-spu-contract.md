@@ -136,7 +136,8 @@ The SPU also re-establishes the property on its own end of this channel after th
 final
 image replacement, and the step is a set rather than a check, per `weaver-organ-channel`
 section 2,
-so that no child process a later workflow spawns from the SPU inherits the seam. The
+so that the seam survives the exec of no child process a later workflow spawns from
+the SPU. The
 harness's own end of this channel carries the same flag from the moment the pair is
 created, before any child exists rather than after one. The property is established
 before any child, so the copy of
@@ -144,10 +145,10 @@ that end the SPU's child carries closes at the SPU's own final image replacement
 is what keeps a
 second end of this seam out of the SPU's address space, per `weaver-spu-PRD` section
 7's rule that the crate receives the channel end and no other handle. And it is
-what keeps this end out of every tool the harness elects for the life of the seam,
-since the harness creates a child process per tool call and a handle without the flag
-survives every one of those forks, an inherited end there handing the tool surface a
-release directive on the residency seam.
+what keeps this end out of every tool the agent runs for the life of the seam: the
+harness forks its organs, the gate among them, and the gate forks a shell per tool call,
+so a handle without the flag would cross the gate's exec and every shell's after it, an
+inherited end there handing the tool surface a release directive on the residency seam.
 
 ## 2. The exchanges
 

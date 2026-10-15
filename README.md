@@ -60,10 +60,11 @@ The same offer runs outward, and there it is smaller than you might expect. We
 build no tools. A bash tool, a database client, an API caller are not crates
 here and never will be, because a hammer is not installed into a carpenter, it
 is shaped so a hand can grip it. What the framework owns is the grip: the
-boundary contract a tool is built to fit. Which grip a tool fits is settled by
-whether it binds a listening port: one that does is external and reaches the
-agent through the gate, and one that does not is internal, running inside the
-loop the operator builds. That is why external tooling can stay
+boundary contract a tool is built to fit. The gate is the agent's boundary, and
+every tool the agent calls out to is on its far side, external and reached through
+the gate: a service
+that listens, and the shell the gate runs per call alike. That is why external
+tooling can stay
 external at no cost to the agent, and why the thing on the far side of that
 contract can change without the agent changing at all.
 

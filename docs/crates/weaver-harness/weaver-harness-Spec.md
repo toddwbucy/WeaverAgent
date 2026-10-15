@@ -457,10 +457,16 @@ three where the agent declares no classifier, that submodule being optional by
 presence per `weaver-spu-PRD` section 15.3, and the rule does not change with
 the count.
 `weaver-harness-spu-contract` section 1 requires the harness's own end flagged
-from the pair's creation. The atomic form is elected because the alternative
-has a window: this process forks a subprocess per tool call, a fork between
-creation and a separate `fcntl` would inherit an unflagged end, and an
-inherited end of the residency seam hands the tool surface a release directive.
+from the pair's creation. **An unflagged end would cross every later exec**: this
+process forks its organs, the gate among them, and the gate forks a shell per tool call
+(`weaver-gate-Spec` section 8), so an end of the residency seam left unflagged would
+reach the gate's image and from it every shell, handing the tool surface a release
+directive. The atomic form is elected because the alternative's safety rests on an
+ordering no type enforces: every fork this process makes is an organ's, from the serving
+thread, and its other threads (the trace's writer, the last words' readers) fork nothing,
+so a separate `fcntl` on the creating thread closes the window today, and only so long as
+no fork ever lands between the creation and the flag. The flag set in the creating call
+needs no such argument.
 Verified: `socketpair` with `SOCK_CLOEXEC` yields both descriptors flagged with
 no interval between them. **The atomicity grounds in apex section 5.1's second
 authentication case.** A pair with no name is authenticated by possession of the
@@ -1754,8 +1760,9 @@ to: harness-provider-injected-no-wire-format
 
 **Tool dispatch is chartered as of the tool workflow's opening, 2026-08-17,
 and it is the exchange and never the trait.** `tool-trait` opened with
-`weaver-traits-PRD` section 3.1's revision and lives on the gate's side of
-the seam: this crate resolves nothing against it and holds no tool, opening
+`weaver-traits-PRD` section 3.1's revision and belongs to the registered services
+reached across the gate's agent-opened seam, the gate's own shell drawing nothing
+from it (#172): this crate resolves nothing against it and holds no tool, opening
 the execution exchange of `weaver-harness-gate-contract` section 2 per call
 the family parse recovers, which keeps every tool on the far side of the
 loop's membrane where the ratified boundary filed it. What the charter fixed
@@ -1780,8 +1787,9 @@ construction requires a tool
 result constructible from exactly one source, and a harness-side execution
 path that must stay open cannot be closed by the type system, so the in-loop
 construction path and the enforcement are incompatible and the enforcement
-was chosen. Whether the gate spawns tool processes or tools are provisioned
-as peers is the tool workflow's election and the finding rules on neither.
+was chosen. Both have since been settled, each for its own kind: the gate forks
+the shell per call into the agent's `tools/` cgroup (#111), and a registered service
+is a peer the operator provisions (#172).
 What is settled is only which side of the loop's membrane the tool sits on.
 
 **The granted tool result closes the loop at the type level, per the audit of
@@ -3124,8 +3132,8 @@ the threat-anchoring rule of the external review of 2026-08-01, and each test
 below is a walk made executable.
 
 **The reference walk: a rogue elected tool reaches for the trace.** The
-adversary is the agent's own tool surface, a subprocess this crate forks per
-call, running as the agent uid with `bash` as the reference case. The attack
+adversary is the agent's own tool surface, a subprocess the gate forks per
+call (#111), running as the agent uid with `bash` as the reference case. The attack
 is inheritance: without close-on-exec every tool subprocess holds a writable
 handle to the trace and edits its own account through a descriptor requiring
 no path and passing no check, or an end of the member's channel and seats

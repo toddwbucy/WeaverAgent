@@ -119,9 +119,10 @@ line is a Unix domain socket, and there is no listening network socket anywhere.
   `/etc/weaver/admin`), opens its trace sink and hands it to the worker, and names its
   SPU by that root's `spu-binary`. Its start step takes the run lock and stands the
   agent's processes as the declaration elects them (Spec section 6, #72).
-- **`weaver-internal`** holds internal tools that run inside the loop (the calculator).
-  A tool that binds a listening port is external and reaches the agent through the gate;
-  one that does not is internal.
+- **`weaver-internal`** holds the loop's inward callables (the calculator), which hold no
+  process. **The gate is the agent's boundary** (the operator's ruling of 2026-10-15,
+  #172): every tool on its far side is external, the shell the gate runs per call
+  included, and a new tool defaults to external unless it bears directly on the loop.
 - **`weaver-traits`** and **`weaver-types`** are the floor: messages, providers, tools,
   permissions, identities, the wire and the agent declaration parser (`config` feature).
   They compile on stable and are demand-derived from what the organs need.

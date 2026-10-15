@@ -505,13 +505,15 @@ section 5's ordering.
 
 **The four constraints, inherited and now visible in the signature.** The
 trait is dyn-compatible,
-because `weaver-traits-PRD` section 3.1 has the engine dispatching tools it does
-not know the identity of and that is object dispatch by definition. Its async
+because the registered services `weaver-traits-PRD` section 3.1 names are tools a
+dispatcher addresses without knowing their identity, and that is object dispatch by
+definition. Its async
 methods return an explicitly boxed future rather than using `async fn` in trait,
 because an `async fn` in a trait is not dyn-compatible and the alternative,
 `async-trait`, is a proc-macro dependency on the floor that the boxing writes out
-by hand in three lines. **The boxed future carries `+ Send`**, because the harness
-drives tool calls on a runtime this crate does not name and a future that cannot
+by hand in three lines. **The boxed future carries `+ Send`**, because whichever
+dispatcher drives a registered service's calls does so on a runtime this crate does not
+name and a future that cannot
 cross a thread would bound the executor the composition root may choose, which is
 a transport decision leaking onto the floor. And the trait carries **no safety
 classification of any kind**, per charter section 3.1 and apex section 3 step 7,
@@ -552,10 +554,14 @@ to: traits-tool-no-safety-classification
 workflow charters it, and that section now cuts on two axes rather than one.** An action
 is elected when the model emits it and autonomic when the loop fires it on a condition
 the loop set, and it is dispatched inward to an organ or outward through the gate.
-**This trait serves the elected and outward corner alone**, which the port ruling of
-2026-08-07 narrows to a tool that binds a listening port: bash and every other tool that
-binds none is internal, so the trait's eventual constituency is the service the agent
-addresses through the gate and nothing else. The inward corners are function loops the
+**This trait serves the elected and outward corner's registered services alone**: its
+eventual constituency is the registered outward service the agent addresses through
+the gate, as `weaver-traits-PRD` section 3.1 limits `Tool`. **Classification is not
+membership.** Since the operator's ruling of 2026-10-15 (#172) every outward tool is
+external,
+the gate being the agent's boundary, and the shell the gate runs per call is external
+with them. It is still outside this trait, being the gate's own verb dispatched directly
+with no table, and `weaver-gate` links no `weaver-traits`. The inward corners are function loops the
 harness runs beside its control loops and reach no trait here. Which shape the trait
 takes is still the workflow's question, and the classification no longer is.
 

@@ -167,14 +167,15 @@ returning through the same exchange when the seat comes back. The mechanics
 are the Spec's, at its section 6.2.
 
 **The tool system.** The registry, the execution context, and the permission modes.
-Permission modes are operator policy and not a safety boundary. What a tool can reach
-depends on which side of the port test it sits, per the port ruling of 2026-08-07. A
-tool that binds a listening port is external, a registered application the harness
-addresses across the gate's agent-opened seam, and its containment is that application's
-own and the operator's to provision. A tool that binds none is internal, loop code this
-crate runs, and what it can reach is bounded by the kernel through the identity the
-worker holds, which is what this paragraph said before the egress act read it outward
-and is true again. The mode setting governs only whether the operator wants to be
+Permission modes are operator policy and not a safety boundary. **Every outward tool
+is external, on the far side of the gate**, the agent's boundary (the operator's ruling of
+2026-10-15, #172, retiring the port test's split of 2026-08-07). A tool that binds a
+listening port is a registered application the harness addresses across the gate's
+agent-opened seam, and its containment is that application's own and the operator's to
+provision. The shell the gate runs per call reaches what the agent's account can,
+bounded by the kernel through that identity and by the agent's `tools/` cgroup (#111).
+Loop code this crate runs, the `weaver-internal` callables, holds no process of its own
+and reaches what the worker holds. The mode setting governs only whether the operator wants to be
 consulted before a class of action. Stating this plainly is the point. A permission mode
 that reads as a security control when the kernel is the actual control is a thing that
 gets trusted wrongly later.
@@ -332,10 +333,12 @@ boundary already stands.
 
 **Where that boundary stands moved with the egress ruling of 2026-08-07.** This
 paragraph said the harness executes the tool as the agent's constrained user and the
-kernel decides what that user can touch. Apex step 7 now has the harness address a
-registered tool across the gate's agent-opened seam rather than fork one, so what the
-harness does is reach a boundary rather than run inside it, and what a tool may touch
-is that application's own affair on the far side of the socket. **The seam this
+kernel decides what that user can touch. Apex step 7 now sends every outward tool call
+to the gate and forks none: the shell is the gate's own verb, forked by the gate per call as
+the agent's account into the agent's `tools/` cgroup (#111, #172), and a registered
+service is addressed across the gate's agent-opened seam, what it may touch being that
+application's own affair on the far side of the socket. Either way the harness reaches a
+boundary rather than running inside it. **The seam this
 requires is chartered and its contract is not written**, per apex section 3 step 7, so
 this charter states the direction and owes the rest to the tool workflow: the exchange
 that carries a tool call toward the gate, this crate's part in it, and what a tool's
@@ -384,9 +387,10 @@ is eight and the table below is six.
 
 **The egress ruling of 2026-08-07 adds no seam here, and the socket count above it is a
 claim worth checking rather than an omission.** Apex section 3 step 7 has the harness
-address a registered tool *through the gate's* agent-opened socket, so this crate's
-counterparty is the gate it already holds a seam with, and what is new is a direction
-on that seam rather than a party. The tool is the gate's peer and not this crate's,
+send every outward tool call to the gate: the shell's as an execution exchange the gate runs
+itself, and a registered service's *through the gate's* agent-opened socket. So this
+crate's counterparty is the gate it already holds a seam with, and what is new is a
+direction on that seam rather than a party. The tool is the gate's peer and not this crate's,
 which is why no row below is the tool's and why nothing here authenticates a tool. **The
 exchange that carries a tool call is owed by `weaver-harness-gate-contract`**, which
 closes its enumeration at five and says in its section 7 that the clause is drawn
@@ -411,7 +415,7 @@ The six sockets:
 
 | Seam | Peer | The harness's role |
 |---|---|---|
-| Boundary | `weaver-gate` | Receives authenticated work inbound. Opens the exchange that carries a tool call outbound, per apex step 7, which the gate relays to the registered tool and never interprets. Gate never reaches past this seam in either direction. |
+| Boundary | `weaver-gate` | Receives authenticated work inbound. Opens the exchange that carries a tool call outbound, per apex step 7, which the gate either runs as its own shell verb, forked into `tools/`, or relays to a registered service unread. Gate never reaches past this seam in either direction. |
 | Residency | `weaver-spu` | Hands over the model binding it was given to admit, and later asks for its release. One arm of the enter fan-out and one of the unwinding. Consumes the confirmation or the typed refusal, which travels into the aggregate unchanged. |
 | Decode | `weaver-spu` | Opens the resident session, appends each turn's delta, and issues the flush. Requests carry `turn_key` and `session_key`. Consumes the response and its measurement payload. |
 | Classify | `weaver-spu` | Sends content with the turn's trace context to the classify submodule and consumes every label that artifact defines, each scored. The submodule's readiness and its faults arrive here. The submodule is optional by presence per `weaver-spu-PRD` section 15.3, so an agent declaring no classifier stands no end of it. |
@@ -642,8 +646,10 @@ nothing the agent needs for its own home directory and work.
 
 **The trace descriptor is close-on-exec, and the crate is broken without it.**
 
-Without `O_CLOEXEC`, every subprocess the harness spawns for a tool call inherits a
-writable handle to the trace, and the agent edits its own audit record through a
+Without `O_CLOEXEC`, the trace descriptor would cross every later exec: the harness
+forks its organs, the gate among them, and the gate forks a shell per tool call
+(`weaver-gate-Spec` section 8), so a writable handle to the trace would reach the gate's
+image and from it every shell, and the agent would edit its own audit record through a
 descriptor requiring no path and passing no check.
 
 The flag rides the descriptor and does not cross with a passed handle, so the
