@@ -280,8 +280,21 @@ fn run_in_home(
     // Cleanup has no tool outcome election: only the supervisor decides
     // whether the clock killed the run.
     let contained = tools.contain(cgroup::CONTAINMENT_BOUND);
+    // **The leader is signalled by its pid, then reaped within the bound**
+    // (Codex on #167): the shell runs as the agent's account and may have
+    // moved itself out of `tools/` (6.1, C1's first stated exception), where
+    // the kill of `tools/` does not reach it and an unbounded reap would
+    // hang the gate. It is this process's own unreaped child, so its pid
+    // cannot have been reused. A leader not reaped within the bound is an
+    // execution not contained.
     let reaped = if contained {
-        child.wait()
+        let _ = nix::sys::signal::kill(group, nix::sys::signal::Signal::SIGKILL);
+        reap_within(&mut child, cgroup::CONTAINMENT_BOUND)
+    } else {
+        None
+    };
+    let reaped = if let Some(reaped) = reaped {
+        reaped
     } else {
         // **An execution the gate cannot contain is never answered**: the
         // leader is signalled, the readers are released, and the gate exits
@@ -323,6 +336,27 @@ fn run_in_home(
         output.push_str("(no output)");
     }
     Ok(output)
+}
+
+/// The leader's reap within `bound`, by a non-blocking wait in slices:
+/// `None` where it did not exit in time (an uninterruptible sleep), which the
+/// caller takes as an execution not contained.
+fn reap_within(
+    child: &mut std::process::Child,
+    bound: std::time::Duration,
+) -> Option<std::io::Result<std::process::ExitStatus>> {
+    let deadline = std::time::Instant::now() + bound;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(Ok(status)),
+            Ok(None) => {}
+            Err(error) => return Some(Err(error)),
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
 
 /// Wait for a cancel or the unload's interrupt without postponing the next

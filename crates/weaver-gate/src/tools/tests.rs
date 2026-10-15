@@ -875,3 +875,37 @@ fn an_execution_the_gate_cannot_kill_is_unanswered() {
         "{answered:?}"
     );
 }
+
+/// **A shell that moved itself out of `tools/` cannot hang the gate**
+/// (Codex on #167; 6.1, C1's first stated exception): the leader writes its
+/// own pid into the scope above its `tools/`, as the agent's account can
+/// into `worker/`, and sleeps. The kill of `tools/` cannot reach it and the
+/// wait reads `tools/` empty at once, so the gate signals the leader by its
+/// pid and reaps it within the bound, and the clock's answer comes.
+/// Perturbation: drop the leader's kill, and the reap waits on a shell that
+/// sleeps for five minutes, past this test's own timeout.
+#[test]
+#[ignore = "runs a shell: needs a delegated cgroup scope"]
+fn a_shell_that_left_tools_cannot_hang_the_gate() {
+    let scratch = ScratchTools::new();
+    let above = scratch
+        .path
+        .parent()
+        .expect("the scope")
+        .join("cgroup.procs");
+    let command = serde_json::json!({
+        "command": format!("echo $$ > {}; exec sleep 300", above.display())
+    })
+    .to_string();
+    let (answered, answer) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let outcome = execute_in_scratch(&scratch, &command, 500);
+        let _ = answered.send(outcome.map(|outcome| format!("{outcome:?}")));
+        drop(scratch);
+    });
+    let outcome = answer
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .expect("the gate answers within the bound, the leader outside tools/ killed");
+    let outcome = outcome.expect("answered");
+    assert!(outcome.contains("Clock"), "{outcome}");
+}

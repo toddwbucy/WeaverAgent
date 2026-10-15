@@ -1359,7 +1359,11 @@ already validated against the declared maximum at the refusal layer, and it is
 the one kill clock. **Every end of an execution kills `tools/` whole**: the
 shell's exit, the clock, a cancel, an interrupt and the channel's closure each
 write `tools/cgroup.kill` and wait for `tools/` to empty, within the kill's
-bound, before the answer goes. `bash` leaves descendants holding the pipes'
+bound, then signal the shell's leader by its pid and reap it within the same bound,
+before the answer goes: the leader may have moved itself out of `tools/` (the agent's
+account can write `worker/cgroup.procs`), where the kill does not reach it, and an
+unbounded reap would hold this crate on it (Codex on #167). A leader not reaped within
+the bound is an execution not contained. `bash` leaves descendants holding the pipes'
 write ends, and a kill that reached only the leader, or only its process
 group, would hold the answer open on a straggler's schedule, or leave a
 command that left its group running past its execution's end. **This crate

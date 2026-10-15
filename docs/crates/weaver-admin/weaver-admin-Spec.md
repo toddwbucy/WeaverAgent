@@ -2514,7 +2514,11 @@ weaver-<agent>/      root's; the agent's cgroup
 - **The gate**, at each execution (`weaver-gate-Spec` section 8):
   - The shell's child moves itself into `tools/` before its exec.
   - At every end the gate writes `tools/cgroup.kill`, then waits for
-    `tools/cgroup.events` to read `populated 0` before it answers. Every end means the
+    `tools/cgroup.events` to read `populated 0`, then signals the shell's leader by its
+    pid and reaps it within the bound before it answers (Codex on #167): the leader, as
+    the agent's account, may have moved itself out of `tools/`, where the kill does not
+    reach it, and an unbounded reap would hold the gate. It is the gate's own unreaped
+    child, so its pid cannot have been reused. Every end means the
     shell's exit, the clock, a cancel, an interrupt and the channel's closure.
   - The kill replaces the process-group signal: it reaches a command that left its group
     or its session, and leaves nothing holding the pipes.
@@ -2702,7 +2706,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | admin's start step | A3 | A3 | refuses `AgentRunning`, naming the processes, and kills nothing (I8) |
 | admin's start step | A2 or A4 | unchanged | refuses `AgentRunning` at the run lock, before the cgroup is looked at (section 3). A4 with the lock free refuses `AgentRunning` as A3 does |
 | the gate, an execution opened | T0 | T1 | the shell's child moves itself into `tools/` before its exec, and the spawn returns once it has exec'd |
-| the gate, the execution's end (exit, clock, cancel, interrupt, closure) | T1 | T2, then T0 | `tools/cgroup.kill`, the wait, then the answer |
+| the gate, the execution's end (exit, clock, cancel, interrupt, closure) | T1 | T2, then T0 | `tools/cgroup.kill`, the wait, then `SIGKILL` to the shell's leader by its pid and its reap within the bound, then the answer. The leader alone is signalled directly, since it may have moved itself out of `tools/` (C1's first exception) where the kill does not reach it; a leader not reaped within the bound is an execution not contained. Its own escapers stay C1's exception, held by C2 |
 | the gate, its write of `tools/cgroup.kill` failing | T1 | T1 | no kill was delivered: the gate exits with the execution unanswered, the gate's death below, and the worker's kill, or its fallback, ends it |
 | the gate, `tools/` not empty within the bound after a delivered kill | T1, then T2 once its kill is delivered | T2 | the gate exits with the execution unanswered: the gate's death below |
 | the gate dies, while serving | T0, T1 or T2 | T2, then T0 | the worker kills `tools/`, waits a full bound from its own kill, and closes an open execution `Killed { by: fault }` |
