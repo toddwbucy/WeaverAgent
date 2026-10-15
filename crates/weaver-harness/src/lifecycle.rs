@@ -2908,9 +2908,10 @@ fn lower_gate_within(
         contained,
         Some((_, crate::tools_cgroup::Containment::Undelivered))
     ) {
-        // `Left` is answered all the same, the account naming the failed
-        // containment (6.1, the unwind with both failing).
-        author_gate_death(run, None, "lowered at the unwind", contained);
+        // `Left` is answered all the same, the fault naming the failed
+        // containment (6.1, the unwind with both failing): its own case, the
+        // gate having lowered and not died.
+        author_containment_undelivered(run, contained);
     }
     drop(gate.channel);
     reap_by(gate.pid, [window, shared].into_iter().flatten().min());
@@ -3701,6 +3702,26 @@ fn containment_words(contained: Option<Contained>) -> Option<&'static str> {
             "containment failed: the write of cgroup.kill and the pinned fallback both failed, the kill not delivered"
         }
     })
+}
+
+/// **The unwind's undelivered sweep** as its own `fault`
+/// (`tools_containment_undelivered`, `weaver-harness-PRD` section 5): the
+/// account names the organ whose `tools/` it was and what the containment
+/// came to, and no death. Latched on a failure (#116), read at the seal.
+fn author_containment_undelivered(run: &mut Run, contained: Option<Contained>) {
+    let mut account = serde_json::json!({"organ": "gate"});
+    if let Some(words) = containment_words(contained) {
+        account["containment"] = serde_json::Value::String(words.to_string());
+    }
+    let _ = run.author.author_fault(
+        &mut run.recorder,
+        Subsystem::Harness,
+        None,
+        &crate::authorship::harness_report(
+            weaver_types::FaultCase::ToolsContainmentUndelivered,
+            &account.to_string(),
+        ),
+    );
 }
 
 /// The gate's death as a `fault`, its last word riding the account where it

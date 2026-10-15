@@ -698,7 +698,18 @@ since that ruling, the prefix's text standing on the trace at its seeding
 turn and in the save point the load's lineage names, and the door's refusal
 at the seeding is the turn's refusal, per `weaver-harness-Spec` section 6.
 
-With these five named the corpus-wide case set closes across all three
+**The sixth is the unwind's containment of the agent's `tools/` cgroup**
+(`weaver-admin-Spec` section 6.1, #111, on the operator's ruling of 2026-10-15).
+Every leave lowers the gate and then sweeps `tools/`, the harness's own write of its
+`cgroup.kill` or one pidfd-pinned pass over its processes, and where the gate lowered
+cleanly while that write and that pass both failed, no kill reached what `tools/`
+still holds. That is the fault `tools_containment_undelivered`: the processes left
+unsignalled are held by the run end's kill of the agent's cgroup (6.1, C2), and the
+leave answers `Left` all the same. It is not an organ's death, which the gate's
+lowering was not, and naming it as one would record a death that never happened in
+the record that is this program's primary artifact.
+
+With these six named the corpus-wide case set closes across all three
 organs, and the payload's shape is the trace act's to elect against it.
 
 **The harness reads, the model does not.** The harness reads the trace continuously,

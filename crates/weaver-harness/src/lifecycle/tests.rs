@@ -8895,3 +8895,64 @@ fn containment_a_gate_dying_at_rest_with_a_leave_held_never_waits() {
         "nothing waited on tools/: {took:?}"
     );
 }
+
+/// **The unwind's undelivered sweep is its own fault, never a death**
+/// (`weaver-admin-Spec` 6.1, the unwind with the write and the pass both
+/// failing; `weaver-harness-PRD` section 5; the operator's ruling of
+/// 2026-10-15): the gate lowers without dying, `cgroup.kill` and
+/// `cgroup.procs` closed to the worker so no kill is delivered, and the
+/// lower authors `tools_containment_undelivered`, the gate's account naming
+/// the containment and no death. Perturbation: author it as
+/// `organ_death_observed`, and this fails.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_an_undelivered_unwind_sweep_is_its_own_fault() {
+    use std::os::unix::fs::PermissionsExt;
+    let layout = crate::tools_cgroup::tests::ScratchLayout::new("undelivered");
+    let (mut run, _spare, sink_path) = entered_run(None);
+    run.tools =
+        Some(crate::tools_cgroup::ToolsCgroup::open_beside_run(&layout.run).expect("tools/ opens"));
+    let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+    run.gate = Some(GateChannel {
+        channel: gate_end,
+        pid: nix::unistd::Pid::from_raw(i32::MAX),
+        last_word: crate::spawn::LastWord::quiet(),
+    });
+    let kill = layout.leaf("worker/tools/cgroup.kill");
+    let procs = layout.leaf("worker/tools/cgroup.procs");
+    std::fs::set_permissions(&kill, std::fs::Permissions::from_mode(0o444)).unwrap();
+    std::fs::set_permissions(&procs, std::fs::Permissions::from_mode(0o200)).unwrap();
+    // The gate stands and does not answer the lower: it never dies here.
+    let _ = lower_gate_within(&mut run, 100, None);
+    std::fs::set_permissions(&kill, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::set_permissions(&procs, std::fs::Permissions::from_mode(0o644)).unwrap();
+    drop(gate_peer);
+    drop(run);
+    let events: Vec<serde_json::Value> = std::fs::read_to_string(&sink_path)
+        .expect("the sink")
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("a record line"))
+        .collect();
+    let faults: Vec<&serde_json::Value> = events.iter().filter(|e| e["kind"] == "fault").collect();
+    let undelivered = faults
+        .iter()
+        .find(|e| e["payload"]["case"] == "tools_containment_undelivered")
+        .unwrap_or_else(|| panic!("the undelivered sweep's fault: {faults:?}"));
+    assert_eq!(undelivered["payload"]["account"]["organ"], "gate");
+    assert!(
+        undelivered["payload"]["account"]["containment"]
+            .as_str()
+            .is_some_and(|words| words.starts_with("containment failed")),
+        "{undelivered}"
+    );
+    assert!(
+        undelivered["payload"]["account"].get("death").is_none(),
+        "no death is named: {undelivered}"
+    );
+    assert!(
+        !faults
+            .iter()
+            .any(|e| e["payload"]["case"] == "organ_death_observed"),
+        "no death is recorded: {faults:?}"
+    );
+}

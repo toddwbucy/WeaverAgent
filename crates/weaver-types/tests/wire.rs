@@ -892,3 +892,17 @@ fn unrecovered_reason_is_internally_tagged_on_case() {
         r#"{"case":"unparsed","detail":"eof"}"#
     );
 }
+
+/// **The twelfth case crosses as its charter names it** (`weaver-harness-PRD`
+/// section 5; `weaver-admin-Spec` 6.1, the unwind's undelivered sweep):
+/// `tools_containment_undelivered`, snake_case as every case is, and it
+/// returns. Perturbation: rename the variant's wire form, and the bytes
+/// differ.
+#[test]
+fn the_tools_containment_case_crosses_snake_case() {
+    let case = weaver_types::FaultCase::ToolsContainmentUndelivered;
+    let bytes = serde_json::to_string(&case).expect("serializes");
+    assert_eq!(bytes, r#""tools_containment_undelivered""#);
+    let back: weaver_types::FaultCase = serde_json::from_str(&bytes).expect("returns");
+    assert_eq!(back, case);
+}

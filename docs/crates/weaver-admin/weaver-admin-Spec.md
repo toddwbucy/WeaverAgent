@@ -2712,7 +2712,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | the worker, while serving, its write of `tools/cgroup.kill` failing | T0, T1 or T2 | T1 or T2, then T2 by the fallback's kills, then T0 | no kill was delivered by the write, so the worker pins each pid in `tools/cgroup.procs` by a pidfd, confirms it still stands in `tools/`, and sends `SIGKILL` through the pidfd, repeating within the bound |
 | the worker, while serving, the write and the fallback both failing | T0, T1 or T2 | T1 or T2 | the worker closes the execution `Killed { by: fault }`, its `fault`'s account naming that containment failed and the kill was not delivered, and ends service: the run end holds what remains |
 | the worker's unwind (the leave, graceful or forced) | T0, T1 or T2 | T0, or as left | the worker writes its kill on `tools/`, or makes its fallback's one pass, and does not wait, before `Left`. The run end holds what remains |
-| the worker's unwind, the write and its one pass both failing | T0, T1 or T2 | as left | `Left` is answered all the same, the `fault`'s account naming the failed containment, and the run end holds the rest |
+| the worker's unwind, the write and its one pass both failing | T0, T1 or T2 | as left | `Left` is answered all the same, the fault `tools_containment_undelivered` naming the failed containment (the gate's death's own fault instead where the gate died at the lower), and the run end holds the rest |
 | the worker dies | A2 | A2, then A3 or A1 once the member and the relay end | the organs die by their death signal (`weaver-harness-Spec` section 2.2), and `tools/` keeps what it held, contained |
 | the member or the relay dies | A2 | A2 | nothing of the cgroup changes |
 | the run's constituents all end, after a leave or a death | A2 | A1 where nothing of the agent is left, else A3 | the run lock frees. The organs end by their death signal, and `tools/` is left as the worker left it |
@@ -2760,7 +2760,10 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
   and never re-run automatically, since the command may have completed before the
   worker's kill reached it.
 - The run end's kill of a leftover is in `admin.log`, not on the trace.
-- No event and no field is added.
+- **One fault case is added, and no event and no field**: the unwind's sweep of
+  `tools/` that delivers no kill while the gate lowered cleanly is the fault
+  `tools_containment_undelivered` (`weaver-harness-PRD` section 5, on the operator's
+  ruling of 2026-10-15), never `organ_death_observed`, the gate not having died.
 
 **The instruments the code act owes**, each perturbation-verified (section 10). They need
 a cgroup v2 subtree the suite can write, such as a delegated user scope, and the code act

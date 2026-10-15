@@ -1544,6 +1544,7 @@ pub enum FaultCase {
     OrganDeathObserved,
     MessageRecordUndecodable,
     IdentityPrefixUnrecorded,
+    ToolsContainmentUndelivered,
 }
 ```
 

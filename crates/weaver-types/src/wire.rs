@@ -1420,14 +1420,16 @@ impl PartialEq for FaultReport {
     }
 }
 
-/// The three charters' closed eleven, per `weaver-types-Spec` section 4.2:
+/// The three charters' closed twelve, per `weaver-types-Spec` section 4.2:
 /// three of `weaver-spu-PRD` section 13.10, three of `weaver-gate-PRD`
-/// section 13.4, five of `weaver-harness-PRD` section 5. **A twelfth case is
-/// a charter act before it is a code change**, and the tenth and eleventh
-/// were both exactly that: the act typing these found the harness authoring
-/// an assembly fault no case covered, and the act answering #369 found it
-/// leaving a seated prefix unaccounted for. The charter widened
-/// before this enum did, both times. The harness's five ride the same shape
+/// section 13.4, six of `weaver-harness-PRD` section 5. **A thirteenth case
+/// is a charter act before it is a code change**, and the tenth, eleventh
+/// and twelfth were each exactly that: the act typing these found the
+/// harness authoring an assembly fault no case covered, the act answering
+/// #369 found it leaving a seated prefix unaccounted for, and #111's PR C
+/// found the unwind's sweep of `tools/` with nothing to name its failure
+/// but a death that never happened. The charter widened before this enum
+/// did, each time. The harness's six ride the same shape
 /// although they cross no socket, one shape serving the wire and the `fault`
 /// event's payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1453,6 +1455,13 @@ pub enum FaultCase {
     /// reporting organ's own rendering by construction, and the load stands
     /// either way.
     IdentityPrefixUnrecorded,
+    /// The unwind's sweep of the agent's `tools/` cgroup delivered no kill,
+    /// per `weaver-harness-PRD` section 5 and `weaver-admin-Spec` section
+    /// 6.1: the gate lowered cleanly, and the harness's write of
+    /// `cgroup.kill` and its pidfd-pinned pass both failed, so what `tools/`
+    /// holds is left unsignalled for the run end's kill of the agent's
+    /// cgroup (C2). `Left` is answered all the same.
+    ToolsContainmentUndelivered,
 }
 
 #[cfg(test)]
