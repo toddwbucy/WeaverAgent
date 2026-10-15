@@ -1153,13 +1153,7 @@ impl Harness {
                     // 2026-10-09): it carries on, turned forced by (A). Only
                     // a worker that dies leaves admin no `Left`.
                     Err(crate::engine::TurnError::ChannelLost) => {
-                        // Inside a leave nothing waits on `tools/` (6.1).
-                        let context = if run.leave.is_some() {
-                            crate::tools_cgroup::Context::Leave
-                        } else {
-                            crate::tools_cgroup::Context::Serving
-                        };
-                        let turn = close_turn_on_death(run, context)?;
+                        let turn = close_turn_on_death(run, death_context(run))?;
                         if let Some(held) = run.leave.as_mut() {
                             held.progress.leave =
                                 crate::lifecycle_table::leave_on_arrival(held.progress.leave, true);
@@ -1362,7 +1356,7 @@ impl Harness {
             // that will not empty, or a kill not delivered, ends service.
             Response::GateFaultServeOn => {
                 let last_word = run.gate.as_ref().and_then(|gate| gate.last_word.take());
-                let contained = contain_tools(run, crate::tools_cgroup::Context::Serving);
+                let contained = contain_tools(run, death_context(run));
                 if !author_death(run, "gate", last_word, contained) {
                     return Err(ChannelFault::Closed);
                 }
@@ -2899,10 +2893,10 @@ fn lower_gate_within(
     // here, before its save point and its `unload`, so this is the last
     // sweep, the write or one pinned pass, never a wait. After every
     // answered execution `tools/` is already empty.
-    let contained = run
-        .gate_contained
-        .take()
-        .or_else(|| contain_tools(run, crate::tools_cgroup::Context::Leave));
+    // Always the unwind's own sweep, never an earlier kill's result (the
+    // Planner's grade of #167): an earlier pass's outcome is spent here.
+    run.gate_contained = None;
+    let contained = contain_tools(run, crate::tools_cgroup::Context::Leave);
     if died {
         author_gate_death(
             run,
@@ -3667,6 +3661,18 @@ fn contain_tools(run: &Run, context: crate::tools_cgroup::Context) -> Option<Con
             crate::tools_cgroup::contain(tools, context, crate::tools_cgroup::CONTAINMENT_BOUND),
         )
     })
+}
+
+/// **The context a gate's death meets `tools/` in** (6.1): a leave held,
+/// which the table's at-rest position does not show (a turn's answer that
+/// finds the gate gone with a leave the turn held), is a leave's, and
+/// nothing waits on `tools/` inside a leave; otherwise the worker serves.
+fn death_context(run: &Run) -> crate::tools_cgroup::Context {
+    if run.leave.is_some() {
+        crate::tools_cgroup::Context::Leave
+    } else {
+        crate::tools_cgroup::Context::Serving
+    }
 }
 
 /// **Whether a containment ends service** (6.1, the worker's rows): while

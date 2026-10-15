@@ -225,7 +225,7 @@ fn run_in_home(
         .process_group(0)
         .spawn()
         .map_err(|error| ShellEnd::Errored {
-            detail: format!("the fork failed: {error}"),
+            detail: format!("the fork, or the shell's move into tools/, failed: {error}"),
         })?;
     let group = nix::unistd::Pid::from_raw(child.id() as i32);
 
@@ -284,11 +284,11 @@ fn run_in_home(
         child.wait()
     } else {
         // **An execution the gate cannot contain is never answered**: the
-        // leader is killed so the reap returns, the readers are released,
-        // and the gate exits so the harness meets its death.
-        // The leader is not reaped: a process that would not die is likely
-        // what kept `tools/` populated, and a wait on it could hold the gate
-        // past its own bound. The gate's exit reparents it.
+        // leader is signalled, the readers are released, and the gate exits
+        // so the harness meets its death. The leader is not reaped: a
+        // process that would not die is likely what kept `tools/` populated,
+        // and a wait on it could hold the gate past its own bound. The gate's
+        // exit reparents it.
         let _ = nix::sys::signal::kill(group, nix::sys::signal::Signal::SIGKILL);
         let _ = finish_draining(&finished, out_reader, err_reader);
         drop(child);

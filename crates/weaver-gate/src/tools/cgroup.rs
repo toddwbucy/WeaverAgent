@@ -176,7 +176,7 @@ pub fn move_self(tools: RawFd, gate: nix::unistd::Pid) -> std::io::Result<()> {
     let procs = openat(
         tools,
         PROCS,
-        OFlag::O_WRONLY | OFlag::O_CLOEXEC,
+        OFlag::O_WRONLY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
         Mode::empty(),
     )?;
     match nix::unistd::write(&procs, b"0")? {

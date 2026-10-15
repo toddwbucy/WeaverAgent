@@ -8817,3 +8817,81 @@ fn containment_a_live_gates_bad_frame_kills_nothing() {
         "the command in tools/ was not killed by a live gate's bad frame"
     );
 }
+
+/// **The unwind always sweeps `tools/` itself** (`weaver-admin-Spec` 6.1, the
+/// worker's unwind; the Planner's grade of #167): an earlier kill's result
+/// left in the run, an interrupt's pass that delivered nothing among them,
+/// is never taken for the unwind's own write or pass. Perturbation: take the
+/// earlier result, and the command in `tools/` outlives the lower.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_the_lower_sweeps_tools_whatever_an_earlier_kill_said() {
+    let layout = crate::tools_cgroup::tests::ScratchLayout::new("lower-stale");
+    let (mut run, _spare, _sink) = entered_run(None);
+    run.tools =
+        Some(crate::tools_cgroup::ToolsCgroup::open_beside_run(&layout.run).expect("tools/ opens"));
+    run.gate_contained = Some((
+        crate::tools_cgroup::Context::Leave,
+        crate::tools_cgroup::Containment::Undelivered,
+    ));
+    let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+    run.gate = Some(GateChannel {
+        channel: gate_end,
+        pid: nix::unistd::Pid::from_raw(i32::MAX),
+        last_word: crate::spawn::LastWord::quiet(),
+    });
+    let mut command = crate::tools_cgroup::tests::escaper_in(&layout.leaf("worker/tools"));
+    drop(gate_peer);
+    let _ = lower_gate_within(&mut run, 100, None);
+    let tools = crate::tools_cgroup::ToolsCgroup::open_beside_run(&layout.run).unwrap();
+    let emptied = tools.wait_empty(std::time::Duration::from_secs(5));
+    let _ = command.kill();
+    let _ = command.wait();
+    assert!(emptied, "the unwind's own sweep emptied tools/");
+}
+
+/// **A gate's death at rest with a leave held never waits on `tools/`**
+/// (`weaver-admin-Spec` 6.1, inside a leave nothing waits; the Planner's
+/// grade of #167): the table's at-rest position (S2, `GateFaultServeOn`)
+/// does not show a leave the turn held, so the context comes from the run.
+/// With `cgroup.events` unreadable a serving wait would run its whole bound
+/// and end service; with the leave held the death is met at once and the
+/// run stands for the leave. Perturbation: meet it serving, and it waits
+/// the bound and ends service.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_a_gate_dying_at_rest_with_a_leave_held_never_waits() {
+    use std::os::unix::fs::PermissionsExt;
+    let layout = crate::tools_cgroup::tests::ScratchLayout::new("rest-leave");
+    let (mut run, _spare, _sink) = entered_run(None);
+    run.tools =
+        Some(crate::tools_cgroup::ToolsCgroup::open_beside_run(&layout.run).expect("tools/ opens"));
+    let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+    run.gate = Some(GateChannel {
+        channel: gate_end,
+        pid: nix::unistd::Pid::from_raw(i32::MAX),
+        last_word: crate::spawn::LastWord::quiet(),
+    });
+    let (held, _admin) = pending_leave(
+        crate::lifecycle_table::Leave::Graceful,
+        crate::lifecycle_table::Leave::Graceful,
+        false,
+    );
+    run.leave = Some(held);
+    let mut command = crate::tools_cgroup::tests::escaper_in(&layout.leaf("worker/tools"));
+    drop(gate_peer);
+    let events = layout.leaf("worker/tools/cgroup.events");
+    std::fs::set_permissions(&events, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let (mut harness, _dir) = harness_entered(run);
+    let began = std::time::Instant::now();
+    let died = harness.organ_died(OrganDeath::Gate);
+    let took = began.elapsed();
+    std::fs::set_permissions(&events, std::fs::Permissions::from_mode(0o444)).unwrap();
+    let _ = command.kill();
+    let _ = command.wait();
+    assert!(died.is_ok(), "the run stands for the leave: {died:?}");
+    assert!(
+        took < std::time::Duration::from_secs(5),
+        "nothing waited on tools/: {took:?}"
+    );
+}
