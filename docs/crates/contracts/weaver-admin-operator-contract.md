@@ -11,7 +11,7 @@ same ruling.
 **Document ID:** `weaver-admin-operator-contract`
 **Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
-**Landing PR:** #72
+**Landing PR:** #174
 
 ---
 
