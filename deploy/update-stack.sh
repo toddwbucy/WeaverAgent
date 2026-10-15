@@ -1150,8 +1150,12 @@ fi
 # printed the step's header, installed binaries already in place, and
 # stopped without reconciling, verifying, or rolling back.
 admin_answer() {
-  local said
-  said=$(sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$BIN_DIR/weaver-admin" "$1" "$2" 2>&1) || true
+  local said scope=()
+  # **A load runs in a delegated scope** (weaver-admin-Spec 6.1): admin makes
+  # the agent's cgroup beneath the cgroup it runs in and refuses one that
+  # carries no delegate mark, as the operator's session scope does.
+  [ "$1" != load ] || scope=(systemd-run --scope -q -p Delegate=yes --)
+  said=$(sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "${scope[@]}" "$BIN_DIR/weaver-admin" "$1" "$2" 2>&1) || true
   [ -n "$said" ] || return 0
   printf '%s\n' "$said" | sed '$d' | sed 's/^/  admin: /' >&2
   printf '%s\n' "$said" | sed -n '$p'

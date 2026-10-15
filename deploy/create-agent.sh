@@ -765,5 +765,5 @@ if [ "$ADMIN_BASE" = /etc/weaver/admin ]; then
   fi
 fi
 printf '   validate it before loading, with the validate verb of %q for %s as root,\n' "$ADMIN_BINARY" "$NAME"
-printf '   then prove its load with deploy/verify-load.sh as root (deploy/HowToDeployANewAgent.md section 4),\n'
+printf '   then prove its load with deploy/verify-load.sh as root in a delegated scope (deploy/HowToDeployANewAgent.md section 4),\n'
 printf '   then seed its prompt as %s, with the agent loaded: deploy/turn.py %s --system reads %s\n' "$OPERATOR" "$NAME" "$PROMPT"

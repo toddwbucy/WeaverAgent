@@ -110,7 +110,9 @@ elif name == 'id':
         elif who.endswith('-admincon'): print(os.environ.get('CONNECTOR_GROUPS', who + ' ' + who.removesuffix('admincon') + 'state ' + who.removesuffix('con')))
         else: print(who)
     elif args[:1] == ['-u'] and len(args) > 1 and 'FIXTURE_ACCOUNT_UID' in os.environ:
-        print(os.environ['FIXTURE_ACCOUNT_UID'])
+        # FIXTURE_ACCOUNT_FOR names the one account the stand-in runs as.
+        named = os.environ.get('FIXTURE_ACCOUNT_FOR', args[1])
+        print(os.environ['FIXTURE_ACCOUNT_UID'] if named == args[1] else '54321')
     else: print(os.environ.get('FIXTURE_UID', '12345'))
 elif name == 'systemctl':
     if args[:1] == ['list-units']:
@@ -193,8 +195,14 @@ elif name == 'sudo':
     elif op == 'visudo': sys.exit(1 if os.environ.get('VISUDO_FAIL') else 0)
     elif op.startswith('WEAVER_ADMIN_CONFIG=') and os.environ.get('FIXTURE_ADMIN'):
         # **Admin as a test stands it in** (#99 area 2 review, N5): the
-        # verb and the agent handed to the script FIXTURE_ADMIN names.
+        # verb and the agent handed to the script FIXTURE_ADMIN names. **A
+        # load comes in a delegated scope** (weaver-admin-Spec 6.1), whose
+        # options are stripped, and a load without one fails the fixture.
+        scope = ['systemd-run', '--scope', '-q', '-p', 'Delegate=yes', '--']
+        scoped = rest[:len(scope)] == scope
+        if scoped: rest = rest[len(scope):]
         assert rest[0].endswith('/weaver-admin'), rest
+        assert scoped or rest[1] != 'load', ('a load outside a delegated scope', rest)
         sys.exit(subprocess.run([os.environ['FIXTURE_ADMIN'], *rest[1:]]).returncode)
     elif op == 'rm':
         target = pathlib.Path(mapped(rest[-1]))
@@ -309,7 +317,7 @@ class PlanTests(unittest.TestCase):
                      "VISUDO_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
                      "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS", "GROUP_WRITES",
                      "LAYOUT_GROUPS", "FIXTURE_ADMIN", "ADMIN_CALLS", "UNLOAD_ANSWER", "MISPLACED",
-                     "KEEP_CGROUP"):
+                     "KEEP_CGROUP", "FIXTURE_ACCOUNT_FOR", "STAND_IN_LEAF"):
             self.env.pop(name, None)
         # Redirect even shell builtin /home probes, and the cgroup mount's
         # reads, into the fixture. The
@@ -987,7 +995,7 @@ case "$1" in
   load) sleep 300 >/dev/null 2>&1 &
         echo $! > {state}/pid
         mkdir -p {agent_cgroup}/constituents {agent_cgroup}/worker/run
-        [ -n "$MISPLACED" ] || echo $! > {agent_cgroup}/constituents/cgroup.procs
+        [ -n "$MISPLACED" ] || echo $! > {agent_cgroup}/${{STAND_IN_LEAF:-constituents}}/cgroup.procs
         echo '{{"kind":"load"}}' >> {sink}
         echo '{{"kind":"state","state":"idle"}}' ;;
   show) if [ -f {state}/pid ]; then
@@ -1051,6 +1059,33 @@ esac
                     self.end_stand_in(state)
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertIn(said, result.stderr)
+
+    def test_verify_load_checks_the_worker_in_worker_run(self):
+        """**The agent's own account is checked in `worker/run/`** (weaver-admin-Spec
+        6.1): a stand-in running as the agent's account passes the leaf check
+        in `worker/run/` and refuses in `constituents/`. It stands alone, so
+        the file sink's relay check refuses after it either way.
+        Perturbation: check the worker in `constituents/`, and the first
+        case refuses at the leaf."""
+        for leaf, passes in (("worker/run", True), ("constituents", False)):
+            with self.subTest(leaf):
+                for d in (self.config / "m1", self.decl, self.root / "stub-state",
+                          self.root / "installed", self.root / "cgroup-fs"):
+                    shutil.rmtree(d, ignore_errors=True)
+                state = self.verify_fixture()
+                self.env.update(FIXTURE_ACCOUNT_FOR="weaver-m1", STAND_IN_LEAF=leaf)
+                try:
+                    result = self.run_script("verify-load.sh", "m1")
+                finally:
+                    for name in ("FIXTURE_ACCOUNT_FOR", "STAND_IN_LEAF"):
+                        del self.env[name]
+                    self.end_stand_in(state)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                if passes:
+                    self.assertIn("weaver-m1  in worker/run beneath the invoker's cgroup", result.stdout)
+                    self.assertIn("no relay stands among the constituents", result.stderr)
+                else:
+                    self.assertIn("is not in ", result.stderr)
 
     def test_verify_load_reads_its_unload_and_takes_only_a_load_event(self):
         """**verify-load reads its first unload's answer, and only `load` is a
@@ -4767,6 +4802,13 @@ class AdminAnswerTests(unittest.TestCase):
         sudo = self.bin_dir / "sudo"
         sudo.write_text('#!/bin/sh\n[ "$1" = "-n" ] && shift\nexec env "$@"\n')
         sudo.chmod(0o755)
+        # A delegated scope (weaver-admin-Spec 6.1), stood in: its options
+        # dropped through `--`, and the verb it carried recorded.
+        self.scoped = root / "scoped"
+        scope = self.bin_dir / "systemd-run"
+        scope.write_text('#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done\nshift\n'
+                         f'echo "$2" >> {self.scoped}\nexec "$@"\n')
+        scope.chmod(0o755)
         self.script = (DEPLOY / "update-stack.sh").read_text()
 
     def answer(self, verb):
@@ -4786,6 +4828,8 @@ class AdminAnswerTests(unittest.TestCase):
                              '{"kind":"refused","reason":"boundary_unverified"}\n')
             self.assertIn("admin: boundary unverified: no weaver-state binary beside the worker's",
                           result.stderr)
+        # **Only the load runs in a delegated scope** (weaver-admin-Spec 6.1).
+        self.assertEqual(self.scoped.read_text(), "load\n")
 
     def test_both_call_sites_reach_the_helper(self):
         self.assertIn('validate() {\n  admin_answer validate "$1"\n}', self.script)

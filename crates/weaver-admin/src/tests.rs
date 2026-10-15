@@ -4011,7 +4011,7 @@ fn the_rollback_before_load_leaves_the_marker_as_found() {
         Some(&save_points::Marker::Open { run: "r-1".into() }),
     )
     .unwrap();
-    let account = roll_back(&config, &mut standing);
+    let (account, _) = roll_back(&config, &mut standing);
     assert!(account.contains("marker restored"), "{account}");
     assert_eq!(save_points::read_marker(&config.root), Some(closed.clone()));
     let mut standing = Standing {
@@ -4023,7 +4023,7 @@ fn the_rollback_before_load_leaves_the_marker_as_found() {
         Some(&save_points::Marker::Open { run: "r-1".into() }),
     )
     .unwrap();
-    roll_back(&config, &mut standing);
+    let _ = roll_back(&config, &mut standing);
     assert_eq!(save_points::read_marker(&config.root), None);
     // **What stood before is recorded ahead of the write** (Codex on
     // #94, round 4): the root made unwritable, the open marker does not
@@ -4049,7 +4049,7 @@ fn the_rollback_before_load_leaves_the_marker_as_found() {
         Some(&save_points::Marker::Open { run: "r-1".into() }),
     )
     .unwrap();
-    roll_back(&config, &mut standing);
+    let _ = roll_back(&config, &mut standing);
     assert_eq!(save_points::read_marker(&config.root), Some(closed.clone()));
     let _ = std::fs::remove_file(config.coordination_socket());
     // A harness that never entered answers the forced leave
@@ -4067,7 +4067,7 @@ fn the_rollback_before_load_leaves_the_marker_as_found() {
         &config,
         vec![weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder)],
     );
-    roll_back(&config, &mut standing);
+    let _ = roll_back(&config, &mut standing);
     let _ = worker.join();
     assert_eq!(save_points::read_marker(&config.root), Some(closed));
 }
@@ -4105,7 +4105,7 @@ fn the_rollback_after_load_leaves_the_marker_open() {
             LifecycleRefusal::ActivityNotAtRest,
         )],
     );
-    roll_back(&config, &mut standing);
+    let _ = roll_back(&config, &mut standing);
     let directed = worker.join().unwrap();
     assert!(matches!(
         directed[0],
@@ -4138,7 +4138,7 @@ fn the_rollback_after_load_leaves_the_marker_open() {
             no_state: false,
         })],
     );
-    let account = roll_back(&config, &mut standing);
+    let (account, _) = roll_back(&config, &mut standing);
     let _ = worker.join();
     assert!(account.contains("left open on the run"), "{account}");
     assert_eq!(
@@ -5352,6 +5352,69 @@ fn a_constituent_that_cannot_move_itself_never_execs() {
         relay.err().and_then(|error| error.raw_os_error()),
         Some(nix::libc::EBADF),
         "the relay's child ends at its move"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// **A `Left` no marker names concludes the record's run** (6.1, ownership;
+/// D2): the conclusion ends the recorded cgroup and its stray before it
+/// prints, as the escalation's conclusion does. Perturbation: skip the run
+/// end where no marker names the run, and the answer names the stray.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_a_left_no_marker_names_still_passes_the_run_end() {
+    let (config, _report, base) = territory_with_one_room_file("cg-no-marker");
+    let (scratch, agent) = agent_cgroup_for(&config, "cg-no-marker", "r-1");
+    let mut stray = containment::tests::escaper_in(&agent.child("worker/tools").unwrap());
+    let left = Left {
+        save_point: None,
+        forced: true,
+        no_state: false,
+    };
+    assert_eq!(conclude_answered(&config, None, &left), unloaded());
+    assert!(stray.wait().is_ok(), "the stray is ended");
+    assert!(
+        scratch
+            .cgroup
+            .child(&agent_cgroup::cgroup_name(&config.agent))
+            .is_err(),
+        "the agent's cgroup is gone"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// **A rollback whose run end refuses answers that refusal** (6.1, the run
+/// end's failures, a rollback's included): a cgroup the layout does not
+/// name beneath `tools/` makes the removal fail, and the rollback answers
+/// `BoundaryUnverified`, the record kept. Perturbation: swallow the run
+/// end's refusal into the account, and the rollback answers success.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_a_rollback_whose_run_end_refuses_answers_it() {
+    use std::os::fd::AsFd;
+    let (config, _report, base) = territory_with_one_room_file("cg-rollback");
+    let (_scratch, agent) = agent_cgroup_for(&config, "cg-rollback", "r-1");
+    agent
+        .child("worker/tools")
+        .unwrap()
+        .make_child("extra")
+        .unwrap();
+    let mut standing = Standing {
+        cgroup_run: Some("r-1".into()),
+        ..Standing::default()
+    };
+    let (account, contained) = roll_back(&config, &mut standing);
+    assert_eq!(
+        contained,
+        Err(LifecycleRefusal::BoundaryUnverified),
+        "{account}"
+    );
+    let run_directory = agent_cgroup::open_run_directory(&config.run_directory()).unwrap();
+    assert!(
+        containment::read_record(run_directory.as_fd(), &config.agent)
+            .unwrap()
+            .is_some(),
+        "the record is kept for the next unload"
     );
     let _ = std::fs::remove_dir_all(&base);
 }

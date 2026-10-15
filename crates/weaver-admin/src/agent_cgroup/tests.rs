@@ -290,3 +290,26 @@ fn containment_the_ladder_reads_through_the_record() {
         "another cgroup at the path"
     );
 }
+
+/// **A listing that fails never reads as holding nothing** (6.1, C2; a
+/// failed read is read as not empty): `worker/tools/` closed to the suite
+/// with a stray inside, the walk skips it and names no process, and the
+/// ladder's read refuses rather than answer empty. Perturbation: read the
+/// pids alone, and the closed cgroup reads as empty.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_a_listing_that_fails_never_reads_as_empty() {
+    let (scratch, _dir, fd, made) = made("listing-fails", "run-1");
+    drop(made);
+    let agent = agent(&scratch).unwrap();
+    let mut stray = escaper_in(&agent.child("worker/tools").unwrap());
+    let tools = std::path::PathBuf::from(containment::CGROUP_ROOT)
+        .join(agent.relative().trim_start_matches('/'))
+        .join("worker/tools");
+    std::fs::set_permissions(&tools, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let held = holds(fd.as_fd(), "alpha");
+    std::fs::set_permissions(&tools, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(held.is_err(), "{held:?}");
+    let _ = stray.kill();
+    let _ = stray.wait();
+}

@@ -384,8 +384,12 @@ sys.exit(0 if isinstance(d, dict) and d.get("kind") == "state" and d.get("state"
 ANSWER=""
 ASKED_CAUSE=""
 ask() {
-  local said
-  said=$(sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$ADMIN" "$1" "$A" 2>&1) || true
+  local said scope=()
+  # **A load runs in a delegated scope** (weaver-admin-Spec 6.1): admin makes
+  # the agent's cgroup beneath the cgroup it runs in and refuses one that
+  # carries no delegate mark, as the operator's session scope does.
+  [ "$1" != load ] || scope=(systemd-run --scope -q -p Delegate=yes --)
+  said=$(sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "${scope[@]}" "$ADMIN" "$1" "$A" 2>&1) || true
   ASKED_CAUSE=$(printf '%s\n' "$said" | sed '$d')
   [ -z "$ASKED_CAUSE" ] || printf '%s\n' "$ASKED_CAUSE" | sed 's/^/     admin: /' >&2
   ANSWER=$(printf '%s\n' "$said" | sed -n '$p')
@@ -767,7 +771,7 @@ RUN=""
 step_2() {
   begin_step 2 "weaver-admin-Spec section 6, 3.0 S0 x load; #99 K12" "validate, load, seed, one turn"
   run_line "weaver-admin validate $A"
-  run_line "deploy/verify-load.sh $A --keep   (as root)"
+  run_line "deploy/verify-load.sh $A --keep   (as root, in a delegated scope)"
   run_line "deploy/turn.py $A --system"
   run_line "deploy/turn.py $A \"Name three primary colours.\""
   want "validated; verify-load prints validate validated, load idle, N > 0 new lines, a load event naming composer, state_member and stack, a $AU-relay constituent, left serving, == $A verified"
@@ -781,7 +785,7 @@ step_2() {
   ask validate; expect_kind validate validated
   local rc=0 out="$LOGDIR/step2-verify-load.log" start
   start=$(trace_lines)
-  sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" WEAVER_STACK_RECORD="$STACK" bash "$CHECKOUT/deploy/verify-load.sh" "$A" --keep >"$out" 2>&1 || rc=$?
+  sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" WEAVER_STACK_RECORD="$STACK" systemd-run --scope -q -p Delegate=yes -- bash "$CHECKOUT/deploy/verify-load.sh" "$A" --keep >"$out" 2>&1 || rc=$?
   sed 's/^/     /' "$out"
   expect_eq "verify-load.sh --keep exits 0" 0 "$rc"
   expect_eq "verify-load validates" yes "$(grep -qF 'validate    {"kind":"validated"}' "$out" && echo yes || echo no)"

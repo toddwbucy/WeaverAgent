@@ -292,8 +292,8 @@ payload names the session, the run, the store, the declaration's hash, the compo
 and writes nothing is the failure this step exists to catch, and the worker's own words
 are in `<territory>/worker.log`, the state member's in `<territory>/state/state.log`.
 
-`deploy/verify-lifecycle.sh --agent <throwaway>`, run in a delegated scope as
-`verify-load.sh` is, verifies a whole lifecycle end to end
+`deploy/verify-lifecycle.sh --agent <throwaway>`, run as the operator (it runs each load
+in a delegated scope itself), verifies a whole lifecycle end to end
 (create, load, seed, save points, restore, force-unload, crash recovery, the refusal by
 name of a root of an older layout, take-down) on a throwaway agent it creates; it plans
 unless given `--apply`, and `--keep` stops it before the take-down so the checks it
@@ -303,7 +303,7 @@ cannot make are made against the loaded agent.
 to its caller, who reads `show` and issues `unload`.
 
 **Then seed the prompt**, the last step, as yourself and with the agent loaded (so
-`verify-load.sh <name> --keep`, or a plain `load`):
+`verify-load.sh <name> --keep`, or a plain `load`, each in a delegated scope as above):
 
 ```sh
 deploy/turn.py <name> --system

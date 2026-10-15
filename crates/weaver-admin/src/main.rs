@@ -1180,11 +1180,15 @@ fn load(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer, Li
             constituents: Vec::new(),
         }),
         Err(refusal) => {
-            let account = roll_back(config, &mut standing);
+            let (account, contained) = roll_back(config, &mut standing);
             if !account.is_empty() {
                 record(config, "load", &format!("rolled back: {account}"));
             }
-            Err(refusal)
+            // **A rollback's run end that refuses is the load's answer** (6.1,
+            // the run end's failures, a rollback's included): the operator
+            // reads that the agent's cgroup still holds processes, or could
+            // not be removed, rather than the load's first refusal.
+            Err(contained.err().unwrap_or(refusal))
         }
     }
 }
@@ -1780,8 +1784,12 @@ fn refusal_from_worker(worker: &mut std::process::Child) -> LifecycleRefusal {
 /// lock's description closed and every constituent it started ended by the
 /// escalation, which never signals this invocation, then the sink closed.
 /// Answers the account, empty where nothing stood.
-fn roll_back(config: &ServiceConfig, standing: &mut Standing) -> String {
+fn roll_back(
+    config: &ServiceConfig,
+    standing: &mut Standing,
+) -> (String, Result<(), LifecycleRefusal>) {
     let mut account = Vec::new();
+    let mut contained = Ok(());
     // **The run being undone leaves forced** (the #94 survey's S10): it
     // takes no save point, a run rolled back having nothing to keep, and
     // its `unload` says forced.
@@ -1853,18 +1861,19 @@ fn roll_back(config: &ServiceConfig, standing: &mut Standing) -> String {
     // **The rollback always ends the cgroup its own load made** (6.1,
     // ownership is the record's), whatever the marker says.
     if let Some(run) = standing.cgroup_run.take() {
+        contained = end_agent_cgroup(config, "load", agent_cgroup::Concluding::Run(&run));
         account.push(format!(
             "cgroup {}",
-            match end_agent_cgroup(config, "load", agent_cgroup::Concluding::Run(&run)) {
+            match &contained {
                 Ok(()) => "ended".to_string(),
-                Err(refusal) => format!("held: {}", surface::render_refusal(&refusal)),
+                Err(refusal) => format!("held: {}", surface::render_refusal(refusal)),
             }
         ));
     }
     if standing.sink_opened {
         account.push("sink closed".to_string());
     }
-    account.join(", ")
+    (account.join(", "), contained)
 }
 
 /// **The start step's making of the agent's cgroup** (Spec 6.1), its
@@ -1888,6 +1897,7 @@ fn make_agent_cgroup(
         (account.uid, account.gid),
     )
     .map_err(|refused| match refused {
+        agent_cgroup::StartRefused::RunLockHeld => LifecycleRefusal::AgentRunning,
         agent_cgroup::StartRefused::Leftovers(pids) => {
             let named = name_pids(&pids);
             diag!(
@@ -2716,7 +2726,11 @@ fn conclude_answered(
     run: Option<&str>,
     left: &Left,
 ) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    // **A run no marker names concludes the record's** (6.1, ownership),
+    // as the escalation's conclusion does, so this path too passes the run
+    // end before it prints.
     let Some(run) = run else {
+        end_agent_cgroup(config, "unload", agent_cgroup::Concluding::Recorded)?;
         return unloaded_by_ladder(config);
     };
     // **The run end comes first, under the lock, the run lock free** (6.1;

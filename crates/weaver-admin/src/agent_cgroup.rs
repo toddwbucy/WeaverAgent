@@ -35,7 +35,9 @@ pub fn open_run_directory(run_directory: &Path) -> std::io::Result<OwnedFd> {
     .map_err(std::io::Error::from)
 }
 
-/// Every pid of a cgroup and its descendants, sorted and each named once.
+/// Every pid of a cgroup and its descendants, sorted and each named once,
+/// for naming: a listing that fails names fewer. Never read as emptiness,
+/// which `populated` answers.
 pub fn pids(cgroup: &Cgroup) -> Vec<i32> {
     let mut pids: Vec<i32> = cgroup
         .subtree()
@@ -94,6 +96,10 @@ impl Made {
 /// Why the start step stood nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StartRefused {
+    /// `AgentRunning` at the run lock, a run standing. The load takes the
+    /// lock before the start step, so this answers only a caller that
+    /// passes it held.
+    RunLockHeld,
     /// `AgentRunning`: an ended run's leftovers, named and never killed (I8).
     Leftovers(Vec<i32>),
     /// `BoundaryUnverified`, naming the cgroup and which question failed.
@@ -136,34 +142,41 @@ pub fn make_beneath(
     );
     let cgroup2 = containment::is_cgroup2();
     let delegated = invoker.as_ref().is_ok_and(containment::delegated);
-    let at_path_cgroup = invoker.as_ref().ok().and_then(|inv| inv.child(&name).ok());
-    let at_path = at_path_cgroup
-        .as_ref()
-        .map_or(Standing::Absent, standing_of);
-    let record = containment::read_record(run_directory, agent);
-    let recorded_cgroup = match &record {
-        Ok(Some(record)) if containment::recorded_at(record) == RecordedAt::Same => {
-            Cgroup::open(&record.path).ok()
-        }
-        _ => None,
-    };
-    let recorded = match &record {
-        Err(()) => RecordAtStart::Unreadable,
-        Ok(None) => RecordAtStart::None,
-        Ok(Some(record)) => match containment::recorded_at(record) {
-            RecordedAt::Absent => RecordAtStart::Absent,
-            RecordedAt::Other => RecordAtStart::Other,
-            RecordedAt::Unreadable => RecordAtStart::Unreadable,
-            RecordedAt::Same => match &recorded_cgroup {
-                Some(cgroup) => RecordAtStart::Same(standing_of(cgroup)),
-                None => RecordAtStart::Unreadable,
-            },
-        },
-    };
     let invoker_path = invoker.as_ref().map_or_else(
         |_| "an unread cgroup".to_string(),
         |inv| inv.relative().to_string(),
     );
+    // What stands at the deterministic path: absent only where the open
+    // answers `ENOENT`, any other failure refusing rather than reading as
+    // absent.
+    let at_path_cgroup = match invoker.as_ref().map(|inv| inv.child(&name)) {
+        Ok(Ok(cgroup)) => Some(cgroup),
+        Ok(Err(error)) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(StartRefused::Unverified(format!(
+                "the cgroup {name} beneath {invoker_path} does not open: {error}"
+            )));
+        }
+        Ok(Err(_)) | Err(_) => None,
+    };
+    let at_path = at_path_cgroup
+        .as_ref()
+        .map_or(Standing::Absent, standing_of);
+    // The record's cgroup is judged once, and opened once where it is the
+    // recorded one.
+    let record = containment::read_record(run_directory, agent);
+    let (recorded, recorded_cgroup) = match &record {
+        Err(()) => (RecordAtStart::Unreadable, None),
+        Ok(None) => (RecordAtStart::None, None),
+        Ok(Some(record)) => match containment::recorded_at(record) {
+            RecordedAt::Absent => (RecordAtStart::Absent, None),
+            RecordedAt::Other => (RecordAtStart::Other, None),
+            RecordedAt::Unreadable => (RecordAtStart::Unreadable, None),
+            RecordedAt::Same => match Cgroup::open(&record.path) {
+                Ok(cgroup) => (RecordAtStart::Same(standing_of(&cgroup)), Some(cgroup)),
+                Err(_) => (RecordAtStart::Unreadable, None),
+            },
+        },
+    };
     let facts = StartFacts {
         // Taken by this invocation before the start step runs (section 3).
         run_lock_held: false,
@@ -175,7 +188,7 @@ pub fn make_beneath(
     match containment::start_judgment(facts) {
         StartAction::Refuse(refusal) => {
             return Err(match refusal {
-                StartRefusal::RunLockHeld => StartRefused::Leftovers(Vec::new()),
+                StartRefusal::RunLockHeld => StartRefused::RunLockHeld,
                 StartRefusal::Leftovers => {
                     let mut standing: Vec<i32> = at_path_cgroup
                         .iter()
@@ -251,8 +264,10 @@ pub fn make_beneath(
         match containment::made_judgment(step) {
             MadeAction::GoOn => Ok(()),
             MadeAction::RemoveAndRefuse => {
-                // What another account made at the path is never removed.
-                if !matches!(made, Err(containment::MakeChildError::NotRoots)) {
+                // Only what this step made is removed: a `mkdir` that failed
+                // made nothing, so whatever stands at the path, another
+                // account's included, is left alone.
+                if matches!(made, Ok(_) | Err(containment::MakeChildError::Mode(_))) {
                     let _ = containment::remove_layout(&invoker, &name);
                 }
                 let _ = containment::remove_record(run_directory);
@@ -475,9 +490,20 @@ pub fn holds(run_directory: BorrowedFd<'_>, agent: &str) -> Result<Vec<i32>, Str
     };
     match containment::recorded_at(&record) {
         RecordedAt::Absent => Ok(Vec::new()),
-        RecordedAt::Same => Cgroup::open(&record.path)
-            .map(|cgroup| pids(&cgroup))
-            .map_err(|error| format!("the cgroup {} does not open: {error}", record.path)),
+        RecordedAt::Same => {
+            let cgroup = Cgroup::open(&record.path)
+                .map_err(|error| format!("the cgroup {} does not open: {error}", record.path))?;
+            // **Emptiness is `populated 0`, a failed read read as not empty**
+            // (6.1): a listing that fails never reads as holding nothing.
+            match (cgroup.populated(), pids(&cgroup)) {
+                (Some(false), _) => Ok(Vec::new()),
+                (_, pids) if !pids.is_empty() => Ok(pids),
+                _ => Err(format!(
+                    "the cgroup {} does not read as empty and names no process",
+                    record.path
+                )),
+            }
+        }
         RecordedAt::Other | RecordedAt::Unreadable => Err(format!(
             "the recorded cgroup {} is not the one recorded",
             record.path
