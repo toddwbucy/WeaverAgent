@@ -186,7 +186,8 @@ the account database because there the uid's home is a fact rather than a
 variable the agent's environment may or may not carry, and, for section 8, `waitid` for the reap, `poll` on the channel end in the supervision
 wait's slices, `prctl`, `getppid`, and `openat` with `write` in the shell's child before
 its exec (the parent-death signal, the check that its parent still stands, and the move
-into `tools/`), the
+into `tools/`), `fstat` and `fstatfs` at entry on the handle at descriptor 4 (a
+directory on the `cgroup2` filesystem), the
 write of `tools/cgroup.kill` that ends an execution, and a read of `tools/cgroup.events`
 for the wait on its emptying (`weaver-admin-Spec` section 6.1). **Every one of
 `tools/cgroup.procs`, `tools/cgroup.kill` and `tools/cgroup.events` is opened by
@@ -237,7 +238,10 @@ to this document, and this document takes it: the exec'd binary finds its
 channel end at 3, the first after the standard streams, and wraps it as an
 owned handle at entry. **Beside it, at 4, is its one further descriptor, the
 handle on the agent's `tools/` cgroup** beneath which section 8 opens `tools/`'s files
-(`weaver-admin-Spec` section 6.1, #111), wrapped the same way and marked
+(`weaver-admin-Spec` section 6.1, #111), required to be a directory on the
+`cgroup2` filesystem, since a plain directory holding files of the same names would
+let a shell run outside any cgroup while every kill read as contained, and otherwise
+every directive refused `BoundaryUnverified`, wrapped the same way and marked
 close-on-exec at entry as 3 is, so no shell inherits it: it stays open across the shell's fork, for the child's move,
 and closes at its exec. These two are the only
 descriptors this process begins with beyond the standard streams, per the fork

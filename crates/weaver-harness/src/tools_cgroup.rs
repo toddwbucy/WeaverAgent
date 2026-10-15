@@ -48,6 +48,8 @@ pub enum OpenRefused {
     Open(nix::Error),
     /// What opened is not a directory.
     NotADirectory,
+    /// What opened is on no `cgroup2` filesystem.
+    NotACgroup,
     /// A file the worker must write beneath `tools/` did not open for write.
     File(&'static str, nix::Error),
 }
@@ -59,6 +61,7 @@ impl std::fmt::Display for OpenRefused {
             Self::NotInRun(own) => write!(f, "the worker's cgroup {own} is not a worker/run leaf"),
             Self::Open(errno) => write!(f, "tools/ does not open: {errno}"),
             Self::NotADirectory => write!(f, "tools/ is not a directory"),
+            Self::NotACgroup => write!(f, "tools/ is not on the cgroup2 filesystem"),
             Self::File(name, errno) => write!(f, "tools/{name} does not open for write: {errno}"),
         }
     }
@@ -103,6 +106,11 @@ impl ToolsCgroup {
         let stat = fstat(&dir).map_err(OpenRefused::Open)?;
         if SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT != SFlag::S_IFDIR {
             return Err(OpenRefused::NotADirectory);
+        }
+        if !nix::sys::statfs::fstatfs(&dir)
+            .is_ok_and(|fs| fs.filesystem_type() == nix::sys::statfs::CGROUP2_SUPER_MAGIC)
+        {
+            return Err(OpenRefused::NotACgroup);
         }
         let tools = Self { dir, relative };
         for name in ["cgroup.kill", "cgroup.procs"] {

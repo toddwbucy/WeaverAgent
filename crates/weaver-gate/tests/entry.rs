@@ -407,14 +407,21 @@ fn a_dial_storm_leaves_the_channel_answering() {
 
 /// **A gate without its handle on `tools/` refuses every directive**
 /// (`weaver-gate-Spec` section 2; `weaver-harness-Spec` section 2.2): with
-/// nothing at descriptor 4, or a regular file there, entry refuses and the
+/// nothing at descriptor 4, a regular file there, or a directory on no
+/// `cgroup2` filesystem, entry refuses and the
 /// `Raise` is answered `BoundaryUnverified`, so no shell could ever run
 /// outside the agent's cgroup. Perturbation: drop the handle's adoption
-/// from entry, and the gate raises.
+/// from entry, take a non-directory, or take any directory, and the gate
+/// raises.
 #[test]
 fn a_gate_without_its_tools_handle_refuses_every_directive() {
     let file = std::fs::File::open("/proc/self/exe").expect("a regular file opens");
-    for (case, fourth) in [("absent", None), ("a regular file", Some(file.as_raw_fd()))] {
+    let plain = common::not_a_cgroup();
+    for (case, fourth) in [
+        ("absent", None),
+        ("a regular file", Some(file.as_raw_fd())),
+        ("a directory not a cgroup", Some(plain.as_raw_fd())),
+    ] {
         let path = socket_path(&format!("no-tools-{}", case.replace(' ', "-")));
         let (harness, child_end) = seqpacket_pair();
         let (mut child, log_path) = spawn_gate_with(child_end.as_raw_fd(), fourth);

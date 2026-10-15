@@ -265,11 +265,19 @@ pub fn tell(end: &OwnedFd, ordinal: u64, directive: LifecycleDirective) {
     send(end.as_raw_fd(), &body, MsgFlags::empty()).expect("the directive is sent");
 }
 
-/// **A plain directory for descriptor 4**, beside the channel's end at 3
-/// (`weaver-gate-Spec` section 2): entry takes any directory as its handle on
-/// `tools/`, so a gate that runs no shell needs no cgroup. A shell run in it
-/// would meet no `cgroup.procs` and answer `Errored`.
+/// **A cgroup directory for descriptor 4** where the gate runs no shell,
+/// beside the channel's end at 3 (`weaver-gate-Spec` section 2): entry
+/// requires a directory on the `cgroup2` filesystem, and the mount's root is
+/// one any account can open. A shell run in it would meet a `cgroup.procs`
+/// this account cannot write and answer `Errored`.
 pub fn plain_tools() -> OwnedFd {
+    std::fs::File::open("/sys/fs/cgroup")
+        .expect("the cgroup2 mount opens")
+        .into()
+}
+
+/// A plain directory, on no `cgroup2` filesystem, for entry's refusal.
+pub fn not_a_cgroup() -> OwnedFd {
     std::fs::File::open(std::env::temp_dir())
         .expect("a plain directory opens")
         .into()

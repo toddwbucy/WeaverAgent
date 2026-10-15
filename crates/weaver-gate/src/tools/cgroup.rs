@@ -47,12 +47,17 @@ pub enum HandleFault {
     Absent,
     /// It is open and not a directory.
     NotADirectory,
+    /// It is a directory on no `cgroup2` filesystem: a plain directory
+    /// holding files of the same names would let a shell run outside any
+    /// cgroup while every kill read as contained.
+    NotACgroup,
     /// Its close-on-exec flag would not set, or entry already ran.
     Hygiene,
 }
 
 /// **Entry takes descriptor 4** (`weaver-gate-Spec` section 2): open, a
-/// directory by `fstat`, and marked close-on-exec at once, so no shell
+/// directory by `fstat` on the `cgroup2` filesystem by `fstatfs`, and marked
+/// close-on-exec at once, so no shell
 /// inherits it past its exec; it stays open across the shell's fork for the
 /// child's move. Kept for every execution after.
 pub fn adopt() -> Result<(), HandleFault> {
@@ -62,6 +67,11 @@ pub fn adopt() -> Result<(), HandleFault> {
     let stat = fstat(borrowed).map_err(|_| HandleFault::Absent)?;
     if SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT != SFlag::S_IFDIR {
         return Err(HandleFault::NotADirectory);
+    }
+    if !nix::sys::statfs::fstatfs(borrowed)
+        .is_ok_and(|fs| fs.filesystem_type() == nix::sys::statfs::CGROUP2_SUPER_MAGIC)
+    {
+        return Err(HandleFault::NotACgroup);
     }
     if ADOPTED.get().is_some() {
         return Err(HandleFault::Hygiene);
