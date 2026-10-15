@@ -853,6 +853,9 @@ pub struct WorkerStart<'a> {
     pub run_lock: &'a RunLock,
     /// The relay's lifetime pipe's write end, where a file sink stood a relay.
     pub relay_write: Option<RawFd>,
+    /// `worker/run/cgroup.procs` of the agent's cgroup, opened before the
+    /// fork: the child moves itself in first (`weaver-admin-Spec` 6.1).
+    pub placement: RawFd,
 }
 
 /// **Forks the worker**, per section 6: the child inherits the run lock's
@@ -870,6 +873,7 @@ pub fn spawn_worker(start: WorkerStart<'_>) -> std::io::Result<std::process::Chi
     let lock_raw = lock.as_raw_fd();
     let relay_raw = relay.as_ref().map(|fd| fd.as_raw_fd());
     let (uid, gid) = (start.uid, start.gid);
+    let placement = start.placement;
     let mut command = std::process::Command::new(start.binary);
     command
         .args(&start.arguments)
@@ -887,6 +891,10 @@ pub fn spawn_worker(start: WorkerStart<'_>) -> std::io::Result<std::process::Chi
     // between fork and exec.
     unsafe {
         command.pre_exec(move || {
+            // **The move into the agent's cgroup comes first** (6.1, C4),
+            // before any descriptor is placed over its number and before the
+            // privilege drop: a failure ends the child before its exec.
+            crate::containment::place_self(placement)?;
             place(lock_raw, RUN_LOCK_FD)?;
             if let Some(raw) = relay_raw {
                 place(raw, RELAY_LIFETIME_FD)?;
@@ -992,6 +1000,9 @@ pub struct RelayStart<'a> {
     pub log: &'a std::fs::File,
     pub lifetime_read: &'a OwnedFd,
     pub run_lock: &'a RunLock,
+    /// `constituents/cgroup.procs` of the agent's cgroup, opened before the
+    /// fork: the child moves itself in first (`weaver-admin-Spec` 6.1).
+    pub placement: RawFd,
 }
 
 /// **Forks the trace relay**, per section 6: under the relay account and its
@@ -1014,6 +1025,7 @@ pub fn spawn_relay(start: RelayStart<'_>) -> std::io::Result<std::process::Child
         (lock.as_raw_fd(), RUN_LOCK_FD),
     ];
     let (uid, gid) = (start.uid, start.gid);
+    let placement = start.placement;
     let mut command = std::process::Command::new(start.binary);
     command
         .args([
@@ -1031,6 +1043,8 @@ pub fn spawn_relay(start: RelayStart<'_>) -> std::io::Result<std::process::Child
     // between fork and exec.
     unsafe {
         command.pre_exec(move || {
+            // The move first, as the worker's (6.1, C4).
+            crate::containment::place_self(placement)?;
             for (source, target) in gifts {
                 place(source, target)?;
             }

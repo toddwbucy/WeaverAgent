@@ -4011,7 +4011,7 @@ fn the_rollback_before_load_leaves_the_marker_as_found() {
         Some(&save_points::Marker::Open { run: "r-1".into() }),
     )
     .unwrap();
-    let account = roll_back(&config, &mut standing);
+    let (account, _) = roll_back(&config, &mut standing);
     assert!(account.contains("marker restored"), "{account}");
     assert_eq!(save_points::read_marker(&config.root), Some(closed.clone()));
     let mut standing = Standing {
@@ -4023,7 +4023,7 @@ fn the_rollback_before_load_leaves_the_marker_as_found() {
         Some(&save_points::Marker::Open { run: "r-1".into() }),
     )
     .unwrap();
-    roll_back(&config, &mut standing);
+    let _ = roll_back(&config, &mut standing);
     assert_eq!(save_points::read_marker(&config.root), None);
     // **What stood before is recorded ahead of the write** (Codex on
     // #94, round 4): the root made unwritable, the open marker does not
@@ -4049,7 +4049,7 @@ fn the_rollback_before_load_leaves_the_marker_as_found() {
         Some(&save_points::Marker::Open { run: "r-1".into() }),
     )
     .unwrap();
-    roll_back(&config, &mut standing);
+    let _ = roll_back(&config, &mut standing);
     assert_eq!(save_points::read_marker(&config.root), Some(closed.clone()));
     let _ = std::fs::remove_file(config.coordination_socket());
     // A harness that never entered answers the forced leave
@@ -4067,7 +4067,7 @@ fn the_rollback_before_load_leaves_the_marker_as_found() {
         &config,
         vec![weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder)],
     );
-    roll_back(&config, &mut standing);
+    let _ = roll_back(&config, &mut standing);
     let _ = worker.join();
     assert_eq!(save_points::read_marker(&config.root), Some(closed));
 }
@@ -4105,7 +4105,7 @@ fn the_rollback_after_load_leaves_the_marker_open() {
             LifecycleRefusal::ActivityNotAtRest,
         )],
     );
-    roll_back(&config, &mut standing);
+    let _ = roll_back(&config, &mut standing);
     let directed = worker.join().unwrap();
     assert!(matches!(
         directed[0],
@@ -4138,7 +4138,7 @@ fn the_rollback_after_load_leaves_the_marker_open() {
             no_state: false,
         })],
     );
-    let account = roll_back(&config, &mut standing);
+    let (account, _) = roll_back(&config, &mut standing);
     let _ = worker.join();
     assert!(account.contains("left open on the run"), "{account}");
     assert_eq!(
@@ -4648,7 +4648,18 @@ fn the_member_spawn_lands_the_members_identity_as_root() {
         .unwrap()
         .expect("a free run lock");
 
-    let harness_end = stand_state_member(&service, &inventory, &run_lock, None);
+    // Stands in for `constituents/cgroup.procs`, which takes the move's `0`.
+    let placement = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/null")
+        .unwrap();
+    let harness_end = stand_state_member(
+        &service,
+        &inventory,
+        &run_lock,
+        None,
+        std::os::fd::AsRawFd::as_raw_fd(&placement),
+    );
     assert!(harness_end.is_some(), "the member stands");
     let territory = sink.join("state");
     let status = territory.join("status");
@@ -4726,6 +4737,13 @@ fn the_worker_spawn_lands_its_identity_and_allowlist_as_root() {
         )
     };
     assert!(leaked >= 50);
+    // Stands in for the leaf's `cgroup.procs`: the child's move writes `0`
+    // to it first, which `/dev/null` takes (the move's own instruments are
+    // `containment`'s).
+    let placement = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/null")
+        .unwrap();
     let mut child = start::spawn_worker(start::WorkerStart {
         binary: std::path::Path::new("/bin/sleep"),
         arguments: vec!["30".to_string()],
@@ -4736,6 +4754,7 @@ fn the_worker_spawn_lands_its_identity_and_allowlist_as_root() {
         log: &log,
         run_lock: &run_lock,
         relay_write: Some(std::os::fd::AsRawFd::as_raw_fd(&relay_write)),
+        placement: std::os::fd::AsRawFd::as_raw_fd(&placement),
     })
     .expect("the worker spawns");
     // The stand-in is `sleep` itself, which changes nothing it inherited,
@@ -4871,6 +4890,13 @@ fn the_relay_spawn_lands_its_identity_and_allowlist_as_root() {
     let (lifetime_read, lifetime_write) = nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC).unwrap();
     // SAFETY: the watch runs this instrument alone, one thread.
     unsafe { std::env::set_var("WEAVER_TRACE_RELAY_TEST_MS", "1") };
+    // Stands in for the leaf's `cgroup.procs`: the child's move writes `0`
+    // to it first, which `/dev/null` takes (the move's own instruments are
+    // `containment`'s).
+    let placement = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/null")
+        .unwrap();
     let mut child = start::spawn_relay(start::RelayStart {
         binary: &stand_in,
         reader_uid: 4246,
@@ -4883,6 +4909,7 @@ fn the_relay_spawn_lands_its_identity_and_allowlist_as_root() {
         log: &log,
         lifetime_read: &lifetime_read,
         run_lock: &run_lock,
+        placement: std::os::fd::AsRawFd::as_raw_fd(&placement),
     })
     .expect("the relay spawns");
     let pid = child.id();
@@ -5155,4 +5182,312 @@ fn a_listener_that_is_not_the_worker_is_refused_and_the_run_untouched() {
         Some(save_points::Marker::Open { run: "r-1".into() }),
         "the marker stays open"
     );
+}
+
+// ------------------------------------------------------------- the agent's cgroup
+
+/// The agent's cgroup made for `run` beneath a delegated scratch invoker,
+/// its record in the config's run directory, as the start step makes it.
+fn agent_cgroup_for(
+    config: &ServiceConfig,
+    tag: &str,
+    run: &str,
+) -> (containment::tests::ScratchCgroup, containment::Cgroup) {
+    use std::os::fd::AsFd;
+    let scratch = containment::tests::ScratchCgroup::new(tag);
+    containment::tests::mark_delegated(&scratch.cgroup);
+    let run_directory = agent_cgroup::open_run_directory(&config.run_directory()).unwrap();
+    let made = agent_cgroup::make_beneath(
+        containment::Cgroup::open(scratch.cgroup.relative()),
+        run_directory.as_fd(),
+        &config.agent,
+        run,
+        (
+            nix::unistd::getuid().as_raw(),
+            nix::unistd::getgid().as_raw(),
+        ),
+        nix::unistd::getuid().as_raw(),
+    )
+    .expect("the agent's cgroup is made");
+    drop(made);
+    let cgroup = scratch
+        .cgroup
+        .child(&agent_cgroup::cgroup_name(&config.agent))
+        .unwrap();
+    (scratch, cgroup)
+}
+
+/// **An `unload` over an ended run with a stray in `run/` answers `Unloaded`
+/// only with the agent's cgroup gone** (`weaver-admin-Spec` 6.1, C2's
+/// instrument; 3.0, S0d), and `show` names the stray until then (rung (iv)).
+/// Perturbation: drop the run end from the ended run's conclusion, and the
+/// unload answers `InTransition` naming the stray.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_an_unload_over_an_ended_run_ends_its_stray() {
+    let (config, _report, base) = territory_with_one_room_file("cg-unload");
+    let (scratch, agent) = agent_cgroup_for(&config, "cg-unload", "r-1");
+    let mut stray = containment::tests::escaper_in(&agent.child("worker/run").unwrap());
+    match show(&config) {
+        Ok(LifecycleAnswer::InTransition { constituents }) => {
+            assert!(constituents.contains(&stray.id()), "{constituents:?}");
+        }
+        other => panic!("show names the stray, not {other:?}"),
+    }
+    assert_eq!(
+        unload_within(&config, TEST_UNLOAD_BOUNDS, false),
+        unloaded()
+    );
+    assert!(stray.wait().is_ok(), "the stray is ended");
+    assert!(
+        scratch
+            .cgroup
+            .child(&agent_cgroup::cgroup_name(&config.agent))
+            .is_err(),
+        "the agent's cgroup is gone"
+    );
+    assert_eq!(show(&config), unloaded());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// **A conclusion never ends another load's cgroup** (6.1, ownership is
+/// the record's): a `Left` concluded for `r-1` while the record names `r-2`
+/// leaves that cgroup and its stray, and answers by the ladder, naming the
+/// stray, never `Unloaded`. Perturbation: conclude by the record's run, and
+/// the stray dies.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_a_conclusion_never_ends_another_loads_cgroup() {
+    let (config, _report, base) = territory_with_one_room_file("cg-other");
+    save_points::write_marker(
+        &config.root,
+        Some(&save_points::Marker::Open { run: "r-1".into() }),
+    )
+    .unwrap();
+    let (_scratch, agent) = agent_cgroup_for(&config, "cg-other", "r-2");
+    let mut stray = containment::tests::escaper_in(&agent.child("worker/run").unwrap());
+    let left = Left {
+        save_point: None,
+        forced: true,
+        no_state: false,
+    };
+    match conclude_answered(&config, Some("r-1"), &left) {
+        Ok(LifecycleAnswer::InTransition { constituents }) => {
+            assert!(constituents.contains(&stray.id()), "{constituents:?}");
+        }
+        other => panic!("the ladder names the stray, not {other:?}"),
+    }
+    assert!(
+        stray.try_wait().unwrap().is_none(),
+        "another load's stray runs on"
+    );
+    let _ = stray.kill();
+    let _ = stray.wait();
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// **The escalation concludes the record's run, never the marker's** (6.1,
+/// ownership is the record's; the Planner's grade of #165): a load killed
+/// between its record and its marker leaves the marker open on `r-1` and
+/// the record naming `r-2`, and a forced unload escalated past the leave's
+/// bound ends `r-2`'s cgroup and its stray before it answers `Unloaded`.
+/// Perturbation: conclude the marker's run, and the run end reads
+/// `NotOwned`, the stray running on.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_the_escalation_concludes_the_records_run() {
+    let (config, _report, base) = territory_with_one_room_file("cg-escalated");
+    save_points::write_marker(
+        &config.root,
+        Some(&save_points::Marker::Open { run: "r-1".into() }),
+    )
+    .unwrap();
+    let (scratch, agent) = agent_cgroup_for(&config, "cg-escalated", "r-2");
+    let mut stray = containment::tests::escaper_in(&agent.child("worker/run").unwrap());
+    let holder = stand_in_holder(&config);
+    let _worker = timed_worker(
+        &config,
+        vec![(std::time::Duration::ZERO, idle_declaring((None, None)))],
+    );
+    let answered = unload_within(&config, TEST_UNLOAD_BOUNDS, true);
+    end(holder);
+    assert_eq!(answered, unloaded());
+    assert!(stray.wait().is_ok(), "the stray is ended");
+    assert!(
+        scratch
+            .cgroup
+            .child(&agent_cgroup::cgroup_name(&config.agent))
+            .is_err(),
+        "the agent's cgroup is gone"
+    );
+    assert_eq!(
+        save_points::read_marker(&config.root),
+        Some(save_points::Marker::Forced { run: "r-1".into() })
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// **A rollback whose escalation left the run lock held ends no cgroup**
+/// (6.1, admin's run end runs once the run lock is free): the cgroup the
+/// load made and its record are left for the next `unload`, and the
+/// rollback refuses `WorkerWouldNotExit`. Perturbation: run the run end
+/// whether or not the lock freed, and the stray dies.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_a_rollback_with_the_lock_held_ends_no_cgroup() {
+    use std::os::fd::AsFd;
+    let (config, _report, base) = territory_with_one_room_file("cg-held");
+    let (_scratch, agent) = agent_cgroup_for(&config, "cg-held", "r-1");
+    let mut stray = containment::tests::escaper_in(&agent.child("worker/run").unwrap());
+    let (account, contained) = end_rolled_back_cgroup(&config, "r-1", false);
+    assert_eq!(
+        contained,
+        Err(LifecycleRefusal::WorkerWouldNotExit),
+        "{account}"
+    );
+    assert!(stray.try_wait().unwrap().is_none(), "nothing is killed");
+    let run_directory = agent_cgroup::open_run_directory(&config.run_directory()).unwrap();
+    assert!(
+        containment::read_record(run_directory.as_fd(), &config.agent)
+            .unwrap()
+            .is_some(),
+        "the record is kept for the next unload"
+    );
+    let _ = stray.kill();
+    let _ = stray.wait();
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// **A constituent that cannot move itself into its leaf never execs, and
+/// the move comes before the privilege drop** (`weaver-admin-Spec` 6.1, C4;
+/// the plan's first review focus): a placement descriptor the child cannot
+/// write ends the worker's and the relay's children in `pre_exec` with the
+/// write's own `EBADF`, so the spawn fails and the load rolls back. Run
+/// unprivileged, a move placed after the drop would meet the drop's `EPERM`
+/// first. Perturbations: drop the move from either spawn, or move it after
+/// the drop, and the spawn fails with `EPERM`.
+#[test]
+fn a_constituent_that_cannot_move_itself_never_execs() {
+    let base = std::env::temp_dir().join(format!("weaver-admin-placement-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let run_directory = base.join("run");
+    std::fs::create_dir_all(&run_directory).unwrap();
+    let run_lock = start::take_run_lock(&run_directory).unwrap().unwrap();
+    let log = start::open_log(&base.join("worker.log"), None).unwrap();
+    // Opened read-only: the child's write of `0` fails.
+    let unwritable = std::fs::File::open("/dev/null").unwrap();
+    let placement = std::os::fd::AsRawFd::as_raw_fd(&unwritable);
+    let worker = start::spawn_worker(start::WorkerStart {
+        binary: std::path::Path::new("/bin/sleep"),
+        arguments: vec!["30".to_string()],
+        uid: 4242,
+        gid: 4243,
+        home: std::path::Path::new("/nonexistent/home/alpha"),
+        library_path: None,
+        log: &log,
+        run_lock: &run_lock,
+        relay_write: None,
+        placement,
+    });
+    assert_eq!(
+        worker.err().and_then(|error| error.raw_os_error()),
+        Some(nix::libc::EBADF),
+        "the worker's child ends at its move"
+    );
+    let stand_in = |path: &str| -> std::os::fd::OwnedFd {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap()
+            .into()
+    };
+    let (listener, sink, lifetime) = (
+        stand_in("/dev/null"),
+        stand_in("/dev/null"),
+        stand_in("/dev/null"),
+    );
+    let relay = start::spawn_relay(start::RelayStart {
+        binary: std::path::Path::new("/bin/sleep"),
+        reader_uid: 4244,
+        agent: "alpha",
+        boundary_digest: "digest",
+        uid: 4245,
+        gid: 4246,
+        listener: &listener,
+        sink: &sink,
+        log: &log,
+        lifetime_read: &lifetime,
+        run_lock: &run_lock,
+        placement,
+    });
+    assert_eq!(
+        relay.err().and_then(|error| error.raw_os_error()),
+        Some(nix::libc::EBADF),
+        "the relay's child ends at its move"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// **A `Left` no marker names concludes the record's run** (6.1, ownership;
+/// D2): the conclusion ends the recorded cgroup and its stray before it
+/// prints, as the escalation's conclusion does. Perturbation: skip the run
+/// end where no marker names the run, and the answer names the stray.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_a_left_no_marker_names_still_passes_the_run_end() {
+    let (config, _report, base) = territory_with_one_room_file("cg-no-marker");
+    let (scratch, agent) = agent_cgroup_for(&config, "cg-no-marker", "r-1");
+    let mut stray = containment::tests::escaper_in(&agent.child("worker/tools").unwrap());
+    let left = Left {
+        save_point: None,
+        forced: true,
+        no_state: false,
+    };
+    assert_eq!(conclude_answered(&config, None, &left), unloaded());
+    assert!(stray.wait().is_ok(), "the stray is ended");
+    assert!(
+        scratch
+            .cgroup
+            .child(&agent_cgroup::cgroup_name(&config.agent))
+            .is_err(),
+        "the agent's cgroup is gone"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// **A rollback whose run end refuses answers that refusal** (6.1, the run
+/// end's failures, a rollback's included): a cgroup the layout does not
+/// name beneath `tools/` makes the removal fail, and the rollback answers
+/// `BoundaryUnverified`, the record kept. Perturbation: swallow the run
+/// end's refusal into the account, and the rollback answers success.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_a_rollback_whose_run_end_refuses_answers_it() {
+    use std::os::fd::AsFd;
+    let (config, _report, base) = territory_with_one_room_file("cg-rollback");
+    let (_scratch, agent) = agent_cgroup_for(&config, "cg-rollback", "r-1");
+    agent
+        .child("worker/tools")
+        .unwrap()
+        .make_child("extra")
+        .unwrap();
+    let mut standing = Standing {
+        cgroup_run: Some("r-1".into()),
+        ..Standing::default()
+    };
+    let (account, contained) = roll_back(&config, &mut standing);
+    assert_eq!(
+        contained,
+        Err(LifecycleRefusal::BoundaryUnverified),
+        "{account}"
+    );
+    let run_directory = agent_cgroup::open_run_directory(&config.run_directory()).unwrap();
+    assert!(
+        containment::read_record(run_directory.as_fd(), &config.agent)
+            .unwrap()
+            .is_some(),
+        "the record is kept for the next unload"
+    );
+    let _ = std::fs::remove_dir_all(&base);
 }

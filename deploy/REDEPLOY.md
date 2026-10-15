@@ -328,14 +328,17 @@ Then, for each:
 
 ```sh
 sudo WEAVER_ADMIN_CONFIG=/etc/weaver/admin /opt/weaver/bin/weaver-admin validate <name>
-sudo deploy/verify-load.sh <name>              # unload, load, read the load event, check the constituents, unload
+sudo systemd-run --scope -p Delegate=yes "$PWD"/deploy/verify-load.sh <name>   # unload, load, read the load event, check the constituents, unload
 ```
 
 `verify-load.sh` reads the agent's root, first unloads the agent (taking its leave save
 point where a run stands), counts the sink's lines before and after the load and refuses a load that wrote nothing, prints the event kinds it saw and the load
-event, checks every constituent `show` names (its account, its cgroup the invoker's, a
-relay for a file sink), and unloads unless told `--keep`, checking that nothing of the
-run is left. A failed load needs no clearing by hand: whatever it started dies with its
+event, checks every constituent `show` names (its account, its leaf of the agent's cgroup
+beneath the invoker's, a relay for a file sink), and unloads unless told `--keep`,
+checking that nothing of the run is left and the agent's cgroup is gone. It runs in a
+delegated scope because a load does: admin makes the agent's cgroup beneath the cgroup
+the load runs in and refuses one carrying no delegate mark, as a login session's scope
+does (`weaver-admin-Spec` section 6.1, `HowToDeployANewAgent.md` section 4). A failed load needs no clearing by hand: whatever it started dies with its
 worker or is ended by the next `unload`. It does not retry the load.
 
 `verify-load.sh` proves a load; `deploy/turn.py <name> "<text>"` proves a turn, run as

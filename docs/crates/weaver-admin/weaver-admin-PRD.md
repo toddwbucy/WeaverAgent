@@ -839,8 +839,9 @@ so nothing of admin's needs to run for the coordination socket or the sink to ou
 the invocation. **It does not outlive its invoker's containment**, which binds the
 agent's lifetime (the Spec's sections 6 and 6.1), the agent's cgroup always nesting
 beneath the invoker's (the operator's rulings of 2026-10-14 on #111). So an agent is
-bound to the containment it was loaded in, admin-con's or the delegated scope a direct
-load runs in, and a long-lived agent is loaded through admin-con.
+bound to the containment it was loaded in, a delegated scope of root's. A load through
+admin-con, whose own unit is not root's, is refused until #166 (the placement and the
+lifetime binding to the invoker) is ruled (the operator's ruling of 2026-10-15).
 
 **Reading and analysis stay outside the program, and the recut does not move
 them.** A trace carries whatever the agent handled, so the code that parses
@@ -862,8 +863,8 @@ built from OS primitives rather than from a supervisor's bookkeeping. **Keep-ali
 the invoker's containment's, and keep-alive past a crash or a reboot is the
 packaging's**, on the operator's rulings of 2026-10-03 on #50 and of 2026-10-14 on #111:
 the worker takes its own session and outlives the invocation that started it, never its
-invoker's containment, so a long-lived agent is loaded through admin-con, and
-restarting it on a crash or a reboot
+invoker's containment, a delegated scope of root's (a load through admin-con waiting
+on #166), and restarting it on a crash or a reboot
 is for whoever packages and deploys the agent, with systemd, a container or anything
 else, and not this framework's.
 

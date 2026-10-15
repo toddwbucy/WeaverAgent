@@ -24,11 +24,11 @@ process or a network boundary, never linked:
   They are WeaverWeb's and never this repository's, and they start under the operator's
   provisioning, never under admin. Gate-con reaches the gate's socket. Admin-con issues
   admin's fixed command lines through the box's strict sudo rule and, where the trace
-  sink is a file, reads the trace door. The agent's lifetime is bound to the
-  containment it was loaded in: admin-con's when admin-con loads it, so the agent fails
-  closed when admin-con stops (#72, toddwbucy/WeaverWeb#15), or the delegated scope a
-  direct load runs in (#111). The role map that bounds them is the box's
-  (toddwbucy/WeaverTools#6).
+  sink is a file, reads the trace door. The agent's lifetime is bound to the root-owned
+  delegated scope a load runs in (#111). A load through admin-con is refused until #166
+  is ruled, since admin's start step requires the invoker's cgroup and every cgroup above
+  it to be root's (`weaver-admin-Spec` section 6.1). The role map that bounds them is the
+  box's (toddwbucy/WeaverTools#6).
 
 The rule that drew the line: a crate a consumer meets across a network boundary gets its
 own repository; the agent keeps everything interior. The suite-level documentation
@@ -246,7 +246,10 @@ pytest -q                                                 # CPU; the venv is hel
 ### Deploying and driving an agent
 
 `deploy/REDEPLOY.md` (a box from scratch) and `deploy/HowToDeployANewAgent.md` (one
-agent on a standing stack) are the runbooks. sqlite is the state engine. postgres is
+agent on a standing stack) are the runbooks. `HowToDeployANewAgent.md` runs ahead of the
+project and is subject to change: it is only as authoritative as it remains functional,
+never above a Spec or a live run, until the repository is locked down (the operator's
+word of 2026-10-15). sqlite is the state engine. postgres is
 removed (#1, reversing #38, and #85): the scripts neither build nor provision it, and
 `create-agent.sh`'s `--engine` defaults to sqlite and refuses an engine this build does
 not provide. `create-agent.sh` lays each territory out by group,

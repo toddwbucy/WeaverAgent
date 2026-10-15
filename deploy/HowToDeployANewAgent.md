@@ -1,5 +1,9 @@
 # How to deploy a new agent
 
+**Subject to change.** This runbook runs ahead of the project's actual state. It is only as
+authoritative as it remains functional, never above a Spec or a live run, and it stays a
+moving target until the repository is locked down (the operator's word of 2026-10-15).
+
 One agent, on a box that already runs the stack. First written 2026-09-30 from the
 thinkpad redeploy, and rewritten for the start step of #50, which took the agent out of
 systemd on the operator's ruling of 2026-10-03: admin stands the agent itself, holds its
@@ -265,16 +269,29 @@ one, so a storeless agent is seeded again in every residency, as its first turn.
 
 ```sh
 sudo WEAVER_ADMIN_CONFIG=/etc/weaver/admin /opt/weaver/bin/weaver-admin validate <name>
-sudo deploy/verify-load.sh <name>
+sudo systemd-run --scope -p Delegate=yes "$PWD"/deploy/verify-load.sh <name>
 ```
+
+**A load runs in a delegated containment** (`weaver-admin-Spec` section 6.1): admin
+makes the agent's cgroup beneath the cgroup the load runs in, and refuses
+`boundary_unverified` where that cgroup carries no delegate mark, or where it, a file
+delegated with it, or any cgroup above it is not root's (#166's guard: no account but
+root may be able to move the agent's processes out of its cgroup). A login shell's
+session scope carries no mark, so a direct load, and a script that loads, runs in a
+scope root makes for it, `sudo systemd-run --scope -p Delegate=yes`, which sits under the
+system slice and not under the operator's login session. A load through the connector's
+rule, from the connector's own unit, is not root's and is refused `boundary_unverified`
+until #166 (the placement and the lifetime binding to the invoker) is ruled.
 
 `validate` answers `{"kind":"validated"}` or a refusal naming the field or the boundary
 piece. `verify-load.sh` validates, first unloads the agent (taking its leave save
 point where a run stands), then loads, counts the events that arrive in the sink,
 prints their kinds and the load event, then reads `show`'s constituents and checks each:
-it runs as the agent's, the member's or the relay's account, it sits in the invoker's own
-cgroup, and a relay stands among them for a file sink. It then unloads, and checks that
-every constituent is gone and `show` reads unloaded. A healthy first load writes `load`,
+it runs as the agent's, the member's or the relay's account, it sits in the agent's
+cgroup beneath the invoker's (the member and the relay in `constituents/`, the worker in
+`worker/run/`), and a relay stands among them for a file sink. It then unloads, and
+checks that every constituent is gone, the agent's cgroup is gone, and `show` reads
+unloaded. A healthy first load writes `load`,
 plus `recall` where a store member stands and the agent has been seeded; a load writes
 no `message.system`, the prompt being on the trace only at its seeding turn. The load event's
 payload names the session, the run, the store, the declaration's hash, the composer
@@ -282,7 +299,8 @@ payload names the session, the run, the store, the declaration's hash, the compo
 and writes nothing is the failure this step exists to catch, and the worker's own words
 are in `<territory>/worker.log`, the state member's in `<territory>/state/state.log`.
 
-`deploy/verify-lifecycle.sh --agent <throwaway>` verifies a whole lifecycle end to end
+`deploy/verify-lifecycle.sh --agent <throwaway>`, run as the operator (it runs each load
+in a delegated scope itself), verifies a whole lifecycle end to end
 (create, load, seed, save points, restore, force-unload, crash recovery, the refusal by
 name of a root of an older layout, take-down) on a throwaway agent it creates; it plans
 unless given `--apply`, and `--keep` stops it before the take-down so the checks it
@@ -292,7 +310,7 @@ cannot make are made against the loaded agent.
 to its caller, who reads `show` and issues `unload`.
 
 **Then seed the prompt**, the last step, as yourself and with the agent loaded (so
-`verify-load.sh <name> --keep`, or a plain `load`):
+`verify-load.sh <name> --keep`, or a plain `load`, each in a delegated scope as above):
 
 ```sh
 deploy/turn.py <name> --system
@@ -346,7 +364,7 @@ is the loop act's, not this runbook's.
 ## 5. Serving, stopping, unloading, and the connector's rule
 
 ```sh
-sudo /opt/weaver/bin/weaver-admin load <name>         # answers {"kind":"state","state":"idle"}
+sudo systemd-run --scope -p Delegate=yes /opt/weaver/bin/weaver-admin load <name>   # answers {"kind":"state","state":"idle"}
 sudo /opt/weaver/bin/weaver-admin show <name>         # the state and the run's constituent pids
 sudo /opt/weaver/bin/weaver-admin save-point <name>   # a save point now, published at once
 sudo /opt/weaver/bin/weaver-admin unload <name>       # answers {"kind":"state","state":"unloaded"}
@@ -401,16 +419,20 @@ gate or SPU dead), does not stop there: it comes down without the save point,
 the marker stands `Forced`, and the next load restores the latest published save point
 and records `ForcedUnload`.
 
-Or `sudo deploy/verify-load.sh <name> --keep` to load with the read-back and leave it
-serving. No unit and no init system is involved. The worker, the state member and the
+Or `sudo systemd-run --scope -p Delegate=yes "$PWD"/deploy/verify-load.sh <name> --keep`
+to load with the read-back and leave it serving. No unit and no init system is involved. The worker, the state member and the
 relay are processes admin started, detached from the invoking terminal, holding the run
-lock between them, and they live in the containment the load was invoked from: a load
-run from a login shell's scope lives in that scope. `unload` asks the agent to leave,
+lock between them, and they live in the agent's cgroup, which admin makes beneath the
+containment the load was invoked from (`weaver-admin-Spec` section 6.1): a direct load
+lives in the scope `systemd-run` made for it, so logging out does not end the agent and
+stopping that scope does. `unload` kills the agent's cgroup whole before it answers
+`unloaded`, so no process of the run, a tool's command that left its session included,
+outlives it. `unload` asks the agent to leave,
 letting it finish the turn in flight and write a wind-down summary before its save
 point, which has no time limit unless the declaration's `[lifecycle]` table sets a
 `drain-bound` and a `wind-down-bound`; with both set it ends the run within their sum
-plus 202 seconds. `force-unload` stops the work at once and
-still saves the state, ending the run within 202 seconds; issued while an `unload` is
+plus the forced unload's bound, which `weaver-admin-Spec` section 3 states. `force-unload`
+stops the work at once and still saves the state, ending the run within that bound; issued while an `unload` is
 in progress it joins it, waiting out one already finishing, and
 beside any other command it refuses, reading which command holds the agent from the
 verb that command records in `admin.lock`, one command at a time being yours to keep. Either then publishes the leave's save point, which takes as long as copying it does. Admin's
@@ -426,10 +448,12 @@ weaver-<name>-admincon ALL=(root) NOPASSWD: /opt/weaver/bin/weaver-admin show <n
 
 The observer role's rule grants the `show` line alone. Each grant is one fixed command
 line, so the connector can pass no argument of its own, and it runs them with `sudo -n`.
-`!pam_session` keeps sudo from opening a session that would move the invocation, and the
-agent it starts, out of the connector's own containment, which is what lets stopping the
-connector stop its agent (toddwbucy/WeaverWeb#15). After a load the connector checks
-that every constituent `show` names sits in its own cgroup. `sudo -n -l -U
+**The `load` line is granted and refused**: admin refuses a load from the connector's own
+unit `boundary_unverified`, since that unit's cgroup is not root's, until #166 is ruled.
+The other lines start no process and run as before. `!pam_session` keeps sudo from
+opening a session that would move the invocation into another containment, which
+matters only to a load. It stays in the rule, so the rule need not change when #166
+rules how a connector load is placed. `sudo -n -l -U
 weaver-<name>-admincon` prints what the rule grants. The connector itself, its service
 and its containment, is WeaverWeb's packaging, and this repository provisions only its
 account, its group, its rule and its place in `roles.toml`.

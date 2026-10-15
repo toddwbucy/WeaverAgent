@@ -19,6 +19,7 @@ fn facts(at_path: Standing, recorded: RecordAtStart) -> StartFacts {
         run_lock_held: false,
         cgroup2: true,
         delegated: true,
+        invoker_roots: true,
         at_path,
         recorded,
     }
@@ -50,6 +51,13 @@ fn the_start_step_judges_by_its_rows_in_order() {
     assert_eq!(
         start_judgment(undelegated),
         StartAction::Refuse(StartRefusal::NotDelegated)
+    );
+    // #166's guard: an invoker not root's, after the mark, before any mkdir.
+    let mut not_roots = facts(Standing::Empty, RecordAtStart::None);
+    not_roots.invoker_roots = false;
+    assert_eq!(
+        start_judgment(not_roots),
+        StartAction::Refuse(StartRefusal::InvokerNotRoots)
     );
     // A0: made afresh.
     assert_eq!(
@@ -114,6 +122,51 @@ fn the_start_step_judges_by_its_rows_in_order() {
         start_judgment(facts(Standing::Empty, RecordAtStart::Absent)),
         StartAction::RemoveThenMake
     );
+}
+
+/// **The invoker's ownership reads every delegated file** (6.1, the floor;
+/// #166's guard): a directory of the owner is admitted only where its
+/// `cgroup.procs`, `cgroup.threads` and `cgroup.subtree_control` are the
+/// owner's too. A plain directory stands in for the invoker's, reached
+/// beneath the mount by `..`, since no cgroup's files can be given another
+/// owner without root; its ancestors are not a cgroup's, so the files are
+/// judged here with the walk's own rule tested apart. Perturbation: read
+/// the directory's owner alone, or `cgroup.procs` alone, and it is
+/// admitted.
+#[test]
+fn the_invokers_ownership_reads_every_delegated_file() {
+    let base = std::env::temp_dir().join(format!("weaver-admin-owned-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let up = "/..".repeat(CGROUP_ROOT.matches('/').count());
+    let directory = Cgroup::open(&format!("{up}{}", base.display())).unwrap();
+    let uid = nix::unistd::getuid().as_raw();
+    let files = || delegated_files_owned(directory.fd(), uid);
+    assert!(!files(), "no delegated file: not admitted");
+    std::fs::write(base.join("cgroup.procs"), b"").unwrap();
+    assert!(!files(), "cgroup.procs alone: not admitted");
+    std::fs::write(base.join("cgroup.threads"), b"").unwrap();
+    std::fs::write(base.join("cgroup.subtree_control"), b"").unwrap();
+    assert!(files(), "every delegated file the owner's: admitted");
+    assert!(
+        !owned_by(&directory, uid),
+        "a directory outside the mount never meets the mount root: refused"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// **An ancestor of another account refuses** (#166's guard; a migration
+/// needs write on the common ancestor's `cgroup.procs`, its directory and
+/// that file both judged): root's and the
+/// floor's owner's are admitted, anyone else's is not. Perturbation: admit
+/// every owner, and the delegatee's ancestor is admitted.
+#[test]
+fn an_ancestor_of_another_account_refuses() {
+    assert!(ancestors_admit(&[], 0));
+    assert!(ancestors_admit(&[0, 0, 0], 0));
+    assert!(ancestors_admit(&[1000, 0], 1000));
+    assert!(!ancestors_admit(&[1000, 0], 0), "a delegatee's ancestor");
+    assert!(!ancestors_admit(&[0, 1001, 0], 1000));
 }
 
 /// 6.1's rows for the floor's `cgroup.kill` and the start's `fchmod`,
@@ -218,7 +271,7 @@ fn the_run_end_steps_by_its_rows() {
 
 // ------------------------------------------------------------- the record
 
-fn run_directory(tag: &str) -> (crate::scratch::Scratch, OwnedFd) {
+pub(crate) fn run_directory(tag: &str) -> (crate::scratch::Scratch, OwnedFd) {
     let dir = crate::scratch::Scratch(
         std::env::temp_dir().join(format!("weaver-admin-record-{tag}-{}", std::process::id())),
     );
@@ -289,14 +342,14 @@ fn the_record_round_trips_and_refuses_a_foreign_path() {
 
 /// A scratch cgroup beneath the delegated scope this suite runs in, killed
 /// and removed when dropped.
-struct ScratchCgroup {
+pub(crate) struct ScratchCgroup {
     parent: Cgroup,
     name: String,
-    cgroup: Cgroup,
+    pub(crate) cgroup: Cgroup,
 }
 
 impl ScratchCgroup {
-    fn new(tag: &str) -> Self {
+    pub(crate) fn new(tag: &str) -> Self {
         let own = own_cgroup().expect("/proc/self/cgroup reads");
         let parent = Cgroup::open(&own).expect("the suite's own cgroup opens");
         // The user manager's delegated scope carries no delegate mark of its
@@ -354,11 +407,35 @@ fn remove_tree(parent: &Cgroup, name: &str) -> nix::Result<()> {
     unlinkat(parent.fd(), name, UnlinkatFlags::RemoveDir)
 }
 
+/// **Sets systemd's mark on a scratch cgroup the suite owns**, standing the
+/// delegated invoker the floor asks for: the user manager's scope carries no
+/// mark (measured on 2026-10-14), and cgroupfs lets a cgroup's owner set a
+/// `user.*` extended attribute.
+pub(crate) fn mark_delegated(cgroup: &Cgroup) {
+    // SAFETY: fsetxattr on a descriptor this frame borrows, reading one byte
+    // of a static buffer.
+    let set = unsafe {
+        nix::libc::fsetxattr(
+            cgroup.fd().as_raw_fd(),
+            c"user.delegate".as_ptr(),
+            b"1".as_ptr().cast(),
+            1,
+            0,
+        )
+    };
+    assert_eq!(
+        set,
+        0,
+        "user.delegate sets on the scratch invoker: {}",
+        std::io::Error::last_os_error()
+    );
+}
+
 /// A process started in `cgroup`: a shell that starts a new session and
 /// double-forks a sleeper, then sleeps itself. **The child moves itself in
 /// before its exec**, as 6.1's constituents and shells do: admitted after
 /// the spawn, the shell could fork its escapers first and leave them outside.
-fn escaper_in(cgroup: &Cgroup) -> std::process::Child {
+pub(crate) fn escaper_in(cgroup: &Cgroup) -> std::process::Child {
     use std::os::unix::process::CommandExt;
     let procs = cgroup.procs_for_placement().expect("cgroup.procs opens");
     let raw = procs.as_raw_fd();
@@ -377,6 +454,40 @@ fn escaper_in(cgroup: &Cgroup) -> std::process::Child {
         std::thread::sleep(Duration::from_millis(20));
     }
     child
+}
+
+/// **The walk to the mount reads every cgroup above the invoker** (6.1, the
+/// floor; #166's guard), on this host's hierarchy: from a scratch cgroup
+/// under the user scope the levels up to `user@<uid>.service` are the
+/// suite's and the ones above it root's, so the suite's uid is admitted and
+/// another uid is refused at the suite's levels. That is this instrument's
+/// level: production's walk, required to be root's, meets root's levels
+/// only. Perturbation: skip the walk, and another uid is admitted; read
+/// the first level only, and the levels read fall short of the depth;
+/// refuse short of the mount root, and the suite's uid is refused.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_the_walk_reads_every_cgroup_above_the_invoker() {
+    let scratch = ScratchCgroup::new("ancestors");
+    let suite = nix::unistd::getuid().as_raw();
+    assert!(
+        owned_by(&scratch.cgroup, suite),
+        "the suite's and root's levels admit the suite"
+    );
+    assert!(
+        !ancestors_owned(scratch.cgroup.fd(), suite.wrapping_add(1)),
+        "the suite's levels refuse another uid"
+    );
+    // Every level up to the mount's root is read, its directory and its
+    // `cgroup.procs`, and the top of the walk is root's.
+    let owners = ancestor_owners(scratch.cgroup.fd()).expect("the walk meets the mount root");
+    let depth = scratch.cgroup.relative().matches('/').count();
+    assert_eq!(owners.len(), 2 * depth, "{owners:?}");
+    assert_eq!(
+        &owners[owners.len() - 2..],
+        &[0, 0],
+        "the mount root is root's"
+    );
 }
 
 /// **The floor's mount, the delegate mark and the cgroup's interface** on

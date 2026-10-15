@@ -384,8 +384,12 @@ sys.exit(0 if isinstance(d, dict) and d.get("kind") == "state" and d.get("state"
 ANSWER=""
 ASKED_CAUSE=""
 ask() {
-  local said
-  said=$(sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$ADMIN" "$1" "$A" 2>&1) || true
+  local said scope=()
+  # **A load runs in a delegated scope** (weaver-admin-Spec 6.1): admin makes
+  # the agent's cgroup beneath the cgroup it runs in and refuses one that
+  # carries no delegate mark, as the operator's session scope does.
+  [ "$1" != load ] || scope=(systemd-run --scope -q -p Delegate=yes --)
+  said=$(sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "${scope[@]}" "$ADMIN" "$1" "$A" 2>&1) || true
   ASKED_CAUSE=$(printf '%s\n' "$said" | sed '$d')
   [ -z "$ASKED_CAUSE" ] || printf '%s\n' "$ASKED_CAUSE" | sed 's/^/     admin: /' >&2
   ANSWER=$(printf '%s\n' "$said" | sed -n '$p')
@@ -767,7 +771,7 @@ RUN=""
 step_2() {
   begin_step 2 "weaver-admin-Spec section 6, 3.0 S0 x load; #99 K12" "validate, load, seed, one turn"
   run_line "weaver-admin validate $A"
-  run_line "deploy/verify-load.sh $A --keep   (as root)"
+  run_line "deploy/verify-load.sh $A --keep   (as root, in a delegated scope)"
   run_line "deploy/turn.py $A --system"
   run_line "deploy/turn.py $A \"Name three primary colours.\""
   want "validated; verify-load prints validate validated, load idle, N > 0 new lines, a load event naming composer, state_member and stack, a $AU-relay constituent, left serving, == $A verified"
@@ -781,7 +785,7 @@ step_2() {
   ask validate; expect_kind validate validated
   local rc=0 out="$LOGDIR/step2-verify-load.log" start
   start=$(trace_lines)
-  sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" WEAVER_STACK_RECORD="$STACK" bash "$CHECKOUT/deploy/verify-load.sh" "$A" --keep >"$out" 2>&1 || rc=$?
+  sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" WEAVER_STACK_RECORD="$STACK" systemd-run --scope -q -p Delegate=yes -- bash "$CHECKOUT/deploy/verify-load.sh" "$A" --keep >"$out" 2>&1 || rc=$?
   sed 's/^/     /' "$out"
   expect_eq "verify-load.sh --keep exits 0" 0 "$rc"
   expect_eq "verify-load validates" yes "$(grep -qF 'validate    {"kind":"validated"}' "$out" && echo yes || echo no)"
@@ -1004,7 +1008,7 @@ step_7() {
   run_line "weaver-admin show $A; kill -9 the constituent whose comm is $WORKER_COMM and whose owner is $AU"
   run_line "weaver-admin show $A; where constituents remain: weaver-admin load $A, then unload $A"
   run_line "weaver-admin load $A"
-  want "the marker open before; show after the kill answers by the ladder: in_transition naming the constituents where any still holds the run lock (rung iii), unloaded with none where the lock is free"
+  want "the marker open before; show after the kill answers by the ladder: in_transition naming the constituents where any still holds the run lock (rung iii) or the agent's cgroup still holds them with the lock free (rung iv), naming none while a process is mid-exit (rung iv, asked again), unloaded with none where the lock is free and the cgroup empty"
   want "where constituents remain, load answers agent_running and unload answers unloaded"
   want "the marker still open; load idle with reset {prior_run, reason: no-clean-unload} and its lineage the manifest's latest; any new manifest line arrived recovered"
   [ "$APPLY" -eq 1 ] || return 0
@@ -1027,15 +1031,27 @@ step_7() {
   # **show answers by the ladder** (weaver-admin-Spec section 3, the show
   # ladder; Codex on #126, round 3): with the worker gone and a member or
   # relay still holding the run lock, no socket answers, which is rung
-  # (iii), InTransition naming the constituents; with the lock free,
-  # Unloaded naming none. Anything else fails.
-  ask show
-  local after left
-  after=$(json_at "$ANSWER" kind)
-  left=$(json_at "$ANSWER" constituents)
+  # (iii), InTransition naming the constituents; with the lock free, rung
+  # (iv): InTransition naming what the agent's cgroup still holds, or
+  # Unloaded naming none where it reads empty. A cgroup that reads populated
+  # and lists nothing (a process mid-exit, its device or memory still
+  # releasing) answers InTransition naming none, and is asked again until it
+  # settles. Anything else fails.
+  local after left tries=0
+  while :; do
+    ask show
+    after=$(json_at "$ANSWER" kind)
+    left=$(json_at "$ANSWER" constituents)
+    [ "$after" = in_transition ] && { [ "$left" = absent ] || [ "$left" = "[]" ]; } || break
+    tries=$((tries + 1))
+    [ "$tries" -lt 10 ] || fail "show after the kill settles" \
+      "in_transition naming the constituents, or unloaded naming none, within 10 s" "$ANSWER"
+    measured "show after the kill answers in_transition naming none (rung iv, a process mid-exit); asking again"
+    sleep 1
+  done
   case "$after/$( { [ "$left" = absent ] || [ "$left" = "[]" ]; } && echo none || echo some)" in
     in_transition/some)
-      pass "show after the kill answers in_transition naming $left (the ladder's rung iii)"
+      pass "show after the kill answers in_transition naming $left (the ladder's rung iii, or iv with the lock free)"
       ask load; expect_kind "load while a constituent holds the lock" agent_running
       ask unload; expect_state unload unloaded ;;
     state/none)

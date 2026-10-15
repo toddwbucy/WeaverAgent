@@ -480,7 +480,7 @@ A declared bound that passes after the leave already turned forced (a join, the 
 
 **(A) A graceful unload with the gate or the SPU dead turns forced from where it stands** (the operator's ruling of 2026-10-09, on #1): it skips what it cannot do, the quiesce and the drain's refusals without a gate, the wind-down without an SPU, still takes the save point, and records its outcome forced with no `forced_by`, the cause being the dead organ's as a bound's is the clock's, the graceful caller's cause kept (I2). **(B) The SPU dying with a turn in flight closes that turn failed** (same ruling): `Stopped { reason: fault }`, the SPU's `fault` recorded, the caller answered an error; later requests are refused `NoResidency`, the standing case for no model resident, through the gate's refused close "no model is resident" (`weaver-gate-world-contract` section 5), until the unload, and the run stands. An SPU already dead does not die again: a run with no model resident meets no second SPU death.
 
-**A load's rollback (S1 x `Leave`).** A load that fails after its enter directs a forced leave to undo a run that never served. **The harness tells it by the directive, not by its position**: the rollback's `Leave` carries `rollback: true` (Codex on #109, round 28), because a `Ready` landing just after this crate's enter deadline leaves the harness `Entered` while this crate rolls back, and a forced `Leave` alone would read there as a sole force and take a save point. For a `Leave` with `rollback` true, in any position, `Entered` included, the harness takes no save point and runs no wind-down, lowers the gate at once, releases what it admitted, and authors `unload` with `forced` true and the load's cause. `unload` carries the load's cause, and, `load` being on the trace, the marker stands `Open` on that run (the operator's ruling of 2026-10-08 on #99, K1), so the next load records `NoCleanUnload`. A rollback before `load` is on the trace leaves the marker as the load found it, and the next load records whatever reset that marker carries (section 4, the marker-write rule). It is exempt from I2 by name: a run that never served is not an unload. **The rollback ends the cgroup its own load made** (section 6.1, ownership is the record's), whatever the marker says: a rollback before `load` is on the trace leaves the previous run's marker standing, and the cgroup and its record are still this load's. **The rollback's bound is stated here once**, and every other document cites it: past the enter's bound, a rollback holds the load at most the leave's 150 seconds, the escalation's forty-five and the run end's containment bound for the agent's cgroup to empty (section 6.1), 225 seconds in all, before the load answers.
+**A load's rollback (S1 x `Leave`).** A load that fails after its enter directs a forced leave to undo a run that never served. **The harness tells it by the directive, not by its position**: the rollback's `Leave` carries `rollback: true` (Codex on #109, round 28), because a `Ready` landing just after this crate's enter deadline leaves the harness `Entered` while this crate rolls back, and a forced `Leave` alone would read there as a sole force and take a save point. For a `Leave` with `rollback` true, in any position, `Entered` included, the harness takes no save point and runs no wind-down, lowers the gate at once, releases what it admitted, and authors `unload` with `forced` true and the load's cause. `unload` carries the load's cause, and, `load` being on the trace, the marker stands `Open` on that run (the operator's ruling of 2026-10-08 on #99, K1), so the next load records `NoCleanUnload`. A rollback before `load` is on the trace leaves the marker as the load found it, and the next load records whatever reset that marker carries (section 4, the marker-write rule). It is exempt from I2 by name: a run that never served is not an unload. **The rollback ends the cgroup its own load made** (section 6.1, ownership is the record's), whatever the marker says: a rollback before `load` is on the trace leaves the previous run's marker standing, and the cgroup and its record are still this load's. It writes the marker first and then, once the run lock is free, runs that cgroup's end (section 6.1). **The rollback's bound is stated here once**, and every other document cites it: past the enter's bound, a rollback holds the load at most the leave's 150 seconds, the escalation's forty-five and the run end's containment bound for the agent's cgroup to empty (section 6.1), 225 seconds in all, before the load answers.
 
 **Why there are two unloads**, on the operator's word of 2026-10-09. The graceful unload
 lets the agent finish its thought before it goes down: the turn in flight completes, then
@@ -735,6 +735,13 @@ cites it rather than restating it:
 - **(iv)** the run lock free: `Unloaded`, from that absence, without dialing, where the
   agent's cgroup is absent or empty. Where it still holds processes (section 6.1, A3, a
   run's leftovers after a crash), `InTransition` with them named, for `unload` to end.
+  **Empty is `cgroup.events` reading `populated 0`, never an empty listing**: the
+  kernel's `cgroup.procs` skips a process mid-exit while `populated` stays 1 through
+  its exit's release of its files and memory, an SPU's device context among them
+  (measured on 2026-10-15: 646 ms after the kill of a process holding 32 GiB), and a
+  listing that fails names nothing too. A cgroup that reads populated and lists
+  nothing answers `InTransition` naming none, a `show` a moment later reading what
+  the exit left.
 
 A name with no root
 refuses `NoSuchAgent` as every verb does, and whether a declaration validates stays
@@ -1739,18 +1746,19 @@ orphaned SPU never holds the device.
 **The agent's lifetime is bound to its invoker's containment, and this crate depends on
 no supervisor**, on the operator's ruling of 2026-10-03 on #72. The new session leaves
 the terminal and nothing else: every process the start step starts stays in whatever
-containment the invocation ran in, so where admin-con runs as a service and loads the
-agent, the worker, the member and the relay sit beneath its group, and stopping
-admin-con stops the agent it loaded and only that agent, each agent having its own. A
-direct load is bound the same way to the delegated scope it runs in (section 6.1). **That is the intended behaviour and not a leak**:
-the management plane going down may mean it was taken over, so the agent fails closed
-with it. This crate asks no supervisor, and the one cgroup it makes, the agent's, it
+containment the invocation ran in, a delegated scope of root's (section 6.1), so
+stopping that scope stops the agent loaded in it. **That is the intended behaviour and
+not a leak**: the containment going down ends the agent with it, failing closed. A load
+through admin-con, whose own unit is delegated to the connector's account and not
+root's, is refused until #166 (the placement and the lifetime binding to the invoker)
+is ruled, so the binding of #72 to admin-con is parked there (the operator's ruling of
+2026-10-15). This crate asks no supervisor, and the one cgroup it makes, the agent's, it
 makes beneath the invoker's own (section 6.1, #111), so the binding is still the
 invoker's containment's and never this crate's code. The
 consequences are stated in `weaver-admin-operator-contract` section 3 and carried to
-toddwbucy/WeaverWeb#15: an orderly stop
-of admin-con unloads first, a kill is an unclean stop that resets the next load to the
-latest save point, and the invoker's resource limits contain the agent.
+toddwbucy/WeaverWeb#15: a kill of the containment is an unclean stop that resets the
+next load to the latest save point, and the containment's resource limits contain the
+agent.
 
 **A failed dial is answered from the worker's own exit, which the start step can read.**
 The invocation is the worker's parent until it exits, so where the dial's bound expires
@@ -2372,16 +2380,18 @@ section asks of the invoker's containment is all it asks of systemd.
 **The agent's cgroup is made beneath the invoker's, so its lifetime stays the
 invoker's** (section 6, the lifetime, and the operator's ruling of 2026-10-03 on #72).
 - **Where:** the start step reads the cgroup its own invocation runs in from
-  `/proc/self/cgroup`. That is the invoker's containment: admin-con's unit, or, for a
-  direct load, a delegated scope the operator makes for it. The start step makes the
+  `/proc/self/cgroup`. That is the invoker's containment: a delegated scope of root's
+  the operator makes for the load. A load from admin-con's unit, delegated to the
+  connector's own account, is refused by the floor below until #166 (the placement and
+  the lifetime binding to the invoker) is ruled. The start step makes the
   agent's cgroup
   as its child, `<invoker's cgroup>/weaver-<agent>/`, named for the agent's account.
 - **What it keeps:** stopping the invoker's containment still ends the agent, since a
   cgroup's kill or a unit's stop reaches every descendant. So the agent fails closed
-  with admin-con as before.
+  with the scope it was loaded in.
 - **Why not its own top-level cgroup:** a separate tree would have cut that binding.
 - **The record:** because a later verb may run from another containment (the operator's
-  shell after admin-con's load), the start step records the agent's cgroup's path in
+  shell after a load from another scope), the start step records the agent's cgroup's path in
   `cgroup` in the run directory, root's and `0600`, beside `run.lock`, before its first
   fork. **It is written atomically** (Codex on #161): to a temporary in the run directory,
   synced, renamed over `cgroup`, and the run directory synced, so a crash leaves the old
@@ -2405,9 +2415,15 @@ invoker's** (section 6, the lifetime, and the operator's ruling of 2026-10-03 on
   only for a run an earlier load made from another containment.
 - **The invoker's requirement:** its containment must be delegated, so that making
   subgroups beneath it is no breach of systemd's rule that one writer manages each
-  cgroup (the operator's ruling of 2026-10-14 on #111, Codex on #161). admin-con's unit
-  carries `Delegate=yes`. A direct load runs in a delegated scope made for it, which
-  as root sits under the system slice and not under the operator's login session.
+  cgroup (the operator's ruling of 2026-10-14 on #111, Codex on #161), **and root's**
+  (the operator's ruling of 2026-10-15, #166's guard): its directory and its
+  `cgroup.procs` owned by root, so no account but root can move a process of the agent
+  out of the agent's cgroup, the common ancestor of the agent's cgroup and any cgroup
+  outside it being the invoker's or above. A load runs in a delegated scope root makes
+  for it (`systemd-run --scope -p Delegate=yes`), which sits under the system slice and
+  not under the operator's login session, and which carries both delegate marks
+  (measured by the operator on 2026-10-15). A unit delegated to another account, such
+  as admin-con's, is not root's and is refused until #166 is ruled.
   `weaver-admin-operator-contract` section 2 carries this.
 - **The host's root cgroup is refused by the same check.** It carries no delegate
   mark, so an invoker there, outside every service and scope, is refused like any
@@ -2420,12 +2436,19 @@ cgroup** (Codex on #161). The start step:
 - reads systemd's delegate mark on the invoker's cgroup before any `mkdir`, as root:
   the extended attribute `user.delegate` reading `1`, or `trusted.delegate` where
   systemd set that one, both read,
+- reads the invoker's cgroup and every cgroup above it as root's, before any `mkdir`
+  (#166's guard): the invoker's directory and the three files systemd delegates with
+  it (`cgroup.procs`, `cgroup.threads`, `cgroup.subtree_control`), and each
+  ancestor's directory and `cgroup.procs` up to the mount's root, by `fstat` of the
+  invoker's descriptor, `fstatat` beneath it and `openat` of `..`, since a move needs
+  write on the common ancestor's `cgroup.procs`, which can be any of them,
 - makes `weaver-<agent>/` beneath the invoker's cgroup, which answers whether the
   invoker's containment admits a child that root makes,
 - and requires a `cgroup.kill` file in what it made.
 
-The delegate mark is the first question and the `mkdir` the second. **Where the mount
-is not `cgroup2`, the invoker's cgroup carries no delegate mark, the `mkdir` fails other
+The delegate mark is the first question, the invoker's ownership the second, and the
+`mkdir` the third. **Where the mount
+is not `cgroup2`, the invoker's cgroup carries no delegate mark or is not root's, the `mkdir` fails other
 than with `EEXIST` (a cgroup already standing, which the start judges below), or
 what it made carries no `cgroup.kill`, the load refuses `BoundaryUnverified`, naming the
 cgroup and which, removes what it made, and stands nothing**, failing closed, as the dial does on a kernel without its pidfd
@@ -2559,8 +2582,15 @@ weaver-<agent>/      root's; the agent's cgroup
     own write alone. **A rollback always runs the end of the cgroup its own load made**,
     whatever the marker says: a load that rolls back before its `load` event leaves the
     previous run's marker standing, and the cgroup and its record are still this
-    load's. An `unload` or `force-unload` over an ended run (S0d) concludes the run
-    its record names.
+    load's. **The rollback alone writes its marker before its run end**: its marker
+    says what the trace holds (section 3, the rollback), not what is contained, so a
+    run end that refuses leaves it written. An escalation that leaves the run lock
+    held runs no run end, the cgroup and its record left for the next `unload`, and
+    the rollback refuses `WorkerWouldNotExit`. **An escalation's conclusion ends the
+    run its record names**, whatever the marker names: what the escalation ended is
+    whatever held the run lock, and a load killed between its record and its marker
+    leaves the marker on an earlier run. An `unload` or `force-unload` over an ended
+    run (S0d) concludes the run its record names.
   - **Never lock-free:** the escalation's lock-free phase ends the run lock's holders
     and never writes a cgroup.
   - **The kill and the removal:** admin writes `cgroup.kill` on `weaver-<agent>/` and
@@ -2665,6 +2695,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | Actor and event | From | To | What it does |
 |---|---|---|---|
 | admin's start step, the invoker's cgroup undelegated (no `user.delegate` or `trusted.delegate` mark) | any | unchanged | refuses `BoundaryUnverified`, naming the cgroup and that it is not delegated, before any `mkdir` |
+| admin's start step, the invoker's cgroup, a file systemd delegates with it, or any cgroup above it not root's (#166's guard) | any | unchanged | refuses `BoundaryUnverified`, naming the cgroup and that it is not root's, before any `mkdir` |
 | admin's start step, the floor missing (no `cgroup2`, the `mkdir` refused, no `cgroup.kill` in what it made) | any | unchanged | refuses `BoundaryUnverified`, removing what it made |
 | admin's start step | A0 | A1, then A2 | makes the cgroups and the record, sets the three files' owner, places the member, the relay and the worker |
 | admin's start step | A1 | A0, then as above | removes it and its record and makes it afresh |
@@ -2687,10 +2718,10 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | the run's constituents all end, after a leave or a death | A2 | A1 where nothing of the agent is left, else A3 | the run lock frees. The organs end by their death signal, and `tools/` is left as the worker left it |
 | admin's run end (a conclusion under the invocation lock) | A3, A1, or A4 left by an earlier run end, once the run lock frees | A4 (where populated), then A0 | `cgroup.kill` on the agent's cgroup, re-issued where A4 was left (it is idempotent), the wait, the removal finished and the record's, then publication, the marker and the answer |
 | admin's run end, the record naming another load's run | any | unchanged | nothing: the cgroup is that load's, whatever the marker says |
-| a load's rollback | A2, then A3, A1 or A4 once the run lock frees | A0 | the run end of the cgroup this load made, whatever the marker says: the kill, the wait, the removal and the record's |
-| admin's run end, a rollback's included, not empty within the bound | A3, A1, or A4 left by an earlier run end, once the run lock frees, its kill delivered (A4) | A4 | refuses `WorkerWouldNotExit`, naming the pids, nothing published and no marker written |
+| a load's rollback | A2, then A3, A1 or A4 once the run lock frees | A0 | the run end of the cgroup this load made, whatever the marker says: the kill, the wait, the removal and the record's. **The rollback's marker is written first** (section 3, the rollback), since it says what the trace holds and not what is contained, so a run end that refuses leaves it written, and an invocation killed between the two leaves a record the next verb ends. **An escalation that leaves the run lock held runs no run end**: the cgroup and its record are left for the next `unload`, and the rollback refuses `WorkerWouldNotExit` |
+| admin's run end, a rollback's included, not empty within the bound | A3, A1, or A4 left by an earlier run end, once the run lock frees, its kill delivered (A4) | A4 | refuses `WorkerWouldNotExit`, naming the pids, nothing published and no marker written, a rollback's marker excepted (its row above) |
 | admin's run end, a rollback's included, its write of `cgroup.kill` failing | A3, A1, or A4 left by an earlier run end, once the run lock frees | A4 by the fallback's kills, or as it was | the pinned fallback over the agent's cgroup and its descendants, repeated within the bound. Both failing refuses `WorkerWouldNotExit` |
-| admin's run end, a rollback's included, a removal failing other than with `ENOENT` | A3, A1, or A4 left by an earlier run end, once the run lock frees, killed and emptied | A1 partly removed | refuses `BoundaryUnverified`, naming the cgroup, the record kept for the next `unload`, nothing published |
+| admin's run end, a rollback's included, a removal failing other than with `ENOENT` | A3, A1, or A4 left by an earlier run end, once the run lock frees, killed and emptied | A1 partly removed | refuses `BoundaryUnverified`, naming the cgroup, the record kept for the next `unload`, nothing published, a rollback's marker excepted (its row above) |
 | admin's run end, a rollback's included, the record's removal failing | A3, A1, or A4 left by an earlier run end, once the run lock frees, the cgroup removed (A0) | A0, a stale record | said in `admin.log`, refusing nothing: the next verb reads the absent path as A0 and removes the record |
 | a wait's read of `cgroup.events` failing (the gate's, the worker's or the run end's) | T2 (the gate's or the worker's wait), or the run end's sources, its kill delivered (A4) | as the bound passing | read as not yet empty, so the wait runs to the bound and ends as a populated cgroup's does |
 | admin dies inside a run end | A4, A1 partly removed, or A0, a stale record | as left | the next `unload` or `force-unload` writes the kill again, which is idempotent, and finishes the removal, the record last. Where the cgroup is already gone and only its record stands, that verb reads the absent path as A0 and removes the record (the row for a recorded path absent) |
@@ -2716,7 +2747,7 @@ them, which can take seconds. A process in an uninterruptible sleep can hold it 
 | # | Invariant | Held by |
 |---|---|---|
 | C1 | **No tool process outlives its execution's end.** A shell's child moves itself into `tools/` before its exec, and before the gate answers, `tools/` is empty, a gate that cannot empty it never answering: a command that left its process group or its session is in `tools/` all the same. A gate's death empties `tools/` by the worker's kill, by a pidfd-pinned `SIGKILL` of each pid still in `tools/` where the kill's write fails, and where both fail the execution is closed `Killed { by: fault }` with its `fault` naming the failed containment, service ending and the run end holding the rest. A `tools/` that will not empty within the bound ends service (the gate exits, then the worker unwinds), so no run serves on past an execution it could not end. **Two exceptions are stated.** The first: a command running as the agent's account can move itself out of `tools/` into `worker/` by writing `worker/cgroup.procs`, since the file that lets the gate move its shell lets the shell move itself. That process escapes C1 and is held by C2. **The second is a containment that could not be delivered**: where the worker's write and its fallback both fail, the execution is closed `Killed { by: fault }` with its processes unsignalled, its `fault` naming the failed containment, and they too are held by C2. So C1 holds of every process to which a kill was delivered. A later election of a controller on `worker/` would meet it there and must place it first. | the gate, and the worker on the gate's death |
-| C2 | **No process of the agent outlives its run's end.** `Unloaded` is answered only where no process of the agent stands: the run lock free and the agent's cgroup absent or empty. The run end answers it only after killing and removing the cgroup, and past the containment bound it refuses `WorkerWouldNotExit`, never `Unloaded`. A load stands a run only in a cgroup it made. **The window is stated:** after a run ends with no admin verb (the worker dying, then the member and the relay, or the worker ending service with `tools/` still populated), leftovers run on until the next `unload` or `force-unload`. A load refuses on them and kills nothing, and `show` names them. They are contained in A3: leaving the agent's cgroup needs a write to a file of root's. | admin's run end, the start step's refusal on A3, and `show`'s ladder |
+| C2 | **No process of the agent outlives its run's end.** `Unloaded` is answered only where no process of the agent stands: the run lock free and the agent's cgroup absent or empty. The run end answers it only after killing and removing the cgroup, and past the containment bound it refuses `WorkerWouldNotExit`, never `Unloaded`. A load stands a run only in a cgroup it made. **The window is stated:** after a run ends with no admin verb (the worker dying, then the member and the relay, or the worker ending service with `tools/` still populated), leftovers run on until the next `unload` or `force-unload`. A load refuses on them and kills nothing, and `show` names them. They are contained in A3: leaving the agent's cgroup needs a write to a file of root's, which holds because the floor requires the invoker's cgroup and every cgroup above it to be root's (#166's guard), so the common ancestor of the agent's cgroup and anywhere outside it has a `cgroup.procs` of root's. | admin's run end, the start step's refusal on A3, and `show`'s ladder |
 | C3 | **The agent's account reaches only three files.** Through them it can move a process within `worker/` and kill `tools/`, and nothing else: no member, no relay, no cgroup made or removed, no interface file of root's changed. | the layout's ownership |
 | C4 | **Every process of the agent starts inside.** Each constituent is placed by its own child before its exec, each shell's child moves itself into `tools/` before its exec, running only the gate's own code until then, and every fork after inherits. | the start step's placement and the shell child's move |
 
@@ -2764,6 +2795,11 @@ The instruments:
 - **The delegation:** a load from an invoker's cgroup without the delegate mark refuses
   `BoundaryUnverified` and makes nothing, and the same load from a delegated one stands.
   Watched to fail when the mark's check is dropped and the undelegated load stands.
+- **The invoker's ownership** (#166's guard): a load from a delegated invoker's cgroup
+  that is not root's refuses `BoundaryUnverified` and makes nothing. Watched to fail
+  when the ownership check is dropped and the load stands. The suite's scope is its
+  own account's, so the instrument takes the owner the floor requires as a parameter,
+  root in production, and stands production's root by requiring another uid.
 
 ## 7. The coordination channel
 

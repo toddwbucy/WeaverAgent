@@ -110,7 +110,9 @@ elif name == 'id':
         elif who.endswith('-admincon'): print(os.environ.get('CONNECTOR_GROUPS', who + ' ' + who.removesuffix('admincon') + 'state ' + who.removesuffix('con')))
         else: print(who)
     elif args[:1] == ['-u'] and len(args) > 1 and 'FIXTURE_ACCOUNT_UID' in os.environ:
-        print(os.environ['FIXTURE_ACCOUNT_UID'])
+        # FIXTURE_ACCOUNT_FOR names the one account the stand-in runs as.
+        named = os.environ.get('FIXTURE_ACCOUNT_FOR', args[1])
+        print(os.environ['FIXTURE_ACCOUNT_UID'] if named == args[1] else '54321')
     else: print(os.environ.get('FIXTURE_UID', '12345'))
 elif name == 'systemctl':
     if args[:1] == ['list-units']:
@@ -193,8 +195,14 @@ elif name == 'sudo':
     elif op == 'visudo': sys.exit(1 if os.environ.get('VISUDO_FAIL') else 0)
     elif op.startswith('WEAVER_ADMIN_CONFIG=') and os.environ.get('FIXTURE_ADMIN'):
         # **Admin as a test stands it in** (#99 area 2 review, N5): the
-        # verb and the agent handed to the script FIXTURE_ADMIN names.
+        # verb and the agent handed to the script FIXTURE_ADMIN names. **A
+        # load comes in a delegated scope** (weaver-admin-Spec 6.1), whose
+        # options are stripped, and a load without one fails the fixture.
+        scope = ['systemd-run', '--scope', '-q', '-p', 'Delegate=yes', '--']
+        scoped = rest[:len(scope)] == scope
+        if scoped: rest = rest[len(scope):]
         assert rest[0].endswith('/weaver-admin'), rest
+        assert scoped or rest[1] != 'load', ('a load outside a delegated scope', rest)
         sys.exit(subprocess.run([os.environ['FIXTURE_ADMIN'], *rest[1:]]).returncode)
     elif op == 'rm':
         target = pathlib.Path(mapped(rest[-1]))
@@ -308,9 +316,11 @@ class PlanTests(unittest.TestCase):
         for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
                      "VISUDO_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
                      "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS", "GROUP_WRITES",
-                     "LAYOUT_GROUPS", "FIXTURE_ADMIN", "ADMIN_CALLS", "UNLOAD_ANSWER"):
+                     "LAYOUT_GROUPS", "FIXTURE_ADMIN", "ADMIN_CALLS", "UNLOAD_ANSWER", "MISPLACED",
+                     "KEEP_CGROUP", "FIXTURE_ACCOUNT_FOR", "STAND_IN_LEAF"):
             self.env.pop(name, None)
-        # Redirect even shell builtin /home probes into the fixture. The
+        # Redirect even shell builtin /home probes, and the cgroup mount's
+        # reads, into the fixture. The
         # production scripts have no test-only path switches and never read
         # the host's real agent homes during these tests.
         preamble = self.root / "fixture.bash"
@@ -318,12 +328,16 @@ class PlanTests(unittest.TestCase):
   local arg
   fixture_mapped=()
   for arg in "$@"; do
-    case "$arg" in /home/*|/run/systemd/system) arg="$FIXTURE_ROOT$arg";; esac
+    case "$arg" in
+      /home/*|/run/systemd/system) arg="$FIXTURE_ROOT$arg";;
+      /sys/fs/cgroup/*) arg="$FIXTURE_ROOT/cgroup-fs${arg#/sys/fs/cgroup}";;
+    esac
     fixture_mapped+=("$arg")
   done
 }
 [() { fixture_args "$@"; builtin [ "${fixture_mapped[@]}"; }
 test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
+grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
 """)
         self.env["BASH_ENV"] = str(preamble)
 
@@ -954,9 +968,15 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
 
     def verify_fixture(self):
         """An admitted agent whose admin is a stub: `load` starts a real
-        process standing in for the run's constituents and writes a load
-        event, `show` names it, `unload` ends it unless KEEP_ALIVE is set."""
+        process standing in for the run's constituents, lists it in the agent's
+        cgroup beneath the invoker's under a stand-in cgroup mount, and writes
+        a load event, `show` names it, `unload` ends it and removes the cgroup
+        unless KEEP_ALIVE is set (or, for the cgroup, KEEP_CGROUP)."""
         self.env.update(FIXTURE_UID="0", FIXTURE_ACCOUNT_UID=str(os.getuid()))
+        cgroup_fs = self.root / "cgroup-fs"
+        own = Path("/proc/self/cgroup").read_text().split("0::", 1)[1].strip()
+        agent_cgroup = cgroup_fs / own.lstrip("/") / "weaver-m1"
+
         root = self.config / "m1"
         root.mkdir()
         self.decl.mkdir(parents=True)
@@ -974,6 +994,8 @@ case "$1" in
   validate) echo '{{"kind":"validated"}}' ;;
   load) sleep 300 >/dev/null 2>&1 &
         echo $! > {state}/pid
+        mkdir -p {agent_cgroup}/constituents {agent_cgroup}/worker/run
+        [ -n "$MISPLACED" ] || echo $! > {agent_cgroup}/${{STAND_IN_LEAF:-constituents}}/cgroup.procs
         echo '{{"kind":"load"}}' >> {sink}
         echo '{{"kind":"state","state":"idle"}}' ;;
   show) if [ -f {state}/pid ]; then
@@ -983,6 +1005,7 @@ case "$1" in
             [ -n "$KEEP_ALIVE" ] || kill $(cat {state}/pid)
             cp {state}/pid {state}/last; rm {state}/pid
           fi
+          [ -n "$KEEP_ALIVE$KEEP_CGROUP" ] || rm -rf {agent_cgroup}
           echo '{{"kind":"state","state":"unloaded"}}' ;;
 esac
 """)
@@ -1008,8 +1031,61 @@ esac
         finally:
             self.end_stand_in(state)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-        self.assertIn("in the invoker's cgroup", result.stdout)
-        self.assertIn("every constituent gone, show unloaded", result.stdout)
+        self.assertIn("in constituents beneath the invoker's cgroup", result.stdout)
+        self.assertIn("every constituent gone, the agent's cgroup gone, show unloaded", result.stdout)
+
+    def test_verify_load_refuses_a_constituent_outside_the_agents_cgroup(self):
+        """**A constituent not in the agent's cgroup beneath the invoker's,
+        and an agent's cgroup outliving the unload, each refuse**
+        (weaver-admin-Spec 6.1): verify-load reads each constituent's leaf
+        and the cgroup's absence after the unload. Perturbations: drop the
+        leaf check, and the misplaced constituent is verified; drop the
+        absence check, and the cgroup left standing is."""
+        for case, variable, said in (
+                ("misplaced", "MISPLACED", "is not in "),
+                ("outlived", "KEEP_CGROUP", "outlived the unload")):
+            with self.subTest(case):
+                shutil.rmtree(self.config / "m1", ignore_errors=True)
+                shutil.rmtree(self.decl, ignore_errors=True)
+                shutil.rmtree(self.root / "stub-state", ignore_errors=True)
+                shutil.rmtree(self.root / "installed", ignore_errors=True)
+                shutil.rmtree(self.root / "cgroup-fs", ignore_errors=True)
+                state = self.verify_fixture()
+                self.env[variable] = "1"
+                try:
+                    result = self.run_script("verify-load.sh", "m1")
+                finally:
+                    del self.env[variable]
+                    self.end_stand_in(state)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(said, result.stderr)
+
+    def test_verify_load_checks_the_worker_in_worker_run(self):
+        """**The agent's own account is checked in `worker/run/`** (weaver-admin-Spec
+        6.1): a stand-in running as the agent's account passes the leaf check
+        in `worker/run/` and refuses in `constituents/`. It stands alone, so
+        the file sink's relay check refuses after it either way.
+        Perturbation: check the worker in `constituents/`, and the first
+        case refuses at the leaf."""
+        for leaf, passes in (("worker/run", True), ("constituents", False)):
+            with self.subTest(leaf):
+                for d in (self.config / "m1", self.decl, self.root / "stub-state",
+                          self.root / "installed", self.root / "cgroup-fs"):
+                    shutil.rmtree(d, ignore_errors=True)
+                state = self.verify_fixture()
+                self.env.update(FIXTURE_ACCOUNT_FOR="weaver-m1", STAND_IN_LEAF=leaf)
+                try:
+                    result = self.run_script("verify-load.sh", "m1")
+                finally:
+                    for name in ("FIXTURE_ACCOUNT_FOR", "STAND_IN_LEAF"):
+                        del self.env[name]
+                    self.end_stand_in(state)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                if passes:
+                    self.assertIn("weaver-m1  in worker/run beneath the invoker's cgroup", result.stdout)
+                    self.assertIn("no relay stands among the constituents", result.stderr)
+                else:
+                    self.assertIn("is not in ", result.stderr)
 
     def test_verify_load_reads_its_unload_and_takes_only_a_load_event(self):
         """**verify-load reads its first unload's answer, and only `load` is a
@@ -2561,18 +2637,25 @@ esac
     def test_lifecycle_step_7_reads_show_by_the_ladder(self):
         # After the worker's kill, show answers by weaver-admin-Spec section
         # 3's ladder: in_transition naming the constituents where any still
-        # holds the run lock (rung iii), unloaded naming none where it is
-        # free; step 7 accepts exactly those two (Codex on #126, round 3).
-        # Perturbation: require unloaded after the kill again, and this fails.
+        # holds the run lock (rung iii) or the agent's cgroup holds them with
+        # the lock free (rung iv), unloaded naming none where it is free and
+        # the cgroup empty; step 7 accepts exactly those two (Codex on #126,
+        # round 3), and asks again while in_transition names none, a process
+        # mid-exit (rung iv; the Planner's grade of #165). Perturbation:
+        # require unloaded after the kill again, or drop the asking again,
+        # and this fails.
         result = self.lifecycle()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("in_transition naming the constituents where any still holds the run lock "
-                      "(rung iii), unloaded with none where the lock is free", result.stdout)
+                      "(rung iii) or the agent's cgroup still holds them with the lock free (rung iv), "
+                      "naming none while a process is mid-exit (rung iv, asked again), unloaded with "
+                      "none where the lock is free and the cgroup empty", result.stdout)
         script = (self.repo / "deploy" / "verify-lifecycle.sh").read_text()
         body = script[script.index("step_7() {"):script.index("step_8() {")]
         self.assertIn("    in_transition/some)", body)
         self.assertIn("    state/none)", body)
         self.assertIn('fail "show after the kill answers by the ladder"', body)
+        self.assertIn('[ "$after" = in_transition ] && { [ "$left" = absent ] || [ "$left" = "[]" ]; } || break', body)
         self.assertNotIn('ask show; expect_state "show after the kill" unloaded', body)
 
     def test_lifecycle_step_8_is_a_plan_only_near_miss_and_8b_always_runs(self):
@@ -4726,6 +4809,13 @@ class AdminAnswerTests(unittest.TestCase):
         sudo = self.bin_dir / "sudo"
         sudo.write_text('#!/bin/sh\n[ "$1" = "-n" ] && shift\nexec env "$@"\n')
         sudo.chmod(0o755)
+        # A delegated scope (weaver-admin-Spec 6.1), stood in: its options
+        # dropped through `--`, and the verb it carried recorded.
+        self.scoped = root / "scoped"
+        scope = self.bin_dir / "systemd-run"
+        scope.write_text('#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done\nshift\n'
+                         f'echo "$2" >> {self.scoped}\nexec "$@"\n')
+        scope.chmod(0o755)
         self.script = (DEPLOY / "update-stack.sh").read_text()
 
     def answer(self, verb):
@@ -4745,6 +4835,8 @@ class AdminAnswerTests(unittest.TestCase):
                              '{"kind":"refused","reason":"boundary_unverified"}\n')
             self.assertIn("admin: boundary unverified: no weaver-state binary beside the worker's",
                           result.stderr)
+        # **Only the load runs in a delegated scope** (weaver-admin-Spec 6.1).
+        self.assertEqual(self.scoped.read_text(), "load\n")
 
     def test_both_call_sites_reach_the_helper(self):
         self.assertIn('validate() {\n  admin_answer validate "$1"\n}', self.script)
