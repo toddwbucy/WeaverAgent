@@ -1225,15 +1225,21 @@ fn busybox() -> PathBuf {
     path
 }
 
-/// A scratch layout as the shell's would stand: `libexec/busybox` (a copy),
-/// `commands/` holding one symlink per applet to it, and `home/` with its
-/// `.tmp`.
+/// A scratch layout as the shell's stands in production (section 8.1):
+/// `libexec/busybox` (a copy), `commands/` holding one symlink per listed
+/// applet to it and **no entry for the interpreter**, and `home/` with its
+/// `.tmp`. The shell is reached as the gate reaches it, the busybox file
+/// itself run with `argv[0]` `sh` (Codex on #175).
 struct ShellLayout {
     base: PathBuf,
 }
 
 impl ShellLayout {
     fn new(tag: &str, applets: &[&str]) -> Self {
+        assert!(
+            !applets.contains(&"sh"),
+            "the interpreter is never a listed command"
+        );
         let base = std::env::temp_dir().join(format!("weaver-shell-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         for dir in ["libexec", "commands", "home/.tmp"] {
@@ -1283,7 +1289,7 @@ impl ShellLayout {
             .allow(Path::new("/dev/urandom"), FS_READ_FILE)
     }
 
-    /// `sh -c script` through the commands directory, with the gate's
+    /// `sh -c script`, the busybox file run with `argv[0]` `sh`, with the gate's
     /// environment: `HOME`, `PATH` the commands directory, `TMPDIR` home's
     /// `.tmp`.
     fn sh(&self, rules: &Ruleset, script: &str) -> Output {
@@ -1292,16 +1298,22 @@ impl ShellLayout {
 
     /// [`ShellLayout::sh`] with the child's socket filter loaded too.
     fn sh_filtered(&self, rules: &Ruleset, script: &str, filter: Option<&[SockFilter]>) -> Output {
-        rules.run_filtered(
-            Command::new(self.path("commands/sh"))
-                .args(["-c", script])
-                .env_clear()
-                .env("HOME", self.path("home"))
-                .env("PATH", self.path("commands"))
-                .env("TMPDIR", self.path("home/.tmp"))
-                .current_dir(self.path("home")),
-            filter,
-        )
+        rules.run_filtered(&mut self.sh_command(script), filter)
+    }
+
+    /// The shell's command, not yet run: the busybox file with `argv[0]`
+    /// `sh`, `-c script`, and the gate's environment.
+    fn sh_command(&self, script: &str) -> Command {
+        let mut command = Command::new(self.path("libexec/busybox"));
+        command
+            .arg0("sh")
+            .args(["-c", script])
+            .env_clear()
+            .env("HOME", self.path("home"))
+            .env("PATH", self.path("commands"))
+            .env("TMPDIR", self.path("home/.tmp"))
+            .current_dir(self.path("home"));
+        command
     }
 }
 
@@ -1311,9 +1323,10 @@ impl Drop for ShellLayout {
     }
 }
 
-const APPLETS: [&str; 15] = [
-    "sh", "ls", "cat", "head", "tail", "wc", "grep", "sort", "uniq", "cut", "tr", "date", "echo",
-    "pwd", "mktemp",
+/// The default listed set of section 8.1, the interpreter not among them.
+const APPLETS: [&str; 14] = [
+    "ls", "cat", "head", "tail", "wc", "grep", "sort", "uniq", "cut", "tr", "date", "echo", "pwd",
+    "mktemp",
 ];
 
 /// **M11: the redirects a shell needs.** Under section 8.1's ruleset: a
@@ -1392,6 +1405,84 @@ fn m12_the_static_busybox_under_the_ruleset() {
     let outside = layout.sh(&rules(), "/usr/bin/id; echo rc=$?");
     println!("M12 a program outside the build: {}", said(&outside));
     assert_says("M12 outside", &outside, "rc=126");
+}
+
+/// Section 8.1's rlimits, soft and hard alike, proposed for the operator's edit.
+const SHELL_RLIMIT_FSIZE: u64 = 64 << 20;
+const SHELL_RLIMIT_NOFILE: u64 = 64;
+const SHELL_RLIMIT_AS: u64 = 512 << 20;
+const SHELL_RLIMIT_CORE: u64 = 0;
+
+/// **M14: the default set runs under section 8.1's rlimits, and they bind.**
+/// The child sets each limit, soft and hard alike, before the ruleset, as the
+/// gate's child will. Every default applet and the interpreter run under them.
+/// `cat /dev/zero` into a home file stops at `SHELL_RLIMIT_FSIZE`, killed by
+/// `SIGXFSZ` (153), its file exactly that size, and the shell reads every
+/// limit as set, soft and hard, refusing a raise past the hard one.
+#[test]
+#[ignore = "a measurement of this box's kernel and a built busybox"]
+fn m14_the_default_set_under_the_rlimits() {
+    let layout = ShellLayout::new("m14", &APPLETS);
+    let limited = |script: &str| {
+        let mut command = layout.sh_command(script);
+        // SAFETY: setrlimit on values held by copy, async-signal-safe.
+        unsafe {
+            command.pre_exec(|| {
+                for (resource, value) in [
+                    (libc::RLIMIT_FSIZE, SHELL_RLIMIT_FSIZE),
+                    (libc::RLIMIT_NOFILE, SHELL_RLIMIT_NOFILE),
+                    (libc::RLIMIT_AS, SHELL_RLIMIT_AS),
+                    (libc::RLIMIT_CORE, SHELL_RLIMIT_CORE),
+                ] {
+                    let limit = libc::rlimit {
+                        rlim_cur: value,
+                        rlim_max: value,
+                    };
+                    if libc::setrlimit(resource, &limit) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
+        layout.rules(true, true).run(&mut command)
+    };
+    let every = limited(
+        "t=$(mktemp) && echo hello world > \"$t\" && cat \"$t\" | head -n 1 | tail -n 1 \
+         | cut -d' ' -f1 | tr h H | grep Hello | sort | uniq | wc -l && ls \"$TMPDIR\" >/dev/null \
+         && date >/dev/null && pwd >/dev/null && echo every=ok",
+    );
+    println!("M14 the default set: {}", said(&every));
+    assert_eq!(
+        String::from_utf8_lossy(&every.stdout).trim(),
+        "1\nevery=ok",
+        "M14 default set: {}",
+        said(&every)
+    );
+    assert!(every.stderr.is_empty(), "M14 default set: {}", said(&every));
+    let fsize = limited("cat /dev/zero > big; echo rc=$?; wc -c < big");
+    println!("M14 RLIMIT_FSIZE: {}", said(&fsize));
+    assert_says("M14 fsize stops", &fsize, "rc=153");
+    assert_says("M14 fsize size", &fsize, &SHELL_RLIMIT_FSIZE.to_string());
+    // ash's `ulimit` reads each limit, soft and hard, in its own units, and
+    // a raise past the hard limit is refused.
+    let read = limited(
+        "echo n=$(ulimit -Sn)/$(ulimit -Hn) v=$(ulimit -Sv)/$(ulimit -Hv) \
+         c=$(ulimit -Sc)/$(ulimit -Hc); ulimit -n 65 2>/dev/null; echo raise=$?",
+    );
+    println!("M14 the limits as the shell reads them: {}", said(&read));
+    let nofile = SHELL_RLIMIT_NOFILE;
+    let kib = SHELL_RLIMIT_AS >> 10;
+    assert_says(
+        "M14 limits",
+        &read,
+        &format!("n={nofile}/{nofile} v={kib}/{kib} c=0/0"),
+    );
+    assert!(
+        !String::from_utf8_lossy(&read.stdout).contains("raise=0"),
+        "M14 a raise past the hard limit: {}",
+        said(&read)
+    );
 }
 
 /// **M13: both filters require no-new-privs.** Without `PR_SET_NO_NEW_PRIVS`
