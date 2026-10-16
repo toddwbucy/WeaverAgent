@@ -625,6 +625,10 @@ BUILT="$BUILT/release"
 # the whole workspace, the frontend having left the repository on 2026-09-26.
 # A member joins the installed set by being written here.
 MEMBERS="pyworker worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state"
+# **The agent's shell** (#29): the static busybox build-busybox.sh writes
+# beside the members, and its applet list, installed into the members'
+# directory and rolled back with them.
+SHELL_FILES="busybox busybox.applets"
 
 MEMBER_FEATURES=weaver-harness/pyworker,weaver-state/sqlite
 SPU_FEATURES=weaver-spu/cuda
@@ -632,6 +636,8 @@ FEATURES="$SPU_FEATURES,$MEMBER_FEATURES"
 
 # ---------------------------------------------------------------- 1. box facts
 say "box"
+# **The shell's build needs its tools before the long build, not after** (#29).
+"$REPO/deploy/build-busybox.sh" --preflight || exit 1
 printf '  host          %s\n' "$(hostname)"
 printf '  stack record  %s\n' "$STACK"
 printf '  admin base    %s\n' "$ADMIN_BASE"
@@ -872,12 +878,25 @@ run_tests
 say "build"
 NVCC_CCBIN=${NVCC_CCBIN:-/usr/bin/g++-15} \
   cargo build --release --locked --workspace --features "$FEATURES"
+# **The agent's shell, built from its pinned source and configuration** (#29,
+# weaver-gate-Spec 8.1): a static busybox and its applet list, written beside
+# the members, planned and installed with them, and rolled back with them.
+# BUSYBOX_TARBALL, where set, names the pinned tarball on a box without the
+# network (deploy/REDEPLOY.md section 3).
+build_busybox() {
+  if [ -n "${BUSYBOX_TARBALL:-}" ]; then
+    "$REPO/deploy/build-busybox.sh" "$BUILT" --tarball "$BUSYBOX_TARBALL"
+  else
+    "$REPO/deploy/build-busybox.sh" "$BUILT"
+  fi
+}
+build_busybox || die "the shell's busybox did not build"
 printf '  ok\n'
 
 # --------------------------------------------------------------------- 5. plan
 say "plan"
 CHANGED=()
-for b in $MEMBERS; do
+for b in $MEMBERS $SHELL_FILES; do
   [ -f "$BUILT/$b" ] \
     || die "the build produced no $b, so the plan cannot speak for it. Check that $b is still a bin target of this workspace."
   n=$(sha256sum "$BUILT/$b" | cut -d' ' -f1)
@@ -954,6 +973,7 @@ ADDED=()
 # on the new ones.
 LOADED_AGENT=""
 COMPLETED=0
+SHELL_KEY_WRITTEN=0
 RESTORED=0
 INSTALL_DONE=0
 BACKUP=""
@@ -999,9 +1019,19 @@ restore() {
       # root's, so an unprivileged test read every entry as absent and the
       # restore silently put nothing back.
       sudo test -f "$BACKUP/$b" || continue
-      sudo install -o root -g root -m 0755 "$BACKUP/$b" "$BIN_DIR/$b" \
+      mode=0755
+      [ "$b" = busybox.applets ] && mode=0644
+      sudo install -o root -g root -m "$mode" "$BACKUP/$b" "$BIN_DIR/$b" \
         || { printf '  FAILED to restore %s\n' "$b" >&2; failed=1; }
     done
+  fi
+  # **The key this run wrote goes whether or not binaries were installed**
+  # (Codex on #177): the repair path writes it with nothing installed, so its
+  # removal stands outside the binaries' rollback.
+  if [ "$SHELL_KEY_WRITTEN" -eq 1 ]; then
+    printf '  removing the stack record'"'"'s shell-binary, which this run wrote\n' >&2
+    sudo rm -f "$STACK/shell-binary" \
+      || { printf '  FAILED to remove %s\n' "$STACK/shell-binary" >&2; failed=1; }
   fi
   if [ "$failed" -ne 0 ]; then
     printf '  RESTORE INCOMPLETE - inspect %s and %s by hand\n' "$BIN_DIR" "$BACKUP" >&2
@@ -1044,7 +1074,11 @@ on_exit() {
   set +e
   trap 'printf "  the run is concluding; a signal now is held until the restore is done\n" >&2' INT TERM HUP
   conclude_pending_unload
-  if [ "$COMPLETED" -eq 0 ] && [ "$INSTALL_DONE" -eq 1 ]; then
+  # **A run that wrote the shell's key restores too** (#29, Codex on #177):
+  # a repair-only run installs nothing and may still write it, and restore's
+  # binary branch stays guarded by INSTALL_DONE, so such a restore removes
+  # the key and touches no binary.
+  if [ "$COMPLETED" -eq 0 ] && { [ "$INSTALL_DONE" -eq 1 ] || [ "$SHELL_KEY_WRITTEN" -eq 1 ]; }; then
     printf '\n  the run did not complete (exit %d)\n' "$rc" >&2
     restore
   fi
@@ -1143,7 +1177,10 @@ if [ ${#CHANGED[@]} -gt 0 ]; then
     else
       ADDED+=("$b")
     fi
-    sudo install -o root -g root -m 0755 "$BUILT/$b" "$BIN_DIR/$b"
+    # The applet list is data, every other member a program.
+    mode=0755
+    [ "$b" = busybox.applets ] && mode=0644
+    sudo install -o root -g root -m "$mode" "$BUILT/$b" "$BIN_DIR/$b"
     printf '  installed %s\n' "$b"
   done
   printf '  previous binaries kept at %s\n' "$BACKUP"
@@ -1183,6 +1220,21 @@ validate() {
 }
 
 # -------------------------------------------------------- 8. reconcile agents
+# **The stack record names the shell** (#29, weaver-admin-Spec section 9): a
+# box bootstrapped before it gains `shell-binary`, which create-agent.sh copies
+# into each new agent's root. An agent made before it carries none, and a
+# declaration of it electing `sh` refuses at validate until it is recreated.
+# A rollback removes the key this run wrote, as it removes the busybox it
+# added, so a rolled-back record never names a file the rollback took away.
+if [ ! -e "$STACK/shell-binary" ]; then
+  # Set before the write, so a write, a chmod or a signal that ends the run
+  # part way leaves restore() removing a key this run may have written.
+  SHELL_KEY_WRITTEN=1
+  printf '%s\n' "$BIN_DIR/busybox" | sudo tee "$STACK/shell-binary" >/dev/null
+  sudo chmod 0644 "$STACK/shell-binary"
+  printf '  the stack record gains shell-binary = %s\n' "$BIN_DIR/busybox"
+fi
+
 say "reconcile declarations"
 [ -n "$AGENTS" ] || printf '  no agents to reconcile\n'
 for agent in $AGENTS; do

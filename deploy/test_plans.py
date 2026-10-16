@@ -248,6 +248,20 @@ class PlanTests(unittest.TestCase):
         self.root = Path(self.scratch.name)
         self.repo = self.root / "repo"
         shutil.copytree(DEPLOY, self.repo / "deploy")
+        # **The shell's build is stood in for** (#29): the real one fetches and
+        # compiles busybox, which BusyboxBuildTests judges apart. The stand-in
+        # logs its call and writes the two files beside the members.
+        stand_in = self.repo / "deploy" / "build-busybox.sh"
+        stand_in.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, pathlib, sys\n"
+            "with open(os.environ['CALLS'], 'a') as log:\n"
+            "    log.write(json.dumps(['build-busybox.sh', *sys.argv[1:]]) + '\\n')\n"
+            "if sys.argv[1] == '--preflight': sys.exit(0)\n"
+            "out = pathlib.Path(sys.argv[1])\n"
+            "out.joinpath('busybox').write_text('fixture busybox')\n"
+            "out.joinpath('busybox.applets').write_text('ls\\ncat\\n')\n")
+        stand_in.chmod(0o755)
         # The admin base, holding one agent's root, and the stack record.
         self.config = self.root / "config"
         self.config.mkdir()
@@ -1564,7 +1578,10 @@ esac
         self.assertIn("--workspace", build)
         self.assertNotIn("--exclude", build)
         self.assertIn("weaver-spu/cuda", build[-1])
-        self.assertEqual(result.stdout.count("NEW"), 7)
+        # The seven members, and the shell's busybox and applet list (#29).
+        self.assertEqual(result.stdout.count("NEW"), 9)
+        for shell_file in ("busybox ", "busybox.applets "):
+            self.assertIn("  " + shell_file, result.stdout)
         self.assertIn("plan only. rerun with --install", result.stdout)
         self.assert_unprivileged()
         cargo_actions = [c[1] for c in self.calls() if c[0] == "cargo"]
@@ -1900,6 +1917,47 @@ esac
                     self.assertIn("admin answered the unload of m1", ran.stderr)
                 if answer:
                     self.assertIn("  admin: weaver-admin: the cause", ran.stderr)
+
+    def test_a_rollback_removes_the_shell_key_its_run_wrote(self):
+        """**A rolled-back run leaves no stack record naming a busybox the
+        rollback took away** (#29): restore() removes `shell-binary` where
+        this run wrote it, beside the busybox it added, and leaves a key the
+        run found standing. Perturbation: drop the removal and the first case
+        keeps the key."""
+        text = (DEPLOY / "update-stack.sh").read_text()
+        stack = self.root / "rollback-stack"
+        bin_dir = self.root / "rollback-bin"
+        backup = self.root / "rollback-backup"
+        for d in (stack, bin_dir, backup):
+            d.mkdir()
+        program = ('sudo() { "$@"; }\n' + shell_function(text, "restore")
+                   + 'RESTORED=0; LOADED_AGENT=""; INSTALL_DONE=1; ADDED=(busybox); CHANGED=()\n'
+                   + 'restore\n')
+        env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
+        env.update(STACK=str(stack), BIN_DIR=str(bin_dir), BACKUP=str(backup))
+        for written, stays in ((1, False), (0, True)):
+            with self.subTest(written=written):
+                (stack / "shell-binary").write_text(str(bin_dir / "busybox") + "\n")
+                (bin_dir / "busybox").write_text("x")
+                ran = subprocess.run(["bash", "-c", f"SHELL_KEY_WRITTEN={written}\n" + program],
+                                     env=env, text=True, capture_output=True, timeout=20)
+                self.assertFalse((bin_dir / "busybox").exists(), ran.stderr)
+                self.assertEqual((stack / "shell-binary").exists(), stays, ran.stderr)
+        # **The repair path** (Codex on #177): binaries unchanged and nothing
+        # installed, the key absent before this run and written by it, then a
+        # validation fails. The rollback installs nothing back and still
+        # removes the key. Perturbation: put the removal back under the
+        # binaries' guard and the key stays.
+        with self.subTest(path="repair"):
+            (stack / "shell-binary").write_text(str(bin_dir / "busybox") + "\n")
+            (bin_dir / "busybox").write_text("x")
+            repair = ('sudo() { "$@"; }\n' + shell_function(text, "restore")
+                      + 'RESTORED=0; LOADED_AGENT=""; INSTALL_DONE=0; ADDED=(); CHANGED=()\n'
+                      + 'SHELL_KEY_WRITTEN=1\nrestore\n')
+            ran = subprocess.run(["bash", "-c", repair], env={**env, "BACKUP": ""}, text=True,
+                                 capture_output=True, timeout=20)
+            self.assertFalse((stack / "shell-binary").exists(), ran.stderr)
+            self.assertTrue((bin_dir / "busybox").exists(), "the unchanged busybox stays")
 
     def test_an_install_unload_past_its_bound_is_joined_by_a_force(self):
         """**The install's unload is bounded, the force its fallback** (the
@@ -2437,6 +2495,33 @@ esac
         self.assertTrue([c for c in self.calls() if c[:2] == ["sudo", "install"]], self.calls())
         self.assertFalse((self.root / "admin-calls").exists(), "no admin verb is asked")
 
+    def test_stack_installs_the_shell_and_records_it(self):
+        """**The update builds the shell, installs it beside the members, and
+        names it in the stack record** (#29, weaver-admin-Spec section 9):
+        build-busybox.sh is called with the build directory, busybox goes in
+        at 0755 and its applet list at 0644, and the record gains
+        shell-binary. Perturbations: drop the build call and no busybox is
+        installed. Install the list at 0755 and the mode assertion fails."""
+        shutil.rmtree(self.config / "existing")
+        (self.root / "installed").mkdir(exist_ok=True)
+        admin = self.root / "fixture-admin"
+        admin.write_text("#!/bin/sh\nexit 2\n")
+        admin.chmod(0o755)
+        shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+        self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_ADMIN=str(admin))
+        result = self.run_script("update-stack.sh", "--install")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.calls()
+        self.assertTrue([c for c in calls if c[0] == "build-busybox.sh"], calls)
+        installs = [c for c in calls if c[:2] == ["sudo", "install"]]
+        busybox = [c for c in installs if c[-1].endswith("/busybox")]
+        applets = [c for c in installs if c[-1].endswith("/busybox.applets")]
+        self.assertTrue(busybox and "0755" in busybox[0], installs)
+        self.assertTrue(applets and "0644" in applets[0], installs)
+        self.assertIn("the stack record gains shell-binary", result.stdout)
+        self.assertTrue([c for c in calls if c[:2] == ["sudo", "tee"] and c[-1].endswith("/shell-binary")],
+                        calls)
+
     def window_admin(self, extra=""):
         """A stand-in admin for the install window: each verb logged with
         whether the connector's rule stands at its name, unload and load
@@ -2562,6 +2647,37 @@ esac
                 self.assertTrue(rule.exists(), run.stdout + run.stderr)
                 self.assertFalse(held.exists())
                 self.assertIn("restored /etc/sudoers.d/weaver-existing", run.stderr)
+
+    def test_a_signal_after_the_shell_key_on_a_repair_run_removes_it(self):
+        """**An interrupted repair run removes the shell key it wrote** (#29,
+        Codex on #177), the real signal source modelled: the box already
+        holds every binary the build makes, so nothing installs, the stack
+        record has no shell-binary, the run writes it, and the stand-in admin
+        signals the run's whole process group at the reconcile's validate.
+        The exit trap restores: no key remains, and the unchanged busybox
+        stands. Perturbation: drop SHELL_KEY_WRITTEN from the trap's condition
+        and the key stays."""
+        rule, held = self.window_admin(
+            f"if [ \"$1\" = validate ] && [ ! -e '{self.root / 'signalled'}' ]; then "
+            f": > '{self.root / 'signalled'}'; "
+            "kill -TERM -- -$(ps -o pgid= -p $$ | tr -d ' '); sleep 5; fi\n")
+        installed = self.root / "installed"
+        for member in ("pyworker", "worker", "weaver-admin", "weaver-trace-relay", "weaver-gate",
+                       "weaver-spu", "weaver-state"):
+            installed.joinpath(member).write_text("fixture artifact " + member)
+        installed.joinpath("busybox").write_text("fixture busybox")
+        installed.joinpath("busybox.applets").write_text("ls\ncat\n")
+        key = self.stack / "shell-binary"
+        self.assertFalse(key.exists())
+        run = subprocess.run(["bash", str(self.repo / "deploy" / "update-stack.sh"), "--install"],
+                             env=self.env, text=True, capture_output=True, timeout=60,
+                             start_new_session=True)
+        self.assertEqual(run.returncode, 143, run.stdout + run.stderr)
+        self.assertIn("nothing to install", run.stdout)
+        self.assertIn("the stack record gains shell-binary", run.stdout)
+        self.assertFalse(key.exists(), run.stdout + run.stderr)
+        self.assertEqual(installed.joinpath("busybox").read_text(), "fixture busybox")
+        self.assertTrue(rule.exists(), "the held rule is put back as before")
 
     def test_stack_build_failure_cannot_claim_a_plan(self):
         self.env["BUILD_FAIL"] = "1"
@@ -5293,6 +5409,91 @@ exit "${CARGO_EXIT:-0}"
                     if re.match(r"\s*(NVCC_CCBIN=\S+\s+)?cargo (test|build)\b", line):
                         self.assertNotRegex(line, r"\|\s*(grep|awk|tee|head|tail)", line)
 
+
+
+
+class BusyboxBuildTests(unittest.TestCase):
+    """**The shell's pinned build** (#29, weaver-gate-Spec section 8.1):
+    the committed configuration elects the static build, the listing, ash
+    as sh run standalone, and the fourteen listed applets and nothing that
+    reaches the network. build-busybox.sh refuses a tarball that is not the
+    pin before it extracts anything."""
+
+    LISTED = ["LS", "CAT", "HEAD", "TAIL", "WC", "GREP", "SORT", "UNIQ", "CUT", "TR",
+              "DATE", "ECHO", "PWD", "MKTEMP"]
+
+    # Every election the configuration makes, whole: the build options, the
+    # shell, and the fourteen listed applets. Nothing else is elected.
+    ELECTED = {
+        "HAVE_DOT_CONFIG", "BUSYBOX", "STATIC", "INSTALL_APPLET_SYMLINKS", "NO_DEBUG_LIB",
+        "FEATURE_BUFFERS_USE_MALLOC", "TRY_LOOP_CONFIGURE",
+        "SH_IS_ASH", "BASH_IS_NONE", "SHELL_ASH", "ASH", "ASH_ECHO", "ASH_PRINTF", "ASH_TEST",
+        "FEATURE_SH_STANDALONE",
+        *LISTED,
+    }
+
+    def test_the_configuration_makes_exactly_its_elections(self):
+        # The whole set of elections, exactly: an applet added (find, awk,
+        # nslookup, httpd, a network tool) or an option dropped fails here.
+        # Perturbation: elect CONFIG_FIND and this fails.
+        text = (DEPLOY / "busybox.config").read_text()
+        elected = {line.split("=")[0].removeprefix("CONFIG_")
+                   for line in text.splitlines() if line.startswith("CONFIG_") and line.endswith("=y")}
+        self.assertEqual(elected, self.ELECTED)
+        self.assertFalse(any(ord(c) > 127 for c in text), "ASCII")
+
+    def test_the_listing_and_the_configuration_agree_both_ways(self):
+        # Read through the tree's declarations: a listed applet the config
+        # does not elect, and an elected applet the build did not list, each
+        # refuse by name, and the agreeing case passes. Perturbation: drop
+        # either direction and its case passes.
+        with tempfile.TemporaryDirectory() as tree:
+            Path(tree, "a.c").write_text(
+                "//applet:IF_LS(APPLET_NOEXEC(ls, ls, BB_DIR_BIN, BB_SUID_DROP, ls))\n"
+                "//applet:IF_ASH(APPLET(ash, BB_DIR_BIN, BB_SUID_DROP))\n"
+                "//applet:IF_SH_IS_ASH(  APPLET_ODDNAME(sh,   ash, BB_DIR_BIN, BB_SUID_DROP, ash))\n"
+                "//applet:IF_FIND(APPLET_NOFORK(find, find, BB_DIR_USR_BIN, BB_SUID_DROP, find))\n")
+            config = Path(tree, "config")
+            run = lambda listed: subprocess.run(
+                ["python3", str(DEPLOY / "busybox_applets.py"), tree, str(config), listed],
+                text=True, capture_output=True, timeout=20)
+            config.write_text("CONFIG_LS=y\nCONFIG_ASH=y\nCONFIG_SH_IS_ASH=y\n# CONFIG_FIND is not set\n")
+            self.assertEqual(run("ls sh ash").returncode, 0)
+            extra = run("ls sh ash find")
+            self.assertEqual(extra.returncode, 1)
+            self.assertIn("listed and not elected: find", extra.stderr)
+            config.write_text("CONFIG_LS=y\nCONFIG_ASH=y\nCONFIG_SH_IS_ASH=y\nCONFIG_FIND=y\n")
+            missing = run("ls sh ash")
+            self.assertEqual(missing.returncode, 1)
+            self.assertIn("elected and not listed: find", missing.stderr)
+
+    def test_the_preflight_probes_gcc_as_the_build_does(self):
+        # busybox's Makefile names gcc, so a box with cc and no gcc refuses
+        # before the long build. Perturbation: probe cc again and this box
+        # passes the preflight.
+        with tempfile.TemporaryDirectory() as bin_dir:
+            for tool in ("tar", "bzip2", "make", "cc", "python3", "sha256sum", "curl", "mktemp", "rm"):
+                real = shutil.which(tool)
+                if real:
+                    os.symlink(real, Path(bin_dir, tool))
+            env = {**os.environ, "PATH": bin_dir}
+            env.pop("BUSYBOX_TARBALL", None)
+            result = subprocess.run(["/bin/bash", str(DEPLOY / "build-busybox.sh"), "--preflight"],
+                                    env=env, text=True, capture_output=True, timeout=20)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("needs gcc", result.stderr)
+
+    def test_a_tarball_that_is_not_the_pin_refuses(self):
+        # Perturbation: drop the sha256 check and the forged tarball reaches
+        # tar, which refuses it differently.
+        with tempfile.TemporaryDirectory() as out:
+            forged = Path(out) / "forged.tar.bz2"
+            forged.write_bytes(b"not busybox")
+            result = subprocess.run(["bash", str(DEPLOY / "build-busybox.sh"), out, "--tarball", str(forged)],
+                                    text=True, capture_output=True, timeout=20)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("not the pinned b8cc24c9", result.stderr)
+            self.assertFalse((Path(out) / "busybox").exists())
 
 if __name__ == "__main__":
     unittest.main()

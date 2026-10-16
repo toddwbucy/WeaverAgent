@@ -46,7 +46,7 @@ table.
 | Prompt draft | `<territory>/system-prompt.md` | root:weaver-<name>-admin 0640, written by create-agent; `deploy/turn.py <name> --system` reads it through the access group |
 | Operations and worker logs | `<territory>/admin.log` and `worker.log` | made by admin at the first verb, root:weaver-<name>-admin 0640 |
 | Published save points and their manifest | `<territory>/save-points/`: `<YYYYMMDDTHHMMSSZ>-<digest>.save-point` and `save-points.manifest` | the directory root:weaver-<name>-admin 0750; each save point root:weaver-<name>-admin 0640, the manifest root 0644, all written by admin |
-| Agent root, which is the admission | `/etc/weaver/admin/<name>/`: `worker-binary`, `spu-binary`, `gate-binary`, `coordination-root` (and `library-path`, `headroom-bytes`, `load-bound-seconds` where the stack record has them), copied from the stack record, plus `territory` (the territory's path), `operator` (the operator's uid) and `roles.toml` (`trace-reader = "weaver-<name>-admincon"`) | root, directory 0755, files 0644, and admin refuses a root that is not root-owned or is group- or world-writable |
+| Agent root, which is the admission | `/etc/weaver/admin/<name>/`: `worker-binary`, `spu-binary`, `gate-binary`, `coordination-root` (and `library-path`, `headroom-bytes`, `load-bound-seconds`, `shell-binary` where the stack record has them), copied from the stack record, plus `territory` (the territory's path), `operator` (the operator's uid) and `roles.toml` (`trace-reader = "weaver-<name>-admincon"`) | root, directory 0755, files 0644, and admin refuses a root that is not root-owned or is group- or world-writable |
 | Sudo rule | `/etc/sudoers.d/weaver-<name>` | root 0440, checked by `visudo` |
 | Run directory | `<coordination-root>/weaver.run/<name>/`: `run.lock`, `admin.lock`, `trace.sock` | made by admin, root 0755 |
 
@@ -70,7 +70,8 @@ group in one shell.
 ## 1. Before you start
 
 - The stack is installed: `ls /opt/weaver/bin` shows the seven members (with
-  `weaver-trace-relay` beside the worker), `ls /etc/weaver/stack` shows the stack
+  `weaver-trace-relay` beside the worker) and the shell's `busybox` and
+  `busybox.applets` (#29), `ls /etc/weaver/stack` shows the stack
   record, and `ls /etc/weaver/admin` shows the agents already admitted, one root each.
 - The artifact is on the box, under `/opt/weaver/models`, and its hash is known. An
   agent's identity is its artifact as much as its prompt, so record the sha256 in the
@@ -124,14 +125,23 @@ and the store's engine. It carries no system prompt: the prompt is state, on the
 operator's ruling of 2026-10-06, and enters the agent through its gate as the seeding
 turn of section 4, after the first load. Beside the declaration the script writes the
 draft that turn sends, `<territory>/system-prompt.md`, a plain prompt that is yours to
-edit before seeding; edit `agent.toml` for a wider context or `ask` before validating.
+edit before seeding. Edit `agent.toml` for a wider context before validating.
 Both files are root:weaver-<name>-admin 0640: `sudoedit /var/lib/weaver-agent/weaver-<name>/agent.toml` edits
 one, and you read either through the access group. The fields are in
 `docs/technical/weaver-agent/agent-declaration.md`, a snapshot of 2026-08-25 that still
 shows an identity table, and `docs/crates/weaver-types/weaver-types-Spec.md` section 2
 is the authority. A required key absent, or any key misspelled, refuses the parse by
-name; the optional keys (`binding-kind`, `gate-instruction`, `state-election`,
+name, and the optional keys (`tool-set`, `binding-kind`, `gate-instruction`, `state-election`,
 `state-store`, `loop-file`, `restore`) carry the absence their Spec rules.
+
+**Electing the shell** (#29). `tool-set = ["sh"]` offers the agent one tool, a POSIX `sh`
+(busybox's ash) over the stack's listed commands (`<prefix>/bin/busybox.applets`), in
+the agent's home, with no network, confined as `weaver-gate-Spec` section 8.1 states.
+The agent's root needs `shell-binary`, which `create-agent.sh` copies from the stack
+record. An agent made before the stack named it carries none and refuses at `validate`
+until it is recreated. The model learns the tool from the system prompt, so describe it
+in `system-prompt.md` before the seeding turn: its name `sh`, that it is POSIX `sh` and
+not bash, the listed commands, and that it has no network.
 
 ## 3. An agent without a store
 
@@ -171,7 +181,7 @@ T=$(realpath -e -- "$(cat /etc/weaver/stack/agent-directory)")/weaver-$N \
 && sudo install -o root -g weaver-$N-admin -m 0640 $N-prompt.md "$T/system-prompt.md" \
 && sudo install -d -o root -g root -m 0755 "$R" \
 && { ok=1; for k in worker-binary spu-binary gate-binary coordination-root \
-                    library-path headroom-bytes load-bound-seconds; do
+                    library-path headroom-bytes load-bound-seconds shell-binary; do
        [ ! -f /etc/weaver/stack/$k ] || sudo cp -- /etc/weaver/stack/$k "$R/$k" || { ok=0; break; }
      done; [ "$ok" = 1 ]; } \
 && printf '%s\n' "$T" | sudo tee "$R/territory" >/dev/null \

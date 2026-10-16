@@ -17,7 +17,7 @@
 # one agent's root, `<admin base>/<agent>/`, and nothing shared. The record at
 # `/etc/weaver/stack/` holds the box-wide defaults, one file per key, which
 # `create-agent.sh` copies into each new agent's root: `worker-binary`,
-# `spu-binary`, `gate-binary`, `coordination-root` and `library-path`, and for
+# `spu-binary`, `gate-binary`, `shell-binary`, `coordination-root` and `library-path`, and for
 # the scripts alone `prefix` and `agent-directory`. `headroom-bytes` and
 # `load-bound-seconds` are optional, and this script writes neither. An
 # operator who writes one into the record has it copied into every agent made
@@ -113,6 +113,8 @@ if [ -n "$CCCL" ] && ! cccl_in_window "$CCCL"; then
   die "cccl $CCCL is outside the 3.1.4-3.3.4 window #397 measured. Fix the pin first."
 fi
 command -v nvcc >/dev/null || die "no nvcc on PATH and the build carries $SPU_FEATURES"
+# **The shell's build needs its tools before the long build, not after** (#29).
+"$REPO/deploy/build-busybox.sh" --preflight || exit 1
 # **What stands is asked, and a question this script cannot answer refuses.**
 # A path behind a directory the operator cannot traverse reads absent to `-e`,
 # and a base the operator cannot list reads empty, and either would let an
@@ -270,6 +272,19 @@ run_build() {
 }
 run_build
 for b in $MEMBERS; do [ -x "$BUILT/$b" ] || die "$BUILT/$b was not built"; done
+# **The agent's shell, built from its pinned source and configuration** (#29,
+# weaver-gate-Spec 8.1): a static busybox and its applet list, written beside
+# the members and installed with them.
+# BUSYBOX_TARBALL, where set, names the pinned tarball on a box without the
+# network (deploy/REDEPLOY.md section 3).
+build_busybox() {
+  if [ -n "${BUSYBOX_TARBALL:-}" ]; then
+    "$REPO/deploy/build-busybox.sh" "$BUILT" --tarball "$BUSYBOX_TARBALL"
+  else
+    "$REPO/deploy/build-busybox.sh" "$BUILT"
+  fi
+}
+build_busybox || die "the shell's busybox did not build"
 # `sed -n 1p` reads the whole listing, where `head -1` closed the pipe on
 # `ls` and `pipefail` with `set -e` ended the script; `|| true` lets no match
 # reach the `die` below rather than exit unexplained.
@@ -288,7 +303,8 @@ plan "install -d $PREFIX/bin $PREFIX/lib  (root, 0755)"
 for b in $MEMBERS; do plan "install $b -> $PREFIX/bin/$b  $(sha256sum "$BUILT/$b" | cut -c1-12)"; done
 plan "cp -a ${#LIBS[@]} library files and links -> $PREFIX/lib"
 plan "write $LDSO_CONF = $PREFIX/lib and $CUDA_LIB_DIR, then ldconfig"
-plan "write $STACK/{worker-binary,spu-binary,gate-binary,coordination-root,library-path,prefix,agent-directory}  (root, 0755 / 0644)"
+plan "install busybox -> $PREFIX/bin/busybox (root, 0755) and busybox.applets beside it (root, 0644)"
+plan "write $STACK/{worker-binary,spu-binary,gate-binary,shell-binary,coordination-root,library-path,prefix,agent-directory}  (root, 0755 / 0644)"
 plan "install -d $ADMIN_BASE (root:root 0755): empty; create-agent.sh adds one root per agent"
 plan "install -d $AGENT_DIR (root:root 0755): territories, each root:weaver-<name>-state 0710, not setgid, its trace root:weaver-<name>-trace 0640"
 [ -d "$PREFIX/models" ] && plan "$PREFIX/models stands: $(ls "$PREFIX/models" | wc -l) entries" || plan "$PREFIX/models is absent: copy the artifacts before declaring an agent"
@@ -302,6 +318,9 @@ for b in $MEMBERS; do
   sudo install -o root -g root -m 0755 "$BUILT/$b" "$PREFIX/bin/$b"
   plan "installed $b"
 done
+sudo install -o root -g root -m 0755 "$BUILT/busybox" "$PREFIX/bin/busybox"
+sudo install -o root -g root -m 0644 "$BUILT/busybox.applets" "$PREFIX/bin/busybox.applets"
+plan "installed busybox and busybox.applets"
 sudo cp -a "${LIBS[@]}" "$PREFIX/lib/"
 sudo chown -h root:root "$PREFIX"/lib/*
 plan "installed ${#LIBS[@]} library files and links"
@@ -326,6 +345,7 @@ w() { printf '%s\n' "$2" | sudo tee "$STACK/$1" >/dev/null; sudo chmod 0644 "$ST
 w worker-binary "$PREFIX/bin/worker"
 w spu-binary "$PREFIX/bin/weaver-spu"
 w gate-binary "$PREFIX/bin/weaver-gate"
+w shell-binary "$PREFIX/bin/busybox"
 w coordination-root /run
 w library-path "$PREFIX/lib"
 w prefix "$PREFIX"

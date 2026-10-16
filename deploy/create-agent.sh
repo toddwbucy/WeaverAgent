@@ -249,7 +249,7 @@ trim() {
 # for. A key that is absent, empty or unreadable refuses by name; only the
 # optional keys may be absent.
 REQUIRED_KEYS="worker-binary spu-binary gate-binary coordination-root"
-OPTIONAL_KEYS="headroom-bytes library-path load-bound-seconds"
+OPTIONAL_KEYS="headroom-bytes library-path load-bound-seconds shell-binary"
 stack_key() { # stack_key KEY required|optional
   local file="$STACK/$1" value
   [ -d "$STACK" ] || die "no stack record at $STACK: bootstrap-stack.sh writes it"

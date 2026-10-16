@@ -109,6 +109,10 @@ pub struct Inventory {
     /// verified so the spawn takes the account the store was asked about
     /// rather than resolving it a second time.
     pub member_account: Option<MemberAccount>,
+    /// The shell's busybox as judged and its listed applets, where the
+    /// declaration elects `sh` (#29): filled by the caller that reads the
+    /// root's `shell-binary`, read by the start step to build `commands/`.
+    pub shell: Option<crate::shell::Judged>,
 }
 
 /// The one inventory function.
@@ -159,27 +163,6 @@ fn take_inventory_against(
         | ConfigErrorKind::BadValue
         | ConfigErrorKind::Malformed => LifecycleRefusal::ConfigInvalid { field: e.field },
     })?;
-
-    // **The shell is refused until its deployment is built** (#29, the first
-    // of its two acts): the declaration may name `sh`, and the gate and the
-    // harness confine and offer it where a grant arrives, but this crate
-    // builds no grant yet - no busybox judged, no `commands/`. A declaration
-    // electing it refuses here, naming `tool-set`, rather than loading with
-    // the election honoured by nothing. The second act replaces this with the
-    // grant.
-    if !config.tool_set.is_empty() {
-        diag!(
-            "{}",
-            serde_json::json!({
-                "refusal": "config_invalid",
-                "field": "tool-set",
-                "detail": "the shell's deployment (its busybox, grant and commands directory, #29) is not built yet, so no declaration may elect it",
-            })
-        );
-        return Err(LifecycleRefusal::ConfigInvalid {
-            field: Some(FieldName("tool-set".into())),
-        });
-    }
 
     // The kind conditions the gate instruction's presence, per
     // `weaver-types-Spec` section 2: a serving declaration requires it and a
@@ -428,6 +411,7 @@ fn take_inventory_against(
         member_account: (store.engine != StoreEngine::None)
             .then_some(boundary.member_account)
             .flatten(),
+        shell: None,
     })
 }
 
