@@ -1606,7 +1606,10 @@ allocates nothing:
 bounds what runs inside it, and none is relied on for the command list. **The full path
 to the busybox file, invoked with any compiled-in applet's name, runs that applet**, and
 the busybox binary's own `busybox <applet>` form does the same, so the compiled-in set
-is the command list whatever `PATH` says or a command names. `RLIMIT_NPROC` is not used,
+is the command list whatever `PATH` says or a command names. The interpreter does the
+same: the pinned configuration carries `FEATURE_SH_STANDALONE`, so ash runs any
+compiled-in applet by its name without a `PATH` lookup, and the boundary is the
+compiled set's equality with the list, never `PATH`. `RLIMIT_NPROC` is not used,
 counting every process of the agent's uid, the worker's organs among them. **Bounding the
 number of a shell's processes is an open question**: it belongs to `pids.max` on `tools/`,
 and no controller is enabled on the agent's cgroups (`weaver-admin-Spec` section 6.1),
