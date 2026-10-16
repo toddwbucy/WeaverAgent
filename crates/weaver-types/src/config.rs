@@ -30,15 +30,19 @@ use crate::wire::SessionId;
 ///
 /// Field names are kebab-case on disk and snake_case here, by explicit election,
 /// and `deny_unknown_fields` is the fixed-surface mechanism: a field no organ
-/// registered refuses rather than being ignored, so a typo in `permission-mode`
-/// cannot silently vanish.
+/// registered refuses rather than being ignored, so a typo in `tool-set`
+/// cannot silently vanish, and the retired `permission-mode` refuses by name.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct AgentConfig {
     pub session: SessionId,
     pub spu_instruction: SpuInstruction,
+    /// The tools elected, per `weaver-types-Spec` section 2 (#29): only
+    /// registered names ([`REGISTERED_TOOLS`]), judged at the parse. Absent
+    /// is the empty list, nothing offered and nothing run, the ruled meaning
+    /// of the field's absence.
+    #[serde(default)]
     pub tool_set: Vec<ToolName>,
-    pub permission_mode: weaver_traits::PermissionMode,
     /// What this load is for, per `weaver-types-Spec` section 2 and
     /// `weaver-agent-PRD` section 6: absence means serving, the ruled
     /// meaning of the field's absence. Admin resolves the absence at
@@ -378,11 +382,35 @@ pub struct ArtifactRef(pub String);
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeviceOrdinal(pub u32);
 
-/// A tool's name. A name today, gaining its element type with the tool
-/// workflow, because it elects from `tool-trait`, which the traits charter
-/// holds blocked.
+/// A tool's name. It stays a name: the family parse mints one from every
+/// emission, and the declaration's `tool-set` is judged against
+/// [`REGISTERED_TOOLS`] at the parse, per `weaver-types-Spec` section 2.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolName(pub String);
+
+/// **The shell's name**, `sh` (the operator's ruling of 2026-10-16 on #29):
+/// the one source the parse, the gate and the harness each read.
+pub const SHELL_TOOL: &str = "sh";
+
+/// **The tools a declaration may elect** (#29, the operator's rulings of
+/// 2026-10-15 and 2026-10-16): the shell, `sh`, is the one. A name outside
+/// this list refuses `BadValue` naming `tool-set` at the parse.
+pub const REGISTERED_TOOLS: [&str; 1] = [SHELL_TOOL];
+
+/// **The shell's grant**, per `weaver-types-Spec` section 2 (#29): built by
+/// admin at inventory and the start step where `tool-set` elects `sh`, and
+/// carried on the enter's serving binding and the gate's raise beside the
+/// instruction, never inside it. Its presence is the operator's election and
+/// its two paths are deployment facts admin authors: the static busybox the
+/// gate grants execute on, and the run directory's `commands/`, which the
+/// gate sets `PATH` to. The gate reads no admin root, so the paths reach it
+/// here or nowhere.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct ShellGrant {
+    pub binary: PathBuf,
+    pub commands: PathBuf,
+}
 
 /// A config field's name, as the operator spells it, kebab-case.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -465,7 +493,33 @@ pub fn parse(source: &str) -> Result<AgentConfig, ConfigError> {
     check_trace_sink_surface(source, &config.trace_sink)?;
     check_declared_paths(&config)?;
     check_restore_name(&config)?;
+    check_tool_set(&config)?;
     Ok(config)
+}
+
+/// **`tool-set` elects registered tools only** (#29, `weaver-types-Spec`
+/// section 2): a name outside [`REGISTERED_TOOLS`] refuses `BadValue` naming
+/// `tool-set`, so a typo or a tool this build holds none of refuses at
+/// `validate` rather than offering the model nothing silently. A diagnostic
+/// binding electing `sh` refuses the same way: it raises no gate, so the
+/// shell elected there would be a declaration that says nothing true.
+#[cfg(feature = "config")]
+fn check_tool_set(config: &AgentConfig) -> Result<(), ConfigError> {
+    let refused = || ConfigError {
+        field: Some(FieldName("tool-set".to_string())),
+        kind: ConfigErrorKind::BadValue,
+    };
+    if config
+        .tool_set
+        .iter()
+        .any(|ToolName(name)| !REGISTERED_TOOLS.contains(&name.as_str()))
+    {
+        return Err(refused());
+    }
+    if matches!(config.binding_kind, Some(BindingKind::Diagnostic)) && !config.tool_set.is_empty() {
+        return Err(refused());
+    }
+    Ok(())
 }
 
 /// **An engine this build does not provide refuses naming the field**, per

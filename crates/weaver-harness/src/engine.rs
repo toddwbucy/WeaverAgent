@@ -146,6 +146,9 @@ pub(crate) struct GatePort<'a> {
             crate::tools_cgroup::Containment,
         )>,
     >,
+    /// The enter carried the shell's grant (#29): only then does a call
+    /// naming the shell cross to the gate.
+    pub(crate) shell_granted: bool,
 }
 
 /// The wind-down turn's user message (`weaver-admin-Spec` 3.0, graceful step
@@ -1307,7 +1310,9 @@ impl<'a> Ports<'a> {
     /// **One execution through the gate**, per `weaver-harness-gate-contract`
     /// section 2: the exchange opens with the call as the parse recovered it,
     /// and completes with one of the four contents, the grant constructed
-    /// from the completion whichever arrived - the one construction site.
+    /// from the completion whichever arrived. This function holds every site
+    /// that constructs a grant: that completion, and the three this crate
+    /// closes in its own word (a gate's death, the leave, an ungranted tool).
     /// The tool bracket's events ride the exchange: started as the harness's
     /// dispatch, completed as the gate's answer, the deferred payloads
     /// carrying the call and the outcome as this crate renders them.
@@ -1332,6 +1337,40 @@ impl<'a> Ports<'a> {
                 Some(Payload::Deferred(started)),
             )
             .map_err(|_| TurnError::ChannelLost)?;
+
+        // **A call naming a tool the enter did not grant opens no exchange**
+        // (#29, `weaver-harness-Spec` section 6): this crate closes it
+        // `Refused` in its own word, naming the tool as not elected, and the
+        // tool-result turn carries the refusal to the model. Nothing crosses
+        // the gate, which refuses an unelected name too, the second wall.
+        // Judged before the leave's branch wherever a gate stands, so a call
+        // that could never have run reads `Refused` during a wind-down too,
+        // never killed by the unload. A wind-down with no gate left keeps
+        // the leave's word below.
+        let refused = self
+            .gate
+            .as_ref()
+            .is_some_and(|gate| !(gate.shell_granted && call.name == crate::tools::SHELL_TOOL));
+        if refused {
+            let outcome = weaver_types::ToolOutcome::Refused {
+                reason: format!(
+                    "{} is not a tool this agent's declaration elects - nothing ran",
+                    call.name
+                ),
+            };
+            let completed = serde_json::to_string(&outcome).map_err(|_| TurnError::ChannelLost)?;
+            let completed = weaver_trace::raw_payload(&completed).ok_or(TurnError::ChannelLost)?;
+            self.author
+                .author(
+                    self.recorder,
+                    Kind::ToolCallCompleted,
+                    Subsystem::Harness,
+                    Some(turn),
+                    Some(Payload::Deferred(completed)),
+                )
+                .map_err(|_| TurnError::ChannelLost)?;
+            return Ok(crate::tools::ToolResult::granted(&outcome));
+        }
 
         // **A call asked after the leave was heard is never sent** (3.0, S4 x
         // tool return): it completes killed by the unload in this crate's own

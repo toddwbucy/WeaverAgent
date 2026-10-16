@@ -1,5 +1,4 @@
 binding-kind = "diagnostic"
-permission-mode = "ask"
 session = "s-diagnostic"
 tool-set = []
 

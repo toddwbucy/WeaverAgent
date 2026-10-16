@@ -125,3 +125,35 @@ fn the_os_surface_is_one_crate() {
         );
     }
 }
+
+/// **The grant has one door, called at four sites, all in the function that
+/// closes a call** (`weaver-harness-Spec` section 6, #29): the gate's
+/// completion, and the harness's own fault kill, unload kill and refusal of
+/// an ungranted tool. A fifth call, or one outside `execute_call`, is a
+/// second door the invariant does not name.
+///
+/// Perturbation: construct a grant anywhere else in the crate and this
+/// fails.
+#[test]
+fn the_grant_is_constructed_only_in_execute_call() {
+    let source = |file: &str| {
+        std::fs::read_to_string(format!("{}/src/{file}", env!("CARGO_MANIFEST_DIR")))
+            .unwrap_or_else(|e| panic!("{file} reads: {e}"))
+    };
+    let engine = source("engine.rs");
+    let start = engine.find("    fn execute_call(").expect("execute_call");
+    let end = start + engine[start..].find("\n    }\n").expect("its end");
+    let calls = |text: &str| text.matches("ToolResult::granted(").count();
+    assert_eq!(calls(&engine[start..end]), 4, "four sites in execute_call");
+    assert_eq!(calls(&engine), 4, "and none elsewhere in engine.rs");
+    for file in [
+        "lifecycle.rs",
+        "authorship.rs",
+        "tools.rs",
+        "assembly.rs",
+        "record.rs",
+        "replay.rs",
+    ] {
+        assert_eq!(calls(&source(file)), 0, "{file} constructs no grant");
+    }
+}

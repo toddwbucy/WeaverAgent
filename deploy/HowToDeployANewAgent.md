@@ -119,7 +119,7 @@ admission. The last step runs one line through the rule as the connector's user
 (`validate` for the operator role, `show` for the observer), the way admin-con will.
 
 The declaration the script writes is a working default: the artifact, `devices = [0]`,
-`permission-mode = "deny"`, an empty tool set, surprisal on, the sink in the territory,
+an empty tool set (no tool is offered, #29), surprisal on, the sink in the territory,
 and the store's engine. It carries no system prompt: the prompt is state, on the
 operator's ruling of 2026-10-06, and enters the agent through its gate as the seeding
 turn of section 4, after the first load. Beside the declaration the script writes the
@@ -212,7 +212,6 @@ in the grammar of 2026-10-06, its prompt no longer in it:
 ```toml
 session = "s-karl-1"
 tool-set = []
-permission-mode = "ask"
 
 [spu-instruction.decoder]
 residual-readout-election = false

@@ -12,11 +12,20 @@
 use super::*;
 use weaver_types::ToolName;
 
+/// **The supervision suite's shell**: bash, bare, through the `cfg(test)`
+/// constructor alone (#29). The clock, the cancel and the containment are
+/// program-neutral, and these fixtures need what the confined busybox does not
+/// hold. The confinement has its own suite (`confine/tests.rs`).
+fn bare() -> super::Shell {
+    super::Shell::bare("bash")
+}
+
 /// One execution in a scratch `tools/` of its own.
 fn execute(execution: &ToolExecution) -> ToolOutcome {
     let scratch = ScratchTools::new();
     let (near, _far) = pair();
-    super::execute_in(execution, &near, &exchange(), &scratch.tools).expect("execution channel")
+    super::execute_in(execution, &near, &exchange(), &scratch.tools, &bare())
+        .expect("execution channel")
 }
 
 /// One execution handed a plain directory as its `tools/`, for the refusals.
@@ -24,7 +33,7 @@ fn refuse(execution: &ToolExecution) -> ToolOutcome {
     let (near, _far) = pair();
     let plain = std::fs::File::open(std::env::temp_dir()).expect("a plain directory opens");
     let tools = Tools::from_owned(plain.into());
-    super::execute_in(execution, &near, &exchange(), &tools).expect("execution channel")
+    super::execute_in(execution, &near, &exchange(), &tools, &bare()).expect("execution channel")
 }
 
 /// A scratch `tools/` cgroup beneath the delegated scope this suite runs in,
@@ -171,6 +180,7 @@ fn a_cancel_brings_the_clock_forward() {
         &gate,
         &exchange(),
         &scratch.tools,
+        &bare(),
     )
     .unwrap();
     let _harness = peer.join().unwrap();
@@ -223,6 +233,7 @@ fn an_interrupt_kills_an_open_execution_by_unload() {
         &gate,
         &exchange(),
         &scratch.tools,
+        &bare(),
     )
     .unwrap();
     let _harness = peer.join().unwrap();
@@ -279,6 +290,7 @@ fn an_exit_is_heard_within_a_slice() {
         &gate,
         &exchange(),
         &scratch.tools,
+        &bare(),
     )
     .unwrap();
     peer.join().unwrap();
@@ -309,6 +321,33 @@ fn refused(arguments: &str, clock_ms: u64) -> ToolOutcome {
         arguments: arguments.into(),
         clock_ms,
     })
+}
+
+/// **An absent grant is no shell** (#29, `weaver-gate-Spec` section 3):
+/// with no grant held, an execution of the shell's own name refuses by name
+/// with nothing run, before any `tools/` is consulted. This suite's process
+/// never holds a grant.
+///
+/// Perturbation: let `execute` fall through to the bare shell where no grant
+/// is held, and the call runs.
+#[test]
+fn an_absent_grant_refuses_every_execution_by_name() {
+    let (near, _far) = pair();
+    let outcome = super::execute(
+        &ToolExecution {
+            name: ToolName(SHELL_NAME.into()),
+            arguments: r#"{"command":"true"}"#.into(),
+            clock_ms: 1_000,
+        },
+        &near,
+        &exchange(),
+    )
+    .expect("an answer");
+    let ToolOutcome::Refused { reason } = outcome else {
+        panic!("refused: {outcome:?}");
+    };
+    assert!(reason.contains("no tool is granted"), "{reason}");
+    assert!(reason.contains(SHELL_NAME), "names the call: {reason}");
 }
 
 /// **A name that is not the shell's refuses by name, in this crate's
@@ -768,6 +807,7 @@ fn execute_in_scratch(
         &near,
         &exchange(),
         &scratch.tools,
+        &bare(),
     )
 }
 

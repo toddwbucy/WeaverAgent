@@ -143,7 +143,7 @@ fn main() -> ExitCode {
         })
     });
     let composer = weaver_harness::LoopIdentity::file("pyworker", &loop_path, digest);
-    match harness.serve(&identity, &[], composer, |seat, text| {
+    match harness.serve(&identity, composer, |seat, text| {
         py_loop::drive(&loop_path, seat, text)
     }) {
         Ok(_) => ExitCode::SUCCESS,

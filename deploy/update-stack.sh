@@ -470,6 +470,23 @@ for agent in $AGENTS; do
   done
 done
 
+# **A declaration carrying `permission-mode` refuses by name** (#29, the
+# operator's rulings of 2026-10-15 and 2026-10-16): the field is retired, the
+# elected tool set and the shell's compiled command list being the
+# permission, and the admin this installs refuses it as an unknown field at
+# every verb. Refused here, before the build, rather than at step 8's
+# validate after it.
+for agent in $AGENTS; do
+  decl=$(declaration_of "$agent") || exit 1
+  rc=0
+  declared_in "$decl" permission-mode any >/dev/null || rc=$?
+  case $rc in
+    0) die "$agent: its declaration $decl carries permission-mode, retired by #29, which the admin this installs refuses as an unknown field. $(recreate "$agent")" ;;
+    3) ;;
+    *) die "$agent: the declaration does not read, see above" ;;
+  esac
+done
+
 # **Every agent's territory and sink are judged as the admin this installs
 # judges them, before anything is built** (#99 area 2 review, N1): admin
 # refuses at every verb a territory that is not root's, grouped to the state

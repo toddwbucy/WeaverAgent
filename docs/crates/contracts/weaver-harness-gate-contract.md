@@ -407,7 +407,9 @@ with exactly one answer or by that same exit and closure, and that a cancel arri
 the answer changes nothing. **What the turn can rely on is a closed execution either
 way**: the harness's grant construction site fires exactly once per opened call, from
 the gate's answer or from the harness's own `Killed { by: fault }`, and a call never
-dangles.
+dangles. A call the harness opens no exchange for, one asked after the leave or one
+naming a tool the enter did not grant (#29), closes in the harness's own word, never
+crossing this seam.
 
 **The harness guarantees** that the instruction it sends is the instruction admin
 sent it, unaltered and uninterpreted. It guarantees that it opens no exchange this
@@ -462,8 +464,11 @@ because the harness answers nothing on this seam. The cases:
 
 - the instruction does not resolve to a socket this crate can bind
 - the bind fails, with the reason carried
-- the shell is granted and its confinement cannot be built: a Landlock ABI below 6, or a
-  ruleset the kernel refuses (`BoundaryUnverified`, #29, failing closed)
+- the shell is granted and its confinement cannot be built: a Landlock ABI below 6, a
+  ruleset the kernel refuses, a home that is not the gate's own directory below `/`, a
+  granted binary that is not a regular file or a `commands/` that is not root's
+  directory, a ruled rlimit above the gate's hard limit, or a `.tmp` that is not a
+  directory (`BoundaryUnverified`, #29, failing closed, `weaver-gate-Spec` section 8.1)
 - the directive is out of order for the channel's state
 
 **The refusal reuses `lifecycle-refusal`,** so the enter aggregate carries it

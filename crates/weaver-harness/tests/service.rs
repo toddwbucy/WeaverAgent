@@ -122,7 +122,6 @@ impl Peer {
             // frame ever arrives to call it.
             harness.serve(
                 "",
-                &[],
                 composer,
                 |_: &mut weaver_harness::Ports<'_>, _: &str| {
                     Err(weaver_harness::TurnError::Unlicensed {
@@ -370,6 +369,7 @@ fn refused_enter_leaves_the_state_at_before_enter() {
                             denied_uids: Default::default(),
                         },
                     },
+                    shell: None,
                 },
                 state_store: weaver_types::StateStore::default(),
                 declaration: String::new(),
@@ -641,6 +641,7 @@ fn serving_enter(session: &str, bounds: (Option<u64>, Option<u64>)) -> Lifecycle
                         denied_uids: Default::default(),
                     },
                 },
+                shell: None,
             },
             state_store: weaver_types::StateStore::default(),
             declaration: String::new(),

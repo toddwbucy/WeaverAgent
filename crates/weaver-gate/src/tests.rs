@@ -10,7 +10,7 @@ use weaver_types::{AccessRule, AgentName, ExchangeId, GateInstruction};
 /// the result already sent stands, and no `Killed` and no refusal follow
 /// it. Removing the late-interrupt drop fails the third execution.
 #[test]
-#[ignore = "runs a shell: needs a delegated cgroup scope"]
+#[ignore = "runs a shell: needs a delegated cgroup scope, WEAVER_BUSYBOX and Landlock ABI 6"]
 fn a_cancel_past_the_answer_is_dropped_in_tools() {
     use nix::sys::socket::{MsgFlags, recv, send};
     use std::os::fd::AsRawFd;
@@ -39,12 +39,14 @@ fn a_cancel_past_the_answer_is_dropped_in_tools() {
     let mut child = command.spawn().unwrap();
     drop(child_end);
     let late_cancel = scratch("late-cancel");
+    let grant = granted_shell();
     let ready = test_common::ask(
         &harness,
         1,
         LifecycleDirective::Raise {
             instruction: instruction(),
             socket: late_cancel.to_path_buf(),
+            shell: Some(grant),
         },
     );
     assert_eq!(ready.payload, Payload::Answer(LifecycleAnswer::GateReady));
@@ -70,7 +72,7 @@ fn a_cancel_past_the_answer_is_dropped_in_tools() {
             exchange: exchange.clone(),
             position: Position::Open,
             payload: Payload::Tool(weaver_types::ToolExecution {
-                name: weaver_types::ToolName("bash".into()),
+                name: weaver_types::ToolName("sh".into()),
                 arguments: r#"{"command":"echo completed"}"#.into(),
                 clock_ms: 1_000,
             }),
@@ -134,7 +136,7 @@ fn a_cancel_past_the_answer_is_dropped_in_tools() {
 /// supervision end the execution on any message, or name the interrupt a
 /// cancel, and this fails.
 #[test]
-#[ignore = "runs a shell: needs a delegated cgroup scope"]
+#[ignore = "runs a shell: needs a delegated cgroup scope, WEAVER_BUSYBOX and Landlock ABI 6"]
 fn the_interrupt_then_the_quiesce_through_the_served_loop_in_tools() {
     use nix::sys::socket::{MsgFlags, recv, send};
     use std::os::fd::AsRawFd;
@@ -163,12 +165,14 @@ fn the_interrupt_then_the_quiesce_through_the_served_loop_in_tools() {
     let mut child = command.spawn().unwrap();
     drop(child_end);
     let socket = scratch("interrupt-quiesce");
+    let grant = granted_shell();
     let ready = test_common::ask(
         &harness,
         1,
         LifecycleDirective::Raise {
             instruction: instruction(),
             socket: socket.to_path_buf(),
+            shell: Some(grant),
         },
     );
     assert_eq!(ready.payload, Payload::Answer(LifecycleAnswer::GateReady));
@@ -193,8 +197,9 @@ fn the_interrupt_then_the_quiesce_through_the_served_loop_in_tools() {
         exchange: execution.clone(),
         position: Position::Open,
         payload: Payload::Tool(weaver_types::ToolExecution {
-            name: weaver_types::ToolName("bash".into()),
-            arguments: r#"{"command":"sleep 5"}"#.into(),
+            name: weaver_types::ToolName("sh".into()),
+            // A loop of builtins: the confined set holds no `sleep`.
+            arguments: r#"{"command":"while :; do :; done"}"#.into(),
             clock_ms: 8_000,
         }),
     });
@@ -265,6 +270,27 @@ fn instruction() -> GateInstruction {
     }
 }
 
+/// **A real grant for the served-loop tests** (#29): the static busybox
+/// `WEAVER_BUSYBOX` names, used where it stands (a fresh copy would race a
+/// parallel test's fork holding its write descriptor, `ETXTBSY`), and, for
+/// `commands/`, `/var/empty`: the served gate requires a root-owned directory
+/// there, as admin builds it, and this suite runs as no root. Its commands
+/// use builtins and applets ash runs by name, so `PATH` finds nothing it
+/// needs. The served gate builds its confinement at the raise, under this
+/// suite's uid, so its home is that uid's and `.tmp` is made there if absent.
+fn granted_shell() -> weaver_types::ShellGrant {
+    let binary = std::env::var_os("WEAVER_BUSYBOX")
+        .map(std::path::PathBuf::from)
+        .expect("WEAVER_BUSYBOX names a static busybox built from the pinned configuration");
+    assert!(binary.is_file(), "{} is not a file", binary.display());
+    let commands = std::path::PathBuf::from("/var/empty");
+    assert!(
+        commands.is_dir(),
+        "a root-owned /var/empty stands on this box"
+    );
+    weaver_types::ShellGrant { binary, commands }
+}
+
 /// A socket path inside a directory of its own, the directory removed
 /// when the test ends, pass or fail: the guard drops on the unwind a
 /// failed assertion takes as on a clean return (#690 item C2.9). It reads
@@ -329,6 +355,7 @@ fn any_directive_after_a_lower_answers_out_of_order() {
         LifecycleDirective::Raise {
             instruction: instruction(),
             socket: terminal.to_path_buf(),
+            shell: None,
         },
         LifecycleDirective::Lower,
         LifecycleDirective::Stop {
@@ -358,6 +385,7 @@ fn raise_then_lower_walks_before_raise_raised_and_lowered() {
         &opened(LifecycleDirective::Raise {
             instruction: instruction(),
             socket: path.to_path_buf(),
+            shell: None,
         }),
     );
     assert_eq!(ready, Payload::Answer(LifecycleAnswer::GateReady));
@@ -371,6 +399,7 @@ fn raise_then_lower_walks_before_raise_raised_and_lowered() {
             &opened(LifecycleDirective::Raise {
                 instruction: instruction(),
                 socket: path.to_path_buf(),
+                shell: None,
             }),
         ),
         Payload::Refusal(LifecycleRefusal::OutOfOrder)
@@ -402,6 +431,7 @@ fn a_quiesce_from_raised_closes_the_listener_and_drains() {
         &opened(LifecycleDirective::Raise {
             instruction: instruction(),
             socket: path.to_path_buf(),
+            shell: None,
         }),
     );
     assert!(matches!(state, HookState::Raised(_, _)));
@@ -536,6 +566,7 @@ fn a_refused_raise_holds_nothing_and_is_answered() {
             &opened(LifecycleDirective::Raise {
                 instruction: instruction(),
                 socket: unbindable.clone(),
+                shell: None,
             }),
         ),
         Payload::Refusal(LifecycleRefusal::BindFailed),
@@ -544,6 +575,49 @@ fn a_refused_raise_holds_nothing_and_is_answered() {
     assert!(
         matches!(state, HookState::BeforeRaise),
         "and nothing is held: no listener, no half-bound socket"
+    );
+}
+
+/// **A grant whose confinement cannot be built refuses the raise
+/// `BoundaryUnverified`, with nothing held** (#29, `weaver-gate-Spec`
+/// sections 3 and 8.1): the confinement is built before the bind, so a
+/// busybox path that does not stand leaves no listener and no socket file,
+/// and no shell is ever offered unconfined. The control: the same raise with
+/// no grant binds and answers ready.
+///
+/// Perturbation: answer the raise from the bind alone, ignoring the
+/// confinement's fault, and the first raise answers ready.
+#[test]
+fn a_grant_that_cannot_be_confined_refuses_the_raise() {
+    let socket = scratch("unconfinable");
+    let missing = socket
+        .parent()
+        .expect("the scratch dir")
+        .join("no-such-busybox");
+    let mut state = HookState::BeforeRaise;
+    let raise = |shell| {
+        opened(LifecycleDirective::Raise {
+            instruction: instruction(),
+            socket: socket.to_path_buf(),
+            shell,
+        })
+    };
+    assert_eq!(
+        dispatch(
+            &mut state,
+            &raise(Some(weaver_types::ShellGrant {
+                binary: missing.clone(),
+                commands: missing.clone(),
+            })),
+        ),
+        Payload::Refusal(LifecycleRefusal::BoundaryUnverified),
+    );
+    assert!(matches!(state, HookState::BeforeRaise), "nothing is held");
+    assert!(!socket.exists(), "no socket file stands");
+    assert_eq!(
+        dispatch(&mut state, &raise(None)),
+        Payload::Answer(LifecycleAnswer::GateReady),
+        "the control: no grant, and the raise binds"
     );
 }
 
@@ -608,6 +682,7 @@ fn a_directive_outside_the_drawn_vocabulary_refuses() {
             &opened(LifecycleDirective::Raise {
                 instruction: instruction(),
                 socket: socket.to_path_buf(),
+                shell: None,
             })
         ),
         Payload::Answer(LifecycleAnswer::GateReady)
@@ -638,6 +713,7 @@ fn a_mis_shapen_exchange_refuses_before_the_directive_runs() {
     let mut closing = opened(LifecycleDirective::Raise {
         instruction: instruction(),
         socket: misshapen.to_path_buf(),
+        shell: None,
     });
     closing.position = Position::Close;
     assert_eq!(
@@ -653,7 +729,7 @@ fn a_mis_shapen_exchange_refuses_before_the_directive_runs() {
 /// shell's own descriptor table holds no 4. Perturbation: drop the flag's
 /// set from the handle's adoption, and the shell lists 4.
 #[test]
-#[ignore = "runs a shell: needs a delegated cgroup scope"]
+#[ignore = "runs a shell: needs a delegated cgroup scope, WEAVER_BUSYBOX and Landlock ABI 6"]
 fn the_tools_handle_never_reaches_the_shell_in_tools() {
     use nix::sys::socket::{MsgFlags, recv, send};
     use std::os::fd::AsRawFd;
@@ -682,12 +758,14 @@ fn the_tools_handle_never_reaches_the_shell_in_tools() {
     let mut child = command.spawn().unwrap();
     drop(child_end);
     let socket = scratch("handle-shell");
+    let grant = granted_shell();
     let ready = test_common::ask(
         &harness,
         1,
         LifecycleDirective::Raise {
             instruction: instruction(),
             socket: socket.to_path_buf(),
+            shell: Some(grant),
         },
     );
     assert_eq!(ready.payload, Payload::Answer(LifecycleAnswer::GateReady));
@@ -701,8 +779,13 @@ fn the_tools_handle_never_reaches_the_shell_in_tools() {
             exchange: execution.clone(),
             position: Position::Open,
             payload: Payload::Tool(weaver_types::ToolExecution {
-                name: weaver_types::ToolName("bash".into()),
-                arguments: r#"{"command":"ls /proc/$$/fd"}"#.into(),
+                name: weaver_types::ToolName("sh".into()),
+                // The wall grants no `/proc`, so the shell asks the
+                // descriptor itself: a redirect from 4 fails where 4 is
+                // closed, and the control opens 4 and sees it. `true`, not
+                // the special builtin `:`, whose failed redirect would end
+                // a POSIX shell's script.
+                arguments: r#"{"command":"if true <&4 2>/dev/null; then echo has4; else echo no4; fi; exec 4</dev/null; if true <&4; then echo control4; fi; cat /etc/hostname >/dev/null 2>&1; echo etc=$?"}"#.into(),
                 clock_ms: 2_000,
             }),
         })
@@ -719,9 +802,19 @@ fn the_tools_handle_never_reaches_the_shell_in_tools() {
         panic!("a result: {answer:?}");
     };
     let listed: Vec<&str> = content.lines().collect();
-    assert!(!listed.contains(&"4"), "the shell holds no 4: {listed:?}");
+    assert!(listed.contains(&"no4"), "the shell holds no 4: {listed:?}");
     assert!(
-        listed.contains(&"0"),
-        "the listing is the shell's: {listed:?}"
+        !listed.contains(&"has4"),
+        "the shell holds no 4: {listed:?}"
+    );
+    assert!(
+        listed.contains(&"control4"),
+        "the check sees a 4 the shell opened: {listed:?}"
+    );
+    // **The served shell runs under its layers** (#29): the wall grants no
+    // `/etc`, so a read there fails in the execution itself.
+    assert!(
+        listed.contains(&"etc=1"),
+        "the wall holds in the served shell: {listed:?}"
     );
 }

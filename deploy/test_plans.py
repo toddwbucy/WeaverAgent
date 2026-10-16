@@ -1735,6 +1735,34 @@ esac
                 self.assertFalse((decl.parent / "system-prompt.md").exists())
                 self.assertFalse(any(c[0] == "cargo" for c in self.calls()))
 
+    def test_stack_refuses_a_declaration_carrying_permission_mode(self):
+        # #29 retired permission-mode, and the admin this installs refuses it
+        # as an unknown field, so the plan refuses it by name before the
+        # build, naming the agent and the remedy, the declaration unchanged.
+        # The control: the same declaration without the key is not refused
+        # for it. Perturbation: drop the refusal and the plan runs on to the
+        # build.
+        decl = self.existing_territory / "agent.toml"
+        bare = self.KARL.replace(
+            '[[spu-instruction.decoder.identity]]\nrole = "system"\n\n'
+            '[[spu-instruction.decoder.identity.content]]\ntype = "text"\ntext = """\n'
+            'You are Karl, a small local agent.\nAnswer plainly."""\n\n', "")
+        self.assertIn('permission-mode = "ask"', bare)
+        decl.write_text(bare)
+        self.log.unlink(missing_ok=True)
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(f"existing: its declaration {decl} carries permission-mode, retired by #29",
+                      result.stderr)
+        self.assertIn("Recreate existing with deploy/create-agent.sh after its take-down by "
+                      "deploy/HowToDeployANewAgent.md section 7", result.stderr)
+        self.assertEqual(decl.read_text(), bare)
+        self.assertFalse(any(c[0] == "cargo" for c in self.calls()))
+        decl.write_text(bare.replace('permission-mode = "ask"\n', ""))
+        self.log.unlink(missing_ok=True)
+        control = self.run_script("update-stack.sh")
+        self.assertNotIn("permission-mode", control.stderr)
+
     def test_stack_refuses_a_trace_the_old_admin_recreated(self):
         # Codex on #82: an admin before #62 recreated a lost trace root:root,
         # which the new admin refuses at load and validate never sees, so the

@@ -517,8 +517,58 @@ enum EnterFailure {
 struct GateChannel {
     channel: OrganChannel,
     pid: nix::unistd::Pid,
+    /// The enter carried the shell's grant and the raise forwarded it (#29):
+    /// the shell's schema is offered and its calls cross to the gate. False,
+    /// no schema is offered and every call closes `Refused` in this crate.
+    shell_granted: bool,
     /// Per `weaver-harness-Spec` section 2.2, as the SPU's.
     last_word: crate::spawn::LastWord,
+}
+
+/// **The gate's raise for a binding, and whether it grants the shell** (#29,
+/// `weaver-harness-Spec` sections 1 and 5): a serving binding raises with
+/// its instruction, this crate's socket, and the shell's grant carried
+/// uninterpreted from the enter, and the flag the run keeps is that grant's
+/// presence. A diagnostic binding raises no gate. The one place the enter
+/// builds either, so a test of it is a test of the carry.
+fn gate_raise(
+    binding: &weaver_types::EnterBinding,
+    socket: PathBuf,
+) -> Option<(LifecycleDirective, bool)> {
+    match binding {
+        weaver_types::EnterBinding::Serving {
+            gate_instruction,
+            shell,
+        } => Some((
+            LifecycleDirective::Raise {
+                instruction: gate_instruction.clone(),
+                // The socket is this crate's rather than the declaration's,
+                // per `weaver-gate-PRD` section 2, named beside the
+                // coordination socket so the manager's runtime directory
+                // covers both and no pathname outlives its worker.
+                socket,
+                // The shell's grant, carried uninterpreted from the enter
+                // (#29, `weaver-harness-Spec` section 5): this crate reads
+                // neither path, and a worker that widened it would reach
+                // nothing its uid did not already (`weaver-gate-Spec` 8.1).
+                shell: shell.clone(),
+            },
+            shell.is_some(),
+        )),
+        weaver_types::EnterBinding::Diagnostic => None,
+    }
+}
+
+/// **The tool schemas a run offers are the elected ones** (#29,
+/// `weaver-harness-Spec` section 5): the shell's where its grant was carried
+/// to a gate that answered ready, and none otherwise, a diagnostic run's
+/// included. No binary supplies a schema of its own.
+fn offered_schemas(run: &Run) -> Vec<String> {
+    if run.gate.as_ref().is_some_and(|gate| gate.shell_granted) {
+        vec![crate::tools::shell_schema().to_string()]
+    } else {
+        Vec::new()
+    }
 }
 
 /// The hub. Adopts the coordination end the unit's declared open delivered,
@@ -572,12 +622,12 @@ impl Harness {
     /// the one arrival owed an answer: `entry` is the loop the binary
     /// carries across the dev boundary, called with the granted surface and
     /// the parsed request, and its return is the response the frame's
-    /// exchange is answered with. `identity` and `tool_schemas` are the
-    /// composition root's, the c-material of the assembled prompt.
+    /// exchange is answered with. `identity` is the composition root's, the
+    /// c-material of the assembled prompt. The tool schemas are not: they
+    /// are the ones the enter elects ([`offered_schemas`], #29).
     pub fn serve<F>(
         mut self,
         identity: &str,
-        tool_schemas: &[String],
         composer: weaver_trace::LoopIdentity,
         mut entry: F,
     ) -> Result<Outcome, ChannelFault>
@@ -673,9 +723,7 @@ impl Harness {
                     }
                 }
                 Ok(Wake::Gate) => {
-                    if let Err(fault) =
-                        self.serve_gate_wake(identity, tool_schemas, &mut entry, &mut pending)
-                    {
+                    if let Err(fault) = self.serve_gate_wake(identity, &mut entry, &mut pending) {
                         self.unwind_if_entered(weaver_types::FaultCase::OrganDeathObserved, &fault);
                         return Err(fault);
                     }
@@ -858,7 +906,6 @@ impl Harness {
     fn serve_gate_wake<F>(
         &mut self,
         identity: &str,
-        tool_schemas: &[String],
         entry: &mut F,
         pending: &mut Option<OrganChannel>,
     ) -> Result<(), ChannelFault>
@@ -890,14 +937,7 @@ impl Harness {
         };
         match envelope.payload {
             weaver_types::Payload::Frame(frame) => {
-                self.serve_frame(
-                    envelope.exchange,
-                    frame,
-                    identity,
-                    tool_schemas,
-                    entry,
-                    pending,
-                )?;
+                self.serve_frame(envelope.exchange, frame, identity, entry, pending)?;
                 // A leave the turn held is carried out now, the turn closed
                 // and its dialer answered.
                 self.carry_out_held_leave().map(|_| ())
@@ -933,7 +973,6 @@ impl Harness {
         exchange: ExchangeId,
         frame: weaver_types::TurnFrame,
         identity: &str,
-        tool_schemas: &[String],
         entry: &mut F,
         pending: &mut Option<OrganChannel>,
     ) -> Result<(), ChannelFault>
@@ -981,7 +1020,7 @@ impl Harness {
                     .recorder
                     .structure()
                     .expect("the frame path runs under the serving record");
-                let prompt = crate::assembly::assemble(structure, identity, tool_schemas);
+                let prompt = crate::assembly::assemble(structure, identity, &offered_schemas(run));
                 if prompt.undecodable > 0 {
                     // An incomplete prompt does not cross the seam: the hole
                     // becomes the fault event and the turn does not run.
@@ -1071,6 +1110,7 @@ impl Harness {
                     held: &mut run.held_frames,
                     tools: run.tools.as_ref(),
                     contained: Some(&mut run.gate_contained),
+                    shell_granted: gate.shell_granted,
                 });
                 let mut ports = crate::engine::Ports::grant(
                     &spu.decode,
@@ -1233,7 +1273,6 @@ impl Harness {
         exchange: ExchangeId,
         frame: weaver_types::TurnFrame,
         identity: &str,
-        tool_schemas: &[String],
         entry: &mut F,
         pending: &mut Option<OrganChannel>,
     ) -> Result<(), ChannelFault>
@@ -1243,8 +1282,8 @@ impl Harness {
             &str,
         ) -> Result<crate::engine::TurnOutcome, crate::engine::TurnError>,
     {
-        self.serve_one_frame(exchange, frame, identity, tool_schemas, entry, pending)?;
-        self.serve_shelf(identity, tool_schemas, entry, pending)
+        self.serve_one_frame(exchange, frame, identity, entry, pending)?;
+        self.serve_shelf(identity, entry, pending)
     }
 
     /// The shelf's flat loop, after a frame's turn ([`Self::serve_frame`]).
@@ -1254,7 +1293,6 @@ impl Harness {
     fn serve_shelf<F>(
         &mut self,
         identity: &str,
-        tool_schemas: &[String],
         entry: &mut F,
         pending: &mut Option<OrganChannel>,
     ) -> Result<(), ChannelFault>
@@ -1283,14 +1321,7 @@ impl Harness {
             };
             match held.payload {
                 weaver_types::Payload::Frame(frame) => {
-                    self.serve_one_frame(
-                        held.exchange,
-                        frame,
-                        identity,
-                        tool_schemas,
-                        entry,
-                        pending,
-                    )?;
+                    self.serve_one_frame(held.exchange, frame, identity, entry, pending)?;
                 }
                 weaver_types::Payload::Fault(report) => {
                     let ChannelState::Entered(run) = &mut self.state else {
@@ -1447,6 +1478,7 @@ impl Harness {
             held: &mut run.held_frames,
             tools: run.tools.as_ref(),
             contained: Some(&mut run.gate_contained),
+            shell_granted: gate.shell_granted,
         });
         let mut ports = crate::engine::Ports::grant(
             &spu.decode,
@@ -2606,9 +2638,10 @@ impl Harness {
         // no binary forked, no raise opened. The run state's gate arm stays
         // empty for the whole residency, so the leave and the unwind lower
         // what stands, reading the same option they always read.
-        let gate_instruction = match &payload.binding {
-            weaver_types::EnterBinding::Serving { gate_instruction } => gate_instruction,
-            weaver_types::EnterBinding::Diagnostic => return Ok(run),
+        let Some((raise, shell_granted)) =
+            gate_raise(&payload.binding, self.coordination.gate_socket())
+        else {
+            return Ok(run);
         };
 
         // **A worker that cannot open or judge `tools/` stands no gate**
@@ -2652,14 +2685,7 @@ impl Harness {
             Opener::Harness,
             run.gate_ordinal,
             weaver_types::RefusingOrgan::Gate,
-            LifecycleDirective::Raise {
-                instruction: gate_instruction.clone(),
-                // The socket is this crate's rather than the declaration's,
-                // per `weaver-gate-PRD` section 2, named beside the
-                // coordination socket so the manager's runtime directory
-                // covers both and no pathname outlives its worker.
-                socket: self.coordination.gate_socket(),
-            },
+            raise,
         ) {
             let refusal = match refusal {
                 // Only a classified death replaces the exchange's own
@@ -2676,6 +2702,7 @@ impl Harness {
                 channel: gate,
                 pid: gate_pid,
                 last_word: gate_word,
+                shell_granted: false,
             });
             after_load!(run, refusal);
         }
@@ -2683,6 +2710,7 @@ impl Harness {
             channel: gate,
             pid: gate_pid,
             last_word: gate_word,
+            shell_granted,
         });
 
         Ok(run)
@@ -2692,11 +2720,7 @@ impl Harness {
     /// interior to whatever loop 1 the binary carries, and takes it back at
     /// the stop and at the leave. A loop composes what this grants or does not
     /// compile - there is no call by which it mints a port.
-    pub fn grant_seat(
-        &mut self,
-        identity: &str,
-        tool_schemas: &[String],
-    ) -> Option<crate::Ports<'_>> {
+    pub fn grant_seat(&mut self, identity: &str) -> Option<crate::Ports<'_>> {
         match &mut self.state {
             // **The extension seam is crossed at loaded-and-idle itself.** A
             // turn in flight is the active state, not the idle one, and loop 0
@@ -2713,7 +2737,7 @@ impl Harness {
                 // nothing-to-hand-across the other arms give rather than
                 // panicking on a record shape the guard above never read.
                 let structure = run.recorder.structure()?;
-                let prompt = crate::assembly::assemble(structure, identity, tool_schemas);
+                let prompt = crate::assembly::assemble(structure, identity, &offered_schemas(run));
                 // **An incomplete prompt does not cross the seam.** A
                 // message-kind record that did not decode is a hole where a
                 // turn's content was, so the count becomes the `fault` event

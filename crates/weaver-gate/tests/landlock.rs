@@ -1001,12 +1001,7 @@ fn m8d_a_readable_library_root_holds_programs() {
 // ------------------------------------------------------------- M9: seccomp
 
 const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
-const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
-const AUDIT_ARCH_X86_64: u32 = 0xc000_003e;
-const BPF_LD_W_ABS: u16 = 0x20;
-const BPF_JEQ_K: u16 = 0x15;
 const BPF_RET_K: u16 = 0x06;
-const BPF_JGE_K: u16 = 0x35;
 const X32_SYSCALL_BIT: u32 = 0x4000_0000;
 
 #[repr(C)]
@@ -1028,30 +1023,15 @@ const fn op(code: u16, jt: u8, jf: u8, k: u32) -> SockFilter {
     SockFilter { code, jt, jf, k }
 }
 
-/// **The socket filter** the shell applies to itself under no-new-privs
-/// (#29, the operator's answer 4, and the ruling on #175 that the shell has no
-/// network). Any architecture but x86-64 is refused whole, and so is every x32
-/// system call (`nr` with bit 30 set), x32 sharing the architecture word.
-/// `io_uring_setup` is refused, io_uring's `IORING_OP_SOCKET` being a route to
-/// a socket that never calls `socket`. `socket` and `socketpair` are refused
-/// `EACCES` for every family, `AF_UNIX` included (Codex on #175: below
-/// Landlock ABI 9 nothing bounds a pathname socket's connect).
+/// **The socket filter the shell applies**, loaded from production
+/// (`weaver_gate::tools::confine::socket_filter_instructions`, the grade of
+/// #176, F3): any architecture but x86-64 refused whole, every x32 system
+/// call refused, `io_uring_setup` refused, and `socket` and `socketpair`
+/// refused `EACCES` for every family. No copy stands here to drift.
 fn socket_filter() -> Vec<SockFilter> {
-    let deny = SECCOMP_RET_ERRNO | libc::EACCES as u32;
-    // seccomp_data: nr at 0, arch at 4.
-    vec![
-        /* 0 */ op(BPF_LD_W_ABS, 0, 0, 4),
-        /* 1 */ op(BPF_JEQ_K, 1, 0, AUDIT_ARCH_X86_64),
-        /* 2 */ op(BPF_RET_K, 0, 0, deny),
-        /* 3 */ op(BPF_LD_W_ABS, 0, 0, 0),
-        /* 4 */ op(BPF_JGE_K, 0, 1, X32_SYSCALL_BIT),
-        /* 5 */ op(BPF_RET_K, 0, 0, deny),
-        /* 6 */ op(BPF_JEQ_K, 3, 0, libc::SYS_io_uring_setup as u32),
-        /* 7 */ op(BPF_JEQ_K, 2, 0, libc::SYS_socket as u32),
-        /* 8 */ op(BPF_JEQ_K, 1, 0, libc::SYS_socketpair as u32),
-        /* 9 */ op(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW),
-        /* 10 */ op(BPF_RET_K, 0, 0, deny),
-    ]
+    weaver_gate::tools::confine::socket_filter_instructions()
+        .map(|(code, jt, jf, k)| op(code, jt, jf, k))
+        .collect()
 }
 
 /// Opens one socket of each kind from a child that set no-new-privs and

@@ -137,6 +137,7 @@ fn a_closed_channel_ends_the_gate_and_its_listener() {
         LifecycleDirective::Raise {
             instruction: instruction(),
             socket: path.to_path_buf(),
+            shell: None,
         },
     );
     assert_eq!(
@@ -183,6 +184,7 @@ fn raise_then_lower_round_trips_across_the_seam() {
         LifecycleDirective::Raise {
             instruction: instruction(),
             socket: path.to_path_buf(),
+            shell: None,
         },
     );
     assert_eq!(ready.payload, Payload::Answer(LifecycleAnswer::GateReady));
@@ -234,6 +236,7 @@ fn the_harness_teardown_sequence_ends_the_gate_cleanly() {
         LifecycleDirective::Raise {
             instruction: instruction(),
             socket: path.to_path_buf(),
+            shell: None,
         },
     );
     assert_eq!(ready.payload, Payload::Answer(LifecycleAnswer::GateReady));
@@ -302,6 +305,7 @@ fn the_running_gate_refuses_an_unauthorized_dial() {
         LifecycleDirective::Raise {
             instruction: permissive,
             socket: path.to_path_buf(),
+            shell: None,
         },
     );
     assert_eq!(ready.payload, Payload::Answer(LifecycleAnswer::GateReady));
@@ -374,6 +378,7 @@ fn a_dial_storm_leaves_the_channel_answering() {
         LifecycleDirective::Raise {
             instruction: instruction(),
             socket: path.to_path_buf(),
+            shell: None,
         },
     );
     assert_eq!(ready.payload, Payload::Answer(LifecycleAnswer::GateReady));
@@ -432,6 +437,7 @@ fn a_gate_without_its_tools_handle_refuses_every_directive() {
             LifecycleDirective::Raise {
                 instruction: instruction(),
                 socket: path.to_path_buf(),
+                shell: None,
             },
         );
         drop(harness);

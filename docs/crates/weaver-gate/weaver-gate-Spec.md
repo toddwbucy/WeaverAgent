@@ -192,7 +192,9 @@ write of `tools/cgroup.kill` that ends an execution, and a read of `tools/cgroup
 for the wait on its emptying (`weaver-admin-Spec` section 6.1). **Every one of
 `tools/cgroup.procs`, `tools/cgroup.kill` and `tools/cgroup.events` is opened by
 `openat` beneath the handle at descriptor 4, never by path.** **The shell's
-confinement of #29 adds** (section 8.1): `setrlimit`, `prctl` for
+confinement of #29 adds** (section 8.1): `getrlimit` at the raise and `setrlimit` in the
+child, `open` with `O_PATH` (and `O_NOFOLLOW` for the two granted paths) and `fstat` on
+those descriptors at the raise, `prctl` for
 `PR_SET_NO_NEW_PRIVS` and for the seccomp filter (`PR_SET_SECCOMP`), all `nix`'s or
 `libc`'s by name, and **one stated exception to "no raw `libc`"**: the three Landlock
 calls (`landlock_create_ruleset`, `landlock_add_rule`, `landlock_restrict_self`) made by
@@ -1632,7 +1634,15 @@ with `RESOLVE_UNIX` handled) stand as that act's evidence.
 crate reads the Landlock ABI and refuses the raise `BoundaryUnverified` below 6, and the
 same where the ABI query itself fails, Landlock absent from the kernel or disabled at
 boot answering it as one below 6, so the load rolls back and no shell is ever offered
-unconfined. In the child, a `setrlimit`, a `prctl`, a seccomp load or a
+unconfined. **The raise refuses the same way** where the gate's uid has no home in the
+account database, or a home that is not an absolute directory below `/` owned by that
+uid and not a link (a home of `/` would grant every right but execute on the whole
+filesystem), where the granted binary is not a regular file or `commands/` is not a
+directory of root's, each judged by `fstat` on the `O_PATH` descriptor the rule then
+uses, opened without following a link (a directory in the binary's place would grant
+execute beneath it), where a ruled rlimit is above the gate's own hard limit (the child
+cannot raise a hard limit, so every spawn would fail), and where home's `.tmp` cannot be
+made or stands as anything but a directory. In the child, a `setrlimit`, a `prctl`, a seccomp load or a
 `landlock_restrict_self` that fails ends the child before its exec, the spawn failing,
 and the execution is answered `Errored` with nothing run, as a move that fails is. **Both
 filters need no-new-privs**, and the kernel refuses each without it (M13:

@@ -23,17 +23,31 @@
 //! carries no tool voice by construction.
 
 pub mod cgroup;
+pub mod confine;
 
 use crate::channel::{Channel, ChannelFault};
 use cgroup::Tools;
+use confine::Shell;
 use weaver_types::{
     ExchangeId, KillCause, LifecycleRefusal, OrganEnvelope, Payload, Position, ToolExecution,
     ToolOutcome,
 };
 
-/// The one held tool's name. The model calls the shell by the name the
-/// shell answers to everywhere else.
-pub const SHELL_NAME: &str = "bash";
+/// The one held tool's name, `sh` (the operator's ruling of 2026-10-16 on
+/// #29), read from the floor: the program the call reaches is busybox's POSIX
+/// `sh`, never bash, so the name says what the model gets.
+pub const SHELL_NAME: &str = weaver_types::SHELL_TOOL;
+
+/// The shell the raise granted, built once there and read by every
+/// execution. Unset, this gate holds no tool (`weaver-gate-Spec` section 3).
+static GRANTED: std::sync::OnceLock<Shell> = std::sync::OnceLock::new();
+
+/// **Holds the granted shell for the gate's life**, from the raise that built
+/// it. A second grant cannot arrive: the raise is answered once per process
+/// and a second refuses out of order.
+pub fn grant(shell: Shell) {
+    let _ = GRANTED.set(shell);
+}
 
 /// The maximum clock the shell declares, in milliseconds. A caller may ask
 /// for less and never more, per the one-clock rule.
@@ -61,8 +75,18 @@ pub fn execute(
     channel: &Channel,
     exchange: &ExchangeId,
 ) -> Result<ToolOutcome, Unanswered> {
+    // **An absent grant is no shell** (`weaver-gate-Spec` section 3, #29):
+    // every execution refuses by name with nothing run.
+    let Some(shell) = GRANTED.get() else {
+        return Ok(ToolOutcome::Refused {
+            reason: format!(
+                "no tool is granted to this agent - its declaration elects none, so {} is not held",
+                execution.name.0
+            ),
+        });
+    };
     match cgroup::adopted() {
-        Some(tools) => execute_in(execution, channel, exchange, tools),
+        Some(tools) => execute_in(execution, channel, exchange, tools, shell),
         // Entry refuses a gate with no handle, so no execution reaches here
         // without one; answered as the machinery's all the same.
         None => Ok(ToolOutcome::Errored {
@@ -79,8 +103,9 @@ pub(crate) fn execute_in(
     channel: &Channel,
     exchange: &ExchangeId,
     tools: &Tools,
+    shell: &Shell,
 ) -> Result<ToolOutcome, Unanswered> {
-    execute_inner(execution, channel, exchange, tools).or_else(|end| match end {
+    execute_inner(execution, channel, exchange, tools, shell).or_else(|end| match end {
         ShellEnd::Channel(fault) => Err(Unanswered::Channel(fault)),
         ShellEnd::Uncontained => Err(Unanswered::Uncontained),
         other => Ok(other.into_outcome()),
@@ -92,6 +117,7 @@ fn execute_inner(
     channel: &Channel,
     exchange: &ExchangeId,
     tools: &Tools,
+    shell: &Shell,
 ) -> Result<ToolOutcome, ShellEnd> {
     if execution.name.0 != SHELL_NAME {
         return Ok(ToolOutcome::Refused {
@@ -123,22 +149,9 @@ fn execute_inner(
             reason: "the arguments carry no command string".to_string(),
         });
     };
-    // The home comes from the account database rather than from the
-    // environment: the gate inherits the agent's environment, which may or
-    // may not carry `HOME`, and the account database is where the uid's home
-    // is a fact rather than an inheritance.
-    let Some(home) = nix::unistd::User::from_uid(nix::unistd::getuid())
-        .ok()
-        .flatten()
-        .map(|user| user.dir)
-    else {
-        return Ok(ToolOutcome::Errored {
-            detail: "this uid has no home in the account database".to_string(),
-        });
-    };
     match run_in_home(
         command,
-        &home.to_string_lossy(),
+        shell,
         std::time::Duration::from_millis(execution.clock_ms),
         channel,
         exchange,
@@ -182,14 +195,14 @@ impl ShellEnd {
 /// path one of the contract's contents, never a hung exchange.
 fn run_in_home(
     command: &str,
-    home: &str,
+    shell_program: &Shell,
     deadline: std::time::Duration,
     channel: &Channel,
     exchange: &ExchangeId,
     tools: &Tools,
 ) -> Result<String, ShellEnd> {
     use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
     // **The child moves itself into `tools/` before its exec**
     // (`weaver-gate-Spec` section 8; `weaver-admin-Spec` 6.1, C4): the
@@ -199,33 +212,26 @@ fn run_in_home(
     // move that fails fails the spawn: `Errored`, nothing run.
     let handle = tools.raw();
     let gate = nix::unistd::getpid();
-    let mut shell = Command::new("bash");
+    // **The confinement's layers follow the move** (`weaver-gate-Spec`
+    // section 8.1): `command` registers the move first and the layers after
+    // it, no-new-privs first, and builds no shell command without them.
     // SAFETY: `move_self` makes only async-signal-safe `nix` calls on
     // numbers and a path read before the fork.
-    unsafe {
-        shell.pre_exec(move || cgroup::move_self(handle, gate));
-    }
+    let mut shell =
+        unsafe { shell_program.command(command, move || cgroup::move_self(handle, gate)) };
     // The child still leads its own process group, as before the cgroup's
     // kill: the group no longer carries the kill, and keeping it changes
     // nothing else.
     let mut child = shell
-        .arg("-c")
-        .arg(command)
-        .current_dir(home)
-        // **The command starts with `HOME` and nothing else**, as it did when
-        // the gate itself ran with an empty environment. The gate now carries
-        // the agent's environment, per `weaver-harness-Spec` section 2.2, and
-        // the operator's ruling of 2026-10-01 reaches organs, not the commands
-        // a tool runs, so the clear keeps that surface where it stood.
-        .env_clear()
-        .env("HOME", home)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0)
         .spawn()
         .map_err(|error| ShellEnd::Errored {
-            detail: format!("the fork, or the shell's move into tools/, failed: {error}"),
+            detail: format!(
+                "the fork, the shell's move into tools/, or its confinement failed: {error}"
+            ),
         })?;
     let group = nix::unistd::Pid::from_raw(child.id() as i32);
 

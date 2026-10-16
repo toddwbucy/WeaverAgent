@@ -326,3 +326,96 @@ fn the_resolved_tree_carries_no_runtime_no_logging_no_yaml() {
         );
     }
 }
+
+/// **No release build reaches the unconfined shell** (#29, `weaver-gate-Spec`
+/// section 8.1). The supervision suite's bare constructor is gated by
+/// `#[cfg(test)]` and nothing else, and this crate declares no feature, so
+/// no `--features` and no cfg a build can set brings it into the binary. An
+/// integration test compiles the library without `cfg(test)`, so none can
+/// reach it either.
+///
+/// Perturbation: gate the constructor `#[cfg(any(test, feature = "bare"))]`
+/// and declare the feature, and both assertions fail.
+#[test]
+fn no_release_build_reaches_the_unconfined_shell() {
+    let confine =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/tools/confine.rs"))
+            .expect("confine.rs reads");
+    let constructor = confine
+        .find("pub(crate) fn bare(")
+        .expect("the bare constructor is where this test looks");
+    let before: Vec<&str> = confine[..constructor]
+        .lines()
+        .rev()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("///"))
+        .take(1)
+        .collect();
+    assert_eq!(
+        before,
+        ["#[cfg(test)]"],
+        "the bare constructor is gated by cfg(test) and nothing else"
+    );
+    assert_eq!(
+        confine.matches("fn bare(").count(),
+        1,
+        "one bare constructor"
+    );
+    let manifest = cargo_json(&["metadata", "--format-version", "1", "--no-deps"]);
+    let gate = manifest["packages"]
+        .as_array()
+        .expect("packages")
+        .iter()
+        .find(|package| package["name"] == "weaver-gate")
+        .expect("weaver-gate is a package");
+    assert_eq!(
+        gate["features"],
+        serde_json::json!({}),
+        "weaver-gate declares no feature"
+    );
+}
+
+/// **No in-crate caller gets an unconfined shell child** (the grade of #176,
+/// F4): the only `Command::new` in the tool code is `Shell::command`'s, and
+/// that function installs the layers itself, so a confined shell's command
+/// carries them by construction. No separate layer-installing entry exists
+/// to forget, and the only shell without layers is the `#[cfg(test)]` bare one
+/// the test above pins.
+///
+/// Perturbation: split the layers out of `command` into a public
+/// `install_layers`, or build a second `Command` in `tools.rs`, and this
+/// fails.
+#[test]
+fn every_shell_command_carries_its_layers() {
+    let read = |file: &str| {
+        std::fs::read_to_string(format!("{}/src/tools/{file}", env!("CARGO_MANIFEST_DIR")))
+            .unwrap_or_else(|e| panic!("{file} reads: {e}"))
+    };
+    let confine = read("confine.rs");
+    let tools = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/tools.rs"))
+        .expect("tools.rs reads");
+    assert_eq!(
+        tools.matches("Command::new(").count(),
+        0,
+        "tools.rs builds no command"
+    );
+    assert_eq!(
+        confine.matches("Command::new(").count(),
+        1,
+        "one command builder"
+    );
+    let start = confine
+        .find("pub unsafe fn command<")
+        .expect("Shell::command");
+    let end = start + confine[start..].find("\n    }\n").expect("its end");
+    let body = &confine[start..end];
+    assert!(
+        body.contains("Command::new("),
+        "the builder is Shell::command"
+    );
+    assert!(
+        body.contains("pre_exec(move || apply(ruleset, filter))"),
+        "and it installs the layers itself"
+    );
+    assert!(!confine.contains("fn install_layers"), "no separate entry");
+}
