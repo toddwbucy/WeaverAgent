@@ -248,6 +248,19 @@ class PlanTests(unittest.TestCase):
         self.root = Path(self.scratch.name)
         self.repo = self.root / "repo"
         shutil.copytree(DEPLOY, self.repo / "deploy")
+        # **The shell's build is stood in for** (#29): the real one fetches and
+        # compiles busybox, which BusyboxBuildTests judges apart. The stand-in
+        # logs its call and writes the two files beside the members.
+        stand_in = self.repo / "deploy" / "build-busybox.sh"
+        stand_in.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, pathlib, sys\n"
+            "with open(os.environ['CALLS'], 'a') as log:\n"
+            "    log.write(json.dumps(['build-busybox.sh', *sys.argv[1:]]) + '\\n')\n"
+            "out = pathlib.Path(sys.argv[1])\n"
+            "out.joinpath('busybox').write_text('fixture busybox')\n"
+            "out.joinpath('busybox.applets').write_text('ls\\ncat\\n')\n")
+        stand_in.chmod(0o755)
         # The admin base, holding one agent's root, and the stack record.
         self.config = self.root / "config"
         self.config.mkdir()
@@ -1564,7 +1577,10 @@ esac
         self.assertIn("--workspace", build)
         self.assertNotIn("--exclude", build)
         self.assertIn("weaver-spu/cuda", build[-1])
-        self.assertEqual(result.stdout.count("NEW"), 7)
+        # The seven members, and the shell's busybox and applet list (#29).
+        self.assertEqual(result.stdout.count("NEW"), 9)
+        for shell_file in ("busybox ", "busybox.applets "):
+            self.assertIn("  " + shell_file, result.stdout)
         self.assertIn("plan only. rerun with --install", result.stdout)
         self.assert_unprivileged()
         cargo_actions = [c[1] for c in self.calls() if c[0] == "cargo"]
@@ -2436,6 +2452,33 @@ esac
             self.assertIn(said, result.stdout)
         self.assertTrue([c for c in self.calls() if c[:2] == ["sudo", "install"]], self.calls())
         self.assertFalse((self.root / "admin-calls").exists(), "no admin verb is asked")
+
+    def test_stack_installs_the_shell_and_records_it(self):
+        """**The update builds the shell, installs it beside the members, and
+        names it in the stack record** (#29, weaver-admin-Spec section 9):
+        build-busybox.sh is called with the build directory, busybox goes in
+        at 0755 and its applet list at 0644, and the record gains
+        shell-binary. Perturbations: drop the build call and no busybox is
+        installed. Install the list at 0755 and the mode assertion fails."""
+        shutil.rmtree(self.config / "existing")
+        (self.root / "installed").mkdir(exist_ok=True)
+        admin = self.root / "fixture-admin"
+        admin.write_text("#!/bin/sh\nexit 2\n")
+        admin.chmod(0o755)
+        shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+        self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_ADMIN=str(admin))
+        result = self.run_script("update-stack.sh", "--install")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.calls()
+        self.assertTrue([c for c in calls if c[0] == "build-busybox.sh"], calls)
+        installs = [c for c in calls if c[:2] == ["sudo", "install"]]
+        busybox = [c for c in installs if c[-1].endswith("/busybox")]
+        applets = [c for c in installs if c[-1].endswith("/busybox.applets")]
+        self.assertTrue(busybox and "0755" in busybox[0], installs)
+        self.assertTrue(applets and "0644" in applets[0], installs)
+        self.assertIn("the stack record gains shell-binary", result.stdout)
+        self.assertTrue([c for c in calls if c[:2] == ["sudo", "tee"] and c[-1].endswith("/shell-binary")],
+                        calls)
 
     def window_admin(self, extra=""):
         """A stand-in admin for the install window: each verb logged with
@@ -5293,6 +5336,42 @@ exit "${CARGO_EXIT:-0}"
                     if re.match(r"\s*(NVCC_CCBIN=\S+\s+)?cargo (test|build)\b", line):
                         self.assertNotRegex(line, r"\|\s*(grep|awk|tee|head|tail)", line)
 
+
+
+
+class BusyboxBuildTests(unittest.TestCase):
+    """**The shell's pinned build** (#29, weaver-gate-Spec section 8.1):
+    the committed configuration elects the static build, the listing, ash
+    as sh run standalone, and the fourteen listed applets and nothing that
+    reaches the network. build-busybox.sh refuses a tarball that is not the
+    pin before it extracts anything."""
+
+    LISTED = ["LS", "CAT", "HEAD", "TAIL", "WC", "GREP", "SORT", "UNIQ", "CUT", "TR",
+              "DATE", "ECHO", "PWD", "MKTEMP"]
+
+    def test_the_configuration_makes_exactly_its_elections(self):
+        # Perturbation: elect CONFIG_WGET or CONFIG_NC and this fails.
+        text = (DEPLOY / "busybox.config").read_text()
+        elected = {line.split("=")[0] for line in text.splitlines() if line.endswith("=y")}
+        for symbol in ["STATIC", "BUSYBOX", "SH_IS_ASH", "FEATURE_SH_STANDALONE", "ASH",
+                       *self.LISTED]:
+            self.assertIn("CONFIG_" + symbol, elected)
+        for symbol in ["WGET", "NC", "TELNET", "HUSH", "BASH_IS_ASH", "FEATURE_INSTALLER",
+                       "SETSID", "SLEEP"]:
+            self.assertNotIn("CONFIG_" + symbol, elected)
+        self.assertFalse(any(ord(c) > 127 for c in text), "ASCII")
+
+    def test_a_tarball_that_is_not_the_pin_refuses(self):
+        # Perturbation: drop the sha256 check and the forged tarball reaches
+        # tar, which refuses it differently.
+        with tempfile.TemporaryDirectory() as out:
+            forged = Path(out) / "forged.tar.bz2"
+            forged.write_bytes(b"not busybox")
+            result = subprocess.run(["bash", str(DEPLOY / "build-busybox.sh"), out, "--tarball", str(forged)],
+                                    text=True, capture_output=True, timeout=20)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("not the pinned b8cc24c9", result.stderr)
+            self.assertFalse((Path(out) / "busybox").exists())
 
 if __name__ == "__main__":
     unittest.main()

@@ -625,6 +625,10 @@ BUILT="$BUILT/release"
 # the whole workspace, the frontend having left the repository on 2026-09-26.
 # A member joins the installed set by being written here.
 MEMBERS="pyworker worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state"
+# **The agent's shell** (#29): the static busybox build-busybox.sh writes
+# beside the members, and its applet list, installed into the members'
+# directory and rolled back with them.
+SHELL_FILES="busybox busybox.applets"
 
 MEMBER_FEATURES=weaver-harness/pyworker,weaver-state/sqlite
 SPU_FEATURES=weaver-spu/cuda
@@ -872,12 +876,16 @@ run_tests
 say "build"
 NVCC_CCBIN=${NVCC_CCBIN:-/usr/bin/g++-15} \
   cargo build --release --locked --workspace --features "$FEATURES"
+# **The agent's shell, built from its pinned source and configuration** (#29,
+# weaver-gate-Spec 8.1): a static busybox and its applet list, written beside
+# the members, planned and installed with them, and rolled back with them.
+"$REPO/deploy/build-busybox.sh" "$BUILT" || die "the shell's busybox did not build"
 printf '  ok\n'
 
 # --------------------------------------------------------------------- 5. plan
 say "plan"
 CHANGED=()
-for b in $MEMBERS; do
+for b in $MEMBERS $SHELL_FILES; do
   [ -f "$BUILT/$b" ] \
     || die "the build produced no $b, so the plan cannot speak for it. Check that $b is still a bin target of this workspace."
   n=$(sha256sum "$BUILT/$b" | cut -d' ' -f1)
@@ -999,7 +1007,9 @@ restore() {
       # root's, so an unprivileged test read every entry as absent and the
       # restore silently put nothing back.
       sudo test -f "$BACKUP/$b" || continue
-      sudo install -o root -g root -m 0755 "$BACKUP/$b" "$BIN_DIR/$b" \
+      mode=0755
+      [ "$b" = busybox.applets ] && mode=0644
+      sudo install -o root -g root -m "$mode" "$BACKUP/$b" "$BIN_DIR/$b" \
         || { printf '  FAILED to restore %s\n' "$b" >&2; failed=1; }
     done
   fi
@@ -1143,7 +1153,10 @@ if [ ${#CHANGED[@]} -gt 0 ]; then
     else
       ADDED+=("$b")
     fi
-    sudo install -o root -g root -m 0755 "$BUILT/$b" "$BIN_DIR/$b"
+    # The applet list is data, every other member a program.
+    mode=0755
+    [ "$b" = busybox.applets ] && mode=0644
+    sudo install -o root -g root -m "$mode" "$BUILT/$b" "$BIN_DIR/$b"
     printf '  installed %s\n' "$b"
   done
   printf '  previous binaries kept at %s\n' "$BACKUP"
@@ -1183,6 +1196,16 @@ validate() {
 }
 
 # -------------------------------------------------------- 8. reconcile agents
+# **The stack record names the shell** (#29, weaver-admin-Spec section 9): a
+# box bootstrapped before it gains `shell-binary`, which create-agent.sh copies
+# into each new agent's root. An agent made before it carries none, and a
+# declaration of it electing `sh` refuses at validate until it is recreated.
+if [ ! -e "$STACK/shell-binary" ]; then
+  printf '%s\n' "$BIN_DIR/busybox" | sudo tee "$STACK/shell-binary" >/dev/null
+  sudo chmod 0644 "$STACK/shell-binary"
+  printf '  the stack record gains shell-binary = %s\n' "$BIN_DIR/busybox"
+fi
+
 say "reconcile declarations"
 [ -n "$AGENTS" ] || printf '  no agents to reconcile\n'
 for agent in $AGENTS; do

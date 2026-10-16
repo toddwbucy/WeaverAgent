@@ -261,15 +261,23 @@ What it does, so the log can say which step a failure was at:
    though it is the default, or the member refuses an agent electing it at load
    (measured 2026-09-11). The CUDA host compiler is `NVCC_CCBIN`, defaulted as
    `update-stack.sh` defaults it. A build that fails refuses the same way, never going on
-   to install what an earlier build left in the target directory (#128).
+   to install what an earlier build left in the target directory (#128). Then
+   `deploy/build-busybox.sh` builds the agent's shell (#29): busybox 1.36.1, its
+   tarball fetched from busybox.net (or named with `--tarball` on a box without the
+   network) and refused unless its sha256 is the pin, configured by the committed
+   `deploy/busybox.config`, refused where `oldconfig` would change it, built static and
+   refused where it names an ELF interpreter, and its applet list written from its own
+   `--list`.
 5. Installs the seven members to `<prefix>/bin` (root, 0755), `weaver-trace-relay`
    beside the worker where admin finds it, and the `libggml*` and `libllama*` objects
    to `<prefix>/lib`, from llama-cpp-sys's `out/lib` under the target's `build/`
    directory (the copies at the target root are bare links that dangle), versioned
    file, SONAME link and bare link together. Writes `/etc/ld.so.conf.d/weaver.conf`,
    runs `ldconfig`, and refuses if `weaver-spu` still has an unresolved library. The
-   members carry no RUNPATH.
-6. Writes the stack record `/etc/weaver/stack/`: the three binary paths,
+   members carry no RUNPATH. Installs `busybox` (root, 0755) and `busybox.applets`
+   (root, 0644) beside them.
+6. Writes the stack record `/etc/weaver/stack/`: the three binary paths and
+   `shell-binary`,
    `coordination-root=/run`, `library-path=<prefix>/lib`, and for the scripts alone
    `prefix` and `agent-directory`. Admin never reads it. An operator who wants
    `headroom-bytes` or `load-bound-seconds` on every agent writes

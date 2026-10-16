@@ -124,14 +124,23 @@ and the store's engine. It carries no system prompt: the prompt is state, on the
 operator's ruling of 2026-10-06, and enters the agent through its gate as the seeding
 turn of section 4, after the first load. Beside the declaration the script writes the
 draft that turn sends, `<territory>/system-prompt.md`, a plain prompt that is yours to
-edit before seeding; edit `agent.toml` for a wider context or `ask` before validating.
+edit before seeding; edit `agent.toml` for a wider context before validating.
 Both files are root:weaver-<name>-admin 0640: `sudoedit /var/lib/weaver-agent/weaver-<name>/agent.toml` edits
 one, and you read either through the access group. The fields are in
 `docs/technical/weaver-agent/agent-declaration.md`, a snapshot of 2026-08-25 that still
 shows an identity table, and `docs/crates/weaver-types/weaver-types-Spec.md` section 2
 is the authority. A required key absent, or any key misspelled, refuses the parse by
-name; the optional keys (`binding-kind`, `gate-instruction`, `state-election`,
+name; the optional keys (`tool-set`, `binding-kind`, `gate-instruction`, `state-election`,
 `state-store`, `loop-file`, `restore`) carry the absence their Spec rules.
+
+**Electing the shell** (#29). `tool-set = ["sh"]` offers the agent one tool, a POSIX `sh`
+(busybox's ash) over the stack's listed commands (`<prefix>/bin/busybox.applets`), in
+the agent's home, with no network, confined as `weaver-gate-Spec` section 8.1 states.
+The agent's root needs `shell-binary`, which `create-agent.sh` copies from the stack
+record. An agent made before the stack named it carries none and refuses at `validate`
+until it is recreated. The model learns the tool from the system prompt, so describe it
+in `system-prompt.md` before the seeding turn: its name `sh`, that it is POSIX `sh` and
+not bash, the listed commands, and that it has no network.
 
 ## 3. An agent without a store
 
