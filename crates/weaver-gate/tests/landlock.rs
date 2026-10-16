@@ -152,12 +152,38 @@ impl Ruleset {
     /// Runs `command` confined: `PR_SET_NO_NEW_PRIVS`, then
     /// `landlock_restrict_self`, in the child before its exec.
     fn run(&self, command: &mut Command) -> Output {
+        self.run_filtered(command, None)
+    }
+
+    /// [`Ruleset::run`] with a seccomp filter loaded first where one is given,
+    /// as section 8.1's child loads its socket filter.
+    fn run_filtered(&self, command: &mut Command, filter: Option<&[SockFilter]>) -> Output {
         let ruleset = self.0.as_raw_fd();
+        let prog = filter.map(|filter| SockFprog {
+            len: filter.len() as u16,
+            filter: filter.as_ptr(),
+        });
+        // An address, not a pointer, so the closure is `Send`: `prog` outlives
+        // the spawn, which returns only once the child has exec'd.
+        let prog_addr = prog
+            .as_ref()
+            .map_or(0usize, |prog| prog as *const SockFprog as usize);
         // SAFETY: prctl and a raw system call on a descriptor opened before the
         // fork, both async-signal-safe.
         unsafe {
             command.pre_exec(move || {
                 if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if prog_addr != 0
+                    && libc::prctl(
+                        libc::PR_SET_SECCOMP,
+                        libc::SECCOMP_MODE_FILTER,
+                        prog_addr as *const SockFprog,
+                        0,
+                        0,
+                    ) != 0
+                {
                     return Err(std::io::Error::last_os_error());
                 }
                 if libc::syscall(libc::SYS_landlock_restrict_self, ruleset, 0u32) != 0 {
@@ -219,6 +245,35 @@ fn said(output: &Output) -> String {
     )
 }
 
+/// The child ran and exited 0.
+fn assert_ran(what: &str, output: &Output) {
+    assert_eq!(output.status.code(), Some(0), "{what}: {}", said(output));
+}
+
+/// The exec itself was refused: the spawn failed `EACCES`, nothing ran.
+fn assert_exec_denied(what: &str, output: &Output) {
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        err.contains("spawn failed: Permission denied"),
+        "{what}: {}",
+        said(output)
+    );
+}
+
+/// `needle` in the output's stdout (`out`) or stderr.
+fn assert_says(what: &str, output: &Output, needle: &str) {
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        all.contains(needle),
+        "{what}: expected {needle:?} in {}",
+        said(output)
+    );
+}
+
 /// The read-only roots a dynamically linked command maps: the interpreter, the
 /// shared libraries, and the files libc reads at start.
 const LIBRARY_ROOTS: [&str; 3] = ["/usr/lib", "/usr/lib64", "/etc"];
@@ -244,6 +299,7 @@ fn standard(ruleset: Ruleset, bin: &CommandDir) -> Ruleset {
 fn m1_the_landlock_abi() {
     let version = abi().expect("Landlock is enabled");
     println!("M1 Landlock ABI version: {version}");
+    assert!(version >= 6, "the floor is 6");
     assert!(version >= 1);
 }
 
@@ -263,10 +319,12 @@ fn m2_execute_and_the_interpreter() {
     }
     let a = readable.run(Command::new(bin.path("ls")).arg("/"));
     println!("M2a libraries read-only: {}", said(&a));
+    assert_exec_denied("M2a", &a);
     // b: the libraries neither readable nor executable.
     let bare = Ruleset::new(handled, 0, 0).allow(&bin.0, FS_EXECUTE | FS_READ_FILE);
     let b = bare.run(Command::new(bin.path("ls")).arg("/"));
     println!("M2b libraries unreadable: {}", said(&b));
+    assert_exec_denied("M2b", &b);
     // c: the libraries readable and executable.
     let mut full = Ruleset::new(handled, 0, 0).allow(&bin.0, FS_EXECUTE | FS_READ_FILE);
     for root in LIBRARY_ROOTS {
@@ -274,6 +332,7 @@ fn m2_execute_and_the_interpreter() {
     }
     let c = full.run(Command::new(bin.path("ls")).arg("/"));
     println!("M2c libraries executable: {}", said(&c));
+    assert_says("M2c: the exec ran, / unread", &c, "cannot open directory");
     // d: /usr/bin/ls itself, outside the command directory, libraries readable.
     let mut outside = Ruleset::new(handled, 0, 0).allow(&bin.0, FS_EXECUTE | FS_READ_FILE);
     for root in LIBRARY_ROOTS {
@@ -281,11 +340,13 @@ fn m2_execute_and_the_interpreter() {
     }
     let d = outside.run(Command::new("/usr/bin/ls").arg("/"));
     println!("M2d /usr/bin/ls outside the directory: {}", said(&d));
+    assert_exec_denied("M2d", &d);
     // e: the interpreter alone executable, the libraries read-only, `/` readable.
     let e = standard(Ruleset::new(handled, 0, 0), &bin)
         .allow(Path::new("/"), FS_READ_DIR)
         .run(Command::new(bin.path("ls")).arg("/"));
     println!("M2e the interpreter alone executable: {}", said(&e));
+    assert_ran("M2e", &e);
     // f: the interpreter not executable, everything else as e.
     let mut f = Ruleset::new(handled, 0, 0).allow(&bin.0, FS_EXECUTE | FS_READ_FILE);
     for root in LIBRARY_ROOTS {
@@ -295,6 +356,7 @@ fn m2_execute_and_the_interpreter() {
         .allow(Path::new("/"), FS_READ_DIR)
         .run(Command::new(bin.path("ls")).arg("/"));
     println!("M2f the interpreter read-only: {}", said(&f));
+    assert_exec_denied("M2f", &f);
 }
 
 /// **M3: a symlink in the command directory.** Landlock judges the file the
@@ -309,6 +371,7 @@ fn m3_a_symlink_is_judged_at_its_target() {
     let out = standard(Ruleset::new(handled, 0, 0), &bin)
         .run(Command::new(bin.path("ls")).arg(bin.0.to_str().unwrap()));
     println!("M3 symlink to /usr/bin/ls: {}", said(&out));
+    assert_exec_denied("M3", &out);
 }
 
 /// **M4: a breakout-capable command can still start only listed programs.**
@@ -330,16 +393,24 @@ fn m4_breakout_commands_start_only_listed_programs() {
         ";",
     ]));
     println!("M4a find -exec /usr/bin/id: {}", said(&find));
+    assert_says("M4a", &find, "Permission denied");
+    assert!(
+        !String::from_utf8_lossy(&find.stdout).contains("uid="),
+        "M4a ran id"
+    );
     let awk = rules().run(
         Command::new(bin.path("awk"))
             .args(["BEGIN { r = system(\"/usr/bin/id\"); print \"system returned \" r }"]),
     );
     println!("M4b awk system(/usr/bin/id): {}", said(&awk));
+    assert_says("M4b", &awk, "system returned 126");
     let bash = rules().run(Command::new(bin.path("bash")).args(["-c", "/usr/bin/id"]));
     println!("M4c bash -c /usr/bin/id: {}", said(&bash));
+    assert_eq!(bash.status.code(), Some(126), "M4c: {}", said(&bash));
     let listed = rules()
         .run(Command::new(bin.path("bash")).args(["-c", &format!("{}", bin.path("id").display())]));
     println!("M4d bash -c <listed id>: {}", said(&listed));
+    assert_says("M4d", &listed, "uid=");
 }
 
 /// **M5: TCP connect denial.** With `CONNECT_TCP` handled and no port allowed,
@@ -362,8 +433,10 @@ fn m5_tcp_connect_is_denied_unless_elected() {
     let script = format!("exec 3<>/dev/tcp/127.0.0.1/{port} && echo connected");
     let denied = rules(None).run(Command::new(bin.path("bash")).args(["-c", &script]));
     println!("M5a connect, no port elected: {}", said(&denied));
+    assert_says("M5a", &denied, "Permission denied");
     let allowed = rules(Some(port)).run(Command::new(bin.path("bash")).args(["-c", &script]));
     println!("M5b connect, the port elected: {}", said(&allowed));
+    assert_says("M5b", &allowed, "connected");
     drop(listener);
 }
 
@@ -393,6 +466,8 @@ fn m6_signal_and_abstract_socket_scoping() {
     );
     let out = rules.run(Command::new(bin.path("bash")).args(["-c", &script]));
     println!("M6a signal scoping: {}", said(&out));
+    assert_says("M6a", &out, "outside=1");
+    assert_says("M6a", &out, "own_child=0");
     let _ = outside.kill();
     let _ = outside.wait();
     // The abstract socket: bound here, outside the domain.
@@ -409,6 +484,7 @@ fn m6_signal_and_abstract_socket_scoping() {
     nix::sys::socket::listen(&server, nix::sys::socket::Backlog::new(1).unwrap()).unwrap();
     let probe = abstract_connect_probe(&rules_for_abstract(&bin), &name);
     println!("M6b abstract socket connect from inside: {probe}");
+    assert!(probe.contains("EPERM"), "M6b: {probe}");
 }
 
 fn rules_for_abstract(bin: &CommandDir) -> Ruleset {
@@ -483,6 +559,8 @@ fn m7_writes_beneath_home_alone() {
     );
     let out = rules.run(Command::new(bin.path("bash")).args(["-c", &script]));
     println!("M7 writes: {}", said(&out));
+    assert_says("M7", &out, "home=ok");
+    assert_says("M7", &out, "elsewhere=1");
     let _ = FS_WRITE_FILE;
     for dir in [&home, &elsewhere] {
         let _ = std::fs::remove_dir_all(dir);
@@ -511,9 +589,11 @@ fn m3b_a_hard_link_is_judged_by_the_path_walked() {
     let through =
         standard(Ruleset::new(handled, 0, 0), &bin).run(&mut Command::new(base.join("bin/id")));
     println!("M3b through the directory: {}", said(&through));
+    assert_ran("M3b through", &through);
     let other =
         standard(Ruleset::new(handled, 0, 0), &bin).run(&mut Command::new(base.join("source/id")));
     println!("M3b by its other path: {}", said(&other));
+    assert_exec_denied("M3b other", &other);
     std::mem::forget(bin);
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -549,6 +629,9 @@ fn m8_the_interpreter_as_a_program() {
     );
     let out = rules.run(Command::new(bin.path("bash")).args(["-c", &format!("{direct}; {via}")]));
     println!("M8 an unlisted ELF in home: {}", said(&out));
+    // The hole is measured open: what the static set and the noexec home close.
+    assert_says("M8 direct", &out, "direct=126");
+    assert_says("M8 via the interpreter", &out, "via_interpreter=0");
     let _ = std::fs::remove_dir_all(&home);
 }
 
@@ -576,6 +659,7 @@ fn m8b_a_static_set_grants_no_interpreter() {
     };
     let alone = rules().run(Command::new(bin.path("docker-init")).arg("--version"));
     println!("M8b the static launcher alone: {}", said(&alone));
+    assert_ran("M8b alone", &alone);
     let via = rules().run(Command::new(bin.path("docker-init")).args([
         "-s",
         "--",
@@ -586,6 +670,7 @@ fn m8b_a_static_set_grants_no_interpreter() {
         "M8b launching the interpreter on the payload: {}",
         said(&via)
     );
+    assert_eq!(via.status.code(), Some(126), "M8b via: {}", said(&via));
     let _ = std::fs::remove_dir_all(&home);
 }
 
@@ -596,10 +681,7 @@ fn m8b_a_static_set_grants_no_interpreter() {
 #[test]
 #[ignore = "a measurement of this box's kernel; run under unshare --map-root-user --mount"]
 fn m8c_a_noexec_home_closes_the_interpreter_route() {
-    assert!(
-        nix::unistd::geteuid().is_root(),
-        "run under `unshare --map-root-user --mount`"
-    );
+    PrivateNamespace::check();
     let bin = CommandDir::new("m8c", &["bash"]);
     let home = std::env::temp_dir().join(format!("weaver-landlock-m8chome-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
@@ -616,6 +698,8 @@ fn m8c_a_noexec_home_closes_the_interpreter_route() {
         )
     };
     assert_eq!(mounted, 0, "mount: {}", nix::errno::Errno::last());
+    // Unmounted on every exit path, a failed assertion's unwind among them.
+    let _mounted = Unmount(target);
     std::fs::copy("/usr/bin/id", home.join("payload")).unwrap();
     let handled = FS_EXECUTE | FS_READ_FILE | FS_READ_DIR;
     let rules =
@@ -626,6 +710,56 @@ fn m8c_a_noexec_home_closes_the_interpreter_route() {
     );
     let out = rules.run(Command::new(bin.path("bash")).args(["-c", &via]));
     println!("M8c the interpreter on a noexec home: {}", said(&out));
+    assert_says("M8c", &out, "failed to map segment");
+    assert_says("M8c", &out, "via_interpreter=127");
+}
+
+/// **The private user and mount namespace M8c's mount needs**, verified
+/// rather than assumed from euid 0. The uid map must not be the identity
+/// (`0 0 4294967295`, the initial namespace): it maps this process's 0 to
+/// another uid outside. The user and mount namespaces must differ from the
+/// parent process's where its links read. Where they do not read, the mount
+/// succeeding is itself the proof: an unprivileged account can mount only in
+/// a mount namespace its own user namespace owns, never in the initial one.
+struct PrivateNamespace;
+
+impl PrivateNamespace {
+    fn check() {
+        assert!(
+            nix::unistd::geteuid().is_root(),
+            "run under `unshare --map-root-user --mount`"
+        );
+        let map = std::fs::read_to_string("/proc/self/uid_map").expect("the uid map reads");
+        let first: Vec<u64> = map
+            .split_whitespace()
+            .take(3)
+            .map(|n| n.parse().unwrap())
+            .collect();
+        assert!(
+            first != [0, 0, 4_294_967_295] && first.get(1).is_some_and(|outside| *outside != 0),
+            "a private user namespace mapping 0 to another uid, not {map:?}"
+        );
+        let parent = nix::unistd::getppid();
+        for ns in ["user", "mnt"] {
+            let own =
+                std::fs::read_link(format!("/proc/self/ns/{ns}")).expect("our own link reads");
+            if let Ok(theirs) = std::fs::read_link(format!("/proc/{parent}/ns/{ns}")) {
+                assert_ne!(own, theirs, "the {ns} namespace is the parent's");
+            }
+        }
+    }
+}
+
+/// A tmpfs this test mounted, detached when dropped on every exit path.
+struct Unmount(CString);
+
+impl Drop for Unmount {
+    fn drop(&mut self) {
+        // SAFETY: an unmount by a C string this value holds.
+        unsafe {
+            libc::umount2(self.0.as_ptr(), libc::MNT_DETACH);
+        }
+    }
 }
 
 /// **M8d: a library root readable wholesale holds programs too.** With the
@@ -651,6 +785,8 @@ fn m8d_a_readable_library_root_holds_programs() {
     let via = format!("{INTERPRETER} {program} --version; echo via_interpreter=$?");
     let out = rules.run(Command::new(bin.path("bash")).args(["-c", &via]));
     println!("M8d {program} through the interpreter: {}", said(&out));
+    // A hole measured open, closed only by the static set or a per-file closure.
+    assert_says("M8d", &out, "via_interpreter=0");
 }
 
 // ------------------------------------------------------------- M9: seccomp
@@ -689,9 +825,10 @@ const fn op(code: u16, jt: u8, jf: u8, k: u32) -> SockFilter {
 /// is refused whole, and so is every x32 system call (`nr` with bit 30 set),
 /// x32 sharing the architecture word. `io_uring_setup` is refused, io_uring's
 /// `IORING_OP_SOCKET` being a route to a socket that never calls `socket`.
-/// `socket` and `socketpair` are allowed for `AF_UNIX`, and for `AF_INET` and
-/// `AF_INET6` only as `SOCK_STREAM` with protocol 0 or `IPPROTO_TCP`, and only
-/// where `tcp` (a TCP port is elected): a pinned protocol keeps MPTCP and
+/// `socket` and `socketpair` are refused for `AF_UNIX` (Codex on #175: below
+/// Landlock ABI 9 nothing bounds a pathname socket's connect), and allowed for
+/// `AF_INET` and `AF_INET6` only as `SOCK_STREAM` with protocol 0 or
+/// `IPPROTO_TCP`, and only where `tcp` (a TCP port is elected): a pinned protocol keeps MPTCP and
 /// SCTP stream sockets out. Everything else that makes a socket is refused
 /// `EACCES`.
 fn socket_filter(tcp: bool) -> Vec<SockFilter> {
@@ -712,7 +849,7 @@ fn socket_filter(tcp: bool) -> Vec<SockFilter> {
         /* 10 */ op(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW),
         /* 11 */ op(BPF_LD_W_ABS, 0, 0, 16),
         /* 12 */ op(BPF_JEQ_K, 0, 1, libc::AF_UNIX as u32),
-        /* 13 */ op(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW),
+        /* 13 */ op(BPF_RET_K, 0, 0, deny),
         /* 14 */ op(BPF_JEQ_K, 1, 0, libc::AF_INET as u32),
         /* 15 */ op(BPF_JEQ_K, 0, 7, libc::AF_INET6 as u32),
         /* 16 */ op(BPF_LD_W_ABS, 0, 0, 24),
@@ -796,6 +933,16 @@ fn socket_probe(filter: &[SockFilter]) -> String {
                 libc::SOCK_STREAM,
                 0,
             );
+            let mut pair = [0i32; 2];
+            if libc::socketpair(
+                libc::AF_UNIX,
+                libc::SOCK_STREAM | libc::SOCK_CLOEXEC,
+                0,
+                pair.as_mut_ptr(),
+            ) == 0
+            {
+                opened |= 1 << 11;
+            }
             let x32_errno = if x32 < 0 {
                 *libc::__errno_location()
             } else {
@@ -839,6 +986,14 @@ fn socket_probe(filter: &[SockFilter]) -> String {
                         }
                     )))
                     .chain(std::iter::once(format!(
+                        "unix socketpair={}",
+                        if opened & (1 << 11) != 0 {
+                            "open"
+                        } else {
+                            "refused"
+                        }
+                    )))
+                    .chain(std::iter::once(format!(
                         "x32={}",
                         if opened & (1 << 9) != 0 {
                             "refused by the filter (EACCES)"
@@ -865,15 +1020,39 @@ fn socket_probe(filter: &[SockFilter]) -> String {
 #[test]
 #[ignore = "a measurement of this box's kernel"]
 fn m9_the_socket_family_filter() {
-    println!(
-        "M9 unfiltered: {}",
-        socket_probe(&[op(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW)])
-    );
-    println!("M9 no TCP elected: {}", socket_probe(&socket_filter(false)));
-    println!(
-        "M9 a TCP port elected: {}",
-        socket_probe(&socket_filter(true))
-    );
+    let unfiltered = socket_probe(&[op(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW)]);
+    println!("M9 unfiltered: {unfiltered}");
+    assert!(unfiltered.contains("unix stream=open"), "{unfiltered}");
+    assert!(unfiltered.contains("io_uring=open"), "{unfiltered}");
+    assert!(unfiltered.contains("x32=ENOSYS"), "{unfiltered}");
+    for (tcp, label) in [(false, "no TCP elected"), (true, "a TCP port elected")] {
+        let filtered = socket_probe(&socket_filter(tcp));
+        println!("M9 {label}: {filtered}");
+        for refused in [
+            "unix stream=refused",
+            "unix socketpair=refused",
+            "inet udp=refused",
+            "netlink=refused",
+            "inet mptcp=refused",
+            "inet sctp=refused",
+            "io_uring=refused",
+            "x32=refused by the filter",
+        ] {
+            assert!(
+                filtered.contains(refused),
+                "{label}: {refused} in {filtered}"
+            );
+        }
+        let tcp_state = if tcp { "open" } else { "refused" };
+        assert!(
+            filtered.contains(&format!("inet tcp={tcp_state}")),
+            "{label}: {filtered}"
+        );
+        assert!(
+            filtered.contains(&format!("inet6 tcp={tcp_state}")),
+            "{label}: {filtered}"
+        );
+    }
 }
 
 /// **M10: execute granted on one file, reached through a symlinked command
@@ -903,8 +1082,10 @@ fn m10_execute_on_one_file_through_symlinks() {
     };
     let through = rules().run(Command::new(base.join("commands/tini")).arg("--version"));
     println!("M10 through the symlink: {}", said(&through));
+    assert_ran("M10 through", &through);
     let copy = rules().run(Command::new(base.join("elsewhere/multicall")).arg("--version"));
     println!("M10 an identical copy elsewhere: {}", said(&copy));
+    assert_exec_denied("M10 copy", &copy);
     // The grant names one file and nothing else: the launcher, run through
     // its symlink, cannot start the interpreter, nor a copy of itself the
     // agent writes into its home (readable and writable to it).
@@ -922,6 +1103,12 @@ fn m10_execute_on_one_file_through_symlinks() {
         "M10 the launcher starting the interpreter: {}",
         said(&interpreter)
     );
+    assert_eq!(
+        interpreter.status.code(),
+        Some(126),
+        "M10 interpreter: {}",
+        said(&interpreter)
+    );
     let written = home_rules().run(Command::new(base.join("commands/tini")).args([
         "-s",
         "--",
@@ -930,6 +1117,12 @@ fn m10_execute_on_one_file_through_symlinks() {
     ]));
     println!(
         "M10 the launcher starting a copy written into home: {}",
+        said(&written)
+    );
+    assert_eq!(
+        written.status.code(),
+        Some(126),
+        "M10 written: {}",
         said(&written)
     );
     let _ = std::fs::remove_dir_all(&base);
@@ -990,17 +1183,16 @@ fn m9b_landlock_tcp_against_mptcp_and_sctp() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let rules = || Ruleset::new(FS_READ_FILE, NET_CONNECT_TCP, 0);
-    println!(
-        "M9b plain TCP: {}",
-        landlock_connect_probe(&rules(), 0, port)
-    );
-    println!(
-        "M9b MPTCP: {}",
-        landlock_connect_probe(&rules(), libc::IPPROTO_MPTCP, port)
-    );
-    println!(
-        "M9b SCTP: {}",
-        landlock_connect_probe(&rules(), libc::IPPROTO_SCTP, port)
+    let tcp = landlock_connect_probe(&rules(), 0, port);
+    let mptcp = landlock_connect_probe(&rules(), libc::IPPROTO_MPTCP, port);
+    let sctp = landlock_connect_probe(&rules(), libc::IPPROTO_SCTP, port);
+    println!("M9b plain TCP: {tcp}, MPTCP: {mptcp}, SCTP: {sctp}");
+    assert!(tcp.contains("EACCES"), "plain TCP is bounded: {tcp}");
+    // Measured unbounded: why the filter pins the protocol.
+    assert_eq!(mptcp, "connected", "MPTCP passes Landlock's TCP right");
+    assert!(
+        !sctp.contains("EACCES"),
+        "SCTP is not bounded by it: {sctp}"
     );
     drop(listener);
 }
@@ -1011,6 +1203,8 @@ fn m9b_landlock_tcp_against_mptcp_and_sctp() {
 /// `IOCTL_DEV` (5) beside ABI 1's.
 const FS_ALL_V5: u64 = (1 << 16) - 1;
 const FS_TRUNCATE: u64 = 1 << 14;
+/// Pathname UNIX socket lookups, `connect` and an addressed `sendmsg`: ABI 9.
+const FS_RESOLVE_UNIX: u64 = 1 << 16;
 
 /// The static busybox under measurement, named by `WEAVER_BUSYBOX`: built
 /// from a pinned source with the default applets, `ash` and `mktemp`.
@@ -1065,7 +1259,14 @@ impl ShellLayout {
         };
         let null_rights =
             FS_READ_FILE | FS_WRITE_FILE | if truncate_null { FS_TRUNCATE } else { 0 };
-        Ruleset::new(FS_ALL_V5, 0, 0)
+        // `RESOLVE_UNIX` (ABI 9) handled with no grant where the kernel offers
+        // it, a second layer under the filter's `AF_UNIX` refusal.
+        let handled = if abi().unwrap_or(0) >= 9 {
+            FS_ALL_V5 | FS_RESOLVE_UNIX
+        } else {
+            FS_ALL_V5
+        };
+        Ruleset::new(handled, 0, 0)
             .allow(&self.path("libexec/busybox"), FS_EXECUTE | FS_READ_FILE)
             .allow(&self.path("commands"), FS_READ_DIR)
             .allow(&self.path("home"), home_rights)
@@ -1078,7 +1279,12 @@ impl ShellLayout {
     /// environment: `HOME`, `PATH` the commands directory, `TMPDIR` home's
     /// `.tmp`.
     fn sh(&self, rules: &Ruleset, script: &str) -> Output {
-        rules.run(
+        self.sh_filtered(rules, script, None)
+    }
+
+    /// [`ShellLayout::sh`] with the child's socket filter loaded too.
+    fn sh_filtered(&self, rules: &Ruleset, script: &str, filter: Option<&[SockFilter]>) -> Output {
+        rules.run_filtered(
             Command::new(self.path("commands/sh"))
                 .args(["-c", script])
                 .env_clear()
@@ -1086,6 +1292,7 @@ impl ShellLayout {
                 .env("PATH", self.path("commands"))
                 .env("TMPDIR", self.path("home/.tmp"))
                 .current_dir(self.path("home")),
+            filter,
         )
     }
 }
@@ -1114,11 +1321,17 @@ fn m11_redirects_truncation_and_tmpdir() {
                   t=$(mktemp) && echo tmp=$t && echo x > \"$t\" && cat \"$t\"";
     let full = layout.sh(&layout.rules(true, true), script);
     println!("M11 the ruleset as stated: {}", said(&full));
+    assert_says("M11 null", &full, "null=1");
+    assert_says("M11 truncate", &full, "second");
+    assert_says("M11 mktemp", &full, "/home/.tmp/tmp.");
     let forms = layout.sh(
         &layout.rules(true, true),
         "echo TMPDIR=$TMPDIR; mktemp; echo bare=$?; mktemp -t; echo t=$?; mktemp -p \"$TMPDIR\"; echo p=$?",
     );
     println!("M11 mktemp's forms: {}", said(&forms));
+    for form in ["bare=0", "t=0", "p=0"] {
+        assert_says("M11 forms", &forms, form);
+    }
     let no_home_truncate = layout.sh(
         &layout.rules(false, true),
         "echo first > f; echo second > f; echo rc=$?; cat f",
@@ -1127,11 +1340,17 @@ fn m11_redirects_truncation_and_tmpdir() {
         "M11 TRUNCATE withheld beneath home: {}",
         said(&no_home_truncate)
     );
+    assert_says(
+        "M11 no home truncate",
+        &no_home_truncate,
+        "can't create f: Permission denied",
+    );
     let no_null_truncate = layout.sh(&layout.rules(true, false), "echo x > /dev/null; echo rc=$?");
     println!(
         "M11 TRUNCATE withheld on /dev/null: {}",
         said(&no_null_truncate)
     );
+    assert_says("M11 no null truncate", &no_null_truncate, "rc=0");
 }
 
 /// **M12: the real static busybox under the ruleset.** Its applet by the
@@ -1145,20 +1364,34 @@ fn m12_the_static_busybox_under_the_ruleset() {
     let rules = || layout.rules(true, true);
     let by_link = rules().run(Command::new(layout.path("commands/echo")).arg("by-link"));
     println!("M12 an applet by its link: {}", said(&by_link));
+    assert_says("M12 by link", &by_link, "by-link");
+    assert_ran("M12 by link", &by_link);
     let by_name =
         rules().run(Command::new(layout.path("libexec/busybox")).args(["echo", "by-name"]));
     println!("M12 busybox <applet>: {}", said(&by_name));
+    assert_says("M12 by name", &by_name, "by-name");
     let pipe = layout.sh(&rules(), "echo a b c | tr ' ' '\\n' | wc -l");
     println!("M12 sh -c with a pipe: {}", said(&pipe));
+    assert_eq!(
+        String::from_utf8_lossy(&pipe.stdout).trim(),
+        "3",
+        "M12 pipe: {}",
+        said(&pipe)
+    );
     let absent = rules().run(Command::new(layout.path("libexec/busybox")).args(["wget", "--help"]));
     println!("M12 an applet not compiled in: {}", said(&absent));
+    assert_says("M12 absent", &absent, "applet not found");
     let outside = layout.sh(&rules(), "/usr/bin/id; echo rc=$?");
     println!("M12 a program outside the build: {}", said(&outside));
+    assert_says("M12 outside", &outside, "rc=126");
 }
 
 /// **M13: both filters require no-new-privs.** Without `PR_SET_NO_NEW_PRIVS`
 /// and without `CAP_SYS_ADMIN`, the kernel refuses `landlock_restrict_self`
-/// and a seccomp filter's load.
+/// and a seccomp filter's load, which is the gate's case, the agent's uid
+/// holding no capability. Run as root in a user namespace, `CAP_SYS_ADMIN`
+/// stands in for no-new-privs and both are admitted, and the instrument asserts
+/// that too, so it holds in either run and measures the gate's case outside.
 #[test]
 #[ignore = "a measurement of this box's kernel"]
 fn m13_both_filters_require_no_new_privs() {
@@ -1193,15 +1426,115 @@ fn m13_both_filters_require_no_new_privs() {
             libc::_exit((landlock_errno.min(15) << 4 | seccomp_errno.min(15)) as i32);
         },
         nix::unistd::ForkResult::Parent { child } => {
-            if let nix::sys::wait::WaitStatus::Exited(_, code) =
-                nix::sys::wait::waitpid(child, None).unwrap()
-            {
-                println!(
-                    "M13 landlock_restrict_self without no-new-privs: {}; seccomp without it: {}",
-                    nix::errno::Errno::from_raw(code >> 4),
-                    nix::errno::Errno::from_raw(code & 0xf)
-                );
+            let status = nix::sys::wait::waitpid(child, None).unwrap();
+            let nix::sys::wait::WaitStatus::Exited(_, code) = status else {
+                panic!("M13's child ended {status:?}");
+            };
+            let landlock = nix::errno::Errno::from_raw(code >> 4);
+            let seccomp = nix::errno::Errno::from_raw(code & 0xf);
+            println!(
+                "M13 landlock_restrict_self without no-new-privs: {landlock}, seccomp without it: {seccomp}"
+            );
+            if nix::unistd::geteuid().is_root() {
+                // Root in a user namespace holds CAP_SYS_ADMIN there, which the
+                // kernel accepts in place of no-new-privs for both: the run
+                // outside a namespace is the one that measures the gate's case.
+                assert_eq!(landlock, nix::errno::Errno::UnknownErrno);
+                assert_eq!(seccomp, nix::errno::Errno::UnknownErrno);
+            } else {
+                // The gate's case: an unprivileged uid, as the agent's.
+                assert_eq!(landlock, nix::errno::Errno::EPERM);
+                assert_eq!(seccomp, nix::errno::Errno::EACCES);
             }
         }
     }
+}
+
+/// Connects to the pathname UNIX socket `path` from a child confined by
+/// `rules` alone, answering what it met.
+fn unix_connect_probe(rules: &Ruleset, path: &Path) -> String {
+    let ruleset = rules.0.as_raw_fd();
+    let path = CString::new(path.to_str().unwrap()).unwrap();
+    // SAFETY: the child makes raw system calls only and exits.
+    match unsafe { nix::unistd::fork() }.unwrap() {
+        nix::unistd::ForkResult::Child => unsafe {
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+                || libc::syscall(libc::SYS_landlock_restrict_self, ruleset, 0u32) != 0
+            {
+                libc::_exit(250);
+            }
+            let fd = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
+            if fd < 0 {
+                libc::_exit(249);
+            }
+            let mut addr: libc::sockaddr_un = std::mem::zeroed();
+            addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
+            for (i, b) in path.as_bytes().iter().enumerate() {
+                addr.sun_path[i] = *b as libc::c_char;
+            }
+            let r = libc::connect(
+                fd,
+                &addr as *const _ as *const libc::sockaddr,
+                std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t,
+            );
+            let errno = if r == 0 { 0 } else { *libc::__errno_location() };
+            libc::_exit(errno.min(199));
+        },
+        nix::unistd::ForkResult::Parent { child } => {
+            match nix::sys::wait::waitpid(child, None).unwrap() {
+                nix::sys::wait::WaitStatus::Exited(_, 0) => "connected".into(),
+                nix::sys::wait::WaitStatus::Exited(_, 250) => "the restriction failed".into(),
+                nix::sys::wait::WaitStatus::Exited(_, 249) => "no socket".into(),
+                nix::sys::wait::WaitStatus::Exited(_, errno) => {
+                    format!("refused: {}", nix::errno::Errno::from_raw(errno))
+                }
+                other => format!("{other:?}"),
+            }
+        }
+    }
+}
+
+/// **M9c: pathname UNIX sockets, two layers, and the shell still works.**
+/// A socket this uid can reach is bound outside the domain. Landlock alone
+/// with `RESOLVE_UNIX` handled and no grant (ABI 9) refuses the connect. With
+/// it unhandled the same connect succeeds, which is the gap below ABI 9 the
+/// filter's `AF_UNIX` refusal closes (M9). Then the shell under the filter and
+/// the full ruleset: its pipeline and its redirects, which use `pipe` and
+/// never a socket, still work.
+#[test]
+#[ignore = "a measurement of this box's kernel and a built busybox"]
+fn m9c_pathname_sockets_and_the_shell_under_the_filter() {
+    let version = abi().expect("Landlock is enabled");
+    let path =
+        std::env::temp_dir().join(format!("weaver-landlock-m9c-{}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    let unhandled = unix_connect_probe(&Ruleset::new(FS_READ_FILE, 0, 0), &path);
+    println!("M9c a pathname connect, RESOLVE_UNIX not handled: {unhandled}");
+    assert_eq!(unhandled, "connected", "the gap the filter closes");
+    if version >= 9 {
+        let handled =
+            unix_connect_probe(&Ruleset::new(FS_READ_FILE | FS_RESOLVE_UNIX, 0, 0), &path);
+        println!("M9c a pathname connect, RESOLVE_UNIX handled, no grant: {handled}");
+        assert!(handled.contains("EACCES"), "{handled}");
+    }
+    drop(listener);
+    let _ = std::fs::remove_file(&path);
+    let layout = ShellLayout::new("m9c", &APPLETS);
+    let filter = socket_filter(false);
+    let out = layout.sh_filtered(
+        &layout.rules(true, true),
+        "echo a b c | tr ' ' '\\n' | wc -l; ls /nonexistent 2>/dev/null; echo x > f && cat f",
+        Some(&filter),
+    );
+    println!("M9c the shell under the filter: {}", said(&out));
+    assert_ran("M9c", &out);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .collect::<Vec<_>>(),
+        ["3", "x"],
+        "M9c: {}",
+        said(&out)
+    );
 }

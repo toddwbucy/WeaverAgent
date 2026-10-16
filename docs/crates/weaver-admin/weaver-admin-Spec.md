@@ -4183,4 +4183,7 @@ Each names what settles it, and none is this Spec's to settle alone.
   is **not** a restatement of the rule that no crate here exposes a network surface:
   that rule binds what these crates link, and this would bind what an agent's tools may
   reach, so an agent whose tools fetch anything would break under it. Settled by an
-  operator who knows which tools their agents carry.
+  operator who knows which tools their agents carry. **For the agent's shell #29 answers it at the shell
+  itself**: the shell's child refuses every socket family, `AF_UNIX` included, but inet
+  TCP where a port is elected (`weaver-gate-Spec` section 8.1). The question stands for
+  the worker and its organs.
