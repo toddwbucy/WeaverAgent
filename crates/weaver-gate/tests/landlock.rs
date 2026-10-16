@@ -834,5 +834,32 @@ fn m10_execute_on_one_file_through_symlinks() {
     println!("M10 through the symlink: {}", said(&through));
     let copy = rules().run(Command::new(base.join("elsewhere/multicall")).arg("--version"));
     println!("M10 an identical copy elsewhere: {}", said(&copy));
+    // The grant names one file and nothing else: the launcher, run through
+    // its symlink, cannot start the interpreter, nor a copy of itself the
+    // agent writes into its home (readable and writable to it).
+    let home = base.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::copy(&multicall, home.join("multicall")).unwrap();
+    let home_rules = || rules().allow(&home, FS_READ_FILE | FS_READ_DIR);
+    let interpreter = home_rules().run(Command::new(base.join("commands/tini")).args([
+        "-s",
+        "--",
+        INTERPRETER,
+        "--version",
+    ]));
+    println!(
+        "M10 the launcher starting the interpreter: {}",
+        said(&interpreter)
+    );
+    let written = home_rules().run(Command::new(base.join("commands/tini")).args([
+        "-s",
+        "--",
+        home.join("multicall").to_str().unwrap(),
+        "--version",
+    ]));
+    println!(
+        "M10 the launcher starting a copy written into home: {}",
+        said(&written)
+    );
     let _ = std::fs::remove_dir_all(&base);
 }
