@@ -137,6 +137,20 @@ static SOCKET_FILTER: [SockFilter; 11] = [
     op(BPF_RET_K, 0, 0, DENY),
 ];
 
+/// **The socket filter's instructions as `(code, jt, jf, k)`**, read-only,
+/// so the instruments of `tests/landlock.rs` load the program production
+/// loads and no copy can drift from it (the grade of #176, F3).
+pub fn socket_filter_instructions() -> impl Iterator<Item = (u16, u8, u8, u32)> {
+    SOCKET_FILTER.iter().map(|instruction| {
+        (
+            instruction.code,
+            instruction.jt,
+            instruction.jf,
+            instruction.k,
+        )
+    })
+}
+
 // ------------------------------------------------------------ the confinement
 
 /// Why the raise refuses the shell `BoundaryUnverified`, nothing offered.
@@ -147,6 +161,14 @@ pub enum ConfineFault {
     AbiBelowFloor(Option<i64>),
     /// This uid has no home in the account database.
     NoHome,
+    /// The home is not an absolute directory of the gate's own uid, or is
+    /// `/`, or is a link.
+    Home(String),
+    /// The granted binary is not a regular file, or is a link.
+    Binary(String),
+    /// The granted commands directory is not a directory of its owner, or is
+    /// a link.
+    Commands(String),
     /// Home's `.tmp` could not be made.
     TmpDir(String),
     /// The ruleset or one of its rules could not be built.
@@ -166,6 +188,9 @@ impl std::fmt::Display for ConfineFault {
             }
             ConfineFault::AbiBelowFloor(None) => write!(f, "the Landlock ABI query failed"),
             ConfineFault::NoHome => write!(f, "this uid has no home in the account database"),
+            ConfineFault::Home(detail) => write!(f, "the home: {detail}"),
+            ConfineFault::Binary(detail) => write!(f, "the shell binary: {detail}"),
+            ConfineFault::Commands(detail) => write!(f, "the commands directory: {detail}"),
             ConfineFault::TmpDir(detail) => write!(f, "home's .tmp: {detail}"),
             ConfineFault::Ruleset(detail) => write!(f, "the Landlock ruleset: {detail}"),
             ConfineFault::Rlimit(detail) => write!(f, "the rlimits: {detail}"),
@@ -259,17 +284,23 @@ impl Shell {
             .flatten()
             .map(|user| user.dir)
             .ok_or(ConfineFault::NoHome)?;
-        Shell::confined_in(grant, home)
+        Shell::confined_in(grant, home, 0)
     }
 
-    /// [`Shell::confined`] beneath a named home: the production path, the
-    /// suite naming a scratch home where the gate names the uid's own.
-    fn confined_in(grant: &ShellGrant, home: PathBuf) -> Result<Shell, ConfineFault> {
+    /// [`Shell::confined`] beneath a named home and with `commands/`'s owner
+    /// named: the production path, the gate naming the uid's own home and
+    /// root, the suite naming a scratch home and its own uid.
+    fn confined_in(
+        grant: &ShellGrant,
+        home: PathBuf,
+        commands_owner: u32,
+    ) -> Result<Shell, ConfineFault> {
         let abi = abi_at_floor(landlock_abi())?;
         rlimits_within_reach()?;
+        judge_home(&home)?;
         // The ruleset is built before `.tmp` is made, so a grant that cannot
         // be confined leaves nothing behind in the home.
-        let ruleset = build_ruleset(abi, grant, &home)?;
+        let ruleset = build_ruleset(abi, grant, &home, commands_owner)?;
         let tmpdir = home.join(".tmp");
         match std::fs::create_dir(&tmpdir) {
             Ok(()) => {}
@@ -320,11 +351,22 @@ impl Shell {
         }
     }
 
-    /// The command for one execution, `-c` and the call's command, with the
-    /// gate's environment and the home as its directory. Its layers are not
-    /// yet installed: the caller registers its own `pre_exec` first (the move
-    /// into `tools/`), then calls [`Shell::install_layers`].
-    pub fn command(&self, script: &str) -> Command {
+    /// **The command for one execution, and the only one this crate builds**
+    /// (`weaver-gate-Spec` section 8.1): `-c` and the call's command, the
+    /// gate's environment, the home as its directory, then the caller's
+    /// `first` step in `pre_exec` (the move into `tools/`), then the layers in
+    /// section 8.1's order: no-new-privs, the rlimits, the socket filter, the
+    /// Landlock restriction. A confined shell's command carries its layers
+    /// by construction. Only the suite's `#[cfg(test)]` bare shell has none.
+    ///
+    /// # Safety
+    ///
+    /// `first` runs in the forked child before its exec, so it must make
+    /// only async-signal-safe calls and allocate nothing.
+    pub unsafe fn command<F>(&self, script: &str, first: F) -> Command
+    where
+        F: FnMut() -> std::io::Result<()> + Send + Sync + 'static,
+    {
         let mut command = Command::new(&self.program);
         command
             .arg0(self.argv0)
@@ -343,26 +385,22 @@ impl Shell {
         if let Some(tmpdir) = &self.tmpdir {
             command.env("TMPDIR", tmpdir);
         }
-        command
-    }
-
-    /// **The child's layers, in `pre_exec`**, in section 8.1's order:
-    /// no-new-privs, the rlimits, the socket filter, the Landlock
-    /// restriction. Each is an async-signal-safe call on a value read here,
-    /// before the fork, and the first failure ends the child before its exec.
-    pub fn install_layers(&self, command: &mut Command) {
-        let Some(layers) = &self.layers else {
-            return;
-        };
-        let ruleset: RawFd = layers.ruleset.as_raw_fd();
-        // The program lives in a `static`, so its address outlives every
-        // fork. An address, not a pointer, keeps the closure `Send`.
-        let filter = SOCKET_FILTER.as_ptr() as usize;
-        // SAFETY: `apply` makes only async-signal-safe calls on values read
-        // before the fork, the child allocating nothing.
+        // SAFETY: the caller's contract covers `first`.
         unsafe {
-            command.pre_exec(move || apply(ruleset, filter));
+            command.pre_exec(first);
         }
+        if let Some(layers) = &self.layers {
+            let ruleset: RawFd = layers.ruleset.as_raw_fd();
+            // The program lives in a `static`, so its address outlives every
+            // fork. An address, not a pointer, keeps the closure `Send`.
+            let filter = SOCKET_FILTER.as_ptr() as usize;
+            // SAFETY: `apply` makes only async-signal-safe calls on values
+            // read before the fork, the child allocating nothing.
+            unsafe {
+                command.pre_exec(move || apply(ruleset, filter));
+            }
+        }
+        command
     }
 }
 
@@ -418,7 +456,38 @@ unsafe fn apply(ruleset: RawFd, filter: usize) -> std::io::Result<()> {
 /// read on the one busybox file, read on the commands directory, every right
 /// but execute beneath home, read and write on `/dev/null`, and read on
 /// `/dev/zero` and `/dev/urandom`. Nothing else, and no TCP port.
-fn build_ruleset(abi: i64, grant: &ShellGrant, home: &Path) -> Result<OwnedFd, ConfineFault> {
+fn build_ruleset(
+    abi: i64,
+    grant: &ShellGrant,
+    home: &Path,
+    commands_owner: u32,
+) -> Result<OwnedFd, ConfineFault> {
+    // **The two granted paths are judged on the descriptors the rules use**
+    // (F1 of the grade of #176): opened `O_PATH` without following a link
+    // and judged by `fstat`, so no link and no other file type widens what
+    // the rule grants. A directory taking the binary's rule would grant
+    // execute beneath it, reopening the interpreter route (M8).
+    let binary = open_judged(&grant.binary, |stat| {
+        if stat.st_mode & libc::S_IFMT != libc::S_IFREG {
+            Some("is not a regular file".to_string())
+        } else {
+            None
+        }
+    })
+    .map_err(ConfineFault::Binary)?;
+    let commands = open_judged(&grant.commands, |stat| {
+        if stat.st_mode & libc::S_IFMT != libc::S_IFDIR {
+            Some("is not a directory".to_string())
+        } else if stat.st_uid != commands_owner {
+            Some(format!(
+                "is owned by uid {}, not {commands_owner}",
+                stat.st_uid
+            ))
+        } else {
+            None
+        }
+    })
+    .map_err(ConfineFault::Commands)?;
     let handled_fs = if abi >= 9 {
         FS_ALL_V5 | FS_RESOLVE_UNIX
     } else {
@@ -444,9 +513,9 @@ fn build_ruleset(abi: i64, grant: &ShellGrant, home: &Path) -> Result<OwnedFd, C
     }
     // SAFETY: a fresh descriptor the kernel returned, owned from here.
     let ruleset = unsafe { OwnedFd::from_raw_fd(fd as RawFd) };
-    let rules: [(&Path, u64); 6] = [
-        (&grant.binary, FS_EXECUTE | FS_READ_FILE),
-        (&grant.commands, FS_READ_DIR),
+    add_rule(&ruleset, &binary, FS_EXECUTE | FS_READ_FILE, &grant.binary)?;
+    add_rule(&ruleset, &commands, FS_READ_DIR, &grant.commands)?;
+    let rules: [(&Path, u64); 4] = [
         (home, FS_ALL_V5 & !FS_EXECUTE),
         (Path::new("/dev/null"), FS_READ_FILE | FS_WRITE_FILE),
         (Path::new("/dev/zero"), FS_READ_FILE),
@@ -466,6 +535,59 @@ fn allow(ruleset: &OwnedFd, path: &Path, access: u64) -> Result<(), ConfineFault
         nix::sys::stat::Mode::empty(),
     )
     .map_err(|errno| ConfineFault::Ruleset(format!("open {}: {errno}", path.display())))?;
+    add_rule(ruleset, &parent, access, path)
+}
+
+/// `path` opened `O_PATH` without following a link at its last component,
+/// and judged by `fstat` on that descriptor: `fault` answers why it is not
+/// what the rule may take, or nothing.
+fn open_judged(
+    path: &Path,
+    fault: impl Fn(&libc::stat) -> Option<String>,
+) -> Result<OwnedFd, String> {
+    let fd = nix::fcntl::open(
+        path,
+        nix::fcntl::OFlag::O_PATH | nix::fcntl::OFlag::O_NOFOLLOW | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::empty(),
+    )
+    .map_err(|errno| format!("{} does not open: {errno}", path.display()))?;
+    let stat = nix::sys::stat::fstat(&fd)
+        .map_err(|errno| format!("{}: fstat: {errno}", path.display()))?;
+    if stat.st_mode & libc::S_IFMT == libc::S_IFLNK {
+        return Err(format!("{} is a link", path.display()));
+    }
+    match fault(&stat) {
+        Some(why) => Err(format!("{} {why}", path.display())),
+        None => Ok(fd),
+    }
+}
+
+/// **The home the wall grants beneath** (F1 of the grade of #176): an
+/// absolute directory, not `/`, not a link, owned by the gate's own uid. A
+/// home of `/` would grant every right but execute on the whole filesystem.
+fn judge_home(home: &Path) -> Result<(), ConfineFault> {
+    let fault = |why: &str| ConfineFault::Home(format!("{} {why}", home.display()));
+    if !home.is_absolute() || home == Path::new("/") {
+        return Err(fault("is not an absolute directory below /"));
+    }
+    let metadata = std::fs::symlink_metadata(home).map_err(|e| fault(&e.to_string()))?;
+    if !metadata.file_type().is_dir() {
+        return Err(fault("is not a directory"));
+    }
+    let own = nix::unistd::geteuid().as_raw();
+    if std::os::unix::fs::MetadataExt::uid(&metadata) != own {
+        return Err(fault(&format!("is not owned by this uid, {own}")));
+    }
+    Ok(())
+}
+
+/// One path-beneath rule on an open descriptor, `path` naming it in a fault.
+fn add_rule(
+    ruleset: &OwnedFd,
+    parent: &OwnedFd,
+    access: u64,
+    path: &Path,
+) -> Result<(), ConfineFault> {
     let rule = PathBeneathAttr {
         allowed_access: access,
         parent_fd: parent.as_raw_fd(),

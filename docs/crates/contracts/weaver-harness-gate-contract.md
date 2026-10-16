@@ -462,8 +462,11 @@ because the harness answers nothing on this seam. The cases:
 
 - the instruction does not resolve to a socket this crate can bind
 - the bind fails, with the reason carried
-- the shell is granted and its confinement cannot be built: a Landlock ABI below 6, or a
-  ruleset the kernel refuses (`BoundaryUnverified`, #29, failing closed)
+- the shell is granted and its confinement cannot be built: a Landlock ABI below 6, a
+  ruleset the kernel refuses, a home that is not the gate's own directory below `/`, a
+  granted binary that is not a regular file or a `commands/` that is not root's
+  directory, a ruled rlimit above the gate's hard limit, or a `.tmp` that is not a
+  directory (`BoundaryUnverified`, #29, failing closed, `weaver-gate-Spec` section 8.1)
 - the directive is out of order for the channel's state
 
 **The refusal reuses `lifecycle-refusal`,** so the enter aggregate carries it

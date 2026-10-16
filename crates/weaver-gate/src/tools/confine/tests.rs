@@ -21,6 +21,12 @@ const APPLETS: [&str; 14] = [
     "mktemp",
 ];
 
+/// This suite's uid, which owns its scratch `commands/` as root owns the
+/// stack's.
+fn own() -> u32 {
+    nix::unistd::geteuid().as_raw()
+}
+
 fn busybox() -> PathBuf {
     let path = std::env::var_os("WEAVER_BUSYBOX")
         .map(PathBuf::from)
@@ -62,7 +68,8 @@ impl Layout {
     }
 
     fn shell(&self) -> Shell {
-        Shell::confined_in(&self.grant(), self.base.join("home")).expect("the confinement builds")
+        Shell::confined_in(&self.grant(), self.base.join("home"), own())
+            .expect("the confinement builds")
     }
 }
 
@@ -79,8 +86,8 @@ impl Drop for Layout {
 fn run(shell: &Shell, script: &str) -> Output {
     let mut attempts = 0;
     loop {
-        let mut command = shell.command(script);
-        shell.install_layers(&mut command);
+        // SAFETY: the first step makes no call at all.
+        let mut command = unsafe { shell.command(script, || Ok(())) };
         match command.stdin(Stdio::null()).output() {
             Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && attempts < 100 => {
                 attempts += 1;
@@ -158,10 +165,11 @@ fn the_filter_refuses_every_socket() {
     std::fs::create_dir_all(&home).unwrap();
     let empty = Shell::confined_in(
         &ShellGrant {
-            binary: "/dev/null".into(),
-            commands: "/".into(),
+            binary: std::env::current_exe().unwrap(),
+            commands: home.clone(),
         },
         home.clone(),
+        own(),
     )
     .expect("the confinement builds");
     let ruleset = empty.layers.as_ref().unwrap().ruleset.as_raw_fd();
@@ -289,12 +297,12 @@ fn a_program_outside_the_build_is_refused() {
 ///
 /// Perturbation: accept any existing `.tmp` and both refusals build.
 #[test]
-#[ignore = "a measurement of this box's kernel: needs Landlock ABI 6"]
+#[ignore = "a measurement of this box's kernel and a built busybox: needs Landlock ABI 6 and WEAVER_BUSYBOX"]
 fn a_tmp_that_is_not_a_directory_refuses() {
     let layout = Layout::new("tmp");
     let home = layout.base.join("home");
     std::fs::write(home.join(".tmp"), b"a file").unwrap();
-    let file = Shell::confined_in(&layout.grant(), home.clone());
+    let file = Shell::confined_in(&layout.grant(), home.clone(), own());
     assert!(
         matches!(file, Err(ConfineFault::TmpDir(_))),
         "a file: {:?}",
@@ -302,7 +310,7 @@ fn a_tmp_that_is_not_a_directory_refuses() {
     );
     std::fs::remove_file(home.join(".tmp")).unwrap();
     std::os::unix::fs::symlink(std::env::temp_dir(), home.join(".tmp")).unwrap();
-    let link = Shell::confined_in(&layout.grant(), home.clone());
+    let link = Shell::confined_in(&layout.grant(), home.clone(), own());
     assert!(
         matches!(link, Err(ConfineFault::TmpDir(_))),
         "a symlink: {:?}",
@@ -310,7 +318,7 @@ fn a_tmp_that_is_not_a_directory_refuses() {
     );
     std::fs::remove_file(home.join(".tmp")).unwrap();
     assert!(
-        Shell::confined_in(&layout.grant(), home.clone()).is_ok(),
+        Shell::confined_in(&layout.grant(), home.clone(), own()).is_ok(),
         "the control builds"
     );
     assert!(home.join(".tmp").is_dir());
@@ -420,5 +428,190 @@ fn the_rlimits_bind() {
         text.contains(&SHELL_RLIMIT_FSIZE.to_string()),
         "{}",
         said(&fsize)
+    );
+}
+
+/// What a child met on the two arms the socket probe does not reach: an x32
+/// `getpid` (bit 30 set) and an i386 `getpid` through `int 0x80`, each the
+/// raw return (`-errno` or a pid), under `apply` or under no-new-privs alone.
+fn architecture_probe(ruleset: Option<RawFd>) -> (i64, i64) {
+    let (read, write) = nix::unistd::pipe().unwrap();
+    // SAFETY: the child makes raw system calls only and exits.
+    match unsafe { nix::unistd::fork() }.unwrap() {
+        nix::unistd::ForkResult::Child => unsafe {
+            let applied = match ruleset {
+                Some(ruleset) => apply(ruleset, SOCKET_FILTER.as_ptr() as usize).is_ok(),
+                None => libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0,
+            };
+            if !applied {
+                libc::_exit(2);
+            }
+            let x32 = libc::syscall(X32_SYSCALL_BIT as libc::c_long | libc::SYS_getpid);
+            // errno read at once, before any other call.
+            let x32 = if x32 < 0 {
+                -(*libc::__errno_location() as i64)
+            } else {
+                x32
+            };
+            // i386's getpid is 20, reached through the 32-bit gate. The
+            // kernel answers in rax, `-errno` on a refusal.
+            let i386: i64;
+            std::arch::asm!(
+                "int 0x80",
+                inlateout("rax") 20i64 => i386,
+                out("r8") _, out("r9") _, out("r10") _, out("r11") _,
+                options(nostack),
+            );
+            let mut bytes = [0u8; 16];
+            bytes[..8].copy_from_slice(&x32.to_le_bytes());
+            bytes[8..].copy_from_slice(&i386.to_le_bytes());
+            libc::write(write.as_raw_fd(), bytes.as_ptr().cast(), 16);
+            libc::_exit(0);
+        },
+        nix::unistd::ForkResult::Parent { child } => {
+            drop(write);
+            let status = nix::sys::wait::waitpid(child, None).unwrap();
+            assert_eq!(
+                status,
+                nix::sys::wait::WaitStatus::Exited(child, 0),
+                "the probe ran"
+            );
+            let mut bytes = [0u8; 16];
+            assert_eq!(nix::unistd::read(&read, &mut bytes).unwrap(), 16);
+            (
+                i64::from_le_bytes(bytes[..8].try_into().unwrap()),
+                i64::from_le_bytes(bytes[8..].try_into().unwrap()),
+            )
+        }
+    }
+}
+
+/// **The production filter refuses an x32 call and a non-native
+/// architecture's call `EACCES`, and the controls do not** (section 8.1's
+/// sockets row, the grade of #176, F3): under [`apply`], an x32 `getpid`
+/// and an i386 `getpid` through `int 0x80` both answer `-EACCES`. With
+/// no-new-privs alone, the x32 call answers the kernel's own `-ENOSYS` and
+/// the i386 call answers a pid, or `-ENOSYS` where the kernel runs no 32-bit
+/// emulation, never `-EACCES`.
+///
+/// Perturbation: delete the filter's x32 arm, or its architecture check, and
+/// the matching case answers the kernel's word, not `-EACCES`.
+#[test]
+#[ignore = "a measurement of this box's kernel: needs Landlock ABI 6"]
+fn the_filter_refuses_x32_and_another_architecture() {
+    let home = std::env::temp_dir().join(format!("weaver-confine-arch-{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    let shell = Shell::confined_in(
+        &ShellGrant {
+            binary: std::env::current_exe().unwrap(),
+            commands: home.clone(),
+        },
+        home.clone(),
+        own(),
+    )
+    .expect("the confinement builds");
+    let ruleset = shell.layers.as_ref().unwrap().ruleset.as_raw_fd();
+    let eacces = -(libc::EACCES as i64);
+    let (x32, i386) = architecture_probe(Some(ruleset));
+    assert_eq!(x32, eacces, "x32 refused by the filter");
+    assert_eq!(i386, eacces, "i386 refused by the filter");
+    let (x32, i386) = architecture_probe(None);
+    assert_eq!(
+        x32,
+        -(libc::ENOSYS as i64),
+        "the control: the kernel's own x32 answer"
+    );
+    assert_ne!(
+        i386, eacces,
+        "the control: the kernel's own i386 answer, {i386}"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// **The home must be the gate's own directory below `/`** (the grade of
+/// #176, F1): `/` would grant every right but execute on the whole
+/// filesystem. `/`, a relative path, a symlink to a good home and a
+/// directory owned by root each refuse `Home`. The control: the scratch home
+/// builds.
+///
+/// Perturbation: drop `judge_home` and `/` builds.
+#[test]
+#[ignore = "a measurement of this box's kernel and a built busybox: needs Landlock ABI 6 and WEAVER_BUSYBOX"]
+fn the_home_must_be_the_gates_own_directory() {
+    let layout = Layout::new("home");
+    let home = layout.base.join("home");
+    let link = layout.base.join("home-link");
+    std::os::unix::fs::symlink(&home, &link).unwrap();
+    for bad in [
+        PathBuf::from("/"),
+        PathBuf::from("relative-home"),
+        link,
+        PathBuf::from("/var/empty"),
+    ] {
+        let built = Shell::confined_in(&layout.grant(), bad.clone(), own());
+        assert!(
+            matches!(built, Err(ConfineFault::Home(_))),
+            "{}: {:?}",
+            bad.display(),
+            built.err()
+        );
+    }
+    assert!(
+        Shell::confined_in(&layout.grant(), home, own()).is_ok(),
+        "the control builds"
+    );
+}
+
+/// **The granted paths are judged on the descriptors the rules use** (the
+/// grade of #176, F1): a directory, or a symlink, in the binary's place
+/// refuses `Binary` (a directory would grant execute beneath it), and a
+/// `commands/` that is a file, a symlink, or owned by another uid refuses
+/// `Commands`. The control: the layout's own grant builds.
+///
+/// Perturbation: open without `O_NOFOLLOW`, or drop the file-type check, and
+/// the matching case builds.
+#[test]
+#[ignore = "a measurement of this box's kernel and a built busybox: needs Landlock ABI 6 and WEAVER_BUSYBOX"]
+fn the_granted_paths_are_judged_on_their_descriptors() {
+    let layout = Layout::new("paths");
+    let home = layout.base.join("home");
+    let good = layout.grant();
+    let binary_link = layout.base.join("busybox-link");
+    std::os::unix::fs::symlink(&good.binary, &binary_link).unwrap();
+    for binary in [layout.base.join("libexec"), binary_link] {
+        let grant = ShellGrant {
+            binary: binary.clone(),
+            commands: good.commands.clone(),
+        };
+        let built = Shell::confined_in(&grant, home.clone(), own());
+        assert!(
+            matches!(built, Err(ConfineFault::Binary(_))),
+            "{}: {:?}",
+            binary.display(),
+            built.err()
+        );
+    }
+    let commands_link = layout.base.join("commands-link");
+    std::os::unix::fs::symlink(&good.commands, &commands_link).unwrap();
+    for commands in [
+        good.binary.clone(),
+        commands_link,
+        PathBuf::from("/var/empty"),
+    ] {
+        let grant = ShellGrant {
+            binary: good.binary.clone(),
+            commands: commands.clone(),
+        };
+        let built = Shell::confined_in(&grant, home.clone(), own());
+        assert!(
+            matches!(built, Err(ConfineFault::Commands(_))),
+            "{}: {:?}",
+            commands.display(),
+            built.err()
+        );
+    }
+    assert!(
+        Shell::confined_in(&good, home, own()).is_ok(),
+        "the control builds"
     );
 }

@@ -212,16 +212,13 @@ fn run_in_home(
     // move that fails fails the spawn: `Errored`, nothing run.
     let handle = tools.raw();
     let gate = nix::unistd::getpid();
-    let mut shell = shell_program.command(command);
+    // **The confinement's layers follow the move** (`weaver-gate-Spec`
+    // section 8.1): `command` registers the move first and the layers after
+    // it, no-new-privs first, and builds no shell command without them.
     // SAFETY: `move_self` makes only async-signal-safe `nix` calls on
     // numbers and a path read before the fork.
-    unsafe {
-        shell.pre_exec(move || cgroup::move_self(handle, gate));
-    }
-    // **The confinement's layers follow the move** (`weaver-gate-Spec`
-    // section 8.1): registered second, so they run after it in the child,
-    // no-new-privs first.
-    shell_program.install_layers(&mut shell);
+    let mut shell =
+        unsafe { shell_program.command(command, move || cgroup::move_self(handle, gate)) };
     // The child still leads its own process group, as before the cgroup's
     // kill: the group no longer carries the kill, and keeping it changes
     // nothing else.

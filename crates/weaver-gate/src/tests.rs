@@ -39,7 +39,7 @@ fn a_cancel_past_the_answer_is_dropped_in_tools() {
     let mut child = command.spawn().unwrap();
     drop(child_end);
     let late_cancel = scratch("late-cancel");
-    let (_shell, grant) = granted_shell("late-cancel");
+    let grant = granted_shell();
     let ready = test_common::ask(
         &harness,
         1,
@@ -165,7 +165,7 @@ fn the_interrupt_then_the_quiesce_through_the_served_loop_in_tools() {
     let mut child = command.spawn().unwrap();
     drop(child_end);
     let socket = scratch("interrupt-quiesce");
-    let (_shell, grant) = granted_shell("interrupt-quiesce");
+    let grant = granted_shell();
     let ready = test_common::ask(
         &harness,
         1,
@@ -272,27 +272,23 @@ fn instruction() -> GateInstruction {
 
 /// **A real grant for the served-loop tests** (#29): the static busybox
 /// `WEAVER_BUSYBOX` names, used where it stands (a fresh copy would race a
-/// parallel test's fork holding its write descriptor, `ETXTBSY`), and a
-/// scratch `commands/` holding the default applets and no `sh`, as admin
-/// builds it.
-/// The served gate builds its confinement from it at the raise, under this
+/// parallel test's fork holding its write descriptor, `ETXTBSY`), and, for
+/// `commands/`, `/var/empty`: the served gate requires a root-owned directory
+/// there, as admin builds it, and this suite runs as no root. Its commands
+/// use builtins and applets ash runs by name, so `PATH` finds nothing it
+/// needs. The served gate builds its confinement at the raise, under this
 /// suite's uid, so its home is that uid's and `.tmp` is made there if absent.
-fn granted_shell(name: &str) -> (Scratch, weaver_types::ShellGrant) {
-    let busybox = std::env::var_os("WEAVER_BUSYBOX")
+fn granted_shell() -> weaver_types::ShellGrant {
+    let binary = std::env::var_os("WEAVER_BUSYBOX")
         .map(std::path::PathBuf::from)
         .expect("WEAVER_BUSYBOX names a static busybox built from the pinned configuration");
-    let layout = scratch(&format!("{name}-shell"));
-    let binary = busybox;
     assert!(binary.is_file(), "{} is not a file", binary.display());
-    let commands = layout.dir.join("commands");
-    std::fs::create_dir_all(&commands).unwrap();
-    for applet in [
-        "ls", "cat", "head", "tail", "wc", "grep", "sort", "uniq", "cut", "tr", "date", "echo",
-        "pwd", "mktemp",
-    ] {
-        std::os::unix::fs::symlink(&binary, commands.join(applet)).unwrap();
-    }
-    (layout, weaver_types::ShellGrant { binary, commands })
+    let commands = std::path::PathBuf::from("/var/empty");
+    assert!(
+        commands.is_dir(),
+        "a root-owned /var/empty stands on this box"
+    );
+    weaver_types::ShellGrant { binary, commands }
 }
 
 /// A socket path inside a directory of its own, the directory removed
@@ -762,7 +758,7 @@ fn the_tools_handle_never_reaches_the_shell_in_tools() {
     let mut child = command.spawn().unwrap();
     drop(child_end);
     let socket = scratch("handle-shell");
-    let (_shell, grant) = granted_shell("handle-shell");
+    let grant = granted_shell();
     let ready = test_common::ask(
         &harness,
         1,
