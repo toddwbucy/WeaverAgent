@@ -89,11 +89,9 @@ impl Ruleset {
                 0u32,
             )
         };
-        assert!(
-            fd >= 0,
-            "landlock_create_ruleset: {}",
-            nix::errno::Errno::last()
-        );
+        // errno read at once, on the line after the call.
+        let errno = nix::errno::Errno::last();
+        assert!(fd >= 0, "landlock_create_ruleset: {errno}");
         // SAFETY: a fresh descriptor the kernel returned.
         Ruleset(unsafe { OwnedFd::from_raw_fd(fd as RawFd) })
     }
@@ -115,13 +113,8 @@ impl Ruleset {
                 0u32,
             )
         };
-        assert_eq!(
-            added,
-            0,
-            "landlock_add_rule {}: {}",
-            path.display(),
-            nix::errno::Errno::last()
-        );
+        let errno = nix::errno::Errno::last();
+        assert_eq!(added, 0, "landlock_add_rule {}: {errno}", path.display());
         self
     }
 
@@ -141,12 +134,8 @@ impl Ruleset {
                 0u32,
             )
         };
-        assert_eq!(
-            added,
-            0,
-            "landlock_add_rule port: {}",
-            nix::errno::Errno::last()
-        );
+        let errno = nix::errno::Errno::last();
+        assert_eq!(added, 0, "landlock_add_rule port: {errno}");
         self
     }
 
@@ -904,7 +893,8 @@ fn m8c_a_noexec_home_closes_the_interpreter_route() {
             std::ptr::null(),
         )
     };
-    assert_eq!(mounted, 0, "mount: {}", nix::errno::Errno::last());
+    let errno = nix::errno::Errno::last();
+    assert_eq!(mounted, 0, "mount: {errno}");
     // Unmounted on every exit path, a failed assertion's unwind among them.
     let _mounted = Unmount(target);
     std::fs::copy("/usr/bin/id", home.join("payload")).unwrap();
@@ -1134,6 +1124,13 @@ fn socket_probe(filter: &[SockFilter]) -> String {
                 libc::SOCK_STREAM,
                 0,
             );
+            // errno read at once, before any other call can overwrite it
+            // (Codex on #175: the socketpair below did).
+            let x32_errno = if x32 < 0 {
+                *libc::__errno_location()
+            } else {
+                0
+            };
             let mut pair = [0i32; 2];
             if libc::socketpair(
                 libc::AF_UNIX,
@@ -1144,11 +1141,6 @@ fn socket_probe(filter: &[SockFilter]) -> String {
             {
                 opened |= 1 << 11;
             }
-            let x32_errno = if x32 < 0 {
-                *libc::__errno_location()
-            } else {
-                0
-            };
             if x32_errno == libc::EACCES {
                 opened |= 1 << 9;
             } else if x32_errno == libc::ENOSYS {
