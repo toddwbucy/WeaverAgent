@@ -1943,6 +1943,21 @@ esac
                                      env=env, text=True, capture_output=True, timeout=20)
                 self.assertFalse((bin_dir / "busybox").exists(), ran.stderr)
                 self.assertEqual((stack / "shell-binary").exists(), stays, ran.stderr)
+        # **The repair path** (Codex on #177): binaries unchanged and nothing
+        # installed, the key absent before this run and written by it, then a
+        # validation fails. The rollback installs nothing back and still
+        # removes the key. Perturbation: put the removal back under the
+        # binaries' guard and the key stays.
+        with self.subTest(path="repair"):
+            (stack / "shell-binary").write_text(str(bin_dir / "busybox") + "\n")
+            (bin_dir / "busybox").write_text("x")
+            repair = ('sudo() { "$@"; }\n' + shell_function(text, "restore")
+                      + 'RESTORED=0; LOADED_AGENT=""; INSTALL_DONE=0; ADDED=(); CHANGED=()\n'
+                      + 'SHELL_KEY_WRITTEN=1\nrestore\n')
+            ran = subprocess.run(["bash", "-c", repair], env={**env, "BACKUP": ""}, text=True,
+                                 capture_output=True, timeout=20)
+            self.assertFalse((stack / "shell-binary").exists(), ran.stderr)
+            self.assertTrue((bin_dir / "busybox").exists(), "the unchanged busybox stays")
 
     def test_an_install_unload_past_its_bound_is_joined_by_a_force(self):
         """**The install's unload is bounded, the force its fallback** (the

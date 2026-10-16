@@ -318,3 +318,73 @@ fn the_stacks_busybox_judges_and_each_fault_refuses() {
             .contains("not a regular file")
     );
 }
+
+/// **No ELF a file can name panics the judgment** (Codex on #177): a
+/// header-only image with no program headers (phoff and phnum 0), a file
+/// shorter than a header, and a table whose offset lies past the file's end
+/// each refuse. The control: a well-formed static header reads as static.
+///
+/// Perturbation: copy the header by index again in place of `get_mut`, and
+/// without the header's floor the first case panics.
+#[test]
+fn a_hostile_elf_refuses_and_never_panics() {
+    let dir = std::env::temp_dir().join(format!("weaver-admin-elf-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let judged = |name: &str, bytes: &[u8]| {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        elf_headers(&path).and_then(|headers| names_an_interpreter(&headers))
+    };
+    let mut header_only = elf_with(1);
+    header_only.truncate(64);
+    header_only[32..40].copy_from_slice(&0u64.to_le_bytes());
+    header_only[56..58].copy_from_slice(&0u16.to_le_bytes());
+    assert!(
+        judged("header-only", &header_only).is_err(),
+        "no program headers refuses"
+    );
+    assert!(
+        judged("short", &elf_with(1)[..30]).is_err(),
+        "a short file refuses"
+    );
+    let mut past = elf_with(1);
+    past.truncate(64);
+    past[32..40].copy_from_slice(&1000u64.to_le_bytes());
+    assert!(
+        judged("past", &past).is_err(),
+        "a table past the end refuses"
+    );
+    assert_eq!(
+        judged("good", &elf_with(1)),
+        Ok(false),
+        "the control reads as static"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **A listing that writes forever is refused within its bound** (Codex on
+/// #177): every pass of the read reaches the cap and the deadline, so a
+/// binary that never stops writing is killed and refused, its bytes capped,
+/// never held or grown without end.
+///
+/// Perturbation: drop the cap and the flood is refused by the deadline
+/// instead, failing the cap's assertion.
+#[test]
+fn a_listing_that_writes_forever_is_refused() {
+    let dir = std::env::temp_dir().join(format!("weaver-admin-flood-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let flood = dir.join("flood");
+    std::fs::write(&flood, "#!/bin/sh\nexec yes sh\n").unwrap();
+    std::fs::set_permissions(&flood, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let started = std::time::Instant::now();
+    let refused = compiled_set_within(&flood, std::time::Duration::from_secs(2)).unwrap_err();
+    assert!(
+        refused.contains("wrote past"),
+        "the cap refuses it: {refused}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "within its bound"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

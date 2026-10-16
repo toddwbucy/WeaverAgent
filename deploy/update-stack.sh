@@ -1013,11 +1013,6 @@ restore() {
       sudo rm -f "$BIN_DIR/$b" \
         || { printf '  FAILED to remove %s\n' "$b" >&2; failed=1; }
     done
-    if [ "$SHELL_KEY_WRITTEN" -eq 1 ]; then
-      printf '  removing the stack record'"'"'s shell-binary, which this run wrote\n' >&2
-      sudo rm -f "$STACK/shell-binary" \
-        || { printf '  FAILED to remove %s\n' "$STACK/shell-binary" >&2; failed=1; }
-    fi
     for b in "${CHANGED[@]}"; do
       # Never backed up is never replaced, so there is nothing to put back.
       # **Asked with the privilege that made it**: the backup directory is
@@ -1029,6 +1024,14 @@ restore() {
       sudo install -o root -g root -m "$mode" "$BACKUP/$b" "$BIN_DIR/$b" \
         || { printf '  FAILED to restore %s\n' "$b" >&2; failed=1; }
     done
+  fi
+  # **The key this run wrote goes whether or not binaries were installed**
+  # (Codex on #177): the repair path writes it with nothing installed, so its
+  # removal stands outside the binaries' rollback.
+  if [ "$SHELL_KEY_WRITTEN" -eq 1 ]; then
+    printf '  removing the stack record'"'"'s shell-binary, which this run wrote\n' >&2
+    sudo rm -f "$STACK/shell-binary" \
+      || { printf '  FAILED to remove %s\n' "$STACK/shell-binary" >&2; failed=1; }
   fi
   if [ "$failed" -ne 0 ]; then
     printf '  RESTORE INCOMPLETE - inspect %s and %s by hand\n' "$BIN_DIR" "$BACKUP" >&2

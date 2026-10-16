@@ -161,16 +161,27 @@ fn elf_headers(binary: &Path) -> Result<Vec<u8>, String> {
     let span = u64::from(u16::from_le_bytes([header[54], header[55]]))
         .checked_mul(u64::from(u16::from_le_bytes([header[56], header[57]])))
         .ok_or_else(malformed)?;
-    let end = phoff.checked_add(span).ok_or_else(malformed)?;
-    // A table past 64 KiB is no busybox's: refused rather than allocated.
+    // **Every span is checked before it is touched** (Codex on #177): the
+    // buffer holds at least the header, a table past 64 KiB is no busybox's
+    // and is refused rather than allocated, and each slice is taken with
+    // `get_mut`, so no offset a file names can panic this crate.
+    let table_end = phoff.checked_add(span).ok_or_else(malformed)?;
+    let end = table_end.max(64);
     if end > 1 << 16 {
         return Err(malformed());
     }
-    let mut bytes = vec![0u8; end as usize];
-    bytes[..64].copy_from_slice(&header);
+    let length = usize::try_from(end).map_err(|_| malformed())?;
+    let mut bytes = vec![0u8; length];
+    bytes
+        .get_mut(..64)
+        .ok_or_else(malformed)?
+        .copy_from_slice(&header);
     if span > 0 {
-        file.read_exact_at(&mut bytes[phoff as usize..end as usize], phoff)
-            .map_err(|_| malformed())?;
+        let start = usize::try_from(phoff).map_err(|_| malformed())?;
+        let stop = usize::try_from(table_end).map_err(|_| malformed())?;
+        let table = bytes.get_mut(start..stop).ok_or_else(malformed)?;
+        // A table past the file's end fails the read and refuses.
+        file.read_exact_at(table, phoff).map_err(|_| malformed())?;
     }
     Ok(bytes)
 }
@@ -182,11 +193,24 @@ fn names_an_interpreter(bytes: &[u8]) -> Result<bool, String> {
     if bytes.len() < 64 || &bytes[..4] != b"\x7fELF" || bytes[4] != 2 || bytes[5] != 1 {
         return Err(malformed());
     }
-    let u16_at = |at: usize| u16::from_le_bytes([bytes[at], bytes[at + 1]]) as usize;
-    let phoff = u64::from_le_bytes(bytes[32..40].try_into().map_err(|_| malformed())?) as usize;
-    let phentsize = u16_at(54);
-    let phnum = u16_at(56);
-    if phentsize < 4 {
+    // The header's fields are read through `get`, so a short image refuses
+    // rather than panics.
+    let u16_at = |at: usize| -> Result<usize, String> {
+        let field = bytes.get(at..at + 2).ok_or_else(malformed)?;
+        Ok(u16::from_le_bytes([field[0], field[1]]) as usize)
+    };
+    let phoff = bytes
+        .get(32..40)
+        .and_then(|field| field.try_into().ok())
+        .map(u64::from_le_bytes)
+        .ok_or_else(malformed)?;
+    let phoff = usize::try_from(phoff).map_err(|_| malformed())?;
+    let phentsize = u16_at(54)?;
+    let phnum = u16_at(56)?;
+    // An executable image has program headers: one that names none is not
+    // the static binary the shell needs, and is refused rather than read as
+    // static.
+    if phentsize < 4 || phnum == 0 {
         return Err(malformed());
     }
     for index in 0..phnum {
@@ -212,6 +236,10 @@ fn is_plain_name(name: &str) -> bool {
 /// is killed and refused, so a root-owned program that is not busybox cannot
 /// hold the inventory, and the locks it runs under, open.
 const LIST_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The cap on `--list`'s output: applet names, one per line, never approach
+/// it, and a binary writing past it is refused and killed.
+const LIST_CAP: usize = 64 * 1024;
 
 /// The binary's own listing of what is compiled in, run as `busybox --list`
 /// (busybox answers `--list` only under a name that starts `busybox`), with
@@ -270,21 +298,34 @@ fn compiled_set_within(
     let mut chunk = [0u8; 4096];
     let mut closed = false;
     let mut exited = None;
+    // **Every iteration reaches the cap, the exit and the deadline** (Codex
+    // on #177): one read per pass, never a loop of reads, so a binary that
+    // writes forever meets the bound, and the listing's bytes are capped at
+    // `LIST_CAP`, which applet names never approach.
     loop {
+        let mut read_any = false;
         if !closed {
             match stdout.read(&mut chunk) {
                 Ok(0) => closed = true,
                 Ok(n) => {
-                    text.extend_from_slice(&chunk[..n]);
-                    continue;
+                    text.extend_from_slice(chunk.get(..n).unwrap_or(&[]));
+                    read_any = true;
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(e) => {
                     kill_group(&mut child);
                     return Err(format!("{} --list: {e}", binary.display()));
                 }
             }
+        }
+        if text.len() > LIST_CAP {
+            kill_group(&mut child);
+            return Err(format!(
+                "{} --list wrote past {LIST_CAP} bytes, no listing of applet names",
+                binary.display()
+            ));
         }
         if exited.is_none() {
             match child.try_wait() {
@@ -312,7 +353,9 @@ fn compiled_set_within(
                 bound.as_millis()
             ));
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        if !read_any {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
     let text =
         String::from_utf8(text).map_err(|_| format!("{} --list is not text", binary.display()))?;
