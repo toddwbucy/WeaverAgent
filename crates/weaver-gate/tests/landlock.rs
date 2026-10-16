@@ -197,7 +197,22 @@ impl Ruleset {
         if command.get_envs().next().is_none() {
             command.env_clear();
         }
-        match command.stdin(Stdio::null()).output() {
+        // **A spawn that meets `ETXTBSY` is retried, bounded** (Codex on
+        // #175): a parallel test's fork can hold the write descriptor of a
+        // binary this test just copied until that fork execs, and an exec of
+        // the copy meanwhile fails "Text file busy". The retry is the one site
+        // every instrument's spawn passes, a second or so in all.
+        let mut attempts = 0;
+        let spawned = loop {
+            match command.stdin(Stdio::null()).output() {
+                Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && attempts < 100 => {
+                    attempts += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                other => break other,
+            }
+        };
+        match spawned {
             Ok(output) => output,
             // The spawn's own failure, a `pre_exec` step or the exec, is a
             // measurement too: it rides the output as status None.
@@ -717,10 +732,11 @@ fn m8c_a_noexec_home_closes_the_interpreter_route() {
 /// **The private user and mount namespace M8c's mount needs**, verified
 /// rather than assumed from euid 0. The uid map must not be the identity
 /// (`0 0 4294967295`, the initial namespace): it maps this process's 0 to
-/// another uid outside. The user and mount namespaces must differ from the
-/// parent process's where its links read. Where they do not read, the mount
-/// succeeding is itself the proof: an unprivileged account can mount only in
-/// a mount namespace its own user namespace owns, never in the initial one.
+/// another uid outside, which proves a user namespace. The mount the test then
+/// makes succeeding proves a mount namespace that user namespace owns: an
+/// account unprivileged outside can mount only there, never in the initial
+/// one. The parent process is not compared with: run under `unshare ... cargo
+/// test`, the parent is cargo, already inside the same namespaces.
 struct PrivateNamespace;
 
 impl PrivateNamespace {
@@ -739,14 +755,6 @@ impl PrivateNamespace {
             first != [0, 0, 4_294_967_295] && first.get(1).is_some_and(|outside| *outside != 0),
             "a private user namespace mapping 0 to another uid, not {map:?}"
         );
-        let parent = nix::unistd::getppid();
-        for ns in ["user", "mnt"] {
-            let own =
-                std::fs::read_link(format!("/proc/self/ns/{ns}")).expect("our own link reads");
-            if let Ok(theirs) = std::fs::read_link(format!("/proc/{parent}/ns/{ns}")) {
-                assert_ne!(own, theirs, "the {ns} namespace is the parent's");
-            }
-        }
     }
 }
 
