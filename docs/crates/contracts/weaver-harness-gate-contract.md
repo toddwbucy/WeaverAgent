@@ -291,8 +291,11 @@ being who speaks in the return:
 - **Result.** The invocation ran and the tool answers in its own words. For
   the shell, a nonzero exit status is a result and not an error: the exit is
   the shell's answer, accounted in content.
-- **Refused.** Nothing ran, and the gate speaks in its own voice: a name it
-  does not hold, or the shell where the raise carried no grant for it (#29) - never
+- **Refused.** Nothing ran, and the refuser speaks in its own voice. On this seam that
+  is the gate. The harness speaks a `Refused` of its own, outside this seam, for a call
+  naming a tool the enter did not grant, which opens no exchange (#29,
+  `weaver-harness-Spec` section 6), and the record tells the two apart by the event's
+  subsystem. The gate's: a name it does not hold, or the shell where the raise carried no grant for it (#29) - never
   a nearest match, the registry discipline of the family table applied one organ
   over - malformed arguments, or a clock beyond the declared maximum. No side effect exists and a corrected call is
   safe to re-ask.

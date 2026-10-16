@@ -1148,8 +1148,10 @@ judged as the organ binaries are, root-owned and written by root alone, and **it
 statically linked**: its ELF header carries no `PT_INTERP`, a dynamically linked shell
 needing execute on the ELF interpreter, which reopens the route `weaver-gate-Spec`
 section 8.1 closes (M8). Its applet list, `<shell-binary>.applets` beside it, one name
-per line, root's as the binary is, reads. The inventory then builds the shell's grant
-from `tool-set` and `shell-tcp-connect`, which the enter carries. Any failure refuses with `BoundaryUnverified`,
+per line, root's as the binary is, reads. The inventory then builds the shell's grant,
+which the enter carries: the operator's `shell-tcp-connect`, and the two paths this crate
+authors as deployment facts, `shell-binary` and the run directory's `commands/`, the
+gate reading no root of this crate's (`weaver-types-Spec` section 2). Any failure refuses with `BoundaryUnverified`,
 nothing is repaired, and nothing is built, per charter section 2. **The model
 binding's artifact is checked for presence and never resolved here.** An empty
 member refuses `ConfigInvalid` naming
@@ -2629,7 +2631,7 @@ weaver-<agent>/      root's; the agent's cgroup
   - **The kill and the removal:** admin writes `cgroup.kill` on `weaver-<agent>/` and
     waits for it to empty. It then removes `run/`, `tools/`, `worker/`, `constituents/`
     and `weaver-<agent>/`, deepest first, an `ENOENT` read as removed, then the record,
-    then the run directory's `commands/` where the shell was elected (#29, section 6),
+    then the run directory's `commands/` where it stands (#29, section 6),
     and only then publishes, writes the marker and prints.
   - **The record:** a kill that found processes still standing is said in `admin.log`
     with their pids, the one record that something of the run outlived its leave.

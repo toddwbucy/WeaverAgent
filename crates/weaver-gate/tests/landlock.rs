@@ -166,7 +166,12 @@ impl Ruleset {
                 Ok(())
             });
         }
-        match command.env_clear().stdin(Stdio::null()).output() {
+        // The environment is cleared where the caller set none, and kept as
+        // the caller set it otherwise (the shell's `HOME`, `PATH`, `TMPDIR`).
+        if command.get_envs().next().is_none() {
+            command.env_clear();
+        }
+        match command.stdin(Stdio::null()).output() {
             Ok(output) => output,
             // The spawn's own failure, a `pre_exec` step or the exec, is a
             // measurement too: it rides the output as status None.
@@ -232,7 +237,7 @@ fn standard(ruleset: Ruleset, bin: &CommandDir) -> Ruleset {
     rules.allow(Path::new(INTERPRETER), FS_EXECUTE | FS_READ_FILE)
 }
 
-/// **M1: the ABI.** Landlock is enabled and reports its version; signal and
+/// **M1: the ABI.** Landlock is enabled and reports its version. Signal and
 /// abstract-socket scoping need 6, TCP rules 4, `REFER` 2, `TRUNCATE` 3.
 #[test]
 #[ignore = "a measurement of this box's kernel"]
@@ -338,7 +343,7 @@ fn m4_breakout_commands_start_only_listed_programs() {
 }
 
 /// **M5: TCP connect denial.** With `CONNECT_TCP` handled and no port allowed,
-/// `bash`'s `/dev/tcp` connect to a local listener fails; with that port
+/// `bash`'s `/dev/tcp` connect to a local listener fails, and with that port
 /// allowed, it connects.
 #[test]
 #[ignore = "a measurement of this box's kernel"]
@@ -364,7 +369,7 @@ fn m5_tcp_connect_is_denied_unless_elected() {
 
 /// **M6: signal and abstract-socket scoping.** With `SCOPE_SIGNAL`, a confined
 /// `bash` cannot signal a process outside its domain (`kill -0`), and can
-/// signal its own child; with `SCOPE_ABSTRACT_UNIX_SOCKET` it cannot connect
+/// signal its own child. With `SCOPE_ABSTRACT_UNIX_SOCKET` it cannot connect
 /// to an abstract socket bound outside.
 #[test]
 #[ignore = "a measurement of this box's kernel"]
@@ -527,7 +532,7 @@ fn m8_the_interpreter_as_a_program() {
     let home = std::env::temp_dir().join(format!("weaver-landlock-m8home-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     std::fs::create_dir_all(&home).unwrap();
-    // The agent could write these bytes itself; the suite places them.
+    // The agent could write these bytes itself, and the suite places them.
     std::fs::copy("/usr/bin/id", home.join("payload")).unwrap();
     std::fs::set_permissions(
         home.join("payload"),
@@ -657,6 +662,8 @@ const BPF_LD_W_ABS: u16 = 0x20;
 const BPF_JEQ_K: u16 = 0x15;
 const BPF_RET_K: u16 = 0x06;
 const BPF_ALU_AND_K: u16 = 0x54;
+const BPF_JGE_K: u16 = 0x35;
+const X32_SYSCALL_BIT: u32 = 0x4000_0000;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -678,12 +685,15 @@ const fn op(code: u16, jt: u8, jf: u8, k: u32) -> SockFilter {
 }
 
 /// **The socket-family filter** the shell applies to itself under
-/// no-new-privs (#29, the operator's answer 4): `socket` and `socketpair`
-/// allowed for `AF_UNIX`; `AF_INET` and `AF_INET6` allowed as `SOCK_STREAM`
-/// alone, and only where `tcp` (a TCP port is elected); every other family,
-/// and UDP or raw on the inet families, refused `EACCES`. `io_uring_setup` is
-/// refused too, io_uring's `IORING_OP_SOCKET` being a route to a socket that
-/// never calls `socket`. Any other architecture is refused whole.
+/// no-new-privs (#29, the operator's answer 4). Any architecture but x86-64
+/// is refused whole, and so is every x32 system call (`nr` with bit 30 set),
+/// x32 sharing the architecture word. `io_uring_setup` is refused, io_uring's
+/// `IORING_OP_SOCKET` being a route to a socket that never calls `socket`.
+/// `socket` and `socketpair` are allowed for `AF_UNIX`, and for `AF_INET` and
+/// `AF_INET6` only as `SOCK_STREAM` with protocol 0 or `IPPROTO_TCP`, and only
+/// where `tcp` (a TCP port is elected): a pinned protocol keeps MPTCP and
+/// SCTP stream sockets out. Everything else that makes a socket is refused
+/// `EACCES`.
 fn socket_filter(tcp: bool) -> Vec<SockFilter> {
     let deny = SECCOMP_RET_ERRNO | libc::EACCES as u32;
     let inet = if tcp { SECCOMP_RET_ALLOW } else { deny };
@@ -693,21 +703,26 @@ fn socket_filter(tcp: bool) -> Vec<SockFilter> {
         /* 1 */ op(BPF_JEQ_K, 1, 0, AUDIT_ARCH_X86_64),
         /* 2 */ op(BPF_RET_K, 0, 0, deny),
         /* 3 */ op(BPF_LD_W_ABS, 0, 0, 0),
-        /* 4 */ op(BPF_JEQ_K, 0, 1, libc::SYS_io_uring_setup as u32),
+        /* 4 */ op(BPF_JGE_K, 0, 1, X32_SYSCALL_BIT),
         /* 5 */ op(BPF_RET_K, 0, 0, deny),
-        /* 6 */ op(BPF_JEQ_K, 2, 0, libc::SYS_socket as u32),
-        /* 7 */ op(BPF_JEQ_K, 1, 0, libc::SYS_socketpair as u32),
-        /* 8 */ op(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW),
-        /* 9 */ op(BPF_LD_W_ABS, 0, 0, 16),
-        /* 10 */ op(BPF_JEQ_K, 0, 1, libc::AF_UNIX as u32),
-        /* 11 */ op(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW),
-        /* 12 */ op(BPF_JEQ_K, 1, 0, libc::AF_INET as u32),
-        /* 13 */ op(BPF_JEQ_K, 0, 4, libc::AF_INET6 as u32),
-        /* 14 */ op(BPF_LD_W_ABS, 0, 0, 24),
-        /* 15 */ op(BPF_ALU_AND_K, 0, 0, 0xf),
-        /* 16 */ op(BPF_JEQ_K, 0, 1, libc::SOCK_STREAM as u32),
-        /* 17 */ op(BPF_RET_K, 0, 0, inet),
-        /* 18 */ op(BPF_RET_K, 0, 0, deny),
+        /* 6 */ op(BPF_JEQ_K, 0, 1, libc::SYS_io_uring_setup as u32),
+        /* 7 */ op(BPF_RET_K, 0, 0, deny),
+        /* 8 */ op(BPF_JEQ_K, 2, 0, libc::SYS_socket as u32),
+        /* 9 */ op(BPF_JEQ_K, 1, 0, libc::SYS_socketpair as u32),
+        /* 10 */ op(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW),
+        /* 11 */ op(BPF_LD_W_ABS, 0, 0, 16),
+        /* 12 */ op(BPF_JEQ_K, 0, 1, libc::AF_UNIX as u32),
+        /* 13 */ op(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW),
+        /* 14 */ op(BPF_JEQ_K, 1, 0, libc::AF_INET as u32),
+        /* 15 */ op(BPF_JEQ_K, 0, 7, libc::AF_INET6 as u32),
+        /* 16 */ op(BPF_LD_W_ABS, 0, 0, 24),
+        /* 17 */ op(BPF_ALU_AND_K, 0, 0, 0xf),
+        /* 18 */ op(BPF_JEQ_K, 0, 4, libc::SOCK_STREAM as u32),
+        /* 19 */ op(BPF_LD_W_ABS, 0, 0, 32),
+        /* 20 */ op(BPF_JEQ_K, 1, 0, 0),
+        /* 21 */ op(BPF_JEQ_K, 0, 1, libc::IPPROTO_TCP as u32),
+        /* 22 */ op(BPF_RET_K, 0, 0, inet),
+        /* 23 */ op(BPF_RET_K, 0, 0, deny),
     ]
 }
 
@@ -718,14 +733,34 @@ fn socket_probe(filter: &[SockFilter]) -> String {
         len: filter.len() as u16,
         filter: filter.as_ptr(),
     };
-    let kinds: [(i32, i32, &str); 6] = [
-        (libc::AF_UNIX, libc::SOCK_STREAM, "unix stream"),
-        (libc::AF_INET, libc::SOCK_STREAM, "inet tcp"),
-        (libc::AF_INET6, libc::SOCK_STREAM, "inet6 tcp"),
-        (libc::AF_INET, libc::SOCK_DGRAM, "inet udp"),
-        (libc::AF_INET, libc::SOCK_RAW, "inet raw"),
-        (libc::AF_NETLINK, libc::SOCK_RAW, "netlink"),
+    let kinds: [(i32, i32, i32, &str); 8] = [
+        (libc::AF_UNIX, libc::SOCK_STREAM, 0, "unix stream"),
+        (libc::AF_INET, libc::SOCK_STREAM, 0, "inet tcp"),
+        (
+            libc::AF_INET6,
+            libc::SOCK_STREAM,
+            libc::IPPROTO_TCP,
+            "inet6 tcp",
+        ),
+        (libc::AF_INET, libc::SOCK_DGRAM, 0, "inet udp"),
+        (libc::AF_INET, libc::SOCK_RAW, 0, "inet raw"),
+        (libc::AF_NETLINK, libc::SOCK_RAW, 0, "netlink"),
+        (
+            libc::AF_INET,
+            libc::SOCK_STREAM,
+            libc::IPPROTO_MPTCP,
+            "inet mptcp",
+        ),
+        (
+            libc::AF_INET,
+            libc::SOCK_STREAM,
+            libc::IPPROTO_SCTP,
+            "inet sctp",
+        ),
     ];
+    // The result crosses a pipe: an exit status keeps eight bits only.
+    let (report_r, report_w) = nix::unistd::pipe().unwrap();
+    let report = report_w.as_raw_fd();
     // SAFETY: the child makes raw system calls only and exits.
     match unsafe { nix::unistd::fork() }.unwrap() {
         nix::unistd::ForkResult::Child => unsafe {
@@ -741,8 +776,8 @@ fn socket_probe(filter: &[SockFilter]) -> String {
                 libc::_exit(255);
             }
             let mut opened = 0;
-            for (bit, (family, kind, _)) in kinds.iter().enumerate() {
-                let fd = libc::socket(*family, *kind | libc::SOCK_CLOEXEC, 0);
+            for (bit, (family, kind, protocol, _)) in kinds.iter().enumerate() {
+                let fd = libc::socket(*family, *kind | libc::SOCK_CLOEXEC, *protocol);
                 if fd >= 0 {
                     opened |= 1 << bit;
                 }
@@ -751,17 +786,41 @@ fn socket_probe(filter: &[SockFilter]) -> String {
             let mut params = [0u8; 120];
             let ring = libc::syscall(libc::SYS_io_uring_setup, 4u32, params.as_mut_ptr());
             if ring >= 0 {
-                opened |= 1 << 6;
+                opened |= 1 << 8;
             }
-            libc::_exit(opened);
+            // An x32 `socket` (bit 30 set): refused by the filter, or ENOSYS
+            // where the kernel runs no x32.
+            let x32 = libc::syscall(
+                X32_SYSCALL_BIT as libc::c_long | libc::SYS_socket,
+                libc::AF_UNIX,
+                libc::SOCK_STREAM,
+                0,
+            );
+            let x32_errno = if x32 < 0 {
+                *libc::__errno_location()
+            } else {
+                0
+            };
+            if x32_errno == libc::EACCES {
+                opened |= 1 << 9;
+            } else if x32_errno == libc::ENOSYS {
+                opened |= 1 << 10;
+            }
+            let bytes = (opened as u32).to_le_bytes();
+            libc::write(report, bytes.as_ptr().cast(), 4);
+            libc::_exit(0);
         },
         nix::unistd::ForkResult::Parent { child } => {
+            drop(report_w);
+            let mut bytes = [0u8; 4];
+            let read = nix::unistd::read(&report_r, &mut bytes).unwrap_or(0);
+            let opened = u32::from_le_bytes(bytes);
             match nix::sys::wait::waitpid(child, None).unwrap() {
                 nix::sys::wait::WaitStatus::Exited(_, 255) => "the filter did not load".into(),
-                nix::sys::wait::WaitStatus::Exited(_, opened) => kinds
+                nix::sys::wait::WaitStatus::Exited(_, 0) if read == 4 => kinds
                     .iter()
                     .enumerate()
-                    .map(|(bit, (_, _, name))| {
+                    .map(|(bit, (_, _, _, name))| {
                         format!(
                             "{name}={}",
                             if opened & (1 << bit) != 0 {
@@ -773,10 +832,20 @@ fn socket_probe(filter: &[SockFilter]) -> String {
                     })
                     .chain(std::iter::once(format!(
                         "io_uring={}",
-                        if opened & (1 << 6) != 0 {
+                        if opened & (1 << 8) != 0 {
                             "open"
                         } else {
                             "refused"
+                        }
+                    )))
+                    .chain(std::iter::once(format!(
+                        "x32={}",
+                        if opened & (1 << 9) != 0 {
+                            "refused by the filter (EACCES)"
+                        } else if opened & (1 << 10) != 0 {
+                            "ENOSYS"
+                        } else {
+                            "neither EACCES nor ENOSYS"
                         }
                     )))
                     .collect::<Vec<_>>()
@@ -788,9 +857,11 @@ fn socket_probe(filter: &[SockFilter]) -> String {
 }
 
 /// **M9: the socket-family filter.** Unfiltered, every kind opens (the box
-/// allows raw only to root, so `inet raw` is refused by DAC alone); with no
-/// TCP port elected, only `AF_UNIX` opens; with one elected, TCP on both
-/// inet families opens too, UDP, raw and netlink refused.
+/// allows raw only to root, so `inet raw` is refused by DAC alone). With no
+/// TCP port elected, only `AF_UNIX` opens. With one elected, TCP on both
+/// inet families opens too, UDP, raw and netlink refused, MPTCP and SCTP
+/// stream sockets refused by the protocol pin, `io_uring_setup` refused, and
+/// an x32 call refused `EACCES` (where the kernel alone answers `ENOSYS`).
 #[test]
 #[ignore = "a measurement of this box's kernel"]
 fn m9_the_socket_family_filter() {
@@ -807,10 +878,10 @@ fn m9_the_socket_family_filter() {
 
 /// **M10: execute granted on one file, reached through a symlinked command
 /// directory.** The stand-in for the stack's static multi-call binary is
-/// `docker-init` (static); the commands directory holds a symlink to it, and
+/// `docker-init` (static). The commands directory holds a symlink to it, and
 /// Landlock grants execute on that one file and read on the directory. Run
 /// through the symlink it starts, since a symlink is judged at its target
-/// (M3); an identical copy elsewhere is denied, the grant naming the file and
+/// (M3). An identical copy elsewhere is denied, the grant naming the file and
 /// not its contents.
 #[test]
 #[ignore = "a measurement of this box's kernel"]
@@ -862,4 +933,275 @@ fn m10_execute_on_one_file_through_symlinks() {
         said(&written)
     );
     let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Connects a socket of `protocol` to `port` on the loopback from a child
+/// confined by `rules` alone (no seccomp), answering what the connect met.
+fn landlock_connect_probe(rules: &Ruleset, protocol: i32, port: u16) -> String {
+    let ruleset = rules.0.as_raw_fd();
+    // SAFETY: the child makes raw system calls only and exits.
+    match unsafe { nix::unistd::fork() }.unwrap() {
+        nix::unistd::ForkResult::Child => unsafe {
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+                || libc::syscall(libc::SYS_landlock_restrict_self, ruleset, 0u32) != 0
+            {
+                libc::_exit(250);
+            }
+            let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, protocol);
+            if fd < 0 {
+                libc::_exit(200 + (*libc::__errno_location()).min(49));
+            }
+            let mut addr: libc::sockaddr_in = std::mem::zeroed();
+            addr.sin_family = libc::AF_INET as libc::sa_family_t;
+            addr.sin_port = port.to_be();
+            addr.sin_addr.s_addr = u32::from_be_bytes([127, 0, 0, 1]).to_be();
+            let r = libc::connect(
+                fd,
+                &addr as *const _ as *const libc::sockaddr,
+                std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+            );
+            let errno = if r == 0 { 0 } else { *libc::__errno_location() };
+            libc::_exit(errno.min(199));
+        },
+        nix::unistd::ForkResult::Parent { child } => {
+            match nix::sys::wait::waitpid(child, None).unwrap() {
+                nix::sys::wait::WaitStatus::Exited(_, 0) => "connected".into(),
+                nix::sys::wait::WaitStatus::Exited(_, 250) => "the restriction failed".into(),
+                nix::sys::wait::WaitStatus::Exited(_, code) if code >= 200 => {
+                    format!("no socket: {}", nix::errno::Errno::from_raw(code - 200))
+                }
+                nix::sys::wait::WaitStatus::Exited(_, errno) => {
+                    format!("refused: {}", nix::errno::Errno::from_raw(errno))
+                }
+                other => format!("{other:?}"),
+            }
+        }
+    }
+}
+
+/// **M9b: does Landlock's TCP right bound MPTCP and SCTP?** With
+/// `CONNECT_TCP` handled and no port allowed, and no seccomp filter, a plain
+/// TCP connect to a loopback listener is denied (M5). An MPTCP and an SCTP
+/// stream socket try the same: where either connects, Landlock does not bound
+/// it, and the filter's protocol pin is what keeps it out.
+#[test]
+#[ignore = "a measurement of this box's kernel"]
+fn m9b_landlock_tcp_against_mptcp_and_sctp() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let rules = || Ruleset::new(FS_READ_FILE, NET_CONNECT_TCP, 0);
+    println!(
+        "M9b plain TCP: {}",
+        landlock_connect_probe(&rules(), 0, port)
+    );
+    println!(
+        "M9b MPTCP: {}",
+        landlock_connect_probe(&rules(), libc::IPPROTO_MPTCP, port)
+    );
+    println!(
+        "M9b SCTP: {}",
+        landlock_connect_probe(&rules(), libc::IPPROTO_SCTP, port)
+    );
+    drop(listener);
+}
+
+// ------------------------------------------------------------- the real busybox
+
+/// Every filesystem right through ABI 5: `REFER` (2), `TRUNCATE` (3) and
+/// `IOCTL_DEV` (5) beside ABI 1's.
+const FS_ALL_V5: u64 = (1 << 16) - 1;
+const FS_TRUNCATE: u64 = 1 << 14;
+
+/// The static busybox under measurement, named by `WEAVER_BUSYBOX`: built
+/// from a pinned source with the default applets, `ash` and `mktemp`.
+/// Absent, the instrument fails naming it, never passing by skip.
+fn busybox() -> PathBuf {
+    let path = std::env::var_os("WEAVER_BUSYBOX").map(PathBuf::from).expect(
+        "WEAVER_BUSYBOX names a statically linked busybox built with the default applets, ash and mktemp",
+    );
+    assert!(path.is_file(), "{} is not a file", path.display());
+    path
+}
+
+/// A scratch layout as the shell's would stand: `libexec/busybox` (a copy),
+/// `commands/` holding one symlink per applet to it, and `home/` with its
+/// `.tmp`.
+struct ShellLayout {
+    base: PathBuf,
+}
+
+impl ShellLayout {
+    fn new(tag: &str, applets: &[&str]) -> Self {
+        let base = std::env::temp_dir().join(format!("weaver-shell-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        for dir in ["libexec", "commands", "home/.tmp"] {
+            std::fs::create_dir_all(base.join(dir)).unwrap();
+        }
+        std::fs::copy(busybox(), base.join("libexec/busybox")).unwrap();
+        for applet in applets {
+            std::os::unix::fs::symlink(
+                base.join("libexec/busybox"),
+                base.join("commands").join(applet),
+            )
+            .unwrap();
+        }
+        Self { base }
+    }
+
+    fn path(&self, rel: &str) -> PathBuf {
+        self.base.join(rel)
+    }
+
+    /// The shell's ruleset as section 8.1 states it: execute and read on the
+    /// busybox file, read on `commands/`, every right but execute beneath
+    /// home (`TRUNCATE` among them unless `truncate_home` is false), read and
+    /// write on `/dev/null` (with truncate where `truncate_null`), and read on
+    /// `/dev/zero` and `/dev/urandom`.
+    fn rules(&self, truncate_home: bool, truncate_null: bool) -> Ruleset {
+        let home_rights = if truncate_home {
+            FS_ALL_V5 & !FS_EXECUTE
+        } else {
+            FS_ALL_V5 & !FS_EXECUTE & !FS_TRUNCATE
+        };
+        let null_rights =
+            FS_READ_FILE | FS_WRITE_FILE | if truncate_null { FS_TRUNCATE } else { 0 };
+        Ruleset::new(FS_ALL_V5, 0, 0)
+            .allow(&self.path("libexec/busybox"), FS_EXECUTE | FS_READ_FILE)
+            .allow(&self.path("commands"), FS_READ_DIR)
+            .allow(&self.path("home"), home_rights)
+            .allow(Path::new("/dev/null"), null_rights)
+            .allow(Path::new("/dev/zero"), FS_READ_FILE)
+            .allow(Path::new("/dev/urandom"), FS_READ_FILE)
+    }
+
+    /// `sh -c script` through the commands directory, with the gate's
+    /// environment: `HOME`, `PATH` the commands directory, `TMPDIR` home's
+    /// `.tmp`.
+    fn sh(&self, rules: &Ruleset, script: &str) -> Output {
+        rules.run(
+            Command::new(self.path("commands/sh"))
+                .args(["-c", script])
+                .env_clear()
+                .env("HOME", self.path("home"))
+                .env("PATH", self.path("commands"))
+                .env("TMPDIR", self.path("home/.tmp"))
+                .current_dir(self.path("home")),
+        )
+    }
+}
+
+impl Drop for ShellLayout {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.base);
+    }
+}
+
+const APPLETS: [&str; 15] = [
+    "sh", "ls", "cat", "head", "tail", "wc", "grep", "sort", "uniq", "cut", "tr", "date", "echo",
+    "pwd", "mktemp",
+];
+
+/// **M11: the redirects a shell needs.** Under section 8.1's ruleset: a
+/// redirect to `/dev/null`, `>` over an existing file in home (an open with
+/// `O_TRUNC`), and `mktemp` under `TMPDIR`, home's `.tmp`. Then the two
+/// truncate rights withheld in turn, to show which each redirect needs.
+#[test]
+#[ignore = "a measurement of this box's kernel and a built busybox"]
+fn m11_redirects_truncation_and_tmpdir() {
+    let layout = ShellLayout::new("m11", &APPLETS);
+    let script = "ls /nonexistent 2>/dev/null; echo null=$?; \
+                  echo first > f && echo second > f && cat f; \
+                  t=$(mktemp) && echo tmp=$t && echo x > \"$t\" && cat \"$t\"";
+    let full = layout.sh(&layout.rules(true, true), script);
+    println!("M11 the ruleset as stated: {}", said(&full));
+    let forms = layout.sh(
+        &layout.rules(true, true),
+        "echo TMPDIR=$TMPDIR; mktemp; echo bare=$?; mktemp -t; echo t=$?; mktemp -p \"$TMPDIR\"; echo p=$?",
+    );
+    println!("M11 mktemp's forms: {}", said(&forms));
+    let no_home_truncate = layout.sh(
+        &layout.rules(false, true),
+        "echo first > f; echo second > f; echo rc=$?; cat f",
+    );
+    println!(
+        "M11 TRUNCATE withheld beneath home: {}",
+        said(&no_home_truncate)
+    );
+    let no_null_truncate = layout.sh(&layout.rules(true, false), "echo x > /dev/null; echo rc=$?");
+    println!(
+        "M11 TRUNCATE withheld on /dev/null: {}",
+        said(&no_null_truncate)
+    );
+}
+
+/// **M12: the real static busybox under the ruleset.** Its applet by the
+/// symlink's full path, `busybox <applet>` by the binary's full path, and the
+/// interpreter's `-c` with a pipe. An applet the build does not hold,
+/// asked of the binary, refuses.
+#[test]
+#[ignore = "a measurement of this box's kernel and a built busybox"]
+fn m12_the_static_busybox_under_the_ruleset() {
+    let layout = ShellLayout::new("m12", &APPLETS);
+    let rules = || layout.rules(true, true);
+    let by_link = rules().run(Command::new(layout.path("commands/echo")).arg("by-link"));
+    println!("M12 an applet by its link: {}", said(&by_link));
+    let by_name =
+        rules().run(Command::new(layout.path("libexec/busybox")).args(["echo", "by-name"]));
+    println!("M12 busybox <applet>: {}", said(&by_name));
+    let pipe = layout.sh(&rules(), "echo a b c | tr ' ' '\\n' | wc -l");
+    println!("M12 sh -c with a pipe: {}", said(&pipe));
+    let absent = rules().run(Command::new(layout.path("libexec/busybox")).args(["wget", "--help"]));
+    println!("M12 an applet not compiled in: {}", said(&absent));
+    let outside = layout.sh(&rules(), "/usr/bin/id; echo rc=$?");
+    println!("M12 a program outside the build: {}", said(&outside));
+}
+
+/// **M13: both filters require no-new-privs.** Without `PR_SET_NO_NEW_PRIVS`
+/// and without `CAP_SYS_ADMIN`, the kernel refuses `landlock_restrict_self`
+/// and a seccomp filter's load.
+#[test]
+#[ignore = "a measurement of this box's kernel"]
+fn m13_both_filters_require_no_new_privs() {
+    let rules = Ruleset::new(FS_READ_FILE, 0, 0);
+    let ruleset = rules.0.as_raw_fd();
+    let filter = [op(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW)];
+    let prog = SockFprog {
+        len: 1,
+        filter: filter.as_ptr(),
+    };
+    // SAFETY: the child makes raw system calls only and exits.
+    match unsafe { nix::unistd::fork() }.unwrap() {
+        nix::unistd::ForkResult::Child => unsafe {
+            let landlock = libc::syscall(libc::SYS_landlock_restrict_self, ruleset, 0u32);
+            let landlock_errno = if landlock == 0 {
+                0
+            } else {
+                *libc::__errno_location()
+            };
+            let seccomp = libc::prctl(
+                libc::PR_SET_SECCOMP,
+                libc::SECCOMP_MODE_FILTER,
+                &prog as *const SockFprog,
+                0,
+                0,
+            );
+            let seccomp_errno = if seccomp == 0 {
+                0
+            } else {
+                *libc::__errno_location()
+            };
+            libc::_exit((landlock_errno.min(15) << 4 | seccomp_errno.min(15)) as i32);
+        },
+        nix::unistd::ForkResult::Parent { child } => {
+            if let nix::sys::wait::WaitStatus::Exited(_, code) =
+                nix::sys::wait::waitpid(child, None).unwrap()
+            {
+                println!(
+                    "M13 landlock_restrict_self without no-new-privs: {}; seccomp without it: {}",
+                    nix::errno::Errno::from_raw(code >> 4),
+                    nix::errno::Errno::from_raw(code & 0xf)
+                );
+            }
+        }
+    }
 }

@@ -630,7 +630,7 @@ and 8, and the agent that produced it holds nothing of its own.
 **The agent holds no route to the sink, twice over.** The first lock is the
 operator's provisioning, where the sink is a file: ownership, mode, and the
 directory's search bit deny the agent uid the path, verified by admin at load, so a
-tool the agent elects, `bash` above all, cannot traverse to it. The kernel refuses
+tool the agent elects, the shell above all, cannot traverse to it. The kernel refuses
 the path lookup before anything else is consulted. The second is the descriptor
 discipline. **The harness never resolves a trace path.** The descriptor is opened by
 a `weaver-admin` principal and passed to the worker over the coordination socket

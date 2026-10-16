@@ -767,19 +767,27 @@ as an unknown field, by the derive below, the operator's ruling of 2026-10-08 on
 carrying no old layout forward.
 
 **The shell's grant crosses beside the gate instruction, not inside it.** Admin builds
-it from `tool-set` and `shell-tcp-connect` at inventory, and the enter's serving binding
-and the gate's raise carry it as their own field, `shell: Option<ShellGrant>` (section
-4.2), present exactly where `tool-set` elects `sh`:
+it at inventory and the start step, and the enter's serving binding and the gate's raise
+carry it as their own field, `shell: Option<ShellGrant>` (section 4.2), present exactly
+where `tool-set` elects `sh`:
 
 ```rust
 pub struct ShellGrant {
+    pub binary: PathBuf,
+    pub commands: PathBuf,
     pub tcp_connect: Vec<u16>,
 }
 ```
 
-Two authors again, as for the socket: the access rule is the operator's election in
-`gate-instruction`, and the shell's grant is the operator's election in `tool-set`, so
-neither is folded into the other's group.
+**Two authors, as the socket and the access rule are.** The grant's presence and
+`tcp_connect` are the operator's elections, `tool-set` and `shell-tcp-connect`. `binary`
+and `commands` are deployment facts admin authors: the root's `shell-binary`, the static
+busybox the gate grants execute on, and the run directory's `commands/` the start step
+builds, which the gate sets `PATH` to (`weaver-admin-Spec` sections 4, 6 and 9,
+`weaver-gate-Spec` section 8.1). The gate reads no admin root, so the paths reach it
+here or nowhere. **A diagnostic binding with `tool-set` electing `sh` refuses at the
+parse**, `BadValue` naming `tool-set`: a diagnostic binding raises no gate, so a shell
+elected there would be a declaration that says nothing true.
 
 **`SpuInstruction` and `GateInstruction` are defined here and are the same types the
 wire carries, and the feature gate never reaches them.** The `config` feature gates the
@@ -1323,7 +1331,8 @@ fixing the rule that one clock governs and not the unit it is read in.
 **The answer's four contents are the contract's and no case is this
 document's**, told apart by tag alone, the rule beneath the four being who
 speaks in the return: a result is the tool's own words, a refusal is the
-gate's voice with nothing run, an error is the machinery's, and a kill carries
+gate's voice with nothing run (or the harness's, for a call naming a tool the enter did
+not grant, which never reaches the gate, #29), an error is the machinery's, and a kill carries
 no tool voice by construction, the output drained before the kill riding as an
 attachment rather than as a result. Every one of them is content rather than a
 channel fault, because each is a fact the model must learn. Since 2026-09-22 a

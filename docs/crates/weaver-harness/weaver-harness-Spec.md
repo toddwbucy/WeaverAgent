@@ -1842,8 +1842,13 @@ block, a call the family parse could not recover, opens none either, per
 `weaver-traits-Spec` section 3: it names no tool and grants nothing. **A call naming a
 tool the enter did not grant opens no exchange either** (#29): this crate closes it in
 its own word, authoring `tool.call.started` and `tool.call.completed` with
-`Refused { reason }` naming the tool as not elected, the harness as the speaker, and the
-tool-result turn carries that refusal to the model. So the record holds the call and its
+`Refused { reason }` naming the tool as not elected, and the tool-result turn carries
+that refusal to the model. **The harness is a stated speaker of `Refused`**, beside the
+gate: what a trace reader must infer from `Refused` is that nothing ran, true of both,
+and which party refused is on the record already, the `tool.call.completed` event's
+subsystem reading `harness` here and `gate` for the gate's refusals, as the harness's
+own `Killed { by: fault }` is told apart today. A distinct outcome would change the wire
+to carry no fact the record lacks. So the record holds the call and its
 refusal, the model learns it, and nothing crosses the gate: a trace fact by the kinds
 that exist, as #31's unrecovered call is by its own, and never a silent drop. The
 gate refuses an unelected name too (`weaver-gate-Spec` section 8), the second wall of

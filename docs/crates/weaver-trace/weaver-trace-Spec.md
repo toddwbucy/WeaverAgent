@@ -1452,7 +1452,7 @@ pub struct Record {
 Record`. The append itself is not public: only this crate's emit path of section 5
 can extend the structure, so a caller holding a `&WorkingStructure` has no
 expressible way to alter what landed. Charter section 2.2 rests this on the agent
-running as its own uid with bash, and a mutation surface reachable from that uid is
+running as its own uid with a shell, and a mutation surface reachable from that uid is
 a surface the agent could reach, so the guarantee has to be architectural rather
 than a discipline. **Two instruments hold this and they hold different halves.**
 Every public accessor yields a shared reference and the append is crate-private,

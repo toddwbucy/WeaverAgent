@@ -431,8 +431,8 @@ admin validated, uninterpreted by the harness, and beside it the socket the
 harness supplies, per `weaver-gate-PRD` section 2. This crate consumes exactly
 three things: that socket path to bind, the access rule the predicate judges
 against, and **the shell's grant** where the declaration elects the shell (#29):
-present or absent, and the elected TCP ports, section 8.1 building the shell's
-ruleset from it. An absent grant is no shell: every execution refuses by name with
+present or absent, the busybox path and the commands directory admin authored, and the
+operator's elected TCP ports, section 8.1 building the shell's ruleset from it. An absent grant is no shell: every execution refuses by name with
 nothing run. Where the grant is present, the raise reads the Landlock ABI and refuses
 `BoundaryUnverified` below 6 (section 8.1, failing closed). **The socket and the rule
 arrive as two fields because they have two authors**, the rule
@@ -1394,12 +1394,12 @@ never answers an execution it cannot contain**: a failed write of
 with the execution unanswered, so the harness meets the gate's death and
 closes the execution itself, as `weaver-admin-Spec` section 6.1 says.
 
-**The shell starts in the uid's home with `HOME` and `PATH` and no other variable.**
+**The shell starts in the uid's home with `HOME`, `PATH` and `TMPDIR` and no other variable.**
 This crate runs with the agent's environment, per `weaver-harness-Spec` section 2.2
 and the operator's ruling of 2026-10-01, and that ruling reaches the organs and
 not the commands a tool runs, so the invocation clears the environment and sets
-`HOME`, and `PATH` to the agent's commands directory (section 8.1). `PATH` is a
-convenience and no control: the wall is section 8.1's Landlock ruleset, which holds
+`HOME`, `PATH` to the agent's commands directory and `TMPDIR` to home's `.tmp`
+(section 8.1). `PATH` is a convenience and no control: the wall is section 8.1's Landlock ruleset, which holds
 whatever path a command names. Whether a command should see the agent's environment
 is a ruling of its own.
 
@@ -1588,11 +1588,11 @@ allocates nothing:
 |---|---|---|---|
 | identity | the agent's own uid, no sudo, in no group of the trace's or the admin's | what the account may touch at all | the account's provisioning (`weaver-admin-Spec` section 9) |
 | privilege | `PR_SET_NO_NEW_PRIVS` | no setuid or file capability can raise the shell, and both filters below require it | the kernel refuses `landlock_restrict_self` and the seccomp filter without it |
-| **the wall** | **Landlock**, ABI 6 or later: execute and read on **the one busybox file** (a file rule), read on the commands directory, read and write beneath the agent's home and never execute there, `CONNECT_TCP` and `BIND_TCP` handled, connect allowed on the elected ports alone and bind on none, and signal and abstract-socket scoping | which programs can start, what they read and write, which TCP ports they reach, which processes they signal | M1 (ABI 10), M10 (execute on one file runs it through a symlinked directory, and denies an identical copy elsewhere, the interpreter, and a copy written into home), M3 (a symlink judged at its target), M4 (`find -exec`, `awk`'s `system()` and the shell start only listed programs), M5 (TCP denied unless elected), M6 (signal and abstract-socket scoping), M7 (writes beneath home alone) |
-| sockets | a seccomp filter on `socket` and `socketpair` | `AF_UNIX` always, and `AF_INET` and `AF_INET6` as `SOCK_STREAM` only where a TCP port is elected, Landlock then bounding the port, with every other family and UDP and raw refused, and `io_uring_setup` refused, its `IORING_OP_SOCKET` being a socket made without `socket` | M9 |
+| **the wall** | **Landlock**, ABI 6 or later, handling every filesystem right through ABI 5 (`TRUNCATE` and `IOCTL_DEV` among them): execute and read on **the one busybox file** (a file rule), read on the commands directory, every right but execute beneath the agent's home (`TRUNCATE` included, since a plain `>` over an existing file opens it truncating), read and write on `/dev/null`, read on `/dev/zero` and `/dev/urandom`, and nothing else on the filesystem, and `CONNECT_TCP` and `BIND_TCP` handled, connect allowed on the elected ports alone and bind on none, and signal and abstract-socket scoping | which programs can start, what they read and write, which TCP ports they reach, which processes they signal | M1 (ABI 10), M10 (execute on one file runs it through a symlinked directory, and denies an identical copy elsewhere, the interpreter, and a copy written into home), M12 (the real static busybox: an applet by its link, `busybox <applet>`, and `sh -c` with a pipe run, an applet not compiled in and a program outside the build do not), M3 (a symlink judged at its target), M4 (`find -exec`, `awk`'s `system()` and the shell start only listed programs), M5 (TCP denied unless elected), M6 (signal and abstract-socket scoping), M7 (writes beneath home alone), M11 (`2>/dev/null`, `>` over a home file, which needs `TRUNCATE` there and none on `/dev/null`, and `mktemp` under `TMPDIR`) |
+| sockets | a seccomp filter: the architecture word checked (`AUDIT_ARCH_X86_64`, any other refused whole), every x32 system call refused (a number with bit 30 set, x32 sharing that word), `io_uring_setup` refused (its `IORING_OP_SOCKET` makes a socket without `socket`), and `socket` and `socketpair` allowed for `AF_UNIX` and, only where a TCP port is elected, for `AF_INET` and `AF_INET6` as `SOCK_STREAM` with protocol 0 or `IPPROTO_TCP`, every other family, type and protocol refused | which kinds of socket exist at all, Landlock then bounding the TCP ports. **The protocol pin is required**: Landlock's TCP rights do not bound an MPTCP or an SCTP stream socket | M9 (the filter), M9b (Landlock alone: plain TCP refused, MPTCP connects, SCTP reaches the network) |
 | containment | the agent's `tools/` cgroup | every process of an execution killed at its end | `weaver-admin-Spec` section 6.1's instruments (#111) |
 | resources | rlimits on the child: `RLIMIT_CORE` 0, `RLIMIT_FSIZE`, `RLIMIT_NOFILE`, `RLIMIT_AS` | file, descriptor and memory runaway, and no core of the shell's memory | the code act's |
-| convenience | `PATH` set to the commands directory | nothing: not a control | |
+| convenience | `PATH` set to the commands directory, `TMPDIR` to home's `.tmp` | nothing: not a control, `TMPDIR` keeping temporaries off a `/tmp` the wall does not grant | M11 |
 
 **Which layer is the wall**: Landlock. Every other row narrows what the wall leaves or
 bounds what runs inside it, and none is relied on for the command list. **The full path
@@ -1604,11 +1604,25 @@ number of a shell's processes belongs to the `tools/` cgroup's `pids` controller
 election.
 
 **Every layer fails closed.** At the raise, where the instruction grants the shell, this
-crate reads the Landlock ABI and refuses the raise `BoundaryUnverified` below 6, so the
-load rolls back and no shell is ever offered unconfined. In the child, a `prctl`, a
-seccomp load or a `landlock_restrict_self` that fails ends the child before its exec,
-the spawn failing, and the execution is answered `Errored` with nothing run, as a move
-that fails is. **Nothing runs unconfined on a kernel that lacks a primitive.**
+crate reads the Landlock ABI and refuses the raise `BoundaryUnverified` below 6, and the
+same where the ABI query itself fails, Landlock absent from the kernel or disabled at
+boot answering it as one below 6, so the load rolls back and no shell is ever offered
+unconfined. In the child, a `setrlimit`, a `prctl`, a seccomp load or a
+`landlock_restrict_self` that fails ends the child before its exec, the spawn failing,
+and the execution is answered `Errored` with nothing run, as a move that fails is. **Both
+filters need no-new-privs**, and the kernel refuses each without it (M13:
+`landlock_restrict_self` `EPERM`, the seccomp load `EACCES`), so that `prctl` comes
+first. **Nothing runs unconfined on a kernel that lacks a primitive.**
+
+**The grant's bound on a subverted worker is the uid.** The harness carries the grant to
+the raise uninterpreted, so a worker subverted could forward a grant wider than admin
+built, more ports or another path. This crate runs as the agent's uid, as the worker does,
+and every layer narrows what that uid reaches and none widens it, so a forged grant
+reaches nothing the uid did not already, which a subverted worker holds in any case.
+
+`TMPDIR` is home's `.tmp`, which this crate makes, as the agent's uid, at the raise where
+the shell is granted, so a command's temporaries land inside the wall rather than on a
+`/tmp` it does not grant (M11).
 
 **The commands directory** is the agent's `commands/` in its run directory on tmpfs
 (`weaver-admin-Spec` section 6): root-owned `0755`, one symlink per listed applet to the
