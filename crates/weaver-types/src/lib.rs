@@ -103,7 +103,7 @@ mod wire;
 pub use config::{
     AgentConfig, ArtifactRef, BindingKind, ClassifyInstruction, ConfigError, ConfigErrorKind,
     DecoderInstruction, DeviceOrdinal, ElectedKindConfig, FieldElection, FieldName,
-    GateInstruction, Lifecycle, ModelBinding, REGISTERED_TOOLS, Restore, ShellGrant,
+    GateInstruction, Lifecycle, ModelBinding, REGISTERED_TOOLS, Restore, SHELL_TOOL, ShellGrant,
     SpuInstruction, StateElection, StateStore, StoreEngine, ToolName, TraceSink,
 };
 #[cfg(feature = "config")]

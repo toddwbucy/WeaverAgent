@@ -39,15 +39,21 @@
 
 use weaver_traits::ToolResultBlock;
 
-/// **The shell's name**, the one registered tool (`weaver_types::REGISTERED_TOOLS`,
-/// the operator's ruling of 2026-10-16 on #29).
-pub(crate) const SHELL_TOOL: &str = "sh";
+/// **The shell's name**, the one registered tool, read from the floor
+/// (`weaver_types::SHELL_TOOL`, the operator's ruling of 2026-10-16 on #29).
+pub(crate) const SHELL_TOOL: &str = weaver_types::SHELL_TOOL;
 
 /// **The shell's schema, this crate's own text** (`weaver-harness-Spec`
 /// section 5, #29): a POSIX `sh` command line, busybox's ash, over the
 /// build's listed commands, run in the agent's home with the clock this crate
-/// gives every call. Offered only where the enter carries the shell's grant.
-pub(crate) fn shell_schema() -> String {
+/// gives every call. Offered only where the enter carries the shell's grant,
+/// and rendered once per process.
+pub(crate) fn shell_schema() -> &'static str {
+    static SCHEMA: std::sync::LazyLock<String> = std::sync::LazyLock::new(render_shell_schema);
+    &SCHEMA
+}
+
+fn render_shell_schema() -> String {
     serde_json::json!({
         "name": SHELL_TOOL,
         "description": format!(

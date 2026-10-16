@@ -26,6 +26,13 @@ use std::process::Command;
 use nix::libc;
 use weaver_types::ShellGrant;
 
+// **The socket filter names x86-64's architecture word and refuses every
+// other** (section 8.1's sockets row), so a build for another architecture
+// would offer a shell whose every execution its own filter ends. That build
+// fails here instead.
+#[cfg(not(target_arch = "x86_64"))]
+compile_error!("the shell's socket filter is written for x86-64 alone (weaver-gate-Spec 8.1)");
+
 /// The lowest Landlock ABI the shell is offered on: 6 brings signal and
 /// abstract-socket scoping, with TCP rules (4) and `TRUNCATE` (3) beneath it.
 pub const LANDLOCK_ABI_FLOOR: i64 = 6;
@@ -144,6 +151,8 @@ pub enum ConfineFault {
     TmpDir(String),
     /// The ruleset or one of its rules could not be built.
     Ruleset(String),
+    /// A ruled rlimit is above the gate's own hard limit.
+    Rlimit(String),
 }
 
 impl std::fmt::Display for ConfineFault {
@@ -159,8 +168,34 @@ impl std::fmt::Display for ConfineFault {
             ConfineFault::NoHome => write!(f, "this uid has no home in the account database"),
             ConfineFault::TmpDir(detail) => write!(f, "home's .tmp: {detail}"),
             ConfineFault::Ruleset(detail) => write!(f, "the Landlock ruleset: {detail}"),
+            ConfineFault::Rlimit(detail) => write!(f, "the rlimits: {detail}"),
         }
     }
+}
+
+/// **The ruled rlimits must be within the gate's own hard limits**: the child
+/// lowers each to the ruled value, soft and hard alike, and an unprivileged
+/// process cannot raise a hard limit, so a packager's lower one would fail
+/// every execution's spawn. Judged at the raise, refusing the shell instead.
+fn rlimits_within_reach() -> Result<(), ConfineFault> {
+    for (resource, value) in RLIMITS {
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: getrlimit into a value this frame holds.
+        if unsafe { libc::getrlimit(resource, &mut limit) } != 0 {
+            let errno = nix::errno::Errno::last();
+            return Err(ConfineFault::Rlimit(format!("getrlimit: {errno}")));
+        }
+        if limit.rlim_max != libc::RLIM_INFINITY && limit.rlim_max < value {
+            return Err(ConfineFault::Rlimit(format!(
+                "resource {resource}: the gate's hard limit {} is below the ruled {value}",
+                limit.rlim_max
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// The Landlock ABI this kernel reports, or the errno of the query.
@@ -231,13 +266,28 @@ impl Shell {
     /// suite naming a scratch home where the gate names the uid's own.
     fn confined_in(grant: &ShellGrant, home: PathBuf) -> Result<Shell, ConfineFault> {
         let abi = abi_at_floor(landlock_abi())?;
+        rlimits_within_reach()?;
+        // The ruleset is built before `.tmp` is made, so a grant that cannot
+        // be confined leaves nothing behind in the home.
+        let ruleset = build_ruleset(abi, grant, &home)?;
         let tmpdir = home.join(".tmp");
         match std::fs::create_dir(&tmpdir) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(ConfineFault::TmpDir(error.to_string())),
         }
-        let ruleset = build_ruleset(abi, grant, &home)?;
+        // **`.tmp` must be a directory of its own, not a file and not a
+        // symlink**: Landlock judges a symlink at its target, so a `.tmp`
+        // pointing out of home would leave every temporary refused.
+        match std::fs::symlink_metadata(&tmpdir) {
+            Ok(meta) if meta.file_type().is_dir() => {}
+            Ok(_) => {
+                return Err(ConfineFault::TmpDir(
+                    "it stands and is not a directory".to_string(),
+                ));
+            }
+            Err(error) => return Err(ConfineFault::TmpDir(error.to_string())),
+        }
         Ok(Shell {
             program: grant.binary.clone(),
             argv0: "sh",

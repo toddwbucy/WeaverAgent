@@ -10,7 +10,7 @@ use weaver_types::{AccessRule, AgentName, ExchangeId, GateInstruction};
 /// the result already sent stands, and no `Killed` and no refusal follow
 /// it. Removing the late-interrupt drop fails the third execution.
 #[test]
-#[ignore = "runs a shell: needs a delegated cgroup scope"]
+#[ignore = "runs a shell: needs a delegated cgroup scope, WEAVER_BUSYBOX and Landlock ABI 6"]
 fn a_cancel_past_the_answer_is_dropped_in_tools() {
     use nix::sys::socket::{MsgFlags, recv, send};
     use std::os::fd::AsRawFd;
@@ -136,7 +136,7 @@ fn a_cancel_past_the_answer_is_dropped_in_tools() {
 /// supervision end the execution on any message, or name the interrupt a
 /// cancel, and this fails.
 #[test]
-#[ignore = "runs a shell: needs a delegated cgroup scope"]
+#[ignore = "runs a shell: needs a delegated cgroup scope, WEAVER_BUSYBOX and Landlock ABI 6"]
 fn the_interrupt_then_the_quiesce_through_the_served_loop_in_tools() {
     use nix::sys::socket::{MsgFlags, recv, send};
     use std::os::fd::AsRawFd;
@@ -271,8 +271,10 @@ fn instruction() -> GateInstruction {
 }
 
 /// **A real grant for the served-loop tests** (#29): the static busybox
-/// `WEAVER_BUSYBOX` names, copied into a scratch `libexec/`, and a scratch
-/// `commands/` holding the default applets and no `sh`, as admin builds it.
+/// `WEAVER_BUSYBOX` names, used where it stands (a fresh copy would race a
+/// parallel test's fork holding its write descriptor, `ETXTBSY`), and a
+/// scratch `commands/` holding the default applets and no `sh`, as admin
+/// builds it.
 /// The served gate builds its confinement from it at the raise, under this
 /// suite's uid, so its home is that uid's and `.tmp` is made there if absent.
 fn granted_shell(name: &str) -> (Scratch, weaver_types::ShellGrant) {
@@ -280,8 +282,8 @@ fn granted_shell(name: &str) -> (Scratch, weaver_types::ShellGrant) {
         .map(std::path::PathBuf::from)
         .expect("WEAVER_BUSYBOX names a static busybox built from the pinned configuration");
     let layout = scratch(&format!("{name}-shell"));
-    let binary = layout.dir.join("busybox");
-    std::fs::copy(&busybox, &binary).expect("the busybox copies");
+    let binary = busybox;
+    assert!(binary.is_file(), "{} is not a file", binary.display());
     let commands = layout.dir.join("commands");
     std::fs::create_dir_all(&commands).unwrap();
     for applet in [
@@ -731,7 +733,7 @@ fn a_mis_shapen_exchange_refuses_before_the_directive_runs() {
 /// shell's own descriptor table holds no 4. Perturbation: drop the flag's
 /// set from the handle's adoption, and the shell lists 4.
 #[test]
-#[ignore = "runs a shell: needs a delegated cgroup scope"]
+#[ignore = "runs a shell: needs a delegated cgroup scope, WEAVER_BUSYBOX and Landlock ABI 6"]
 fn the_tools_handle_never_reaches_the_shell_in_tools() {
     use nix::sys::socket::{MsgFlags, recv, send};
     use std::os::fd::AsRawFd;

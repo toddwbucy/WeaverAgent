@@ -525,13 +525,47 @@ struct GateChannel {
     last_word: crate::spawn::LastWord,
 }
 
+/// **The gate's raise for a binding, and whether it grants the shell** (#29,
+/// `weaver-harness-Spec` sections 1 and 5): a serving binding raises with
+/// its instruction, this crate's socket, and the shell's grant carried
+/// uninterpreted from the enter, and the flag the run keeps is that grant's
+/// presence. A diagnostic binding raises no gate. The one place the enter
+/// builds either, so a test of it is a test of the carry.
+fn gate_raise(
+    binding: &weaver_types::EnterBinding,
+    socket: PathBuf,
+) -> Option<(LifecycleDirective, bool)> {
+    match binding {
+        weaver_types::EnterBinding::Serving {
+            gate_instruction,
+            shell,
+        } => Some((
+            LifecycleDirective::Raise {
+                instruction: gate_instruction.clone(),
+                // The socket is this crate's rather than the declaration's,
+                // per `weaver-gate-PRD` section 2, named beside the
+                // coordination socket so the manager's runtime directory
+                // covers both and no pathname outlives its worker.
+                socket,
+                // The shell's grant, carried uninterpreted from the enter
+                // (#29, `weaver-harness-Spec` section 5): this crate reads
+                // neither path, and a worker that widened it would reach
+                // nothing its uid did not already (`weaver-gate-Spec` 8.1).
+                shell: shell.clone(),
+            },
+            shell.is_some(),
+        )),
+        weaver_types::EnterBinding::Diagnostic => None,
+    }
+}
+
 /// **The tool schemas a run offers are the elected ones** (#29,
 /// `weaver-harness-Spec` section 5): the shell's where its grant was carried
 /// to a gate that answered ready, and none otherwise, a diagnostic run's
 /// included. No binary supplies a schema of its own.
 fn offered_schemas(run: &Run) -> Vec<String> {
     if run.gate.as_ref().is_some_and(|gate| gate.shell_granted) {
-        vec![crate::tools::shell_schema()]
+        vec![crate::tools::shell_schema().to_string()]
     } else {
         Vec::new()
     }
@@ -2604,12 +2638,10 @@ impl Harness {
         // no binary forked, no raise opened. The run state's gate arm stays
         // empty for the whole residency, so the leave and the unwind lower
         // what stands, reading the same option they always read.
-        let (gate_instruction, shell) = match &payload.binding {
-            weaver_types::EnterBinding::Serving {
-                gate_instruction,
-                shell,
-            } => (gate_instruction, shell),
-            weaver_types::EnterBinding::Diagnostic => return Ok(run),
+        let Some((raise, shell_granted)) =
+            gate_raise(&payload.binding, self.coordination.gate_socket())
+        else {
+            return Ok(run);
         };
 
         // **A worker that cannot open or judge `tools/` stands no gate**
@@ -2653,19 +2685,7 @@ impl Harness {
             Opener::Harness,
             run.gate_ordinal,
             weaver_types::RefusingOrgan::Gate,
-            LifecycleDirective::Raise {
-                instruction: gate_instruction.clone(),
-                // The socket is this crate's rather than the declaration's,
-                // per `weaver-gate-PRD` section 2, named beside the
-                // coordination socket so the manager's runtime directory
-                // covers both and no pathname outlives its worker.
-                socket: self.coordination.gate_socket(),
-                // The shell's grant, carried uninterpreted from the enter
-                // (#29, `weaver-harness-Spec` section 5): this crate reads
-                // neither path, and a worker that widened it would reach
-                // nothing its uid did not already (`weaver-gate-Spec` 8.1).
-                shell: shell.clone(),
-            },
+            raise,
         ) {
             let refusal = match refusal {
                 // Only a classified death replaces the exchange's own
@@ -2690,7 +2710,7 @@ impl Harness {
             channel: gate,
             pid: gate_pid,
             last_word: gate_word,
-            shell_granted: shell.is_some(),
+            shell_granted,
         });
 
         Ok(run)

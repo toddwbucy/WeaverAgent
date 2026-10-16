@@ -34,10 +34,9 @@ use weaver_types::{
 };
 
 /// The one held tool's name, `sh` (the operator's ruling of 2026-10-16 on
-/// #29): the program the call reaches is busybox's POSIX `sh`, never bash, so
-/// the name says what the model gets. It is the one name in
-/// `weaver_types::REGISTERED_TOOLS`.
-pub const SHELL_NAME: &str = "sh";
+/// #29), read from the floor: the program the call reaches is busybox's POSIX
+/// `sh`, never bash, so the name says what the model gets.
+pub const SHELL_NAME: &str = weaver_types::SHELL_TOOL;
 
 /// The shell the raise granted, built once there and read by every
 /// execution. Unset, this gate holds no tool (`weaver-gate-Spec` section 3).

@@ -1249,7 +1249,7 @@ fn an_ungranted_call(name: &str, shell_granted: bool) {
     let decode = crate::channel::decode_from_owned(near);
 
     // The decode peer: two rounds. Round one answers a generation whose
-    // canonical content carries the call; round two reads the tool-result
+    // canonical content carries the call, and round two reads the tool-result
     // delta back and answers plain text.
     let peer = std::thread::spawn(move || {
         let mut buf = vec![0u8; 65536];
@@ -1993,8 +1993,14 @@ struct LeaveDuringTurn {
 /// connection. `before_call` delays the generation so the leave is heard
 /// on the decode stream, before the call is asked; otherwise the leave is
 /// heard during the call's execution. `crossing` has the gate send its
-/// result before it reads the interrupt.
-fn leave_during_turn(forced: bool, crossing: bool, before_call: bool) -> LeaveDuringTurn {
+/// result before it reads the interrupt. `granted` is the gate's shell
+/// grant (#29).
+fn leave_during_turn(
+    forced: bool,
+    crossing: bool,
+    before_call: bool,
+    granted: bool,
+) -> LeaveDuringTurn {
     use nix::poll::{PollFd, PollFlags, poll};
     use std::os::fd::AsFd;
     use std::sync::{
@@ -2224,7 +2230,7 @@ fn leave_during_turn(forced: bool, crossing: bool, before_call: bool) -> LeaveDu
                 held: &mut held_frames,
                 tools: None,
                 contained: None,
-                shell_granted: true,
+                shell_granted: granted,
             }),
             None,
             None,
@@ -2947,7 +2953,7 @@ fn a_drain_bound_passing_mid_turn_cancels_the_turn_and_turns_the_leave_forced() 
 /// cause. Perturbation: re-feed the killed call, or close the turn clean.
 #[test]
 fn a_call_out_when_the_leave_is_heard_is_interrupted_and_its_turn_closes_stopped() {
-    let run = leave_during_turn(false, false, false);
+    let run = leave_during_turn(false, false, false, true);
     assert_eq!((run.interrupts, run.executions), (1, 1));
     assert_eq!(
         run.completed["payload"]["by"], "unload",
@@ -2967,7 +2973,7 @@ fn a_call_out_when_the_leave_is_heard_is_interrupted_and_its_turn_closes_stopped
 /// closes stopped.
 #[test]
 fn a_crossed_result_is_delivered_and_its_turn_closes_clean() {
-    let run = leave_during_turn(false, true, false);
+    let run = leave_during_turn(false, true, false, true);
     assert_eq!(run.executions, 1);
     assert_eq!(
         run.completed["payload"]["outcome"], "result",
@@ -2985,7 +2991,7 @@ fn a_crossed_result_is_delivered_and_its_turn_closes_clean() {
 /// unload. Perturbation: send it, and the gate executes it.
 #[test]
 fn a_call_asked_after_the_leave_is_never_sent() {
-    let run = leave_during_turn(false, false, true);
+    let run = leave_during_turn(false, false, true, true);
     assert_eq!(run.executions, 0, "never sent");
     assert_eq!(run.completed["subsystem"], "harness", "{}", run.completed);
     assert_eq!(
@@ -2994,6 +3000,31 @@ fn a_call_asked_after_the_leave_is_never_sent() {
         run.completed
     );
     assert_eq!(run.close["payload"]["reason"], "unload", "{}", run.close);
+}
+
+/// **An ungranted call asked after the leave was heard reads `Refused`,
+/// never killed by the unload** (#29): it could never have run, so the
+/// harness's refusal is judged before the leave's branch wherever a gate
+/// stands. Nothing is sent and the turn still closes stopped by the unload.
+/// Perturbation: judge the grant after the leave's branch and the
+/// completion reads `Killed { by: unload }`.
+#[test]
+fn an_ungranted_call_after_the_leave_reads_refused() {
+    let run = leave_during_turn(false, false, true, false);
+    assert_eq!(run.executions, 0, "never sent");
+    assert_eq!(run.completed["subsystem"], "harness", "{}", run.completed);
+    assert!(
+        run.completed["payload"]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("is not a tool")),
+        "{}",
+        run.completed
+    );
+    assert!(
+        run.completed["payload"]["by"].is_null(),
+        "{}",
+        run.completed
+    );
 }
 
 /// **The wind-down sends no call** (`weaver-admin-Spec` 3.0, graceful
@@ -3083,7 +3114,7 @@ fn a_call_asked_in_the_wind_down_is_never_sent() {
 /// a cancel rather than the interrupt, and the gate fixture fails on it.
 #[test]
 fn a_forced_leave_during_a_call_interrupts_it_and_cancels_the_turn() {
-    let run = leave_during_turn(true, false, false);
+    let run = leave_during_turn(true, false, false, true);
     assert_eq!(run.interrupts, 1);
     assert_eq!(
         run.completed["payload"]["by"], "unload",

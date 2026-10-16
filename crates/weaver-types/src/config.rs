@@ -388,10 +388,14 @@ pub struct DeviceOrdinal(pub u32);
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolName(pub String);
 
+/// **The shell's name**, `sh` (the operator's ruling of 2026-10-16 on #29):
+/// the one source the parse, the gate and the harness each read.
+pub const SHELL_TOOL: &str = "sh";
+
 /// **The tools a declaration may elect** (#29, the operator's rulings of
 /// 2026-10-15 and 2026-10-16): the shell, `sh`, is the one. A name outside
 /// this list refuses `BadValue` naming `tool-set` at the parse.
-pub const REGISTERED_TOOLS: [&str; 1] = ["sh"];
+pub const REGISTERED_TOOLS: [&str; 1] = [SHELL_TOOL];
 
 /// **The shell's grant**, per `weaver-types-Spec` section 2 (#29): built by
 /// admin at inventory and the start step where `tool-set` elects `sh`, and

@@ -5949,6 +5949,48 @@ fn no_seat_is_granted_while_a_turn_is_in_flight() {
     );
 }
 
+/// **The enter's grant reaches the raise uninterpreted, and the run's flag
+/// is its presence** (#29, `weaver-harness-Spec` sections 1 and 5): a serving
+/// binding with a grant raises carrying it and grants the shell, one without
+/// raises carrying none and grants nothing, and a diagnostic binding raises
+/// no gate.
+///
+/// Perturbation: raise with `shell: None`, or set the flag `true` always, and
+/// one case fails.
+#[test]
+fn the_enters_grant_reaches_the_raise_and_sets_the_flag() {
+    let instruction = weaver_types::GateInstruction {
+        access_rule: weaver_types::AccessRule {
+            allowed_uids: Default::default(),
+            allowed_gids: Default::default(),
+            denied_uids: Default::default(),
+        },
+    };
+    let grant = weaver_types::ShellGrant {
+        binary: "/usr/local/libexec/weaver/busybox".into(),
+        commands: "/run/weaver.run/a/commands".into(),
+    };
+    let socket = PathBuf::from("/run/weaver.run/a/gate.sock");
+    for shell in [Some(grant.clone()), None] {
+        let binding = weaver_types::EnterBinding::Serving {
+            gate_instruction: instruction.clone(),
+            shell: shell.clone(),
+        };
+        let (raise, granted) = gate_raise(&binding, socket.clone()).expect("serving raises");
+        assert_eq!(
+            raise,
+            LifecycleDirective::Raise {
+                instruction: instruction.clone(),
+                socket: socket.clone(),
+                shell: shell.clone(),
+            },
+            "the grant crosses as the enter carried it"
+        );
+        assert_eq!(granted, shell.is_some(), "the flag is the grant's presence");
+    }
+    assert!(gate_raise(&weaver_types::EnterBinding::Diagnostic, socket).is_none());
+}
+
 /// **The seat's prompt offers the elected schemas alone** (#29,
 /// `weaver-harness-Spec` section 5): the shell's schema where the run's gate
 /// carries the grant, and none where the gate carries none or no gate stands.

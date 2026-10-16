@@ -152,6 +152,7 @@ fn the_rlimits_are_the_ruled_values() {
 /// Perturbation: take `SYS_socket` out of [`SOCKET_FILTER`] and the inet
 /// and unix sockets open.
 #[test]
+#[ignore = "a measurement of this box's kernel: needs Landlock ABI 6 and io_uring"]
 fn the_filter_refuses_every_socket() {
     let home = std::env::temp_dir().join(format!("weaver-confine-sockets-{}", std::process::id()));
     std::fs::create_dir_all(&home).unwrap();
@@ -238,7 +239,7 @@ fn socket_probe(ruleset: Option<RawFd>) -> u8 {
 /// `2>/dev/null` and `>` over a home file work, and `mktemp` lands under
 /// `TMPDIR`, home's `.tmp`, which the confinement made.
 #[test]
-#[ignore = "runs the static busybox: needs WEAVER_BUSYBOX"]
+#[ignore = "runs the static busybox: needs WEAVER_BUSYBOX and Landlock ABI 6"]
 fn the_listed_set_runs_under_the_layers() {
     let layout = Layout::new("runs");
     let shell = layout.shell();
@@ -261,31 +262,102 @@ fn the_listed_set_runs_under_the_layers() {
 }
 
 /// **A program outside the build is refused, and the control runs it** (as
-/// M12): a static program outside the grant (`docker-init`) is refused 126,
-/// and with execute on that one file added to the same ruleset it runs.
+/// M10 and M12): an identical static copy of the busybox placed outside the
+/// grant is refused 126, the grant naming the file and not its contents, and
+/// with execute on that one copy added to the same ruleset it runs.
 #[test]
-#[ignore = "runs the static busybox: needs WEAVER_BUSYBOX"]
+#[ignore = "runs the static busybox: needs WEAVER_BUSYBOX and Landlock ABI 6"]
 fn a_program_outside_the_build_is_refused() {
-    let outside = Path::new("/usr/bin/docker-init");
-    assert!(
-        outside.is_file(),
-        "a static program outside the build on this box"
-    );
-    let probe = "/usr/bin/docker-init --version >/dev/null; echo rc=$?";
     let layout = Layout::new("outside");
-    let refused = run(&layout.shell(), probe);
+    let elsewhere = layout.base.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let outside = elsewhere.join("busybox");
+    std::fs::copy(busybox(), &outside).unwrap();
+    let probe = format!("{} echo ran; echo rc=$?", outside.display());
+    let refused = run(&layout.shell(), &probe);
     assert!(stdout(&refused).contains("rc=126"), "{}", said(&refused));
     let granted = layout.shell();
-    add_right(&granted, outside, FS_EXECUTE | FS_READ_FILE);
-    let control = run(&granted, probe);
-    assert!(stdout(&control).contains("rc=0"), "{}", said(&control));
+    add_right(&granted, &outside, FS_EXECUTE | FS_READ_FILE);
+    let control = run(&granted, &probe);
+    assert!(stdout(&control).contains("ran\nrc=0"), "{}", said(&control));
+}
+
+/// **`.tmp` must be a directory of its own** (section 8.1): a `.tmp` that
+/// stands as a file, or as a symlink out of home, refuses the confinement,
+/// since every temporary would then be refused by the wall. The control: a
+/// home with no `.tmp` builds and makes it.
+///
+/// Perturbation: accept any existing `.tmp` and both refusals build.
+#[test]
+#[ignore = "a measurement of this box's kernel: needs Landlock ABI 6"]
+fn a_tmp_that_is_not_a_directory_refuses() {
+    let layout = Layout::new("tmp");
+    let home = layout.base.join("home");
+    std::fs::write(home.join(".tmp"), b"a file").unwrap();
+    let file = Shell::confined_in(&layout.grant(), home.clone());
+    assert!(
+        matches!(file, Err(ConfineFault::TmpDir(_))),
+        "a file: {:?}",
+        file.err()
+    );
+    std::fs::remove_file(home.join(".tmp")).unwrap();
+    std::os::unix::fs::symlink(std::env::temp_dir(), home.join(".tmp")).unwrap();
+    let link = Shell::confined_in(&layout.grant(), home.clone());
+    assert!(
+        matches!(link, Err(ConfineFault::TmpDir(_))),
+        "a symlink: {:?}",
+        link.err()
+    );
+    std::fs::remove_file(home.join(".tmp")).unwrap();
+    assert!(
+        Shell::confined_in(&layout.grant(), home.clone()).is_ok(),
+        "the control builds"
+    );
+    assert!(home.join(".tmp").is_dir());
+}
+
+/// **A ruled limit above the gate's own hard limit refuses at the raise**:
+/// the child cannot raise a hard limit, so every spawn would fail. A child
+/// lowers its own hard `RLIMIT_NOFILE` below the ruled 64 and the judgment
+/// refuses. The control: the same judgment with the limit untouched passes.
+///
+/// Perturbation: let `rlimits_within_reach` answer `Ok` always and the
+/// lowered child passes.
+#[test]
+fn a_ruled_limit_above_the_gates_hard_limit_refuses() {
+    let judged = |lower: bool| -> bool {
+        // SAFETY: the child makes raw system calls only and exits.
+        match unsafe { nix::unistd::fork() }.unwrap() {
+            nix::unistd::ForkResult::Child => unsafe {
+                if lower {
+                    let limit = libc::rlimit {
+                        rlim_cur: 32,
+                        rlim_max: 32,
+                    };
+                    if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) != 0 {
+                        libc::_exit(2);
+                    }
+                }
+                libc::_exit(if rlimits_within_reach().is_ok() { 0 } else { 1 });
+            },
+            nix::unistd::ForkResult::Parent { child } => {
+                match nix::sys::wait::waitpid(child, None).unwrap() {
+                    nix::sys::wait::WaitStatus::Exited(_, 0) => true,
+                    nix::sys::wait::WaitStatus::Exited(_, 1) => false,
+                    other => panic!("the judging child ended {other:?}"),
+                }
+            }
+        }
+    };
+    assert!(!judged(true), "a hard NOFILE of 32 refuses the ruled 64");
+    assert!(judged(false), "the control: the suite's own limits admit");
 }
 
 /// **Writes land beneath home alone, and the control writes elsewhere** (as
 /// M7): a write to a directory beside home is refused, and with the home's
 /// rights added there it lands.
 #[test]
-#[ignore = "runs the static busybox: needs WEAVER_BUSYBOX"]
+#[ignore = "runs the static busybox: needs WEAVER_BUSYBOX and Landlock ABI 6"]
 fn writes_land_beneath_home_alone() {
     let layout = Layout::new("writes");
     let elsewhere = layout.base.join("elsewhere");
@@ -305,7 +377,7 @@ fn writes_land_beneath_home_alone() {
 /// `cat /dev/zero` into home stops at `SHELL_RLIMIT_FSIZE` killed by
 /// `SIGXFSZ`.
 #[test]
-#[ignore = "runs the static busybox: needs WEAVER_BUSYBOX"]
+#[ignore = "runs the static busybox: needs WEAVER_BUSYBOX and Landlock ABI 6"]
 fn the_rlimits_bind() {
     let layout = Layout::new("rlimits");
     let shell = layout.shell();

@@ -323,8 +323,6 @@ fn refused(arguments: &str, clock_ms: u64) -> ToolOutcome {
     })
 }
 
-/// **A name that is not the shell's refuses by name, in this crate's
-/// own voice, and nothing runs.** The one verb has no nearest match.
 /// **An absent grant is no shell** (#29, `weaver-gate-Spec` section 3):
 /// with no grant held, an execution of the shell's own name refuses by name
 /// with nothing run, before any `tools/` is consulted. This suite's process
@@ -352,6 +350,8 @@ fn an_absent_grant_refuses_every_execution_by_name() {
     assert!(reason.contains(SHELL_NAME), "names the call: {reason}");
 }
 
+/// **A name that is not the shell's refuses by name, in this crate's
+/// own voice, and nothing runs.** The one verb has no nearest match.
 #[test]
 fn a_name_that_is_not_the_shells_refuses_by_name() {
     let outcome = refuse(&ToolExecution {
