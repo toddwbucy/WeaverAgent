@@ -431,7 +431,8 @@ fn m4_breakout_commands_start_only_listed_programs() {
 
 /// **M5: TCP connect denial.** With `CONNECT_TCP` handled and no port allowed,
 /// `bash`'s `/dev/tcp` connect to a local listener fails, and with that port
-/// allowed, it connects.
+/// allowed, it connects. The shell elects no port (section 8.1), so this
+/// stands as the evidence a later TCP election would build on.
 #[test]
 #[ignore = "a measurement of this box's kernel"]
 fn m5_tcp_connect_is_denied_unless_elected() {
@@ -518,13 +519,14 @@ fn landlock_bind_probe(rules: &Ruleset, port: u16) -> String {
     }
 }
 
-/// **M5b: the shell never binds, so never listens** (Codex on #175). With
-/// `CONNECT_TCP` and `BIND_TCP` handled and connect allowed on one port alone,
-/// as section 8.1's wall stands where a port is elected, a `bind` on the
-/// elected port, on another port and on port 0 (an ephemeral one) is refused
-/// `EACCES`, so `listen` is never reached. Without the seccomp filter, which
-/// admits inet stream sockets where a port is elected, so the wall alone
-/// answers. Run with `BIND_TCP` unhandled, the same binds succeed and listen.
+/// **M5b: bind is refused on every port, even beside an allowed connect**
+/// (Codex on #175). With `CONNECT_TCP` and `BIND_TCP` handled and connect
+/// allowed on one port alone, a `bind` on that port, on another port and on
+/// port 0 (an ephemeral one) is refused `EACCES`, so `listen` is never
+/// reached. Without the seccomp filter, so the wall alone answers. Run with
+/// `BIND_TCP` unhandled, the same binds succeed and listen. The shell makes
+/// no socket today (M9), so this is the wall's second layer and the evidence
+/// a later TCP election would build on.
 #[test]
 #[ignore = "a measurement of this box's kernel"]
 fn m5b_bind_is_refused_on_every_port() {
@@ -896,7 +898,6 @@ const AUDIT_ARCH_X86_64: u32 = 0xc000_003e;
 const BPF_LD_W_ABS: u16 = 0x20;
 const BPF_JEQ_K: u16 = 0x15;
 const BPF_RET_K: u16 = 0x06;
-const BPF_ALU_AND_K: u16 = 0x54;
 const BPF_JGE_K: u16 = 0x35;
 const X32_SYSCALL_BIT: u32 = 0x4000_0000;
 
@@ -919,21 +920,17 @@ const fn op(code: u16, jt: u8, jf: u8, k: u32) -> SockFilter {
     SockFilter { code, jt, jf, k }
 }
 
-/// **The socket-family filter** the shell applies to itself under
-/// no-new-privs (#29, the operator's answer 4). Any architecture but x86-64
-/// is refused whole, and so is every x32 system call (`nr` with bit 30 set),
-/// x32 sharing the architecture word. `io_uring_setup` is refused, io_uring's
-/// `IORING_OP_SOCKET` being a route to a socket that never calls `socket`.
-/// `socket` and `socketpair` are refused for `AF_UNIX` (Codex on #175: below
-/// Landlock ABI 9 nothing bounds a pathname socket's connect), and allowed for
-/// `AF_INET` and `AF_INET6` only as `SOCK_STREAM` with protocol 0 or
-/// `IPPROTO_TCP`, and only where `tcp` (a TCP port is elected): a pinned protocol keeps MPTCP and
-/// SCTP stream sockets out. Everything else that makes a socket is refused
-/// `EACCES`.
-fn socket_filter(tcp: bool) -> Vec<SockFilter> {
+/// **The socket filter** the shell applies to itself under no-new-privs
+/// (#29, the operator's answer 4, and the ruling on #175 that the shell has no
+/// network). Any architecture but x86-64 is refused whole, and so is every x32
+/// system call (`nr` with bit 30 set), x32 sharing the architecture word.
+/// `io_uring_setup` is refused, io_uring's `IORING_OP_SOCKET` being a route to
+/// a socket that never calls `socket`. `socket` and `socketpair` are refused
+/// `EACCES` for every family, `AF_UNIX` included (Codex on #175: below
+/// Landlock ABI 9 nothing bounds a pathname socket's connect).
+fn socket_filter() -> Vec<SockFilter> {
     let deny = SECCOMP_RET_ERRNO | libc::EACCES as u32;
-    let inet = if tcp { SECCOMP_RET_ALLOW } else { deny };
-    // seccomp_data: nr at 0, arch at 4, args[i] at 16 + 8 i (the low word).
+    // seccomp_data: nr at 0, arch at 4.
     vec![
         /* 0 */ op(BPF_LD_W_ABS, 0, 0, 4),
         /* 1 */ op(BPF_JEQ_K, 1, 0, AUDIT_ARCH_X86_64),
@@ -941,24 +938,11 @@ fn socket_filter(tcp: bool) -> Vec<SockFilter> {
         /* 3 */ op(BPF_LD_W_ABS, 0, 0, 0),
         /* 4 */ op(BPF_JGE_K, 0, 1, X32_SYSCALL_BIT),
         /* 5 */ op(BPF_RET_K, 0, 0, deny),
-        /* 6 */ op(BPF_JEQ_K, 0, 1, libc::SYS_io_uring_setup as u32),
-        /* 7 */ op(BPF_RET_K, 0, 0, deny),
-        /* 8 */ op(BPF_JEQ_K, 2, 0, libc::SYS_socket as u32),
-        /* 9 */ op(BPF_JEQ_K, 1, 0, libc::SYS_socketpair as u32),
-        /* 10 */ op(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW),
-        /* 11 */ op(BPF_LD_W_ABS, 0, 0, 16),
-        /* 12 */ op(BPF_JEQ_K, 0, 1, libc::AF_UNIX as u32),
-        /* 13 */ op(BPF_RET_K, 0, 0, deny),
-        /* 14 */ op(BPF_JEQ_K, 1, 0, libc::AF_INET as u32),
-        /* 15 */ op(BPF_JEQ_K, 0, 7, libc::AF_INET6 as u32),
-        /* 16 */ op(BPF_LD_W_ABS, 0, 0, 24),
-        /* 17 */ op(BPF_ALU_AND_K, 0, 0, 0xf),
-        /* 18 */ op(BPF_JEQ_K, 0, 4, libc::SOCK_STREAM as u32),
-        /* 19 */ op(BPF_LD_W_ABS, 0, 0, 32),
-        /* 20 */ op(BPF_JEQ_K, 1, 0, 0),
-        /* 21 */ op(BPF_JEQ_K, 0, 1, libc::IPPROTO_TCP as u32),
-        /* 22 */ op(BPF_RET_K, 0, 0, inet),
-        /* 23 */ op(BPF_RET_K, 0, 0, deny),
+        /* 6 */ op(BPF_JEQ_K, 3, 0, libc::SYS_io_uring_setup as u32),
+        /* 7 */ op(BPF_JEQ_K, 2, 0, libc::SYS_socket as u32),
+        /* 8 */ op(BPF_JEQ_K, 1, 0, libc::SYS_socketpair as u32),
+        /* 9 */ op(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW),
+        /* 10 */ op(BPF_RET_K, 0, 0, deny),
     ]
 }
 
@@ -1110,48 +1094,35 @@ fn socket_probe(filter: &[SockFilter]) -> String {
     }
 }
 
-/// **M9: the socket-family filter.** Unfiltered, every kind opens (the box
-/// allows raw only to root, so `inet raw` is refused by DAC alone). With no
-/// TCP port elected, only `AF_UNIX` opens. With one elected, TCP on both
-/// inet families opens too, UDP, raw and netlink refused, MPTCP and SCTP
-/// stream sockets refused by the protocol pin, `io_uring_setup` refused, and
-/// an x32 call refused `EACCES` (where the kernel alone answers `ENOSYS`).
+/// **M9: the socket filter: no socket of any family.** Unfiltered, every
+/// kind opens (the box allows raw only to root, so `inet raw` is refused by
+/// DAC alone). Filtered, nothing opens: TCP, UDP, raw, netlink, MPTCP and SCTP
+/// on inet, `AF_UNIX` by `socket` and by `socketpair`, and `io_uring_setup`,
+/// and an x32 call is refused `EACCES` (where the kernel alone answers
+/// `ENOSYS`).
 #[test]
 #[ignore = "a measurement of this box's kernel"]
 fn m9_the_socket_family_filter() {
     let unfiltered = socket_probe(&[op(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW)]);
     println!("M9 unfiltered: {unfiltered}");
     assert!(unfiltered.contains("unix stream=open"), "{unfiltered}");
+    assert!(unfiltered.contains("inet tcp=open"), "{unfiltered}");
     assert!(unfiltered.contains("io_uring=open"), "{unfiltered}");
     assert!(unfiltered.contains("x32=ENOSYS"), "{unfiltered}");
-    for (tcp, label) in [(false, "no TCP elected"), (true, "a TCP port elected")] {
-        let filtered = socket_probe(&socket_filter(tcp));
-        println!("M9 {label}: {filtered}");
-        for refused in [
-            "unix stream=refused",
-            "unix socketpair=refused",
-            "inet udp=refused",
-            "netlink=refused",
-            "inet mptcp=refused",
-            "inet sctp=refused",
-            "io_uring=refused",
-            "x32=refused by the filter",
-        ] {
-            assert!(
-                filtered.contains(refused),
-                "{label}: {refused} in {filtered}"
-            );
+    let filtered = socket_probe(&socket_filter());
+    println!("M9 filtered: {filtered}");
+    for kind in filtered.split(", ") {
+        if kind.starts_with("x32=") {
+            assert_eq!(kind, "x32=refused by the filter (EACCES)", "{filtered}");
+        } else {
+            assert!(kind.ends_with("=refused"), "M9 {kind} in {filtered}");
         }
-        let tcp_state = if tcp { "open" } else { "refused" };
-        assert!(
-            filtered.contains(&format!("inet tcp={tcp_state}")),
-            "{label}: {filtered}"
-        );
-        assert!(
-            filtered.contains(&format!("inet6 tcp={tcp_state}")),
-            "{label}: {filtered}"
-        );
     }
+    assert_eq!(
+        filtered.split(", ").count(),
+        11,
+        "every kind probed: {filtered}"
+    );
 }
 
 /// **M10: execute granted on one file, reached through a symlinked command
@@ -1275,7 +1246,8 @@ fn landlock_connect_probe(rules: &Ruleset, protocol: i32, port: u16) -> String {
 /// `CONNECT_TCP` handled and no port allowed, and no seccomp filter, a plain
 /// TCP connect to a loopback listener is denied (M5). An MPTCP and an SCTP
 /// stream socket try the same: where either connects, Landlock does not bound
-/// it, and the filter's protocol pin is what keeps it out.
+/// it, so a later TCP election needs a filter pinning the protocol, the
+/// evidence section 8.1's open note names.
 #[test]
 #[ignore = "a measurement of this box's kernel"]
 fn m9b_landlock_tcp_against_mptcp_and_sctp() {
@@ -1355,8 +1327,9 @@ impl ShellLayout {
     /// The shell's ruleset as section 8.1 states it: execute and read on the
     /// busybox file, read on `commands/`, every right but execute beneath
     /// home (`TRUNCATE` among them unless `truncate_home` is false), read and
-    /// write on `/dev/null` (with truncate where `truncate_null`), and read on
-    /// `/dev/zero` and `/dev/urandom`.
+    /// write on `/dev/null` (with truncate where `truncate_null`), read on
+    /// `/dev/zero` and `/dev/urandom`, TCP connect and bind handled with no
+    /// grant, and signal and abstract-socket scoping.
     fn rules(&self, truncate_home: bool, truncate_null: bool) -> Ruleset {
         let home_rights = if truncate_home {
             FS_ALL_V5 & !FS_EXECUTE
@@ -1372,13 +1345,19 @@ impl ShellLayout {
         } else {
             FS_ALL_V5
         };
-        Ruleset::new(handled, 0, 0)
-            .allow(&self.path("libexec/busybox"), FS_EXECUTE | FS_READ_FILE)
-            .allow(&self.path("commands"), FS_READ_DIR)
-            .allow(&self.path("home"), home_rights)
-            .allow(Path::new("/dev/null"), null_rights)
-            .allow(Path::new("/dev/zero"), FS_READ_FILE)
-            .allow(Path::new("/dev/urandom"), FS_READ_FILE)
+        // `CONNECT_TCP` and `BIND_TCP` handled with no grant, and signal and
+        // abstract-socket scoping, the wall's second layer under the filter.
+        Ruleset::new(
+            handled,
+            NET_CONNECT_TCP | NET_BIND_TCP,
+            SCOPE_SIGNAL | SCOPE_ABSTRACT_UNIX_SOCKET,
+        )
+        .allow(&self.path("libexec/busybox"), FS_EXECUTE | FS_READ_FILE)
+        .allow(&self.path("commands"), FS_READ_DIR)
+        .allow(&self.path("home"), home_rights)
+        .allow(Path::new("/dev/null"), null_rights)
+        .allow(Path::new("/dev/zero"), FS_READ_FILE)
+        .allow(Path::new("/dev/urandom"), FS_READ_FILE)
     }
 
     /// `sh -c script`, the busybox file run with `argv[0]` `sh`, with the gate's
@@ -1718,7 +1697,7 @@ fn unix_connect_probe(rules: &Ruleset, path: &Path) -> String {
 /// A socket this uid can reach is bound outside the domain. Landlock alone
 /// with `RESOLVE_UNIX` handled and no grant (ABI 9) refuses the connect. With
 /// it unhandled the same connect succeeds, which is the gap below ABI 9 the
-/// filter's `AF_UNIX` refusal closes (M9). Then the shell under the filter and
+/// filter's refusal of every socket closes (M9). Then the shell under the filter and
 /// the full ruleset: its pipeline and its redirects, which use `pipe` and
 /// never a socket, still work.
 #[test]
@@ -1741,7 +1720,7 @@ fn m9c_pathname_sockets_and_the_shell_under_the_filter() {
     drop(listener);
     let _ = std::fs::remove_file(&path);
     let layout = ShellLayout::new("m9c", &APPLETS);
-    let filter = socket_filter(false);
+    let filter = socket_filter();
     let out = layout.sh_filtered(
         &layout.rules(true, true),
         "echo a b c | tr ' ' '\\n' | wc -l; ls /nonexistent 2>/dev/null; echo x > f && cat f",

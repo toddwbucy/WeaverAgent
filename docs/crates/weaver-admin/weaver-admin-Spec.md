@@ -1157,8 +1157,7 @@ lines the applets compiled in, and the set less the interpreter's two names (`sh
 nothing, and a binary that answers no listing refuses, failing closed. Running it is
 trusting what the stack installed, as the organ binaries already judged are trusted.
 The inventory then builds the shell's grant,
-which the enter carries: the operator's `shell-tcp-connect`, and the two paths this crate
-authors as deployment facts, `shell-binary` and the run directory's `commands/`, the
+which the enter carries: the two paths this crate authors as deployment facts, `shell-binary` and the run directory's `commands/`, the
 gate reading no root of this crate's (`weaver-types-Spec` section 2). Any failure refuses with `BoundaryUnverified`,
 nothing is repaired, and nothing is built, per charter section 2. **The model
 binding's artifact is checked for presence and never resolved here.** An empty
@@ -4192,6 +4191,6 @@ Each names what settles it, and none is this Spec's to settle alone.
   that rule binds what these crates link, and this would bind what an agent's tools may
   reach, so an agent whose tools fetch anything would break under it. Settled by an
   operator who knows which tools their agents carry. **For the agent's shell #29 answers it at the shell
-  itself**: the shell's child refuses every socket family, `AF_UNIX` included, but inet
-  TCP where a port is elected (`weaver-gate-Spec` section 8.1). The question stands for
+  itself**: the shell's child makes no socket of any family, `AF_UNIX` included
+  (`weaver-gate-Spec` section 8.1). The question stands for
   the worker and its organs.

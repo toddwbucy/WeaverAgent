@@ -206,8 +206,6 @@ pub struct AgentConfig {
     pub spu_instruction: SpuInstruction,
     #[serde(default)]
     pub tool_set: Vec<ToolName>,
-    #[serde(default)]
-    pub shell_tcp_connect: Vec<u16>,
     pub binding_kind: Option<BindingKind>,
     pub gate_instruction: Option<GateInstruction>,
     pub trace_sink: TraceSink,
@@ -601,10 +599,10 @@ diagnostic binding authors nothing, and the operator's ruling of the same date r
 that reading with a composition, every binding authoring a record and the kind selecting
 the mechanism rather than the presence, per `weaver-agent-PRD` section 6. What the
 declaration names is a sink, and what the run writes into it follows the kind without
-the field moving. **`tool_set` and `shell_tcp_connect` may be absent** because section 2's
-tool paragraph rules what absence means, no tool offered and no port elected (#29): each
-defaults to an empty list (`#[serde(default)]` above), so an absent field and an empty
-list are one declaration, and the parse never reads an absence as anything wider. Every
+the field moving. **`tool_set` may be absent** because section 2's tool
+paragraph rules what absence means, no tool offered (#29): it defaults to an empty list
+(`#[serde(default)]` above), so an absent field and an empty list are one declaration,
+and the parse never reads an absence as anything wider. Every
 other field is required. The residual-readout election is what a
 builder will reach to default, to off, and it is exactly the one that must not: an
 operator who stated no readout has not thereby declined it, and admin refusing the load
@@ -762,10 +760,10 @@ operator's rulings of 2026-10-15). The parse refuses a name it does not register
 `validate` rather than offering the model nothing silently. **Absent or empty is no
 tool**: nothing is offered to the model and nothing runs, the default being `[]`.
 Electing `sh` offers the shell of `weaver-gate-Spec` section 8, confined by its
-section 8.1. **`shell-tcp-connect` elects the TCP ports the shell may connect to**,
-absent or empty being no network, the default. A port elected where `tool-set` does
-not elect `sh` refuses `BadValue`, a port with no shell being a declaration that says
-nothing true. **`permission-mode` is retired** (#29): the elected tool set and, for the
+section 8.1. **The shell has no network and the declaration elects none** (#29): no
+compiled applet reaches the network and ash opens no socket, so a port election would be
+a capability declared and consumed by nothing. A later act may elect TCP together with a
+TCP-capable applet, at the bar `weaver-gate-Spec` section 8.1 names. **`permission-mode` is retired** (#29): the elected tool set and, for the
 shell, its compiled command list (`weaver-gate-Spec` section 8.1) are the permission,
 and a mode that read as a control where the kernel is the control was the thing
 `weaver-harness-PRD` section 2 warned against. A declaration still carrying it refuses
@@ -781,13 +779,12 @@ where `tool-set` elects `sh`:
 pub struct ShellGrant {
     pub binary: PathBuf,
     pub commands: PathBuf,
-    pub tcp_connect: Vec<u16>,
 }
 ```
 
-**Two authors, as the socket and the access rule are.** The grant's presence and
-`tcp_connect` are the operator's elections, `tool-set` and `shell-tcp-connect`. `binary`
-and `commands` are deployment facts admin authors: the root's `shell-binary`, the static
+**Two authors, as the socket and the access rule are.** The grant's presence is the
+operator's election, `tool-set`. `binary` and `commands` are deployment facts admin
+authors: the root's `shell-binary`, the static
 busybox the gate grants execute on, and the run directory's `commands/` the start step
 builds, which the gate sets `PATH` to (`weaver-admin-Spec` sections 4, 6 and 9,
 `weaver-gate-Spec` section 8.1). The gate reads no admin root, so the paths reach it
@@ -2684,9 +2681,8 @@ already discharged.
   make optional.
 - In this crate: a misspelled key refuses, confirmed by watching a mistyped
   `tool-set` vanish when `deny_unknown_fields` is removed.
-- In this crate: `tool-set` refuses a name it does not register, `shell-tcp-connect`
-  refuses a port where `sh` is not elected, and a declaration carrying the retired
-  `permission-mode` refuses as an unknown field (#29), each watched to fail when its
+- In this crate: `tool-set` refuses a name it does not register, and a declaration
+  carrying the retired `permission-mode` refuses as an unknown field (#29), each watched to fail when its
   check is dropped. The watch is the
   derive's removal while the surface is one type's, and it moves with the surface.
 - In this crate: an identity message refuses the parse unless it is a
