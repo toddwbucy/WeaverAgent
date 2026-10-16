@@ -349,14 +349,18 @@ fn m2_execute_and_the_interpreter() {
     let c = full.run(Command::new(bin.path("ls")).arg("/"));
     println!("M2c libraries executable: {}", said(&c));
     assert_says("M2c: the exec ran, / unread", &c, "cannot open directory");
-    // d: /usr/bin/ls itself, outside the command directory, libraries readable.
-    let mut outside = Ruleset::new(handled, 0, 0).allow(&bin.0, FS_EXECUTE | FS_READ_FILE);
-    for root in LIBRARY_ROOTS {
-        outside = outside.allow(Path::new(root), FS_READ_FILE | FS_READ_DIR);
-    }
-    let d = outside.run(Command::new("/usr/bin/ls").arg("/"));
+    // d: /usr/bin/ls itself, outside the command directory, under e's rules
+    // (the interpreter executable), and its control: execute on that one file
+    // added, the only right withheld, and it runs.
+    let outside = || standard(Ruleset::new(handled, 0, 0), &bin).allow(Path::new("/"), FS_READ_DIR);
+    let d = outside().run(Command::new("/usr/bin/ls").arg("/"));
     println!("M2d /usr/bin/ls outside the directory: {}", said(&d));
     assert_exec_denied("M2d", &d);
+    let d_control = outside()
+        .allow(Path::new("/usr/bin/ls"), FS_EXECUTE | FS_READ_FILE)
+        .run(Command::new("/usr/bin/ls").arg("/"));
+    println!("M2d control, execute on /usr/bin/ls: {}", said(&d_control));
+    assert_ran("M2d control", &d_control);
     // e: the interpreter alone executable, the libraries read-only, `/` readable.
     let e = standard(Ruleset::new(handled, 0, 0), &bin)
         .allow(Path::new("/"), FS_READ_DIR)
@@ -388,12 +392,20 @@ fn m3_a_symlink_is_judged_at_its_target() {
         .run(Command::new(bin.path("ls")).arg(bin.0.to_str().unwrap()));
     println!("M3 symlink to /usr/bin/ls: {}", said(&out));
     assert_exec_denied("M3", &out);
+    // The control: execute on the target added, and the same symlink runs.
+    let control = standard(Ruleset::new(handled, 0, 0), &bin)
+        .allow(Path::new("/usr/bin/ls"), FS_EXECUTE | FS_READ_FILE)
+        .run(Command::new(bin.path("ls")).arg(bin.0.to_str().unwrap()));
+    println!("M3 control, execute on the target: {}", said(&control));
+    assert_ran("M3 control", &control);
 }
 
 /// **M4: a breakout-capable command can still start only listed programs.**
 /// `find -exec`, `awk`'s `system()` and `bash` itself, confined to the
 /// directory, try `/usr/bin/id`, which is not in it: each must fail with a
-/// permission error, and `id` listed must run.
+/// permission error, and `id` listed must run. `awk`'s `system()` goes
+/// through `/bin/sh`, unlisted itself, so its refusal is the shell's. Each
+/// refusal has a control granting the one file it was refused.
 #[test]
 #[ignore = "a measurement of this box's kernel"]
 fn m4_breakout_commands_start_only_listed_programs() {
@@ -427,6 +439,40 @@ fn m4_breakout_commands_start_only_listed_programs() {
         .run(Command::new(bin.path("bash")).args(["-c", &format!("{}", bin.path("id").display())]));
     println!("M4d bash -c <listed id>: {}", said(&listed));
     assert_says("M4d", &listed, "uid=");
+    // The controls: execute on `/usr/bin/id` added, the one right withheld,
+    // and `find` and `bash` start it.
+    let granted = || rules().allow(Path::new("/usr/bin/id"), FS_EXECUTE | FS_READ_FILE);
+    let find = granted().run(Command::new(bin.path("find")).args([
+        bin.0.to_str().unwrap(),
+        "-maxdepth",
+        "0",
+        "-exec",
+        "/usr/bin/id",
+        ";",
+    ]));
+    let bash = granted().run(Command::new(bin.path("bash")).args(["-c", "/usr/bin/id"]));
+    for (what, out) in [("find", &find), ("bash", &bash)] {
+        println!(
+            "M4 control, {what} with execute on /usr/bin/id: {}",
+            said(out)
+        );
+        assert_says(&format!("M4 control {what}"), out, "uid=");
+    }
+    // `awk`'s `system()` runs its command through `/bin/sh`, itself unlisted
+    // (`/usr/bin/bash` here), so M4b's refusal is the shell's: a builtin's
+    // `system()` is refused too, and its control grants execute on that one
+    // file, after which the shell runs.
+    let awk_probe = "BEGIN { r = system(\"echo via-sh\"); print \"system returned \" r }";
+    let awk_refused = rules().run(Command::new(bin.path("awk")).args([awk_probe]));
+    println!("M4b awk system() of a builtin: {}", said(&awk_refused));
+    assert_says("M4b builtin", &awk_refused, "system returned 126");
+    let sh = std::fs::canonicalize("/bin/sh").unwrap();
+    let awk = rules()
+        .allow(&sh, FS_EXECUTE | FS_READ_FILE)
+        .run(Command::new(bin.path("awk")).args([awk_probe]));
+    println!("M4b control, execute on {}: {}", sh.display(), said(&awk));
+    assert_says("M4b control", &awk, "via-sh");
+    assert_says("M4b control", &awk, "system returned 0");
 }
 
 /// **M5: TCP connect denial.** With `CONNECT_TCP` handled and no port allowed,
@@ -545,6 +591,14 @@ fn m5b_bind_is_refused_on_every_port() {
             bound, "bind refused: EACCES: Permission denied",
             "M5b bind on {what}"
         );
+        // The control: `BIND_TCP` left unhandled, the one right removed, and
+        // the same bind succeeds and listens (Codex on #175).
+        let control = landlock_bind_probe(
+            &Ruleset::new(FS_READ_FILE, NET_CONNECT_TCP, 0).allow_connect(elected),
+            port,
+        );
+        println!("M5b control, BIND_TCP unhandled, on {what}: {control}");
+        assert_eq!(control, "listening", "M5b control on {what}");
     }
 }
 
@@ -576,6 +630,11 @@ fn m6_signal_and_abstract_socket_scoping() {
     println!("M6a signal scoping: {}", said(&out));
     assert_says("M6a", &out, "outside=1");
     assert_says("M6a", &out, "own_child=0");
+    // The control: `SCOPE_SIGNAL` removed, the same signal reaches outside.
+    let unscoped = standard(Ruleset::new(handled, 0, SCOPE_ABSTRACT_UNIX_SOCKET), &bin)
+        .run(Command::new(bin.path("bash")).args(["-c", &script]));
+    println!("M6a control, SCOPE_SIGNAL removed: {}", said(&unscoped));
+    assert_says("M6a control", &unscoped, "outside=0");
     let _ = outside.kill();
     let _ = outside.wait();
     // The abstract socket: bound here, outside the domain.
@@ -593,6 +652,16 @@ fn m6_signal_and_abstract_socket_scoping() {
     let probe = abstract_connect_probe(&rules_for_abstract(&bin), &name);
     println!("M6b abstract socket connect from inside: {probe}");
     assert!(probe.contains("EPERM"), "M6b: {probe}");
+    // The control: `SCOPE_ABSTRACT_UNIX_SOCKET` removed, and it connects.
+    let control = abstract_connect_probe(
+        &standard(
+            Ruleset::new(FS_EXECUTE | FS_READ_FILE | FS_READ_DIR, 0, 0),
+            &bin,
+        ),
+        &name,
+    );
+    println!("M6b control, the abstract scope removed: {control}");
+    assert_eq!(control, "connected", "M6b control");
 }
 
 fn rules_for_abstract(bin: &CommandDir) -> Ruleset {
@@ -669,6 +738,14 @@ fn m7_writes_beneath_home_alone() {
     println!("M7 writes: {}", said(&out));
     assert_says("M7", &out, "home=ok");
     assert_says("M7", &out, "elsewhere=1");
+    // The control: the same rights granted on the other directory, and the
+    // same write lands.
+    let control = standard(Ruleset::new(FS_ALL_V1, 0, 0), &bin)
+        .allow(&home, FS_ALL_V1 & !FS_EXECUTE)
+        .allow(&elsewhere, FS_ALL_V1 & !FS_EXECUTE)
+        .run(Command::new(bin.path("bash")).args(["-c", &script]));
+    println!("M7 control, writes granted elsewhere: {}", said(&control));
+    assert_says("M7 control", &control, "elsewhere=0");
     let _ = FS_WRITE_FILE;
     for dir in [&home, &elsewhere] {
         let _ = std::fs::remove_dir_all(dir);
@@ -709,8 +786,8 @@ fn m3b_a_hard_link_is_judged_by_the_path_walked() {
 /// **M8: the interpreter as a program.** The interpreter must be executable
 /// for any dynamically linked command (M2e, M2f), and run directly it loads
 /// whatever readable ELF it is handed by `mmap`, which Landlock does not
-/// check. An ELF placed in the writable home, not executable and not listed,
-/// is run that way? Then the command list does not hold for a dynamically
+/// check. An ELF placed in the writable home, executable by its mode (the
+/// agent can set its own file's mode) but not listed, is run that way? Then the command list does not hold for a dynamically
 /// linked set, and the remedy is measured beside it: a statically linked
 /// command needs no interpreter, so none is granted execute.
 #[test]
@@ -724,7 +801,7 @@ fn m8_the_interpreter_as_a_program() {
     std::fs::copy("/usr/bin/id", home.join("payload")).unwrap();
     std::fs::set_permissions(
         home.join("payload"),
-        std::os::unix::fs::PermissionsExt::from_mode(0o644),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
     )
     .unwrap();
     let handled = FS_EXECUTE | FS_READ_FILE | FS_READ_DIR;
@@ -740,6 +817,13 @@ fn m8_the_interpreter_as_a_program() {
     // The hole is measured open: what the static set and the noexec home close.
     assert_says("M8 direct", &out, "direct=126");
     assert_says("M8 via the interpreter", &out, "via_interpreter=0");
+    // The control for the direct refusal: execute granted on home, the one
+    // right withheld, and the payload runs directly.
+    let control = standard(Ruleset::new(handled, 0, 0), &bin)
+        .allow(&home, FS_EXECUTE | FS_READ_FILE | FS_READ_DIR)
+        .run(Command::new(bin.path("bash")).args(["-c", &direct]));
+    println!("M8 control, execute on home: {}", said(&control));
+    assert_says("M8 control", &control, "direct=0");
     let _ = std::fs::remove_dir_all(&home);
 }
 
@@ -779,6 +863,21 @@ fn m8b_a_static_set_grants_no_interpreter() {
         said(&via)
     );
     assert_eq!(via.status.code(), Some(126), "M8b via: {}", said(&via));
+    // The control: execute on the interpreter added, the one right withheld,
+    // and the launcher starts it on the payload.
+    let control = rules()
+        .allow(Path::new(INTERPRETER), FS_EXECUTE | FS_READ_FILE)
+        .run(Command::new(bin.path("docker-init")).args([
+            "-s",
+            "--",
+            INTERPRETER,
+            home.join("payload").to_str().unwrap(),
+        ]));
+    println!(
+        "M8b control, execute on the interpreter: {}",
+        said(&control)
+    );
+    assert_says("M8b control", &control, "uid=");
     let _ = std::fs::remove_dir_all(&home);
 }
 
@@ -820,6 +919,25 @@ fn m8c_a_noexec_home_closes_the_interpreter_route() {
     println!("M8c the interpreter on a noexec home: {}", said(&out));
     assert_says("M8c", &out, "failed to map segment");
     assert_says("M8c", &out, "via_interpreter=127");
+    // The control: the same payload and rules on a home without `noexec`,
+    // the one mount option removed, and the interpreter runs it.
+    let plain =
+        std::env::temp_dir().join(format!("weaver-landlock-m8cplain-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&plain);
+    std::fs::create_dir_all(&plain).unwrap();
+    std::fs::copy("/usr/bin/id", plain.join("payload")).unwrap();
+    let control = standard(Ruleset::new(handled, 0, 0), &bin)
+        .allow(&plain, FS_READ_FILE | FS_READ_DIR)
+        .run(Command::new(bin.path("bash")).args([
+            "-c",
+            &format!(
+                "{INTERPRETER} {}/payload; echo via_interpreter=$?",
+                plain.display()
+            ),
+        ]));
+    let _ = std::fs::remove_dir_all(&plain);
+    println!("M8c control, the home without noexec: {}", said(&control));
+    assert_says("M8c control", &control, "via_interpreter=0");
 }
 
 /// **The private user and mount namespace M8c's mount needs**, verified
@@ -1156,6 +1274,11 @@ fn m10_execute_on_one_file_through_symlinks() {
     let copy = rules().run(Command::new(base.join("elsewhere/multicall")).arg("--version"));
     println!("M10 an identical copy elsewhere: {}", said(&copy));
     assert_exec_denied("M10 copy", &copy);
+    let copy_control = rules()
+        .allow(&base.join("elsewhere/multicall"), FS_EXECUTE | FS_READ_FILE)
+        .run(Command::new(base.join("elsewhere/multicall")).arg("--version"));
+    println!("M10 control, execute on the copy: {}", said(&copy_control));
+    assert_ran("M10 copy control", &copy_control);
     // The grant names one file and nothing else: the launcher, run through
     // its symlink, cannot start the interpreter, nor a copy of itself the
     // agent writes into its home (readable and writable to it).
@@ -1179,6 +1302,14 @@ fn m10_execute_on_one_file_through_symlinks() {
         "M10 interpreter: {}",
         said(&interpreter)
     );
+    let interpreter_control = home_rules()
+        .allow(Path::new(INTERPRETER), FS_EXECUTE | FS_READ_FILE)
+        .run(Command::new(base.join("commands/tini")).args(["-s", "--", INTERPRETER, "--version"]));
+    println!(
+        "M10 control, execute on the interpreter: {}",
+        said(&interpreter_control)
+    );
+    assert_ran("M10 interpreter control", &interpreter_control);
     let written = home_rules().run(Command::new(base.join("commands/tini")).args([
         "-s",
         "--",
@@ -1195,6 +1326,19 @@ fn m10_execute_on_one_file_through_symlinks() {
         "M10 written: {}",
         said(&written)
     );
+    let written_control = home_rules()
+        .allow(&home.join("multicall"), FS_EXECUTE | FS_READ_FILE)
+        .run(Command::new(base.join("commands/tini")).args([
+            "-s",
+            "--",
+            home.join("multicall").to_str().unwrap(),
+            "--version",
+        ]));
+    println!(
+        "M10 control, execute on the written copy: {}",
+        said(&written_control)
+    );
+    assert_ran("M10 written control", &written_control);
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -1259,6 +1403,10 @@ fn m9b_landlock_tcp_against_mptcp_and_sctp() {
     let sctp = landlock_connect_probe(&rules(), libc::IPPROTO_SCTP, port);
     println!("M9b plain TCP: {tcp}, MPTCP: {mptcp}, SCTP: {sctp}");
     assert!(tcp.contains("EACCES"), "plain TCP is bounded: {tcp}");
+    // The control: the port allowed, and the same plain TCP connect succeeds.
+    let control = landlock_connect_probe(&rules().allow_connect(port), 0, port);
+    println!("M9b control, the port allowed: {control}");
+    assert_eq!(control, "connected", "M9b control");
     // Measured unbounded: why the filter pins the protocol.
     assert_eq!(mptcp, "connected", "MPTCP passes Landlock's TCP right");
     assert!(
@@ -1497,9 +1645,18 @@ fn m12_the_static_busybox_under_the_ruleset() {
     let absent = rules().run(Command::new(layout.path("libexec/busybox")).args(["wget", "--help"]));
     println!("M12 an applet not compiled in: {}", said(&absent));
     assert_says("M12 absent", &absent, "applet not found");
-    let outside = layout.sh(&rules(), "/usr/bin/id; echo rc=$?");
+    // A static program outside the build, so execute on it is the one right
+    // that decides, no interpreter or library entering.
+    let probe = "/usr/bin/docker-init --version >/dev/null; echo rc=$?";
+    let outside = layout.sh(&rules(), probe);
     println!("M12 a program outside the build: {}", said(&outside));
     assert_says("M12 outside", &outside, "rc=126");
+    let control = layout.sh(
+        &rules().allow(Path::new("/usr/bin/docker-init"), FS_EXECUTE | FS_READ_FILE),
+        probe,
+    );
+    println!("M12 control, execute on it: {}", said(&control));
+    assert_says("M12 control", &control, "rc=0");
 }
 
 /// Section 8.1's rlimits, soft and hard alike, proposed for the operator's edit.
@@ -1591,6 +1748,13 @@ fn m14_the_default_set_under_the_rlimits() {
         );
         assert_says("M14 raise", &raise, "raise=");
     }
+    // The control: each set to its hard value, not past it, succeeds, so the
+    // refusals above are the hard limits' own.
+    for (flag, at) in [("f", blocks), ("n", nofile), ("v", kib), ("c", 0)] {
+        let set = limited(&format!("ulimit -{flag} {at}; echo set=$?"));
+        println!("M14 control, -{flag} set to {at}: {}", said(&set));
+        assert_says("M14 control", &set, "set=0");
+    }
 }
 
 /// **M13: both filters require no-new-privs.** Without `PR_SET_NO_NEW_PRIVS`
@@ -1602,6 +1766,41 @@ fn m14_the_default_set_under_the_rlimits() {
 #[test]
 #[ignore = "a measurement of this box's kernel"]
 fn m13_both_filters_require_no_new_privs() {
+    let (landlock, seccomp) = filters_probe(false);
+    println!(
+        "M13 landlock_restrict_self without no-new-privs: {landlock}, seccomp without it: {seccomp}"
+    );
+    if nix::unistd::geteuid().is_root() {
+        // Root in a user namespace holds CAP_SYS_ADMIN there, which the
+        // kernel accepts in place of no-new-privs for both: the run
+        // outside a namespace is the one that measures the gate's case.
+        assert_eq!(landlock, nix::errno::Errno::UnknownErrno);
+        assert_eq!(seccomp, nix::errno::Errno::UnknownErrno);
+    } else {
+        // The gate's case: an unprivileged uid, as the agent's.
+        assert_eq!(landlock, nix::errno::Errno::EPERM);
+        assert_eq!(seccomp, nix::errno::Errno::EACCES);
+    }
+    // The control: no-new-privs set first, the one condition withheld above,
+    // and both load in either run.
+    let (landlock, seccomp) = filters_probe(true);
+    println!("M13 control, no-new-privs set: {landlock}, {seccomp}");
+    assert_eq!(
+        landlock,
+        nix::errno::Errno::UnknownErrno,
+        "M13 control landlock"
+    );
+    assert_eq!(
+        seccomp,
+        nix::errno::Errno::UnknownErrno,
+        "M13 control seccomp"
+    );
+}
+
+/// Restricts a child by an empty Landlock ruleset and loads an allow-all
+/// seccomp filter, setting no-new-privs first where `no_new_privs`, and
+/// answers each call's errno (`UnknownErrno` for success).
+fn filters_probe(no_new_privs: bool) -> (nix::errno::Errno, nix::errno::Errno) {
     let rules = Ruleset::new(FS_READ_FILE, 0, 0);
     let ruleset = rules.0.as_raw_fd();
     let filter = [op(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW)];
@@ -1612,6 +1811,9 @@ fn m13_both_filters_require_no_new_privs() {
     // SAFETY: the child makes raw system calls only and exits.
     match unsafe { nix::unistd::fork() }.unwrap() {
         nix::unistd::ForkResult::Child => unsafe {
+            if no_new_privs && libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
+                libc::_exit(255);
+            }
             let landlock = libc::syscall(libc::SYS_landlock_restrict_self, ruleset, 0u32);
             let landlock_errno = if landlock == 0 {
                 0
@@ -1637,22 +1839,11 @@ fn m13_both_filters_require_no_new_privs() {
             let nix::sys::wait::WaitStatus::Exited(_, code) = status else {
                 panic!("M13's child ended {status:?}");
             };
-            let landlock = nix::errno::Errno::from_raw(code >> 4);
-            let seccomp = nix::errno::Errno::from_raw(code & 0xf);
-            println!(
-                "M13 landlock_restrict_self without no-new-privs: {landlock}, seccomp without it: {seccomp}"
-            );
-            if nix::unistd::geteuid().is_root() {
-                // Root in a user namespace holds CAP_SYS_ADMIN there, which the
-                // kernel accepts in place of no-new-privs for both: the run
-                // outside a namespace is the one that measures the gate's case.
-                assert_eq!(landlock, nix::errno::Errno::UnknownErrno);
-                assert_eq!(seccomp, nix::errno::Errno::UnknownErrno);
-            } else {
-                // The gate's case: an unprivileged uid, as the agent's.
-                assert_eq!(landlock, nix::errno::Errno::EPERM);
-                assert_eq!(seccomp, nix::errno::Errno::EACCES);
-            }
+            assert_ne!(code, 255, "M13's child could not set no-new-privs");
+            (
+                nix::errno::Errno::from_raw(code >> 4),
+                nix::errno::Errno::from_raw(code & 0xf),
+            )
         }
     }
 }
