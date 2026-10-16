@@ -54,7 +54,6 @@ the author's convenience.
 
     src/lib.rs          re-exports, and nothing else
     src/message.rs      the message model, section 3
-    src/permission.rs   the permission modes, section 4
     src/tool.rs         the tool contract, section 5
     src/provider.rs     the provider contract, section 6, deferred
 
@@ -133,7 +132,7 @@ to: axiom-floor-is-vocabulary-behavior-is-socket
 **Every type here is data, derives what data derives, and owns no invariant it
 cannot state in its own shape or name a party to enforce.** Concretely: `Debug`,
 `Clone`, `PartialEq`, and `serde::Serialize` with `Deserialize` on the message
-model and the permission modes, and no `Default` anywhere. A default is a decision
+model, and no `Default` anywhere. A default is a decision
 about what an absent value means, and `weaver-types-PRD` section 5 rules that
 absence is never read as a default unless a charter says so and says what it
 means. A `Default` impl on a floor type is that ruling defeated by a derive.
@@ -163,10 +162,9 @@ to: traits-no-default
 
 
 **Enumerations are non-exhaustive where the charter says the set grows, and
-exhaustive where the charter says it is closed.** The permission modes are a
-closed operator-facing set, so their enum is exhaustive and a consumer's match is
-checked. Message roles and content blocks grow with the conversation model, so
-those enums carry `#[non_exhaustive]` and consumers keep a wildcard arm. The
+exhaustive where the charter says it is closed.** No closed set stands here since the
+permission modes were retired (section 4). Message roles and content blocks grow with
+the conversation model, so those enums carry `#[non_exhaustive]` and consumers keep a wildcard arm. The
 attribute is elected per type against that test rather than applied as a house
 style, because it buys forward compatibility at the cost of exactly the
 compile-time loudness that makes a closed set worth closing.
@@ -382,69 +380,14 @@ combinations above are what make the pairing checkable rather than coincidental.
 
 ## 4. Permission modes, retired
 
-**Retired by #29** (the operator's rulings of 2026-10-15): the elected tool set and,
-for the shell, its compiled command list are the permission (`weaver-types-Spec`
-section 2, `weaver-gate-Spec` section 8.1), and a mode that read as a control where the
-kernel is the control was the misreading charter section 3.4 warned of. The enum and its
-module leave with #29's code act, and with them this section's pins. Until then the
-vocabulary below stands in the crate and no declaration elects it.
-
-The operator-facing policy vocabulary of charter section 3.4, closed and
-exhaustive.
-
-```rust
-pub enum PermissionMode {
-    Ask,
-    Allow,
-    Deny,
-}
-```
-
-**Three modes and no fourth, because the question has three answers.** Ask the
-operator before a class of action, permit it without asking, refuse it. A fourth
-mode would be a policy this program does not hold, and the enum is exhaustive so
-a fourth cannot arrive without every consumer's match failing to compile, which is
-the loudness charter section 5 asks for.
-
-```graph
-node: traits-permission-mode-exhaustive
-kind: assertion
-tag: compile-pin
-
-edge: asserts
-from: weaver-traits
-to: traits-permission-mode-exhaustive
-```
-
-
-**The type carries no method that adjudicates anything:** no inherent method and
-no trait implementation beyond the data derives of section 2. No `is_allowed`, no
-`check`, no predicate of any kind. The mode is what the operator declared and the
-harness reads it, and a helper here would be the first step toward a floor type
-that decides, which charter section 4 forbids. **The named candidates are pinned
-by the compile-fail doctests of section 7,** because an absence is what a runtime
-test structurally cannot demonstrate, **and the prohibition itself is review's,**
-a finite set of doctests reaching the methods it names and not the open set of
-all of them. The two are two records for that reason, per section 7.
-
-```graph
-node: traits-no-adjudicating-method
-kind: assertion
-tag: review
-
-edge: asserts
-from: weaver-traits
-to: traits-no-adjudicating-method
-
-edge: grounds
-from: traits-no-adjudicating-method
-to: axiom-floor-is-vocabulary-behavior-is-socket
-```
-
-**The relationship to the agent config ran one way, and the field is retired.**
-`weaver-types-PRD` section 2.1 defined a `permission-mode` field that elected one of
-these, and #29 retires it. This crate defines the vocabulary and learns nothing
-about which mode any agent chose.
+**Retired by #29** (the operator's rulings of 2026-10-15 and 2026-10-16): the elected
+tool set and, for the shell, its compiled command list are the permission
+(`weaver-types-Spec` section 2, `weaver-gate-Spec` section 8.1), and a mode that read as
+a control where the kernel is the control was the misreading charter section 3.4 warned
+of. The enum, its module and its pins left this crate with #29's code act, and the
+declaration's `permission-mode` field left with them, so a declaration carrying it
+refuses as an unknown field. A policy vocabulary that returns is a charter act before
+it is a type.
 
 ## 5. The tool contract, chartered with the tool workflow
 
@@ -491,7 +434,7 @@ pub struct ToolFailure {
 **The name is the primitive on purpose.** `tool-name` is `weaver-types`
 vocabulary and `weaver-types` already links this crate, the one floor-link
 its manifest names, so a trait naming that type would close a dependency
-cycle - and the floor invariant this Spec grounds six claims in is the
+cycle - and the floor invariant this Spec grounds four claims in is the
 reason this crate refuses internal dependencies at all. What compares a name
 that crossed against what a tool answers is the dispatching consumer this
 section's opening says the trait does not have, and no crate carries both
@@ -624,17 +567,14 @@ what it errors on and it errors on nothing for a thing that was never written.
 
 **Enforced by the compiler, by construction.**
 
-- The permission-mode enum is exhaustive, so a fourth mode breaks every consumer's
-  match at compile time rather than at run time.
 - The message model's serde representation comes from derives rather than
   hand-written implementations, so a field added to a struct cannot be silently
   dropped from the wire.
 - The data derives of section 2 are read by a doctest: a function bounded on
   `Debug`, `Clone`, `PartialEq`, `Serialize`, and `Deserialize` accepts every
-  message-model type and the mode enum, so a derive dropped later stops the
-  build rather than a behavior. The named bounds are the pinned half of section
-  2's posture claim, the posture itself staying review's, per the split this
-  section already makes for the adjudicator candidates.
+  message-model type, so a derive dropped later stops the build rather than a
+  behavior. The named bounds are the pinned half of section 2's posture claim,
+  the posture itself staying review's, per the split below.
 
 **Enforced by compile-fail tests, because the property is an absence.** Each is a
 `compile_fail` doctest asserting that the offending code does not build, which is
@@ -643,24 +583,16 @@ how an absence becomes mechanical rather than remembered.
 - No `Default` on any type here: a doctest requiring `Message: Default` fails to
   compile. The day someone adds the derive that code starts compiling and the
   `compile_fail` test starts failing, which is the instrument firing.
-- No adjudicating method on `PermissionMode`: doctests naming the tempting
-  candidates, `is_allowed` and `check`, fail to compile. A finite set of doctests
-  pins the named methods and not the open set of all possible methods, so the
-  general prohibition stays review's, which is the same honest split this section
-  makes for the manifest rules below. **The split is two assertions rather than
-  one,** the pinned candidates here and the prohibition itself at the section 4
-  clause that argues it: a single record tagged for the mechanical half would
-  claim the instrument for the whole, which is the overclaim this corpus refuses
-  in prose and has no reason to admit in a graph. Any clause naming one
-  instrument for a claim's core and another for its periphery divides the same
-  way.
 - No safety classification on the eventual tool trait, when that trait exists.
 - The non-exhaustive elections of section 2, pinned from the outside: doctests
   matching `Role` and `ContentBlock` without a wildcard arm fail to compile,
   which is `#[non_exhaustive]` doing its work where a consumer would feel it.
   The attribute's presence is the mechanical half of section 2's election claim,
-  the per-charter test staying review's, per the same split. The exhaustive half
-  of that claim needs no record here, being the first bullet of this section.
+  the per-charter test staying review's. **The split is two assertions rather
+  than one:** a single record tagged for the mechanical half would claim the
+  instrument for the whole, which is the overclaim this corpus refuses in prose
+  and has no reason to admit in a graph. Any clause naming one instrument for a
+  claim's core and another for its periphery divides the same way.
 
 **Enforced by the manifest, with the instrument named rather than assumed.** The
 no-internal-dependency rule is gate H2, which reads Cargo edges against the graph.
@@ -669,8 +601,8 @@ takes a build-time assertion over the resolved external tree, a `cargo tree` che
 in the workspace's own automation, and naming it here is what keeps it from being
 a claim nothing runs.
 
-**Which invariant each claim serves, and why most serve none.** Six of the
-twenty-four carry a `grounds` edge and all six run to
+**Which invariant each claim serves, and why most serve none.** Four of the
+twenty-one carry a `grounds` edge and all four run to
 `axiom-floor-is-vocabulary-behavior-is-socket`. The other three axioms take
 nothing from this crate: it makes no claim about a turn key, it is not an organ,
 and the contracts that draw it draw the message model and the tool contract
@@ -679,26 +611,20 @@ applied is whether the axiom
 is the reason the claim exists.** Remove the floor invariant and this crate has no
 reason to refuse an internal dependency, no reason to keep an async runtime out of
 its manifest, no reason to bound a boxed future with `Send` or to hold `futures`
-off the floor, and no reason to deny `PermissionMode` a method that decides.
+off the floor.
 Remove it and the derive set is still the data derives, the tagging test still
 yields the same two shapes, the role set is still four, and the enums are still
 non-exhaustive where the charter says the set grows, so those ground in nothing.
-**Eighteen claims grounding in no invariant is the expected result and not a gap**,
+**Seventeen claims grounding in no invariant is the expected result and not a gap**,
 per Document Format section 4: section 2 of this Spec is named for representation,
 a floor crate is mostly that, and representation is what the invariants are not
 about.
 
-**The four edges a reader would otherwise have to reconstruct.** The `Send` bound
+**The two edges a reader would otherwise have to reconstruct.** The `Send` bound
 and the refusal of a `futures` dependency read as async-ecosystem preference and
 are not. An executor bound written into a floor signature is a transport decision
 taken on the floor, and an async crate the floor carries is one everything above
 carries, which is behavior arriving by linkage rather than from behind a socket.
-The prohibition on an adjudicating method is the same invariant at the type level,
-a floor type that decides being what its first half rules out, and the doctest
-pinning of the named candidates carries the edge for the same reason: the two are
-one claim divided by instrument, per Document Format section 3, and grounding one
-half and not the other would make the division carry a difference it does not
-hold.
 
 **Two neighbours that look like they belong and do not.** The absence of a safety
 classification sits in the same clause as the boxed future's bound and grounds in
@@ -711,10 +637,9 @@ rendering happens, per `weaver-trace-PRD` section 4.2.
 
 **Where the records sit, and the one claim another crate declares.** The
 assertion records are at the clauses that argue the claims, across sections 1
-through 6, rather than gathered here, per Document Format section 6. Six
+through 6, rather than gathered here, per Document Format section 6. Five
 claims are argued only in this section and carry their records at the end of
-it, among them the doctest pinning of the adjudicator candidates, whose
-prohibition is section 4's, and the two pins divided out of section 2's
+it, among them the two pins divided out of section 2's
 posture and election claims, whose remainders are that section's. **The
 licensed combinations of section 3 are declared by `weaver-harness`,** whose
 Spec section 8 carries the test and has
@@ -787,18 +712,6 @@ tag: perturbation
 edge: asserts
 from: weaver-traits
 to: traits-unknown-tag-refuses
-
-node: traits-adjudicators-pinned-by-doctest
-kind: assertion
-tag: compile-fail
-
-edge: asserts
-from: weaver-traits
-to: traits-adjudicators-pinned-by-doctest
-
-edge: grounds
-from: traits-adjudicators-pinned-by-doctest
-to: axiom-floor-is-vocabulary-behavior-is-socket
 
 node: traits-derive-set-pinned-by-doctest
 kind: assertion
