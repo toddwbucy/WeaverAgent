@@ -1816,17 +1816,25 @@ verified at the parse.
 **The grant is `ToolResult`, a type on this crate's surface with three
 negatives, each pinned the way the floor pins `PeerIdentity`:** no
 `Deserialize`, no public constructor, no conversion from `ToolResultBlock`.
-It is constructed at exactly one site, the completion of the execution
-exchange of `weaver-harness-gate-contract` section 2, **whichever of the
-exchange's four contents arrived**, or the harness's own `Killed { by: fault }` where
-the gate's death closed the exchange unanswered, a gate that cannot contain an
-execution exiting so (that contract's section 5, `weaver-admin-Spec` section 6.1):
-the grant carries the tool's result, the gate's refusal, the machinery's error, or a
-kill, on the caller's clock or the gate's death,
+It is constructed through one crate-private door, called at four sites in the one
+function that closes a call and nowhere else:
+
+- the completion of the execution exchange of `weaver-harness-gate-contract` section 2,
+  **whichever of the exchange's four contents arrived**,
+- the harness's own `Killed { by: fault }` where the gate's death closed the exchange
+  unanswered, a gate that cannot contain an execution exiting so (that contract's
+  section 5, `weaver-admin-Spec` section 6.1),
+- the harness's own `Killed { by: unload }` for a call asked after the leave was heard,
+  never sent (`weaver-admin-Spec` 3.0),
+- the harness's own `Refused` for a call naming a tool the enter did not grant, no
+  exchange opened and its `tool.call.completed` authored with the subsystem `harness`
+  (section 6, #29).
+
+The grant carries the tool's result, a refusal, the machinery's error, or a kill, on the caller's clock, the gate's death or the unload,
 per the taxonomy the tool boundary ruling of 2026-08-18 settled on that
 contract, because each is a fact the model must learn and a refusal that
 could not author a tool-result turn would leave the conversation with a hole
-where the answer goes. One site, four contents, no second door. The author door for a
+where the answer goes. One door, four sites in one function, no second door. The author door for a
 tool-result message takes the grant and never the block, so a loop 1 that
 would fabricate a result has no door: not by construction, not by serde,
 not by conversion, which is the enforcement mechanism named and held. The record the

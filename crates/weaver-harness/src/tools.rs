@@ -3,12 +3,20 @@
 //! The granted tool result, per `weaver-harness-Spec` section 6 and the tool
 //! workflow's opening act: the loop closes at the type level here.
 //!
-//! **The grant is constructed at exactly one site**, the completion of the
-//! execution exchange of `weaver-harness-gate-contract` section 2, whichever
-//! of the exchange's three contents arrived - the tool's result, the tool's
-//! failure, or the gate's refusal of an unheld name - because each is a fact
-//! the model must learn, and a refusal that could not author a tool-result
-//! turn would leave the conversation with a hole where the answer goes.
+//! **The grant is constructed through one door, at four sites in the one
+//! function that closes a call** (`weaver-harness-Spec` section 6):
+//! - the completion of the execution exchange of
+//!   `weaver-harness-gate-contract` section 2, whichever of its four contents
+//!   arrived,
+//! - the harness's own `Killed { by: fault }` where the gate died with the
+//!   call open,
+//! - its own `Killed { by: unload }` for a call asked after the leave, never
+//!   sent,
+//! - its own `Refused` for a call naming a tool the enter did not grant, no
+//!   exchange opened (#29).
+//! Each is a fact the model must learn, and a refusal
+//! that could not author a tool-result turn would leave the conversation with
+//! a hole where the answer goes.
 //!
 //! **Three negatives, each a compile property**, the `PeerIdentity` pattern
 //! one seam over: the gate exchange supplies it and no code asserts it.
@@ -115,8 +123,9 @@ pub struct ToolResult {
 }
 
 impl ToolResult {
-    /// The one construction site's door, crate-private: called where the
-    /// execution exchange completes and nowhere else.
+    /// The one door, crate-private: called at the four sites of
+    /// `Engine::execute_call` that close a call (the module's header) and
+    /// nowhere else, which `tests/manifest.rs` pins.
     ///
     /// Every outcome becomes renderable content, in words the model reasons
     /// over, whichever of the exchange's four contents arrived: a result is

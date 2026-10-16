@@ -407,7 +407,9 @@ with exactly one answer or by that same exit and closure, and that a cancel arri
 the answer changes nothing. **What the turn can rely on is a closed execution either
 way**: the harness's grant construction site fires exactly once per opened call, from
 the gate's answer or from the harness's own `Killed { by: fault }`, and a call never
-dangles.
+dangles. A call the harness opens no exchange for, one asked after the leave or one
+naming a tool the enter did not grant (#29), closes in the harness's own word, never
+crossing this seam.
 
 **The harness guarantees** that the instruction it sends is the instruction admin
 sent it, unaltered and uninterpreted. It guarantees that it opens no exchange this

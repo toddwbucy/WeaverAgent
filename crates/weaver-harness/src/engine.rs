@@ -1310,7 +1310,9 @@ impl<'a> Ports<'a> {
     /// **One execution through the gate**, per `weaver-harness-gate-contract`
     /// section 2: the exchange opens with the call as the parse recovered it,
     /// and completes with one of the four contents, the grant constructed
-    /// from the completion whichever arrived - the one construction site.
+    /// from the completion whichever arrived. This function holds every site
+    /// that constructs a grant: that completion, and the three this crate
+    /// closes in its own word (a gate's death, the leave, an ungranted tool).
     /// The tool bracket's events ride the exchange: started as the harness's
     /// dispatch, completed as the gate's answer, the deferred payloads
     /// carrying the call and the outcome as this crate renders them.
