@@ -245,7 +245,10 @@ What it does, so the log can say which step a failure was at:
 
 1. Prints the box facts and refuses if `cccl` is outside the 3.1.4-3.3.4 window, if
    there is no `nvcc`, if the stack record `/etc/weaver/stack` or `<prefix>/bin`
-   already stands, or if `/etc/weaver/admin` holds anything.
+   already stands, or if `/etc/weaver/admin` holds anything. It refuses too where the
+   shell's build lacks a tool (`build-busybox.sh --preflight`: tar with bzip2, make, a C
+   compiler that links statically, python3, and curl unless `BUSYBOX_TARBALL` names
+   the tarball), before the long build rather than after it.
 2. Names the tree: the git revision, or `nogit-<lockfile sha>` on a tree without git.
 3. `cargo test --release --locked -p weaver-trace -p weaver-harness -p weaver-state
    --features weaver-harness/pyworker,weaver-state/sqlite`. The selection is the
@@ -263,8 +266,9 @@ What it does, so the log can say which step a failure was at:
    `update-stack.sh` defaults it. A build that fails refuses the same way, never going on
    to install what an earlier build left in the target directory (#128). Then
    `deploy/build-busybox.sh` builds the agent's shell (#29): busybox 1.36.1, its
-   tarball fetched from busybox.net (or named with `--tarball` on a box without the
-   network) and refused unless its sha256 is the pin, configured by the committed
+   tarball fetched from busybox.net (or, on a box without the network, named by
+   `BUSYBOX_TARBALL=<path>` in the environment of `bootstrap-stack.sh` or
+   `update-stack.sh`, which pass it through as `--tarball`) and refused unless its sha256 is the pin, configured by the committed
    `deploy/busybox.config`, refused where `oldconfig` would change it, built static and
    refused where it names an ELF interpreter, and its applet list written from its own
    `--list`.

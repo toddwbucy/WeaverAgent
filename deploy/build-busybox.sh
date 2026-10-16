@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # build-busybox.sh OUT [--tarball PATH]
+# build-busybox.sh --preflight
 #
 # **The agent's shell, built from a pinned source and a committed
 # configuration** (#29, weaver-gate-Spec section 8.1, weaver-admin-Spec
@@ -9,14 +10,25 @@
 # `--list` against. bootstrap-stack.sh and update-stack.sh call it beside the
 # workspace's build and install both files beside the members.
 #
-# The tarball is PATH where given, else OUT/busybox-1.36.1.tar.bz2 where it
-# stands, else fetched from busybox.net into OUT. Each refuses unless its
-# sha256 is the pin.
+# The tarball is PATH where given (the stack scripts pass BUSYBOX_TARBALL
+# through, for a box without the network), else OUT/busybox-1.36.1.tar.bz2
+# where it stands, else fetched from busybox.net into OUT. Each refuses unless
+# its sha256 is the pin.
+#
+# **The build is reproducible**: the build time busybox stamps into its
+# banner is pinned (SOURCE_DATE_EPOCH, KCONFIG_NOTIMESTAMP), so one tarball
+# and one configuration build one binary, and update-stack.sh's plan reads an
+# unchanged busybox as unchanged.
+#
+# `--preflight` checks only that the tools the build needs stand (curl where
+# no tarball is given, tar with bzip2, make, a C compiler that links
+# statically, python3), so the stack scripts refuse before their long build
+# rather than after it.
 #
 # Refuses, by name, where:
 # - the configuration's oldconfig would change it (a tree that is not the
-#   pinned one, or a configuration that is not complete);
-# - the binary names an ELF interpreter (it is not static);
+#   pinned one, or a configuration that is not complete),
+# - the binary names an ELF interpreter (it is not static),
 # - its `--list` lacks sh or ash, or its applets are not the configuration's
 #   CONFIG_<APPLET>=y elections.
 set -euo pipefail
@@ -28,6 +40,32 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG="$REPO/deploy/busybox.config"
 
 die() { printf 'build-busybox: %s\n' "$*" >&2; exit 1; }
+
+# The release's own date, 2023-01-03, pinned as the build time.
+export SOURCE_DATE_EPOCH=1672704000 KCONFIG_NOTIMESTAMP=1
+
+preflight() {
+  local tool
+  for tool in tar bzip2 make cc python3 sha256sum; do
+    command -v "$tool" >/dev/null || die "the shell's build needs $tool, which this box does not have"
+  done
+  if [ -z "${BUSYBOX_TARBALL:-}" ]; then
+    command -v curl >/dev/null \
+      || die "the shell's build fetches its tarball with curl, which this box does not have: install it, or name a tarball with BUSYBOX_TARBALL"
+  fi
+  local probe
+  probe=$(mktemp -d "${TMPDIR:-/tmp}/weaver-busybox-preflight.XXXXXX")
+  printf 'int main(void) { return 0; }\n' >"$probe/c.c"
+  if ! cc -static -o "$probe/c" "$probe/c.c" >/dev/null 2>&1; then
+    rm -rf -- "$probe"
+    die "the C compiler does not link statically (no static libc): the shell's busybox is static"
+  fi
+  rm -rf -- "$probe"
+}
+if [ "${1:-}" = --preflight ]; then
+  preflight
+  exit 0
+fi
 
 [ $# -ge 1 ] || die "usage: build-busybox.sh OUT [--tarball PATH]"
 OUT=$1; shift
@@ -60,7 +98,7 @@ cp -- "$CONFIG" "$TREE/.config"
 # The elections a configuration makes, its comments and blank lines aside.
 elections() { grep -E '^CONFIG_' -- "$1" | sort; }
 make -C "$TREE" oldconfig </dev/null >"$TREE/oldconfig.log" 2>&1 \
-  || die "oldconfig failed, see $TREE/oldconfig.log"
+  || { tail -n 40 -- "$TREE/oldconfig.log" >&2; die "oldconfig failed, its log's end above"; }
 if ! diff <(elections "$CONFIG") <(elections "$TREE/.config") >/dev/null; then
   diff <(elections "$CONFIG") <(elections "$TREE/.config") >&2 || true
   die "oldconfig would change $CONFIG: the tree or the configuration is not the pinned one"
@@ -71,10 +109,12 @@ make -C "$TREE" -j"$(nproc)" >"$TREE/build.log" 2>&1 \
 BIN="$TREE/busybox"
 # **Static, or refused** (weaver-gate-Spec 8.1, M8): no PT_INTERP among the
 # program headers, read as admin's inventory reads them.
-python3 - "$BIN" <<'PY' || die "$BIN names an ELF interpreter: it is not static"
+rc=0
+python3 - "$BIN" <<'PY' || rc=$?
 import struct, sys
 data = open(sys.argv[1], "rb").read()
-assert data[:4] == b"\x7fELF" and data[4] == 2 and data[5] == 1
+if not (data[:4] == b"\x7fELF" and data[4] == 2 and data[5] == 1):
+    sys.exit(2)
 phoff, = struct.unpack_from("<Q", data, 32)
 phentsize, phnum = struct.unpack_from("<HH", data, 54)
 for i in range(phnum):
@@ -82,6 +122,12 @@ for i in range(phnum):
     if p_type == 3:
         sys.exit(1)
 PY
+case $rc in
+  0) ;;
+  1) die "$BIN names an ELF interpreter: it is not static" ;;
+  2) die "$BIN is not a 64-bit little-endian ELF image" ;;
+  *) die "$BIN's ELF header does not read" ;;
+esac
 
 LISTED=$(env -i "$BIN" --list </dev/null) || die "$BIN answers no listing: CONFIG_BUSYBOX is not set"
 for name in sh ash; do
@@ -92,7 +138,7 @@ APPLETS=$(grep -vxE 'sh|ash' <<<"$LISTED" | sort)
 # CONFIG_<NAME>=y, so the build's set and the configuration's agree.
 for applet in $APPLETS; do
   symbol=CONFIG_$(tr '[:lower:]-' '[:upper:]_' <<<"$applet")
-  grep -qx -- "$symbol=y" "$CONFIG" || die "$BIN lists $applet, which $CONFIG does not elect"
+  grep -qxF -- "$symbol=y" "$CONFIG" || die "$BIN lists $applet, whose $symbol=y $CONFIG does not hold"
 done
 
 install -m 0755 -- "$BIN" "$OUT/busybox"

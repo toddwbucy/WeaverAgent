@@ -257,6 +257,7 @@ class PlanTests(unittest.TestCase):
             "import json, os, pathlib, sys\n"
             "with open(os.environ['CALLS'], 'a') as log:\n"
             "    log.write(json.dumps(['build-busybox.sh', *sys.argv[1:]]) + '\\n')\n"
+            "if sys.argv[1] == '--preflight': sys.exit(0)\n"
             "out = pathlib.Path(sys.argv[1])\n"
             "out.joinpath('busybox').write_text('fixture busybox')\n"
             "out.joinpath('busybox.applets').write_text('ls\\ncat\\n')\n")
@@ -1916,6 +1917,32 @@ esac
                     self.assertIn("admin answered the unload of m1", ran.stderr)
                 if answer:
                     self.assertIn("  admin: weaver-admin: the cause", ran.stderr)
+
+    def test_a_rollback_removes_the_shell_key_its_run_wrote(self):
+        """**A rolled-back run leaves no stack record naming a busybox the
+        rollback took away** (#29): restore() removes `shell-binary` where
+        this run wrote it, beside the busybox it added, and leaves a key the
+        run found standing. Perturbation: drop the removal and the first case
+        keeps the key."""
+        text = (DEPLOY / "update-stack.sh").read_text()
+        stack = self.root / "rollback-stack"
+        bin_dir = self.root / "rollback-bin"
+        backup = self.root / "rollback-backup"
+        for d in (stack, bin_dir, backup):
+            d.mkdir()
+        program = ('sudo() { "$@"; }\n' + shell_function(text, "restore")
+                   + 'RESTORED=0; LOADED_AGENT=""; INSTALL_DONE=1; ADDED=(busybox); CHANGED=()\n'
+                   + 'restore\n')
+        env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
+        env.update(STACK=str(stack), BIN_DIR=str(bin_dir), BACKUP=str(backup))
+        for written, stays in ((1, False), (0, True)):
+            with self.subTest(written=written):
+                (stack / "shell-binary").write_text(str(bin_dir / "busybox") + "\n")
+                (bin_dir / "busybox").write_text("x")
+                ran = subprocess.run(["bash", "-c", f"SHELL_KEY_WRITTEN={written}\n" + program],
+                                     env=env, text=True, capture_output=True, timeout=20)
+                self.assertFalse((bin_dir / "busybox").exists(), ran.stderr)
+                self.assertEqual((stack / "shell-binary").exists(), stays, ran.stderr)
 
     def test_an_install_unload_past_its_bound_is_joined_by_a_force(self):
         """**The install's unload is bounded, the force its fallback** (the
@@ -5349,16 +5376,24 @@ class BusyboxBuildTests(unittest.TestCase):
     LISTED = ["LS", "CAT", "HEAD", "TAIL", "WC", "GREP", "SORT", "UNIQ", "CUT", "TR",
               "DATE", "ECHO", "PWD", "MKTEMP"]
 
+    # Every election the configuration makes, whole: the build options, the
+    # shell, and the fourteen listed applets. Nothing else is elected.
+    ELECTED = {
+        "HAVE_DOT_CONFIG", "BUSYBOX", "STATIC", "INSTALL_APPLET_SYMLINKS", "NO_DEBUG_LIB",
+        "FEATURE_BUFFERS_USE_MALLOC", "TRY_LOOP_CONFIGURE",
+        "SH_IS_ASH", "BASH_IS_NONE", "SHELL_ASH", "ASH", "ASH_ECHO", "ASH_PRINTF", "ASH_TEST",
+        "FEATURE_SH_STANDALONE",
+        *LISTED,
+    }
+
     def test_the_configuration_makes_exactly_its_elections(self):
-        # Perturbation: elect CONFIG_WGET or CONFIG_NC and this fails.
+        # The whole set of elections, exactly: an applet added (find, awk,
+        # nslookup, httpd, a network tool) or an option dropped fails here.
+        # Perturbation: elect CONFIG_FIND and this fails.
         text = (DEPLOY / "busybox.config").read_text()
-        elected = {line.split("=")[0] for line in text.splitlines() if line.endswith("=y")}
-        for symbol in ["STATIC", "BUSYBOX", "SH_IS_ASH", "FEATURE_SH_STANDALONE", "ASH",
-                       *self.LISTED]:
-            self.assertIn("CONFIG_" + symbol, elected)
-        for symbol in ["WGET", "NC", "TELNET", "HUSH", "BASH_IS_ASH", "FEATURE_INSTALLER",
-                       "SETSID", "SLEEP"]:
-            self.assertNotIn("CONFIG_" + symbol, elected)
+        elected = {line.split("=")[0].removeprefix("CONFIG_")
+                   for line in text.splitlines() if line.startswith("CONFIG_") and line.endswith("=y")}
+        self.assertEqual(elected, self.ELECTED)
         self.assertFalse(any(ord(c) > 127 for c in text), "ASCII")
 
     def test_a_tarball_that_is_not_the_pin_refuses(self):

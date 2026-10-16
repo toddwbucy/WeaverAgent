@@ -636,6 +636,8 @@ FEATURES="$SPU_FEATURES,$MEMBER_FEATURES"
 
 # ---------------------------------------------------------------- 1. box facts
 say "box"
+# **The shell's build needs its tools before the long build, not after** (#29).
+"$REPO/deploy/build-busybox.sh" --preflight || exit 1
 printf '  host          %s\n' "$(hostname)"
 printf '  stack record  %s\n' "$STACK"
 printf '  admin base    %s\n' "$ADMIN_BASE"
@@ -879,7 +881,16 @@ NVCC_CCBIN=${NVCC_CCBIN:-/usr/bin/g++-15} \
 # **The agent's shell, built from its pinned source and configuration** (#29,
 # weaver-gate-Spec 8.1): a static busybox and its applet list, written beside
 # the members, planned and installed with them, and rolled back with them.
-"$REPO/deploy/build-busybox.sh" "$BUILT" || die "the shell's busybox did not build"
+# BUSYBOX_TARBALL, where set, names the pinned tarball on a box without the
+# network (deploy/REDEPLOY.md section 3).
+build_busybox() {
+  if [ -n "${BUSYBOX_TARBALL:-}" ]; then
+    "$REPO/deploy/build-busybox.sh" "$BUILT" --tarball "$BUSYBOX_TARBALL"
+  else
+    "$REPO/deploy/build-busybox.sh" "$BUILT"
+  fi
+}
+build_busybox || die "the shell's busybox did not build"
 printf '  ok\n'
 
 # --------------------------------------------------------------------- 5. plan
@@ -962,6 +973,7 @@ ADDED=()
 # on the new ones.
 LOADED_AGENT=""
 COMPLETED=0
+SHELL_KEY_WRITTEN=0
 RESTORED=0
 INSTALL_DONE=0
 BACKUP=""
@@ -1001,6 +1013,11 @@ restore() {
       sudo rm -f "$BIN_DIR/$b" \
         || { printf '  FAILED to remove %s\n' "$b" >&2; failed=1; }
     done
+    if [ "$SHELL_KEY_WRITTEN" -eq 1 ]; then
+      printf '  removing the stack record'"'"'s shell-binary, which this run wrote\n' >&2
+      sudo rm -f "$STACK/shell-binary" \
+        || { printf '  FAILED to remove %s\n' "$STACK/shell-binary" >&2; failed=1; }
+    fi
     for b in "${CHANGED[@]}"; do
       # Never backed up is never replaced, so there is nothing to put back.
       # **Asked with the privilege that made it**: the backup directory is
@@ -1200,9 +1217,12 @@ validate() {
 # box bootstrapped before it gains `shell-binary`, which create-agent.sh copies
 # into each new agent's root. An agent made before it carries none, and a
 # declaration of it electing `sh` refuses at validate until it is recreated.
+# A rollback removes the key this run wrote, as it removes the busybox it
+# added, so a rolled-back record never names a file the rollback took away.
 if [ ! -e "$STACK/shell-binary" ]; then
   printf '%s\n' "$BIN_DIR/busybox" | sudo tee "$STACK/shell-binary" >/dev/null
   sudo chmod 0644 "$STACK/shell-binary"
+  SHELL_KEY_WRITTEN=1
   printf '  the stack record gains shell-binary = %s\n' "$BIN_DIR/busybox"
 fi
 

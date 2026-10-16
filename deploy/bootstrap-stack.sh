@@ -17,7 +17,7 @@
 # one agent's root, `<admin base>/<agent>/`, and nothing shared. The record at
 # `/etc/weaver/stack/` holds the box-wide defaults, one file per key, which
 # `create-agent.sh` copies into each new agent's root: `worker-binary`,
-# `spu-binary`, `gate-binary`, `coordination-root` and `library-path`, and for
+# `spu-binary`, `gate-binary`, `shell-binary`, `coordination-root` and `library-path`, and for
 # the scripts alone `prefix` and `agent-directory`. `headroom-bytes` and
 # `load-bound-seconds` are optional, and this script writes neither. An
 # operator who writes one into the record has it copied into every agent made
@@ -113,6 +113,8 @@ if [ -n "$CCCL" ] && ! cccl_in_window "$CCCL"; then
   die "cccl $CCCL is outside the 3.1.4-3.3.4 window #397 measured. Fix the pin first."
 fi
 command -v nvcc >/dev/null || die "no nvcc on PATH and the build carries $SPU_FEATURES"
+# **The shell's build needs its tools before the long build, not after** (#29).
+"$REPO/deploy/build-busybox.sh" --preflight || exit 1
 # **What stands is asked, and a question this script cannot answer refuses.**
 # A path behind a directory the operator cannot traverse reads absent to `-e`,
 # and a base the operator cannot list reads empty, and either would let an
@@ -273,7 +275,16 @@ for b in $MEMBERS; do [ -x "$BUILT/$b" ] || die "$BUILT/$b was not built"; done
 # **The agent's shell, built from its pinned source and configuration** (#29,
 # weaver-gate-Spec 8.1): a static busybox and its applet list, written beside
 # the members and installed with them.
-"$REPO/deploy/build-busybox.sh" "$BUILT" || die "the shell's busybox did not build"
+# BUSYBOX_TARBALL, where set, names the pinned tarball on a box without the
+# network (deploy/REDEPLOY.md section 3).
+build_busybox() {
+  if [ -n "${BUSYBOX_TARBALL:-}" ]; then
+    "$REPO/deploy/build-busybox.sh" "$BUILT" --tarball "$BUSYBOX_TARBALL"
+  else
+    "$REPO/deploy/build-busybox.sh" "$BUILT"
+  fi
+}
+build_busybox || die "the shell's busybox did not build"
 # `sed -n 1p` reads the whole listing, where `head -1` closed the pipe on
 # `ls` and `pipefail` with `set -e` ended the script; `|| true` lets no match
 # reach the `die` below rather than exit unexplained.

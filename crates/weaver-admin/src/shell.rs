@@ -36,11 +36,11 @@ pub fn applets_path(binary: &Path) -> PathBuf {
 /// failure answering why, which the caller says and refuses
 /// `BoundaryUnverified`:
 /// - the binary and its applet list are regular files, not links, owned by
-///   `owner` and writable by no group or other, their directories closed;
+///   `owner` and writable by no group or other, their directories closed,
 /// - the binary is statically linked, its ELF header carrying no
-///   `PT_INTERP`;
+///   `PT_INTERP`,
 /// - the list names each applet once, a plain file name, and never the
-///   interpreter;
+///   interpreter,
 /// - the binary's own `--list`, run with an empty environment and no input,
 ///   holds `sh` and `ash`, and the rest equals the list exactly.
 pub fn judge(binary: &Path, owner: u32) -> Result<Judged, String> {
@@ -52,9 +52,7 @@ pub fn judge(binary: &Path, owner: u32) -> Result<Judged, String> {
     crate::judge_ancestors(&list, &[owner, 0])
         .map_err(|_| format!("a directory above {} is not closed", list.display()))?;
 
-    let bytes = std::fs::read(&canonical)
-        .map_err(|e| format!("{} does not read: {e}", canonical.display()))?;
-    if names_an_interpreter(&bytes)? {
+    if names_an_interpreter(&elf_headers(&canonical)?)? {
         return Err(format!(
             "{} is dynamically linked (its ELF header names an interpreter), and the shell's \
              wall needs a static binary",
@@ -136,6 +134,47 @@ fn closed_file(path: &Path, owner: u32) -> Result<(), String> {
     Ok(())
 }
 
+/// **The ELF header and the program header table, and nothing more**: read
+/// from one descriptor opened without following a link, the header first and
+/// then the table's span it names, so a judgment never reads the whole
+/// binary. The bytes answer laid out as the image has them, zeroes between.
+fn elf_headers(binary: &Path) -> Result<Vec<u8>, String> {
+    use std::os::unix::fs::{FileExt, OpenOptionsExt};
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NOFOLLOW)
+        .open(binary)
+        .map_err(|e| format!("{} does not open: {e}", binary.display()))?;
+    let malformed = || {
+        format!(
+            "{} is not a 64-bit little-endian ELF image",
+            binary.display()
+        )
+    };
+    let mut header = vec![0u8; 64];
+    file.read_exact_at(&mut header, 0)
+        .map_err(|_| malformed())?;
+    if &header[..4] != b"\x7fELF" || header[4] != 2 || header[5] != 1 {
+        return Err(malformed());
+    }
+    let phoff = u64::from_le_bytes(header[32..40].try_into().map_err(|_| malformed())?);
+    let span = u64::from(u16::from_le_bytes([header[54], header[55]]))
+        .checked_mul(u64::from(u16::from_le_bytes([header[56], header[57]])))
+        .ok_or_else(malformed)?;
+    let end = phoff.checked_add(span).ok_or_else(malformed)?;
+    // A table past 64 KiB is no busybox's: refused rather than allocated.
+    if end > 1 << 16 {
+        return Err(malformed());
+    }
+    let mut bytes = vec![0u8; end as usize];
+    bytes[..64].copy_from_slice(&header);
+    if span > 0 {
+        file.read_exact_at(&mut bytes[phoff as usize..end as usize], phoff)
+            .map_err(|_| malformed())?;
+    }
+    Ok(bytes)
+}
+
 /// **Whether a 64-bit little-endian ELF image names an interpreter**: its
 /// program headers walked for a `PT_INTERP` entry. Anything else refuses.
 fn names_an_interpreter(bytes: &[u8]) -> Result<bool, String> {
@@ -154,7 +193,9 @@ fn names_an_interpreter(bytes: &[u8]) -> Result<bool, String> {
         let at = phoff
             .checked_add(index.checked_mul(phentsize).ok_or_else(malformed)?)
             .ok_or_else(malformed)?;
-        let field = bytes.get(at..at + 4).ok_or_else(malformed)?;
+        let field = bytes
+            .get(at..at.checked_add(4).ok_or_else(malformed)?)
+            .ok_or_else(malformed)?;
         if u32::from_le_bytes(field.try_into().map_err(|_| malformed())?) == PT_INTERP {
             return Ok(true);
         }
@@ -167,25 +208,69 @@ fn is_plain_name(name: &str) -> bool {
     !name.contains('/') && name != "." && name != ".." && !name.contains('\0')
 }
 
-/// The binary's own listing of what is compiled in, run with no argument
-/// but `--list`, an empty environment, no input and no error stream.
+/// The bound on `--list`'s answer: a binary that does not answer within it
+/// is killed and refused, so a root-owned program that is not busybox cannot
+/// hold the inventory, and the locks it runs under, open.
+const LIST_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The binary's own listing of what is compiled in, run as `busybox --list`
+/// (busybox answers `--list` only under a name that starts `busybox`), with
+/// an empty environment, no input and no error stream, bounded at
+/// [`LIST_BOUND`].
 fn compiled_set(binary: &Path) -> Result<BTreeSet<String>, String> {
-    let output = std::process::Command::new(binary)
+    compiled_set_within(binary, LIST_BOUND)
+}
+
+/// [`compiled_set`] under a named bound.
+fn compiled_set_within(
+    binary: &Path,
+    bound: std::time::Duration,
+) -> Result<BTreeSet<String>, String> {
+    use std::io::Read;
+    use std::os::unix::process::CommandExt;
+    let mut child = std::process::Command::new(binary)
+        .arg0("busybox")
         .arg("--list")
         .env_clear()
         .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .output()
+        .spawn()
         .map_err(|e| format!("{} --list does not run: {e}", binary.display()))?;
-    if !output.status.success() {
+    let mut stdout = child.stdout.take().expect("stdout is piped");
+    let reader = std::thread::spawn(move || {
+        let mut text = Vec::new();
+        let _ = stdout.read_to_end(&mut text);
+        text
+    });
+    let deadline = std::time::Instant::now() + bound;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "{} --list did not answer within {}ms",
+                    binary.display(),
+                    bound.as_millis()
+                ));
+            }
+            Err(e) => return Err(format!("{} --list: {e}", binary.display())),
+        }
+    };
+    let text = reader.join().unwrap_or_default();
+    if !status.success() {
         return Err(format!(
-            "{} answers no listing ({}): it must be built with CONFIG_BUSYBOX",
-            binary.display(),
-            output.status
+            "{} answers no listing ({status}): it must be built with CONFIG_BUSYBOX",
+            binary.display()
         ));
     }
-    let text = String::from_utf8(output.stdout)
-        .map_err(|_| format!("{} --list is not text", binary.display()))?;
+    let text =
+        String::from_utf8(text).map_err(|_| format!("{} --list is not text", binary.display()))?;
     Ok(text
         .lines()
         .map(str::trim)

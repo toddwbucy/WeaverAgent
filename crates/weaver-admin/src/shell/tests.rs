@@ -55,6 +55,44 @@ fn a_dynamic_binary_names_an_interpreter() {
         names_an_interpreter(&truncated).is_err(),
         "a header past the end refuses"
     );
+    let mut far = elf_with(1);
+    far[32..40].copy_from_slice(&(u64::MAX - 1).to_le_bytes());
+    assert!(
+        names_an_interpreter(&far).is_err(),
+        "an offset at the edge refuses, never panics"
+    );
+}
+
+/// **A listing that does not answer within its bound is killed and
+/// refused**: a program that blocks instead of listing cannot hold the
+/// inventory, and the locks it runs under, open. The control: a program
+/// that answers at once is read.
+///
+/// Perturbation: wait without the bound and the blocking case hangs past
+/// the test's own timeout.
+#[test]
+fn a_listing_past_its_bound_is_killed_and_refused() {
+    let dir = std::env::temp_dir().join(format!("weaver-admin-list-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let blocking = dir.join("blocking");
+    std::fs::write(&blocking, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    std::fs::set_permissions(&blocking, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let answering = dir.join("answering");
+    std::fs::write(&answering, "#!/bin/sh\nprintf 'sh\\nash\\nls\\n'\n").unwrap();
+    std::fs::set_permissions(&answering, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let bound = std::time::Duration::from_millis(300);
+    let started = std::time::Instant::now();
+    let refused = compiled_set_within(&blocking, bound).unwrap_err();
+    assert!(refused.contains("did not answer"), "{refused}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "killed at its bound"
+    );
+    assert_eq!(
+        compiled_set_within(&answering, bound),
+        Ok(set(&["sh", "ash", "ls"]))
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// **The compiled set holds `sh` and `ash`, and the rest equals the list**
@@ -234,6 +272,14 @@ fn the_stacks_busybox_judges_and_each_fault_refuses() {
             .unwrap_err()
             .contains("not root's alone")
     );
+
+    // Any file name: busybox answers `--list` only as `busybox`, which the
+    // judgment runs it as whatever the stack named it.
+    let renamed = Stack::new("renamed", &APPLETS);
+    let weaver_sh = renamed.base.join("weaver-sh");
+    std::fs::rename(renamed.binary(), &weaver_sh).unwrap();
+    std::fs::rename(applets_path(&renamed.binary()), applets_path(&weaver_sh)).unwrap();
+    judge(&weaver_sh, owner()).expect("a busybox under another name judges");
 
     let linked = Stack::new("linked", &APPLETS);
     let link = linked.base.join("link");

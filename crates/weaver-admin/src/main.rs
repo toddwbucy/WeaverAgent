@@ -839,9 +839,7 @@ fn take_inventory(
     agent: &AgentName,
 ) -> Result<inventory::Inventory, LifecycleRefusal> {
     judge_reader(&config.require_boundary()?.reader, agent)?;
-    let mut inventory = room_inventory(config, agent)?;
-    grant_shell(config, &mut inventory)?;
-    Ok(inventory)
+    room_inventory(config, agent)
 }
 
 /// **The shell's grant, built at the inventory where the declaration elects
@@ -923,6 +921,12 @@ fn room_inventory(
     // declaration naming a sink elsewhere would stand the trace and the room
     // outside what the territory's custody, group and archive cover.
     sink_within_territory(&inventory.config.trace_sink, &config.territory)?;
+    // **Every inventory that reads a declaration electing `sh` carries its
+    // grant** (#29): built here, so no path that takes an inventory, a
+    // verb that starts nothing among them, holds a serving binding electing
+    // the shell with no grant.
+    let mut inventory = inventory;
+    grant_shell(config, &mut inventory)?;
     Ok(inventory)
 }
 
@@ -3917,7 +3921,7 @@ fn read_boundary(root: &std::path::Path) -> Result<BoundaryRead, String> {
 /// `spu-binary`, `gate-binary`, `coordination-root`, `territory`,
 /// `operator` and `roles.toml`. Optional: `headroom-bytes`, `library-path`,
 /// `load-bound-seconds`, and `shell-binary`, which the inventory requires
-/// where the declaration elects the shell (#29). A failure names the value;
+/// where the declaration elects the shell (#29). A failure names the value,
 /// a failure of the boundary file starts with its name, which the caller
 /// carries as the refusal's field.
 fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<ServiceConfig, String> {
