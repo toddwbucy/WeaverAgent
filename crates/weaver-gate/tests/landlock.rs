@@ -647,3 +647,160 @@ fn m8d_a_readable_library_root_holds_programs() {
     let out = rules.run(Command::new(bin.path("bash")).args(["-c", &via]));
     println!("M8d {program} through the interpreter: {}", said(&out));
 }
+
+// ------------------------------------------------------------- M9: seccomp
+
+const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
+const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
+const AUDIT_ARCH_X86_64: u32 = 0xc000_003e;
+const BPF_LD_W_ABS: u16 = 0x20;
+const BPF_JEQ_K: u16 = 0x15;
+const BPF_RET_K: u16 = 0x06;
+const BPF_ALU_AND_K: u16 = 0x54;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SockFilter {
+    code: u16,
+    jt: u8,
+    jf: u8,
+    k: u32,
+}
+
+#[repr(C)]
+struct SockFprog {
+    len: u16,
+    filter: *const SockFilter,
+}
+
+const fn op(code: u16, jt: u8, jf: u8, k: u32) -> SockFilter {
+    SockFilter { code, jt, jf, k }
+}
+
+/// **The socket-family filter** the shell applies to itself under
+/// no-new-privs (#29, the operator's answer 4): `socket` and `socketpair`
+/// allowed for `AF_UNIX`; `AF_INET` and `AF_INET6` allowed as `SOCK_STREAM`
+/// alone, and only where `tcp` (a TCP port is elected); every other family,
+/// and UDP or raw on the inet families, refused `EACCES`. `io_uring_setup` is
+/// refused too, io_uring's `IORING_OP_SOCKET` being a route to a socket that
+/// never calls `socket`. Any other architecture is refused whole.
+fn socket_filter(tcp: bool) -> Vec<SockFilter> {
+    let deny = SECCOMP_RET_ERRNO | libc::EACCES as u32;
+    let inet = if tcp { SECCOMP_RET_ALLOW } else { deny };
+    // seccomp_data: nr at 0, arch at 4, args[i] at 16 + 8 i (the low word).
+    vec![
+        /* 0 */ op(BPF_LD_W_ABS, 0, 0, 4),
+        /* 1 */ op(BPF_JEQ_K, 1, 0, AUDIT_ARCH_X86_64),
+        /* 2 */ op(BPF_RET_K, 0, 0, deny),
+        /* 3 */ op(BPF_LD_W_ABS, 0, 0, 0),
+        /* 4 */ op(BPF_JEQ_K, 0, 1, libc::SYS_io_uring_setup as u32),
+        /* 5 */ op(BPF_RET_K, 0, 0, deny),
+        /* 6 */ op(BPF_JEQ_K, 2, 0, libc::SYS_socket as u32),
+        /* 7 */ op(BPF_JEQ_K, 1, 0, libc::SYS_socketpair as u32),
+        /* 8 */ op(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW),
+        /* 9 */ op(BPF_LD_W_ABS, 0, 0, 16),
+        /* 10 */ op(BPF_JEQ_K, 0, 1, libc::AF_UNIX as u32),
+        /* 11 */ op(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW),
+        /* 12 */ op(BPF_JEQ_K, 1, 0, libc::AF_INET as u32),
+        /* 13 */ op(BPF_JEQ_K, 0, 4, libc::AF_INET6 as u32),
+        /* 14 */ op(BPF_LD_W_ABS, 0, 0, 24),
+        /* 15 */ op(BPF_ALU_AND_K, 0, 0, 0xf),
+        /* 16 */ op(BPF_JEQ_K, 0, 1, libc::SOCK_STREAM as u32),
+        /* 17 */ op(BPF_RET_K, 0, 0, inet),
+        /* 18 */ op(BPF_RET_K, 0, 0, deny),
+    ]
+}
+
+/// Opens one socket of each kind from a child that set no-new-privs and
+/// loaded `filter`, answering which opened.
+fn socket_probe(filter: &[SockFilter]) -> String {
+    let prog = SockFprog {
+        len: filter.len() as u16,
+        filter: filter.as_ptr(),
+    };
+    let kinds: [(i32, i32, &str); 6] = [
+        (libc::AF_UNIX, libc::SOCK_STREAM, "unix stream"),
+        (libc::AF_INET, libc::SOCK_STREAM, "inet tcp"),
+        (libc::AF_INET6, libc::SOCK_STREAM, "inet6 tcp"),
+        (libc::AF_INET, libc::SOCK_DGRAM, "inet udp"),
+        (libc::AF_INET, libc::SOCK_RAW, "inet raw"),
+        (libc::AF_NETLINK, libc::SOCK_RAW, "netlink"),
+    ];
+    // SAFETY: the child makes raw system calls only and exits.
+    match unsafe { nix::unistd::fork() }.unwrap() {
+        nix::unistd::ForkResult::Child => unsafe {
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+                || libc::prctl(
+                    libc::PR_SET_SECCOMP,
+                    libc::SECCOMP_MODE_FILTER,
+                    &prog as *const SockFprog,
+                    0,
+                    0,
+                ) != 0
+            {
+                libc::_exit(255);
+            }
+            let mut opened = 0;
+            for (bit, (family, kind, _)) in kinds.iter().enumerate() {
+                let fd = libc::socket(*family, *kind | libc::SOCK_CLOEXEC, 0);
+                if fd >= 0 {
+                    opened |= 1 << bit;
+                }
+            }
+            // io_uring_setup with a zeroed params block: a ring opens, or not.
+            let mut params = [0u8; 120];
+            let ring = libc::syscall(libc::SYS_io_uring_setup, 4u32, params.as_mut_ptr());
+            if ring >= 0 {
+                opened |= 1 << 6;
+            }
+            libc::_exit(opened);
+        },
+        nix::unistd::ForkResult::Parent { child } => {
+            match nix::sys::wait::waitpid(child, None).unwrap() {
+                nix::sys::wait::WaitStatus::Exited(_, 255) => "the filter did not load".into(),
+                nix::sys::wait::WaitStatus::Exited(_, opened) => kinds
+                    .iter()
+                    .enumerate()
+                    .map(|(bit, (_, _, name))| {
+                        format!(
+                            "{name}={}",
+                            if opened & (1 << bit) != 0 {
+                                "open"
+                            } else {
+                                "refused"
+                            }
+                        )
+                    })
+                    .chain(std::iter::once(format!(
+                        "io_uring={}",
+                        if opened & (1 << 6) != 0 {
+                            "open"
+                        } else {
+                            "refused"
+                        }
+                    )))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                other => format!("{other:?}"),
+            }
+        }
+    }
+}
+
+/// **M9: the socket-family filter.** Unfiltered, every kind opens (the box
+/// allows raw only to root, so `inet raw` is refused by DAC alone); with no
+/// TCP port elected, only `AF_UNIX` opens; with one elected, TCP on both
+/// inet families opens too, UDP, raw and netlink refused.
+#[test]
+#[ignore = "a measurement of this box's kernel"]
+fn m9_the_socket_family_filter() {
+    println!(
+        "M9 unfiltered: {}",
+        socket_probe(&[op(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW)])
+    );
+    println!("M9 no TCP elected: {}", socket_probe(&socket_filter(false)));
+    println!(
+        "M9 a TCP port elected: {}",
+        socket_probe(&socket_filter(true))
+    );
+}
