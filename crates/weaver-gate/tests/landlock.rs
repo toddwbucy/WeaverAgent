@@ -1469,6 +1469,14 @@ fn m12_the_static_busybox_under_the_ruleset() {
         .map(|name| (*name).to_owned())
         .collect();
     println!("M12 the compiled set: {compiled:?}");
+    // The interpreter's two names present, as admin's inventory requires,
+    // and then the whole set equal.
+    for alias in ["sh", "ash"] {
+        assert!(
+            compiled.contains(alias),
+            "M12 the interpreter's {alias} is compiled in: {compiled:?}"
+        );
+    }
     assert_eq!(compiled, expected, "M12 the compiled set is the listed one");
     let by_link = rules().run(Command::new(layout.path("commands/echo")).arg("by-link"));
     println!("M12 an applet by its link: {}", said(&by_link));

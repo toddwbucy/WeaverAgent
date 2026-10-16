@@ -1150,8 +1150,10 @@ needing execute on the ELF interpreter, which reopens the route `weaver-gate-Spe
 section 8.1 closes (M8). Its applet list, `<shell-binary>.applets` beside it, one name
 per line, root's as the binary is, reads. **The binary's compiled set equals the list**:
 the inventory runs `shell-binary --list` with an empty environment and no input, its
-lines the applets compiled in, and the set less the interpreter's two names (`sh`,
-`ash`) must equal the list's. An applet compiled in and not listed refuses, since
+lines the applets compiled in. The set must contain the interpreter's two names, `sh`
+and `ash`, and the rest must equal the list's exactly. A missing interpreter name
+refuses, since every shell call would otherwise fail as an unknown applet after a load
+that read as ready. An applet compiled in and not listed refuses, since
 `busybox <applet>` reaches every applet the binary holds whatever `commands/` lists
 (`weaver-gate-Spec` section 8.1). A listed name not compiled in refuses too, a link to
 nothing, and a binary that answers no listing refuses, failing closed. Running it is
