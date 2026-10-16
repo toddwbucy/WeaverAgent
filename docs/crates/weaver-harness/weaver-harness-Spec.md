@@ -207,9 +207,10 @@ the agent config's file, so it links no parser. The SPU instruction and the gate
 instruction are config sections this crate does consume, arriving over the coordination
 seam inside the enter directive, already validated, which is the file read staying
 admin's, and the readout election rides the first uninterpreted to the admit. The
-elections the file carries beyond them, the permission mode and the tool set, are
-consumed by no workflow chartered today, and section 9 holds the config read as the tool
-workflow's question. **The featureless link rests on a placement owed to
+tool set reaches this crate as the shell's grant beside the gate instruction (#29,
+`weaver-types-Spec` section 2), already validated: where it is present this crate offers
+the shell's schema and opens executions, and where it is absent it offers none. The
+permission mode is retired. **The featureless link rests on a placement owed to
 `weaver-types-Spec`.** `SpuInstruction` and `GateInstruction` are config fields and wire
 types at once, that Spec defines them in the module its `config` feature gates while
 ruling the wire types unconditional, and this crate can construct a directive with the
@@ -1702,7 +1703,12 @@ crate. What does not vary and is fixed now is the order of parts, the identity
 prefix, then the message sequence, then the tool schemas, per apex section 3
 step 4, and the property that assembly is deterministic over the working
 structure's contents: the same records assemble the same prompt, byte for
-byte, which is what makes a replayed run's prompts comparable at all. **The two
+byte, which is what makes a replayed run's prompts comparable at all. **The tool
+schemas are the elected ones** (#29): where the enter's serving binding carries the
+shell's grant, the one schema is the `sh` tool's, this crate's own text, describing a
+POSIX `sh` command line (busybox's ash, no bash arrays or `[[ ]]`) over the build's
+listed commands, with the caller's clock. Where it carries none, the schemas are empty
+and the model is offered no tool. **The two
 claims take two instruments and both are bought.** Determinism is section 8's
 perturbation bullet. The order of parts was review's by election, a test
 reading the three parts out of an assembled prompt named as what would reach it
@@ -1766,9 +1772,10 @@ from it (#172): this crate resolves nothing against it and holds no tool, openin
 the execution exchange of `weaver-harness-gate-contract` section 2 per call
 the family parse recovers, which keeps every tool on the far side of the
 loop's membrane where the ratified boundary filed it. What the charter fixed
-before the workflow still holds: permission modes are consultation policy
-and not a boundary, the kernel bounds what a tool reaches through the uid it
-runs as, and no safety classification exists here or is coming, per
+before the workflow still holds, the permission mode now retired (#29): the
+elected tool set and the shell's compiled command list are the permission, the
+kernel bounds what a tool reaches (`weaver-gate-Spec` section 8.1, Landlock the
+wall), and no safety classification exists here or is coming, per
 `weaver-harness-PRD` section 3. The tool subprocess inherits no descriptor this program
 holds,
 which section 2 delivers by construction rather than by a per-tool argument and
@@ -1832,7 +1839,15 @@ tool-result turns in that same order, so the conversation's ordering is the
 emission's and the channel's exchange identity is the only correlation the
 wire needs. A turn whose emission carries no call opens none, and an `UnrecoveredCall`
 block, a call the family parse could not recover, opens none either, per
-`weaver-traits-Spec` section 3: it names no tool and grants nothing.
+`weaver-traits-Spec` section 3: it names no tool and grants nothing. **A call naming a
+tool the enter did not grant opens no exchange either** (#29): this crate closes it in
+its own word, authoring `tool.call.started` and `tool.call.completed` with
+`Refused { reason }` naming the tool as not elected, the harness as the speaker, and the
+tool-result turn carries that refusal to the model. So the record holds the call and its
+refusal, the model learns it, and nothing crosses the gate: a trace fact by the kinds
+that exist, as #31's unrecovered call is by its own, and never a silent drop. The
+gate refuses an unelected name too (`weaver-gate-Spec` section 8), the second wall of
+the same rule.
 
 ```graph
 node: harness-tool-result-granted-not-minted
@@ -3133,7 +3148,7 @@ below is a walk made executable.
 
 **The reference walk: a rogue elected tool reaches for the trace.** The
 adversary is the agent's own tool surface, a subprocess the gate forks per
-call (#111), running as the agent uid with `bash` as the reference case. The attack
+call (#111), running as the agent uid with the shell (`sh`, #29) as the reference case. The attack
 is inheritance: without close-on-exec every tool subprocess holds a writable
 handle to the trace and edits its own account through a descriptor requiring
 no path and passing no check, or an end of the member's channel and seats
@@ -3519,9 +3534,9 @@ Each names what settles it, and none is this Spec's to settle alone.
 - **The config read.** No chartered workflow reads the declaration from this crate, and
   the crate links no parser: admin reads the file at its inventory and what this crate
   receives is the enter, the sink's descriptor, and the loop's path on the worker's
-  vector, per `weaver-admin-Spec` section 4. The read this charter once declared returns
-  with the tool workflow, which consumes the tool set and the permission mode, and the
-  charter's section 5 names that re-entry in place of the edge it retired on 2026-09-04.
+  vector, per `weaver-admin-Spec` section 4. The tool set returns as the shell's grant
+  on the enter (#29), admin reading the declaration, and the permission mode is
+  retired.
   **The sink half of this item closed the same date, per issue #311**: the config's
   `trace-sink` field names the sink and the charter has the agent never told the name,
   and the two never disagreed, because the charter's own descriptor paragraph scopes
@@ -3531,9 +3546,10 @@ Each names what settles it, and none is this Spec's to settle alone.
   is admin's to read and `weaver-types-Spec` section 2 now names it so. The kernel's
   search-bit lock stands between knowledge and reach either way, and nothing here
   retains the field because nothing here ever receives it.
-- **Tool dispatch, the execution context, and the permission-mode
-  enforcement point.** Blocked with `tool-trait`, per `weaver-traits-PRD`
-  section 3.1.
+- **Registered-service dispatch.** Blocked with `tool-trait`, per `weaver-traits-PRD`
+  section 3.1. The shell's dispatch is chartered (section 6) and its election and
+  confinement are #29's, and the permission-mode enforcement point is retired with the
+  mode.
 - **The satellite types.** `AdoptionFault`'s case set, `OrganChannel`'s
   exchange-surface spelling, `SpuChannels`' name, the licensing error's shape,
   `DecodeChannel`'s token send and receive surface, now chartered in section

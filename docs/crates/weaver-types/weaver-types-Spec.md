@@ -66,8 +66,9 @@ on the floor is a nightly requirement everywhere.
 
 **The dependency set is four crates, one of them optional, and each is argued.**
 `weaver-traits`, the one internal dependency, declared as the `floor-link` the charter
-carries and required because the config's permission mode and tool set elect from that
-crate's vocabulary. `serde` with `derive`, for the config and the wire types both.
+carries and required because the wire's message types and the config's identity check
+are that crate's vocabulary (`Message`, `ContentBlock`, `Role`). The permission mode that
+once also elected from it is retired (#29). `serde` with `derive`, for the config and the wire types both.
 `serde_json` for the wire encoding, per section 4.3, with its `raw_value` feature on,
 because section 4.4's measurement is spliced JSON and the splicing type is what that
 feature gates. A TOML implementation for the config file, per the election of section 2,
@@ -204,7 +205,7 @@ pub struct AgentConfig {
     pub session: SessionId,
     pub spu_instruction: SpuInstruction,
     pub tool_set: Vec<ToolName>,
-    pub permission_mode: weaver_traits::PermissionMode,
+    pub shell_tcp_connect: Vec<u16>,
     pub binding_kind: Option<BindingKind>,
     pub gate_instruction: Option<GateInstruction>,
     pub trace_sink: TraceSink,
@@ -749,6 +750,37 @@ grouping survives the loss: `gate_instruction` stays a named group rather than
 collapsing to a bare rule, on the same pattern `spu_instruction` takes, so a
 field the gate workflow adds later has somewhere to land.
 
+**`tool-set` elects registered tools, and `sh` is the one registered name** (#29, the
+operator's rulings of 2026-10-15). The parse refuses a name it does not register,
+`BadValue` naming the field, so a typo or a tool this build holds none of refuses at
+`validate` rather than offering the model nothing silently. **Absent or empty is no
+tool**: nothing is offered to the model and nothing runs, the default being `[]`.
+Electing `sh` offers the shell of `weaver-gate-Spec` section 8, confined by its
+section 8.1. **`shell-tcp-connect` elects the TCP ports the shell may connect to**,
+absent or empty being no network, the default. A port elected where `tool-set` does
+not elect `sh` refuses `BadValue`, a port with no shell being a declaration that says
+nothing true. **`permission-mode` is retired** (#29): the elected tool set and, for the
+shell, its compiled command list (`weaver-gate-Spec` section 8.1) are the permission,
+and a mode that read as a control where the kernel is the control was the thing
+`weaver-harness-PRD` section 2 warned against. A declaration still carrying it refuses
+as an unknown field, by the derive below, the operator's ruling of 2026-10-08 on #1
+carrying no old layout forward.
+
+**The shell's grant crosses beside the gate instruction, not inside it.** Admin builds
+it from `tool-set` and `shell-tcp-connect` at inventory, and the enter's serving binding
+and the gate's raise carry it as their own field, `shell: Option<ShellGrant>` (section
+4.2), present exactly where `tool-set` elects `sh`:
+
+```rust
+pub struct ShellGrant {
+    pub tcp_connect: Vec<u16>,
+}
+```
+
+Two authors again, as for the socket: the access rule is the operator's election in
+`gate-instruction`, and the shell's grant is the operator's election in `tool-set`, so
+neither is folded into the other's group.
+
 **`SpuInstruction` and `GateInstruction` are defined here and are the same types the
 wire carries, and the feature gate never reaches them.** The `config` feature gates the
 parser and the `parse` surface alone, and never a type: the two are wire types the loop
@@ -758,9 +790,8 @@ build with the feature off holds every type of this crate and no config-format
 dependency, which is section 1's unconditional-wire sentence stated as the gate's
 mechanical scope. Both travel two paths, into the config from the operator and across a
 seam inside a directive, and one type for both is what keeps admin from re-encoding what
-it validated. `ToolName` is a name today and gains its element type with the tool
-workflow, because it elects from `tool-trait`, which `weaver-traits-PRD` section 3.1
-holds blocked.
+it validated. `ToolName` stays a name: the family parse mints one from every emission,
+and the config's `tool-set` is judged against the registered names at the parse.
 
 **Validation is a total parse into a typed value, and admin performs it.** The
 crate exposes `parse` and nothing partial: no builder, no field-by-field accessor
@@ -793,7 +824,7 @@ that charter section names, and what survives that round is the property rather 
 derive. The three sites below that name the derive say the same and are qualified rather
 than rewritten, because the representation is that round's to change and not this act's.
 An ignored field is an operator's declaration silently discarded, and a typo in
-`permission-mode` that parses as an unknown field and vanishes is the failure this
+`tool-set` that parses as an unknown field and vanishes is the failure this
 rejection exists to prevent.
 
 ```graph
@@ -1336,7 +1367,7 @@ pub enum LifecycleDirective {
     Observe,
     Admit { instruction: SpuInstruction },
     Release,
-    Raise { instruction: GateInstruction, socket: PathBuf },
+    Raise { instruction: GateInstruction, socket: PathBuf, shell: Option<ShellGrant> },
     Quiesce,
     Lower,
     Load { agent: AgentName },
@@ -1540,7 +1571,7 @@ pub enum ResetReason {
 }
 
 pub enum EnterBinding {
-    Serving { gate_instruction: GateInstruction },
+    Serving { gate_instruction: GateInstruction, shell: Option<ShellGrant> },
     Diagnostic,
 }
 
@@ -2637,7 +2668,11 @@ already discharged.
   the residual-readout election, since it is the one a builder is most likely to
   make optional.
 - In this crate: a misspelled key refuses, confirmed by watching a mistyped
-  `permission-mode` vanish when `deny_unknown_fields` is removed. The watch is the
+  `tool-set` vanish when `deny_unknown_fields` is removed.
+- In this crate: `tool-set` refuses a name it does not register, `shell-tcp-connect`
+  refuses a port where `sh` is not elected, and a declaration carrying the retired
+  `permission-mode` refuses as an unknown field (#29), each watched to fail when its
+  check is dropped. The watch is the
   derive's removal while the surface is one type's, and it moves with the surface.
 - In this crate: an identity message refuses the parse unless it is a
   `System` message carrying at least one `Text` block and every block carries
@@ -2777,9 +2812,8 @@ the claim divides are both open and section 6 carries them together.
   fault, and the frame carries its octets base64-encoded in one member.
   Recorded as closed rather than deleted, this list naming what settled each
   entry.
-- **The `tool-set` field's element shape.** It elects from `tool-trait`, which
-  `weaver-traits-PRD` section 3.1 holds blocked, so the field is a list of names
-  today and gains its element type with the tool workflow.
+- **The `tool-set` field's element shape.** Closed by #29: a list of names judged
+  against the registered names, `sh` the one, at the parse.
 - **`SessionId`, `RunId`, `TurnKey`, `AgentName`, and `FieldName`.** Named in the
   signatures above and shaped in this crate, their representations being
   identifier choices with no cross-crate consequence.

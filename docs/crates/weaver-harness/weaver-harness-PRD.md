@@ -166,8 +166,9 @@ entered with the turn's content and the granted surface, the response
 returning through the same exchange when the seat comes back. The mechanics
 are the Spec's, at its section 6.2.
 
-**The tool system.** The registry, the execution context, and the permission modes.
-Permission modes are operator policy and not a safety boundary. **Every outward tool
+**The tool system.** The registry and the execution context. The permission modes this
+paragraph named are retired (#29): the elected tool set and the shell's compiled command
+list are the permission, and the kernel is the boundary. **Every outward tool
 is external, on the far side of the gate**, the agent's boundary (the operator's ruling of
 2026-10-15, #172, retiring the port test's split of 2026-08-07). A tool that binds a
 listening port is a registered application the harness addresses across the gate's
@@ -175,10 +176,9 @@ agent-opened seam, and its containment is that application's own and the operato
 provision. The shell the gate runs per call reaches what the agent's account can,
 bounded by the kernel through that identity and by the agent's `tools/` cgroup (#111).
 Loop code this crate runs, the `weaver-internal` callables, holds no process of its own
-and reaches what the worker holds. The mode setting governs only whether the operator wants to be
-consulted before a class of action. Stating this plainly is the point. A permission mode
-that reads as a security control when the kernel is the actual control is a thing that
-gets trusted wrongly later.
+and reaches what the worker holds. Stating this plainly is the point: a setting that
+reads as a security control when the kernel is the actual control is a thing that gets
+trusted wrongly later, which is why the mode is retired rather than kept as policy.
 
 **Prompt assembly's deterministic floor, with the family render across the seam.** The
 harness composes the canonical conversation: the identity prefix, which is the system
@@ -280,9 +280,8 @@ carries, the sink's descriptor beside it, and the loop's path on the worker's ve
 and holds no parser and no path. **The `reads` edge this paragraph declared to
 `agent-config` retired on 2026-09-04, per issue #311**, because it recorded a read the
 crate does not perform and no chartered workflow exercises, which is the reserved slot
-in graph form. It returns, declared here again, with the tool workflow that consumes the
-tool set and the permission mode, on the day that workflow is chartered and the read
-exists.
+in graph form. The tool set returns as the shell's grant on the enter (#29), admin
+reading the declaration, and the permission mode is retired.
 
 **Encoding and decoding both go to `weaver-spu`, and so does everything that
 serves them.** Model residency, GPU arbitration, decode compute, embedding compute,
@@ -738,7 +737,7 @@ so the set is bounded, not drafted here.
   against.
 - Prompt assembly, including the per-model scaffolding this layer is re-erected
   from for each decoder integrated into the SPU.
-- The tool system, the execution context, and permission modes as policy.
+- The tool system and the execution context.
 - Activity control, covering stop, cancel, and interrupt.
 - Trace authorship, covering the event set this crate writes and the descriptor
   discipline of section 5.

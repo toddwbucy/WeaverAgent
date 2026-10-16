@@ -135,9 +135,11 @@ holds as of the tool boundary ruling of 2026-08-18, and the egress socket
 waits on a registered application to address.
 
 **Raise the hook.** Opened by the harness, last in the enter fan-out, carrying the
-gate instruction admin supplied in the enter directive, uninterpreted by the harness.
-The gate resolves the instruction, binds the socket it names, and answers ready, or
-it refuses. **Ready is sent only after the bind has returned,** so the harness's own
+gate instruction admin supplied in the enter directive, and beside it the shell's grant
+where the declaration elects the shell (#29, `weaver-types-Spec` section 2), both
+uninterpreted by the harness. The gate resolves the instruction, binds the socket it
+names, builds the shell's confinement where the grant is present (`weaver-gate-Spec`
+section 8.1), and answers ready, or it refuses. **Ready is sent only after the bind has returned,** so the harness's own
 ready answer to admin rests on a bound listener and never on a starting process. The
 refusal carries a reason the harness places in the enter aggregate without
 translation, which is what makes `weaver-admin-harness-contract` section 6's
@@ -290,9 +292,9 @@ being who speaks in the return:
   the shell, a nonzero exit status is a result and not an error: the exit is
   the shell's answer, accounted in content.
 - **Refused.** Nothing ran, and the gate speaks in its own voice: a name it
-  does not hold - never a nearest match, the registry discipline of the
-  family table applied one organ over - malformed arguments, or a clock
-  beyond the declared maximum. No side effect exists and a corrected call is
+  does not hold, or the shell where the raise carried no grant for it (#29) - never
+  a nearest match, the registry discipline of the family table applied one organ
+  over - malformed arguments, or a clock beyond the declared maximum. No side effect exists and a corrected call is
   safe to re-ask.
 - **Errored.** The invocation machinery failed - the fork, a pipe, the
   supervisor - and the account's speaker is the infrastructure, never the
@@ -387,8 +389,8 @@ This section is derived from section 2 rather than prose beside it, because ever
 exchange payload change is a supplies change by construction, and a Spec writer reads
 this list.
 
-**The harness supplies** the gate instruction it was handed in the enter directive,
-the directives to quiesce and to lower, and, per call, the tool execution's name, arguments
+**The harness supplies** the gate instruction it was handed in the enter directive and
+the shell's grant beside it where one was handed, the directives to quiesce and to lower, and, per call, the tool execution's name, arguments
 as the family parse recovered them, and the caller's clock, uninterpreted,
 opened serially in emission order, and at most one cancel or interrupt per
 execution while its exchange stands open from the harness's side.
@@ -457,6 +459,8 @@ because the harness answers nothing on this seam. The cases:
 
 - the instruction does not resolve to a socket this crate can bind
 - the bind fails, with the reason carried
+- the shell is granted and its confinement cannot be built: a Landlock ABI below 6, or a
+  ruleset the kernel refuses (`BoundaryUnverified`, #29, failing closed)
 - the directive is out of order for the channel's state
 
 **The refusal reuses `lifecycle-refusal`,** so the enter aggregate carries it
