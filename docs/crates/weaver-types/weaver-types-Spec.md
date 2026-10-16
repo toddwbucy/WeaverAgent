@@ -204,7 +204,9 @@ binary runs under the agent's identity is placed where the admission is.
 pub struct AgentConfig {
     pub session: SessionId,
     pub spu_instruction: SpuInstruction,
+    #[serde(default)]
     pub tool_set: Vec<ToolName>,
+    #[serde(default)]
     pub shell_tcp_connect: Vec<u16>,
     pub binding_kind: Option<BindingKind>,
     pub gate_instruction: Option<GateInstruction>,
@@ -542,9 +544,9 @@ temptation named.** The surface is the union of what the organs register, per
 struct's field list, and the refusal is against that surface rather than against a fixed
 type. The property below is unchanged by that and is why the rule exists. Charter
 section 5 rules that absence is never read as a default unless the charter says a field
-is optional and says what its absence means. Three fields are optional by exactly that
-rule's own terms, and one more is an option at the parse for a different reason, named
-after them. `state_election` may be absent because `weaver-state-PRD` section 4 rules
+is optional and says what its absence means. The fields optional by exactly that rule's
+own terms are named below, each with what its absence means, and one more is an option
+at the parse for a different reason, named after them. `state_election` may be absent because `weaver-state-PRD` section 4 rules
 what absence means, the default election, the envelope of every kind and nothing more,
 so a deployment that elects nothing still holds the session's shape by the charter's
 sentence rather than by a parser's guess. The resolved spelling of that default is fixed
@@ -599,7 +601,11 @@ diagnostic binding authors nothing, and the operator's ruling of the same date r
 that reading with a composition, every binding authoring a record and the kind selecting
 the mechanism rather than the presence, per `weaver-agent-PRD` section 6. What the
 declaration names is a sink, and what the run writes into it follows the kind without
-the field moving. Every other field is required. The residual-readout election is what a
+the field moving. **`tool_set` and `shell_tcp_connect` may be absent** because section 2's
+tool paragraph rules what absence means, no tool offered and no port elected (#29): each
+defaults to an empty list (`#[serde(default)]` above), so an absent field and an empty
+list are one declaration, and the parse never reads an absence as anything wider. Every
+other field is required. The residual-readout election is what a
 builder will reach to default, to off, and it is exactly the one that must not: an
 operator who stated no readout has not thereby declined it, and admin refusing the load
 is how that operator learns the file is incomplete rather than discovering it in a

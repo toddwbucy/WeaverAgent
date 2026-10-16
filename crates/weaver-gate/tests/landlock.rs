@@ -27,6 +27,7 @@ const FS_READ_FILE: u64 = 1 << 2;
 const FS_READ_DIR: u64 = 1 << 3;
 const FS_ALL_V1: u64 = (1 << 13) - 1;
 
+const NET_BIND_TCP: u64 = 1 << 0;
 const NET_CONNECT_TCP: u64 = 1 << 1;
 
 const SCOPE_ABSTRACT_UNIX_SOCKET: u64 = 1 << 0;
@@ -453,6 +454,96 @@ fn m5_tcp_connect_is_denied_unless_elected() {
     println!("M5b connect, the port elected: {}", said(&allowed));
     assert_says("M5b", &allowed, "connected");
     drop(listener);
+}
+
+/// A free loopback TCP port, found by binding port 0 and released at once.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// Binds a TCP socket to `port` on the loopback from a child confined by
+/// `rules` alone, then listens, answering which step stopped it.
+fn landlock_bind_probe(rules: &Ruleset, port: u16) -> String {
+    let ruleset = rules.0.as_raw_fd();
+    // SAFETY: the child makes raw system calls only and exits.
+    match unsafe { nix::unistd::fork() }.unwrap() {
+        nix::unistd::ForkResult::Child => unsafe {
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+                || libc::syscall(libc::SYS_landlock_restrict_self, ruleset, 0u32) != 0
+            {
+                libc::_exit(250);
+            }
+            let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+            if fd < 0 {
+                libc::_exit(249);
+            }
+            let mut addr: libc::sockaddr_in = std::mem::zeroed();
+            addr.sin_family = libc::AF_INET as libc::sa_family_t;
+            addr.sin_port = port.to_be();
+            addr.sin_addr.s_addr = u32::from_be_bytes([127, 0, 0, 1]).to_be();
+            if libc::bind(
+                fd,
+                &addr as *const _ as *const libc::sockaddr,
+                std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+            ) != 0
+            {
+                libc::_exit((*libc::__errno_location()).min(99));
+            }
+            if libc::listen(fd, 1) != 0 {
+                libc::_exit(100 + (*libc::__errno_location()).min(99));
+            }
+            libc::_exit(0);
+        },
+        nix::unistd::ForkResult::Parent { child } => {
+            match nix::sys::wait::waitpid(child, None).unwrap() {
+                nix::sys::wait::WaitStatus::Exited(_, 0) => "listening".into(),
+                nix::sys::wait::WaitStatus::Exited(_, 250) => "the restriction failed".into(),
+                nix::sys::wait::WaitStatus::Exited(_, 249) => "no socket".into(),
+                nix::sys::wait::WaitStatus::Exited(_, code) if code >= 100 => {
+                    format!(
+                        "bound, listen refused: {}",
+                        nix::errno::Errno::from_raw(code - 100)
+                    )
+                }
+                nix::sys::wait::WaitStatus::Exited(_, errno) => {
+                    format!("bind refused: {}", nix::errno::Errno::from_raw(errno))
+                }
+                other => format!("{other:?}"),
+            }
+        }
+    }
+}
+
+/// **M5b: the shell never binds, so never listens** (Codex on #175). With
+/// `CONNECT_TCP` and `BIND_TCP` handled and connect allowed on one port alone,
+/// as section 8.1's wall stands where a port is elected, a `bind` on the
+/// elected port, on another port and on port 0 (an ephemeral one) is refused
+/// `EACCES`, so `listen` is never reached. Without the seccomp filter, which
+/// admits inet stream sockets where a port is elected, so the wall alone
+/// answers. Run with `BIND_TCP` unhandled, the same binds succeed and listen.
+#[test]
+#[ignore = "a measurement of this box's kernel"]
+fn m5b_bind_is_refused_on_every_port() {
+    let elected = free_port();
+    let other = free_port();
+    let rules =
+        || Ruleset::new(FS_READ_FILE, NET_CONNECT_TCP | NET_BIND_TCP, 0).allow_connect(elected);
+    for (what, port) in [
+        ("the elected port", elected),
+        ("another port", other),
+        ("port 0", 0),
+    ] {
+        let bound = landlock_bind_probe(&rules(), port);
+        println!("M5b bind on {what} ({port}): {bound}");
+        assert_eq!(
+            bound, "bind refused: EACCES: Permission denied",
+            "M5b bind on {what}"
+        );
+    }
 }
 
 /// **M6: signal and abstract-socket scoping.** With `SCOPE_SIGNAL`, a confined
@@ -1216,7 +1307,8 @@ const FS_RESOLVE_UNIX: u64 = 1 << 16;
 
 /// The static busybox under measurement, named by `WEAVER_BUSYBOX`: built
 /// from a pinned source with the default applets, `ash` and the listing
-/// (`CONFIG_BUSYBOX`, so `busybox --list` answers the compiled set). Absent, the instrument fails naming it, never passing by skip.
+/// (`CONFIG_BUSYBOX`, so `busybox --list` answers the compiled set).
+/// Absent, the instrument fails naming it, never passing by skip.
 fn busybox() -> PathBuf {
     let path = std::env::var_os("WEAVER_BUSYBOX").map(PathBuf::from).expect(
         "WEAVER_BUSYBOX names a statically linked busybox built with the default applets, ash and the listing",
@@ -1434,7 +1526,7 @@ const SHELL_RLIMIT_CORE: u64 = 0;
 /// gate's child will. Every default applet and the interpreter run under them.
 /// `cat /dev/zero` into a home file stops at `SHELL_RLIMIT_FSIZE`, killed by
 /// `SIGXFSZ` (153), its file exactly that size, and the shell reads every
-/// limit as set, soft and hard, refusing a raise past the hard one.
+/// limit as set, soft and hard, refusing a raise of each past its hard one.
 #[test]
 #[ignore = "a measurement of this box's kernel and a built busybox"]
 fn m14_the_default_set_under_the_rlimits() {
@@ -1480,25 +1572,38 @@ fn m14_the_default_set_under_the_rlimits() {
     println!("M14 RLIMIT_FSIZE: {}", said(&fsize));
     assert_says("M14 fsize stops", &fsize, "rc=153");
     assert_says("M14 fsize size", &fsize, &SHELL_RLIMIT_FSIZE.to_string());
-    // ash's `ulimit` reads each limit, soft and hard, in its own units, and
-    // a raise past the hard limit is refused.
-    let read = limited(
-        "echo n=$(ulimit -Sn)/$(ulimit -Hn) v=$(ulimit -Sv)/$(ulimit -Hv) \
-         c=$(ulimit -Sc)/$(ulimit -Hc); ulimit -n 65 2>/dev/null; echo raise=$?",
-    );
-    println!("M14 the limits as the shell reads them: {}", said(&read));
+    // ash's `ulimit` reads each limit, soft and hard, in its own units: `-f`
+    // in 512-byte blocks, `-v` in KiB, `-n` a count, `-c` in blocks.
+    let blocks = SHELL_RLIMIT_FSIZE / 512;
     let nofile = SHELL_RLIMIT_NOFILE;
     let kib = SHELL_RLIMIT_AS >> 10;
+    let read = limited(
+        "echo f=$(ulimit -Sf)/$(ulimit -Hf) n=$(ulimit -Sn)/$(ulimit -Hn) \
+         v=$(ulimit -Sv)/$(ulimit -Hv) c=$(ulimit -Sc)/$(ulimit -Hc)",
+    );
+    println!("M14 the limits as the shell reads them: {}", said(&read));
     assert_says(
         "M14 limits",
         &read,
-        &format!("n={nofile}/{nofile} v={kib}/{kib} c=0/0"),
+        &format!("f={blocks}/{blocks} n={nofile}/{nofile} v={kib}/{kib} c=0/0"),
     );
-    assert!(
-        !String::from_utf8_lossy(&read.stdout).contains("raise=0"),
-        "M14 a raise past the hard limit: {}",
-        said(&read)
-    );
+    // A raise of each, soft and hard together as `ulimit` sets them, one
+    // past its hard limit, each refused.
+    for (flag, past) in [
+        ("f", blocks + 1),
+        ("n", nofile + 1),
+        ("v", kib + 1),
+        ("c", 1),
+    ] {
+        let raise = limited(&format!("ulimit -{flag} {past} 2>/dev/null; echo raise=$?"));
+        println!("M14 a raise of -{flag} to {past}: {}", said(&raise));
+        assert!(
+            !String::from_utf8_lossy(&raise.stdout).contains("raise=0"),
+            "M14 -{flag} raised past its hard limit: {}",
+            said(&raise)
+        );
+        assert_says("M14 raise", &raise, "raise=");
+    }
 }
 
 /// **M13: both filters require no-new-privs.** Without `PR_SET_NO_NEW_PRIVS`
